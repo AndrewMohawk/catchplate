@@ -21,12 +21,13 @@ from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_ordinary_generations as generations
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_assignment as cohort
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 
 p = c9.p
 ROLES = profile.ROLES
-FIRST_INDEX = 36
+FIRST_INDEX = job_index("service-originals", "native-delivery-" + ROLES[0])
 NEXT_JOB = "native-role-keys-retrieval"
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
 _LIVE = None
 _USED = False
 
@@ -213,12 +214,12 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_deliveries(policy, *, process, request) -> dict:
-    """Seven verified originals at first key job43; no key approval implied."""
+    """Seven verified originals at the first key job; no key approval implied."""
     return _verified_deliveries(policy, process=process, request=request, first=True)
 
 
 def recheck_deliveries(policy, *, process, request) -> dict:
-    """Recheck an opened boundary through fixed key/service jobs and handoff74."""
+    """Recheck an opened boundary through the fixed completed-owner scope."""
     return _verified_deliveries(policy, process=process, request=request, first=False)
 
 
@@ -228,8 +229,8 @@ def _verified_deliveries(policy, *, process, request, first):
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(ROLES)
         and installation.native_completed_boundary(request)
-        and request.job_index >= FIRST_INDEX + len(ROLES)
-        and (request.job_index == FIRST_INDEX + len(ROLES) and request.job == NEXT_JOB
+        and request.job_index >= NEXT_INDEX
+        and (request.job_index == NEXT_INDEX and request.job == NEXT_JOB
              if first else owner.key_boundary_open))
     owner.inflight = request
     try:

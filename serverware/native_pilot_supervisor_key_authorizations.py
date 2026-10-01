@@ -21,13 +21,14 @@ from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_assignment as cohort
 from serverware.native_pilot_phase_execution import (
-    JOBS, KEY_AUTHORIZATION_JOBS, KEY_AUTHORIZATION_JOB_INFO, MAX_RETAINED_BYTES,
+    JOBS, KEY_AUTHORIZATION_JOBS, KEY_AUTHORIZATION_JOB_INFO, MAX_RETAINED_BYTES, job_index,
 )
 
 p = c9.p
 ROLES = profile.ROLES
-FIRST_INDEX = 43
+FIRST_INDEX = job_index("service-originals", KEY_AUTHORIZATION_JOBS[0].name)
 NEXT_JOB = "native-service-commitRequest"
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
 _LIVE = None
 _USED = False
 
@@ -280,12 +281,12 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_authorizations(policy, *, process, request) -> dict:
-    """Verified ten literal pairs at job63, not fabricated verifier configs."""
+    """Verify ten literal pairs at the first native-service job, not configurations."""
     return _verified_authorizations(policy, process=process, request=request, first=True)
 
 
 def recheck_authorizations(policy, *, process, request) -> dict:
-    """Recheck the previously opened boundary through fixed service jobs/handoff74."""
+    """Recheck the opened boundary through the fixed completed-owner scope."""
     return _verified_authorizations(policy, process=process, request=request, first=False)
 
 
@@ -295,8 +296,8 @@ def _verified_authorizations(policy, *, process, request, first):
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None
         and owner.next == len(KEY_AUTHORIZATION_JOBS) and installation.native_completed_boundary(request)
-        and request.job_index >= FIRST_INDEX + len(KEY_AUTHORIZATION_JOBS)
-        and (request.job_index == FIRST_INDEX + len(KEY_AUTHORIZATION_JOBS) and request.job == NEXT_JOB
+        and request.job_index >= NEXT_INDEX
+        and (request.job_index == NEXT_INDEX and request.job == NEXT_JOB
              if first else owner.service_boundary_open))
     owner.inflight = request
     try:

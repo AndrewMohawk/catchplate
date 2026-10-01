@@ -134,34 +134,18 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has 127 of 136 job composers, including initial history, ordinary-service
-delivery/generation grants, all ten native deliveries and their ordered key
-authorizations, eleven [native operational grants](docs/native-pilot-native-services.md),
-five [ordinary transition grants](docs/native-pilot-ordinary-transitions.md)
-and 31 [late launch authorisations](docs/native-pilot-launch-authorizations.md),
-plus ten [endpoint-launch bundles](docs/native-pilot-endpoint-launches.md)
-and [service-material publication](docs/native-pilot-service-material.md) at job 120.
-Explicit policy/v13 adds that material decision without changing the 108 key
-selectors. It refuses startup until the remaining nine jobs, beginning with
-`bridge-runtime / install-bridge-runtime`, are implemented. Its focused local
-checks pass; live material installation and connected acceptance remain unverified.
-The [bridge prerequisites](docs/native-pilot-bridge-prerequisites.md#focused-verification)
-add current-head authority and initial-history compatibility. Their focused checks
-and native compile pass; bridge composition and live acceptance remain unfinished.
-The next [retained bridge preparation](docs/native-pilot-bridge-preparation.md)
-connects actual-owner trust requests and process observations to the conductor,
-plus bridge-only authorization producers. Its focused checks pass after one
-fixture-only correction; nine current composer slots, their remaining helper/
-authorization prerequisites, and independent live acceptance are still open.
-The [fresh-helper and bridge successor](docs/native-pilot-helper-initial.md)
-adds initialization-before-handshake wiring and pure bridge-launch checks.
-Focused checks pass after a v11 selection correction; the native compile passes,
-but live initialization and pilot acceptance remain unverified.
-The total includes 20 key/admission and 31 late launch prerequisites missing from
-the earlier 85-job inventory; it is not a percentage of product readiness.
-The [native history handoff repair](docs/native-pilot-operational-histories.md)
-connects the service grants to actual ordinary histories and a separately
-authenticated fleet startup receipt.
+has **142 of 151 current job composers** and **108 signing selectors**. This
+includes service histories, delivery/generation grants, endpoint authorizations,
+launch bundles and public material. Explicit policy/v14 connects the
+[helper's four-role signing ceremonies](docs/native-pilot-helper-ceremonies.md);
+its focused verification is pending. The earlier
+[fresh-helper startup path](docs/native-pilot-helper-initial.md) passes focused
+checks and native compilation, but live initialization remains unverified.
+
+Startup still refuses until the remaining nine current jobs, beginning with
+bridge-runtime installation, are connected. Additional request-bound currentness
+and bridge authorization prerequisites are not yet included in that inventory;
+these counts are not a percentage of product readiness.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary

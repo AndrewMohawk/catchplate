@@ -1,6 +1,6 @@
 """Five generation inputs from retained deliveries and measured scope originals.
 
-Only the real pending jobs 31--35 and an independently admitted generation
+Only the real pending ordinary-generation jobs and an independently admitted generation
 policy enter composition. The first job opens the completed C9 boundary; every
 later access rechecks its actual owners, original startup window and previous
 signed results. No private key, signing, service receipt or renewed interval is
@@ -18,12 +18,13 @@ from serverware import native_pilot_publication as publication
 from serverware import native_pilot_service_authority as authority
 from serverware import native_pilot_supervisor_ordinary_deliveries as deliveries
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 
 p = generation.p
 ROLES = generation.ROLES
-FIRST_INDEX = 31
+FIRST_INDEX = job_index("service-originals", "ordinary-generation-" + ROLES[0])
 NEXT_JOB = "native-delivery-generationInstall"
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
 _LIVE = None
 _USED = False
 
@@ -245,12 +246,12 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_generations(policy, *, process, request) -> dict:
-    """Verified five grants at job36; no native-delivery approval is implied."""
+    """Verify five grants at the first native delivery; no approval is implied."""
     return _verified_generations(policy, process=process, request=request, first=True)
 
 
 def recheck_generations(policy, *, process, request) -> dict:
-    """Recheck the opened boundary through fixed native jobs and handoff74."""
+    """Recheck the opened boundary through the fixed completed-owner scope."""
     return _verified_generations(policy, process=process, request=request, first=False)
 
 
@@ -260,7 +261,7 @@ def _verified_generations(policy, *, process, request, first):
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(ROLES)
         and installation.native_completed_boundary(request)
-        and (request.job_index == FIRST_INDEX + len(ROLES) and request.job == NEXT_JOB
+        and (request.job_index == NEXT_INDEX and request.job == NEXT_JOB
              if first else owner.native_boundary_open))
     owner.inflight = request
     try:

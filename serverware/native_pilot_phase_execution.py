@@ -96,6 +96,18 @@ INITIAL_JOBS = tuple(_Job(
 INITIAL_JOB_INFO = {job.name: (role, operation) for job, (role, operation) in zip(INITIAL_JOBS,
     ((role, operation) for role in generation.ROLES for operation in initial_authority.OPERATIONS), strict=True)}
 
+# The approved primary helper role remains one of INITIAL_JOBS. Three explicit
+# supplemental slots cover its native-ordered complement, with the same keys.
+# These assembly results stay retained; they do not create publication slots.
+HELPER_INITIAL_JOBS = tuple(_Job(
+    "ordinary-helper-initial-" + operation + "-slot" + str(slot), "helper-initial", generation.ROLES[-1],
+    initial_authority.MAX_INPUT, None,
+    None if operation == "assemble" else "ordinary-initial-" + (
+        "checkpoint" if operation == "checkpoint" else operation.removesuffix("-anchor")) + "-" + generation.ROLES[-1])
+    for slot in range(1, 4) for operation in initial_authority.OPERATIONS)
+HELPER_INITIAL_JOB_INFO = {job.name: selected for job, selected in zip(HELPER_INITIAL_JOBS,
+    ((slot, operation) for slot in range(1, 4) for operation in initial_authority.OPERATIONS), strict=True)}
+
 KEY_AUTHORIZATION_JOBS = tuple(_signed(
     ("native-role-keys-" if operation == "role-keys" else "native-key-admission-") + role,
     "native-key", role, key_authority.MAX_INPUT)
@@ -128,6 +140,7 @@ JOBS = {
         delivery_authority.MAX_INPUT, "native-delivery-" + role) for role in ENDPOINT_INPUT_ROLES),
     "service-originals": (
         *INITIAL_JOBS,
+        *HELPER_INITIAL_JOBS,
         *(_signed("ordinary-delivery-" + role, "ordinary-delivery", role, service_authority.MAX_INPUT_BYTES,
                   "ordinary-delivery-" + role) for role in generation.ROLES),
         *(_signed("ordinary-generation-" + role, "ordinary-generation", role, service_authority.MAX_INPUT_BYTES,
@@ -162,6 +175,14 @@ JOBS = {
     "shutdown": (_plain("stop", "stop", 1024),),
 }
 KEY_PURPOSES = tuple(sorted({job.key for jobs in JOBS.values() for job in jobs if job.key is not None}))
+
+
+def job_index(phase, name):
+    """One-based index of a unique source-fixed job, never a caller job list."""
+    p.require(type(phase) is str and phase in JOBS and type(name) is str)
+    indices = [index for index, job in enumerate(JOBS[phase], 1) if job.name == name]
+    p.require(len(indices) == 1)
+    return indices[0]
 
 
 def _same(first, second):
@@ -378,7 +399,14 @@ class PhaseExecution:
                 self._known("requestCommitmentOriginal", value, "native-request-commitment-commitRequest")
 
     def _bind_initial(self, job, value):
-        role, operation = INITIAL_JOB_INFO[job.name]
+        supplemental = job.family == "helper-initial"
+        if supplemental:
+            slot, operation = HELPER_INITIAL_JOB_INFO[job.name]
+            role = generation.ROLES[-1]
+            stem, suffix = "ordinary-helper-initial-", "-slot" + str(slot)
+        else:
+            role, operation = INITIAL_JOB_INFO[job.name]
+            stem, suffix = "ordinary-initial-", "-" + role
         extra = () if operation == "checkpoint" else ("initialCheckpointOriginal",)
         if operation == "assemble":
             extra += ("anchorSignatures",)
@@ -396,7 +424,28 @@ class PhaseExecution:
             _same(value[field], installed[field])
         _same(value["launchOriginal"], installed["ordinaryLaunchOriginal"])
         _same(value["configurationOriginal"], installed["ordinaryColdOriginals"][role])
-        checkpoint_job = "ordinary-initial-checkpoint-" + role
+        checkpoint_job = stem + "checkpoint" + suffix
+        if supplemental:
+            # A later ceremony changes only the protocol-role identity. It must
+            # use the actual retained primary facts, not a new owner/window.
+            primary_name = "ordinary-initial-checkpoint-" + role
+            primary = p.document(self._inputs[primary_name], initial_authority.MAX_INPUT)
+            _, primary_state = initial_authority._original(primary["initialStateOriginal"], initial_profile.MAX_STATE)
+            _, primary_payload = initial_authority._original(primary["payloadOriginal"], initial_authority.MAX_CHECKPOINT)
+            remaining = tuple(name for name in initial_profile.HELPER_ENDPOINT_ROLES
+                if name != primary_payload["endpointRole"])
+            p.require(len(remaining) == 3)
+            _, payload = initial_authority._original(value["payloadOriginal"], initial_authority.MAX_CHECKPOINT)
+            p.require(payload["endpointRole"] == remaining[slot - 1])
+            for field in initial_profile.STATE_FIELDS:
+                if field != "endpointProcessIdentitySha256":
+                    p.require(generation.canonical(state[field]) == generation.canonical(primary_state[field]))
+            for field in initial_authority.COMMON_FIELDS:
+                if field not in ("operation", "initialStateOriginal", "payloadOriginal"):
+                    _same(value[field], primary[field])
+            for field in primary_payload:
+                if field not in ("endpointRole", "endpointProcessIdentitySha256", "predecessorCheckpointSha256"):
+                    p.require(generation.canonical(payload[field]) == generation.canonical(primary_payload[field]))
         if operation != "checkpoint":
             approved = p.document(self._inputs[checkpoint_job], initial_authority.MAX_INPUT)
             # Literal originals and all independently selected public keys are
@@ -411,7 +460,7 @@ class PhaseExecution:
         if operation == "assemble":
             for signer, original in p.fields(value["anchorSignatures"], initial_authority.KEY_NAMES).items():
                 raw, _ = initial_authority._original(original, initial_authority.MAX_SIGNATURE)
-                p.require(raw == self._outputs["ordinary-initial-" + signer + "-anchor-" + role])
+                p.require(raw == self._outputs[stem + signer + "-anchor" + suffix])
 
     def _bind_initial_delivery(self, role, value):
         output = "ordinary-initial-assemble-" + role
@@ -446,6 +495,17 @@ class PhaseExecution:
             "keyId": header["authorityHistoryRootKeyId"],
             "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
         p.require(header["authorityHistoryManifestSha256"] == history["manifestSha256"])
+        if role == generation.ROLES[-1] and header["apiVersion"] == initial_profile.HELPER_RUNTIME_API:
+            runtime = generation.document(runtime_raw, generation.MAX_BYTES)
+            expected = {}
+            for name in (output,) + tuple("ordinary-helper-initial-assemble-slot" + str(slot) for slot in range(1, 4)):
+                raw = self._outputs[name]
+                wrapper = generation.document(raw, initial_profile.MAX_HELPER_HISTORY)
+                endpoint_role = wrapper["initialCheckpoint"]["payload"]["endpointRole"]
+                p.require(endpoint_role not in expected)
+                expected[endpoint_role] = raw.decode("ascii")
+            _same(runtime["initialEndpointHistories"], expected)
+            initial_profile.helper_endpoint_histories(history_raw, runtime=runtime)
 
     def _bind(self, job, value):
         """Join approved input originals to this actual request and prior outputs."""
@@ -483,7 +543,7 @@ class PhaseExecution:
                 p.require(bridge_runtime.version(runtime) in (10, 11) or len(p.canonical(value)) <= delivery_authority.MAX_INPUT)
                 pin = self._installations["install-bridge-runtime"]["pins"]["bridge-runtime"]
                 p.require(pin["sha256"] == p.sha(runtime_raw))
-        elif job.family == "ordinary-initial":
+        elif job.family in ("ordinary-initial", "helper-initial"):
             self._bind_initial(job, value)
         elif job.family.startswith("ordinary-"):
             operation = job.family.removeprefix("ordinary-")
@@ -717,8 +777,8 @@ class PhaseExecution:
             signed = native_authority.sign(job.role, raw, key)
         elif job.family == "generation-install":
             signed, _ = generation_authority.sign(input_original=raw, signing_key=key)
-        elif job.family == "ordinary-initial":
-            _, operation = INITIAL_JOB_INFO[job.name]
+        elif job.family in ("ordinary-initial", "helper-initial"):
+            _, operation = (INITIAL_JOB_INFO if job.family == "ordinary-initial" else HELPER_INITIAL_JOB_INFO)[job.name]
             if operation == "assemble":
                 p.require(key is None)
                 signed, initial_deadline = initial_authority.assemble(input_original=raw)

@@ -25,16 +25,17 @@ from serverware import native_pilot_supervisor_key_authorizations as keys
 from serverware import native_pilot_supervisor_ordinary_generations as generations
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_assignment as cohort
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 from serverware.native_shadow_proof_cohort_control import _Original
 
 p = generation.p
 OPERATIONS = profile.OPERATIONS
-FIRST_INDEX = 63
 NEXT_JOB = "ordinary-dispatch-durable-recovery-store"
-_TRANSITION_LAST_INDEX = 120
 JOB_NAMES = tuple("native-generation-install-grant" if operation == "generationInstall"
     else "native-service-" + operation for operation in OPERATIONS)
+FIRST_INDEX = job_index("service-originals", JOB_NAMES[0])
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
+_TRANSITION_LAST_INDEX = job_index("service-originals", "service-material")
 _LIVE = None
 _USED = False
 
@@ -106,7 +107,7 @@ def _current(owner, request):
     p.require(_LIVE is owner and not owner.failed and not owner.closed)
     # This originating predecessor recursively rechecks the actual native C9,
     # ordinary generation/delivery, initial-history and recipe owners. Its
-    # first boundary was opened only by _capture at the real job63.
+    # first boundary was opened only by _capture at the first native-service job.
     p.require(keys.recheck_authorizations(owner.policy, process=owner.process, request=request) == owner.pairs)
     phase = endpoints._phase(owner.process, "service-originals")
     p.require(p.canonical(phase) == owner.phase_raw
@@ -278,12 +279,12 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_services(policy, *, process, request) -> dict:
-    """Verified literal input/grant pairs only at the actual next fixed job74."""
+    """Verify literal input/grant pairs only at the first ordinary-transition job."""
     return _verified_services(policy, process=process, request=request, first=True)
 
 
 def recheck_services(policy, *, process, request) -> dict:
-    """Recheck the opened boundary through endpoint launches and handoff120."""
+    """Recheck the opened boundary through endpoint launches and service material."""
     return _verified_services(policy, process=process, request=request, first=False)
 
 
@@ -293,8 +294,8 @@ def _verified_services(policy, *, process, request, first):
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(OPERATIONS)
         and installation.native_completed_boundary(request)
-        and FIRST_INDEX + len(OPERATIONS) <= request.job_index <= _TRANSITION_LAST_INDEX
-        and (request.job_index == FIRST_INDEX + len(OPERATIONS) and request.job == NEXT_JOB
+        and NEXT_INDEX <= request.job_index <= _TRANSITION_LAST_INDEX
+        and (request.job_index == NEXT_INDEX and request.job == NEXT_JOB
              if first else owner.transition_boundary_open))
     owner.inflight = request
     try:

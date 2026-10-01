@@ -1,19 +1,22 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.383` source connects service-material job 120 after ten endpoint-launch
-composers and 31 late launch authorizations, five ordinary
-transition grants, eleven
-native operational grants, twenty
-native key/admission authorizations, all ten C9 deliveries, ordinary grants
-and initial history. **127 of 136**
+The `.387` source connects [supplemental helper ceremonies](native-pilot-helper-ceremonies.md)
+under explicit policy/v14, preserving the existing primary and supplying the
+four-role runtime with actual signed histories. Source-derived boundaries keep
+the downstream delivery/grant/launch sequence aligned; service material is now
+job 135. **142 of 151**
 jobs now have fixed policy/input composers. Source coverage is not production
 acceptance, which remains **0/6**. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
 is no CLI, generic template renderer, approval callback or implicit approval of
-future inputs. The assembled focused check passed **141 controls**; live
+future inputs. Verification of this batch is pending at source freeze; live
 installation and connected acceptance remain unverified. Source checkpoints
 remain **36/46**; independent production acceptance remains separate.
+Older numbered examples below describe their original source batches; use the
+current [sequencing table](native-pilot-helper-ceremonies.md#source-derived-sequencing)
+for current job positions. Currentness and remaining bridge prerequisites are
+not yet fully represented in the inventory.
 
 ## Decision and process ownership
 

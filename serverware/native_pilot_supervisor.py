@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 127 of 136 job composers exist. The complete-coverage check refuses
+The initial 142 of 151 job composers exist. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -27,7 +27,7 @@ from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, MAX_APPROVAL
+from serverware.native_pilot_phase_execution import INITIAL_JOBS, HELPER_INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, MAX_APPROVAL
 from serverware.native_pilot_supervisor_policy import SupervisorPolicy
 from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
 
@@ -39,6 +39,7 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     ("endpoint-deliveries", "native-delivery-persistence"),
     ("endpoint-deliveries", "native-delivery-trustedTime"),
     *(("service-originals", job.name) for job in INITIAL_JOBS),
+    *(("service-originals", job.name) for job in HELPER_INITIAL_JOBS),
     *(("service-originals", "ordinary-delivery-" + role) for role in generation.ROLES),
     *(("service-originals", "ordinary-generation-" + role) for role in generation.ROLES),
     *(("service-originals", "native-delivery-" + role) for role in native_deliveries.ROLES),
@@ -48,6 +49,21 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     *(("service-originals", name) for name in launch_authorizations.JOB_NAMES),
     *(("service-originals", name) for name in endpoint_launches.JOB_NAMES),
     (service_material.PHASE, service_material.JOB))
+_COMPOSER_GROUPS = (
+    ("endpoint-inputs", ("endpoint-inputs",), endpoint_inputs.compose),
+    ("endpoint-deliveries", tuple("native-delivery-" + role for role in endpoint_deliveries.ROLES), endpoint_deliveries.compose),
+    ("service-originals", tuple(job.name for job in INITIAL_JOBS + HELPER_INITIAL_JOBS), initial_history.compose),
+    ("service-originals", tuple("ordinary-delivery-" + role for role in generation.ROLES), ordinary_deliveries.compose),
+    ("service-originals", tuple("ordinary-generation-" + role for role in generation.ROLES), ordinary_generations.compose),
+    ("service-originals", tuple("native-delivery-" + role for role in native_deliveries.ROLES), native_deliveries.compose),
+    ("service-originals", tuple(job.name for job in KEY_AUTHORIZATION_JOBS), key_authorizations.compose),
+    ("service-originals", native_services.JOB_NAMES, native_services.compose),
+    ("service-originals", ordinary_transitions.JOB_NAMES, ordinary_transitions.compose),
+    ("service-originals", launch_authorizations.JOB_NAMES, launch_authorizations.compose),
+    ("service-originals", endpoint_launches.JOB_NAMES, endpoint_launches.compose),
+    (service_material.PHASE, (service_material.JOB,), service_material.compose),
+)
+_COMPOSERS = {(phase, name): composer for phase, names, composer in _COMPOSER_GROUPS for name in names}
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
 _TOKEN = object()
 _USED = False
@@ -57,6 +73,8 @@ _LIVE = None
 def missing_jobs():
     """Source coverage only, never acceptance or a percentage of remaining effort."""
     p.require(tuple(JOBS) == STAGES and _ORDER[:len(SUPPORTED_JOBS)] == SUPPORTED_JOBS)
+    p.require(tuple(_COMPOSERS) == SUPPORTED_JOBS[3:]
+        and len(_COMPOSERS) == sum(len(names) for _, names, _ in _COMPOSER_GROUPS))
     return tuple(item for item in _ORDER if item not in SUPPORTED_JOBS)
 
 
@@ -143,42 +161,9 @@ class CommissioningSupervisor:
                 self._policy.derive_measured(process=self._process, request=request)
             input_raw = precreation.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
-        elif slot == SUPPORTED_JOBS[3]:
-            input_raw = endpoint_inputs.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[4:7]:
-            input_raw = endpoint_deliveries.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[7:32]:
-            input_raw = initial_history.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[32:37]:
-            input_raw = ordinary_deliveries.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[37:42]:
-            input_raw = ordinary_generations.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[42:49]:
-            input_raw = native_deliveries.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[49:69]:
-            input_raw = key_authorizations.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[69:80]:
-            input_raw = native_services.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[80:85]:
-            input_raw = ordinary_transitions.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[85:116]:
-            input_raw = launch_authorizations.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
-        elif slot in SUPPORTED_JOBS[116:126]:
-            input_raw = endpoint_launches.compose(self._policy, process=self._process, request=request)
-            approval_raw = _approval(request.raw, input_raw)
         else:
-            p.require(slot == SUPPORTED_JOBS[126])
-            input_raw = service_material.compose(self._policy, process=self._process, request=request)
+            p.require(slot in _COMPOSERS)
+            input_raw = _COMPOSERS[slot](self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)
         p.document(approval_raw, MAX_APPROVAL)

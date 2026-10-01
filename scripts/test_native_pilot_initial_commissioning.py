@@ -103,6 +103,18 @@ def stage_fixture(operation):
 
 class SyntheticInitialCommissioningControls(unittest.TestCase):
     def test_closed_role_major_order_and_distinct_capabilities(self):
+        phase = "service-originals"
+        def source_jobs(names):
+            first = execution.job_index(phase, names[0]) - 1
+            selected = execution.JOBS[phase][first:first + len(names)]
+            self.assertEqual(tuple(job.name for job in selected), tuple(names))
+            for offset, name in enumerate(names):
+                self.assertEqual(execution.job_index(phase, name), first + offset + 1)
+            supported_first = supervisor.SUPPORTED_JOBS.index((phase, names[0]))
+            self.assertEqual(supervisor.SUPPORTED_JOBS[supported_first:supported_first + len(names)],
+                tuple((phase, name) for name in names))
+            return selected
+
         expected = tuple("ordinary-initial-" + operation + "-" + role
             for role in ROLES for operation in OPERATIONS)
         jobs = execution.JOBS["service-originals"][:25]
@@ -128,50 +140,51 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             self.assertNotEqual(initial_profile.INITIAL_CREDENTIAL_PATHS[role],
                 publication.DESTINATIONS["ordinary-initial-history-" + role])
         self.assertEqual(supervisor.SUPPORTED_JOBS[7:32], tuple(("service-originals", name) for name in expected))
-        self.assertEqual(supervisor.SUPPORTED_JOBS[32:37], tuple(("service-originals", "ordinary-delivery-" + role) for role in ROLES))
-        self.assertEqual(supervisor.SUPPORTED_JOBS[37:42], tuple(("service-originals", "ordinary-generation-" + role) for role in ROLES))
+        source_jobs(tuple("ordinary-delivery-" + role for role in ROLES))
+        source_jobs(tuple("ordinary-generation-" + role for role in ROLES))
         endpoints = ("retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
             "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
         pairs = tuple((role, operation) for role in endpoints for operation in ("role-keys", "admission"))
         key_names = tuple(("native-role-keys-" if operation == "role-keys" else "native-key-admission-")
             + role for role, operation in pairs)
         self.assertEqual(tuple(job.name for job in execution.KEY_AUTHORIZATION_JOBS), key_names)
-        self.assertEqual(execution.JOBS["service-originals"][42:62], execution.KEY_AUTHORIZATION_JOBS)
-        self.assertEqual(supervisor.SUPPORTED_JOBS[49:69], tuple(("service-originals", name) for name in key_names))
+        self.assertEqual(source_jobs(key_names), execution.KEY_AUTHORIZATION_JOBS)
         for job, pair in zip(execution.KEY_AUTHORIZATION_JOBS, pairs, strict=True):
             self.assertEqual(execution.KEY_AUTHORIZATION_JOB_INFO[job.name], pair)
             self.assertEqual((job.family, job.purpose, job.key, job.maximum),
                 ("native-key", None, job.name, 32 * 1024 * 1024))
-        self.assertEqual(execution.JOBS["service-originals"][62].name, "native-service-commitRequest")
         native_names = tuple("native-service-" + operation for operation in ("commitRequest", "ingress", "ledger",
             "terminal", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "retrieval", "persistence", "trustedTime"))
         native_names += ("native-generation-install-grant",)
-        self.assertEqual(supervisor.SUPPORTED_JOBS[69:80], tuple(("service-originals", name) for name in native_names))
+        source_jobs(native_names)
         transition_names = ("ordinary-dispatch-durable-recovery-store", "ordinary-dispatch-current-signature-authority",
             "ordinary-head", "ordinary-cleanup", "ordinary-current")
-        self.assertEqual(supervisor.SUPPORTED_JOBS[80:85], tuple(("service-originals", name) for name in transition_names))
+        source_jobs(transition_names)
         launch_pairs = tuple((role, operation) for role in endpoints for operation in
             (("closure", "request-commitment", "encrypted-delivery", "verifier-transport")
              if role == "commitRequest" else ("closure", "encrypted-delivery", "verifier-transport")))
         launch_names = tuple("native-" + operation + "-" + role for role, operation in launch_pairs)
         self.assertEqual(len(launch_names), 31)
         self.assertEqual(tuple(job.name for job in execution.LAUNCH_AUTHORIZATION_JOBS), launch_names)
-        self.assertEqual(execution.JOBS["service-originals"][78:109], execution.LAUNCH_AUTHORIZATION_JOBS)
-        self.assertEqual(supervisor.SUPPORTED_JOBS[85:116], tuple(("service-originals", name) for name in launch_names))
+        self.assertEqual(source_jobs(launch_names), execution.LAUNCH_AUTHORIZATION_JOBS)
         for job, pair in zip(execution.LAUNCH_AUTHORIZATION_JOBS, launch_pairs, strict=True):
             self.assertEqual(execution.LAUNCH_AUTHORIZATION_JOB_INFO[job.name], pair)
             self.assertEqual((job.family, job.purpose, job.key), ("native-launch-authorization", None, job.name))
-        self.assertEqual(execution.JOBS["service-originals"][109].name, "install-launch-retrieval")
-        endpoint_jobs = execution.JOBS["service-originals"][109:119]
-        self.assertEqual(tuple(job.name for job in endpoint_jobs), tuple("install-launch-" + role for role in endpoints))
-        self.assertEqual(supervisor.SUPPORTED_JOBS[116:126],
-            tuple(("service-originals", job.name) for job in endpoint_jobs))
+        endpoint_jobs = source_jobs(tuple("install-launch-" + role for role in endpoints))
         for job, role in zip(endpoint_jobs, endpoints, strict=True):
             self.assertEqual((job.family, job.role, job.purpose, job.key), ("launch", role, None, None))
-        self.assertEqual(execution.JOBS["service-originals"][119].name, "service-material")
-        self.assertEqual(supervisor.SUPPORTED_JOBS[126], ("service-originals", "service-material"))
-        self.assertEqual(execution.JOBS["service-originals"][119].maximum, 64 * 1024 * 1024)
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (136, 9))
+        material, = source_jobs(("service-material",))
+        self.assertEqual(execution.job_index(phase, material.name), len(execution.JOBS[phase]))
+        self.assertEqual(material.maximum, 64 * 1024 * 1024)
+        service_names = (expected + tuple(job.name for job in execution.HELPER_INITIAL_JOBS)
+            + tuple("ordinary-delivery-" + role for role in ROLES)
+            + tuple("ordinary-generation-" + role for role in ROLES)
+            + tuple("native-delivery-" + role for role in endpoints[3:])
+            + key_names + native_names + transition_names + launch_names
+            + tuple("install-launch-" + role for role in endpoints) + ("service-material",))
+        self.assertEqual(tuple(job.name for job in execution.JOBS[phase]), service_names)
+        self.assertEqual(supervisor.SUPPORTED_JOBS[7:], tuple((phase, name) for name in service_names))
+        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (142, 151, 9))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

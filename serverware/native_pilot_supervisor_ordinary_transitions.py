@@ -21,16 +21,16 @@ from serverware import native_pilot_service_authority as authority
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_native_services as native
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import JOBS, LAUNCH_AUTHORIZATION_JOBS, MAX_RETAINED_BYTES
-from serverware.native_shadow_proof_cohort_assignment import ENDPOINT_ROLES
+from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 
 p = generation.p
 TRANSITIONS = profile.JOBS
-FIRST_INDEX = 74
 NEXT_JOB = "native-closure-retrieval"
-_AUTHORIZATION_LAST_INDEX = FIRST_INDEX + len(TRANSITIONS) + len(LAUNCH_AUTHORIZATION_JOBS) + len(ENDPOINT_ROLES)
 JOB_NAMES = tuple("ordinary-" + operation + ("-" + role if operation == "dispatch" else "")
     for operation, role in TRANSITIONS)
+FIRST_INDEX = job_index("service-originals", JOB_NAMES[0])
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
+_AUTHORIZATION_LAST_INDEX = job_index("service-originals", "service-material")
 _LIVE = None
 _USED = False
 
@@ -225,7 +225,7 @@ def require_transitions(policy, *, process, request) -> dict:
 
 
 def recheck_transitions(policy, *, process, request) -> dict:
-    """Recheck the opened boundary through late authorizations/launches to120."""
+    """Recheck the opened boundary through late authorizations and service material."""
     return _verified_transitions(policy, process=process, request=request, first=False)
 
 
@@ -235,8 +235,8 @@ def _verified_transitions(policy, *, process, request, first):
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(TRANSITIONS)
         and installation.native_completed_boundary(request)
-        and FIRST_INDEX + len(TRANSITIONS) <= request.job_index <= _AUTHORIZATION_LAST_INDEX
-        and (request.job_index == FIRST_INDEX + len(TRANSITIONS) and request.job == NEXT_JOB
+        and NEXT_INDEX <= request.job_index <= _AUTHORIZATION_LAST_INDEX
+        and (request.job_index == NEXT_INDEX and request.job == NEXT_JOB
              if first else owner.authorization_boundary_open))
     owner.inflight = request
     try:

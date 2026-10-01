@@ -17,14 +17,15 @@ from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_key_authorizations as keys
 from serverware import native_pilot_supervisor_ordinary_transitions as transitions
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import JOBS, LAUNCH_AUTHORIZATION_JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, LAUNCH_AUTHORIZATION_JOBS, MAX_RETAINED_BYTES, job_index
 
 p = key_profile.p
 AUTHORIZATIONS = profile.JOBS
-FIRST_INDEX = 79
 NEXT_JOB = "install-launch-retrieval"
-_LAUNCH_LAST_INDEX = FIRST_INDEX + len(AUTHORIZATIONS) + len(key_profile.ROLES)
 JOB_NAMES = tuple(profile.job_name(operation, role) for operation, role in AUTHORIZATIONS)
+FIRST_INDEX = job_index("service-originals", JOB_NAMES[0])
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
+_LAUNCH_LAST_INDEX = job_index("service-originals", "service-material")
 _LIVE = None
 _USED = False
 
@@ -195,12 +196,12 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_authorizations(policy, *, process, request) -> dict:
-    """Read-only actual thirty-one-result handoff at first launch job110."""
+    """Read-only actual thirty-one-result handoff at the first endpoint launch."""
     return _verified_authorizations(policy, process=process, request=request, first=True)
 
 
 def recheck_authorizations(policy, *, process, request) -> dict:
-    """Recheck the opened boundary through fixed launches and handoff120."""
+    """Recheck the opened boundary through fixed launches and service material."""
     return _verified_authorizations(policy, process=process, request=request, first=False)
 
 
@@ -210,8 +211,8 @@ def _verified_authorizations(policy, *, process, request, first):
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(AUTHORIZATIONS)
         and installation.native_completed_boundary(request)
-        and FIRST_INDEX + len(AUTHORIZATIONS) <= request.job_index <= _LAUNCH_LAST_INDEX
-        and (request.job_index == FIRST_INDEX + len(AUTHORIZATIONS) and request.job == NEXT_JOB
+        and NEXT_INDEX <= request.job_index <= _LAUNCH_LAST_INDEX
+        and (request.job_index == NEXT_INDEX and request.job == NEXT_JOB
              if first else owner.launch_boundary_open))
     owner.inflight = request
     try:

@@ -17,13 +17,14 @@ from serverware import native_pilot_supervisor_native_services as services
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 
 PHASE = "service-originals"
 JOB = "service-material"
-INDEX = 120
+INDEX = job_index(PHASE, JOB)
 NEXT_PHASE = "bridge-runtime"
 NEXT_JOB = "install-bridge-runtime"
+NEXT_INDEX = job_index(NEXT_PHASE, NEXT_JOB)
 ROLES = ("persistence", "generationInstall")
 SERVICE_JOBS = {"persistence": "native-service-persistence", "generationInstall": "native-generation-install-grant"}
 _LIVE = None
@@ -121,7 +122,7 @@ def _current(owner, request, *, next_phase=False):
         # The actual process admits this new phase only after its preceding
         # service-material reply. This is not permission to call an earlier
         # service owner with a different phase or manufacture a live owner.
-        p.require(request.phase == NEXT_PHASE and request.job_index == 1 and request.job == NEXT_JOB
+        p.require(request.phase == NEXT_PHASE and request.job_index == NEXT_INDEX and request.job == NEXT_JOB
             and JOBS[NEXT_PHASE][0].name == NEXT_JOB and STAGES.index(NEXT_PHASE) == STAGES.index(PHASE) + 1)
         phase = endpoints._phase(owner.process, NEXT_PHASE)
         p.require(phase["sequence"] == prior_phase["sequence"] + 1)

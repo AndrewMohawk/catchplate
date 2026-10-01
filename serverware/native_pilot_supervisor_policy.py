@@ -38,6 +38,9 @@ authorizations and separately approved clock-bootstrap settings. It retains
 Explicit v13 delegates exclusive publication of the four existing fresh
 Persistence/GenerationInstall material originals. It introduces no signer or
 journal-initialization authority; bridge and release remain separate.
+Explicit v14 adds three supplemental helper initial-history ceremonies under
+its existing approved root/checkpoint/service keys. Their exact outputs enter
+the four-role runtime; they do not approve currentness, launch or cleanup.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -105,7 +108,11 @@ ENDPOINT_LAUNCH_FIELDS = LAUNCH_AUTHORIZATION_FIELDS + ("endpointLaunchesOrigina
 SERVICE_MATERIAL_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v13"
 SERVICE_MATERIAL_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-service-material"
 SERVICE_MATERIAL_FIELDS = ENDPOINT_LAUNCH_FIELDS + ("serviceMaterialOriginal",)
-ENDPOINT_LAUNCH_POLICY_APIS = (ENDPOINT_LAUNCH_POLICY_API, SERVICE_MATERIAL_POLICY_API)
+HELPER_INITIAL_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v14"
+HELPER_INITIAL_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-helper-histories"
+HELPER_INITIAL_FIELDS = SERVICE_MATERIAL_FIELDS + ("helperInitialHistoriesOriginal",)
+SERVICE_MATERIAL_POLICY_APIS = (SERVICE_MATERIAL_POLICY_API, HELPER_INITIAL_POLICY_API)
+ENDPOINT_LAUNCH_POLICY_APIS = (ENDPOINT_LAUNCH_POLICY_API,) + SERVICE_MATERIAL_POLICY_APIS
 LAUNCH_AUTHORIZATION_POLICY_APIS = (LAUNCH_AUTHORIZATION_POLICY_API,) + ENDPOINT_LAUNCH_POLICY_APIS
 ORDINARY_TRANSITION_POLICY_APIS = (ORDINARY_TRANSITION_POLICY_API,) + LAUNCH_AUTHORIZATION_POLICY_APIS
 NATIVE_SERVICE_POLICY_APIS = (NATIVE_SERVICE_POLICY_API,) + ORDINARY_TRANSITION_POLICY_APIS
@@ -199,6 +206,7 @@ class SupervisorPolicy:
         self._launch_authorizations = None
         self._endpoint_launches = None
         self._service_material = None
+        self._helper_initial = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -219,7 +227,8 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            service_material = value["apiVersion"] == SERVICE_MATERIAL_POLICY_API
+            helper_initial = value["apiVersion"] == HELPER_INITIAL_POLICY_API
+            service_material = value["apiVersion"] in SERVICE_MATERIAL_POLICY_APIS
             endpoint_launch = value["apiVersion"] in ENDPOINT_LAUNCH_POLICY_APIS
             launch_authorization = value["apiVersion"] in LAUNCH_AUTHORIZATION_POLICY_APIS
             ordinary_transition = value["apiVersion"] in ORDINARY_TRANSITION_POLICY_APIS
@@ -231,9 +240,9 @@ class SupervisorPolicy:
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, HELPER_INITIAL_FIELDS if helper_initial else SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -297,6 +306,13 @@ class SupervisorPolicy:
                     root = ordinary_initial["services"][role]["authorities"]["root"]
                     p.require(keys["ordinary-generation-" + role]
                         == p.sha(p.decoded(root["publicKeySpkiBase64"], size=44)[-32:]))
+            if helper_initial:
+                from serverware import native_pilot_supervisor_helper_initial_profile as helper
+                policy_text = value["helperInitialHistoriesOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii()
+                    and ordinary_deliveries["apiVersion"] == "serverware.nativePilotOrdinaryRuntimePolicy/v2")
+                helper_initial_policy = helper.validate_policy(
+                    generation.document(policy_text.encode("ascii"), helper.MAX_POLICY), initial_policy=ordinary_initial)
             if native_delivery:
                 from serverware import native_pilot_native_delivery_profile as native
                 policy_text = value["nativeDeliveriesOriginal"]
@@ -375,6 +391,8 @@ class SupervisorPolicy:
                 owner._endpoint_launches = endpoint_launches
             if service_material:
                 owner._service_material = service_material_policy
+            if helper_initial:
+                owner._helper_initial = helper_initial_policy
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -411,7 +429,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2-v13 require the already independently
+        Legacy policy forbids a recipe. v2+ require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -520,6 +538,15 @@ class SupervisorPolicy:
         p.require(self._value["apiVersion"] in DELIVERY_POLICY_APIS)
         return copy.deepcopy(self._ordinary_deliveries)
 
+    def helper_initial_policy(self, *, process, request) -> dict | None:
+        """Only explicit v14 supplies supplementary roles; never infer them."""
+        self.check(process)
+        process.check_request(request)
+        if self._value["apiVersion"] != HELPER_INITIAL_POLICY_API:
+            return None
+        p.require(self._helper_initial is not None)
+        return copy.deepcopy(self._helper_initial)
+
     def ordinary_generation_policy(self, *, process, request) -> dict:
         """Only v6+ delegate the five fixed ordinary generation decisions."""
         self.check(process)
@@ -573,10 +600,10 @@ class SupervisorPolicy:
         return copy.deepcopy(self._endpoint_launches)
 
     def service_material_policy(self, *, process, request) -> dict:
-        """Only v13 delegates exact fresh public material, not journal writes."""
+        """V13+ delegate exact fresh public material, not journal writes."""
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == SERVICE_MATERIAL_POLICY_API)
+        p.require(self._value["apiVersion"] in SERVICE_MATERIAL_POLICY_APIS)
         return copy.deepcopy(self._service_material)
 
     def _require_native_signers(self, process, request, jobs):
@@ -681,7 +708,7 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == SERVICE_MATERIAL_POLICY_API:
+            if self._value["apiVersion"] in SERVICE_MATERIAL_POLICY_APIS:
                 from serverware import native_pilot_supervisor_service_material as service_material
                 service_material.close(self._process)
             if self._value["apiVersion"] in ENDPOINT_LAUNCH_POLICY_APIS:

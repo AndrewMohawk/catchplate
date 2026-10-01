@@ -327,10 +327,10 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def _service_boundary(request):
-    from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS
-    count = len(INITIAL_JOBS)
+    from serverware.native_pilot_phase_execution import JOBS, job_index
+    last = job_index("service-originals", "ordinary-delivery-" + generation.ROLES[0])
     return (request.phase == "service-originals" and type(request.job_index) is int
-        and 1 <= request.job_index <= count + 1
+        and 1 <= request.job_index <= last
         and request.job == JOBS["service-originals"][request.job_index - 1].name)
 
 

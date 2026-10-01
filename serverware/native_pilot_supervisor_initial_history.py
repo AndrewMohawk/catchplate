@@ -1,4 +1,4 @@
-"""Twenty-five fixed initial-history inputs from one real retained request.
+"""Primary and explicit supplemental histories from one real retained request.
 
 The independently admitted policy selects public authorities, generations and
 revocation facts. Only actual preparation/resource originals supply process,
@@ -19,10 +19,14 @@ from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_publication as publication
 from serverware import native_pilot_service_authority as service
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
+from serverware import native_pilot_supervisor_helper_initial_profile as helper
 from serverware import native_pilot_window_authority as window_authority
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, INITIAL_JOB_INFO
+from serverware.native_pilot_phase_execution import (
+    HELPER_INITIAL_JOBS, HELPER_INITIAL_JOB_INFO, INITIAL_JOBS, INITIAL_JOB_INFO,
+    MAX_RETAINED_BYTES, job_index,
+)
 
 p = generation.p
 POLICY_API = "serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1"
@@ -30,6 +34,7 @@ VALIDITY = "observed-initial-resources-through-original-lifetime"
 ROLE_FIELDS = ("authorities", "endpointRole", "endpointGeneration", "serviceGeneration", "operationGeneration",
     "durableEpoch", "deploymentGenerationSha256", "revocationGenerationHighWater", "revocationRootSha256", "validity")
 GENERATIONS = ("endpointGeneration", "serviceGeneration", "operationGeneration", "durableEpoch")
+CEREMONY_JOBS = INITIAL_JOBS + HELPER_INITIAL_JOBS
 _LIVE = None
 _USED = False
 
@@ -107,8 +112,12 @@ def _result_context(role, operation, input_raw):
 
 def checked_result(role, operation, input_raw, result) -> bytes:
     """Verify a public result; the caller separately proves input/owner origin."""
+    return _checked_result(role, operation, input_raw, result, published=True)
+
+
+def _checked_result(role, operation, input_raw, result, *, published) -> bytes:
     value, state, identity, payload, authorities, keys = _result_context(role, operation, input_raw)
-    p.fields(result, ("original", "sha256", "pin") if operation == "assemble" else ("original", "sha256"))
+    p.fields(result, ("original", "sha256", "pin") if operation == "assemble" and published else ("original", "sha256"))
     bound = issuer.MAX_OUTPUT if operation == "assemble" else issuer.MAX_CHECKPOINT if operation == "checkpoint" else issuer.MAX_SIGNATURE
     raw, output = history._original(result["original"], bound)
     p.require(p.sha(raw) == p.digest(result["sha256"]))
@@ -146,7 +155,8 @@ def checked_result(role, operation, input_raw, result) -> bytes:
         root_pin={name: authorities["root"][name] for name in ("keyId", "keySpkiSha256")})
     _same(verified["rootAuthority"], authorities["root"])
     _same(verified["firstRetainedEpoch"], anchor)
-    _same(result["pin"], {"path": publication.DESTINATIONS["ordinary-initial-history-" + role], "sha256": p.sha(raw)})
+    if published:
+        _same(result["pin"], {"path": publication.DESTINATIONS["ordinary-initial-history-" + role], "sha256": p.sha(raw)})
     return raw
 
 
@@ -162,7 +172,8 @@ class _Attempt:
     def __init__(self, policy, process):
         self.policy, self.process = policy, process
         self.inputs = {}
-        self.phase_raw = self.fragment = None
+        self.phase_raw = self.fragment = self.helper_fragment = None
+        self.retained_bytes = 0
         self.next = 0
         self.failed = self.closed = False
 
@@ -183,13 +194,22 @@ def _context(owner, request):
     policy, process = owner.policy, owner.process
     endpoints.require_deliveries(policy, process=process, request=request)
     fragment = policy.ordinary_initial_policy(process=process, request=request)
+    helper_fragment = policy.helper_initial_policy(process=process, request=request)
+    if helper_fragment is not None:
+        helper.validate_policy(helper_fragment, initial_policy=fragment)
+        from serverware import native_pilot_ordinary_runtime_profile as runtime
+        p.require(policy.ordinary_delivery_policy(process=process, request=request)["apiVersion"] == runtime.HELPER_API)
     phase = endpoints._phase(process, "service-originals")
     phase_raw = p.canonical(phase)
     p.require(p.sha(phase_raw) == request.value["conductorRequestSha256"]
         and request.deadline_boottime_ns == p.ns(phase["deadlineBoottimeNs"]))
     if owner.phase_raw is None:
         owner.phase_raw, owner.fragment = phase_raw, copy.deepcopy(fragment)
+        owner.helper_fragment = copy.deepcopy(helper_fragment)
+        owner.retained_bytes = len(phase_raw) + len(generation.canonical(fragment)) + len(p.canonical(helper_fragment))
+        p.require(owner.retained_bytes <= MAX_RETAINED_BYTES)
     p.require(owner.phase_raw == phase_raw); _same(owner.fragment, fragment)
+    _same(owner.helper_fragment, helper_fragment)
     approved = policy.bootstrap_originals()
     retained = process.bootstrap_originals()
     p.require(all(type(raw) is bytes and raw == retained[name] for name, raw in approved.items()))
@@ -210,7 +230,11 @@ def _context(owner, request):
     _same(installed["ordinaryColdOriginals"], policy.precreation()["ordinaryColdOriginals"])
     validate_policy(fragment, ordinary_cold_originals=installed["ordinaryColdOriginals"], driver_configuration=config)
     bindings = process.policy_bindings()["keyBindings"]
-    for role, row in fragment["services"].items():
+    selections = [(role, role, row) for role, row in fragment["services"].items()]
+    if helper_fragment is not None:
+        selections.extend((slot, helper.HELPER, {**fragment["services"][helper.HELPER], "endpointRole": endpoint_role})
+            for slot, endpoint_role in enumerate(helper_fragment["supplementalEndpointRoles"], 1))
+    for selection, role, row in selections:
         for name, public in _keys(row["authorities"]).items():
             p.require(bindings["ordinary-initial-" + name + "-" + role] == p.sha(history._raw_key(public)))
     launch_raw, _ = history._original(installed["ordinaryLaunchOriginal"], 65536)
@@ -223,7 +247,7 @@ def _context(owner, request):
     resources_raw, _ = history._original(observed["ordinaryInitialResourcesOriginal"], initial.MAX_STATE)
     resources = initial.resources(resources_raw)
     result = {}
-    for role, row in fragment["services"].items():
+    for selection, role, row in selections:
         cold_raw, _ = history._original(installed["ordinaryColdOriginals"][role], 65536)
         cold = generation.configuration(cold_raw, launch["services"][role]["deliveryConfiguration"]["sha256"], role)
         identity = key.prepared_identity(measured, role=role, endpoint_role=row["endpointRole"],
@@ -249,7 +273,7 @@ def _context(owner, request):
             "validFromBoottime": {"domain": domain, "absoluteBoottimeNanos": p.ns(state["issuedAtBoottimeNs"])},
             "validUntilBoottime": {"domain": domain, "absoluteBoottimeNanos": lifetime}}
         key.validate_payload(payload, identity=identity, window=window, now=before)
-        result[role] = {"apiVersion": issuer.INPUT_API, "driverConfigurationOriginal": approved["configuration"].decode("ascii"),
+        result[selection] = {"apiVersion": issuer.INPUT_API, "driverConfigurationOriginal": approved["configuration"].decode("ascii"),
             "driverWindowOriginal": approved["window"].decode("ascii"), "launchOriginal": launch_raw.decode("ascii"),
             "configurationOriginal": cold_raw.decode("ascii"), "preparationOriginal": preparation_raw.decode("ascii"),
             "resourcesOriginal": resources_raw.decode("ascii"), "initialStateOriginal": generation.canonical(state).decode("ascii"),
@@ -261,34 +285,52 @@ def _context(owner, request):
 
 def _previous(owner, count):
     outputs = {}
-    for job in INITIAL_JOBS[:count]:
+    for job in CEREMONY_JOBS[:count]:
         expected = owner.inputs[job.name]
         raw = owner.process.approved_input_original("service-originals", job.name)
         p.require(raw == expected and p.sha(raw) == owner.process.approved_input_sha256("service-originals", job.name))
         result = owner.process.prior_result("service-originals", job.name)
-        role, operation = INITIAL_JOB_INFO[job.name]
-        outputs[job.name] = (checked_result(role, operation, raw, result), copy.deepcopy(result))
+        if job.name in INITIAL_JOB_INFO:
+            role, operation = INITIAL_JOB_INFO[job.name]
+            verified = checked_result(role, operation, raw, result)
+        else:
+            slot, operation = HELPER_INITIAL_JOB_INFO[job.name]
+            verified = helper.checked_result(slot, operation, raw, result,
+                fragment=owner.helper_fragment, initial_policy=owner.fragment)
+        outputs[job.name] = (verified, copy.deepcopy(result))
     return outputs
 
 
 def compose(policy, *, process, request) -> bytes:
     owner = _attempt(policy, process, request)
-    p.require(request.phase == "service-originals" and request.job in INITIAL_JOB_INFO
-        and request.job_index == owner.next + 1 and INITIAL_JOBS[owner.next].name == request.job)
+    p.require(request.phase == "service-originals" and owner.next < len(CEREMONY_JOBS)
+        and request.job_index == owner.next + 1 and CEREMONY_JOBS[owner.next].name == request.job)
     owner.failed = True
     bases = _context(owner, request)
     outputs = _previous(owner, owner.next)
-    role, operation = INITIAL_JOB_INFO[request.job]
-    value = {**bases[role], "operation": operation}
+    if request.job in INITIAL_JOB_INFO:
+        role, operation = INITIAL_JOB_INFO[request.job]
+        selection = role
+        names = {op: job.name for job in INITIAL_JOBS
+            for selected_role, op in (INITIAL_JOB_INFO[job.name],) if selected_role == role}
+    else:
+        slot, operation = HELPER_INITIAL_JOB_INFO[request.job]
+        p.require(owner.helper_fragment is not None)
+        role, selection = helper.HELPER, slot
+        names = {op: job.name for job in HELPER_INITIAL_JOBS
+            for selected_slot, op in (HELPER_INITIAL_JOB_INFO[job.name],) if selected_slot == slot}
+    value = {**bases[selection], "operation": operation}
     if operation != "checkpoint":
-        value["initialCheckpointOriginal"] = outputs["ordinary-initial-checkpoint-" + role][0].decode("ascii")
+        value["initialCheckpointOriginal"] = outputs[names["checkpoint"]][0].decode("ascii")
     if operation == "assemble":
-        value["anchorSignatures"] = {name: outputs["ordinary-initial-" + name + "-anchor-" + role][0].decode("ascii")
+        value["anchorSignatures"] = {name: outputs[names[name + "-anchor"]][0].decode("ascii")
             for name in issuer.KEY_NAMES}
     raw = p.canonical(value)
     p.require(len(raw) <= issuer.MAX_INPUT)
     _result_context(role, operation, raw)
     _owners(policy, process, request)
+    p.require(owner.retained_bytes + len(raw) <= MAX_RETAINED_BYTES)
+    owner.retained_bytes += len(raw)
     owner.inputs[request.job] = raw
     owner.next += 1
     owner.failed = False
@@ -297,16 +339,33 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_histories(policy, *, process, request) -> dict:
     """Actual five final wrapper results at the first ordinary delivery only."""
+    return require_all_histories(policy, process=process, request=request)["histories"]
+
+
+def require_helper_histories(policy, *, process, request):
+    """Actual authenticated four-member handoff, never caller-provided history."""
+    return require_all_histories(policy, process=process, request=request)["helperHistories"]
+
+
+def require_all_histories(policy, *, process, request) -> dict:
+    """Single genuine boundary check for primary results and helper members."""
     owner = _attempt(policy, process, request)
-    p.require(request.phase == "service-originals" and request.job_index == len(INITIAL_JOBS) + 1
-        and request.job == "ordinary-delivery-" + generation.ROLES[0] and owner.next == len(INITIAL_JOBS))
+    p.require(request.phase == "service-originals"
+        and request.job_index == job_index("service-originals", "ordinary-delivery-" + generation.ROLES[0])
+        and request.job == "ordinary-delivery-" + generation.ROLES[0] and owner.next == len(CEREMONY_JOBS))
     owner.failed = True
     _context(owner, request)
-    outputs = _previous(owner, len(INITIAL_JOBS))
-    result = {role: outputs["ordinary-initial-assemble-" + role][1] for role in generation.ROLES}
+    outputs = _previous(owner, len(CEREMONY_JOBS))
+    members = None
+    if owner.helper_fragment is not None:
+        members = helper.authenticate_histories(outputs["ordinary-initial-assemble-" + helper.HELPER][0],
+            {slot: outputs[job.name][0] for job in HELPER_INITIAL_JOBS
+                for slot, operation in (HELPER_INITIAL_JOB_INFO[job.name],) if operation == "assemble"},
+            fragment=owner.helper_fragment, initial_policy=owner.fragment)
     _owners(policy, process, request)
     owner.failed = False
-    return result
+    return {"histories": {role: outputs["ordinary-initial-assemble-" + role][1] for role in generation.ROLES},
+        "helperHistories": members}
 
 
 def close(process):

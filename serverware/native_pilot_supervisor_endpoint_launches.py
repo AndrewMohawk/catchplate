@@ -16,13 +16,14 @@ from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_launch_authorizations as authorizations
 from serverware import native_pilot_supervisor_native_services as services
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 
 p = key_profile.p
 ROLES = profile.ROLES
-FIRST_INDEX = 110
 NEXT_JOB = "service-material"
 JOB_NAMES = tuple("install-launch-" + role for role in ROLES)
+FIRST_INDEX = job_index("service-originals", JOB_NAMES[0])
+NEXT_INDEX = job_index("service-originals", NEXT_JOB)
 _LIVE = None
 _USED = False
 
@@ -208,7 +209,7 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_launches(policy, *, process, request) -> dict:
-    """Read-only actual installation handoff at the service-material job120."""
+    """Read-only actual installation handoff at the service-material job."""
     return _verified_launches(policy, process=process, request=request, first=True)
 
 
@@ -222,7 +223,7 @@ def _verified_launches(policy, *, process, request, first):
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(ROLES)
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(ROLES)
+        and request.phase == "service-originals" and request.job_index == NEXT_INDEX
         and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB
         and (first or owner.material_boundary_open))
     owner.inflight = request

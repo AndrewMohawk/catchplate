@@ -22,7 +22,7 @@ from serverware.native_pilot_ordinary_runtime_recipe import INSPECTION_PATHS, RU
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_supervisor_initial_history as histories
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, LAUNCH_AUTHORIZATION_JOBS
+from serverware.native_pilot_phase_execution import JOBS, KEY_AUTHORIZATION_JOBS, LAUNCH_AUTHORIZATION_JOBS, job_index
 from serverware.native_shadow_proof_cohort_assignment import ENDPOINT_ROLES
 
 p = g.p
@@ -35,7 +35,8 @@ _FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _TOKEN = object()
 _USED = False
 _LIVE = None
-_NATIVE_FIRST_INDEX = len(INITIAL_JOBS) + 2 * len(g.ROLES) + 1
+_DELIVERY_FIRST_INDEX = job_index("service-originals", "ordinary-delivery-" + g.ROLES[0])
+_GENERATION_FIRST_INDEX = job_index("service-originals", "ordinary-generation-" + g.ROLES[0])
 _NATIVE_COMPLETED_JOBS = tuple("native-delivery-" + role for role in ENDPOINT_ROLES
     if role not in ("retrieval", "persistence", "trustedTime")) + tuple(
         job.name for job in KEY_AUTHORIZATION_JOBS) + tuple("native-service-" + operation for operation in
@@ -45,6 +46,8 @@ _NATIVE_COMPLETED_JOBS = tuple("native-delivery-" + role for role in ENDPOINT_RO
                 "ordinary-dispatch-current-signature-authority", "ordinary-head", "ordinary-cleanup",
                 "ordinary-current") + tuple(job.name for job in LAUNCH_AUTHORIZATION_JOBS) + tuple(
                     "install-launch-" + role for role in ENDPOINT_ROLES) + ("service-material",)
+_NATIVE_FIRST_INDEX = job_index("service-originals", _NATIVE_COMPLETED_JOBS[0])
+_NATIVE_LAST_INDEX = job_index("service-originals", "service-material")
 
 
 def native_completed_boundary(request):
@@ -53,9 +56,10 @@ def native_completed_boundary(request):
         return False
     index = request.job_index - _NATIVE_FIRST_INDEX
     return (0 <= index < len(_NATIVE_COMPLETED_JOBS)
+        and request.job_index <= _NATIVE_LAST_INDEX
         and request.job == _NATIVE_COMPLETED_JOBS[index]
         and tuple(job.name for job in JOBS["service-originals"][_NATIVE_FIRST_INDEX - 1:
-            _NATIVE_FIRST_INDEX - 1 + len(_NATIVE_COMPLETED_JOBS)]) == _NATIVE_COMPLETED_JOBS)
+            _NATIVE_LAST_INDEX]) == _NATIVE_COMPLETED_JOBS)
 
 
 def plan(*, runtime_originals, history_originals, cold_originals, launch_original):
@@ -142,10 +146,10 @@ class _Installation:
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
             and originals._boot() == self.boot)
         policy.check(process); process.check_request(request)
-        offset = request.job_index - len(INITIAL_JOBS) - 1
+        offset = request.job_index - _DELIVERY_FIRST_INDEX
         delivery = (0 <= offset < len(g.ROLES)
             and request.job == "ordinary-delivery-" + g.ROLES[offset])
-        generation_offset = offset - len(g.ROLES)
+        generation_offset = request.job_index - _GENERATION_FIRST_INDEX
         generation_job = (0 <= generation_offset < len(g.ROLES)
             and request.job == "ordinary-generation-" + g.ROLES[generation_offset])
         completed_boundary = self.complete and (generation_job or native_completed_boundary(request))
@@ -235,7 +239,7 @@ def prepare(policy, *, process, request):
     global _USED, _LIVE
     _types(policy, process, request)
     p.require(not _USED and _LIVE is None and request.phase == "service-originals"
-        and request.job_index == len(INITIAL_JOBS) + 1
+        and request.job_index == _DELIVERY_FIRST_INDEX
         and request.job == "ordinary-delivery-" + g.ROLES[0])
     _USED = True
     owner = _Installation(_TOKEN, policy, process, request)

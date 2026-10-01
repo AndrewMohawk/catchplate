@@ -19,16 +19,20 @@ from serverware import native_pilot_publication as publication
 from serverware import native_pilot_service_authority as authority
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_initial_history as initial_history
+from serverware import native_pilot_supervisor_helper_initial_profile as helper
 from serverware import native_pilot_window_authority as window_authority
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_retrieval_artifacts as retrieval
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, INITIAL_JOB_INFO, JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import (
+    HELPER_INITIAL_JOB_INFO, INITIAL_JOB_INFO,
+    JOBS, MAX_RETAINED_BYTES, job_index,
+)
 from serverware.native_shadow_proof_cohort_control import _Original
 
 p = generation.p
 ROLES = generation.ROLES
-FIRST_INDEX = 26
+FIRST_INDEX = job_index("service-originals", "ordinary-delivery-" + ROLES[0])
 INPUT_API = "serverware.nativePilotServiceAuthorityInput/v1"
 INPUT_FIELDS = ("apiVersion", "operation", "serviceRole", "launchOriginal", "payloadOriginal",
     "configurationOriginal", "configurationSha256", "runtimeOriginal", "activation")
@@ -104,6 +108,7 @@ class _Attempt:
         self.failed = self.closed = self.close_attempted = False
         self.generation_boundary_open = False
         self.inputs, self.initial, self.histories, self.runtimes = {}, {}, {}, {}
+        self.helper_histories = self.helper_fragment = self.initial_fragment = None
         self.deliveries, self.delivery_results = {}, {}
         self.retained_bytes = 0
         self.phase_raw = self.fragment = self.installed_raw = self.endpoint_raw = None
@@ -127,6 +132,8 @@ def _current(owner, request):
         and phase["deadlineBoottimeNs"] == owner.window["startupDeadlineBoottimeNs"]
         and request.deadline_boottime_ns == p.ns(owner.window["startupDeadlineBoottimeNs"]))
     _same(owner.policy.ordinary_delivery_policy(process=owner.process, request=request), owner.fragment)
+    _same(owner.policy.helper_initial_policy(process=owner.process, request=request), owner.helper_fragment)
+    _same(owner.policy.ordinary_initial_policy(process=owner.process, request=request), owner.initial_fragment)
     p.require(owner.policy.bootstrap_originals() == owner.bootstrap == owner.process.bootstrap_originals())
     for phase_name, job, expected in (("endpoint-precreation", "install-precreation", owner.installed_raw),
             ("endpoint-inputs", "endpoint-inputs", owner.endpoint_raw)):
@@ -146,12 +153,18 @@ def _current(owner, request):
 
 def _capture(owner, request):
     # This is the only entry into the initial owner's first-delivery boundary.
-    results = initial_history.require_histories(owner.policy, process=owner.process, request=request)
+    handoff = initial_history.require_all_histories(owner.policy, process=owner.process, request=request)
+    results = handoff["histories"]
     p.fields(results, ROLES)
     histories = {role: history._original(results[role]["original"], generation.MAX_BYTES)[0] for role in ROLES}
     _reserve(owner, sum(len(raw) for raw in histories.values()))
     owner.histories = histories
-    for job in INITIAL_JOBS:
+    owner.helper_histories = handoff["helperHistories"]
+    if owner.helper_histories is not None:
+        _reserve(owner, sum(len(raw) for raw in owner.helper_histories.values()))
+    owner.helper_fragment = owner.policy.helper_initial_policy(process=owner.process, request=request)
+    owner.initial_fragment = owner.policy.ordinary_initial_policy(process=owner.process, request=request)
+    for job in initial_history.CEREMONY_JOBS:
         raw = owner.process.approved_input_original("service-originals", job.name)
         result_raw = generation.canonical(owner.process.prior_result("service-originals", job.name))
         p.require(p.sha(raw) == owner.process.approved_input_sha256("service-originals", job.name))
@@ -186,18 +199,19 @@ def _capture(owner, request):
     # backing object with the genuine process. No aggregate limit is enlarged.
     _reserve(owner, sum(len(raw) for raw in (owner.phase_raw, owner.installed_raw, owner.endpoint_raw,
         owner.launch_raw, owner.preparation_raw, owner.resources_raw, *owner.bootstrap.values(), *owner.cold.values()))
-        + len(generation.canonical(owner.fragment)) + len(generation.canonical(owner.activations)))
+        + len(generation.canonical(owner.fragment)) + len(generation.canonical(owner.activations))
+        + len(generation.canonical(owner.helper_fragment)) + len(generation.canonical(owner.initial_fragment)))
     _current(owner, request)
     owner.peer = _Original(pin["path"], 4096, p.digest(pin["sha256"]), mode=0o400)
     _reserve(owner, len(owner.peer.raw))
     peer = retrieval._peer(owner.peer.raw)
     runtime_profile.validate_policy(owner.fragment, ordinary_cold_originals=installed["ordinaryColdOriginals"],
-        initial_policy=owner.policy.ordinary_initial_policy(process=owner.process, request=request))
+        initial_policy=owner.initial_fragment)
     for role in ROLES:
         _current(owner, request)
         raw = runtime_profile.build(role, fragment=owner.fragment, history_originals=owner.histories,
             preparation_raw=owner.preparation_raw, resources_raw=owner.resources_raw, launch_raw=owner.launch_raw,
-            configuration_raw=owner.cold[role], peer=peer)
+            configuration_raw=owner.cold[role], peer=peer, helper_history_originals=owner.helper_histories)
         p.require(type(raw) is bytes and 0 < len(raw) <= generation.MAX_BYTES)
         _reserve(owner, len(raw))
         owner.runtimes[role] = raw
@@ -216,16 +230,28 @@ def prepared_runtime_originals(policy, *, process, request) -> dict:
 
 
 def _prior(owner):
-    for job in INITIAL_JOBS:
+    supplementary = {}
+    for job in initial_history.CEREMONY_JOBS:
         expected, result_raw = owner.initial[job.name]
         raw = owner.process.approved_input_original("service-originals", job.name)
         result = owner.process.prior_result("service-originals", job.name)
         p.require(raw == expected and p.sha(raw) == owner.process.approved_input_sha256("service-originals", job.name)
             and generation.canonical(result) == result_raw)
-        role, operation = INITIAL_JOB_INFO[job.name]
-        verified = initial_history.checked_result(role, operation, raw, result)
-        if operation == "assemble":
-            p.require(verified == owner.histories[role])
+        if job.name in INITIAL_JOB_INFO:
+            role, operation = INITIAL_JOB_INFO[job.name]
+            verified = initial_history.checked_result(role, operation, raw, result)
+            if operation == "assemble":
+                p.require(verified == owner.histories[role])
+        else:
+            slot, operation = HELPER_INITIAL_JOB_INFO[job.name]
+            verified = helper.checked_result(slot, operation, raw, result,
+                fragment=owner.helper_fragment, initial_policy=owner.initial_fragment)
+            if operation == "assemble":
+                supplementary[slot] = verified
+    if owner.helper_fragment is not None:
+        members = helper.authenticate_histories(owner.histories[helper.HELPER], supplementary,
+            fragment=owner.helper_fragment, initial_policy=owner.initial_fragment)
+        p.require(members == owner.helper_histories)
     for role in ROLES[:owner.next]:
         job = "ordinary-delivery-" + role
         raw = owner.process.approved_input_original("service-originals", job)
@@ -295,7 +321,7 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_deliveries(policy, *, process, request) -> dict:
-    """Five verified originals at actual job31, not a future generation grant."""
+    """Five verified originals at the first generation, not a future grant."""
     return _verified_deliveries(policy, process=process, request=request, first=True)
 
 
@@ -348,5 +374,7 @@ def close(process):
         owner.peer.close(); owner.peer = None
     owner.closed = True
     owner.initial.clear(); owner.inputs.clear(); owner.histories.clear(); owner.runtimes.clear()
+    if owner.helper_histories is not None:
+        owner.helper_histories.clear()
     owner.deliveries.clear(); owner.delivery_results.clear()
     _LIVE = None

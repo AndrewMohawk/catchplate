@@ -24,8 +24,13 @@ INITIAL_MODES = {
     "--assemble-genesis-ordinary-history": "assemble",
 }
 ORDINARY_MODES = {"--sign-genesis-ordinary-delivery": "delivery", "--sign-genesis-ordinary-grant": "grant"}
-SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release") + tuple(ORDINARY_MODES) + tuple(
-    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble")
+NATIVE_MODES = {"--sign-genesis-native-" + label + "-" + operation: (role, operation)
+    for label, role in (("retrieval", "publicationGenesisRetrieval"), ("publication", "publicationGenesis"),
+        ("coordinator", "publicationGenesisCoordinator")) for operation in ("delivery", "role-keys", "admission", "closure")}
+SERVICE_MODES = {"--sign-genesis-native-publication-grant": "publication",
+    "--sign-genesis-native-retrieval-grant": "retrieval"}
+SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release", "--sign-genesis-endpoints-release") + tuple(ORDINARY_MODES) + tuple(
+    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES)
 MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history") + SIGNING_MODES
 
 
@@ -76,6 +81,11 @@ def main():
     from serverware import native_pilot_genesis_parent_authority as genesis
     from serverware import native_pilot_genesis_ordinary_initial_authority as initial
     from serverware import native_pilot_genesis_ordinary_authority as ordinary
+    from serverware import native_pilot_genesis_delivery_authority as delivery
+    from serverware import native_pilot_genesis_key_authority as keys
+    from serverware import native_pilot_genesis_closure_authority as closure
+    from serverware import native_pilot_genesis_native_service_authority as service
+    from serverware import native_pilot_genesis_endpoint_release_authority as endpoint_release
     from serverware import native_pilot_publication_cold_binding as cold_binding
     from serverware import native_shadow_nitro_originals as originals
 
@@ -91,7 +101,10 @@ def main():
         purpose = genesis_operation(mode)
         initial_purpose = INITIAL_MODES.get(mode)
         ordinary_purpose = ORDINARY_MODES.get(mode)
-        maximum = (ordinary.MAX_INPUT if ordinary_purpose is not None else
+        native_purpose, service_purpose = NATIVE_MODES.get(mode), SERVICE_MODES.get(mode)
+        maximum = (endpoint_release.MAX_INPUT if mode == "--sign-genesis-endpoints-release" else
+            delivery.MAX_INPUT if native_purpose is not None else
+            service.MAX_INPUT if service_purpose is not None else ordinary.MAX_INPUT if ordinary_purpose is not None else
             initial.MAX_INPUT if initial_purpose is not None else
             genesis.MAX_INPUT if purpose is not None else cold_binding.MAX_INPUT
             if mode == "--prepare-genesis-binding" else assignment.MAX_INPUT
@@ -129,7 +142,42 @@ def main():
             if payload is not None:
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after_wall)
 
-        if ordinary_purpose is not None:
+        if mode == "--sign-genesis-endpoints-release":
+            approved = endpoint_release.prepare_input(raw, boot=originals._boot(),
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result, result_deadline = endpoint_release.sign(input_original=raw, signing_key=io.signing_key(key_fd))
+            p.require(result_deadline == deadline)
+        elif native_purpose is not None:
+            role, operation = native_purpose
+            clocks = dict(boot=originals._boot(), now_boottime_ns=originals._clock())
+            if operation == "delivery":
+                approved = delivery.prepare_input(role, raw, **clocks)
+            elif operation == "closure":
+                approved = closure.prepare_input(role, raw, **clocks, now_unix_ns=time.time_ns())
+            else:
+                approved = keys.prepare_input(operation, role, raw, **clocks, now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved.get("epochLimit")
+            key_identity = io._input(key_fd, 32, private=True)
+            check()  # Fixed role and purpose precede private-key access.
+            selected_key = io.signing_key(key_fd)
+            if operation == "delivery":
+                result, result_deadline = delivery.sign(role, input_original=raw, signing_key=selected_key)
+            elif operation == "closure":
+                result, result_deadline = closure.sign(role, input_original=raw, signing_key=selected_key)
+            else:
+                result, result_deadline = keys.sign(operation, role, input_original=raw, signing_key=selected_key)
+            p.require(result_deadline == deadline)
+        elif service_purpose is not None:
+            approved = service.prepare_input(service_purpose, raw, boot=originals._boot(),
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result = service.sign(service_purpose, input_original=raw, signing_key=io.signing_key(key_fd))
+        elif ordinary_purpose is not None:
             approved = ordinary.prepare_input(ordinary_purpose, raw, boot=originals._boot(),
                 now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
             deadline, epoch_limit = approved["deadline"], approved["epochLimit"]

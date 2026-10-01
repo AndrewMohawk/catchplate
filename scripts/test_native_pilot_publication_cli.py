@@ -28,7 +28,7 @@ class PublicationCliTests(unittest.TestCase):
             "--sign-genesis-ordinary-checkpoint", "--sign-genesis-ordinary-root-anchor",
             "--sign-genesis-ordinary-checkpoint-anchor", "--sign-genesis-ordinary-service-anchor",
             "--assemble-genesis-ordinary-history", "--sign-genesis-ordinary-delivery",
-            "--sign-genesis-ordinary-grant"})
+            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release"} | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES))
         for mode, purpose in (("--sign-genesis-precreation", "precreation"),
                               ("--sign-genesis-release", "release")):
             values = arguments(True)
@@ -79,6 +79,22 @@ class PublicationCliTests(unittest.TestCase):
             values[index] = value
             with self.subTest(index=index, value=value):
                 self.assertFalse(entry.valid_arguments(values))
+
+    def test_cold_native_roles_and_operations_are_fixed_not_payload_selected(self):
+        self.assertEqual(len(entry.NATIVE_MODES), 12)
+        self.assertEqual(set(entry.NATIVE_MODES.values()), {(role, operation)
+            for role in ("publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator")
+            for operation in ("delivery", "role-keys", "admission", "closure")})
+        self.assertEqual(entry.SERVICE_MODES, {"--sign-genesis-native-publication-grant": "publication",
+            "--sign-genesis-native-retrieval-grant": "retrieval"})
+        for mode in (*entry.NATIVE_MODES, *entry.SERVICE_MODES, "--sign-genesis-endpoints-release"):
+            values = arguments(True); values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values[:-2]))
+        for mode in ("--sign-genesis-native", "--sign-genesis-native-bridge-delivery",
+                "--sign-genesis-native-coordinator-grant"):
+            values = arguments(True); values[0] = mode
+            self.assertFalse(entry.valid_arguments(values))
 
     def test_unknown_mode_flags_paths_or_hashes_refuse(self):
         for index, value in ((0, "--sign-adoption"), (1, "--runtime-inventory-fd"),

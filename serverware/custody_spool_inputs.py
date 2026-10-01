@@ -64,12 +64,21 @@ def _require_retrieval_profile(payload, *, expected_api, effects, proof_scope_or
         and store["headSha256"] == store["genesisSha256"])
 
 
-def _native_original(name, raw, *, expected_api, effects, proof_scope_original):
+def _native_original(name, raw, *, expected_api, effects, proof_scope_original, adoption=False):
     """Keep legacy profiles exact; admit only the explicit effects successor."""
     from serverware import native_pilot_native_service_authority as authority
+    p.require(type(adoption) is bool and (not adoption or effects))
+    if adoption and name == "retrieval":
+        from serverware import native_pilot_adopted_service_authority as adopted
+        p.require(expected_api == EFFECT_NATIVE[name][1])
+        candidate = adopted.grant_original("retrieval", raw)
+        p.require(p.decoded(candidate["payload"]["proofScopeOriginalBase64url"], maximum=16384)
+            == proof_scope_original.encode("ascii"))
+        return candidate
     candidate = p.fields(g.document(raw, authority.MAX_OUTPUT), ("payload", "signature"))
     payload = candidate["payload"]
     successor = name in authority.HISTORY_PROFILES and payload.get("apiVersion") == authority.HISTORY_PROFILES[name][0]
+    p.require(not adoption or successor)
     if successor:
         p.require(effects is True and expected_api == EFFECT_NATIVE[name][1])
         return authority.grant_original(name, raw)
@@ -198,13 +207,13 @@ class RoleInputs:
         p.require(value["apiVersion"] == "serverware." + profile + "/v" + version and value["purpose"] == purpose
             and value["guest"] == item["guest"] and value["runtimeConfigurationSha256"] == item["runtime"].sha
             and value["authorityHistoryManifestSha256"] == semantic and p.digest(value["initialTransitionHeadSha256"]) != p.sha(b""))
-        payload_raw = g.canonical(value)
+        payload_raw = p.canonical(value) if self._owner._adoption else g.canonical(value)
         domain = ("serverware." + profile + ".signature/v" + version).encode("ascii")
         message = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(payload_raw).to_bytes(8, "big") + payload_raw
         root.verify(p.decoded(signed["signatureBase64url"], size=64), message)
         header = g.document(item["runtime_raw"], g.MAX_BYTES)["runtime"]
         own = "spoolHead" if head else "spoolCleanup" if cleanup else "spoolCurrent"
-        p.require(header["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v8" if effects else "serverware.policyCustodyServiceRuntimeConfig/v7")
+        p.require(header["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v12" if self._owner._adoption and self._role in ROLES else "serverware.policyCustodyServiceRuntimeConfig/v8" if effects else "serverware.policyCustodyServiceRuntimeConfig/v7")
             and header[own] == {"grantFdName": self._prefix + "-grant"}
             and all(other not in header for other in ("spoolHead", "spoolCurrent", "spoolCleanup") if other != own)
             and (not cleanup or header.get("dispatchAdmission") is None))
@@ -233,7 +242,7 @@ class RoleInputs:
                     and p.sha(bytes.fromhex("302a300506032b6570032100") + key) == public["keySpkiSha256"])
                 public_keys.append(key)
                 native = _native_original(name, native_originals[name], expected_api=api, effects=effects,
-                    proof_scope_original=value["proofScopeOriginal"])
+                    proof_scope_original=value["proofScopeOriginal"], adoption=self._owner._adoption)
                 if "ordinaryServices" in native["payload"]:
                     from serverware import native_pilot_native_service_authority as authority
                     for member_role, member in self._owner._roles.items():
@@ -249,7 +258,7 @@ class RoleInputs:
                 cleanup_public = p.decoded(value["effects"]["cleanupPublicKeyBase64url"], size=32)
                 p.require(len(set(public_keys + [cleanup_public])) == len(public_keys) + 1
                     and root.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) not in public_keys + [cleanup_public])
-                retrieved = g.document(native_originals["retrieval"], 65536)["payload"]
+                retrieved = g.document(native_originals["retrieval"], 3 * 1024 * 1024 if self._owner._adoption else 65536)["payload"]
                 p.require(p.fields(retrieved["effects"], EFFECT_KEYS) == {name: value["effects"][name] for name in EFFECT_KEYS})
             p.require(type(value["proofScopeOriginal"]) is str and value["proofScopeOriginal"].isascii()
                 and len(value["proofScopeOriginal"]) <= 16384 and p.sha(value["proofScopeOriginal"].encode("ascii")) == scope["proofScopeSha256"])
@@ -322,14 +331,19 @@ def _require_release(launcher, cohort, transfers, *, inputs):
     p.require(type(cohort) is ParkedProofCohort and cohort.spool_selected() and type(transfers) is dict)
     terminal = cohort.terminal_selected()
     effects = cohort.effects_selected()
+    adopted = cohort.adoption_selected()
     roles = {"retrieval", "persistence", "trustedTime", "generationInstall", "bridge", "commitRequest", "ingressAdmission"}
     if inputs is not None:
         p.require(effects and cohort.endpoint_driver_selected())
         roles.remove("bridge")
+    if adopted:
+        p.require(inputs is not None and launcher._adoption)
+        roles.add("publicationReconciliation")
     p.require((not effects or terminal) and set(transfers) == (roles | ({"terminalAppend"} if terminal else set())
         | (set(EFFECT_KEYS) if effects else set())))
     owner = launcher._input_owner; _release_current(owner)
-    p.require(owner._released and launcher._spool and owner._effects == effects == launcher._effects)
+    p.require(owner._released and launcher._spool and owner._effects == effects == launcher._effects
+        and owner._adoption == launcher._adoption == adopted)
     expected = bridge_selection(owner)
     p.require(expected["apiVersion"] == ("serverware.nativeSpoolServices/v3" if effects else "serverware.nativeSpoolServices/v2" if terminal else "serverware.nativeSpoolServices/v1"))
     native_roles = (("ingress", "ingressAdmission"), ("ledger", "commitRequest"), ("retrieval", "retrieval"))
@@ -340,6 +354,13 @@ def _require_release(launcher, cohort, transfers, *, inputs):
         value = transfers[role]
         p.require(type(value) is RetainedActivationFds and value._cohort is cohort and value._role == role)
         value.check(); p.require(value._grant_bytes == owner._spools[ROLES[0]]._native[name])
+    if adopted:
+        from serverware import custody_publication_inputs as publication
+        publication.release_current(owner)
+        value = transfers["publicationReconciliation"]
+        p.require(type(value) is RetainedActivationFds and value._cohort is cohort
+            and value._role == "publicationReconciliation")
+        value.check(); p.require(value._grant_bytes == owner._publications[ROLES[0]]._native)
     if inputs is None:
         bridge = transfers["bridge"]
         p.require(type(bridge) is RetainedActivationFds and bridge._cohort is cohort and bridge._role == "bridge")
@@ -367,8 +388,10 @@ def _require_release(launcher, cohort, transfers, *, inputs):
         # already-verified OperationalInputs, not a fake bridge transfer.
         inputs.check()
         runtime = g.document(inputs._runtime_raw, g.MAX_BYTES)
-    p.require(runtime["apiVersion"] == ("serverware.policyCustodyProductionRpcRuntime/v9" if effects else "serverware.policyCustodyProductionRpcRuntime/v8" if terminal else "serverware.policyCustodyProductionRpcRuntime/v7") and runtime["spool"] == expected
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyProductionRpcRuntime/v14" if adopted else "serverware.policyCustodyProductionRpcRuntime/v9" if effects else "serverware.policyCustodyProductionRpcRuntime/v8" if terminal else "serverware.policyCustodyProductionRpcRuntime/v7") and runtime["spool"] == expected
         and runtime["commitRequest"] == expected_commitment)
+    if adopted:
+        p.require(runtime["publication"] == publication.bridge_selection(owner))
     from serverware.native_shadow_spool_inputs import SpoolInputs
     p.require(type(cohort._spool_resources) is SpoolInputs)
     if inputs is None:

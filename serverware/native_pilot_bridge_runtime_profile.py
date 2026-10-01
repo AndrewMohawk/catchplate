@@ -1,4 +1,4 @@
-"""Compose explicit v11/v12 bridges from actual prior public originals.
+"""Compose explicit v11/v12/v14 bridges from actual prior public originals.
 
 Independent policy supplies only final peer expectations, credential names,
 external endpoints and bounded startup configuration. All observations and
@@ -13,6 +13,7 @@ import stat
 
 from serverware import custody_generation_grants as g
 from serverware import custody_spool_inputs as spool
+from serverware import native_pilot_adopted_delivery as adopted_c9
 from serverware import native_pilot_bridge_install as install
 from serverware import native_pilot_bridge_preparation as preparation
 from serverware import native_pilot_bridge_runtime_policy as policy
@@ -37,6 +38,7 @@ from serverware import native_shadow_key_admission_profile as admission
 
 p = g.p
 API = "serverware.nativePilotBridgeRuntimeBundle/v1"
+ADOPTED_API = "serverware.nativePilotBridgeRuntimeBundle/v2"
 MAX_INPUT = install.MAX_BRIDGE_INPUT
 MAX_CONTEXT = 128 * 1024 * 1024
 TRANSITION_JOBS = tuple("ordinary-" + operation + ("-" + role if operation == "dispatch" else "")
@@ -48,8 +50,10 @@ _OPERATION = {"retrieval": "retrieval", "persistence": "persistence", "trustedTi
     "generationInstall": "generationInstall", "commitRequest": "ledger", "ingressAdmission": "ingress",
     "terminalAppend": "terminal", "dispatchBarrier": "dispatchBarrier", "activeEffectBarrier": "activeEffectBarrier",
     "activeEffectCommit": "activeEffectCommit"}
+_ADOPTED_OPERATION = {**_OPERATION, "publicationReconciliation": "publication"}
 _KEY_ROLE = {role: ("custody-result-envelope" if role == "generationInstall"
     else native_authority._LOCAL_ROLE[operation]) for role, operation in _OPERATION.items()}
+_ADOPTED_KEY_ROLE = {**_KEY_ROLE, "publicationReconciliation": "custody-publication-reconciliation"}
 
 
 def _same(first, second):
@@ -123,8 +127,8 @@ def _gate(raw, config, window, observation_raw, observed, *, now):
     return ids, notice
 
 
-def _signing_digest(role, item):
-    runtime = ordinary_runtime.validate_runtime(role, item["runtime_raw"])
+def _signing_digest(role, item, *, adopted=False):
+    runtime = ordinary_runtime.validate_runtime(role, item["runtime_raw"], adopted=adopted)
     name = runtime["serviceSigningKeyCredential" if role == g.ROLES[3] else "signingKeyCredential"]
     credentials = p.document(item["delivery_raw"], 65536)["payload"]["credentials"]
     matches = [row for row in credentials if row["name"] == name]
@@ -135,7 +139,7 @@ def _signing_digest(role, item):
 
 def _project(fragment, *, current_context, heads, ordinary, native, transition_originals,
              bootstrap_originals, driver_observation_raw, cohort_observation_raw, gate_binding_raw,
-             bridge_journal, boot, now_boottime_ns):
+             bridge_journal, boot, now_boottime_ns, publication_originals=None):
     """Internal deterministic projection, called only after full prepare admission.
 
     The item dictionaries are prechecked PUBLIC data, never authority-bearing
@@ -143,7 +147,11 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
     nor native/transition signatures; prepare/build are the complete entrypoints.
     """
     fragment = policy.validate_policy(fragment)
-    p.fields(ordinary, g.ROLES); p.fields(native, peers.NATIVE_ROLES)
+    adopted = fragment["apiVersion"] == policy.ADOPTED_API
+    p.require(adopted == (publication_originals is not None))
+    if adopted:
+        p.fields(publication_originals, (g.ROLES[0], g.ROLES[3]))
+    p.fields(ordinary, g.ROLES); p.fields(native, peers.ADOPTED_NATIVE_ROLES if adopted else peers.NATIVE_ROLES)
     p.fields(transition_originals, TRANSITION_JOBS)
     _records(heads, current_heads.JOB_NAMES, "headOriginal", head.MAX_INPUT, head.MAX_OUTPUT)
     config, cold, window, driver_observed = _bootstrap(bootstrap_originals, driver_observation_raw,
@@ -153,7 +161,7 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
         and sources["driver_window_raw"] == bootstrap_originals["window"])
     observed = preparation.shape(sources["bridge_preparation_raw"])
     _, peer_rows = preparation._parts(observed)
-    p.require(observed["apiVersion"] == preparation.HELPER_API
+    p.require(observed["apiVersion"] == (preparation.ADOPTED_API if adopted else preparation.HELPER_API)
         and observed["driverObservationSha256"] == p.sha(driver_observation_raw)
         and peer_rows["native-endpoints"]["sourceOriginalSha256"] == p.sha(cohort_observation_raw))
     cohort = p.document(cohort_observation_raw, 32768)
@@ -219,7 +227,7 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
             "handshakes": selected})
     endpoints = {}
     for field, discriminator, mapping, activations in (
-            ("parentSignerEndpoints", "signerRole", preparation.NATIVE_SIGNERS, SIGNER_ACTIVATIONS),
+            ("parentSignerEndpoints", "signerRole", preparation.ADOPTED_SIGNERS if adopted else preparation.NATIVE_SIGNERS, SIGNER_ACTIVATIONS),
             ("proofEndpoints", "endpointKind", preparation.NATIVE_PROOFS, PROOF_ACTIVATIONS)):
         rows = []
         for name in activations:
@@ -228,10 +236,10 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
                 role = mapping[name]
                 public = native[role]["key"]
                 p.public_key(public)
-                p.require(public["role"] == _KEY_ROLE[role]
+                p.require(public["role"] == (_ADOPTED_KEY_ROLE if adopted else _KEY_ROLE)[role]
                     and binding["authorityKeyId"] == public["keyId"]
                     and binding["authorityKeySpkiSha256"] == public["keySpkiSha256"])
-                socket = (outgoing._NATIVE_SIGNERS if field == "parentSignerEndpoints" else outgoing._PROOFS)[name][0]
+                socket = (outgoing.native_signers(14 if adopted else 12) if field == "parentSignerEndpoints" else outgoing._PROOFS)[name][0]
                 selected_peer = expected["native-endpoints"][role]
             else:
                 selected = fragment["externalSignerEndpoints"][name]
@@ -246,9 +254,9 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
         "rootKeySpkiSha256": item["header"]["authorityHistoryRootKeySpkiSha256"]} for role, item in ordinary.items()]
     helper_deadline = min((row["request"]["deadline"] for row in sessions[-1]["handshakes"]),
         key=lambda value: value["absoluteBoottimeNanos"])
-    terminal = fragment["apiVersion"] == policy.TERMINAL_API
-    launch_api = "serverware.nativeProofBridgeLaunch/v8" if terminal else "serverware.nativeProofBridgeLaunch/v7"
-    runtime = {"apiVersion": "serverware.policyCustodyProductionRpcRuntime/v12" if terminal else "serverware.policyCustodyProductionRpcRuntime/v11",
+    terminal = adopted or fragment["apiVersion"] == policy.TERMINAL_API
+    launch_api = "serverware.nativeProofBridgeLaunch/v10" if adopted else "serverware.nativeProofBridgeLaunch/v8" if terminal else "serverware.nativeProofBridgeLaunch/v7"
+    runtime = {"apiVersion": "serverware.policyCustodyProductionRpcRuntime/v14" if adopted else "serverware.policyCustodyProductionRpcRuntime/v12" if terminal else "serverware.policyCustodyProductionRpcRuntime/v11",
         "startupTimeoutMillis": fragment["startupTimeoutMillis"], "listenerSocketPath": resources.LISTENER_PATH,
         "expectedFacadePeer": expected["gate"]["gate"], "journalDirectoryIdentity": copy.deepcopy(bridge_journal),
         "expectedHelperEndpointRoles": list(helper.ROLES), "expectedDriverProcessIdentitySha256": peer["processIdentitySha256"],
@@ -256,7 +264,7 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
         "expectedOperationGeneration": common["operationGeneration"],
         "expectedSharedConfigurationSha256": common["sharedConfigurationSha256"],
         "expectedServiceConfigurationSha256": {role: p.sha(item["runtime_raw"]) for role, item in ordinary.items()},
-        "expectedServiceSigningCredentialSha256": {role: _signing_digest(role, item) for role, item in ordinary.items()},
+        "expectedServiceSigningCredentialSha256": {role: _signing_digest(role, item, adopted=adopted) for role, item in ordinary.items()},
         "expectedServiceRestartEpoch": {role: item["header"]["serviceRestartEpoch"] for role, item in ordinary.items()},
         "expectedServiceReadinessEpoch": {role: item["header"]["readinessEpoch"] for role, item in ordinary.items()},
         "expectedServiceAuthorityHistoryManifestSha256": {role: item["header"]["authorityHistoryManifestSha256"] for role, item in ordinary.items()},
@@ -275,6 +283,10 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
             "generationGrantOriginal": item["grant_raw"].decode("ascii"),
             **({"historyOriginal": item["history_raw"].decode("ascii")} if terminal else {})} for role, item in ordinary.items()},
         "helperBootstrap": helper.shape(helper.build(ordinary[g.ROLES[-1]]["runtime_raw"], deadline=helper_deadline))}
+    if adopted:
+        runtime["publication"] = {"apiVersion": "serverware.nativePublicationServices/v2",
+            "durableGrantOriginal": publication_originals[g.ROLES[0]].decode("ascii"),
+            "currentGrantOriginal": publication_originals[g.ROLES[3]].decode("ascii")}
     runtime_raw = p.canonical(runtime)
     install.shape("bridge-runtime", runtime_raw)
     outgoing._selection(runtime_raw, launch_api, cold["uid"])
@@ -289,14 +301,24 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
         "bridgeLaunchVersion": launch_api}
     outgoing_raw = p.canonical(selected)
     install.shape("bridge-outgoing", outgoing_raw)
-    bundle = p.canonical({"apiVersion": API, "driverControlSha256": p.sha(bootstrap_originals["control"]),
+    bundle = p.canonical({"apiVersion": ADOPTED_API if adopted else API, "driverControlSha256": p.sha(bootstrap_originals["control"]),
         "driverObservationOriginal": driver_observation_raw.decode("ascii"), "runtimeOriginal": runtime_raw.decode("ascii"),
         "outgoingOriginal": outgoing_raw.decode("ascii")})
     p.require(len(bundle) <= MAX_INPUT)
     return bundle
 
 
-def _native_delivery(role, row, value, *, cohort_observation_raw):
+def _native_delivery(role, row, value, *, cohort_observation_raw, adopted=False):
+    if adopted:
+        original = g.document(row["inputOriginal"], adopted_c9.MAX_INPUT)
+        p.require(role in peers.ADOPTED_NATIVE_ROLES and original["role"] == role
+            and original["apiVersion"] == adopted_c9.API
+            and value["deliveryInputOriginal"] == row["inputOriginal"].decode("ascii")
+            and value["coordinatorDeliveryOriginal" if role == "generationInstall" else "deliveryOriginal"] == row["deliveryOriginal"].decode("ascii")
+            and original["observationOriginal"].encode("ascii") == cohort_observation_raw)
+        # The complete adopted service issuer already authenticated this exact
+        # C9 input/signature and actual cohort selection; no derived DTO is used.
+        return
     original = c9.input_document(row["inputOriginal"])
     p.require(original["role"] == role and role in peers.NATIVE_ROLES)
     generation = role == "generationInstall"
@@ -316,11 +338,14 @@ def _native_delivery(role, row, value, *, cohort_observation_raw):
 
 def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_observation_raw,
             cohort_observation_raw, gate_binding_raw, bridge_journal, transition_context,
-            native_context, native_delivery_context, boot, now_boottime_ns, now_unix_ns):
+            native_context, native_delivery_context, boot, now_boottime_ns, now_unix_ns, publication_context=None):
     """Authenticate the complete literal source graph before public projection."""
     fragment = policy.validate_policy(fragment)
+    adopted = fragment["apiVersion"] == policy.ADOPTED_API
+    p.require(adopted == (publication_context is not None))
     _size((fragment, current_context, heads, bootstrap_originals, driver_observation_raw,
-        cohort_observation_raw, gate_binding_raw, bridge_journal, transition_context, native_context, native_delivery_context))
+        cohort_observation_raw, gate_binding_raw, bridge_journal, transition_context, native_context, native_delivery_context,
+        publication_context))
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     checked = current_heads._refresh(current_context, boot=boot, now_boottime_ns=now_boottime_ns)
     _records(heads, current_heads.JOB_NAMES, "headOriginal", head.MAX_INPUT, head.MAX_OUTPUT)
@@ -329,20 +354,24 @@ def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_obs
             context=checked, boot=boot, now_boottime_ns=now_boottime_ns)
         head.checked_result(row["inputOriginal"], _result(row["headOriginal"]),
             boot=boot, now_boottime_ns=now_boottime_ns)
-    _records(native_context, native_profile.OPERATIONS, "grantOriginal", native_profile.MAX_INPUT, native_profile.MAX_OUTPUT)
-    _records(native_delivery_context, peers.NATIVE_ROLES, "deliveryOriginal", c9.MAX_INPUT, 65536)
+    operations = native_profile.OPERATIONS + (("publication",) if adopted else ())
+    _records(native_context, operations, "grantOriginal", native_profile.MAX_INPUT, native_profile.MAX_OUTPUT)
+    _records(native_delivery_context, peers.ADOPTED_NATIVE_ROLES if adopted else peers.NATIVE_ROLES,
+        "deliveryOriginal", adopted_c9.MAX_INPUT if adopted else c9.MAX_INPUT, 65536)
     _records(transition_context, TRANSITION_JOBS, "grantOriginal", transitions.MAX_INPUT, 131072)
     native_inputs, payloads, native, deadline, epoch_limit = {}, {}, {}, checked["deadline"], (1 << 63) - 1
     authority_context = None
-    for operation in native_profile.OPERATIONS:
+    for operation in operations:
         row = native_context[operation]
-        prepared = native_profile.prepare_input(operation, row["inputOriginal"], **clocks)
-        native_profile.checked_result(operation, row["inputOriginal"], _result(row["grantOriginal"]), **clocks)
+        prepare_native = native_profile.prepare_adopted_input if adopted else native_profile.prepare_input
+        check_native = native_profile.checked_adopted_result if adopted else native_profile.checked_result
+        prepared = prepare_native(operation, row["inputOriginal"], **clocks)
+        check_native(operation, row["inputOriginal"], _result(row["grantOriginal"]), **clocks)
         value = p.document(row["inputOriginal"], native_profile.MAX_INPUT)
         native_inputs[operation], payloads[operation] = value, prepared["payload"]
         deadline, epoch_limit = min(deadline, prepared["deadline"]), min(epoch_limit, prepared["epochLimit"])
-        role = native_profile.ENDPOINT_ROLES[operation]
-        _native_delivery(role, native_delivery_context[role], value, cohort_observation_raw=cohort_observation_raw)
+        role = "publicationReconciliation" if operation == "publication" else native_profile.ENDPOINT_ROLES[operation]
+        _native_delivery(role, native_delivery_context[role], value, cohort_observation_raw=cohort_observation_raw, adopted=adopted)
         config_field = "nativeConfigurationOriginal" if operation == "generationInstall" else "configurationOriginal"
         config = p.document(value[config_field].encode("ascii"), p.MAX_CONFIG)
         admitted, keys = admission.authorization(config, now_unix_ns)
@@ -353,15 +382,16 @@ def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_obs
             authority_context = selected_authority
         else:
             _same(authority_context, selected_authority)
-        if operation != _OPERATION[role]:
+        if operation != (_ADOPTED_OPERATION if adopted else _OPERATION)[role]:
             continue
-        native[role] = {"guest": admitted["guest"], "key": keys[p.ROLES.index(_KEY_ROLE[role])],
+        native[role] = {"guest": admitted["guest"], "key": keys[p.ROLES.index((_ADOPTED_KEY_ROLE if adopted else _KEY_ROLE)[role])],
             "expectedPeer": prepared["payload"]["expectedPeer"]}
-    expected_persistence = native_profile.authority.persistence.COMPLETED_GRANT_API if fragment["apiVersion"] == policy.TERMINAL_API else native_profile.authority.PROFILES["persistence"][0]
+    expected_persistence = ("serverware.nativeShadowPersistenceServiceAssignment/v4" if adopted else
+        native_profile.authority.persistence.COMPLETED_GRANT_API if fragment["apiVersion"] == policy.TERMINAL_API else native_profile.authority.PROFILES["persistence"][0])
     p.require(payloads["persistence"]["apiVersion"] == expected_persistence)
     sources = checked["sources"]
     ordinary_context = {"launchOriginal": sources["launch_raw"].decode("ascii"), "services": sources["ordinary_context"]}
-    ordinary = transitions._services(ordinary_context, native_inputs, payloads, clocks)
+    ordinary = transitions._services(ordinary_context, native_inputs, payloads, clocks, adopted=adopted)
     generation_scope = ordinary[g.ROLES[0]]["generation"]["scope"]
     for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision"):
         p.require(authority_context[name] == generation_scope[name])
@@ -387,14 +417,40 @@ def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_obs
             if operation == "current":
                 p.require(value["cleanupGrantOriginal"] == transition_originals["ordinary-cleanup"].decode("ascii"))
         transition_originals[job] = transitions.checked_result(operation, role, row["inputOriginal"],
-            _result(row["grantOriginal"]), **clocks)
-        prepared = service.prepare_input(operation, role, row["inputOriginal"], **clocks)
+            _result(row["grantOriginal"]), **clocks, adopted=adopted)
+        prepared = service.prepare_input(operation, role, row["inputOriginal"], **clocks, adopted=adopted)
         deadline = min(deadline, prepared["deadline"])
+    publication_originals = None
+    if adopted:
+        from serverware import native_pilot_ordinary_publication_authority as publication_authority
+        _records(publication_context, (g.ROLES[0], g.ROLES[3]), "grantOriginal",
+            publication_authority.MAX_INPUT, publication_authority.MAX_OUTPUT)
+        publication_originals = {}
+        publication_payloads = {}
+        for role, row in publication_context.items():
+            value = p.document(row["inputOriginal"], publication_authority.MAX_INPUT)
+            p.require(value["launchOriginal"] == ordinary_context["launchOriginal"])
+            for target in (g.ROLES[0], g.ROLES[3]):
+                p.require(value["services"][target] == ordinary_context["services"][target])
+            for label, operation in (("Publication", "publication"), ("Retrieval", "retrieval")):
+                for suffix, source in (("InputOriginal", "inputOriginal"), ("GrantOriginal", "grantOriginal")):
+                    p.require(value["native" + label + suffix] == native_context[operation][source].decode("ascii"))
+            checked_publication = publication_authority.prepare_input(role, row["inputOriginal"], **clocks)
+            publication_originals[role] = publication_authority.checked_result(role, row["inputOriginal"], row["grantOriginal"], **clocks)
+            publication_payloads[role] = checked_publication["payload"]
+            deadline = min(deadline, checked_publication["deadline"])
+            epoch_limit = min(epoch_limit, checked_publication["epochLimit"])
+        durable, current = (publication_payloads[role] for role in (g.ROLES[0], g.ROLES[3]))
+        for field in ("admission", "native", "retrieval", "durableAuthorityEpoch", "durablePublicKeyBase64url",
+                "initialDurableTransitionHeadSha256"):
+            _same(durable[field], current[field])
+        p.require(durable["initialTransitionHeadSha256"] == current["initialDurableTransitionHeadSha256"])
     p.require(now_boottime_ns < deadline and now_unix_ns < epoch_limit)
     bundle = _project(fragment, current_context=checked, heads=heads, ordinary=ordinary, native=native,
         transition_originals=transition_originals, bootstrap_originals=bootstrap_originals,
         driver_observation_raw=driver_observation_raw, cohort_observation_raw=cohort_observation_raw,
-        gate_binding_raw=gate_binding_raw, bridge_journal=bridge_journal, boot=boot, now_boottime_ns=now_boottime_ns)
+        gate_binding_raw=gate_binding_raw, bridge_journal=bridge_journal, boot=boot, now_boottime_ns=now_boottime_ns,
+        publication_originals=publication_originals)
     return {"bundleOriginal": bundle, "window": copy.deepcopy(checked["window"]), "deadline": deadline, "epochLimit": epoch_limit}
 
 
@@ -408,7 +464,7 @@ def checked_result(bundle_raw, result, **kwargs):
     p.require(type(bundle_raw) is bytes and bundle_raw == prepared["bundleOriginal"])
     bundle = p.fields(p.document(bundle_raw, MAX_INPUT), install.FIELDS)
     bootstrap, window = kwargs["bootstrap_originals"], prepared["window"]
-    expected = {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v1", "bundleSha256": p.sha(bundle_raw),
+    expected = {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v" + ("2" if bundle["apiVersion"] == ADOPTED_API else "1"), "bundleSha256": p.sha(bundle_raw),
         "configurationSha256": p.sha(bootstrap["configuration"]), "windowSha256": p.sha(bootstrap["window"]),
         "observationSha256": p.sha(kwargs["driver_observation_raw"]), "invocationId": window["invocationId"],
         "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],

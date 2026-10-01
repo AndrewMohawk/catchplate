@@ -149,7 +149,8 @@ class NativePilotLaunch:
             self._cohort = failure.cohort
             raise
         try:
-            self._five = FiveServiceLaunch.start_effects()
+            self._five = (FiveServiceLaunch.start_adopted_inspected()
+                if self._cohort.adoption_selected() else FiveServiceLaunch.start_effects())
         except FiveServiceStartError as failure:
             self._five = failure.launch
             self._five_cleanup_failure = failure.cleanup_error
@@ -165,14 +166,27 @@ class NativePilotLaunch:
         self._five.check()
         _require(self._driver._gate_binding is not None)
         self._stage = "resource-preparation-attempted"
-        self._business = BusinessResources.prepare_commitment(self._five)
-        self._generation = self._business.commitment_inputs()
+        _require(self._cohort.adoption_selected() == self._five._adoption == (self._received_core is not None))
+        self._business = (BusinessResources.prepare_adopted(self._five) if self._five._adoption
+            else BusinessResources.prepare_commitment(self._five))
+        self._generation = (self._business.adopted_inputs() if self._five._adoption
+            else self._business.commitment_inputs())
         self._spool = self._cohort.prepare_spool_inputs()
         self._commit_request = self._cohort.prepare_commit_request_inputs()
         self._generation_install = self._cohort.prepare_generation_install_inputs()
         self._bridge = BridgeResources.prepare(self._driver)
         self._stage = "resources"
         self._preparing()
+
+    def seal_publication_grant(self, role, *, approved_grant_original, native_original, retrieval_original):
+        """One actual ordinary grant FD, under the selected adopted owner."""
+        self._preparing()
+        _require(self._received_core is not None and self._cohort.adoption_selected() and self._five._adoption)
+        self._received_core.check()
+        result = self._generation.seal_publication_grant(role, approved_grant_original=approved_grant_original,
+            native_original=native_original, retrieval_original=retrieval_original)
+        self._preparing()
+        return result
 
     def prepare_bridge_connections(self):
         """Allocate the exact live clients after all endpoint paths exist.

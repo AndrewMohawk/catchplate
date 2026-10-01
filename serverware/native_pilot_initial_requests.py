@@ -106,7 +106,7 @@ class InitialRequests:
 
     def _snapshot(self):
         from serverware import custody_generation_initial_state as state_owner
-        from serverware.custody_generation_launch import EFFECTS_CONFIGURATION
+        from serverware.custody_generation_launch import EFFECTS_CONFIGURATION, ADOPTION_CONFIGURATION
 
         self._owner()
         inputs, launch = self._generation, self._launcher
@@ -118,14 +118,21 @@ class InitialRequests:
             and retained.inputs is inputs and not retained.failed and type(retained.raw) is bytes
             and retained.preparation == preparation)
         resources = retained.raw
-        observed = profile.initial.resources(resources)
+        adopted = launch._adoption
+        p.require(adopted == inputs._adoption == self._pilot._cohort.adoption_selected())
+        observed = profile.initial.resources(resources, adopted=adopted)
         original = launch._originals[0]
-        p.require(type(original) is o.Original and original.path == EFFECTS_CONFIGURATION)
+        p.require(type(original) is o.Original and original.path == (ADOPTION_CONFIGURATION if adopted else EFFECTS_CONFIGURATION))
         launch_raw = original.read()
         contexts, joins, total, identities = {}, {}, len(preparation) + len(resources) + len(launch_raw), set()
         for role in g.ROLES:
             item = inputs._roles[role]
-            p.require(item["delivery_attempt"] and item["grant_attempt"] and item["launch"] is not None
+            # Adopted DRS/CSA cannot publish their guest launch until the later
+            # publication grant is sealed. These requests precede that grant;
+            # parked ownership and the actual C9/history/generation still bind
+            # acquisition, without pretending the service is release-ready.
+            p.require(item["delivery_attempt"] and item["grant_attempt"]
+                and (item["launch"] is not None or (adopted and role in profile.initial.ADOPTED_ROLES))
                 and type(item["delivery"]) is o.Original and type(item["runtime"]) is o.Original
                 and type(item["grant_raw"]) is bytes and type(item["history_raw"]) is bytes)
             cold_raw, runtime_raw, delivery_raw = item["configuration"].read(), item["runtime"].read(), item["delivery"].read()
@@ -148,7 +155,7 @@ class InitialRequests:
             g._admit_grant(signed_raw=item["grant_raw"], guest=guest, runtime_raw=runtime_raw,
                 history_raw=history_raw, delivery_raw=delivery_raw, now=now, **inputs._profile(role))
             if role == g.ROLES[-1] and header["apiVersion"] == profile.initial.HELPER_RUNTIME_API:
-                runtime = profile.runtime.validate_runtime(role, runtime_raw)
+                runtime = profile.runtime.validate_runtime(role, runtime_raw, adopted=adopted)
                 members = profile.initial.helper_endpoint_histories(history_raw, runtime=runtime)
                 for name, expected in profile.initial.helper_public_keys(runtime, members, delivery["credentials"]).items():
                     entries = [entry for entry in delivery["credentials"] if entry["name"] == name]
@@ -156,7 +163,7 @@ class InitialRequests:
                         and value.path == entries[0]["original"]["path"]]
                     p.require(len(held) == 1 and held[0].read() == expected)
             directories = dict(item["descriptors"])
-            for name in state_owner.DIRECTORIES[role]:
+            for name in state_owner.directories(adoption=adopted)[role]:
                 fd = directories[name]
                 info = os.fstat(fd)
                 identity = info.st_dev, info.st_ino
@@ -168,7 +175,7 @@ class InitialRequests:
             joins[role] = (delivery_raw, item["grant_raw"])
             total += sum(map(len, (cold_raw, runtime_raw, history_raw, delivery_raw, item["grant_raw"])))
             p.require(total <= MAX_RETAINED_BYTES)
-        p.require(len(identities) == 15)
+        p.require(len(identities) == (17 if adopted else 15))
         scopes = [g.document(joins[role][1], 65536)["payload"]["scope"] for role in g.ROLES]
         p.require(all(value == scopes[0] for value in scopes))
         grant_deadline = min(g.document(joins[role][1], 65536)["payload"]["expiresAtBoottimeNanos"] for role in g.ROLES)
@@ -178,12 +185,13 @@ class InitialRequests:
         self._owner()
         return dict(contexts=contexts, joins=joins, preparation_original=preparation,
             resources_original=resources, launch_original=launch_raw, window=window, boot=launch._boot,
-            grant_deadline=grant_deadline)
+            grant_deadline=grant_deadline, adopted=adopted)
 
     @staticmethod
     def _select(source, now):
         selected = profile.select(source["contexts"], **{name: source[name] for name in (
-            "preparation_original", "resources_original", "launch_original", "window", "boot")}, now_boottime_ns=now)
+            "preparation_original", "resources_original", "launch_original", "window", "boot")},
+            now_boottime_ns=now, adopted=source.get("adopted", False))
         # _snapshot authenticates these exact grants before retaining their
         # earliest original expiry. Clip, never extend, each request deadline;
         # all terminal clock checks consequently retain this authority bound.

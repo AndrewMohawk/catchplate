@@ -18,7 +18,7 @@ struct Launch {api_version:String,delivery_configuration:Pin,delivery:Pin}
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct InspectedLaunch {api_version:String,delivery_configuration:Pin,delivery:Pin,peer_inspection_credential:String}
 
-enum EntryProfile {Generation,InspectedGeneration,CommitRequest,InspectedCommitRequest,InspectedSpool,InspectedEffects,InspectedGenesis}
+enum EntryProfile {Generation,InspectedGeneration,CommitRequest,InspectedCommitRequest,InspectedSpool,InspectedEffects,InspectedGenesis,InspectedAdoption}
 impl EntryProfile {
     fn selector(&self)->&'static str {match self {
         Self::Generation=>"--guest-c9-generation",
@@ -28,8 +28,9 @@ impl EntryProfile {
         Self::InspectedSpool=>"--guest-c9-spool-inspected",
         Self::InspectedEffects=>"--guest-c9-effects-inspected",
         Self::InspectedGenesis=>"--guest-c9-genesis-inspected",
+        Self::InspectedAdoption=>"--guest-c9-adoption-inspected",
     }}
-    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration|Self::InspectedCommitRequest|Self::InspectedSpool|Self::InspectedEffects|Self::InspectedGenesis)}
+    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration|Self::InspectedCommitRequest|Self::InspectedSpool|Self::InspectedEffects|Self::InspectedGenesis|Self::InspectedAdoption)}
     fn commitment(&self)->bool {matches!(self,Self::CommitRequest|Self::InspectedCommitRequest|Self::InspectedSpool)}
     fn launch(&self,raw:&[u8])->Result<(Pin,Pin),ServiceRunnerError> {match self {
         Self::Generation=>{
@@ -72,7 +73,28 @@ impl EntryProfile {
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
+        Self::InspectedAdoption=>{
+            let value:InspectedLaunch=exact(raw)?;
+            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v8"
+                && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
+            Ok((value.delivery_configuration,value.delivery))
+        },
     }}
+    fn runtime(&self,role:&Role)->Result<&'static str,ServiceRunnerError> {
+        Ok(if matches!(self,Self::InspectedAdoption){
+            require(matches!(role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
+            super::super::publication_service::ADOPTION_RUNTIME
+        }else if matches!(self,Self::InspectedGenesis){
+            require(matches!(role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
+            super::super::publication_genesis_service::RUNTIME
+        }else if matches!(self,Self::InspectedEffects){
+            require(matches!(role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority|Role::CleanupAuthorizationConsumer))?;
+            super::super::active_effect_cleanup::RUNTIME
+        }else if self.commitment(){
+            require(matches!(role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
+            if matches!(self,Self::InspectedSpool){super::super::spool_head::RUNTIME}else{super::super::dispatch_service::RUNTIME}
+        }else{generation_service::RUNTIME})
+    }
 }
 
 pub(super) struct Timer {handle:usize,pid:i32,deadline:u64}
@@ -155,16 +177,7 @@ fn entry(role:&str,profile:EntryProfile)->Result<(),ServiceRunnerError> {
         && delivery.owner.payload.service_role!=Role::ProductionBridge
         && inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
     let runtime:serde_json::Value=exact(&delivery.owner.runtime.read(MAX_CONFIG_BYTES)?)?;
-    let expected=if matches!(profile,EntryProfile::InspectedGenesis){
-        require(matches!(delivery.owner.payload.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
-        super::super::publication_genesis_service::RUNTIME
-    }else if matches!(profile,EntryProfile::InspectedEffects){
-        require(matches!(delivery.owner.payload.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority|Role::CleanupAuthorizationConsumer))?;
-        super::super::active_effect_cleanup::RUNTIME
-    }else if profile.commitment(){
-        require(matches!(delivery.owner.payload.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
-        if matches!(profile,EntryProfile::InspectedSpool){super::super::spool_head::RUNTIME}else{super::super::dispatch_service::RUNTIME}
-    }else{generation_service::RUNTIME};
+    let expected=profile.runtime(&delivery.owner.payload.service_role)?;
     require(runtime.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())==Some(expected))?;
     let lifetime=Lifetime::arm(&delivery.owner)?;
     *delivery.owner.ordinary_lifetime.lock().map_err(|_|fail("ordinary lifetime owner poisoned"))?=Some(lifetime);
@@ -211,9 +224,46 @@ pub(crate) fn run_commitment(role:&str,inspected:bool)->! {
 }
 pub(crate) fn run_spool(role:&str)->!{let _=entry(role,EntryProfile::InspectedSpool);unsafe{libc::_exit(1)}}
 pub(crate) fn run_effects(role:&str)->!{let _=entry(role,EntryProfile::InspectedEffects);unsafe{libc::_exit(1)}}
+pub(crate) fn run_adoption(role:&str)->!{let _=entry(role,EntryProfile::InspectedAdoption);unsafe{libc::_exit(1)}}
 pub(crate) fn run_genesis(role:&str)->! {
     // A terminal notice reports only actual serving status 0/1. Any failed
     // cleanup/protocol check, including after its send, must not match it.
     let _=entry(role,EntryProfile::InspectedGenesis);
     unsafe{libc::_exit(2)}
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    #[test]
+    fn adopted_entry_is_inspected_and_only_two_roles() {
+        let selected=EntryProfile::InspectedAdoption;
+        assert!(selected.inspected());
+        assert_eq!(selected.selector(),"--guest-c9-adoption-inspected");
+        for role in [Role::DurableRecoveryStore,Role::CurrentSignatureAuthority] {
+            assert_eq!(selected.runtime(&role).unwrap(),super::super::super::publication_service::ADOPTION_RUNTIME);
+        }
+        for role in [Role::CleanupAuthorizationConsumer,Role::RecoveryTargetProvider,Role::BoundedCleanupHelper,Role::ProductionBridge] {
+            assert!(selected.runtime(&role).is_err());
+        }
+    }
+    #[test]
+    fn legacy_runtime_selection_does_not_upgrade() {
+        assert_eq!(EntryProfile::InspectedEffects.runtime(&Role::DurableRecoveryStore).unwrap(),"serverware.policyCustodyServiceRuntimeConfig/v8");
+        assert_eq!(EntryProfile::InspectedGenesis.runtime(&Role::DurableRecoveryStore).unwrap(),"serverware.policyCustodyServiceRuntimeConfig/v11");
+    }
+    #[test]
+    fn adopted_launch_is_not_selected_by_legacy_shape() {
+        let pin=serde_json::json!({"path":"/etc/serverware/test.json","sha256":format!("sha256:{}","11".repeat(32))});
+        for version in [6,7,8] {
+            let value=serde_json::json!({"apiVersion":format!("serverware.custodyOrdinaryServiceGuestLaunch/v{version}"),
+                "deliveryConfiguration":pin,"delivery":pin,"peerInspectionCredential":"peer-inspection-policy"});
+            let raw=encode_canonical_frame(&value).unwrap();
+            assert_eq!(EntryProfile::InspectedAdoption.launch(&raw).is_ok(),version==8);
+            if version==8 {
+                assert!(EntryProfile::InspectedEffects.launch(&raw).is_err());
+                assert!(EntryProfile::InspectedGenesis.launch(&raw).is_err());
+            }
+        }
+    }
 }

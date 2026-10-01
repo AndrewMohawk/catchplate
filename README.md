@@ -141,8 +141,10 @@ which are still being assembled. They remain separate from the new
 now extended with [real core custody and native-validated adoption signing](docs/native-pilot-core-handoff.md).
 The [adopted operational cohort](docs/native-pilot-adopted-cohort.md) now connects
 received-core ownership and the three special adopted endpoint launch producers
-in source. Remaining endpoint/bridge producers and independent supervisor
-orchestration still need integration; this is not a runnable pilot claim.
+in source. The [adopted release assembly](docs/native-pilot-adopted-release.md)
+adds the remaining endpoint producers, ordinary publication resources and bridge
+runtime. Bridge authorization and independent supervisor orchestration still
+need integration; this is not a runnable pilot claim.
 The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight

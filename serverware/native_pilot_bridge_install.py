@@ -51,7 +51,7 @@ def shape(purpose: str, raw: bytes) -> dict:
         value = p.fields(p.document(raw, 8192), OUTGOING_FIELDS)
         p.require(value["apiVersion"] == "serverware.nativeShadowDriverOutgoingInputs/v1"
             and value["bridgeLaunchVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
-                "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8"))
+                "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8", bridge_runtime.ADOPTED_LAUNCH))
         for name in ("driverConfigurationSha256", "driverWindowSha256", "driverObservationSha256"):
             p.digest(value[name])
         delivery._pin(value["deliveryConfiguration"])
@@ -60,7 +60,7 @@ def shape(purpose: str, raw: bytes) -> dict:
         publication._invocation(value["invocationId"])
         return value
     value = bridge_runtime.shape(raw)
-    p.require(bridge_runtime.version(value) in (9, 10, 11, 12)
+    p.require(bridge_runtime.version(value) in (9, 10, 11, 12, 14)
         and value["listenerSocketPath"] == resources.LISTENER_PATH)
     p.integer(value["startupTimeoutMillis"], maximum=30000)
     generation = p.fields(value["generationAdmission"], ("apiVersion", "grants"))
@@ -75,7 +75,7 @@ def shape(purpose: str, raw: bytes) -> dict:
     spool = p.fields(value["spool"], ("apiVersion", "headGrantOriginal", "currentGrantOriginal", "originFdName", "cleanupGrantOriginal"))
     p.require(spool["apiVersion"] == "serverware.nativeSpoolServices/v3" and spool["originFdName"] == "generation-origin")
     for name in ("headGrantOriginal", "currentGrantOriginal", "cleanupGrantOriginal"):
-        scope._original(spool[name], 131072 if bridge_runtime.version(value) in (10, 11, 12) and name != "headGrantOriginal" else 65536)
+        scope._original(spool[name], 131072 if bridge_runtime.version(value) in bridge_runtime.LARGE_VERSIONS and name != "headGrantOriginal" else 65536)
     histories = value["histories"]
     p.require(type(histories) is list and len(histories) == 5)
     roles = []
@@ -102,7 +102,8 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
     p.require(type(bundle_original) is bytes and 0 < len(bundle_original) <= MAX_BRIDGE_INPUT
         and p.sha(bundle_original) == p.digest(expected_sha256))
     value = p.fields(p.document(bundle_original, MAX_BRIDGE_INPUT), FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotBridgeRuntimeBundle/v1")
+    adopted = value["apiVersion"] == "serverware.nativePilotBridgeRuntimeBundle/v2"
+    p.require(adopted or value["apiVersion"] == "serverware.nativePilotBridgeRuntimeBundle/v1")
     held, publisher = [], None
 
     def retain(path, maximum, digest):
@@ -127,7 +128,8 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         runtime_raw, _ = bridge_runtime.original(value["runtimeOriginal"])
         outgoing_raw, _ = scope._original(value["outgoingOriginal"], 8192)
         runtime = shape("bridge-runtime", runtime_raw)
-        p.require(bridge_runtime.version(runtime) in (10, 11, 12) or len(bundle_original) <= MAX_INPUT)
+        p.require(adopted == (bridge_runtime.version(runtime) == 14)
+            and (bridge_runtime.version(runtime) in bridge_runtime.LARGE_VERSIONS or len(bundle_original) <= MAX_INPUT))
         selected = shape("bridge-outgoing", outgoing_raw)
         scope._same(selected, {"apiVersion": "serverware.nativeShadowDriverOutgoingInputs/v1",
             "driverConfigurationSha256": p.sha(config_raw), "driverWindowSha256": p.sha(window_raw),
@@ -155,7 +157,7 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
             previous = check(previous)
         publisher.check()
         check(previous)
-        return {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v1", "bundleSha256": expected_sha256,
+        return {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v" + ("2" if adopted else "1"), "bundleSha256": expected_sha256,
             "configurationSha256": p.sha(config_raw), "windowSha256": p.sha(window_raw),
             "observationSha256": p.sha(observation_raw), "invocationId": window["invocationId"],
             "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],

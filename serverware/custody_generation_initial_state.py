@@ -17,6 +17,7 @@ from serverware import custody_generation_originals as o
 
 p = g.p
 API = "serverware.custodyFiveServiceInitialResources/v1"
+ADOPTED_API = "serverware.custodyFiveServiceInitialResources/v2"
 FIELDS = ("apiVersion", "preparationSha256", "issuedAtBoottimeNs", "services")
 SERVICE_FIELDS = ("directories",)
 DIRECTORY_FIELDS = ("identity", "entryCount")
@@ -28,8 +29,15 @@ DIRECTORIES = {
     g.ROLES[3]: ("generation-journal", "dispatch-journal", "spool-current-journal"),
     g.ROLES[4]: ("journal", "generation-journal"),
 }
+ADOPTED_DIRECTORIES = {role: names + (("publication-journal",) if role in (g.ROLES[0], g.ROLES[3]) else ())
+    for role, names in DIRECTORIES.items()}
 MAX_BYTES = 65536
 _TOKEN = object()
+
+
+def directories(adoption=False):
+    p.require(type(adoption) is bool)
+    return ADOPTED_DIRECTORIES if adoption else DIRECTORIES
 
 
 def _owner(inputs):
@@ -51,12 +59,14 @@ def _owner(inputs):
         and tuple(inputs._roles) == g.ROLES and tuple(launch._children) == g.ROLES
         and all(child["phase"] == "parked" and not child["reaped"] for child in launch._children.values())
         and set(inputs._commitments) == {g.ROLES[0], g.ROLES[3]}
-        and set(inputs._spools) == {g.ROLES[0], g.ROLES[1], g.ROLES[3]})
+        and set(inputs._spools) == {g.ROLES[0], g.ROLES[1], g.ROLES[3]}
+        and inputs._adoption == launch._adoption
+        and set(inputs._publications) == ({g.ROLES[0], g.ROLES[3]} if inputs._adoption else set()))
     for item in inputs._roles.values():
         p.require(not item["delivery_attempt"] and not item["grant_attempt"]
             and item["delivery"] is None and item["guest"] is None
             and item["grant_raw"] is None and item["launch"] is None)
-    p.require(all(not item._attempted for item in (*inputs._commitments.values(), *inputs._spools.values())))
+    p.require(all(not item._attempted for item in (*inputs._commitments.values(), *inputs._spools.values(), *inputs._publications.values())))
     p.require(os.getpid() == launch._pid and o.native._start() == launch._start
         and o.native._boot() == launch._boot and o.clock() < launch._startup)
     return launch
@@ -90,6 +100,7 @@ class _InitialResources:
         launch = self._current()
         p.require(launch.preparation_original() == self.preparation)
         services, identities = {}, set()
+        selected_directories = ADOPTED_DIRECTORIES if self.inputs._adoption else DIRECTORIES
         for role in g.ROLES:
             self._current()
             item = self.inputs._roles[role]
@@ -103,12 +114,14 @@ class _InitialResources:
                 prefix = {g.ROLES[0]: "spool-head", g.ROLES[1]: "active-effect-cleanup",
                     g.ROLES[3]: "spool-current"}[role]
                 expected += (prefix + "-journal", prefix + "-grant")
+            if role in self.inputs._publications:
+                expected += ("publication-journal", "publication-grant")
             descriptors = item["descriptors"]
             p.require(tuple(name for name, _ in descriptors) == expected)
             directories = {}
             for name, fd in descriptors:
                 info = os.fstat(fd)
-                if name not in DIRECTORIES[role]:
+                if name not in selected_directories[role]:
                     p.require(not stat.S_ISDIR(info.st_mode))
                     continue
                 p.require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
@@ -125,11 +138,12 @@ class _InitialResources:
                 identities.add(pair)
                 directories[name] = {"identity": identity, "entryCount": 0}
                 self._current()
-            p.require(tuple(directories) == DIRECTORIES[role])
+            p.require(tuple(directories) == selected_directories[role])
             services[role] = {"directories": directories}
-        p.require(len(identities) == 15 and launch.preparation_original() == self.preparation)
+        p.require(len(identities) == (17 if self.inputs._adoption else 15)
+            and launch.preparation_original() == self.preparation)
         self._current()
-        return {"apiVersion": API, "preparationSha256": p.sha(self.preparation),
+        return {"apiVersion": ADOPTED_API if self.inputs._adoption else API, "preparationSha256": p.sha(self.preparation),
             "issuedAtBoottimeNs": str(self.issued), "services": services}
 
     def original(self):

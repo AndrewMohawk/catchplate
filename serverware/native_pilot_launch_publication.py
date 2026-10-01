@@ -86,7 +86,9 @@ ADOPTED_PURPOSES = {**{"native-launch-" + role: 32768 for role in ADOPTED_ROLES}
     **{"native-delivery-" + role: 65536 for role in ADOPTED_ROLES},
     **{"native-" + role + "-" + suffix: maximum for role in ADOPTED_ROLES for suffix, maximum in COMPONENTS.values()},
     "native-service-retrieval": 3 * 1024 * 1024, "native-service-persistence": 3 * 1024 * 1024,
-    "native-service-publication": 4 * 1024 * 1024}
+    "native-service-publication": 4 * 1024 * 1024,
+    **{"native-service-" + operation: services.MAX_OUTPUT for operation in services.ADOPTED_OPERATIONS},
+    "native-generation-install-grant": generation.MAX_BYTES}
 ADOPTED_DESTINATIONS = {purpose: "/etc/serverware/native-pilot-inputs/" + purpose + ".json" for purpose in ADOPTED_PURPOSES}
 INNER_FIELDS = ("apiVersion", "deliveryConfiguration", "delivery") + tuple(COMPONENTS)
 _ENVELOPE = ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256",
@@ -255,7 +257,16 @@ def shape_adopted(purpose: str, raw: bytes) -> dict:
         else p.document(raw, ADOPTED_PURPOSES[purpose]))
     if purpose.startswith("native-service-"):
         from serverware import native_pilot_adopted_service_authority as adopted
-        return adopted.grant_original(purpose.removeprefix("native-service-"), raw)
+        operation = purpose.removeprefix("native-service-")
+        if operation in adopted.PROFILES: return adopted.grant_original(operation, raw)
+        signed = services.grant_original(operation, raw)
+        api = services.HISTORY_PROFILES[operation][0] if operation in services.HISTORY_OPERATIONS else services.PROFILES[operation][0]
+        p.require(signed["payload"]["apiVersion"] == api)
+        return signed
+    if purpose == "native-generation-install-grant":
+        signed = generation.grant_original(raw)
+        p.require(signed["payload"]["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v2")
+        return signed
     if purpose.startswith("native-cold-"):
         return delivery.configuration(raw, p.sha(raw))
     if purpose.startswith("native-delivery-"):
@@ -753,9 +764,10 @@ def install_adopted(input_original: bytes, *, expected_sha256: str) -> dict:
         bundle = p.document(context["bundleOriginal"], MAX_INPUT)
         paths = {"owner": control.CONFIGURATION, "window": control.PRECREATION,
             "configuration": bundle["keyAdmission"]["deliveryConfiguration"]["path"],
-            "delivery": bundle["keyAdmission"]["delivery"]["path"], "grant": bundle["serviceGrant"]["path"]}
+            "delivery": bundle["keyAdmission"]["delivery"]["path"], "grant": bundle["serviceGrant"]["path"],
+            "companion": ADOPTED_DESTINATIONS["native-service-commitRequest"]}
         for name, raw in context["prerequisites"]:
-            maximum = 4 * 1024 * 1024 if name == "grant" else 65536
+            maximum = 4 * 1024 * 1024 if name in ("grant", "companion") else 65536
             retained = control._Original(paths[name], maximum, p.sha(raw))
             held.append(retained); p.require(retained.raw == raw)
         prepared = context["prepared"]

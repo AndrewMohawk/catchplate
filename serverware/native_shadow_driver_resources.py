@@ -16,6 +16,7 @@ import stat
 import threading
 
 from serverware import custody_generation_originals as o
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_shadow_driver_bootstrap as bootstrap
 from serverware import native_shadow_driver_outgoing as outgoing_module
 from serverware.custody_generation_inputs import _persistent
@@ -110,20 +111,22 @@ class BridgeResources:
         p.require(cohort._spool_resources is spool and cohort.effects_selected()
             and cohort._external_driver is not None and cohort._external_driver.driver is self._driver
             and outgoing._launch_version in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
-                "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8")
+                "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8", bridge_runtime.ADOPTED_LAUNCH)
             and outgoing._inputs is None and not outgoing._begun)
+        adopted = outgoing._launch_version == bridge_runtime.ADOPTED_LAUNCH
+        p.require(cohort.adoption_selected() == adopted)
         self._peers_attempted = True
         self._outgoing, self._spool = outgoing, spool
         self._runtime_raw = bytes(outgoing._runtime_raw)
         runtime, _, excluded = outgoing_module._selection(self._runtime_raw, outgoing._launch_version, self._uid)
         p.require(runtime["apiVersion"] in ("serverware.policyCustodyProductionRpcRuntime/v9", "serverware.policyCustodyProductionRpcRuntime/v10",
-                "serverware.policyCustodyProductionRpcRuntime/v11", "serverware.policyCustodyProductionRpcRuntime/v12")
+                "serverware.policyCustodyProductionRpcRuntime/v11", "serverware.policyCustodyProductionRpcRuntime/v12",
+                "serverware.policyCustodyProductionRpcRuntime/v14")
             and runtime["listenerSocketPath"] == LISTENER_PATH
             and runtime["journalDirectoryIdentity"] == self._journal_identity)
-        selected = [(entry, outgoing_module._PROOFS[entry["endpointKind"]]) for entry in runtime["proofEndpoints"]]
-        selected += [(entry, outgoing_module._NATIVE_SIGNERS[entry["signerRole"]])
-            for entry in runtime["parentSignerEndpoints"] if entry["signerRole"] in outgoing_module._NATIVE_SIGNERS]
-        p.require(len(selected) == 10 and {entry["activationFdName"] for entry, _ in selected} == excluded)
+        selected = outgoing_module.native_connections(runtime)
+        p.require(len(selected) == (11 if adopted else 10)
+            and {entry["activationFdName"] for entry, _ in selected} == excluded)
         for entry, (path, directory_name) in selected:
             self._origin(); outgoing.check()
             name = entry["activationFdName"]
@@ -148,7 +151,9 @@ class BridgeResources:
         self._origin_identity = o.structural(os.fstat(origin))
         self._descriptors["generation-origin"] = self._origin_fd
         self._records = {name: o.structural(os.fstat(fd)) for name, fd in self._descriptors.items()}
-        p.require(len(self._descriptors) == 23 and not set(self._descriptors).intersection(outgoing._descriptors))
+        p.require(len(self._descriptors) == (25 if adopted else 23)
+            and len(outgoing._descriptors) == (16 if adopted else 18)
+            and not set(self._descriptors).intersection(outgoing._descriptors))
         self._peers_ready = True
         self.check()
         return self
@@ -229,7 +234,7 @@ class BridgeResources:
             and inputs._outgoing is self._outgoing
             and driver is self._driver and self._inputs is None and not self._begun and self._peers_ready
             and runtime_raw == self._runtime_raw and launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
-                "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8")
+                "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8", bridge_runtime.ADOPTED_LAUNCH)
             and launch["keyAdmission"]["deliveryConfiguration"] == driver._config["deliveryConfiguration"]
             and delivery["runtimeConfig"]["sha256"] == p.sha(self._runtime_raw))
         runtime, _, _ = outgoing_module._selection(runtime_raw, launch["apiVersion"], self._uid)

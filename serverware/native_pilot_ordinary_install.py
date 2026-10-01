@@ -62,14 +62,14 @@ def native_completed_boundary(request):
             _NATIVE_LAST_INDEX]) == _NATIVE_COMPLETED_JOBS)
 
 
-def plan(*, runtime_originals, history_originals, cold_originals, launch_original):
+def plan(*, runtime_originals, history_originals, cold_originals, launch_original, adopted=False):
     """Pure fifteen-file plan; no input dictionary establishes a live owner."""
     for values in (runtime_originals, history_originals, cold_originals):
         p.fields(values, g.ROLES)
     launch = p.fields(g.document(launch_original, 65536), ("apiVersion", "bootIdBase64url",
         "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs",
         "lifetimeDeadlineBoottimeNs", "invocationId", "services"))
-    p.require(launch["apiVersion"] == "serverware.custodyFiveServiceLaunch/v6")
+    p.require(type(adopted) is bool and launch["apiVersion"] == "serverware.custodyFiveServiceLaunch/v" + ("7" if adopted else "6"))
     p.fields(launch["services"], g.ROLES)
     planned = []
     for role in g.ROLES:
@@ -77,14 +77,14 @@ def plan(*, runtime_originals, history_originals, cold_originals, launch_origina
         p.require(type(runtime_raw) is bytes and 0 < len(runtime_raw) <= MAX_RUNTIME
             and type(history_raw) is bytes and 0 < len(history_raw) <= MAX_HISTORY)
         cold = g.configuration(cold_raw, launch["services"][role]["deliveryConfiguration"]["sha256"], role)
-        runtime = runtime_profile.validate_runtime(role, runtime_raw)
+        runtime = runtime_profile.validate_runtime(role, runtime_raw, adopted=adopted)
         header = runtime["runtime"]
         p.require(header["authorityHistoryManifestCredential"] == "authority-history")
         wrapper = p.fields(g.document(history_raw, MAX_HISTORY), initial.WRAPPER_FIELDS)
-        p.require(wrapper["apiVersion"] == initial.WRAPPER_API)
+        p.require(wrapper["apiVersion"] == (initial.ADOPTED_WRAPPER_API if adopted and role in initial.ADOPTED_ROLES else initial.WRAPPER_API))
         history = initial.manifest(history_raw, role=role, root_pin={
             "keyId": header["authorityHistoryRootKeyId"],
-            "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+            "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]}, adopted=adopted)
         state = wrapper["initialState"]
         identity = history["firstRetainedEpoch"]["retainedEpoch"]["endpointProcessIdentity"]
         p.require((identity["endpointUid"], identity["endpointGid"]) == (cold["uid"], cold["gid"])

@@ -41,18 +41,25 @@ MAX_OUTPUT = authority.MAX_OUTPUT
 
 
 def prepare_adopted_input(operation, input_original, **clocks):
-    """Complete independently approved Input/v6, not legacy policy fallback."""
+    """Complete version-selected input; never a legacy policy fallback."""
     from serverware import native_pilot_adopted_service_authority as adopted
-    return adopted.prepare_input(operation, input_original, **clocks)
+    value = p.document(input_original, authority.MAX_INPUT)
+    if operation == "generationInstall":
+        p.require(value["apiVersion"] == installation.ADOPTED_INPUT_API)
+        return installation.prepare_input(input_original, **clocks)
+    selected = adopted.INPUT_API if operation in adopted.PROFILES else authority.ADOPTED_INPUT_API
+    p.require(value["apiVersion"] == selected)
+    return authority.prepare_input(operation, input_original, **clocks)
 
 
 def checked_adopted_result(operation, input_raw, result, **clocks):
     from serverware import native_pilot_adopted_service_authority as adopted
-    context = adopted.prepare_input(operation, input_raw, **clocks)
+    context = prepare_adopted_input(operation, input_raw, **clocks)
     p.fields(result, ("original", "sha256"))
-    raw, _ = adopted.original(result["original"], adopted.PROFILES[operation][3])
+    maximum = adopted.PROFILES[operation][3] if operation in adopted.PROFILES else authority.MAX_OUTPUT
+    raw, _ = adopted.original(result["original"], maximum)
     p.require(p.sha(raw) == p.digest(result["sha256"]))
-    signed = adopted.grant_original(operation, raw)
+    signed = installation.grant_original(raw) if operation == "generationInstall" else authority.grant_original(operation, raw)
     p.require(signed["payload"] == context["payload"])
     p.public_key(context["supervisor"]).verify(p.decoded(signed["signature"], size=64),
         p.preimage(context["domain"], context["payload"]))

@@ -106,7 +106,7 @@ class _RoleInputs:
             and value["purpose"] == "commit-request-service-transition" and value["serviceRole"] == self._role
             and value["guest"] == item["guest"]
             and value["runtimeConfigurationSha256"] == item["runtime"].sha
-            and runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v8" if self._owner._effects else "serverware.policyCustodyServiceRuntimeConfig/v7" if self._owner._spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
+            and runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v12" if self._owner._adoption else "serverware.policyCustodyServiceRuntimeConfig/v8" if self._owner._effects else "serverware.policyCustodyServiceRuntimeConfig/v7" if self._owner._spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
             and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
             and runtime["dispatchAdmission"] == {"grantFdName": "dispatch-grant"})
         semantic = p.framed(b"serverware.policyCustodyAuthorityHistoryManifest/v3",
@@ -134,7 +134,7 @@ class _RoleInputs:
         signing = [entry["signing"]["publicKeyBase64url"] for entry in c9["credentials"] if entry["signing"] is not None]
         p.require(p.encoded(ledger) not in signing
             and p.encoded(key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)) not in signing)
-        payload_raw = g.canonical(value)
+        payload_raw = p.canonical(value) if self._owner._adoption else g.canonical(value)
         message = b"serverware-signature-v1\0" + len(a.SERVICE_DOMAIN).to_bytes(8, "big") + a.SERVICE_DOMAIN
         message += len(payload_raw).to_bytes(8, "big") + payload_raw
         key.verify(p.decoded(signed["signatureBase64url"], size=64), message)

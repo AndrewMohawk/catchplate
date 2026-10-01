@@ -62,33 +62,35 @@ def _slot(request):
     return index
 
 
-def _input(role, input_raw):
+def _input(role, input_raw, *, adopted=False):
     """Pure complete-input bindings; not retained-file or currentness evidence."""
     p.require(role in ROLES)
-    value = p.fields(p.document(input_raw, authority.MAX_INPUT_BYTES), INPUT_FIELDS)
-    p.require(value["apiVersion"] == INPUT_API and value["operation"] == "delivery" and value["serviceRole"] == role)
+    value = p.fields(generation.document(input_raw, generation.MAX_BYTES) if adopted
+        else p.document(input_raw, authority.MAX_INPUT_BYTES), INPUT_FIELDS)
+    p.require(value["apiVersion"] == (authority.ADOPTED_INPUT_API if adopted else INPUT_API)
+        and value["operation"] == "delivery" and value["serviceRole"] == role)
     launch_raw = authority._original(value["launchOriginal"], 65536)
     payload_raw = authority._original(value["payloadOriginal"], 65536)
     payload = generation.document(payload_raw, 65536)
     launch = generation.document(launch_raw, 65536)
     boot = tuple(launch[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode"))
     issued = p.ns(payload["issuedAtBoottimeNs"])
-    launch, startup, lifetime = authority._launch(launch_raw, boot, issued)
+    launch, startup, lifetime = authority._launch(launch_raw, boot, issued, adopted=adopted)
     cold_raw, cold_sha, _ = authority._cold(value, role, launch)
     runtime_raw = authority._original(value["runtimeOriginal"], generation.MAX_BYTES)
-    runtime_profile.validate_runtime(role, runtime_raw)
-    authority._runtime(runtime_raw, role)
+    runtime_profile.validate_runtime(role, runtime_raw, adopted=adopted)
+    authority._runtime(runtime_raw, role, adopted=adopted)
     _same(payload["runtimeConfig"], {"path": installation.RUNTIME_PATHS[role], "sha256": p.sha(runtime_raw)})
     p.require(payload["invocationId"] == launch["invocationId"])
     generation._delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role, payload_raw=payload_raw,
         activation=value["activation"], boot=boot, startup=startup, lifetime=lifetime, now=issued,
-        **authority._flags(role))
+        **authority._flags(role, adopted=adopted))
     return value, payload, cold_raw, cold_sha, boot, startup, lifetime
 
 
-def checked_result(role, input_raw, result) -> bytes:
+def checked_result(role, input_raw, result, *, adopted=False) -> bytes:
     """Authenticate the returned C9 bytes, not the input's approval provenance."""
-    value, payload, cold_raw, cold_sha, boot, startup, lifetime = _input(role, input_raw)
+    value, payload, cold_raw, cold_sha, boot, startup, lifetime = _input(role, input_raw, adopted=adopted)
     p.fields(result, ("original", "sha256", "pin"))
     raw, signed = history._original(result["original"], 65536)
     p.require(p.sha(raw) == p.digest(result["sha256"]))
@@ -96,7 +98,7 @@ def checked_result(role, input_raw, result) -> bytes:
     _same(signed["payload"], payload)
     generation._admit_delivery(signed_raw=raw, cold_raw=cold_raw, cold_sha=cold_sha, role=role,
         activation=value["activation"], boot=boot, startup=startup, lifetime=lifetime,
-        now=p.ns(payload["issuedAtBoottimeNs"]), **authority._flags(role))
+        now=p.ns(payload["issuedAtBoottimeNs"]), **authority._flags(role, adopted=adopted))
     return raw
 
 

@@ -132,7 +132,7 @@ def validate_identity(value: dict) -> dict:
 
 
 def prepared_identity(observation: dict, *, role: str, endpoint_role: str,
-                      launch: dict, configuration: dict, window: dict, now: int) -> dict:
+                      launch: dict, configuration: dict, window: dict, now: int, adopted=False) -> dict:
     """Bind approved originals to intended exec; never assert completed exec.
 
     The caller verifies the signed driver window, independent authority history
@@ -144,7 +144,7 @@ def prepared_identity(observation: dict, *, role: str, endpoint_role: str,
     p.require(role in g.ROLES and endpoint_role in ENDPOINT_ROLES
         and (role != g.ROLES[0] or endpoint_role == "settlement-store"))
     p.fields(launch, _LAUNCH_FIELDS)
-    p.require(launch["apiVersion"] == "serverware.custodyFiveServiceLaunch/v6"
+    p.require(type(adopted) is bool and launch["apiVersion"] == "serverware.custodyFiveServiceLaunch/v" + ("7" if adopted else "6")
         and observed["configurationSha256"] == p.sha(g.canonical(launch)))
     specs = p.fields(launch["services"], g.ROLES)
     for name in g.ROLES:

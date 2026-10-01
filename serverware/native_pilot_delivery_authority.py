@@ -176,20 +176,19 @@ def bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed, *, bo
     return window
 
 
-def _bridge_inventory(runtime_raw, cold):
-    p.require(bridge_runtime.runtime_version(runtime_raw) in (9, 10, 11, 12))
+def _bridge_inventory(runtime_raw, cold, *, adopted=False):
+    p.require(type(adopted) is bool)
+    p.require(bridge_runtime.runtime_version(runtime_raw) in ((14,) if adopted else (9, 10, 11, 12)))
     runtime, other, native = outgoing._selection(runtime_raw, bridge_runtime.launch_for_runtime(runtime_raw), cold["uid"])
     p.require(runtime["listenerSocketPath"] == "/run/serverware-native-pilot-bridge/listener.sock"
-        and len(other) == 9 and len(native) == 10)
+        and len(other) == (8 if adopted else 9) and len(native) == (11 if adopted else 10))
     inventory = {"production-listener": stat.S_IFSOCK, "production-journal": stat.S_IFDIR,
         "generation-origin": stat.S_IFSOCK}
     for ordinal, (name, _) in enumerate(other):
         inventory[name] = stat.S_IFSOCK
         inventory[outgoing._DIRECTORY_PREFIX + str(ordinal)] = stat.S_IFDIR
-    selected = [(entry, outgoing._PROOFS[entry["endpointKind"]]) for entry in runtime["proofEndpoints"]]
-    selected += [(entry, outgoing._NATIVE_SIGNERS[entry["signerRole"]])
-        for entry in runtime["parentSignerEndpoints"] if entry["signerRole"] in outgoing._NATIVE_SIGNERS]
-    p.require(len(selected) == 10 and {entry["activationFdName"] for entry, _ in selected} == native)
+    selected = outgoing.native_connections(runtime)
+    p.require(len(selected) == (11 if adopted else 10) and {entry["activationFdName"] for entry, _ in selected} == native)
     for entry, (_, directory) in selected:
         p.require(entry["activationFdName"] not in inventory and directory not in inventory)
         inventory[entry["activationFdName"]] = stat.S_IFSOCK
@@ -239,9 +238,12 @@ def input_document(input_original: bytes) -> dict:
     """Version-selected input bounds only; not original/signature admission."""
     value = p.fields(p.document(input_original, MAX_BRIDGE_INPUT), INPUT_FIELDS)
     role = value["role"]
-    p.require(value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v1"
-        and type(role) is str and role in (*ENDPOINTS, "bridge"))
-    successor = role == "bridge" and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) in (10, 11, 12)
+    adopted = value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v3"
+    p.require(type(role) is str and ((adopted and role == "bridge") or
+        (value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v1" and role in (*ENDPOINTS, "bridge"))))
+    runtime_version = bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) if role == "bridge" else None
+    p.require(adopted == (runtime_version == 14))
+    successor = role == "bridge" and runtime_version in bridge_runtime.LARGE_VERSIONS
     p.require(successor or len(input_original) <= MAX_INPUT)
     return value
 
@@ -265,7 +267,8 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     p.require(p.encoded(public) == cold["authority"]["publicKeyBase64url"])
     if role == "bridge":
         window = _bridge_owner(cold, cold_raw, config_raw, window_raw, signed_window, observed)
-        expected, runtime = _bridge_inventory(runtime_raw, cold)
+        expected, runtime = _bridge_inventory(runtime_raw, cold,
+            adopted=value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v3")
     else:
         window = _endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed_window, observed)
         expected, runtime = ENDPOINTS[role], None

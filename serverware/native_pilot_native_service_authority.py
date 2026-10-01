@@ -99,6 +99,9 @@ PAYLOAD_FIELDS = {
 FRESH_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v2"
 HISTORY_RETRIEVAL_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v4"
 COMPLETED_PERSISTENCE_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v5"
+ADOPTED_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v7"
+ADOPTED_OPERATIONS = HISTORY_OPERATIONS + ("trustedTime",)
+ADOPTED_FIELDS = ("deliveryInputOriginal", "pair")
 FRESH_RETRIEVAL_PROFILE = ("serverware.nativeLedgerSpoolRetrievalGrant/v4",
     "native-ledger-spool-retrieval", "serverware.nativeLedgerSpoolRetrievalGrant.signature/v4")
 _ENDPOINT = {"ingress": "ingressAdmission", "ledger": "commitRequest", "terminal": "terminalAppend",
@@ -116,16 +119,19 @@ def input_shape(operation, input_original):
     p.require(type(value) is dict)
     history_retrieval = value.get("apiVersion") == HISTORY_RETRIEVAL_INPUT_API
     fresh = history_retrieval or value.get("apiVersion") == FRESH_INPUT_API
-    history = value.get("apiVersion") == HISTORY_INPUT_API
+    adopted = value.get("apiVersion") == ADOPTED_INPUT_API
+    history = value.get("apiVersion") == HISTORY_INPUT_API or adopted and operation in HISTORY_OPERATIONS
     completed = value.get("apiVersion") == COMPLETED_PERSISTENCE_INPUT_API
-    p.require(history or history_retrieval or len(input_original) <= MAX_LEGACY_INPUT)
+    p.require(history or history_retrieval or adopted or len(input_original) <= MAX_LEGACY_INPUT)
     p.require(not history or operation in HISTORY_OPERATIONS)
+    p.require(not adopted or operation in ADOPTED_OPERATIONS)
     p.require(not fresh or operation == "retrieval")
     p.require(not completed or operation == "persistence")
     p.fields(value, INPUT_FIELDS + EXTRA_FIELDS[operation] + (("retrievalManifestOriginal",) if fresh else ())
         + (HISTORY_INPUT_FIELDS if history else ())
-        + (EVIDENCE_INPUT_FIELDS if history and operation == "commitRequest" else ()))
-    p.require(value["apiVersion"] == (HISTORY_INPUT_API if history else HISTORY_RETRIEVAL_INPUT_API if history_retrieval
+        + (EVIDENCE_INPUT_FIELDS if history and operation == "commitRequest" else ())
+        + (ADOPTED_FIELDS if adopted else ()))
+    p.require(value["apiVersion"] == (ADOPTED_INPUT_API if adopted else HISTORY_INPUT_API if history else HISTORY_RETRIEVAL_INPUT_API if history_retrieval
         else FRESH_INPUT_API if fresh else COMPLETED_PERSISTENCE_INPUT_API if completed
         else "serverware.nativePilotNativeServiceAuthorityInput/v1")
         and value["operation"] == operation)
@@ -135,6 +141,23 @@ def input_shape(operation, input_original):
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
         p.require(p.decoded(manifest["proofScopeOriginalBase64url"], maximum=16384) == proof_raw)
     return value, fresh
+
+
+def _adopted_context(value, operation, *, boot, now_boottime_ns, now_unix_ns):
+    from serverware import native_pilot_adopted_endpoint_authority as selected
+    from serverware import native_pilot_adopted_delivery as adopted_delivery
+    p.require(value["apiVersion"] == ADOPTED_INPUT_API and operation in ADOPTED_OPERATIONS)
+    context = selected.context(_ENDPOINT[operation], pair=value["pair"],
+        delivery_input_original=_original(value["deliveryInputOriginal"], adopted_delivery.MAX_INPUT)[0],
+        delivery_original=_original(value["deliveryOriginal"], 65536)[0],
+        configuration_original=_original(value["configurationOriginal"], p.MAX_CONFIG)[0],
+        configuration_sha256=value["configurationSha256"],
+        assignment_payload_original=_original(value["assignmentPayloadOriginal"], p.MAX_CONFIG)[0],
+        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    selected.duplicate_originals(context, value)
+    context["epochLimit"] = selected.require_interval(context, value["issuedAtUnixNanos"], value["expiresAtUnixNanos"],
+        now_unix_ns=now_unix_ns)
+    return context
 
 
 def grant_shape(operation, payload):
@@ -285,7 +308,7 @@ def _companion(value, keys, admitted, checkpoint, peer, scope, now, *, boot=None
     p.require(pin["sha256"] == p.sha(raw))
     payload = _verified_grant(raw, "commitRequest", keys, admitted, checkpoint, now,
         boot=boot, now_boottime_ns=now_boottime_ns)
-    p.require((value["apiVersion"] == HISTORY_INPUT_API)
+    p.require((value["apiVersion"] in (HISTORY_INPUT_API, ADOPTED_INPUT_API))
         == (payload["apiVersion"] == HISTORY_PROFILES["commitRequest"][0]))
     for name in ("guest", "keyAuthorizationSha256"):
         _same(payload[name], admitted[name])
@@ -299,21 +322,28 @@ def _companion(value, keys, admitted, checkpoint, peer, scope, now, *, boot=None
     return pin, payload["expiresAtUnixNanos"]
 
 
-def ordinary_services(value, scope, peer, guest, *, assignment_id, boot, now_boottime_ns, now_unix_ns):
+def ordinary_services(value, scope, peer, guest, *, assignment_id, boot, now_boottime_ns, now_unix_ns, selected=None):
     """Verify five actual C9/runtime/history/generation chains, not root DTOs."""
     launch_raw = ordinary._original(value["ordinaryLaunchOriginal"], 65536)
-    launch, startup, lifetime = ordinary._launch(launch_raw, boot, now_boottime_ns)
+    adopted = value["apiVersion"] == ADOPTED_INPUT_API
+    launch, startup, lifetime = ordinary._launch(launch_raw, boot, now_boottime_ns, adopted=adopted)
     contexts = p.fields(value["services"], generation.ROLES)
     rows, common = {}, None
+    deadline = startup
     uids, gids = {guest["uid"], peer["uid"]}, {guest["gid"], peer["gid"]}
     epoch_limit = (1 << 63) - 1
     for role in generation.ROLES:
-        item = ordinary._service(contexts[role], role, launch, boot, startup, lifetime, now_boottime_ns, granted=True)
+        item = ordinary._service(contexts[role], role, launch, boot, startup, lifetime, now_boottime_ns,
+            granted=True, adopted=adopted)
         p.require(len(item["history_raw"]) <= 1024 * 1024)
         grant, header = item["generation"], item["header"]
         ordinary_commitment._scope_join(scope, grant["scope"])
         p.require(grant["scope"]["previousConfigurationBindingSha256"] is None
             and grant["scope"]["assignmentId"] == assignment_id)
+        if adopted:
+            from serverware import native_pilot_adopted_endpoint_authority as selected_profile
+            p.require(selected is not None)
+            selected_profile.require_generation_scope(selected, grant["scope"])
         if common is None:
             common = grant["scope"]
         else:
@@ -324,14 +354,20 @@ def ordinary_services(value, scope, peer, guest, *, assignment_id, boot, now_boo
         p.require(common["installationIssuedAtUnixNanos"] <= value["issuedAtUnixNanos"]
             < value["expiresAtUnixNanos"] <= common["installationExpiresAtUnixNanos"])
         epoch_limit = min(epoch_limit, common["installationExpiresAtUnixNanos"])
+        if adopted: epoch_limit = min(epoch_limit, common["installationIssuedAtUnixNanos"] + p.DAY_NS + 1)
         _same(header["expectedPeer"], peer)
         p.require(item["guest"]["uid"] not in uids and item["guest"]["gid"] not in gids)
         uids.add(item["guest"]["uid"]); gids.add(item["guest"]["gid"])
-        root = initial.runtime_manifest(item["history_raw"], runtime=header, guest=item["guest"])["rootAuthority"]
+        if adopted:
+            root = item["history"]["rootAuthority"]
+            deadline = min(deadline, item["deadline"])
+            if item["epochLimit"] is not None: epoch_limit = min(epoch_limit, item["epochLimit"])
+        else:
+            root = initial.runtime_manifest(item["history_raw"], runtime=header, guest=item["guest"])["rootAuthority"]
         rows[role] = {"generationGrantOriginal": item["grant_raw"].decode("ascii"),
             "runtimeOriginal": item["runtime_raw"].decode("ascii"), "historyOriginal": item["history_raw"].decode("ascii"),
             "rootKeyId": root["keyId"], "rootKeySpkiSha256": root["keySpkiSha256"]}
-    return rows, startup, epoch_limit
+    return rows, deadline, epoch_limit
 
 
 def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, now_unix_ns):
@@ -344,7 +380,10 @@ def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, n
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     value, fresh = input_shape(operation, input_original)
     p.require(not fresh)
-    guest, window, observed = _endpoint(value, operation, boot=boot, now_boottime_ns=now_boottime_ns)
+    selected = _adopted_context(value, operation, boot=boot, now_boottime_ns=now_boottime_ns,
+        now_unix_ns=now_unix_ns) if value["apiVersion"] == ADOPTED_INPUT_API else None
+    guest, window, observed = ((selected["delivery"][name] for name in ("guest", "window", "observed")) if selected is not None
+        else _endpoint(value, operation, boot=boot, now_boottime_ns=now_boottime_ns))
     config_raw, config = _original(value["configurationOriginal"], p.MAX_CONFIG)
     p.require(p.sha(config_raw) == p.digest(value["configurationSha256"]))
     admitted, keys = admission.authorization(config, now_unix_ns)
@@ -356,7 +395,7 @@ def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, n
     _, peer = _peer(value, observed, guest)
     issued, expires = value["issuedAtUnixNanos"], value["expiresAtUnixNanos"]
     payload = commitment._common(config, admitted, keys, issued, expires, now_unix_ns)
-    history = value["apiVersion"] == HISTORY_INPUT_API
+    history = value["apiVersion"] in (HISTORY_INPUT_API, ADOPTED_INPUT_API)
     api, purpose, domain = HISTORY_PROFILES[operation] if history else PROFILES[operation]
     payload.update(apiVersion=api, purpose=purpose, expectedPeer=peer)
     if operation == "commitRequest":
@@ -369,6 +408,8 @@ def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, n
             and p.ns(guest["issuedAtBoottimeNs"]) <= scope["issuedAtBoottimeNanos"]
             and scope["expiresAtBoottimeNanos"] <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
         payload["scope"] = scope
+        if selected is not None:
+            p.require(scope["productionConfigurationBindingSha256"] == selected["first"]["measured"]["configurationBindingSha256"])
         if history:
             from serverware import native_pilot_runtime_evidence as evidence
             signed_assignment_raw, signed_assignment = _original(value["assignmentOriginal"], p.MAX_CONFIG)
@@ -379,10 +420,13 @@ def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, n
     else:
         scope_raw, _ = _original(value["spoolScopeOriginal"], 16384)
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
+        if selected is not None:
+            p.require(proof_raw.decode("ascii") == selected["first"]["measured"]["proofScopeOriginal"])
         scope = spool._scope(scope_raw, proof_raw, admitted, guest, assignment_payload_original=assignment_raw)
         _, origin = _original(value["originVerifierOriginal"], 4096)
         spool.key_live(origin, now_unix_ns)
         p.require(origin["keyId"] not in {key["keyId"] for key in keys} and expires <= origin["notAfterUnixNanos"])
+        if selected is not None: p.require(origin["notBeforeUnixNanos"] <= issued)
         companion = None
         if operation == "ledger":
             companion, until = _companion(value, keys, admitted, config["trustCheckpoint"], peer, scope, now_unix_ns,
@@ -393,12 +437,14 @@ def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, n
     if history:
         rows, startup, until = ordinary_services(value, scope, peer, guest,
             assignment_id=admitted["assignmentId"], boot=boot,
-            now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+            now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, selected=selected)
         payload["ordinaryServices"] = rows
         if operation == "ledger":
             companion_raw, _ = _original(value["companionOriginal"], MAX_OUTPUT)
             _same(grant_original("commitRequest", companion_raw)["payload"]["ordinaryServices"], rows)
         deadline, epoch_limit = min(deadline, startup), min(epoch_limit, until)
+    if selected is not None:
+        deadline = min(deadline, selected["deadline"]); epoch_limit = min(epoch_limit, selected["epochLimit"])
     p.require(now_boottime_ns < deadline and now_unix_ns < epoch_limit)
     p.require(grant_shape(operation, payload) == domain)
     p.require(len(p.canonical(payload)) <= (MAX_OUTPUT if history else MAX_LEGACY_OUTPUT))
@@ -464,7 +510,10 @@ def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_
             now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     value, fresh_ledger = input_shape(operation, input_original)
-    guest, window, observed = _endpoint(value, operation, boot=boot, now_boottime_ns=now_boottime_ns)
+    selected = _adopted_context(value, operation, boot=boot, now_boottime_ns=now_boottime_ns,
+        now_unix_ns=now_unix_ns) if value["apiVersion"] == ADOPTED_INPUT_API else None
+    guest, window, observed = ((selected["delivery"][name] for name in ("guest", "window", "observed")) if selected is not None
+        else _endpoint(value, operation, boot=boot, now_boottime_ns=now_boottime_ns))
     now = now_unix_ns
     config_raw, config = _original(value["configurationOriginal"], p.MAX_CONFIG)
     p.require(p.sha(config_raw) == p.digest(value["configurationSha256"]))
@@ -508,7 +557,9 @@ def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_
         domain = persistence.COMPLETED_GRANT_DOMAIN if value["apiVersion"] == COMPLETED_PERSISTENCE_INPUT_API else persistence.GRANT_DOMAIN
     else:
         p.require(operation == "trustedTime")
-        bootstrap_raw, _ = _original(value["bootstrapOriginal"], 65536)
+        bootstrap_raw, bootstrap = _original(value["bootstrapOriginal"], 65536)
+        if selected is not None:
+            p.require(bootstrap["signingKeyId"] == selected["trust"]["timeKey"]["keyId"])
         payload, supervisor = trusted_time._service_grant_payload(configuration_original=config_raw,
             configuration_sha256=value["configurationSha256"], bootstrap_original=bootstrap_raw,
             bootstrap_sha256=p.sha(bootstrap_raw), peer_original=peer_raw, peer_sha256=value["peerSha256"],
@@ -517,11 +568,13 @@ def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_
 
     _same(supervisor, keys[-1]); _same(payload["guest"], guest)
     deadline = p.ns(window["startupDeadlineBoottimeNs"])
-    p.require(now_boottime_ns < deadline and now < expires
+    epoch_limit = expires if selected is None else min(expires, selected["epochLimit"])
+    if selected is not None: deadline = min(deadline, selected["deadline"])
+    p.require(now_boottime_ns < deadline and now < epoch_limit
         and grant_shape(operation, payload) == domain
         and len(p.canonical(payload)) <= MAX_LEGACY_OUTPUT)
     return {"payload": payload, "supervisor": supervisor, "window": window,
-        "deadline": deadline, "epochLimit": expires, "domain": domain}
+        "deadline": deadline, "epochLimit": epoch_limit, "domain": domain}
 
 
 def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
@@ -529,6 +582,8 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
     from serverware import native_pilot_adopted_service_authority as adopted
     if p.document(input_original, MAX_INPUT).get("apiVersion") == adopted.INPUT_API:
         return adopted.sign(operation, input_original, signing_key)
+    if p.document(input_original, MAX_INPUT).get("apiVersion") == ADOPTED_INPUT_API:
+        return _sign_adopted(operation, input_original, signing_key)
     p.require(operation in OPERATIONS and isinstance(signing_key, Ed25519PrivateKey))
     boot, before, now = host_originals._boot(), host_originals._clock(), time.time_ns()
     prepared = prepare_input(operation, input_original, boot=boot,
@@ -559,4 +614,24 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
     p.require(after <= final_wall < prepared["epochLimit"])
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], final_wall)
     p.require(c9._live(window, before) < prepared["deadline"])
+    return raw
+
+
+def _sign_adopted(operation, input_original, signing_key):
+    """Unchanged native domains, original bounds, explicit successor input."""
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    boot, before, wall = host_originals._boot(), host_originals._clock(), time.time_ns()
+    prepared = prepare_input(operation, input_original, boot=boot, now_boottime_ns=before, now_unix_ns=wall)
+    key = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(key) == prepared["supervisor"]["publicKeyBase64url"])
+    p.require(host_originals._boot() == boot)
+    now, epoch = host_originals._clock(), time.time_ns()
+    p.require(before <= now < prepared["deadline"] and wall <= epoch < prepared["epochLimit"])
+    signature = signing_key.sign(p.preimage(prepared["domain"], prepared["payload"]))
+    signing_key.public_key().verify(signature, p.preimage(prepared["domain"], prepared["payload"]))
+    raw = p.canonical({"payload": prepared["payload"], "signature": p.encoded(signature)})
+    grant_original(operation, raw)
+    p.require(host_originals._boot() == boot)
+    final, final_epoch = host_originals._clock(), time.time_ns()
+    p.require(now <= final < prepared["deadline"] and epoch <= final_epoch < prepared["epochLimit"])
     return raw

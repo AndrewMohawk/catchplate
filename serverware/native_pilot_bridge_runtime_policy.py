@@ -17,6 +17,7 @@ from serverware import native_shadow_driver_outgoing as outgoing
 p = generation.p
 API = "serverware.nativePilotSupervisorBridgeRuntimePolicy/v1"
 TERMINAL_API = "serverware.nativePilotSupervisorBridgeRuntimePolicy/v2"
+ADOPTED_API = "serverware.nativePilotSupervisorBridgeRuntimePolicy/v3"
 MAX_POLICY = 65536
 FIELDS = ("apiVersion", "startupTimeoutMillis", "peerExpectations", "historyCredentials",
     "authorityBindings", "externalSignerEndpoints")
@@ -55,10 +56,13 @@ def _peer(value):
 
 def validate_policy(fragment):
     p.fields(fragment, FIELDS)
-    p.require(fragment["apiVersion"] in (API, TERMINAL_API) and len(generation.canonical(fragment)) <= MAX_POLICY)
+    p.require(fragment["apiVersion"] in (API, TERMINAL_API, ADOPTED_API) and len(generation.canonical(fragment)) <= MAX_POLICY)
+    adopted = fragment["apiVersion"] == ADOPTED_API
     p.integer(fragment["startupTimeoutMillis"], maximum=30000)
     expectations = p.fields(fragment["peerExpectations"], peers.ROLES)
     for kind, roles in peers.ROLES.items():
+        if adopted and kind == "native-endpoints":
+            roles = peers.ADOPTED_NATIVE_ROLES
         for row in p.fields(expectations[kind], roles).values():
             p.fields(row, EXPECTATION_FIELDS)
             for value in row.values():
@@ -75,7 +79,8 @@ def validate_policy(fragment):
         names.add(name)
         p.digest(row["authorityKeyId"])
         p.digest(row["authorityKeySpkiSha256"])
-    endpoints = p.fields(fragment["externalSignerEndpoints"], EXTERNAL_SIGNERS)
+    endpoints = p.fields(fragment["externalSignerEndpoints"],
+        tuple(role for role in EXTERNAL_SIGNERS if role != "publication-reconciliation") if adopted else EXTERNAL_SIGNERS)
     paths = set()
     for row in endpoints.values():
         p.fields(row, ("expectedSocketPath", "expectedPeer"))

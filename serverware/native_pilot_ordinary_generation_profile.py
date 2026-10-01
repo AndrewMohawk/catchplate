@@ -161,10 +161,10 @@ def derive_scope(fragment, *, measured, recipe_originals, driver_generation_reci
     return result
 
 
-def _input(role, input_raw, root_pin):
+def _input(role, input_raw, root_pin, *, adopted=False):
     p.require(role in g.ROLES)
     value = p.fields(p.document(input_raw, service.MAX_INPUT_BYTES), INPUT_FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotServiceAuthorityInput/v1"
+    p.require(value["apiVersion"] == (service.ADOPTED_INPUT_API if adopted else "serverware.nativePilotServiceAuthorityInput/v1")
         and value["operation"] == "generation" and value["serviceRole"] == role)
     selected = p.fields(p.fields(value["services"], (role,))[role], SERVICE_FIELDS)
     launch_raw = service._original(value["launchOriginal"], 65536)
@@ -173,22 +173,22 @@ def _input(role, input_raw, root_pin):
     payload = p.fields(g.document(payload_raw, 65536), g.GRANT)
     issued = p.integer(payload["issuedAtBoottimeNanos"], maximum=p.MAX_U64)
     boot = tuple(launch[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode"))
-    launch, startup, lifetime = service._launch(launch_raw, boot, issued)
-    item = service._service(selected, role, launch, boot, startup, lifetime, issued, granted=False)
-    runtime_profile.validate_runtime(role, item["runtime_raw"])
+    launch, startup, lifetime = service._launch(launch_raw, boot, issued, adopted=adopted)
+    item = service._service(selected, role, launch, boot, startup, lifetime, issued, granted=False, adopted=adopted)
+    runtime_profile.validate_runtime(role, item["runtime_raw"], adopted=adopted)
     header = item["header"]
     p.fields(root_pin, ("keyId", "keySpkiSha256"))
     p.require(root_pin == {"keyId": header["authorityHistoryRootKeyId"],
         "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
-    initial.manifest(item["history_raw"], role=role, root_pin=root_pin)
+    initial.manifest(item["history_raw"], role=role, root_pin=root_pin, adopted=adopted)
     p.require(payload["scope"]["previousConfigurationBindingSha256"] is None)
     g._grant_values(payload_raw=payload_raw, guest=item["guest"], runtime_raw=item["runtime_raw"],
-        history_raw=item["history_raw"], delivery_raw=item["delivery_raw"], now=issued, **service._flags(role))
+        history_raw=item["history_raw"], delivery_raw=item["delivery_raw"], now=issued, **service._flags(role, adopted=adopted))
     return value, payload, item, issued
 
 
 def build(role, *, launch_raw, configuration_raw, delivery_raw, runtime_raw, history_raw, scope,
-          issued_boottime_ns, expires_boottime_ns):
+          issued_boottime_ns, expires_boottime_ns, adopted=False):
     p.require(role in g.ROLES)
     p.fields(scope, g.SCOPE); p.require(scope["previousConfigurationBindingSha256"] is None)
     launch = g.document(launch_raw, 65536)
@@ -196,24 +196,24 @@ def build(role, *, launch_raw, configuration_raw, delivery_raw, runtime_raw, his
         "deliveryOriginal": delivery_raw.decode("ascii"), "runtimeOriginal": runtime_raw.decode("ascii"),
         "historyOriginal": history_raw.decode("ascii")}
     boot = tuple(launch[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode"))
-    launch, startup, lifetime = service._launch(launch_raw, boot, issued_boottime_ns)
-    item = service._service(selected, role, launch, boot, startup, lifetime, issued_boottime_ns, granted=False)
+    launch, startup, lifetime = service._launch(launch_raw, boot, issued_boottime_ns, adopted=adopted)
+    item = service._service(selected, role, launch, boot, startup, lifetime, issued_boottime_ns, granted=False, adopted=adopted)
     header = item["header"]
     payload = {"apiVersion": "serverware.custodyServiceGenerationGrant/v1", "purpose": "cold-service-generation-admission",
         "serviceRole": role, "guest": item["guest"], "runtimeConfigurationSha256": p.sha(runtime_raw),
         "authorityHistoryManifestSha256": header["authorityHistoryManifestSha256"], "scope": copy.deepcopy(scope),
         "issuedAtBoottimeNanos": issued_boottime_ns, "expiresAtBoottimeNanos": expires_boottime_ns}
-    value = {"apiVersion": "serverware.nativePilotServiceAuthorityInput/v1", "operation": "generation", "serviceRole": role,
+    value = {"apiVersion": service.ADOPTED_INPUT_API if adopted else "serverware.nativePilotServiceAuthorityInput/v1", "operation": "generation", "serviceRole": role,
         "launchOriginal": launch_raw.decode("ascii"), "payloadOriginal": g.canonical(payload).decode("ascii"), "services": {role: selected}}
     raw = p.canonical(value)
     p.require(len(raw) <= service.MAX_INPUT_BYTES)
-    _input(role, raw, {"keyId": header["authorityHistoryRootKeyId"], "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+    _input(role, raw, {"keyId": header["authorityHistoryRootKeyId"], "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]}, adopted=adopted)
     return raw
 
 
-def checked_result(role, input_raw, result, *, root_pin):
+def checked_result(role, input_raw, result, *, root_pin, adopted=False):
     """Verify the fixed result with independently pinned history-root authority."""
-    _, payload, item, issued = _input(role, input_raw, root_pin)
+    _, payload, item, issued = _input(role, input_raw, root_pin, adopted=adopted)
     p.fields(result, ("original", "sha256", "pin"))
     raw = service._original(result["original"], 65536)
     signed = p.fields(g.document(raw, 65536), ("payload", "signatureBase64url"))
@@ -221,5 +221,5 @@ def checked_result(role, input_raw, result, *, root_pin):
     _same(result["pin"], {"path": publication.DESTINATIONS["ordinary-generation-" + role], "sha256": p.sha(raw)})
     _same(signed["payload"], payload)
     g._admit_grant(signed_raw=raw, guest=item["guest"], runtime_raw=item["runtime_raw"], history_raw=item["history_raw"],
-        delivery_raw=item["delivery_raw"], now=issued, **service._flags(role))
+        delivery_raw=item["delivery_raw"], now=issued, **service._flags(role, adopted=adopted))
     return raw

@@ -14,6 +14,7 @@ import time
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import custody_generation_grants as g
 from serverware import custody_commitment_inputs as commitment
@@ -27,6 +28,7 @@ p = g.p
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 OPERATIONS = ("delivery", "generation", "dispatch", "head", "cleanup", "current")
 TRANSITION_OPERATIONS = ("dispatch", "head", "cleanup", "current")
+ADOPTED_INPUT_API = "serverware.nativePilotServiceAuthorityInput/v3"
 ROLES = g.ROLES
 HEAD_FIELDS = spool.HEAD + ("completion", "effects")
 CLEANUP_FIELDS = CURRENT_FIELDS = spool.CURRENT
@@ -51,15 +53,18 @@ def _public(key):
     return key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
-def _flags(role):
+def _flags(role, *, adopted=False):
     effects = role in spool.EFFECT_ROLES
-    return dict(commitment=role in commitment.ROLES, spool=effects, effects=effects)
+    flags = dict(commitment=role in commitment.ROLES, spool=effects, effects=effects)
+    if adopted:
+        flags["adoption"] = role in commitment.ROLES
+    return flags
 
 
-def _launch(raw, boot, now):
+def _launch(raw, boot, now, *, adopted=False):
     value = p.fields(g.document(raw, 65536), ("apiVersion", "bootIdBase64url", "timeNamespaceDevice",
         "timeNamespaceInode", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"))
-    p.require(value["apiVersion"] == "serverware.custodyFiveServiceLaunch/v6"
+    p.require(type(adopted) is bool and value["apiVersion"] == "serverware.custodyFiveServiceLaunch/v" + ("7" if adopted else "6")
         and (value["bootIdBase64url"], value["timeNamespaceDevice"], value["timeNamespaceInode"]) == boot
         and type(value["invocationId"]) is str and re.fullmatch(r"[0-9a-f]{32}", value["invocationId"])
         and value["invocationId"] != "0" * 32)
@@ -79,17 +84,20 @@ def _cold(value, role, launch):
     return raw, digest, g.configuration(raw, digest, role)
 
 
-def _runtime(raw, role):
+def _runtime(raw, role, *, adopted=False):
     header = g.document(raw, g.MAX_BYTES)["runtime"]
     effects = role in spool.EFFECT_ROLES
     fresh_helper = role == g.ROLES[-1] and header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v9"
-    if fresh_helper:
+    selected = adopted and role in commitment.ROLES
+    if fresh_helper or adopted:
         from serverware import native_pilot_ordinary_runtime_profile as ordinary
-        ordinary.validate_runtime(role, raw)
-    p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v" + ("9" if fresh_helper else "8" if effects else "5")
+        ordinary.validate_runtime(role, raw, adopted=adopted)
+    p.require(type(adopted) is bool and header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v" + ("12" if selected else "9" if fresh_helper else "8" if effects else "5")
         and header["generationAdmission"] == {"grantFdName": "generation-grant"}
         and (header.get("dispatchAdmission") == {"grantFdName": "dispatch-grant"}
-             if role in commitment.ROLES else header.get("dispatchAdmission") is None))
+             if role in commitment.ROLES else header.get("dispatchAdmission") is None)
+        and (header.get("publicationAdmission") == {"grantFdName": "publication-grant"}
+            if selected else "publicationAdmission" not in header))
     expected = {_DRS: ("spoolHead", "spool-head"), _CLEANUP: ("spoolCleanup", "active-effect-cleanup"),
                 _CURRENT: ("spoolCurrent", "spool-current")}.get(role)
     for field in ("spoolHead", "spoolCleanup", "spoolCurrent"):
@@ -100,18 +108,18 @@ def _runtime(raw, role):
     return header
 
 
-def _service(value, role, launch, boot, startup, lifetime, now, *, granted):
+def _service(value, role, launch, boot, startup, lifetime, now, *, granted, adopted=False):
     p.fields(value, _SERVICE + (("generationGrantOriginal",) if granted else ()))
     cold_raw, cold_sha, cold = _cold(value, role, launch)
     delivery_raw = _original(value["deliveryOriginal"], 65536)
     envelope = p.fields(g.document(delivery_raw, 65536), ("apiVersion", "payload", "signatureBase64url"))
     payload = envelope["payload"]
     _, guest = g._admit_delivery(signed_raw=delivery_raw, cold_raw=cold_raw, cold_sha=cold_sha, role=role,
-        activation=payload["activation"], boot=boot, startup=startup, lifetime=lifetime, now=now, **_flags(role))
+        activation=payload["activation"], boot=boot, startup=startup, lifetime=lifetime, now=now, **_flags(role, adopted=adopted))
     p.require(guest["invocationId"] == launch["invocationId"])
     runtime_raw = _original(value["runtimeOriginal"], g.MAX_BYTES)
     history_raw = _original(value["historyOriginal"], g.MAX_BYTES)
-    header = _runtime(runtime_raw, role)
+    header = _runtime(runtime_raw, role, adopted=adopted)
     p.require(p.sha(runtime_raw) == guest["runtimeConfigurationSha256"])
     if role == g.ROLES[-1] and header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v9":
         from serverware import native_pilot_ordinary_initial_profile as initial
@@ -119,11 +127,25 @@ def _service(value, role, launch, boot, startup, lifetime, now, *, granted):
         initial.helper_endpoint_histories(history_raw, runtime=g.document(runtime_raw, g.MAX_BYTES))
     item = dict(cold=cold, guest=guest, runtime_raw=runtime_raw, history_raw=history_raw,
                 delivery_raw=delivery_raw, header=header)
+    if adopted:
+        from serverware import native_pilot_ordinary_initial_profile as initial
+        from serverware import native_pilot_ordinary_key_authority as history_authority
+        manifest = initial.runtime_manifest(history_raw, runtime=header, guest=guest)
+        epoch, _ = history_authority._history(g.canonical(manifest), role=role, root_pin={
+            "keyId": header["authorityHistoryRootKeyId"], "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+        wrapper = g.document(history_raw, g.MAX_BYTES)
+        checkpoint = wrapper["initialCheckpoint"]["payload"]
+        p.require(checkpoint["validFromBoottime"]["absoluteBoottimeNanos"] <= now
+            < checkpoint["validUntilBoottime"]["absoluteBoottimeNanos"])
+        item.update(history=manifest, epoch=epoch,
+            deadline=min(startup, lifetime, checkpoint["validUntilBoottime"]["absoluteBoottimeNanos"]), epochLimit=None)
     if granted:
         item["grant_raw"] = _original(value["generationGrantOriginal"], 65536)
         _, item["root"] = g._admit_grant(signed_raw=item["grant_raw"], guest=guest,
-            runtime_raw=runtime_raw, history_raw=history_raw, delivery_raw=delivery_raw, now=now, **_flags(role))
+            runtime_raw=runtime_raw, history_raw=history_raw, delivery_raw=delivery_raw, now=now, **_flags(role, adopted=adopted))
         item["generation"] = g.document(item["grant_raw"], 65536)["payload"]
+        if adopted:
+            item["deadline"] = min(item["deadline"], item["generation"]["expiresAtBoottimeNanos"])
     return item
 
 
@@ -165,7 +187,7 @@ def _signed_spool(operation, raw, item):
     return value
 
 
-def _head(value, services, native, now, epoch):
+def _head(value, services, native, now, epoch, *, adopted=False):
     item = services[_DRS]
     scope = p.fields(value["scope"], spool.SCOPE)
     for field in spool.SCOPE:
@@ -199,7 +221,7 @@ def _head(value, services, native, now, epoch):
             and selected["keySpkiSha256"] == p.sha(bytes.fromhex("302a300506032b6570032100") + public))
         keys.append(public)
         signed = spool._native_original(name, native[name], expected_api=api, effects=True,
-            proof_scope_original=value["proofScopeOriginal"])
+            proof_scope_original=value["proofScopeOriginal"], adoption=adopted)
         payload = signed["payload"]
         p.decoded(signed["signature"], size=64)
         if "ordinaryServices" in payload:
@@ -219,7 +241,7 @@ def _head(value, services, native, now, epoch):
     signing = g.document(item["delivery_raw"], 65536)["payload"]["credentials"]
     p.require(all(p.decoded(entry["signing"]["publicKeyBase64url"], size=32) not in keys
                   for entry in signing if entry["signing"] is not None))
-    retrieved = g.document(native["retrieval"], 65536)["payload"]
+    retrieved = g.document(native["retrieval"], 3 * 1024 * 1024 if adopted else 65536)["payload"]
     p.require(p.decoded(retrieved["proofScopeOriginalBase64url"], maximum=16384) == proof_raw
         and retrieved["ingress"] == value["ingress"] and retrieved["ledger"] == value["ledger"]
         and retrieved["terminal"] == completion["terminal"]
@@ -243,7 +265,40 @@ def _followup(operation, value, item, head, head_raw, services, now, cleanup=Non
     return scope
 
 
-def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now_unix_ns):
+def _prepare_bootstrap(operation, role, input_original, *, boot, now_boottime_ns, now_unix_ns):
+    p.require(operation in ("delivery", "generation") and role in ROLES)
+    extra = ("configurationOriginal", "configurationSha256", "runtimeOriginal", "activation") if operation == "delivery" else ("services",)
+    value = p.fields(g.document(input_original, g.MAX_BYTES) if operation == "delivery"
+        else p.document(input_original, MAX_INPUT_BYTES), _COMMON + extra)
+    p.require(value["apiVersion"] == ADOPTED_INPUT_API and value["operation"] == operation and value["serviceRole"] == role)
+    launch, startup, lifetime = _launch(_original(value["launchOriginal"], 65536), boot, now_boottime_ns, adopted=True)
+    payload_raw = _original(value["payloadOriginal"], 65536)
+    deadline, epoch_limit = startup, None
+    if operation == "delivery":
+        cold_raw, cold_sha, cold = _cold(value, role, launch)
+        runtime_raw = _original(value["runtimeOriginal"], g.MAX_BYTES)
+        _runtime(runtime_raw, role, adopted=True)
+        _, payload = g._delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role, payload_raw=payload_raw,
+            activation=value["activation"], boot=boot, startup=startup, lifetime=lifetime, now=now_boottime_ns,
+            **_flags(role, adopted=True))
+        p.require(payload["invocationId"] == launch["invocationId"] and payload["runtimeConfig"]["sha256"] == p.sha(runtime_raw))
+        root = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
+        message = g.c9.DOMAIN + payload_raw
+    else:
+        row = p.fields(value["services"], (role,))[role]
+        item = _service(row, role, launch, boot, startup, lifetime, now_boottime_ns, granted=False, adopted=True)
+        payload, root = g._grant_values(payload_raw=payload_raw, guest=item["guest"], runtime_raw=item["runtime_raw"],
+            history_raw=item["history_raw"], delivery_raw=item["delivery_raw"], now=now_boottime_ns, **_flags(role, adopted=True))
+        deadline = min(deadline, item["deadline"], payload["expiresAtBoottimeNanos"])
+        epoch_limit = payload["scope"]["installationExpiresAtUnixNanos"]
+        p.require(payload["scope"]["installationIssuedAtUnixNanos"] <= now_unix_ns < epoch_limit)
+        message = g._grant_message(payload_raw)
+    p.require(now_boottime_ns < deadline)
+    return dict(payload=payload, payloadOriginal=payload_raw, root=root, message=message, window=launch,
+        deadline=deadline, epochLimit=epoch_limit, maximum=65536)
+
+
+def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
     """Pure preparation shared by the four existing transition signers.
 
     Complete approved originals and caller-supplied clocks are checked data,
@@ -252,8 +307,12 @@ def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now
     exact independently approved pins; their full native admission is not
     inferred from the head/cleanup/current shape checks.
     """
-    p.require(operation in TRANSITION_OPERATIONS and role in ROLES)
+    p.require(type(adopted) is bool)
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
+    if adopted and operation in ("delivery", "generation"):
+        return _prepare_bootstrap(operation, role, input_original, boot=boot,
+            now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    p.require(operation in TRANSITION_OPERATIONS and role in ROLES)
     extra = ("services",)
     if operation == "dispatch":
         p.require(role in commitment.ROLES)
@@ -266,20 +325,21 @@ def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now
         if operation == "current":
             extra += ("cleanupGrantOriginal",)
     value = p.fields(p.document(input_original, MAX_INPUT_BYTES), _COMMON + extra)
-    p.require(value["apiVersion"] == "serverware.nativePilotServiceAuthorityInput/v1"
+    p.require(value["apiVersion"] == (ADOPTED_INPUT_API if adopted else "serverware.nativePilotServiceAuthorityInput/v1")
         and value["operation"] == operation and value["serviceRole"] == role)
     launch_raw = _original(value["launchOriginal"], 65536)
-    launch, startup, lifetime = _launch(launch_raw, boot, now_boottime_ns)
+    launch, startup, lifetime = _launch(launch_raw, boot, now_boottime_ns, adopted=adopted)
     maximum = 131072 if operation in ("cleanup", "current") else 65536
     payload_raw = _original(value["payloadOriginal"], maximum)
     selected = ((role,) if operation == "dispatch" else
         (_DRS, _CLEANUP, _CURRENT) if operation == "current" else (_DRS, _CLEANUP))
     supplied = p.fields(value["services"], selected)
     services = {name: _service(supplied[name], name, launch, boot, startup, lifetime,
-        now_boottime_ns, granted=True) for name in selected}
+        now_boottime_ns, granted=True, adopted=adopted) for name in selected}
     p.require(len({item["cold"]["uid"] for item in services.values()}) == len(services)
         and len({item["cold"]["gid"] for item in services.values()}) == len(services))
     item = services[role]
+    native_windows = []
     from serverware import native_pilot_native_service_authority as native_authority
     if operation == "dispatch":
         payload = p.fields(g.document(payload_raw, maximum), dispatch.SERVICE_FIELDS)
@@ -287,6 +347,7 @@ def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now
         _scope(payload["scope"], item, now_boottime_ns)
         native_raw = _original(value["nativeGrantOriginal"], native_authority.MAX_OUTPUT)
         native_payload = native_authority.grant_original("commitRequest", native_raw)["payload"]
+        native_windows.append(native_payload)
         p.require(native_payload["expectedPeer"] == item["header"]["expectedPeer"])
         native_authority.require_ordinary_member(native_payload, role, runtime_raw=item["runtime_raw"],
             history_raw=item["history_raw"], generation_raw=item["grant_raw"])
@@ -295,23 +356,25 @@ def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now
             history_original=item["history_raw"], delivery_original=item["delivery_raw"],
             now=now_boottime_ns, native_configuration_original=_original(value["nativeConfigurationOriginal"], p.MAX_CONFIG),
             native_configuration_sha256=p.digest(value["nativeConfigurationSha256"]),
-            native_now=now_unix_ns, spool=True, effects=True)
+            native_now=now_unix_ns, spool=True, effects=True, adoption=adopted)
         p.require(_public(root) == _public(item["root"]))
         scope = payload["scope"]
         domain = dispatch.SERVICE_DOMAIN.decode("ascii")
         message = b"serverware-signature-v1\0" + len(dispatch.SERVICE_DOMAIN).to_bytes(8, "big") \
             + dispatch.SERVICE_DOMAIN + len(payload_raw).to_bytes(8, "big") + payload_raw
     else:
-        native = {name: _original(raw, native_authority.MAX_OUTPUT)
+        native = {name: _original(raw, 3 * 1024 * 1024 if adopted and name == "retrieval" else native_authority.MAX_OUTPUT)
             for name, raw in p.fields(value["nativeOriginals"], spool.EFFECT_NATIVE).items()}
+        if adopted:
+            native_windows.extend(g.document(raw, g.MAX_BYTES)["payload"] for raw in native.values())
         payload = _spool_payload(operation, payload_raw, item)
         root = item["root"]
         if operation == "head":
-            scope = _head(payload, services, native, now_boottime_ns, now_unix_ns)
+            scope = _head(payload, services, native, now_boottime_ns, now_unix_ns, adopted=adopted)
         else:
             head_raw = _original(value["headGrantOriginal"], 65536)
             head = _signed_spool("head", head_raw, services[_DRS])
-            _head(head, services, native, now_boottime_ns, now_unix_ns)
+            _head(head, services, native, now_boottime_ns, now_unix_ns, adopted=adopted)
             cleanup = None
             if operation == "current":
                 cleanup_raw = _original(value["cleanupGrantOriginal"], 131072)
@@ -322,38 +385,57 @@ def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now
         domain = "serverware." + stem + ".signature/v" + version
         message = _message(operation, payload_raw)
     deadline = min(startup, scope["expiresAtBoottimeNanos"])
+    epoch_limit = None
+    if adopted:
+        p.require(p.canonical(payload) == payload_raw)
+        deadline = min(deadline, *(member["deadline"] for member in services.values()))
+        epoch_limit = min(member["generation"]["scope"]["installationExpiresAtUnixNanos"] for member in services.values())
+        for native_payload in native_windows:
+            p.freshness(native_payload["issuedAtUnixNanos"], native_payload["expiresAtUnixNanos"], now_unix_ns)
+            epoch_limit = min(epoch_limit, native_payload["expiresAtUnixNanos"], native_payload["issuedAtUnixNanos"] + 300_000_000_001)
+        p.require(now_unix_ns < epoch_limit)
     p.require(now_boottime_ns < deadline)
     return {"payload": payload, "payloadOriginal": payload_raw, "root": root, "domain": domain,
-        "message": message, "window": launch, "deadline": deadline, "maximum": maximum}
+        "message": message, "window": launch, "deadline": deadline, "epochLimit": epoch_limit, "maximum": maximum}
 
 
-def _sign_transition(operation, role, input_original, signing_key):
+def _sign_transition(operation, role, input_original, signing_key, *, adopted=False):
     boot, now, epoch = originals._boot(), originals._clock(), time.time_ns()
     prepared = prepare_input(operation, role, input_original, boot=boot,
-        now_boottime_ns=now, now_unix_ns=epoch)
+        now_boottime_ns=now, now_unix_ns=epoch, adopted=adopted)
     p.require(_public(signing_key.public_key()) == _public(prepared["root"]))
+    p.require(originals._boot() == boot)
     before, before_epoch = originals._clock(), time.time_ns()
-    p.require(originals._boot() == boot and now <= before < prepared["deadline"] and epoch <= before_epoch)
+    p.require(now <= before < prepared["deadline"] and epoch <= before_epoch)
     checked = prepare_input(operation, role, input_original, boot=boot,
-        now_boottime_ns=before, now_unix_ns=before_epoch)
+        now_boottime_ns=before, now_unix_ns=before_epoch, adopted=adopted)
     p.require(checked["message"] == prepared["message"] and checked["deadline"] == prepared["deadline"]
         and _public(checked["root"]) == _public(signing_key.public_key()))
+    p.require(originals._boot() == boot)
+    signing_now, signing_epoch = originals._clock(), time.time_ns()
+    p.require(before <= signing_now < prepared["deadline"] and before_epoch <= signing_epoch
+        and (checked.get("epochLimit") is None or signing_epoch < checked["epochLimit"]))
     signature = signing_key.sign(prepared["message"])
     prepared["root"].verify(signature, prepared["message"])
-    signed = g.canonical({"payload": prepared["payload"], "signatureBase64url": p.encoded(signature)})
+    envelope = {"payload": prepared["payload"], "signatureBase64url": p.encoded(signature)}
+    if operation == "delivery":
+        envelope["apiVersion"] = "serverware.policyCustodyGuestDelivery/v1"
+    signed = g.canonical(envelope)
     p.require(len(signed) <= prepared["maximum"])
+    p.require(originals._boot() == boot)
     after, after_epoch = originals._clock(), time.time_ns()
-    p.require(originals._boot() == boot and before <= after < prepared["deadline"] and before_epoch <= after_epoch)
+    p.require(signing_now <= after < prepared["deadline"] and signing_epoch <= after_epoch)
     checked = prepare_input(operation, role, input_original, boot=boot,
-        now_boottime_ns=after, now_unix_ns=after_epoch)
+        now_boottime_ns=after, now_unix_ns=after_epoch, adopted=adopted)
     p.require(checked["message"] == prepared["message"] and checked["deadline"] == prepared["deadline"]
         and _public(checked["root"]) == _public(signing_key.public_key())
         and originals._boot() == boot and after <= originals._clock() < prepared["deadline"]
         and after_epoch <= time.time_ns())
+    p.require(checked.get("epochLimit") is None or time.time_ns() < checked["epochLimit"])
     return signed, prepared["deadline"]
 
 
-def sign(*, operation, role, input_original, signing_key):
+def sign(*, operation, role, input_original, signing_key, adopted=False):
     """Return (existing signed original, original output deadline), no new wire.
 
     Common input fields: apiVersion nativePilotServiceAuthorityInput/v1,
@@ -368,8 +450,9 @@ def sign(*, operation, role, input_original, signing_key):
     All Original values are literal canonical ASCII strings, not summaries.
     """
     p.require(operation in OPERATIONS and role in ROLES and isinstance(signing_key, Ed25519PrivateKey))
-    if operation in TRANSITION_OPERATIONS:
-        return _sign_transition(operation, role, input_original, signing_key)
+    p.require(type(adopted) is bool)
+    if adopted or operation in TRANSITION_OPERATIONS:
+        return _sign_transition(operation, role, input_original, signing_key, adopted=adopted)
     extra = ("configurationOriginal", "configurationSha256", "runtimeOriginal", "activation") if operation == "delivery" else ("services",)
     value = p.fields(p.document(input_original, MAX_INPUT_BYTES), _COMMON + extra)
     p.require(value["apiVersion"] == "serverware.nativePilotServiceAuthorityInput/v1"

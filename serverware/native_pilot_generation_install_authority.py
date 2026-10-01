@@ -37,6 +37,7 @@ MAX_LEGACY_BYTES = 65536
 MAX_BYTES = 4 * 1024 * 1024
 DOMAIN = "serverware.nativeGenerationCoordinatorAssignment.signature/v1"
 HISTORY_DOMAIN = "serverware.nativeGenerationCoordinatorAssignment.signature/v2"
+ADOPTED_INPUT_API = "serverware.nativePilotGenerationInstallAuthorityInput/v3"
 PAYLOAD_FIELDS = ("apiVersion", "purpose", "guest", "assignmentPayloadSha256",
     "keyAuthorizationSha256", "services", "keyHistory", "journal", "expectedPeer",
     "trustCheckpointId", "revocationGeneration", "revocationRootSha256",
@@ -151,14 +152,33 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     """
     now, wall = now_boottime_ns, now_unix_ns
     p.integer(now, maximum=p.MAX_U64); p.integer(wall)
-    value = p.fields(p.document(input_original, MAX_INPUT_BYTES), INPUT_FIELDS)
-    history = value["apiVersion"] == "serverware.nativePilotGenerationInstallAuthorityInput/v2"
-    p.require(value["apiVersion"] == "serverware.nativePilotGenerationInstallAuthorityInput/v" + ("2" if history else "1"))
+    value = p.document(input_original, MAX_INPUT_BYTES)
+    adopted = value.get("apiVersion") == ADOPTED_INPUT_API
+    p.fields(value, INPUT_FIELDS + (("deliveryInputOriginal", "pair") if adopted else ()))
+    history = adopted or value["apiVersion"] == "serverware.nativePilotGenerationInstallAuthorityInput/v2"
+    p.require(value["apiVersion"] == (ADOPTED_INPUT_API if adopted else
+        "serverware.nativePilotGenerationInstallAuthorityInput/v" + ("2" if history else "1")))
     payload_raw = ordinary._original(value["payloadOriginal"], MAX_BYTES)
     payload = p.fields(p.document(payload_raw, MAX_BYTES), PAYLOAD_FIELDS)
     domain = grant_shape(payload)
     p.require(history == (domain == HISTORY_DOMAIN) and (history or len(payload_raw) <= MAX_LEGACY_BYTES))
-    guest, window, observed = _coordinator(value, boot=boot, now=now)
+    selected = None
+    if adopted:
+        from serverware import native_pilot_adopted_endpoint_authority as selected_profile
+        from serverware import native_pilot_adopted_delivery as adopted_delivery
+        selected = selected_profile.context("generationInstall", pair=value["pair"],
+            delivery_input_original=ordinary._original(value["deliveryInputOriginal"], adopted_delivery.MAX_INPUT),
+            delivery_original=ordinary._original(value["coordinatorDeliveryOriginal"], MAX_LEGACY_BYTES),
+            configuration_original=ordinary._original(value["nativeConfigurationOriginal"], p.MAX_CONFIG),
+            configuration_sha256=value["nativeConfigurationSha256"],
+            assignment_payload_original=ordinary._original(value["assignmentPayloadOriginal"], g.MAX_BYTES),
+            boot=boot, now_boottime_ns=now, now_unix_ns=wall)
+        selected_profile.duplicate_originals(selected, value, generation=True)
+        selected["epochLimit"] = selected_profile.require_interval(selected, payload["issuedAtUnixNanos"],
+            payload["expiresAtUnixNanos"], now_unix_ns=wall)
+        guest, window, observed = (selected["delivery"][name] for name in ("guest", "window", "observed"))
+    else:
+        guest, window, observed = _coordinator(value, boot=boot, now=now)
     _same(payload["guest"], guest)
     native_raw = ordinary._original(value["nativeConfigurationOriginal"], p.MAX_CONFIG)
     p.require(p.sha(native_raw) == p.digest(value["nativeConfigurationSha256"]))
@@ -187,21 +207,27 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     p.require(payload["expiresAtUnixNanos"] <= epoch_limit)
     peer = _peer(payload, observed, guest)
     launch_raw = ordinary._original(value["ordinaryLaunchOriginal"], MAX_LEGACY_BYTES)
-    launch, startup, lifetime = ordinary._launch(launch_raw, boot, now)
+    launch, startup, lifetime = ordinary._launch(launch_raw, boot, now, adopted=adopted)
     contexts = p.fields(value["services"], g.ROLES)
     members = p.fields(payload["services"], g.ROLES)
     deadline = min(startup, p.ns(window["startupDeadlineBoottimeNs"]))
     scopes, uids, gids = [], {guest["uid"], peer["uid"]}, {guest["gid"], peer["gid"]}
     for role in g.ROLES:
-        item = ordinary._service(contexts[role], role, launch, boot, startup, lifetime, now, granted=True)
+        item = ordinary._service(contexts[role], role, launch, boot, startup, lifetime, now,
+            granted=True, adopted=adopted)
         member = members[role]
         p.require(member["grantOriginal"] == item["grant_raw"].decode("ascii")
             and member["historyOriginal"] == item["history_raw"].decode("ascii")
             and len(item["history_raw"]) <= 1024 * 1024)
         if history:
             p.require(member["runtimeOriginal"] == item["runtime_raw"].decode("ascii"))
-        root = initial.runtime_manifest(item["history_raw"], runtime=item["header"],
-            guest=item["guest"])["rootAuthority"]
+        if adopted:
+            root = item["history"]["rootAuthority"]
+            deadline = min(deadline, item["deadline"])
+            if item["epochLimit"] is not None: epoch_limit = min(epoch_limit, item["epochLimit"])
+        else:
+            root = initial.runtime_manifest(item["history_raw"], runtime=item["header"],
+                guest=item["guest"])["rootAuthority"]
         p.require(member["rootKeyId"] == root["keyId"] and member["rootKeySpkiSha256"] == root["keySpkiSha256"])
         _same(item["header"]["expectedPeer"], peer)
         p.require(item["guest"]["uid"] not in uids and item["guest"]["gid"] not in gids)
@@ -218,6 +244,11 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     scope = scopes[0]
     p.freshness(scope["installationIssuedAtUnixNanos"], scope["installationExpiresAtUnixNanos"], wall)
     epoch_limit = min(epoch_limit, scope["installationExpiresAtUnixNanos"])
+    if selected is not None:
+        selected_profile.require_generation_scope(selected, scope)
+        p.require(scope["installationIssuedAtUnixNanos"] <= payload["issuedAtUnixNanos"])
+        epoch_limit = min(epoch_limit, selected["epochLimit"], scope["installationIssuedAtUnixNanos"] + p.DAY_NS + 1)
+        deadline = min(deadline, selected["deadline"])
     p.require(payload["expiresAtUnixNanos"] <= epoch_limit)
     _journal(value, payload, guest)
     p.require(now < deadline and wall < epoch_limit)

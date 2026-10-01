@@ -28,7 +28,7 @@ CONTEXT_FIELDS = ("configurationOriginal", "runtimeOriginal", "historyOriginal",
 
 
 def select(contexts, *, preparation_original, resources_original, launch_original,
-           window, boot, now_boottime_ns):
+           window, boot, now_boottime_ns, adopted=False):
     """Authenticate five service contexts and every role-specific initial wrapper.
 
 This pure check establishes byte/signature joins, not the provenance of a
@@ -36,28 +36,28 @@ caller dictionary, an empty-directory observation or permission to sign.
 Missing/conflicting coverage refuses before the owner samples request entropy.
 """
     p.fields(contexts, g.ROLES)
-    p.require(type(boot) is tuple and len(boot) == 3
+    p.require(type(adopted) is bool and type(boot) is tuple and len(boot) == 3
         and tuple(window[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode")) == boot)
     now = key._uint(now_boottime_ns)
-    observed = initial.resources(resources_original)
+    observed = initial.resources(resources_original, adopted=adopted)
     p.require(observed["preparationSha256"] == p.sha(preparation_original))
     values, checked = {}, {}
     for role in g.ROLES:
         row = p.fields(contexts[role], CONTEXT_FIELDS)
-        value = runtime.validate_runtime(role, row["runtimeOriginal"])
+        value = runtime.validate_runtime(role, row["runtimeOriginal"], adopted=adopted)
         header, guest = value["runtime"], row["guest"]
         p.guest(guest)
         p.require(guest["serviceRole"] == role
             and guest["runtimeConfigurationSha256"] == p.sha(row["runtimeOriginal"]))
         wrapper = p.fields(g.document(row["historyOriginal"], g.MAX_BYTES), initial.WRAPPER_FIELDS)
-        p.require(wrapper["apiVersion"] == initial.WRAPPER_API)
+        p.require(wrapper["apiVersion"] == (initial.ADOPTED_WRAPPER_API if adopted and role in initial.ADOPTED_ROLES else initial.WRAPPER_API))
         history = initial.runtime_manifest(row["historyOriginal"], runtime=header, guest=guest)
         state, checkpoint = wrapper["initialState"], wrapper["initialCheckpoint"]
         epoch = history["firstRetainedEpoch"]["retainedEpoch"]
         cold = g.configuration(row["configurationOriginal"], guest["configurationSha256"], role)
         identity = initial.prepared_state(state, preparation_raw=preparation_original,
             resources_raw=resources_original, launch_raw=launch_original, configuration=cold,
-            window=window, endpoint_role=checkpoint["payload"]["endpointRole"], now=now)
+            window=window, endpoint_role=checkpoint["payload"]["endpointRole"], now=now, adopted=adopted)
         p.require(identity == epoch["endpointProcessIdentity"]
             and (guest["uid"], guest["gid"]) == (cold["uid"], cold["gid"]))
         key.validate_payload(checkpoint["payload"], identity=identity, window=window, now=now)
@@ -79,7 +79,7 @@ Missing/conflicting coverage refuses before the owner samples request entropy.
                 resources_raw=resources_original, launch_raw=launch_original,
                 configuration=g.configuration(contexts[g.ROLES[-1]]["configurationOriginal"],
                     contexts[g.ROLES[-1]]["guest"]["configurationSha256"], g.ROLES[-1]),
-                window=window, endpoint_role=endpoint_role, now=now)
+                window=window, endpoint_role=endpoint_role, now=now, adopted=adopted)
             p.require(identity == selected_identity)
             key.validate_payload(checkpoint["payload"], identity=identity, window=window, now=now)
             targets[g.ROLES[-1], endpoint_role] = dict(endpointRole=endpoint_role, identity=identity,
@@ -87,7 +87,7 @@ Missing/conflicting coverage refuses before the owner samples request entropy.
                     checkpoint["payload"]["validUntilBoottime"]["absoluteBoottimeNanos"]),
                 runtimeConfigurationSha256=p.sha(contexts[g.ROLES[-1]]["runtimeOriginal"]),
                 initialHistorySha256=p.sha(item["original"]))
-    forbidden = {digest for row in targets.values() for digest in initial.commitments(row["state"]).values()}
+    forbidden = {digest for row in targets.values() for digest in initial.commitments(row["state"], adopted=adopted).values()}
     selected = {}
 
     def accept(pin, expected_role=None, subject=None):

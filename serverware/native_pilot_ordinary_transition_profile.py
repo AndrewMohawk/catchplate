@@ -48,12 +48,15 @@ def _same(first, second):
     p.require(g.canonical(first) == g.canonical(second))
 
 
-def epoch_reference(history_raw, *, runtime, guest):
+def epoch_reference(history_raw, *, runtime, guest, adopted=False):
     """Authenticate the initial wrapper, then project Rust's exact epoch ref.
 
     This is public signature/byte binding, never live endpoint admission.
     """
-    p.require(g.document(history_raw, g.MAX_BYTES)["apiVersion"] == initial.WRAPPER_API)
+    selected = adopted and guest["serviceRole"] in initial.ADOPTED_ROLES
+    p.require(type(adopted) is bool and g.document(history_raw, g.MAX_BYTES)["apiVersion"]
+        == (initial.ADOPTED_WRAPPER_API if selected else initial.WRAPPER_API))
+    p.require((runtime["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v12") == selected)
     history = initial.runtime_manifest(history_raw, runtime=runtime, guest=guest)
     epoch = history["firstRetainedEpoch"]["retainedEpoch"]
     value = {name: copy.deepcopy(epoch[name]) for name in ("apiVersion", "authorityRole", "authorityEpochSequence",
@@ -69,22 +72,26 @@ def epoch_reference(history_raw, *, runtime, guest):
     return value, p.encoded(public)
 
 
-def _native_context(context, clocks):
-    p.fields(context, native.OPERATIONS)
+def _native_context(context, clocks, *, adopted=False):
+    from serverware import native_pilot_adopted_service_authority as adopted_authority
+    operations = native.OPERATIONS + (("publication",) if adopted else ())
+    p.fields(context, operations)
     total = 0
     for row in context.values():
         p.fields(row, ("inputOriginal", "grantOriginal"))
-        for name, maximum in (("inputOriginal", native.MAX_INPUT), ("grantOriginal", native.MAX_OUTPUT)):
+        for name, maximum in (("inputOriginal", native.MAX_INPUT), ("grantOriginal", 4 * 1024 * 1024 if adopted else native.MAX_OUTPUT)):
             p.require(type(row[name]) is bytes and 0 < len(row[name]) <= maximum)
             total += len(row[name])
     p.require(total <= MAX_CONTEXT)
     inputs, payloads, keys = {}, {}, {}
-    for operation in native.OPERATIONS:
+    for operation in operations:
         row = context[operation]
-        raw = native.checked_result(operation, row["inputOriginal"],
+        checker = native.checked_adopted_result if adopted else native.checked_result
+        raw = checker(operation, row["inputOriginal"],
             {"original": row["grantOriginal"].decode("ascii"), "sha256": p.sha(row["grantOriginal"])}, **clocks)
         inputs[operation] = p.document(row["inputOriginal"], native.MAX_INPUT)
-        payloads[operation] = g.document(raw, native.MAX_OUTPUT)["payload"]
+        maximum = adopted_authority.PROFILES[operation][3] if adopted and operation in adopted_authority.PROFILES else native.MAX_OUTPUT
+        payloads[operation] = g.document(raw, maximum)["payload"]
         if operation in spool.EFFECT_NATIVE or operation == "commitRequest":
             config = p.document(authority._original(inputs[operation]["configurationOriginal"], p.MAX_CONFIG), p.MAX_CONFIG)
             _, authorized = admission.authorization(config, clocks["now_unix_ns"])
@@ -95,7 +102,7 @@ def _native_context(context, clocks):
     return inputs, payloads, keys
 
 
-def _services(context, inputs, payloads, clocks):
+def _services(context, inputs, payloads, clocks, *, adopted=False):
     p.fields(context, ("launchOriginal", "services"))
     rows = p.fields(context["services"], g.ROLES)
     # Byte-identical actual inputs, not a reconstructed history/guest summary.
@@ -106,12 +113,12 @@ def _services(context, inputs, payloads, clocks):
             p.fields(rows[role], authority._SERVICE + ("generationGrantOriginal",))
             p.require(rows[role] == original["services"][role])
     launch_raw = authority._original(context["launchOriginal"], 65536)
-    launch, startup, lifetime = authority._launch(launch_raw, clocks["boot"], clocks["now_boottime_ns"])
+    launch, startup, lifetime = authority._launch(launch_raw, clocks["boot"], clocks["now_boottime_ns"], adopted=adopted)
     services = {}
     common = None
     for role in g.ROLES:
         item = authority._service(rows[role], role, launch, clocks["boot"], startup, lifetime,
-            clocks["now_boottime_ns"], granted=True)
+            clocks["now_boottime_ns"], granted=True, adopted=adopted)
         if common is None:
             common = item["generation"]["scope"]
         else:
@@ -129,9 +136,9 @@ def _base(item):
         "authorityHistoryManifestSha256": semantic}
 
 
-def _head_payload(fragment, services, payloads, keys):
+def _head_payload(fragment, services, payloads, keys, *, adopted=False):
     cleanup = services[CLEANUP]
-    epoch, public = epoch_reference(cleanup["history_raw"], runtime=cleanup["header"], guest=cleanup["guest"])
+    epoch, public = epoch_reference(cleanup["history_raw"], runtime=cleanup["header"], guest=cleanup["guest"], adopted=adopted)
     ingress = payloads["ingress"]
     return {**_base(services[DRS]), "apiVersion": "serverware.nativeSpoolHeadGrant/v3",
         "purpose": "native-shared-spool-head", "scope": copy.deepcopy(ingress["scope"]),
@@ -146,7 +153,7 @@ def _head_payload(fragment, services, payloads, keys):
 
 
 def build(operation, role, *, fragment, ordinary_context, native_context, prior_transition_originals,
-          boot, now_boottime_ns, now_unix_ns) -> bytes:
+          boot, now_boottime_ns, now_unix_ns, adopted=False) -> bytes:
     p.require((operation, role) in JOBS)
     fragment = validate_policy(fragment)
     required = ("head", "cleanup") if operation == "current" else ("head",) if operation == "cleanup" else ()
@@ -154,11 +161,11 @@ def build(operation, role, *, fragment, ordinary_context, native_context, prior_
     for name, raw in prior_transition_originals.items():
         p.require(type(raw) is bytes and 0 < len(raw) <= (65536 if name == "head" else 131072))
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
-    inputs, payloads, keys = _native_context(native_context, clocks)
-    services = _services(ordinary_context, inputs, payloads, clocks)
+    inputs, payloads, keys = _native_context(native_context, clocks, adopted=adopted)
+    services = _services(ordinary_context, inputs, payloads, clocks, adopted=adopted)
     item = services[role]
     selected = (role,) if operation == "dispatch" else (DRS, CLEANUP, CURRENT) if operation == "current" else (DRS, CLEANUP)
-    value = {"apiVersion": "serverware.nativePilotServiceAuthorityInput/v1", "operation": operation,
+    value = {"apiVersion": authority.ADOPTED_INPUT_API if adopted else "serverware.nativePilotServiceAuthorityInput/v1", "operation": operation,
         "serviceRole": role, "launchOriginal": ordinary_context["launchOriginal"],
         "services": {name: copy.deepcopy(ordinary_context["services"][name]) for name in selected}}
     if operation == "dispatch":
@@ -174,7 +181,7 @@ def build(operation, role, *, fragment, ordinary_context, native_context, prior_
             nativeConfigurationOriginal=inputs["commitRequest"]["configurationOriginal"],
             nativeConfigurationSha256=inputs["commitRequest"]["configurationSha256"])
     else:
-        head = _head_payload(fragment, services, payloads, keys)
+        head = _head_payload(fragment, services, payloads, keys, adopted=adopted)
         value["nativeOriginals"] = {name: native_context[name]["grantOriginal"].decode("ascii") for name in spool.EFFECT_NATIVE}
         if operation == "head":
             payload = head
@@ -182,7 +189,7 @@ def build(operation, role, *, fragment, ordinary_context, native_context, prior_
             head_raw = prior_transition_originals["head"]
             _same(authority._signed_spool("head", head_raw, services[DRS]), head)
             durable = services[DRS]
-            epoch, public = epoch_reference(durable["history_raw"], runtime=durable["header"], guest=durable["guest"])
+            epoch, public = epoch_reference(durable["history_raw"], runtime=durable["header"], guest=durable["guest"], adopted=adopted)
             payload = {**_base(item), "apiVersion": "serverware." + authority._SPOOL[operation][1]
                 + "/v" + authority._SPOOL[operation][2], "purpose": authority._SPOOL[operation][3],
                 "headGrantOriginal": head_raw.decode("ascii"), "durableAuthorityEpoch": epoch,
@@ -198,14 +205,14 @@ def build(operation, role, *, fragment, ordinary_context, native_context, prior_
     value["payloadOriginal"] = g.canonical(payload).decode("ascii")
     raw = p.canonical(value)
     p.require(len(raw) <= MAX_INPUT)
-    authority.prepare_input(operation, role, raw, **clocks)
+    authority.prepare_input(operation, role, raw, adopted=adopted, **clocks)
     return raw
 
 
-def checked_result(operation, role, input_raw, result, *, boot, now_boottime_ns, now_unix_ns) -> bytes:
+def checked_result(operation, role, input_raw, result, *, boot, now_boottime_ns, now_unix_ns, adopted=False) -> bytes:
     p.require((operation, role) in JOBS)
     prepared = authority.prepare_input(operation, role, input_raw, boot=boot,
-        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
     p.fields(result, ("original", "sha256"))
     raw = authority._original(result["original"], prepared["maximum"])
     p.require(p.sha(raw) == p.digest(result["sha256"]))

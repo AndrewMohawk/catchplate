@@ -166,14 +166,14 @@ def sign_service_transition_grant(*, payload_original, native_grant_original, ru
 
 def _sign_service_transition_grant(*, payload_original, native_grant_original, runtime_original,
                                   history_original, delivery_original, signing_key, now,
-                                  native_configuration_original, native_configuration_sha256, native_now, spool, effects=False):
+                                  native_configuration_original, native_configuration_sha256, native_now, spool, effects=False, adoption=False):
     """Independent history-root signature; never the LedgerAppend/HMAC key."""
     payload, root = _service_transition_payload(payload_original=payload_original,
         native_grant_original=native_grant_original, runtime_original=runtime_original,
         history_original=history_original, delivery_original=delivery_original, now=now,
         native_configuration_original=native_configuration_original,
         native_configuration_sha256=native_configuration_sha256, native_now=native_now,
-        spool=spool, effects=effects)
+        spool=spool, effects=effects, adoption=adoption)
     p.require(isinstance(signing_key, Ed25519PrivateKey)
         and signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
             == root.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
@@ -188,7 +188,7 @@ def _sign_service_transition_grant(*, payload_original, native_grant_original, r
 def _service_transition_payload(*, payload_original, native_grant_original, runtime_original,
                                 history_original, delivery_original, now,
                                 native_configuration_original, native_configuration_sha256,
-                                native_now, spool, effects=False):
+                                native_now, spool, effects=False, adoption=False):
     """Shared pure transition checks and the authenticated history-root key.
 
     Supplied clocks are data, not proof of a retained live owner. No private
@@ -224,7 +224,7 @@ def _service_transition_payload(*, payload_original, native_grant_original, runt
             history_raw=history_original, generation_raw=grant_raw)
         g._admit_grant(signed_raw=grant_raw, guest=guest, runtime_raw=runtime_original,
             history_raw=history_original, delivery_raw=delivery_original, now=now,
-            commitment=True, spool=spool, effects=effects)
+            commitment=True, spool=spool, effects=effects, adoption=adoption)
     p.require(np == expected and native_configuration["authorization"]["payload"]["localRoles"] == ["custody-ledger-append"])
     p.public_key(keys[-1]).verify(p.decoded(native["signature"], size=64),
         p.preimage(native_authority.grant_shape("commitRequest", np), np))
@@ -232,10 +232,13 @@ def _service_transition_payload(*, payload_original, native_grant_original, runt
     p.require(payload["nativeLedgerKeyId"] == ledger["keyId"]
         and payload["nativeLedgerKeySpkiSha256"] == ledger["keySpkiSha256"]
         and payload["nativeLedgerPublicKeyBase64url"] == ledger["publicKeyBase64url"])
-    p.require(type(spool) is bool and type(effects) is bool and (not effects or spool))
-    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v8" if effects else "serverware.policyCustodyServiceRuntimeConfig/v7" if spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
+    p.require(type(spool) is bool and type(effects) is bool and type(adoption) is bool
+        and (not effects or spool) and (not adoption or effects))
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v12" if adoption else "serverware.policyCustodyServiceRuntimeConfig/v8" if effects else "serverware.policyCustodyServiceRuntimeConfig/v7" if spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
         and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
         and runtime["dispatchAdmission"] == {"grantFdName": "dispatch-grant"}
+        and (runtime.get("publicationAdmission") == {"grantFdName": "publication-grant"}
+            if adoption else runtime.get("publicationAdmission") is None)
         and payload["nativeGrantSha256"] == p.sha(native_grant_original) and native["payload"]["scope"] == scope
         and p.sha(delivery_original) == guest["deliverySha256"]
         and p.sha(runtime_original) == guest["runtimeConfigurationSha256"] == payload["runtimeConfigurationSha256"])
@@ -264,6 +267,8 @@ def _service_transition_payload(*, payload_original, native_grant_original, runt
         and p.digest(payload["initialHeadSha256"]) != p.sha(b"")
         and p.ns(guest["issuedAtBoottimeNs"]) <= scope["issuedAtBoottimeNanos"] <= now
         < scope["expiresAtBoottimeNanos"] <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
+    if adoption:
+        p.require(p.canonical(payload) == payload_original)
     return payload, root_key
 
 

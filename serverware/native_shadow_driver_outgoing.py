@@ -40,6 +40,21 @@ _NATIVE_SIGNERS = {
     "active-effect-barrier": ("/run/serverware-shadow-active-effect-barrier/listener.sock", "active-effect-barrier-peer-directory"),
     "active-effect-commit": ("/run/serverware-shadow-active-effect-commit/listener.sock", "active-effect-commit-peer-directory"),
 }
+_ADOPTED_NATIVE_SIGNERS = {**_NATIVE_SIGNERS,
+    "publication-reconciliation": ("/run/serverware-shadow-publication-reconciliation/listener.sock",
+        "publication-reconciliation-peer-directory")}
+
+
+def native_signers(version):
+    p.require(type(version) is int and version in bridge_runtime.VERSIONS)
+    return _ADOPTED_NATIVE_SIGNERS if version == bridge_runtime.ADOPTED_VERSION else _NATIVE_SIGNERS
+
+
+def native_connections(runtime):
+    signers = native_signers(bridge_runtime.version(runtime))
+    return ([(entry, _PROOFS[entry["endpointKind"]]) for entry in runtime["proofEndpoints"]]
+        + [(entry, signers[entry["signerRole"]]) for entry in runtime["parentSignerEndpoints"]
+            if entry["signerRole"] in signers])
 _RUNTIME_FIELDS = ("apiVersion", "startupTimeoutMillis", "listenerSocketPath", "expectedFacadePeer",
     "journalDirectoryIdentity", "expectedHelperEndpointRoles", "expectedDriverProcessIdentitySha256",
     "expectedDriverConfigurationGenerationSha256", "expectedOperationGeneration", "expectedSharedConfigurationSha256",
@@ -111,7 +126,7 @@ def _selection(raw, launch_version, bridge_uid):
             and spool["originFdName"] == "generation-origin")
         for key in ("headGrantOriginal", "currentGrantOriginal") + (("cleanupGrantOriginal",) if suffix >= 9 else ()):
             p.require(type(spool[key]) is str and spool[key].isascii())
-            p.document(spool[key].encode("ascii"), 131072 if suffix in (10, 11, 12) and key != "headGrantOriginal" else 65536)
+            p.document(spool[key].encode("ascii"), 131072 if suffix in bridge_runtime.LARGE_VERSIONS and key != "headGrantOriginal" else 65536)
     outgoing, names, roles, excluded = {}, {"production-listener", "production-journal", "generation-origin"}, set(), set()
     sessions = runtime["serviceSessions"]
     p.require(type(sessions) is list and len(sessions) == 5)
@@ -124,9 +139,11 @@ def _selection(raw, launch_version, bridge_uid):
         outgoing[name] = entry
     signers, roles = runtime["parentSignerEndpoints"], set()
     p.require(type(signers) is list and len(signers) == 10)
+    signer_paths = native_signers(suffix)
     selected_signers = {5: set(), 6: {"ledger-append"}, 7: {"ledger-append", "ingress-admission"},
         8: {"ledger-append", "ingress-admission", "terminal-append"},
-            9: set(_NATIVE_SIGNERS), 10: set(_NATIVE_SIGNERS), 11: set(_NATIVE_SIGNERS), 12: set(_NATIVE_SIGNERS)}[suffix]
+            9: set(_NATIVE_SIGNERS), 10: set(_NATIVE_SIGNERS), 11: set(_NATIVE_SIGNERS), 12: set(_NATIVE_SIGNERS),
+            14: set(_ADOPTED_NATIVE_SIGNERS)}[suffix]
     for entry in signers:
         p.fields(entry, ("signerRole", "authorityBindingCredential", "activationFdName", "expectedSocketPath", "expectedPeer", "authorityKeyId", "authorityKeySpkiSha256"))
         role, name = entry["signerRole"], _name(entry["activationFdName"])
@@ -134,7 +151,7 @@ def _selection(raw, launch_version, bridge_uid):
         roles.add(role); names.add(name); _peer(entry["expectedPeer"], bridge_uid)
         _name(entry["authorityBindingCredential"]); p.digest(entry["authorityKeyId"]); p.digest(entry["authorityKeySpkiSha256"])
         if role in selected_signers:
-            path, directory_name = _NATIVE_SIGNERS[role]
+            path, directory_name = signer_paths[role]
             p.require(entry["expectedSocketPath"] == path and directory_name not in names)
             excluded.add(name); names.add(directory_name)
         else:
@@ -150,7 +167,7 @@ def _selection(raw, launch_version, bridge_uid):
         roles.add(role); names.add(name); names.add(directory_name); excluded.add(name)
         _peer(entry["expectedPeer"], bridge_uid)
         _name(entry["authorityBindingCredential"]); p.digest(entry["authorityKeyId"]); p.digest(entry["authorityKeySpkiSha256"])
-    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12, 9: 9, 10: 9, 11: 9, 12: 9}[suffix])
+    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12, 9: 9, 10: 9, 11: 9, 12: 9, 14: 8}[suffix])
     for ordinal in range(len(outgoing)):
         p.require(_DIRECTORY_PREFIX + str(ordinal) not in names)
     return runtime, tuple((name, outgoing[name]) for name in sorted(outgoing)), frozenset(excluded)

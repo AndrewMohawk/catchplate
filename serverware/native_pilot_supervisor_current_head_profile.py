@@ -60,7 +60,7 @@ def _text(raw, bound):
     return raw.decode("ascii")
 
 
-def _approved_history(role, row, item):
+def _approved_history(role, row, item, *, adopted=False):
     """Bind authenticated history keys/state to independently selected policy."""
     p.fields(row, _POLICY_FIELDS)
     p.require(row["validity"] == "observed-initial-resources-through-original-lifetime")
@@ -71,8 +71,8 @@ def _approved_history(role, row, item):
     p.require(root == {"keyId": item["header"]["authorityHistoryRootKeyId"],
         "keySpkiSha256": item["header"]["authorityHistoryRootKeySpkiSha256"]})
     wrapper = p.fields(g.document(item["history_raw"], g.MAX_BYTES), initial.WRAPPER_FIELDS)
-    p.require(wrapper["apiVersion"] == initial.WRAPPER_API)
-    manifest = initial.manifest(item["history_raw"], role=role, root_pin=root)
+    p.require(wrapper["apiVersion"] == (initial.ADOPTED_WRAPPER_API if adopted and role in initial.ADOPTED_ROLES else initial.WRAPPER_API))
+    manifest = initial.manifest(item["history_raw"], role=role, root_pin=root, adopted=adopted)
     epoch = manifest["firstRetainedEpoch"]["retainedEpoch"]
     _same(authorities, {"root": manifest["rootAuthority"], "checkpoint": epoch["checkpointAuthority"],
         "service": epoch["serviceSigningKey"]})
@@ -107,14 +107,15 @@ def prepare_context(*, fragment, bridge_preparation_raw, driver_configuration_ra
     driver._key(config["bootstrapAuthority"]).verify(p.decoded(signed_window["signatureBase64url"], size=64),
         driver.WINDOW_DOMAIN + p.canonical(window))
     windows.validate_window(window, driver_configuration_raw, config, boot=boot, now=now)
-    launch, startup, lifetime = service._launch(launch_raw, boot, now)
+    observed = bridge.shape(bridge_preparation_raw)
+    adopted = observed["apiVersion"] == bridge.ADOPTED_API
+    launch, startup, lifetime = service._launch(launch_raw, boot, now, adopted=adopted)
     p.require(startup == p.ns(window["startupDeadlineBoottimeNs"])
         and lifetime == p.ns(window["lifetimeDeadlineBoottimeNs"])
         and launch["invocationId"] == window["invocationId"])
     measured = key.preparation(preparation_raw)
-    initial.resources(resources_raw)
-    observed = bridge.shape(bridge_preparation_raw)
-    p.require(observed["apiVersion"] == bridge.HELPER_API)
+    initial.resources(resources_raw, adopted=adopted)
+    p.require(observed["apiVersion"] in (bridge.HELPER_API, bridge.ADOPTED_API))
     exported, peers = bridge._parts(observed)
     p.require(exported["apiVersion"] == requests.HELPER_API
         and exported["launchSha256"] == p.sha(launch_raw)
@@ -142,9 +143,9 @@ def prepare_context(*, fragment, bridge_preparation_raw, driver_configuration_ra
         row = p.fields(rows[role], service._SERVICE + ("generationGrantOriginal",))
         total += sum(len(value.encode("ascii")) for value in row.values() if type(value) is str)
         p.require(total <= MAX_RETAINED_BYTES)
-        item = service._service(row, role, launch, boot, startup, lifetime, now, granted=True)
-        runtime.validate_runtime(role, item["runtime_raw"])
-        root, wrapper, epoch = _approved_history(role, policy_rows[role], item)
+        item = service._service(row, role, launch, boot, startup, lifetime, now, granted=True, adopted=adopted)
+        runtime.validate_runtime(role, item["runtime_raw"], adopted=adopted)
+        root, wrapper, epoch = _approved_history(role, policy_rows[role], item, adopted=adopted)
         generation = item["generation"]
         p.require(generation["scope"]["previousConfigurationBindingSha256"] is None)
         if common_scope is None:
@@ -159,10 +160,10 @@ def prepare_context(*, fragment, bridge_preparation_raw, driver_configuration_ra
         pinned[role] = root, wrapper, epoch
     p.require(items[g.ROLES[-1]]["header"]["apiVersion"] == initial.HELPER_RUNTIME_API)
     selection = requests.select(contexts, preparation_original=preparation_raw, resources_original=resources_raw,
-        launch_original=launch_raw, window=window, boot=boot, now_boottime_ns=now)
+        launch_original=launch_raw, window=window, boot=boot, now_boottime_ns=now, adopted=adopted)
     selected = {(role, endpoint): row for role, endpoint, row in requests.iter_selection(selection)}
     members = initial.helper_endpoint_histories(items[g.ROLES[-1]]["history_raw"],
-        runtime=runtime.validate_runtime(g.ROLES[-1], items[g.ROLES[-1]]["runtime_raw"]))
+        runtime=runtime.validate_runtime(g.ROLES[-1], items[g.ROLES[-1]]["runtime_raw"], adopted=adopted))
     targets = {}
     for job_name, (role, endpoint) in zip(JOB_NAMES, TARGETS, strict=True):
         row = exported["requests"][role] if endpoint is None else exported["requests"][role][endpoint]

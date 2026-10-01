@@ -1734,6 +1734,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_delivery.py \
 	scripts/test_native_pilot_adopted_keys.py \
 	scripts/test_native_pilot_adopted_services.py \
+	scripts/test_custody_adopted_inputs.py \
+	scripts/test_native_pilot_adopted_bridge.py \
+	scripts/test_native_pilot_adopted_endpoints.py \
+	scripts/test_native_pilot_adopted_ordinary.py \
+	serverware/custody_publication_inputs.py \
+	serverware/native_pilot_adopted_endpoint_authority.py \
+	serverware/native_pilot_ordinary_delivery_profile.py \
+	serverware/native_pilot_ordinary_publication_authority.py \
 	serverware/native_pilot_adopted_cohort_authority.py \
 	serverware/native_pilot_adopted_commands.py \
 	serverware/native_pilot_adopted_delivery.py \
@@ -4639,6 +4647,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_delivery.py \
 				scripts/test_native_pilot_adopted_keys.py \
 				scripts/test_native_pilot_adopted_services.py \
+				scripts/test_custody_adopted_inputs.py \
+				scripts/test_native_pilot_adopted_bridge.py \
+				scripts/test_native_pilot_adopted_endpoints.py \
+				scripts/test_native_pilot_adopted_ordinary.py \
+				serverware/custody_publication_inputs.py \
+				serverware/native_pilot_adopted_endpoint_authority.py \
+				serverware/native_pilot_ordinary_delivery_profile.py \
+				serverware/native_pilot_ordinary_publication_authority.py \
 				serverware/native_pilot_adopted_cohort_authority.py \
 				serverware/native_pilot_adopted_commands.py \
 				serverware/native_pilot_adopted_delivery.py \

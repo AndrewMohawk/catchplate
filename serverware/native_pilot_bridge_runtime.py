@@ -14,8 +14,12 @@ MAX_LEGACY_RUNTIME = 65536
 MAX_RUNTIME = 4 * 1024 * 1024
 MAX_BRIDGE_INPUT = 16 * 1024 * 1024
 PREFIX = "serverware.policyCustodyProductionRpcRuntime/v"
-LAUNCH_RUNTIME = {"serverware.nativeProofBridgeLaunch/v" + str(version): version + 4
-    for version in range(1, 9)}
+ADOPTED_VERSION = 14
+ADOPTED_LAUNCH = "serverware.nativeProofBridgeLaunch/v10"
+VERSIONS = tuple(range(4, 13)) + (ADOPTED_VERSION,)
+LARGE_VERSIONS = (10, 11, 12, ADOPTED_VERSION)
+LAUNCH_RUNTIME = {**{"serverware.nativeProofBridgeLaunch/v" + str(version): version + 4
+    for version in range(1, 9)}, ADOPTED_LAUNCH: ADOPTED_VERSION}
 BASE_FIELDS = ("apiVersion", "startupTimeoutMillis", "listenerSocketPath", "expectedFacadePeer",
     "journalDirectoryIdentity", "expectedHelperEndpointRoles", "expectedDriverProcessIdentitySha256",
     "expectedDriverConfigurationGenerationSha256", "expectedOperationGeneration", "expectedSharedConfigurationSha256",
@@ -27,14 +31,14 @@ BASE_FIELDS = ("apiVersion", "startupTimeoutMillis", "listenerSocketPath", "expe
 
 def version(value):
     p.require(type(value) is dict)
-    selected = {PREFIX + str(number): number for number in range(4, 13)}.get(value.get("apiVersion"))
+    selected = {PREFIX + str(number): number for number in VERSIONS}.get(value.get("apiVersion"))
     p.require(selected is not None)
     return selected
 
 
 def maximum_for_version(number):
-    p.require(type(number) is int and 4 <= number <= 12)
-    return MAX_RUNTIME if number in (10, 11, 12) else MAX_LEGACY_RUNTIME
+    p.require(type(number) is int and number in VERSIONS)
+    return MAX_RUNTIME if number in LARGE_VERSIONS else MAX_LEGACY_RUNTIME
 
 
 def maximum_for_launch(api):
@@ -52,17 +56,19 @@ def shape(raw):
     # Relabelling a large document also cannot widen the legacy byte bound.
     value = p.document(raw, MAX_RUNTIME)
     selected = version(value)
-    if selected not in (10, 11, 12):
+    if selected not in LARGE_VERSIONS:
         p.require(len(raw) <= MAX_LEGACY_RUNTIME)
     extra = (() if selected == 4 else ("generationAdmission",))
     if selected >= 6:
         extra += ("commitRequest",)
     if selected >= 7:
         extra += ("spool",)
-    if selected in (10, 11, 12):
+    if selected in LARGE_VERSIONS:
         extra += ("ordinaryInitialHistories",)
-    if selected in (11, 12):
+    if selected in (11, 12, ADOPTED_VERSION):
         extra += ("helperBootstrap",)
+    if selected == ADOPTED_VERSION:
+        extra += ("publication",)
     p.fields(value, BASE_FIELDS + extra)
     p.integer(value["startupTimeoutMillis"], maximum=30000)
     for field in extra:
@@ -86,22 +92,49 @@ def shape(raw):
             and row["originFdName"] == "generation-origin")
         _original(row["headGrantOriginal"], 65536)
         for field in ("currentGrantOriginal",) + (("cleanupGrantOriginal",) if effect else ()):
-            _original(row[field], 131072 if selected in (10, 11, 12) else 65536)
-    if selected in (10, 11, 12):
+            _original(row[field], 131072 if selected in LARGE_VERSIONS else 65536)
+    if selected in LARGE_VERSIONS:
         for role, row in p.fields(value["ordinaryInitialHistories"], generation.ROLES).items():
-            p.fields(row, ("runtimeOriginal", "generationGrantOriginal") + (("historyOriginal",) if selected == 12 else ()))
-            if selected == 12:
+            p.fields(row, ("runtimeOriginal", "generationGrantOriginal") + (("historyOriginal",) if selected in (12, ADOPTED_VERSION) else ()))
+            if selected in (12, ADOPTED_VERSION):
                 _original(row["historyOriginal"], 1024 * 1024)
             runtime = _original(row["runtimeOriginal"], generation.MAX_BYTES)
             p.require(type(runtime.get("runtime")) is dict)
+            if selected == ADOPTED_VERSION and role in (generation.ROLES[0], generation.ROLES[3]):
+                p.require(runtime["runtime"].get("apiVersion") == "serverware.policyCustodyServiceRuntimeConfig/v12"
+                    and runtime["runtime"].get("publicationAdmission") == {"grantFdName": "publication-grant"})
             grant = p.fields(_original(row["generationGrantOriginal"], 65536), ("payload", "signatureBase64url"))
             payload = p.fields(grant["payload"], generation.GRANT)
             p.require(payload["apiVersion"] == "serverware.custodyServiceGenerationGrant/v1"
                 and payload["serviceRole"] == role)
             p.decoded(grant["signatureBase64url"], size=64)
-    if selected in (11, 12):
+    if selected in (11, 12, ADOPTED_VERSION):
         from serverware import native_pilot_helper_bootstrap_profile as helper
         helper.shape(p.canonical(value["helperBootstrap"]))
+    if selected == ADOPTED_VERSION:
+        publication_shape(value["publication"])
+    return value
+
+
+def publication_shape(value):
+    """Exact adopted selection and literal signed wires, not grant admission.
+
+    The native client independently authenticates both root signatures and
+    their histories, adoption, durable key and cross-service associations.
+    Keep the native 4 MiB aggregate runtime cap despite the per-grant limit.
+    """
+    p.fields(value, ("apiVersion", "durableGrantOriginal", "currentGrantOriginal"))
+    p.require(value["apiVersion"] == "serverware.nativePublicationServices/v2")
+    for field, role in (("durableGrantOriginal", generation.ROLES[0]),
+                        ("currentGrantOriginal", generation.ROLES[3])):
+        signed = p.fields(_original(value[field], 3 * 1024 * 1024), ("payload", "signatureBase64url"))
+        payload = p.fields(signed["payload"], ("apiVersion", "purpose", "serviceRole", "guest",
+            "runtimeConfigurationSha256", "authorityHistoryManifestSha256", "admission", "native", "retrieval",
+            "initialTransitionHeadSha256", "initialDurableTransitionHeadSha256", "durableAuthorityEpoch", "durablePublicKeyBase64url"))
+        p.require(payload["apiVersion"] == "serverware.nativePublicationServiceGrant/v2"
+            and payload["purpose"] == "native-policy-publication-state" and payload["serviceRole"] == role
+            and type(payload["admission"]) is dict and type(payload["admission"].get("adoption")) is dict)
+        p.decoded(signed["signatureBase64url"], size=64)
     return value
 
 

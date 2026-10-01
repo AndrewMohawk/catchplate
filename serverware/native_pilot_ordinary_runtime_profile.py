@@ -54,10 +54,12 @@ def validate_policy(fragment, *, ordinary_cold_originals, initial_policy):
     return copy.deepcopy(fragment)
 
 
-def _selections(role):
+def _selections(role, *, adopted=False):
     result = {"generationAdmission": {"grantFdName": "generation-grant"}}
     if role in (DRS, CURRENT):
         result["dispatchAdmission"] = {"grantFdName": "dispatch-grant"}
+        if adopted:
+            result["publicationAdmission"] = {"grantFdName": "publication-grant"}
     field, grant = {DRS: ("spoolHead", "spool-head"), CLEANUP: ("spoolCleanup", "active-effect-cleanup"),
         CURRENT: ("spoolCurrent", "spool-current")}.get(role, (None, None))
     if field is not None:
@@ -77,15 +79,15 @@ def _pin_shape(value):
     return identity
 
 
-def validate_runtime(role, raw):
+def validate_runtime(role, raw, *, adopted=False):
     """Closed runtime and authenticated helper-member joins, not owner/approval."""
-    p.require(role in g.ROLES)
+    p.require(role in g.ROLES and type(adopted) is bool)
     value = g.document(raw, g.MAX_BYTES)
     helper = role == HELPER and value.get("runtime", {}).get("apiVersion") == initial.HELPER_RUNTIME_API
     p.fields(value, ("runtime",) + FIELDS[role] + (("initialEndpointHistories", "initialEndpointPins") if helper else ()))
-    selections = _selections(role)
+    selections = _selections(role, adopted=adopted)
     header = p.fields(value["runtime"], HEADER + tuple(name for name in selections if name != "generationAdmission"))
-    expected_version = "9" if helper else "8" if role in (DRS, CLEANUP, CURRENT) else "5"
+    expected_version = "12" if adopted and role in (DRS, CURRENT) else "9" if helper else "8" if role in (DRS, CLEANUP, CURRENT) else "5"
     p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v" + expected_version
         and header["authorityHistoryManifestCredential"] == HISTORY_NAME and header["listenerSocketPath"] == listener(role))
     for name, selected in selections.items():
@@ -101,7 +103,7 @@ def validate_runtime(role, raw):
             recipe.digest(header[name])
     retrieval._peer(g.canonical(header["expectedPeer"]))
     initial._directories({name: {"identity": identity, "entryCount": 0}
-        for name, identity in header["activationDirectoryIdentities"].items()}, role)
+        for name, identity in header["activationDirectoryIdentities"].items()}, role, adopted=adopted)
     for name in FIELDS[role]:
         if name.endswith("Credential"):
             recipe.name(value[name])
@@ -157,11 +159,11 @@ def validate_runtime(role, raw):
     return value
 
 
-def _histories(rows, originals, preparation_raw, resources_raw, launch_raw):
+def _histories(rows, originals, preparation_raw, resources_raw, launch_raw, *, adopted=False):
     p.fields(originals, g.ROLES)
-    prepared, resources = key.preparation(preparation_raw), initial.resources(resources_raw)
+    prepared, resources = key.preparation(preparation_raw), initial.resources(resources_raw, adopted=adopted)
     launch = p.fields(g.document(launch_raw, 65536), key._LAUNCH_FIELDS)
-    p.require(launch["apiVersion"] == "serverware.custodyFiveServiceLaunch/v6"
+    p.require(launch["apiVersion"] == "serverware.custodyFiveServiceLaunch/v" + ("7" if adopted else "6")
         and prepared["configurationSha256"] == p.sha(launch_raw)
         and resources["preparationSha256"] == p.sha(preparation_raw))
     p.fields(launch["services"], g.ROLES)
@@ -169,9 +171,9 @@ def _histories(rows, originals, preparation_raw, resources_raw, launch_raw):
     for role in g.ROLES:
         header = rows[role]["runtimeHeader"]
         wrapper = p.fields(g.document(originals[role], g.MAX_BYTES), initial.WRAPPER_FIELDS)
-        p.require(wrapper["apiVersion"] == initial.WRAPPER_API)
+        p.require(wrapper["apiVersion"] == (initial.ADOPTED_WRAPPER_API if adopted and role in initial.ADOPTED_ROLES else initial.WRAPPER_API))
         history = initial.manifest(originals[role], role=role, root_pin={
-            "keyId": header["authorityHistoryRootKeyId"], "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+            "keyId": header["authorityHistoryRootKeyId"], "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]}, adopted=adopted)
         state, checkpoint = wrapper["initialState"], wrapper["initialCheckpoint"]
         epoch = history["firstRetainedEpoch"]["retainedEpoch"]
         item, identity = prepared["services"][role], epoch["endpointProcessIdentity"]
@@ -211,11 +213,11 @@ def _pin(selection, target, contexts, forbidden, endpoint_role=None):
 
 
 def build(role, *, fragment, history_originals, preparation_raw, resources_raw, launch_raw, configuration_raw, peer,
-          helper_history_originals=None):
+          helper_history_originals=None, adopted=False):
     """Build one deterministic flat native config; never sample a new clock."""
-    p.require(role in g.ROLES)
+    p.require(role in g.ROLES and type(adopted) is bool)
     rows = recipe.shape(fragment)
-    contexts, prepared, launch = _histories(rows, history_originals, preparation_raw, resources_raw, launch_raw)
+    contexts, prepared, launch = _histories(rows, history_originals, preparation_raw, resources_raw, launch_raw, adopted=adopted)
     helper = fragment["apiVersion"] == HELPER_API
     p.require((type(helper_history_originals) is dict) if helper else helper_history_originals is None)
     if helper:
@@ -237,7 +239,7 @@ def build(role, *, fragment, history_originals, preparation_raw, resources_raw, 
         roles[HELPER] = initial.HELPER_ENDPOINT_ROLES
     for name in g.ROLES:
         recipe.bind_keys(name, rows[name], authorities, roles)
-    forbidden = {digest for item in contexts.values() for digest in initial.commitments(item["state"]).values()}
+    forbidden = {digest for item in contexts.values() for digest in initial.commitments(item["state"], adopted=adopted).values()}
     if helper:
         forbidden.update(digest for item in contexts[HELPER]["endpointHistories"].values()
             for digest in initial.commitments(item["state"]).values())
@@ -245,14 +247,14 @@ def build(role, *, fragment, history_originals, preparation_raw, resources_raw, 
     state, checkpoint, service = context["state"], context["checkpoint"], copy.deepcopy(row["service"])
     payload = checkpoint["payload"]
     header = {**copy.deepcopy(row["runtimeHeader"]), "apiVersion": "serverware.policyCustodyServiceRuntimeConfig/v" +
-        ("9" if helper and role == HELPER else "8" if role in (DRS, CLEANUP, CURRENT) else "5"),
+        ("12" if adopted and role in (DRS, CURRENT) else "9" if helper and role == HELPER else "8" if role in (DRS, CLEANUP, CURRENT) else "5"),
         "operationGeneration": state["operationGeneration"],
         "serviceRestartEpoch": state["serviceGeneration"], "durabilityWorkerQueueDepth": 8,
         "authorityHistoryManifestSha256": context["history"]["manifestSha256"],
         "authorityHistoryManifestCredential": HISTORY_NAME, "deploymentGenerationSha256": state["deploymentGenerationSha256"],
         "listenerSocketPath": listener(role), "expectedPeer": copy.deepcopy(peer),
         "activationDirectoryIdentities": {name: record["identity"] for name, record in state["directories"].items()},
-        **_selections(role)}
+        **_selections(role, adopted=adopted)}
     if role in (DRS, CLEANUP, HELPER):
         service.update(signingKeyId=payload["authorizedSigningKeyId"], endpointGeneration=payload["exactEndpointGeneration"],
             checkpointSequence=payload["checkpointSequence"], currentKeyAuthorizationCheckpointSha256=checkpoint["checkpointSha256"],
@@ -286,5 +288,5 @@ def build(role, *, fragment, history_originals, preparation_raw, resources_raw, 
             for name in initial.HELPER_ENDPOINT_ROLES}
     p.require(sum(item["length"] for item in row["credentials"]) + len(history_originals[role]) + 4096 <= 16 * 1024 * 1024)
     raw = g.canonical({"runtime": header, **service})
-    validate_runtime(role, raw)
+    validate_runtime(role, raw, adopted=adopted)
     return raw

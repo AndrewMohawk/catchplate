@@ -26,6 +26,7 @@ PARKED = b"serverware.custodyFiveServiceParked/v1"
 COMMITMENT_CONFIGURATION = "/etc/serverware/custody-commitment-five.json"
 SPOOL_CONFIGURATION = "/etc/serverware/custody-spool-five.json"
 EFFECTS_CONFIGURATION = "/etc/serverware/custody-effects-five.json"
+ADOPTION_CONFIGURATION = "/etc/serverware/custody-adoption-five.json"
 COMMITMENT_RELEASE = b"serverware.custodyFiveServiceRelease/v2"
 COMMITMENT_PARKED = b"serverware.custodyFiveServiceParked/v2"
 COMMITMENT_ROLES = (g.ROLES[0], g.ROLES[3])
@@ -55,7 +56,7 @@ def _packet(channel, maximum, descriptors):
         raise
 
 
-def _park(channel, executable, parent, role, startup, inspected, commitment, spool, effects):
+def _park(channel, executable, parent, role, startup, inspected, commitment, spool, effects, adoption=False):
     """Same fork child performs the fixed exec; no future PID prediction."""
     try:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -83,7 +84,8 @@ def _park(channel, executable, parent, role, startup, inspected, commitment, spo
         p.require(poll.poll((remaining + 999_999) // 1_000_000) and o.clock() < startup)
         selected = commitment and role in COMMITMENT_ROLES
         effect_selected = effects and role in EFFECTS_ROLES
-        count = 1 + len(g.BUSINESS[role]) + 2 + (2 if selected else 0) + (2 if effect_selected or selected and spool else 0)
+        adopted = adoption and role in COMMITMENT_ROLES
+        count = 1 + len(g.BUSINESS[role]) + 2 + (2 if selected else 0) + (2 if effect_selected or selected and spool else 0) + (2 if adopted else 0)
         raw, rights, peer = _packet(wire, len(release), count)
         p.require(raw == release and peer == (parent, 0, 0) and os.getppid() == parent)
         safe = [fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 256) for fd in rights]
@@ -93,7 +95,10 @@ def _park(channel, executable, parent, role, startup, inspected, commitment, spo
             os.dup2(fd, target, inheritable=True)
         os.closerange(6 + count - 1, limit)
         p.require(o.clock() < startup and os.getppid() == parent)
-        if effect_selected:
+        if adopted:
+            p.require(inspected and effect_selected and selected)
+            selector = "--guest-c9-adoption-inspected"
+        elif effect_selected:
             p.require(inspected)
             selector = "--guest-c9-effects-inspected"
         elif selected and spool:
@@ -135,6 +140,7 @@ class FiveServiceLaunch:
         self._preparation = None
         self._peer_preparation_attempted = False
         self._peer_preparation = None
+        self._adoption = False
 
     @classmethod
     def start(cls):
@@ -156,9 +162,15 @@ class FiveServiceLaunch:
         return cls._start(True, spool=True, effects=True)
 
     @classmethod
-    def _start(cls, commitment, spool=False, effects=False):
+    def start_adopted_inspected(cls):
+        """Explicit protected five-service profile, with adopted DRS/CSA only."""
+        return cls._start(True, spool=True, effects=True, adoption=True)
+
+    @classmethod
+    def _start(cls, commitment, spool=False, effects=False, adoption=False):
         p.require(cls is FiveServiceLaunch and type(commitment) is bool and type(spool) is bool
-            and type(effects) is bool and (not spool or commitment) and (not effects or spool))
+            and type(effects) is bool and type(adoption) is bool and (not spool or commitment)
+            and (not effects or spool) and (not adoption or effects))
         p.require(os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
             and threading.current_thread() is threading.main_thread())
         # Fixed kernel-owned self link is intentional, not a supplied ancestor.
@@ -170,7 +182,7 @@ class FiveServiceLaunch:
         owner = cls(_TOKEN)
         try:
             owner._pid = os.getpid(); owner._start = o.native._start(); owner._boot = o.native._boot()
-            original = o.Original(EFFECTS_CONFIGURATION if effects else SPOOL_CONFIGURATION if spool else COMMITMENT_CONFIGURATION if commitment else CONFIGURATION, 65536)
+            original = o.Original(ADOPTION_CONFIGURATION if adoption else EFFECTS_CONFIGURATION if effects else SPOOL_CONFIGURATION if spool else COMMITMENT_CONFIGURATION if commitment else CONFIGURATION, 65536)
             owner._originals.append(original)
             cold = p.fields(g.document(original.read(), 65536), ("apiVersion", "bootIdBase64url",
                 "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs",
@@ -181,6 +193,8 @@ class FiveServiceLaunch:
                 versions = ("serverware.custodyFiveServiceLaunch/v5", "serverware.custodyFiveServiceLaunch/v5")
             if effects:
                 versions = ("serverware.custodyFiveServiceLaunch/v6", "serverware.custodyFiveServiceLaunch/v6")
+            if adoption:
+                versions = ("serverware.custodyFiveServiceLaunch/v7", "serverware.custodyFiveServiceLaunch/v7")
             p.require(cold["apiVersion"] in versions
                 and (cold["bootIdBase64url"], cold["timeNamespaceDevice"], cold["timeNamespaceInode"]) == owner._boot
                 and type(cold["invocationId"]) is str and re.fullmatch(r"[0-9a-f]{32}", cold["invocationId"])
@@ -191,6 +205,7 @@ class FiveServiceLaunch:
             owner._commitment = commitment
             owner._spool = spool
             owner._effects = effects
+            owner._adoption = adoption
             owner._startup = p.ns(cold["startupDeadlineBoottimeNs"])
             owner._lifetime = p.ns(cold["lifetimeDeadlineBoottimeNs"])
             owner._issued = o.clock(); owner._invocation = cold["invocationId"]
@@ -226,7 +241,7 @@ class FiveServiceLaunch:
                 pid = os.fork()
                 if pid == 0:
                     _park(child, owner._configurations[role][2].fd, owner._pid, role, owner._startup,
-                        owner._inspected, owner._commitment, owner._spool, owner._effects)
+                        owner._inspected, owner._commitment, owner._spool, owner._effects, owner._adoption)
                     os._exit(1)
                 child.close()
                 try:
@@ -301,7 +316,7 @@ class FiveServiceLaunch:
             and not self._attempted)
         transfer.check(); prepared = transfer._prepared()
         p.require(transfer._owner._commitment == self._commitment and transfer._owner._spool == self._spool
-            and transfer._owner._effects == self._effects)
+            and transfer._owner._effects == self._effects and transfer._owner._adoption == self._adoption)
         p.require(tuple(prepared) == g.ROLES)
         self._attempted = True; self._transfer = transfer
         # Irreversible before the first possible send. A failed/unknown release
@@ -331,7 +346,7 @@ class FiveServiceLaunch:
         """
         from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
         self.check()
-        p.require(type(cohort) is ParkedProofCohort and self._inspected and self._attempted
+        p.require(type(cohort) is ParkedProofCohort and self._inspected and self._attempted and not self._adoption
             and not self._bridge_attempted and threading.current_thread() is threading.main_thread())
         self._bridge_attempted = True
         try:
@@ -393,7 +408,8 @@ class FiveServiceLaunch:
         try:
             cohort.check(); driver.check(); inputs.check()
             p.require(cohort.endpoint_driver_selected() and cohort._external_driver.driver is driver
-                and inputs._driver is driver and driver._prepared_inputs is inputs)
+                and inputs._driver is driver and driver._prepared_inputs is inputs
+                and cohort.adoption_selected() == self._adoption)
             from serverware.custody_spool_inputs import _require_endpoint_release, _release_current
             _require_endpoint_release(self, cohort, driver, inputs, transfers)
             measured = cohort._external_driver.value

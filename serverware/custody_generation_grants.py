@@ -80,7 +80,7 @@ def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, st
         activation=activation,boot=boot,startup=startup,lifetime=lifetime,now=now,signing_key=signing_key,commitment=False)
 
 
-def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, commitment, spool=False, effects=False):
+def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, commitment, spool=False, effects=False, adoption=False):
     cold = configuration(cold_raw, cold_sha, role)
     p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
     names = BUSINESS[role] + ("generation-journal", "generation-grant")
@@ -93,6 +93,9 @@ def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot,
     if spool:
         prefix = "active-effect-cleanup" if effects and role == ROLES[1] else "spool-head" if role == ROLES[0] else "spool-current"
         names += (prefix + "-journal", prefix + "-grant")
+    p.require(type(adoption) is bool and (not adoption or effects and commitment and role in (ROLES[0], ROLES[3])))
+    if adoption:
+        names += ("publication-journal", "publication-grant")
     payload = p.fields(document(payload_raw, 65536), c9.FIELDS)
     p.require(payload["configurationSha256"] == cold_sha and payload["authorityKeyId"] == cold["authority"]["keyId"]
         and all(payload[field] == cold[field] for field in ("serviceRole", "uid", "gid"))
@@ -115,7 +118,8 @@ def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot,
         p.require(type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name)
             and name not in names and name != "generation-grant" and (not commitment or name != "dispatch-grant")
             and (not spool or name not in {"spool-head-grant", "spool-current-grant"})
-            and (not effects or name != "active-effect-cleanup-grant"))
+            and (not effects or name != "active-effect-cleanup-grant")
+            and (not adoption or name != "publication-grant"))
         names.add(name); c9._pin(credential["original"])
         total += p.integer(credential["length"], maximum=MAX_BYTES)
         if credential["signing"] is not None:
@@ -125,6 +129,8 @@ def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot,
                 and key["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
                 and key["keyId"] != cold["authority"]["keyId"])
     p.require(total <= 16 * 1024 * 1024)
+    if adoption:
+        p.require(p.canonical(payload) == payload_raw)
     return cold, payload
 
 
@@ -135,10 +141,10 @@ def _delivery_guest(raw, payload):
     return guest
 
 
-def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment, spool=False, effects=False):
+def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment, spool=False, effects=False, adoption=False):
     cold, payload = _delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role,
         payload_raw=payload_raw, activation=activation, boot=boot, startup=startup,
-        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects)
+        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects, adoption=adoption)
     p.require(isinstance(signing_key, Ed25519PrivateKey))
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == cold["authority"]["publicKeyBase64url"])
@@ -151,7 +157,7 @@ def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, s
 
 
 def _admit_delivery(*, signed_raw, cold_raw, cold_sha, role, activation, boot,
-                    startup, lifetime, now, commitment, spool=False, effects=False):
+                    startup, lifetime, now, commitment, spool=False, effects=False, adoption=False):
     """Verify an exact external signature against retained cold/resource scope.
 
     Profile flags are chosen by the real resource owner, never the envelope.
@@ -162,7 +168,7 @@ def _admit_delivery(*, signed_raw, cold_raw, cold_sha, role, activation, boot,
     payload_raw = canonical(envelope["payload"])
     cold, payload = _delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role,
         payload_raw=payload_raw, activation=activation, boot=boot, startup=startup,
-        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects)
+        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects, adoption=adoption)
     public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
     public.verify(p.decoded(envelope["signatureBase64url"], size=64), c9.DOMAIN + payload_raw)
     return signed_raw, _delivery_guest(signed_raw, payload)
@@ -173,7 +179,7 @@ def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, si
         delivery_raw=delivery_raw,signing_key=signing_key,now=now,commitment=False)
 
 
-def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, now, commitment, spool=False, effects=False):
+def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, now, commitment, spool=False, effects=False, adoption=False):
     payload = p.fields(document(payload_raw, 65536), GRANT)
     runtime_value = document(runtime_raw, MAX_BYTES)
     runtime = runtime_value["runtime"]
@@ -192,6 +198,7 @@ def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw,
         and (not effects or spool and role in (ROLES[0], ROLES[1], ROLES[3])
             and commitment == (role in (ROLES[0], ROLES[3])))
         and (not spool or commitment or effects and role == ROLES[1]))
+    p.require(type(adoption) is bool and (not adoption or effects and commitment and role in (ROLES[0], ROLES[3])))
     helper = role == ROLES[-1] and runtime["apiVersion"] == initial.HELPER_RUNTIME_API
     if helper:
         p.require(not commitment and not spool and not effects)
@@ -203,11 +210,13 @@ def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw,
         initial.helper_public_keys(runtime_value, members, delivery["credentials"])
     else:
         p.require(all(name not in runtime_value for name in ("initialEndpointHistories", "initialEndpointPins")))
-    version = 9 if helper else 8 if effects else 7 if spool else 6 if commitment else 5
+    version = 12 if adoption else 9 if helper else 8 if effects else 7 if spool else 6 if commitment else 5
     p.require(runtime["apiVersion"] == f"serverware.policyCustodyServiceRuntimeConfig/v{version}"
         and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
         and (runtime.get("dispatchAdmission") == {"grantFdName":"dispatch-grant"}
-            if commitment else runtime.get("dispatchAdmission") is None))
+            if commitment else runtime.get("dispatchAdmission") is None)
+        and (runtime.get("publicationAdmission") == {"grantFdName": "publication-grant"}
+            if adoption else runtime.get("publicationAdmission") is None))
     if effects:
         field, prefix = {ROLES[0]: ("spoolHead", "spool-head"), ROLES[1]: ("spoolCleanup", "active-effect-cleanup"),
             ROLES[3]: ("spoolCurrent", "spool-current")}[role]
@@ -245,6 +254,8 @@ def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw,
     issued = p.integer(payload["issuedAtBoottimeNanos"], maximum=(1 << 64) - 1)
     expires = p.integer(payload["expiresAtBoottimeNanos"], maximum=(1 << 64) - 1)
     p.require(p.ns(guest["issuedAtBoottimeNs"]) <= issued <= now < expires <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
+    if adoption:
+        p.require(p.canonical(payload) == payload_raw)
     return payload, public
 
 
@@ -252,10 +263,10 @@ def _grant_message(payload_raw):
     return b"serverware-signature-v1\0" + len(DOMAIN).to_bytes(8, "big") + DOMAIN + len(payload_raw).to_bytes(8, "big") + payload_raw
 
 
-def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment, spool=False, effects=False):
+def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment, spool=False, effects=False, adoption=False):
     payload, public = _grant_values(payload_raw=payload_raw, guest=guest, runtime_raw=runtime_raw,
         history_raw=history_raw, delivery_raw=delivery_raw, now=now,
-        commitment=commitment, spool=spool, effects=effects)
+        commitment=commitment, spool=spool, effects=effects, adoption=adoption)
     p.require(isinstance(signing_key, Ed25519PrivateKey)
         and signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         == public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
@@ -268,7 +279,7 @@ def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, s
 
 
 def _admit_grant(*, signed_raw, guest, runtime_raw, history_raw, delivery_raw,
-                 now, commitment, spool=False, effects=False):
+                 now, commitment, spool=False, effects=False, adoption=False):
     """Authenticate an external original with the already retained history root.
 
     This is the same bounded preparation check as the signing producer. Full
@@ -278,6 +289,6 @@ def _admit_grant(*, signed_raw, guest, runtime_raw, history_raw, delivery_raw,
     payload_raw = canonical(envelope["payload"])
     _, public = _grant_values(payload_raw=payload_raw, guest=guest, runtime_raw=runtime_raw,
         history_raw=history_raw, delivery_raw=delivery_raw, now=now,
-        commitment=commitment, spool=spool, effects=effects)
+        commitment=commitment, spool=spool, effects=effects, adoption=adoption)
     public.verify(p.decoded(envelope["signatureBase64url"], size=64), _grant_message(payload_raw))
     return signed_raw, public

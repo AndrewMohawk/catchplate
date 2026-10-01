@@ -7,15 +7,27 @@ not acquire adopted authority. No services, resources or histories are created.
 from __future__ import annotations
 
 from serverware import native_pilot_adopted_delivery as delivery
-from serverware import native_pilot_adopted_service_authority as service
 from serverware import native_pilot_closure_authority as closure
 from serverware import native_pilot_encrypted_authority as encrypted
 from serverware import native_pilot_key_authority as keys
+from serverware import native_pilot_native_service_profile as grants
+from serverware import native_pilot_native_service_authority as native
+from serverware import native_pilot_generation_install_authority as generation
 from serverware import native_pilot_verifier_authority as verifier
 
 p = keys.p
 MAX_INPUT = 32 * 1024 * 1024
-OPERATIONS = ("delivery", "role-keys", "admission", "closure", "encrypted-delivery", "request-commitment", "verifier", "grant", "launch")
+OPERATIONS = ("delivery", "role-keys", "admission", "closure", "encrypted-delivery", "request-commitment", "verifier", "grant", "companion-grant", "launch")
+GRANTS = {role: role for role in keys.profile.ADOPTED_ROLES} | {
+    "publicationReconciliation": "publication", "commitRequest": "ledger", "ingressAdmission": "ingress", "terminalAppend": "terminal"}
+
+
+def grant_operation(role, operation):
+    p.require(role in GRANTS and operation in ("grant", "companion-grant"))
+    if operation == "companion-grant":
+        p.require(role == "commitRequest")
+        return "commitRequest"
+    return GRANTS[role]
 
 
 def prepare_input(role, operation, raw, *, boot, now_boottime_ns, now_unix_ns):
@@ -42,10 +54,8 @@ def prepare_input(role, operation, raw, *, boot, now_boottime_ns, now_unix_ns):
     if operation == "verifier":
         p.require(value["apiVersion"] == verifier.ADOPTED_API)
         return verifier.prepare_input(role, raw, **clocks)
-    if operation == "grant":
-        p.require(role in ("publicationReconciliation", "retrieval", "persistence")
-            and value["apiVersion"] == service.INPUT_API)
-        return service.prepare_input("publication" if role == "publicationReconciliation" else role, raw, **clocks)
+    if operation in ("grant", "companion-grant"):
+        return grants.prepare_adopted_input(grant_operation(role, operation), raw, **clocks)
     from serverware import native_pilot_adopted_launch_profile as launch
     return launch.prepare_input(role, raw, **clocks)
 
@@ -68,6 +78,11 @@ def execute(role, operation, raw, *, signing_key=None):
         return encrypted.sign("delivery" if operation == "encrypted-delivery" else operation, role, raw, signing_key)[0]
     if operation == "verifier":
         return verifier.sign(role, raw, signing_key)[0]
-    p.require(operation == "grant" and role in ("publicationReconciliation", "retrieval", "persistence"))
-    return service.sign("publication" if role == "publicationReconciliation" else role,
-        input_original=raw, signing_key=signing_key)
+    selected = grant_operation(role, operation)
+    if selected == "generationInstall":
+        p.require(p.document(raw, MAX_INPUT)["apiVersion"] == generation.ADOPTED_INPUT_API)
+        return generation.sign(input_original=raw, signing_key=signing_key)[0]
+    from serverware import native_pilot_adopted_service_authority as service
+    expected = service.INPUT_API if selected in service.PROFILES else native.ADOPTED_INPUT_API
+    p.require(p.document(raw, MAX_INPUT)["apiVersion"] == expected)
+    return native.sign(selected, input_original=raw, signing_key=signing_key)

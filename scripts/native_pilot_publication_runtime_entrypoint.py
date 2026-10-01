@@ -45,15 +45,31 @@ ADOPTED_ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall",
 ADOPTED_MODES = {"--sign-adopted-native-" + role + "-" + operation: (role, operation)
     for role in ADOPTED_ROLES for operation in ("delivery", "role-keys", "admission", "closure", "encrypted-delivery", "verifier")}
 ADOPTED_MODES.update({"--sign-adopted-native-" + role + "-grant": (role, "grant")
-    for role in ("retrieval", "persistence", "publicationReconciliation")})
+    for role in ADOPTED_ROLES})
+ADOPTED_MODES["--sign-adopted-native-commitRequest-companion-grant"] = ("commitRequest", "companion-grant")
 ADOPTED_MODES["--sign-adopted-native-commitRequest-request-commitment"] = ("commitRequest", "request-commitment")
 ADOPTED_LAUNCH_MODES = {"--assemble-adopted-native-" + role + "-launch": (role, "launch")
-    for role in ("retrieval", "persistence", "publicationReconciliation")}
+    for role in ADOPTED_ROLES}
 ADOPTED_COHORT_MODES = {"--sign-adopted-precreation": "precreation", "--sign-adopted-release": "release"}
+ADOPTED_INITIAL_MODES = {"--sign-adopted-ordinary-" + operation: operation
+    for operation in ("checkpoint", "root-anchor", "checkpoint-anchor", "service-anchor")}
+ADOPTED_INITIAL_MODES["--assemble-adopted-ordinary-history"] = "assemble"
+ADOPTED_PUBLICATION_MODES = {"--sign-adopted-ordinary-" + role + "-publication-grant": role
+    for role in ("durable-recovery-store", "current-signature-authority")}
+ADOPTED_ORDINARY_ROLES = ("durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider",
+    "current-signature-authority", "bounded-cleanup-helper")
+ADOPTED_SERVICE_MODES = {"--sign-adopted-ordinary-" + role + "-" + operation: (operation, role)
+    for role in ADOPTED_ORDINARY_ROLES for operation in ("delivery", "generation")}
+ADOPTED_SERVICE_MODES.update({"--sign-adopted-ordinary-" + role + "-dispatch": ("dispatch", role)
+    for role in ("durable-recovery-store", "current-signature-authority")})
+ADOPTED_SERVICE_MODES.update({"--sign-adopted-ordinary-" + role + "-" + operation: (operation, role)
+    for operation, role in (("head", "durable-recovery-store"), ("cleanup", "cleanup-authorization-consumer"),
+        ("current", "current-signature-authority"))})
 SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release", "--sign-genesis-endpoints-release") + tuple(ORDINARY_MODES) + tuple(
-    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES) + tuple(ADOPTED_MODES) + tuple(ADOPTED_COHORT_MODES)
+    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES) + tuple(ADOPTED_MODES) + tuple(ADOPTED_COHORT_MODES) + tuple(
+    mode for mode, operation in ADOPTED_INITIAL_MODES.items() if operation != "assemble") + tuple(ADOPTED_PUBLICATION_MODES) + tuple(ADOPTED_SERVICE_MODES)
 ADOPTION_MODE = "--sign-publication-adoption"
-MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", ADOPTION_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES) + tuple(ADOPTED_LAUNCH_MODES)
+MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", "--assemble-adopted-ordinary-history", ADOPTION_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES) + tuple(ADOPTED_LAUNCH_MODES)
 
 
 def valid_arguments(arguments):
@@ -183,6 +199,9 @@ def main():
     from serverware import native_pilot_publication_cold_binding as cold_binding
     from serverware import native_pilot_adopted_commands as adopted
     from serverware import native_pilot_adopted_cohort_authority as adopted_cohort
+    from serverware import native_pilot_ordinary_initial_authority as adopted_initial
+    from serverware import native_pilot_ordinary_publication_authority as adopted_publication
+    from serverware import native_pilot_service_authority as adopted_service
     from serverware import native_shadow_nitro_originals as originals
 
     runtime = None
@@ -203,8 +222,14 @@ def main():
         transport_purpose, launch_role = TRANSPORT_MODES.get(mode), LAUNCH_MODES.get(mode)
         adopted_purpose = ADOPTED_MODES.get(mode) or ADOPTED_LAUNCH_MODES.get(mode)
         adopted_cohort_purpose = ADOPTED_COHORT_MODES.get(mode)
+        adopted_initial_purpose = ADOPTED_INITIAL_MODES.get(mode)
+        adopted_publication_role = ADOPTED_PUBLICATION_MODES.get(mode)
+        adopted_service_purpose = ADOPTED_SERVICE_MODES.get(mode)
         transport = (encrypted if transport_purpose[1] == "encrypted-delivery" else verifier) if transport_purpose else None
-        maximum = (adopted_cohort.MAX_INPUT if adopted_cohort_purpose is not None else adopted.MAX_INPUT if adopted_purpose is not None else transport.MAX_INPUT if transport is not None else launch.MAX_INPUT if launch_role is not None else
+        maximum = (adopted_service.MAX_INPUT_BYTES if adopted_service_purpose is not None else
+            adopted_initial.MAX_INPUT if adopted_initial_purpose is not None else
+            adopted_publication.MAX_INPUT if adopted_publication_role is not None else
+            adopted_cohort.MAX_INPUT if adopted_cohort_purpose is not None else adopted.MAX_INPUT if adopted_purpose is not None else transport.MAX_INPUT if transport is not None else launch.MAX_INPUT if launch_role is not None else
             endpoint_release.MAX_INPUT if mode == "--sign-genesis-endpoints-release" else
             delivery.MAX_INPUT if native_purpose is not None else
             service.MAX_INPUT if service_purpose is not None else ordinary.MAX_INPUT if ordinary_purpose is not None else
@@ -245,7 +270,55 @@ def main():
             if payload is not None:
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after_wall)
 
-        if adopted_cohort_purpose is not None:
+        def output_clock():
+            # Full input/runtime checks bracket output. Per-write checks retain
+            # the same process and original clocks without rereading a 32-MiB
+            # source on every pipe chunk.
+            nonlocal previous_boot, previous_wall
+            p.require(owner == (os.getpid(), originals._start(), originals._boot()))
+            current_boot, current_wall = originals._clock(), time.time_ns()
+            p.require(previous_boot <= current_boot and previous_wall <= current_wall)
+            if deadline is not None: p.require(current_boot < deadline)
+            if epoch_limit is not None: p.require(current_wall < epoch_limit)
+            if payload is not None:
+                p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], current_wall)
+            previous_boot, previous_wall = current_boot, current_wall
+
+        if adopted_service_purpose is not None:
+            operation, role = adopted_service_purpose
+            approved = adopted_service.prepare_input(operation, role, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns(), adopted=True)
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result, result_deadline = adopted_service.sign(operation=operation, role=role,
+                input_original=raw, signing_key=io.signing_key(key_fd), adopted=True)
+            p.require(result_deadline == deadline)
+            check()
+        elif adopted_initial_purpose is not None:
+            approved = adopted_initial.prepare_input(adopted_initial_purpose, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns(), adopted=True)
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            if signing: key_identity = io._input(key_fd, 32, private=True)
+            check()
+            if signing:
+                result, result_deadline = adopted_initial.sign(adopted_initial_purpose,
+                    input_original=raw, signing_key=io.signing_key(key_fd), adopted=True)
+            else:
+                result, result_deadline = adopted_initial.assemble(input_original=raw, adopted=True)
+            p.require(result_deadline == deadline)
+            check()
+        elif adopted_publication_role is not None:
+            approved = adopted_publication.prepare_input(adopted_publication_role, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result, result_deadline = adopted_publication.sign(adopted_publication_role,
+                input_original=raw, signing_key=io.signing_key(key_fd))
+            p.require(result_deadline == deadline)
+            check()
+        elif adopted_cohort_purpose is not None:
             approved = adopted_cohort.prepare_input(adopted_cohort_purpose, raw, boot=owner[2],
                 now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
             deadline = approved["deadline"]
@@ -264,10 +337,12 @@ def main():
             check()  # Exact adopted version, role and purpose before key bytes.
             result = adopted.execute(role, operation, raw,
                 signing_key=io.signing_key(key_fd) if signing else None)
+            if operation == "launch": p.require(result == approved["bundleOriginal"])
             check()
             final = adopted.prepare_input(role, operation, raw, boot=owner[2],
                 now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
             p.require((final["deadline"], final.get("epochLimit")) == (deadline, epoch_limit))
+            if operation == "launch": p.require(result == final["bundleOriginal"])
         elif transport_purpose is not None:
             role, _ = transport_purpose
             approved = transport.prepare_input(role, raw, boot=originals._boot(),
@@ -377,7 +452,7 @@ def main():
             p.require(mode == "--prepare-closure-set")
             result = preparation.prepare(raw, arguments[8])
         check()
-        io.write_public(result, deadline_boottime_ns=deadline)
+        io.write_public(result, deadline_boottime_ns=deadline, check=output_clock)
         check()
         runtime.close()
         final_boot, final_wall = originals._clock(), time.time_ns()

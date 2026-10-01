@@ -18,6 +18,7 @@ p = g.p
 _TOKEN = object()
 CONFIGURATION = "/etc/serverware/custody-generation-business.json"
 COMMITMENT_CONFIGURATION = "/etc/serverware/custody-commitment-business.json"
+ADOPTION_CONFIGURATION = "/etc/serverware/custody-adoption-business.json"
 RUN = "/run/serverware-custody-business"
 STORE = "/var/lib/serverware/custody-business"
 
@@ -46,7 +47,13 @@ class BusinessResources:
 
     @classmethod
     def prepare_commitment(cls, launcher):
-        p.require(type(launcher) is FiveServiceLaunch and launcher._commitment)
+        p.require(type(launcher) is FiveServiceLaunch and launcher._commitment and not launcher._adoption)
+        return cls._prepare(launcher)
+
+    @classmethod
+    def prepare_adopted(cls, launcher):
+        p.require(type(launcher) is FiveServiceLaunch and launcher._adoption
+            and launcher._effects and launcher._inspected)
         return cls._prepare(launcher)
 
     @classmethod
@@ -57,11 +64,11 @@ class BusinessResources:
         launcher.check()
         owner = cls(_TOKEN, launcher)
         try:
-            original = o.Original(COMMITMENT_CONFIGURATION if launcher._commitment else CONFIGURATION, 65536)
+            original = o.Original(ADOPTION_CONFIGURATION if launcher._adoption else COMMITMENT_CONFIGURATION if launcher._commitment else CONFIGURATION, 65536)
             owner._originals.append(original)
             config = p.fields(g.document(original.read(), 65536),
                 ("apiVersion", "launchConfigurationSha256", "invocationId", "clientConfiguration"))
-            version = "serverware.custodyFiveServiceBusinessInputs/v2" if launcher._commitment else "serverware.custodyFiveServiceBusinessInputs/v1"
+            version = "serverware.custodyFiveServiceBusinessInputs/v3" if launcher._adoption else "serverware.custodyFiveServiceBusinessInputs/v2" if launcher._commitment else "serverware.custodyFiveServiceBusinessInputs/v1"
             p.require(config["apiVersion"] == version
                 and config["launchConfigurationSha256"] == p.sha(launcher._originals[0].read())
                 and config["invocationId"] == launcher._invocation)
@@ -206,7 +213,11 @@ class BusinessResources:
         return self._inputs_for_profile()
 
     def commitment_inputs(self):
-        p.require(self._launcher._commitment)
+        p.require(self._launcher._commitment and not self._launcher._adoption)
+        return self._inputs_for_profile()
+
+    def adopted_inputs(self):
+        p.require(self._launcher._adoption)
         return self._inputs_for_profile()
 
     def _inputs_for_profile(self):

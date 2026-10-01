@@ -23,6 +23,7 @@ from serverware import native_shadow_driver_outgoing as outgoing
 p = head.p
 API = "serverware.nativePilotBridgePreparation/v1"
 HELPER_API = "serverware.nativePilotBridgePreparation/v2"
+ADOPTED_API = "serverware.nativePilotBridgePreparation/v3"
 MAX_BYTES = 1024 * 1024
 FIELDS = ("apiVersion", "driverObservationSha256", "initialTrustRequestsOriginal",
     "ordinaryPeerPreparationOriginal", "nativePeerPreparationOriginal", "gatePeerPreparationOriginal")
@@ -35,6 +36,7 @@ NATIVE_SIGNERS = {"ledger-append": "commitRequest", "ingress-admission": "ingres
     "active-effect-barrier": "activeEffectBarrier", "active-effect-commit": "activeEffectCommit"}
 NATIVE_PROOFS = {"retrieval": "retrieval", "persistence": "persistence", "trusted-time": "trustedTime",
     "generation-install-envelope": "generationInstall"}
+ADOPTED_SIGNERS = {**NATIVE_SIGNERS, "publication-reconciliation": "publicationReconciliation"}
 _TOKEN = object()
 _USED = False
 
@@ -53,10 +55,11 @@ def _parts(value):
 def shape(raw):
     """Pure exact data associations; not a provenance or authority verdict."""
     value = p.fields(p.document(raw, MAX_BYTES), FIELDS)
-    p.require(value["apiVersion"] in (API, HELPER_API))
+    p.require(value["apiVersion"] in (API, HELPER_API, ADOPTED_API))
     p.digest(value["driverObservationSha256"])
     requests, peers = _parts(value)
-    p.require((value["apiVersion"] == HELPER_API) == (requests["apiVersion"] == requests_profile.HELPER_API))
+    p.require((value["apiVersion"] in (HELPER_API, ADOPTED_API)) == (requests["apiVersion"] == requests_profile.HELPER_API)
+        and (value["apiVersion"] == ADOPTED_API) == (peers["native-endpoints"]["apiVersion"] == peers_profile.ADOPTED_API))
     ordinary = peers["ordinary-services"]
     identities = set()
     for kind, item in peers.items():
@@ -114,11 +117,14 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
     requests, peers = _parts(value)
     p.fields(peer_ids, peers_profile.ROLES)
     for kind, roles in peers_profile.ROLES.items():
+        if kind == "native-endpoints" and value["apiVersion"] == ADOPTED_API:
+            roles = peers_profile.ADOPTED_NATIVE_ROLES
         p.fields(peer_ids[kind], roles)
     runtime = runtime_profile.shape(runtime_raw)
     version = runtime_profile.version(runtime)
     p.require(((version == 10 and value["apiVersion"] == API)
-            or (version in (11, 12) and value["apiVersion"] == HELPER_API))
+            or (version in (11, 12) and value["apiVersion"] == HELPER_API)
+            or (version == 14 and value["apiVersion"] == ADOPTED_API))
         and p.sha(driver_observation_raw) == value["driverObservationSha256"]
         and p.sha(cohort_observation_raw) == peers["native-endpoints"]["sourceOriginalSha256"])
     _peer(runtime["expectedFacadePeer"], peers["gate"]["peers"]["gate"], peer_ids["gate"]["gate"])
@@ -134,7 +140,7 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
         member = runtime["ordinaryInitialHistories"][role]
         _peer(session["expectedPeer"], peers["ordinary-services"]["peers"][role], peer_ids["ordinary-services"][role])
         p.require(type(session["handshakes"]) is list and bool(session["handshakes"]))
-        if version in (11, 12) and role == "bounded-cleanup-helper":
+        if version in (11, 12, 14) and role == "bounded-cleanup-helper":
             p.require([item["endpointRole"] for item in session["handshakes"]] == list(helper_bootstrap.ROLES))
         for handshake in session["handshakes"]:
             selected_key = (role, handshake["endpointRole"])
@@ -159,7 +165,7 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
                 and pending["requestedAtBoottimeNanos"] <= statement["issuedAtBoottimeNanos"]
                 and statement["deadline"] == pending["deadline"] == request["deadline"])
     p.require(consumed == set(pending_rows))
-    if version in (11, 12):
+    if version in (11, 12, 14):
         helper = runtime["ordinaryInitialHistories"]["bounded-cleanup-helper"]["runtimeOriginal"].encode("ascii")
         pending = [head.request(row["requestOriginal"].encode("ascii"))
             for (role, _), row in pending_rows.items() if role == "bounded-cleanup-helper"]
@@ -167,7 +173,7 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
         deadline["absoluteBoottimeNanos"] = min(row["deadline"]["absoluteBoottimeNanos"] for row in pending)
         helper_bootstrap.require_runtime(p.canonical(runtime["helperBootstrap"]), helper, deadline=deadline)
         p.require(runtime["expectedHelperEndpointRoles"] == list(helper_bootstrap.ROLES))
-    for field, discriminator, mapping in (("parentSignerEndpoints", "signerRole", NATIVE_SIGNERS),
+    for field, discriminator, mapping in (("parentSignerEndpoints", "signerRole", ADOPTED_SIGNERS if version == 14 else NATIVE_SIGNERS),
             ("proofEndpoints", "endpointKind", NATIVE_PROOFS)):
         for endpoint in runtime[field]:
             role = mapping.get(endpoint[discriminator])
@@ -197,7 +203,9 @@ class BridgePreparation:
         pilot._preparing()
         requests_raw = self._requests.original()
         requests = requests_profile.shape(requests_raw)
-        return p.canonical({"apiVersion": HELPER_API if requests["apiVersion"] == requests_profile.HELPER_API else API,
+        adopted = pilot.cohort.adoption_selected()
+        p.require(not adopted or requests["apiVersion"] == requests_profile.HELPER_API)
+        return p.canonical({"apiVersion": ADOPTED_API if adopted else HELPER_API if requests["apiVersion"] == requests_profile.HELPER_API else API,
             "driverObservationSha256": p.sha(pilot.driver.observation_original()),
             "initialTrustRequestsOriginal": requests_raw.decode("ascii"),
             "ordinaryPeerPreparationOriginal": pilot.ordinary_services.peer_preparation_original().decode("ascii"),

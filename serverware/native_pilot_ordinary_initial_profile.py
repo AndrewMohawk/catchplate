@@ -19,6 +19,9 @@ p = g.p
 MAX_STATE = 65536
 STATE_API = "serverware.custodyOrdinaryInitialState/v1"
 WRAPPER_API = "serverware.custodyOrdinaryInitialHistory/v1"
+ADOPTED_STATE_API = "serverware.custodyOrdinaryInitialState/v3"
+ADOPTED_WRAPPER_API = "serverware.custodyOrdinaryInitialHistory/v3"
+ADOPTED_ROLES = (g.ROLES[0], g.ROLES[3])
 HELPER_RUNTIME_API = "serverware.policyCustodyServiceRuntimeConfig/v9"
 MAX_HELPER_HISTORY = 1024 * 1024
 HELPER_ENDPOINT_ROLES = ("settlement-store", "fence-authority", "cgroup-executor", "termination-ledger")
@@ -37,8 +40,9 @@ DOMAINS = {
 }
 
 
-def _directories(value, role):
-    p.fields(value, DIRECTORIES[role])
+def _directories(value, role, *, adopted=False):
+    p.require(type(adopted) is bool)
+    p.fields(value, DIRECTORIES[role] + (("publication-journal",) if adopted and role in ADOPTED_ROLES else ()))
     seen, owners = set(), set()
     for record in value.values():
         p.fields(record, ("identity", "entryCount"))
@@ -55,26 +59,28 @@ def _directories(value, role):
     return seen
 
 
-def resources(raw):
+def resources(raw, *, adopted=False):
     """Closed observation shape only; no filesystem or approval claim."""
     value = p.fields(g.document(raw, MAX_STATE),
         ("apiVersion", "preparationSha256", "issuedAtBoottimeNs", "services"))
-    p.require(value["apiVersion"] == "serverware.custodyFiveServiceInitialResources/v1")
+    p.require(type(adopted) is bool and value["apiVersion"] == "serverware.custodyFiveServiceInitialResources/v" + ("2" if adopted else "1"))
     p.digest(value["preparationSha256"]); p.ns(value["issuedAtBoottimeNs"])
     p.fields(value["services"], g.ROLES)
     seen = set()
     for role, item in value["services"].items():
         p.fields(item, ("directories",))
-        current = _directories(item["directories"], role)
+        current = _directories(item["directories"], role, adopted=adopted)
         p.require(not current & seen)
         seen.update(current)
-    p.require(len(seen) == 15)
+    p.require(len(seen) == (17 if adopted else 15))
     return value
 
 
-def validate_state(value):
+def validate_state(value, *, adopted=False):
     p.fields(value, STATE_FIELDS)
-    p.require(value["apiVersion"] == STATE_API and value["serviceRole"] in g.ROLES)
+    p.require(type(adopted) is bool and value["serviceRole"] in g.ROLES)
+    selected = adopted and value["serviceRole"] in ADOPTED_ROLES
+    p.require(value["apiVersion"] == (ADOPTED_STATE_API if selected else STATE_API))
     for name in ("preparationSha256", "resourcesSha256", "launchSha256",
                  "endpointProcessIdentitySha256", "deploymentGenerationSha256"):
         p.require(p.digest(value[name]) != p.sha(b""))
@@ -84,24 +90,24 @@ def validate_state(value):
     p.require(issued < startup <= lifetime and startup - issued <= 30_000_000_000)
     for name in ("endpointGeneration", "serviceGeneration", "operationGeneration", "durableEpoch"):
         key._uint(value[name])
-    _directories(value["directories"], value["serviceRole"])
+    _directories(value["directories"], value["serviceRole"], adopted=adopted)
     p.require(len(g.canonical(value)) <= MAX_STATE)
     return copy.deepcopy(value)
 
 
-def commitments(state):
-    raw = g.canonical(validate_state(state))
+def commitments(state, *, adopted=False):
+    raw = g.canonical(validate_state(state, adopted=adopted))
     return {name: p.framed(domain, (raw,)) for name, domain in DOMAINS.items()}
 
 
 def prepared_state(state, *, preparation_raw, resources_raw, launch_raw, configuration,
-                   window, endpoint_role, now):
-    state = validate_state(state)
-    observation, observed = key.preparation(preparation_raw), resources(resources_raw)
+                   window, endpoint_role, now, adopted=False):
+    state = validate_state(state, adopted=adopted)
+    observation, observed = key.preparation(preparation_raw), resources(resources_raw, adopted=adopted)
     launch = g.document(launch_raw, 65536)
     role = state["serviceRole"]
     identity = key.prepared_identity(observation, role=role, endpoint_role=endpoint_role,
-        launch=launch, configuration=configuration, window=window, now=now)
+        launch=launch, configuration=configuration, window=window, now=now, adopted=adopted)
     p.require(state["preparationSha256"] == observed["preparationSha256"] == p.sha(preparation_raw)
         and state["resourcesSha256"] == p.sha(resources_raw)
         and state["launchSha256"] == p.sha(launch_raw)
@@ -120,10 +126,10 @@ def prepared_state(state, *, preparation_raw, resources_raw, launch_raw, configu
     return identity
 
 
-def validate_checkpoint(state, checkpoint, *, checkpoint_authority, service_key):
+def validate_checkpoint(state, checkpoint, *, checkpoint_authority, service_key, adopted=False):
     from serverware import native_pilot_ordinary_key_authority as authority
 
-    state = validate_state(state)
+    state = validate_state(state, adopted=adopted)
     checked = key.validate_checkpoint(checkpoint)
     payload = checked["payload"]
     public = authority._key(checkpoint_authority)
@@ -137,7 +143,7 @@ def validate_checkpoint(state, checkpoint, *, checkpoint_authority, service_key)
         and payload["checkpointSequence"] == payload["rollbackFloorCheckpointSequence"] == 1
         and payload["rollbackFloorEndpointGeneration"] == state["endpointGeneration"]
         and payload["rollbackFloorConsumerSequence"] == 1
-        and payload["predecessorCheckpointSha256"] == commitments(state)["predecessorCheckpointSha256"])
+        and payload["predecessorCheckpointSha256"] == commitments(state, adopted=adopted)["predecessorCheckpointSha256"])
     start, end = payload["validFromBoottime"], payload["validUntilBoottime"]
     p.require(start["domain"] == end["domain"] == key._boot(state)
         and p.ns(state["issuedAtBoottimeNs"]) <= start["absoluteBoottimeNanos"]
@@ -147,17 +153,17 @@ def validate_checkpoint(state, checkpoint, *, checkpoint_authority, service_key)
     return checked
 
 
-def _wrapper(value, *, role, root_pin):
+def _wrapper(value, *, role, root_pin, adopted=False):
     from serverware import native_pilot_ordinary_key_authority as authority
 
     p.fields(value, WRAPPER_FIELDS)
-    p.require(value["apiVersion"] == WRAPPER_API)
-    state = validate_state(value["initialState"])
+    p.require(value["apiVersion"] == (ADOPTED_WRAPPER_API if adopted and role in ADOPTED_ROLES else WRAPPER_API))
+    state = validate_state(value["initialState"], adopted=adopted)
     p.require(state["serviceRole"] == role)
     history = p.fields(value["history"], g.HISTORY)
     epoch, _ = authority._history(g.canonical(history), role=role, root_pin=root_pin)
     checkpoint = validate_checkpoint(state, value["initialCheckpoint"],
-        checkpoint_authority=epoch["checkpointAuthority"], service_key=epoch["serviceSigningKey"])
+        checkpoint_authority=epoch["checkpointAuthority"], service_key=epoch["serviceSigningKey"], adopted=adopted)
     identity = epoch["endpointProcessIdentity"]
     p.require(epoch["checkpointSequence"] == 1 and epoch["checkpointSha256"] == checkpoint["checkpointSha256"]
         and epoch["endpointProcessIdentitySha256"] == state["endpointProcessIdentitySha256"]
@@ -169,7 +175,7 @@ def _wrapper(value, *, role, root_pin):
     for item in state["directories"].values():
         p.require((item["identity"]["uid"], item["identity"]["gid"])
             == (identity["endpointUid"], identity["endpointGid"]))
-    roots = commitments(state)
+    roots = commitments(state, adopted=adopted)
     p.require(epoch["durableEpochHeadSha256"] == roots["durableEpochHeadSha256"]
         and history["firstRetainedEpoch"]["prunedHistoryRootSha256"] == roots["prunedHistoryRootSha256"])
     retention = history["retention"]
@@ -181,24 +187,31 @@ def _wrapper(value, *, role, root_pin):
     return history
 
 
-def manifest(raw, *, role, root_pin):
+def manifest(raw, *, role, root_pin, adopted=False):
     """Opt-in authenticated initial wrapper or unchanged legacy shape.
 
     Preserve the original outer bytes for C9 byte-digest admission. Returning
     the inner manifest does not assert a live empty-directory observation.
     """
     value = g.document(raw, g.MAX_BYTES)
-    if value.get("apiVersion") == WRAPPER_API:
-        return _wrapper(value, role=role, root_pin=root_pin)
+    p.require(type(adopted) is bool)
+    selected = ADOPTED_WRAPPER_API if adopted and role in ADOPTED_ROLES else WRAPPER_API
+    if value.get("apiVersion") == selected:
+        return _wrapper(value, role=role, root_pin=root_pin, adopted=adopted)
+    p.require(not adopted or role not in ADOPTED_ROLES)
     return p.fields(value, g.HISTORY)
 
 
 def runtime_manifest(raw, *, runtime, guest):
+    adopted = runtime["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v12"
     history = manifest(raw, role=guest["serviceRole"], root_pin={
         "keyId": runtime["authorityHistoryRootKeyId"],
-        "keySpkiSha256": runtime["authorityHistoryRootKeySpkiSha256"]})
+        "keySpkiSha256": runtime["authorityHistoryRootKeySpkiSha256"]}, adopted=adopted)
     value = g.document(raw, g.MAX_BYTES)
-    if value.get("apiVersion") != WRAPPER_API:
+    if adopted:
+        p.require(value.get("apiVersion") == "serverware.custodyOrdinaryInitialHistory/v3"
+            and guest["serviceRole"] in (g.ROLES[0], g.ROLES[3]))
+    elif value.get("apiVersion") != WRAPPER_API:
         return history
     state = value["initialState"]
     for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "invocationId",

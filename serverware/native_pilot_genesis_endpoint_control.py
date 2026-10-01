@@ -70,6 +70,7 @@ class GenesisEndpointControl:
         self._last = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
         self._inputs, self._named, self._images = [], [], []
         self._peers, self._cold, self._deliveries = {}, {}, {}
+        self._launch_sources = {}
         self._process = self._resources = self._observation = self._preparation = None
         self._started = self._failed = self._closed = self._released = self._release_attempted = self._close_attempted = False
         self._release_raw = None
@@ -284,6 +285,7 @@ class GenesisEndpointControl:
                 p.require(p.integer(scope["issuedAtBoottimeNanos"], maximum=p.MAX_U64) <= now
                     < p.integer(scope["expiresAtBoottimeNanos"], maximum=p.MAX_U64))
                 self._deadline = min(self._deadline, scope["expiresAtBoottimeNanos"] - RESERVE)
+                self._launch_sources[role] = {"launch": launch, "grant": grant}
                 with io.owning():
                     self._images.append(io.ImageOriginal(pins["image"]["path"], pins["image"]["sha256"]))
             self._check(startup=True)

@@ -134,7 +134,9 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has **164 of 164 current jobs handled** and **113 signing selectors**. This
+has **164 of 164 operational jobs handled** and **113 signing selectors**. These
+counts exclude [cold commissioning and adoption](docs/native-pilot-genesis-assembly.md),
+which are still being assembled. The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight
 [request-bound approval intake jobs](docs/native-pilot-current-head-intake.md),
@@ -144,7 +146,7 @@ Focused checks pass; live pause/resume remains unverified. The earlier
 checks and native compilation, but live initialization remains unverified.
 
 Policy/v18 connects the [final release, publication and shutdown decisions](docs/native-pilot-final-continuations.md).
-All current jobs are now connected in source; this batch passed all 25 focused
+All jobs in that operational inventory are connected in source; this batch passed all 25 focused
 controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused-verification)). The new
 [supervisor executable and package](docs/native-pilot-supervisor-executable.md)
 passed 29 focused controls and an engineering artifact build. The

@@ -2,6 +2,8 @@
 
 Prepare one static closure set or cold binding, or issue one independently
 approved assignment, cold parent, initial history or ordinary service original.
+Cold key-delivery and verifier issuers use their own authenticated cold inputs;
+keyless launch assembly emits a public bundle, never installs or launches it.
 There is no child launch, publisher, provisioning, retry or default key. The
 complete input and installed runtime have separate externally supplied pins.
 Only these fixed commands exist; no caller-selected Python module is executed.
@@ -27,11 +29,17 @@ ORDINARY_MODES = {"--sign-genesis-ordinary-delivery": "delivery", "--sign-genesi
 NATIVE_MODES = {"--sign-genesis-native-" + label + "-" + operation: (role, operation)
     for label, role in (("retrieval", "publicationGenesisRetrieval"), ("publication", "publicationGenesis"),
         ("coordinator", "publicationGenesisCoordinator")) for operation in ("delivery", "role-keys", "admission", "closure")}
+TRANSPORT_MODES = {"--sign-genesis-native-" + label + "-" + operation: (role, operation)
+    for label, role in (("retrieval", "publicationGenesisRetrieval"), ("publication", "publicationGenesis"),
+        ("coordinator", "publicationGenesisCoordinator")) for operation in ("encrypted-delivery", "verifier")}
+LAUNCH_MODES = {"--assemble-genesis-native-" + label + "-launch": role
+    for label, role in (("retrieval", "publicationGenesisRetrieval"), ("publication", "publicationGenesis"),
+        ("coordinator", "publicationGenesisCoordinator"))}
 SERVICE_MODES = {"--sign-genesis-native-publication-grant": "publication",
     "--sign-genesis-native-retrieval-grant": "retrieval"}
 SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release", "--sign-genesis-endpoints-release") + tuple(ORDINARY_MODES) + tuple(
-    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES)
-MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history") + SIGNING_MODES
+    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES)
+MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history") + SIGNING_MODES + tuple(LAUNCH_MODES)
 
 
 def valid_arguments(arguments):
@@ -86,6 +94,9 @@ def main():
     from serverware import native_pilot_genesis_closure_authority as closure
     from serverware import native_pilot_genesis_native_service_authority as service
     from serverware import native_pilot_genesis_endpoint_release_authority as endpoint_release
+    from serverware import native_pilot_genesis_encrypted_authority as encrypted
+    from serverware import native_pilot_genesis_verifier_authority as verifier
+    from serverware import native_pilot_genesis_launch_profile as launch
     from serverware import native_pilot_publication_cold_binding as cold_binding
     from serverware import native_shadow_nitro_originals as originals
 
@@ -102,7 +113,10 @@ def main():
         initial_purpose = INITIAL_MODES.get(mode)
         ordinary_purpose = ORDINARY_MODES.get(mode)
         native_purpose, service_purpose = NATIVE_MODES.get(mode), SERVICE_MODES.get(mode)
-        maximum = (endpoint_release.MAX_INPUT if mode == "--sign-genesis-endpoints-release" else
+        transport_purpose, launch_role = TRANSPORT_MODES.get(mode), LAUNCH_MODES.get(mode)
+        transport = (encrypted if transport_purpose[1] == "encrypted-delivery" else verifier) if transport_purpose else None
+        maximum = (transport.MAX_INPUT if transport is not None else launch.MAX_INPUT if launch_role is not None else
+            endpoint_release.MAX_INPUT if mode == "--sign-genesis-endpoints-release" else
             delivery.MAX_INPUT if native_purpose is not None else
             service.MAX_INPUT if service_purpose is not None else ordinary.MAX_INPUT if ordinary_purpose is not None else
             initial.MAX_INPUT if initial_purpose is not None else
@@ -142,7 +156,23 @@ def main():
             if payload is not None:
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after_wall)
 
-        if mode == "--sign-genesis-endpoints-release":
+        if transport_purpose is not None:
+            role, _ = transport_purpose
+            approved = transport.prepare_input(role, raw, boot=originals._boot(),
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()  # Complete cold purpose/role admission precedes key bytes.
+            result, result_deadline = transport.sign(role, input_original=raw, signing_key=io.signing_key(key_fd))
+            p.require(result_deadline == deadline)
+        elif launch_role is not None:
+            approved = launch.prepare_input(launch_role, raw, boot=originals._boot(),
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            check()
+            result, result_deadline = launch.assemble(launch_role, input_original=raw)
+            p.require(result_deadline == deadline and result == approved["bundleOriginal"])
+        elif mode == "--sign-genesis-endpoints-release":
             approved = endpoint_release.prepare_input(raw, boot=originals._boot(),
                 now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
             deadline, epoch_limit = approved["deadline"], approved["epochLimit"]

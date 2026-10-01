@@ -462,6 +462,10 @@ class ParkedGenesisController:
         return rows[:8]
 
     def release(self, *, release_fd, release_sha256, activation_fds):
+        return self._release_with_runtime(release_fd=release_fd, release_sha256=release_sha256,
+            activation_fds=activation_fds, expected_runtime=None, check=lambda: None)
+
+    def _release_with_runtime(self, *, release_fd, release_sha256, activation_fds, expected_runtime, check):
         try:
             self.observation_original()
             self._release_attempted = True  # Validation failure consumes this attempt too.
@@ -470,6 +474,8 @@ class ParkedGenesisController:
             self._release = self._input(release_fd, MAX_WIRE, release_sha256)
             signed = codec.document(self._release.raw, MAX_WIRE)
             rows = self._release_sources(signed)
+            if expected_runtime is not None:
+                p.require(type(expected_runtime) is bytes and self._runtime.raw == expected_runtime)
             with io.owning():
                 for fd, row in zip(activation_fds, rows, strict=True):
                     p.require(type(fd) is int and fd >= 3 and not os.get_inheritable(fd))
@@ -480,7 +486,8 @@ class ParkedGenesisController:
                     self._activation.append((duplicate, copy.deepcopy(row)))
             self._check_sources(full=True)
             self._before_release()
-            self._sample(self._deadline - RESERVE)
+            check()
+            self._sample(min(self._startup, self._deadline - RESERVE))
             self._controller()
             self._parked()
             self._result_pair()
@@ -488,10 +495,13 @@ class ParkedGenesisController:
             p.require(not self._stdout_eof)
             rights = array.array("i", [fd for fd, _ in self._activation])
             with io.owning():
+                self._sample(min(self._startup, self._deadline - RESERVE))
                 count = self._socket.sendmsg([self._release.raw], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)],
                     socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
                 p.require(count == len(self._release.raw))
                 self._released = True
+            check()
+            self._sample(min(self._startup, self._deadline - RESERVE))
             return None  # A sent packet is not admission, readiness or a result.
         except BaseException as error:
             self._failed = True
@@ -506,12 +516,16 @@ class ParkedGenesisController:
             self._terminal_result = (actual.si_code, actual.si_status)
 
     def finish(self):
+        return self._finish_checked(lambda: None)
+
+    def _finish_checked(self, check):
         try:
             self._origin()
             p.require(self._released and not self._failed and not self._finish_attempted and not self._close_attempted)
             self._finish_attempted = True
             self._check_sources(full=True)
             while True:
+                check()
                 self._sample(self._deadline)
                 self._controller(terminal=True)
                 self._check_sources()
@@ -531,6 +545,7 @@ class ParkedGenesisController:
                     raw = bytes(self._output)
                     _bundle(raw, self._scope)
                     self._check_sources(full=True)
+                    check()
                     self._sample(self._deadline)
                     self._reap(terminal)
                     self._sample(self._deadline)

@@ -118,8 +118,11 @@ Exact archives, commands, logs and checksums are retained at
 `codex-offload/serverware/engineering-builds/8e9459d5-genesis-endpoints-jApq7d/`.
 No cloud resource, paid test or broad unchanged test suite was used.
 
-Still required: cold encrypted-key/verifier inputs; connected coordinator runtime
-assembly and resource transfer; the expanded commissioning graph; retained cold
+The next [cold launch and coordinator assembly slice](native-pilot-genesis-assembly.md)
+connects encrypted-key/verifier inputs, public launch bundles and retained
+coordinator resources. Its verification boundary is recorded separately.
+
+Still required: the expanded commissioning and public installation graph; retained cold
 core transfer and actual adoption-signer ownership; operational composition and
 uncertain recovery; independent release/Nitro/KMS/signing/witness provisioning;
 and connected allow/deny, lifecycle, provider and hardware acceptance. The older

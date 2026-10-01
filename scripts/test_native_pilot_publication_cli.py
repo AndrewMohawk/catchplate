@@ -28,7 +28,8 @@ class PublicationCliTests(unittest.TestCase):
             "--sign-genesis-ordinary-checkpoint", "--sign-genesis-ordinary-root-anchor",
             "--sign-genesis-ordinary-checkpoint-anchor", "--sign-genesis-ordinary-service-anchor",
             "--assemble-genesis-ordinary-history", "--sign-genesis-ordinary-delivery",
-            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release"} | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES))
+            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release"}
+            | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES) | set(entry.TRANSPORT_MODES) | set(entry.LAUNCH_MODES))
         for mode, purpose in (("--sign-genesis-precreation", "precreation"),
                               ("--sign-genesis-release", "release")):
             values = arguments(True)
@@ -95,6 +96,28 @@ class PublicationCliTests(unittest.TestCase):
                 "--sign-genesis-native-coordinator-grant"):
             values = arguments(True); values[0] = mode
             self.assertFalse(entry.valid_arguments(values))
+
+    def test_cold_transports_are_keyed_and_launch_bundles_are_keyless(self):
+        roles = ("publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator")
+        self.assertEqual(len(entry.TRANSPORT_MODES), 6)
+        self.assertEqual(set(entry.TRANSPORT_MODES.values()), {(role, operation)
+            for role in roles for operation in ("encrypted-delivery", "verifier")})
+        self.assertEqual(set(entry.LAUNCH_MODES.values()), set(roles))
+        self.assertEqual(len(entry.LAUNCH_MODES), 3)
+        for mode in entry.TRANSPORT_MODES:
+            values = arguments(True); values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values[:-2]))
+        for mode in entry.LAUNCH_MODES:
+            values = arguments(); values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values + ["--authority-key-fd", "5"]))
+        for mode in ("--sign-genesis-native-bridge-verifier", "--sign-genesis-native-coordinator-request-commitment",
+                "--assemble-genesis-native-coordinator", "--sign-genesis-native-coordinator-launch",
+                "--assemble-genesis-native-retrieval-encrypted-delivery"):
+            values = arguments(True); values[0] = mode
+            self.assertFalse(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values[:-2]))
 
     def test_unknown_mode_flags_paths_or_hashes_refuse(self):
         for index, value in ((0, "--sign-adoption"), (1, "--runtime-inventory-fd"),

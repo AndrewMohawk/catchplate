@@ -75,13 +75,15 @@ to adopt a different PID, retry with a fresh deadline or regenerate authority.
 ## Still required before the pilot can run
 
 1. Build and genuinely install the signed local authority package, including
-   its complete closure and real immutable-installation evidence. The existing
-   artifact generator emits an unsigned package; the atomic provisioner command
-   emits a plan, **not an installed package or an installation receipt**.
+   its complete closure and real immutable-installation evidence. The new
+   [local signing/installation commands](trusted-host-local-installation.md)
+   connect these effects; they have not performed a complete signed install.
+   Genuine upstream evidence and a capable dedicated filesystem remain missing.
 2. Provision actual scoped keys, database authentication, TLS and trust pins,
    then run the existing offline metadata bootstrap and local authority roles.
 3. Invoke genuine policy-genesis preparation, obtain actual audit inclusion and
-   finalize through those services. The existing offline development installer
+   finalize through the new foreground commissioning caller. Its independent
+   audit/evidence and enrolled-WebAuthn inputs remain required. The offline development installer
    only materializes an already finalized policy; it cannot create that state.
 4. Start the control plane, seed once, verify the CA, start the frozen Rust gate
    and prove credential replacement, denial and redaction.

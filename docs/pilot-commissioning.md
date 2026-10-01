@@ -19,10 +19,12 @@ actual Python/pathname execution from native static-ELF/descriptor execution.
 It connects the retained real child, protected static inputs and late signed
 launch documents. This source connection has not commissioned the pilot.
 The remaining prerequisite is a genuinely installed signed local authority
-package, with actual installation evidence and scoped trust inputs; existing
-artifact/provisioning commands produce unsigned packages/plans, not those
-effects. The genuine first-policy prepare/audit/finalize caller must also be
-connected. Do not manufacture observations or receipts to fill these gaps.
+package, with actual installation evidence and scoped trust inputs. New
+[local snapshot/signing/installation commands](trusted-host-local-installation.md)
+and the genuine foreground first-policy caller connect those code paths, but
+have not performed a complete installation or policy transition. Missing
+upstream evidence producers and a capable dedicated filesystem remain explicit
+gaps. Do not manufacture observations or receipts to fill them.
 Native production admission remains separate.
 
 Required components, with actual separately scoped identities:
@@ -73,11 +75,17 @@ condition, not permission to invent receipts or enable a fallback.
 2. **Prepare genuine demo-policy genesis.** Have the selected authority approve
    the exact signed policy matching
    [demo_policy_bundle](../serverware/policy_bundle.py) for `cred-demo-bearer`.
-   Invoke the existing `prepare_policy_authority_genesis` operation through its
-   actual authority path. Obtain the real transition's independently verified
-   audit inclusion, then `finalize_policy_authority_genesis`. Retain the exact
+   Use the fixed [foreground caller](../scripts/commission_development_policy.py)
+   with its four pre-admitted descriptors and the actual `AuthorityRuntimeClient`.
+   It sends `policy.genesis.prepare`, retains the actual result, and waits for
+   its supervisor to fill/seal the reserved late request with independently
+   verified audit inclusion and fresh bound WebAuthn approval. It then sends
+   `policy.genesis.finalize`, bound to that same live preparation. Retain the exact
    preparation, inclusion and finalization originals. No direct SQL insert,
    local signature alone or synthetic verifier response establishes this state.
+   The existing semantic-to-kernel business-intent normalization is used only
+   on a temporary validation copy; caller originals remain unchanged. This
+   caller does not supply the missing evidence signer/registration service.
 3. **Materialize that same signed policy.** For the synthetic development pilot,
    the fixed [offline installer](../scripts/materialize_development_policy_genesis.py)
    consumes an inherited root-owned read-only/sealed policy FD, its SHA256 and

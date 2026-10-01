@@ -135,8 +135,10 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).
 Python and Rust images are built, supporting services are healthy, and the
 isolated database has its 13 restricted role identities. The
-[local authority launcher](docs/trusted-host-local-startup.md) is source-connected;
-actual signed-package installation, authentication, schema bootstrap and
+[local authority launcher](docs/trusted-host-local-startup.md),
+[signing/installation commands](docs/trusted-host-local-installation.md) and
+foreground policy caller are source-connected. Genuine upstream evidence,
+a capable dedicated filesystem, actual installation, authentication, schema bootstrap and
 [policy commissioning](docs/pilot-commissioning.md) remain. **There is not yet a working pilot.** The planned
 walkthrough is non-TEE, non-production and uses no real provider credentials.
 Its current authority requirements cannot be replaced by a SQLite shortcut.

@@ -148,6 +148,13 @@ def _identity(info):
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _check_handle(fd, expected):
+    # procfs directory nlink changes with the host's live process population.
+    # Directory custody is its stable inode/type/mode/owner, not that counter.
+    width = 5 if stat.S_ISDIR(expected[2]) else 6
+    _require(_identity(os.fstat(fd))[:width] == expected[:width])
+
+
 def _start(pid):
     with open(f"/proc/{pid}/stat", "r", encoding="ascii") as source:
         raw = source.read(8193)
@@ -375,11 +382,12 @@ class LocalAuthorityStartup:
                 and (self.last_boot is None or self.last_boot <= current_boot)
                 and (self.last_epoch is None or self.last_epoch <= current_epoch))
         for fd, identity in self.handles:
-            _require(fd is not None and _identity(os.fstat(fd))[:6] == identity[:6])
+            _require(fd is not None)
+            _check_handle(fd, identity)
         for parent, name, child, identity, directory in self.names:
             observed = _identity(os.stat(name, dir_fd=parent, follow_symlinks=False))
             held = _identity(os.fstat(child))
-            _require(observed[:6] == held[:6] == identity[:6] if directory else observed == held == identity)
+            _require(observed[:5] == held[:5] == identity[:5] if directory else observed == held == identity)
         if self.raw is not None:
             _require(_read(self.plan_fd, MAX_PLAN) == self.raw)
         if full and hasattr(self, "resource_files"):

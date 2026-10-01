@@ -31,6 +31,7 @@ SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v7"
 UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v7"
 ROLE_BINDING_DOMAIN = "serverware.authorityRoleBinding/v1"
 ROLE_RUNTIME_CLOSURE_SCHEMA = "serverware.policyAuthorityRoleRuntimeClosure/v1"
+LOCAL_STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityTrustedHostLocalBootstrapInterface/v1"
 RUNTIME_EVIDENCE_NAME = "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"
 RUNTIME_EVIDENCE_ROLES = frozenset(
     {"verifier", "planner", "planner-writer", "issuer", "executor"}
@@ -1412,47 +1413,7 @@ def validate_closure_receipt(receipt: Mapping[str, Any]) -> None:
         name="verified native objects",
         key=lambda entry: entry["runtimePath"],
     )
-    stage_zero = _require_mapping(
-        payload["stageZero"],
-        name="closure stage zero",
-        keys={
-            "path",
-            "sha256",
-            "size",
-            "interfaceSchema",
-            "runtimePath",
-            "staticElf",
-            "ptInterp",
-            "needed",
-            "elfEvidenceDigest",
-        },
-    )
-    _require_relative_path(stage_zero["path"], name="stage-zero path")
-    _require_digest(stage_zero["sha256"], name="stage-zero digest")
-    _require_int(
-        stage_zero["size"],
-        name="stage-zero size",
-        minimum=1,
-        maximum=MAX_FILE_BYTES,
-    )
-    _require_identifier(
-        stage_zero["interfaceSchema"], name="stage-zero interface schema"
-    )
-    _require_runtime_path(
-        stage_zero["runtimePath"], name="stage-zero runtime path"
-    )
-    if (
-        stage_zero["staticElf"] is not True
-        or stage_zero["ptInterp"] is not None
-        or stage_zero["needed"] != []
-    ):
-        raise ArtifactContractError(
-            "closure verifier did not prove a static stage zero"
-        )
-    _require_digest(
-        stage_zero["elfEvidenceDigest"],
-        name="stage-zero ELF evidence digest",
-    )
+    validate_stage_zero_reference(payload["stageZero"], native_executables=executables)
     coverage = _require_mapping(
         payload["coverage"],
         name="closure coverage",
@@ -1737,6 +1698,41 @@ def _validate_digest_file_reference(
     _require_relative_path(reference["path"], name=f"{name} path")
     _require_digest(reference["sha256"], name=f"{name} digest")
     return reference
+
+
+def validate_stage_zero_reference(value: object, *, native_executables: Sequence[Mapping[str, Any]],
+        trust_mode: str | None = None) -> bool:
+    """Validate signed bootstrap data, not an observed launch or installation.
+
+    Local Python bootstrap source has its own explicit interface and interpreter
+    binding. It never acquires a static-ELF or descriptor-execution claim.
+    """
+    local = isinstance(value, Mapping) and value.get("interfaceSchema") == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA
+    if local and trust_mode not in {None, "trusted-host-local"}:
+        raise ArtifactContractError("Python bootstrap cannot claim a native production trust mode")
+    reference = _validate_digest_file_reference(value, name="stage zero", extra_keys={
+        "size", "interfaceSchema", "runtimePath",
+    } | ({"interpreter"} if local else {"staticElf", "ptInterp", "needed", "elfEvidenceDigest"}))
+    _require_int(reference["size"], name="stage-zero size", minimum=1, maximum=MAX_FILE_BYTES)
+    _require_identifier(reference["interfaceSchema"], name="stage-zero interface schema")
+    _require_runtime_path(reference["runtimePath"], name="stage-zero runtime path")
+    if not local:
+        if reference["staticElf"] is not True or reference["ptInterp"] is not None or reference["needed"] != []:
+            raise ArtifactContractError("stage zero must be a static ELF without dynamic dependencies")
+        _require_digest(reference["elfEvidenceDigest"], name="stage-zero ELF evidence digest")
+        return False
+    interpreter = _validate_digest_file_reference(reference["interpreter"], name="local interpreter",
+        extra_keys={"size", "runtimePath"})
+    _require_int(interpreter["size"], name="local interpreter size", minimum=1, maximum=MAX_FILE_BYTES)
+    _require_runtime_path(interpreter["runtimePath"], name="local interpreter runtime path")
+    if interpreter["path"] == reference["path"] or interpreter["runtimePath"] == reference["runtimePath"]:
+        raise ArtifactContractError("local interpreter and bootstrap source are not distinct")
+    matches = [entry for entry in native_executables if all(
+        entry.get(key) == interpreter[key] for key in ("path", "runtimePath", "sha256"))]
+    if len(matches) != 1:
+        raise ArtifactContractError("local interpreter is not one exact native closure executable")
+    _validate_native_executable(matches[0])
+    return True
 
 
 def _configuration_payload_binding_key(value: Mapping[str, Any]) -> tuple[str, ...]:
@@ -2922,39 +2918,18 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
             "provenance statement digest is not canonical"
         )
 
-    stage_zero = _validate_digest_file_reference(
-        value["stageZero"],
-        name="native stage zero",
-        extra_keys={
-            "size",
-            "interfaceSchema",
-            "runtimePath",
-            "staticElf",
-            "ptInterp",
-            "needed",
-            "elfEvidenceDigest",
-        },
-    )
-    _require_identifier(
-        stage_zero["interfaceSchema"], name="stage-zero interface schema"
-    )
-    _require_runtime_path(
-        stage_zero["runtimePath"], name="stage-zero runtime path"
-    )
-    if stage_zero["staticElf"] is not True:
-        raise ArtifactContractError("stage zero must be a static ELF")
-    if stage_zero["ptInterp"] is not None or stage_zero["needed"] != []:
-        raise ArtifactContractError(
-            "stage zero cannot have an interpreter or dynamic dependencies"
-        )
-    _require_digest(
-        stage_zero["elfEvidenceDigest"],
-        name="stage-zero ELF evidence digest",
-    )
+    stage_zero = value["stageZero"]
+    local_bootstrap = validate_stage_zero_reference(stage_zero, native_executables=executables,
+        trust_mode=value["trustMode"]["mode"])
     if stage_zero != closure_payload["stageZero"]:
         raise ArtifactContractError(
-            "stage zero is not the externally verified static image"
+            "stage zero differs from the exact signed closure evidence"
         )
+    if local_bootstrap:
+        for reference, kind in ((stage_zero, "authority-source"), (stage_zero["interpreter"], "elf-executable")):
+            measured = file_by_path.get(reference["path"])
+            if measured is None or any(measured[key] != reference[key] for key in ("sha256", "size")) or measured["kind"] != kind:
+                raise ArtifactContractError("local bootstrap source or interpreter differs from its measured file")
 
     operation_manifest = _validate_digest_file_reference(
         value["operationManifest"],
@@ -3020,7 +2995,7 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
         + [
             (sbom, "sbom"),
             (provenance, "provenance"),
-            (stage_zero, "native-stage-zero"),
+            (stage_zero, "authority-source" if local_bootstrap else "native-stage-zero"),
             (operation_manifest, "operation-manifest"),
         ]
     )
@@ -3941,7 +3916,7 @@ STAGE_ZERO_REFERENCE_JSON_SCHEMA = _closed_object_schema(
         "path": RELATIVE_PATH_JSON_SCHEMA,
         "sha256": SHA256_JSON_SCHEMA,
         "size": INTEGER_JSON_SCHEMA,
-        "interfaceSchema": TEXT_JSON_SCHEMA,
+        "interfaceSchema": {"allOf": [TEXT_JSON_SCHEMA, {"not": {"const": LOCAL_STAGE_ZERO_INTERFACE_SCHEMA}}]},
         "runtimePath": TEXT_JSON_SCHEMA,
         "staticElf": {"const": True},
         "ptInterp": {"type": "null"},
@@ -3949,6 +3924,22 @@ STAGE_ZERO_REFERENCE_JSON_SCHEMA = _closed_object_schema(
         "elfEvidenceDigest": SHA256_JSON_SCHEMA,
     }
 )
+LOCAL_STAGE_ZERO_REFERENCE_JSON_SCHEMA = _closed_object_schema({
+    "path": RELATIVE_PATH_JSON_SCHEMA,
+    "sha256": SHA256_JSON_SCHEMA,
+    "size": INTEGER_JSON_SCHEMA,
+    "interfaceSchema": {"const": LOCAL_STAGE_ZERO_INTERFACE_SCHEMA},
+    "runtimePath": TEXT_JSON_SCHEMA,
+    "interpreter": _closed_object_schema({
+        "path": RELATIVE_PATH_JSON_SCHEMA,
+        "sha256": SHA256_JSON_SCHEMA,
+        "size": INTEGER_JSON_SCHEMA,
+        "runtimePath": TEXT_JSON_SCHEMA,
+    }),
+})
+BOOTSTRAP_REFERENCE_JSON_SCHEMA = {"oneOf": [
+    STAGE_ZERO_REFERENCE_JSON_SCHEMA, LOCAL_STAGE_ZERO_REFERENCE_JSON_SCHEMA,
+]}
 SIGNED_EVIDENCE_ENVELOPE_FIELDS = {
     "signerKeyId": TEXT_JSON_SCHEMA,
     "algorithm": {"const": "Ed25519"},
@@ -4049,7 +4040,7 @@ CLOSURE_RECEIPT_JSON_SCHEMA = _closed_object_schema(
                         },
                     }
                 ),
-                "stageZero": STAGE_ZERO_REFERENCE_JSON_SCHEMA,
+                "stageZero": BOOTSTRAP_REFERENCE_JSON_SCHEMA,
                 "coverage": CLOSURE_COVERAGE_JSON_SCHEMA,
                 "rootfs": _closed_object_schema(
                     {
@@ -4417,10 +4408,18 @@ ARTIFACT_BUNDLE_JSON_SCHEMA = _closed_object_schema(
         "sbom": SBOM_REFERENCE_JSON_SCHEMA,
         "provenance": PROVENANCE_REFERENCE_JSON_SCHEMA,
         "ociImage": OCI_IMAGE_JSON_SCHEMA,
-        "stageZero": STAGE_ZERO_REFERENCE_JSON_SCHEMA,
+        "stageZero": BOOTSTRAP_REFERENCE_JSON_SCHEMA,
         "operationManifest": OPERATION_MANIFEST_REFERENCE_JSON_SCHEMA,
     }
 )
+ARTIFACT_BUNDLE_JSON_SCHEMA["allOf"] = [{
+    "if": {"properties": {"stageZero": {"properties": {
+        "interfaceSchema": {"const": LOCAL_STAGE_ZERO_INTERFACE_SCHEMA},
+    }}}},
+    "then": {"properties": {"trustMode": {"properties": {
+        "mode": {"const": "trusted-host-local"},
+    }}}},
+}]
 TRUST_MODE_JSON_SCHEMA = _closed_object_schema(
     {
         "mode": {"enum": sorted(TRUST_MODES)},

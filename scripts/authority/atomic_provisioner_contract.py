@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 from serverware.authority_artifact_spec import (
     ArtifactContractError,
+    LOCAL_STAGE_ZERO_INTERFACE_SCHEMA,
     VerifiedArtifactPackage,
     artifact_bundle_digest,
     canonical_json_bytes,
@@ -418,24 +419,29 @@ def validate_verification_receipt(
             "verified signatures are not in canonical order"
         )
 
+    local_bootstrap = (isinstance(value["stageZeroVerification"], Mapping)
+        and value["stageZeroVerification"].get("interfaceSchema") == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA)
     stage_zero = _closed(
         value["stageZeroVerification"],
         name="stage-zero verification",
         keys={
             "artifactDigest",
             "interfaceSchema",
-            "staticElf",
-            "ptInterp",
-            "needed",
             "verifierDigest",
-        },
+        } | ({"interpreterDigest", "interpreterRuntimePath"} if local_bootstrap
+            else {"staticElf", "ptInterp", "needed"}),
     )
     _digest(stage_zero["artifactDigest"], name="stage-zero artifact digest")
     _identifier(
         stage_zero["interfaceSchema"],
         name="stage-zero interface schema",
     )
-    if (
+    if local_bootstrap:
+        if value["trustMode"] != "trusted-host-local":
+            raise ProvisioningContractError("Python bootstrap verification cannot claim production trust")
+        _digest(stage_zero["interpreterDigest"], name="local interpreter digest")
+        _runtime_path(stage_zero["interpreterRuntimePath"], name="local interpreter runtime path")
+    elif (
         stage_zero["staticElf"] is not True
         or stage_zero["ptInterp"] is not None
         or stage_zero["needed"] != []
@@ -559,6 +565,10 @@ def validate_verification_receipt(
         validate_signed_artifact_package(package)
         bundle = package["bundle"]
         generation = package["generation"]
+        if local_bootstrap and (bundle["stageZero"]["interfaceSchema"] != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA
+                or stage_zero["interpreterDigest"] != bundle["stageZero"]["interpreter"]["sha256"]
+                or stage_zero["interpreterRuntimePath"] != bundle["stageZero"]["interpreter"]["runtimePath"]):
+            raise ProvisioningContractError("local verification receipt binds another interpreter")
         if (
             value["packageDigest"] != signed_package_digest(package)
             or value["artifactBundleDigest"]

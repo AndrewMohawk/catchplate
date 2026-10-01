@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -9,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from . import authority_contract
 from .authority_artifact_spec import (
     ALLOWED_MUTABLE_STATE_PROTOCOLS,
+    LOCAL_STAGE_ZERO_INTERFACE_SCHEMA,
     RUNTIME_EVIDENCE_NAME,
     RUNTIME_EVIDENCE_ROLES,
     ArtifactContractError,
@@ -18,6 +20,7 @@ from .authority_artifact_spec import (
     ed25519_public_key_from_seed,
     strict_base64url_decode,
     verify_ed25519_signature,
+    validate_stage_zero_reference,
 )
 
 
@@ -30,6 +33,12 @@ SIGNED_LAUNCH_IDENTITY_SCHEMA = (
 )
 STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v5"
 STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v5"
+LOCAL_STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityTrustedHostLocalBootstrapRequest/v1"
+LOCAL_LAUNCH_IDENTITY_PAYLOAD_SCHEMA = "serverware.authorityTrustedHostLocalLaunchIdentityCertificatePayload/v1"
+LOCAL_SIGNED_LAUNCH_IDENTITY_SCHEMA = "serverware.signedAuthorityTrustedHostLocalLaunchIdentityCertificate/v1"
+LOCAL_STAGE_ZERO_REQUEST_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalBootstrapRequestDigest/v1"
+LOCAL_LAUNCH_ID_DOMAIN = "serverware.authorityTrustedHostLocalLaunchIdentity/v1"
+LOCAL_LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalLaunchIdentityCertificateSignature/v1"
 STAGE_ZERO_REQUEST_DIGEST_DOMAIN = (
     "serverware.authorityNativeStageZeroRequestDigest/v5"
 )
@@ -826,8 +835,13 @@ def validate_stage_zero_request(
             "trustMode",
         },
     )
-    if value["schema"] != STAGE_ZERO_REQUEST_SCHEMA:
+    local = value["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA
+    if value["schema"] not in {STAGE_ZERO_REQUEST_SCHEMA, LOCAL_STAGE_ZERO_REQUEST_SCHEMA}:
         raise StageZeroContractError("stage-zero request schema changed")
+    if local and (value["trustMode"] != "trusted-host-local"
+            or verified_package.trust_mode != "trusted-host-local"
+            or verified_package.stage_zero_contract != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA):
+        raise StageZeroContractError("local bootstrap requires its exact local package and trust mode")
     if value["trustMode"] not in TRUST_MODES:
         raise StageZeroContractError("trust mode is not recognized")
     bootstrap_control = _validate_bootstrap_control(value["bootstrapControl"])
@@ -1127,11 +1141,7 @@ def validate_stage_zero_request(
             "size",
             "interfaceSchema",
             "runtimePath",
-            "staticElf",
-            "ptInterp",
-            "needed",
-            "elfEvidenceDigest",
-        },
+        } | ({"interpreter"} if local else {"staticElf", "ptInterp", "needed", "elfEvidenceDigest"}),
     )
     _integer(
         stage_zero["fd"],
@@ -1148,21 +1158,17 @@ def validate_stage_zero_request(
         maximum=MAX_FILE_BYTES,
     )
     _runtime_path(stage_zero["runtimePath"], name="stage-zero runtime path")
-    if stage_zero["interfaceSchema"] != STAGE_ZERO_INTERFACE_SCHEMA:
+    if stage_zero["interfaceSchema"] != (LOCAL_STAGE_ZERO_INTERFACE_SCHEMA if local else STAGE_ZERO_INTERFACE_SCHEMA):
         raise StageZeroContractError("stage-zero interface schema changed")
-    if (
-        stage_zero["staticElf"] is not True
-        or stage_zero["ptInterp"] is not None
-        or stage_zero["needed"] != []
-    ):
-        raise StageZeroContractError("stage zero must be a static ELF")
-    _digest(
-        stage_zero["elfEvidenceDigest"],
-        name="stage-zero ELF evidence",
-    )
     exact_stage_zero = {
         key: stage_zero[key] for key in stage_zero if key != "fd"
     }
+    try:
+        validate_stage_zero_reference(exact_stage_zero,
+            native_executables=verified_package.package["bundle"]["nativeClosure"]["executables"],
+            trust_mode=value["trustMode"])
+    except ArtifactContractError as exc:
+        raise StageZeroContractError(str(exc)) from exc
     if exact_stage_zero != dict(
         verified_package.package["bundle"]["stageZero"]
     ):
@@ -1492,12 +1498,11 @@ def validate_stage_zero_request(
             "pathname",
             "argv",
             "cwd",
-            "execveatFlags",
             "pythonIsolationFlags",
             "noNewPrivileges",
             "closeRangeFrom",
             "preserveFds",
-        },
+        } | ({"transition"} if local else {"execveatFlags"}),
     )
     executable_fd = _integer(
         execution["executableFd"],
@@ -1506,10 +1511,14 @@ def validate_stage_zero_request(
         maximum=2**31 - 1,
     )
     _digest(execution["executableDigest"], name="executable digest")
-    if execution["pathname"] != "":
+    if execution["pathname"] != (role["entrypointPath"] if local else ""):
         raise StageZeroContractError(
-            "execveat pathname must be the empty string"
+            "execution pathname differs from the selected native or local transition"
         )
+    if local and (execution["transition"] != "pathname-execve"
+            or stage_zero["interpreter"]["runtimePath"] != role["entrypointPath"]
+            or stage_zero["interpreter"]["sha256"] != execution["executableDigest"]):
+        raise StageZeroContractError("local pathname transition differs from the measured interpreter")
     argv = _list(
         execution["argv"],
         name="argv",
@@ -1527,6 +1536,9 @@ def validate_stage_zero_request(
         raise StageZeroContractError(
             "argv differs from exact signed role manifest"
         )
+    if local and list(argv[:7]) != [stage_zero["interpreter"]["runtimePath"],
+            *REQUIRED_PYTHON_ISOLATION_FLAGS, f"/proc/self/fd/{stage_zero['fd']}"]:
+        raise StageZeroContractError("local argv does not execute the exact retained bootstrap source")
     isolation_positions = []
     for flag in REQUIRED_PYTHON_ISOLATION_FLAGS:
         if list(argv).count(flag) != 1:
@@ -1542,7 +1554,7 @@ def validate_stage_zero_request(
         raise StageZeroContractError(
             "working directory differs from exact role manifest"
         )
-    if execution["execveatFlags"] != list(REQUIRED_EXECVEAT_FLAGS):
+    if not local and execution["execveatFlags"] != list(REQUIRED_EXECVEAT_FLAGS):
         raise StageZeroContractError("execveat flags changed")
     if execution["pythonIsolationFlags"] != list(
         REQUIRED_PYTHON_ISOLATION_FLAGS
@@ -1596,6 +1608,8 @@ def validate_stage_zero_request(
             "execution is not bound to one retained role entrypoint"
         )
     executable_binding = executable_bindings[0]
+    if local and executable_binding["size"] != stage_zero["interpreter"]["size"]:
+        raise StageZeroContractError("retained local interpreter size differs from the signed bootstrap")
     if (
         executable_binding["runtimePath"] != role["entrypointPath"]
         or executable_binding["surviveExec"] is not True
@@ -1693,6 +1707,8 @@ def validate_stage_zero_request(
         private_key_target,
         certificate_target,
     }
+    if local:
+        expected_preserved.add(stage_zero["fd"])
     if set(preserve) != expected_preserved:
         raise StageZeroContractError(
             "preserved descriptor set is not exact"
@@ -1725,7 +1741,7 @@ def stage_zero_request_digest(
         validation_time=validation_time,
     )
     return domain_digest(
-        STAGE_ZERO_REQUEST_DIGEST_DOMAIN,
+        LOCAL_STAGE_ZERO_REQUEST_DIGEST_DOMAIN if request["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else STAGE_ZERO_REQUEST_DIGEST_DOMAIN,
         canonical_json_bytes(request),
     )
 
@@ -1904,7 +1920,7 @@ def derive_launch_id(
         decoded_size=32,
     )
     return domain_digest(
-        LAUNCH_ID_DOMAIN,
+        LOCAL_LAUNCH_ID_DOMAIN if request["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else LAUNCH_ID_DOMAIN,
         stage_zero_request_digest(
             request,
             verified_package=verified_package,
@@ -1975,7 +1991,9 @@ def validate_launch_identity_payload(
             "hardwareBacked",
         },
     )
-    if value["schema"] != LAUNCH_IDENTITY_PAYLOAD_SCHEMA:
+    expected_schema = (LOCAL_LAUNCH_IDENTITY_PAYLOAD_SCHEMA
+        if request.get("schema") == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else LAUNCH_IDENTITY_PAYLOAD_SCHEMA)
+    if value["schema"] != expected_schema:
         raise StageZeroContractError("launch identity payload schema changed")
     _digest(value["launchId"], name="launch identifier")
     _integer(
@@ -2191,7 +2209,9 @@ def validate_signed_launch_identity(
             "signatureBase64Url",
         },
     )
-    if value["schema"] != SIGNED_LAUNCH_IDENTITY_SCHEMA:
+    expected_schema = (LOCAL_SIGNED_LAUNCH_IDENTITY_SCHEMA
+        if request.get("schema") == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else SIGNED_LAUNCH_IDENTITY_SCHEMA)
+    if value["schema"] != expected_schema:
         raise StageZeroContractError("launch certificate schema changed")
     validate_launch_identity_payload(
         value["payload"],
@@ -2275,6 +2295,7 @@ def validate_trusted_host_local_launch_identity(
     if (
         verified_package.trust_mode != "trusted-host-local"
         or request.get("trustMode") != "trusted-host-local"
+        or request.get("schema") != LOCAL_STAGE_ZERO_REQUEST_SCHEMA
         or not isinstance(private_key_seed, bytes)
         or len(private_key_seed) != 32
         or not isinstance(certificate_bytes, bytes)
@@ -2349,7 +2370,7 @@ def launch_certificate_signature_message(
         validation_time=validation_time,
     )
     return domain_digest(
-        LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN,
+        LOCAL_LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN if request["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN,
         canonical_json_bytes(payload),
     ).encode("ascii")
 
@@ -2366,6 +2387,8 @@ def validate_stage_zero_handoff(
     private_key_seed: bytes,
     certificate_bytes: bytes,
 ) -> None:
+    if request.get("schema") != STAGE_ZERO_REQUEST_SCHEMA:
+        raise StageZeroContractError("native handoff requires the unchanged native request profile")
     validate_stage_zero_request(
         request,
         verified_package=verified_package,
@@ -3232,7 +3255,57 @@ STAGE_ZERO_HANDOFF_JSON_SCHEMA = _closed_schema(
 )
 
 
+LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA = deepcopy(STAGE_ZERO_REQUEST_JSON_SCHEMA)
+LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"].update({
+    "schema": {"const": LOCAL_STAGE_ZERO_REQUEST_SCHEMA},
+    "trustMode": {"const": "trusted-host-local"},
+    "stageZero": _closed_schema({
+        "fd": INTEGER_JSON_SCHEMA,
+        "path": STRING_JSON_SCHEMA,
+        "sha256": SHA256_JSON_SCHEMA,
+        "size": INTEGER_JSON_SCHEMA,
+        "interfaceSchema": {"const": LOCAL_STAGE_ZERO_INTERFACE_SCHEMA},
+        "runtimePath": STRING_JSON_SCHEMA,
+        "interpreter": _closed_schema({
+            "path": STRING_JSON_SCHEMA,
+            "sha256": SHA256_JSON_SCHEMA,
+            "size": INTEGER_JSON_SCHEMA,
+            "runtimePath": STRING_JSON_SCHEMA,
+        }),
+    }),
+    "execution": _closed_schema({
+        **{key: deepcopy(value) for key, value in EXECUTION_JSON_SCHEMA["properties"].items()
+            if key not in {"pathname", "execveatFlags"}},
+        "pathname": STRING_JSON_SCHEMA,
+        "transition": {"const": "pathname-execve"},
+    }),
+})
+LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA = deepcopy(LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA)
+LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA["properties"].update({
+    "schema": {"const": LOCAL_LAUNCH_IDENTITY_PAYLOAD_SCHEMA},
+    "stageZeroContract": {"const": LOCAL_STAGE_ZERO_INTERFACE_SCHEMA},
+    "trustMode": {"const": "trusted-host-local"},
+    "coLocated": {"const": True},
+    "hardwareBacked": {"const": False},
+})
+LOCAL_SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA = deepcopy(SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA)
+LOCAL_SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA["properties"].update({
+    "schema": {"const": LOCAL_SIGNED_LAUNCH_IDENTITY_SCHEMA},
+    "payload": LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA,
+})
+
+
 __all__ = [
+    "LOCAL_STAGE_ZERO_REQUEST_SCHEMA",
+    "LOCAL_STAGE_ZERO_INTERFACE_SCHEMA",
+    "LOCAL_STAGE_ZERO_REQUEST_DIGEST_DOMAIN",
+    "LOCAL_LAUNCH_ID_DOMAIN",
+    "LOCAL_LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN",
+    "LOCAL_LAUNCH_IDENTITY_PAYLOAD_SCHEMA",
+    "LOCAL_SIGNED_LAUNCH_IDENTITY_SCHEMA",
+    "LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA",
+    "LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA",
+    "LOCAL_SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA",
     "STAGE_ZERO_REQUEST_SCHEMA",
     "LAUNCH_IDENTITY_PAYLOAD_SCHEMA",
     "SIGNED_LAUNCH_IDENTITY_SCHEMA",

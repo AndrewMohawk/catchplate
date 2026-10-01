@@ -47,6 +47,7 @@ from serverware.authority_artifact_spec import (
     KEY_REVOCATION_SCHEMA,
     UNSIGNED_PACKAGE_SCHEMA,
     ArtifactContractError,
+    LOCAL_STAGE_ZERO_INTERFACE_SCHEMA,
     VerifiedAuthorityKey,
     artifact_bundle_digest,
     canonical_json_bytes,
@@ -1589,6 +1590,9 @@ def _build_bundle(
         provenance["ociRootDigest"] = oci["rootDigest"]
 
         stage_zero = dict(closure_payload["stageZero"])
+        if (stage_zero["interfaceSchema"] == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA
+                and spec["trustMode"]["mode"] != "trusted-host-local"):
+            raise GeneratorError("Python bootstrap evidence requires explicit trusted-host-local selection")
         bundle = {
             "schema": ARTIFACT_BUNDLE_SCHEMA,
             "bundleVersion": 1,

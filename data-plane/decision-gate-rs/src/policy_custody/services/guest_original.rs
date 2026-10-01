@@ -51,6 +51,9 @@ impl Original {
     pub(super) fn publication_genesis_precreation() -> Result<Self,Error> {
         Self::fixed_native("native-publication-genesis-precreation.json",32768)
     }
+    pub(super) fn publication_genesis_endpoints() -> Result<Self,Error> {
+        Self::fixed_native("native-publication-genesis-endpoints.json",32768)
+    }
     pub(super) fn driver_bootstrap_configuration() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-driver-bootstrap.json",65536)
     }

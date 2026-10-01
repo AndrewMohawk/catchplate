@@ -285,11 +285,18 @@ pub(super) fn run(configuration: Configuration, owner: Arc<native_guest::Admitte
         super::initial_history::require_genesis_guest(member.history_original.as_bytes(), &header, p.service_role, &p.guest)?;
         super::initial_history::require_genesis_window(member.history_original.as_bytes(), &header, p.service_role,
             p.scope.issued_at_boottime_nanos, p.scope.expires_at_boottime_nanos)?;
+        let identity = &history.current_epoch().map_err(|_| invalid())?.statement().endpoint_process_identity;
+        let peer = &session.expected_peer;
+        // The authenticated history's EndpointProcessIdentity/v3 and the
+        // inspected socket's PeerProcessIdentity/v4 have different domains
+        // and fields. Preserve both digests; join their common actual owner.
         require(p.runtime_configuration_sha256 == Sha256Digest::compute(member.runtime_original.as_bytes())
             && p.guest.uid != own.uid && p.guest.gid != own.gid
-            && p.guest.uid == session.expected_peer.uid && p.guest.gid == session.expected_peer.gid
-            && session.expected_peer.process_identity_sha256
-                == history.current_epoch().map_err(|_| invalid())?.epoch_reference().endpoint_process_identity_sha256)?;
+            && p.guest.uid == peer.uid && p.guest.gid == peer.gid
+            && peer.uid == identity.endpoint_uid && peer.gid == identity.endpoint_gid
+            && peer.pid == identity.endpoint_pid && peer.start_time_ticks == identity.endpoint_start_time_ticks
+            && peer.executable_device == identity.executable_device && peer.executable_inode == identity.executable_inode
+            && peer.executable_length == identity.executable_length && peer.executable_sha256 == identity.executable_sha256)?;
     }
     for peer in &configuration.native_endpoints {
         require(peer.expected_peer.uid != own.uid && peer.expected_peer.gid != own.gid)?;

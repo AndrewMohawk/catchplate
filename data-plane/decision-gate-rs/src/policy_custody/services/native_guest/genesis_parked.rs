@@ -15,16 +15,16 @@ const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
 
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Authority {public_key_base64url:String,key_id:Sha256Digest}
+pub(super) struct Authority {public(super) public_key_base64url:String,pub(super) key_id:Sha256Digest}
 impl Authority {
-    fn key(&self)->Result<VerifyingKey,ShadowError>{
+    pub(super) fn key(&self)->Result<VerifyingKey,ShadowError>{
         let raw=URL_SAFE_NO_PAD.decode(&self.public_key_base64url).map_err(fail)?;
         require(raw.len()==32 && raw!=[0u8;32] && URL_SAFE_NO_PAD.encode(&raw)==self.public_key_base64url
             && Sha256Digest::compute(&raw)==self.key_id)?;
         VerifyingKey::from_bytes(&raw.try_into().map_err(fail)?).map_err(fail)
     }
 }
-fn verify(key:&VerifyingKey,domain:&str,payload:&impl Serialize,signature:&str)->Result<(),ShadowError>{
+pub(super) fn verify(key:&VerifyingKey,domain:&str,payload:&impl Serialize,signature:&str)->Result<(),ShadowError>{
     let raw=URL_SAFE_NO_PAD.decode(signature).map_err(fail)?;
     require(raw.len()==64 && URL_SAFE_NO_PAD.encode(&raw)==signature)?;
     key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(payload)?),
@@ -54,7 +54,7 @@ pub(super) struct Admission {process:Process,configuration:Original,configuratio
     precreation:Original,precreation_raw:Vec<u8>,window:Window,cold:Original,uid:u32,gid:u32,
     issued:u64,startup:u64,lifetime:u64}
 impl Admission {
-    fn open()->Result<Self,ShadowError>{
+    pub(super) fn open()->Result<Self,ShadowError>{
         let process=Process::capture().map_err(fail)?;
         let configuration=Original::publication_genesis_parent().map_err(fail)?;
         let configuration_raw=configuration.read(MAX_WIRE).map_err(fail)?.to_vec();
@@ -90,7 +90,7 @@ impl Admission {
             window:signed.payload,cold,uid:value.uid,gid:value.gid,issued,startup,lifetime};
         owner.check_startup()?;Ok(owner)
     }
-    fn check(&self)->Result<(),ShadowError>{
+    pub(super) fn check(&self)->Result<(),ShadowError>{
         self.process.check().map_err(fail)?;
         require(unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0
             && unsafe{libc::getgid()}==0 && unsafe{libc::getegid()}==0 && now()?<self.lifetime
@@ -102,6 +102,23 @@ impl Admission {
         self.check()?;require(now()?<self.startup && now()?.checked_add(REAP_RESERVE_NS).is_some_and(|v|v<self.lifetime))
     }
     pub(super) fn lifetime(&self)->u64{self.lifetime}
+    pub(super) fn startup(&self)->u64{self.startup}
+    pub(super) fn invocation(&self)->&str{&self.window.invocation_id}
+    pub(super) fn configuration_sha(&self)->Sha256Digest{Sha256Digest::compute(&self.configuration_raw)}
+    pub(super) fn precreation_sha(&self)->Sha256Digest{Sha256Digest::compute(&self.precreation_raw)}
+    pub(super) fn require_endpoint_key(&self,key:&VerifyingKey)->Result<(),ShadowError>{
+        let cold:services::guest::Configuration=exact(&self.cold.read(65536).map_err(fail)?)?;
+        let raw=URL_SAFE_NO_PAD.decode(&cold.authority.public_key_base64url).map_err(fail)?;
+        require(*key!=self.config.precreation_authority.key()? && *key!=self.config.release_authority.key()?
+            && key.to_bytes().as_slice()!=raw.as_slice())
+    }
+    pub(super) fn join_endpoint(&self,files:&FileAdmission)->Result<(),ShadowError>{
+        self.check_startup()?;let p=&files.payload;
+        require(p.boot_id_base64url==self.window.boot_id_base64url
+            && p.time_namespace_device==self.window.time_namespace_device && p.time_namespace_inode==self.window.time_namespace_inode
+            && decimal(&p.issued_at_boottime_ns)?==self.issued && files.startup()==self.startup
+            && files.lifetime()==self.lifetime && p.invocation_id==self.window.invocation_id)
+    }
     fn join(&self,launch:&Launch,files:&FileAdmission,runtime:&Runtime)->Result<(),ShadowError>{
         self.check_startup()?;let p=&files.payload;
         require(canonical_json_bytes(&launch.delivery_configuration)?==canonical_json_bytes(&self.config.delivery_configuration)?
@@ -117,11 +134,15 @@ impl Admission {
     }
 }
 
-struct Control {socket:OwnedFd,peer:libc::ucred,pidfd:OwnedFd}
+pub(super) struct Control {pub(super) socket:OwnedFd,peer:libc::ucred,pidfd:OwnedFd}
 impl Control {
     fn open()->Result<Self,ShadowError>{
+        Self::selected("--parked-genesis")
+    }
+    pub(super) fn endpoints()->Result<Self,ShadowError>{Self::selected("--parked-genesis-endpoints")}
+    fn selected(flag:&str)->Result<Self,ShadowError>{
         require(cfg!(target_arch="x86_64") && std::env::args_os().count()==2
-            && std::env::args_os().nth(1).as_deref()==Some(std::ffi::OsStr::new("--parked-genesis"))
+            && std::env::args_os().nth(1).as_deref()==Some(std::ffi::OsStr::new(flag))
             && std::env::vars_os().next().is_none() && unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0
             && unsafe{libc::getgid()}==0 && unsafe{libc::getegid()}==0)?;
         let mut present=BTreeSet::new();
@@ -143,21 +164,32 @@ impl Control {
         require(peer.pid>1 && peer.pid!=unsafe{libc::getpid()} && peer.uid==0 && peer.gid==0)?;
         let owner=Self{socket,peer,pidfd};owner.check()?;Ok(owner)
     }
-    fn check(&self)->Result<(),ShadowError>{
+    pub(super) fn check(&self)->Result<(),ShadowError>{
         genesis_controller::check_interruption()?;
         retrieval_peer::same_process(self.pidfd.as_fd(),self.peer.pid)?;
         require(retrieval_peer::same_credentials(&retrieval_peer::credentials(self.socket.as_fd())?,&self.peer))
     }
     fn receive(&self)->Result<Option<retrieval_peer::Packet>,ShadowError>{
+        self.receive_count(8)
+    }
+    pub(super) fn receive_count(&self,count:usize)->Result<Option<retrieval_peer::Packet>,ShadowError>{
         self.check()?;
-        let packet=retrieval_peer::receive(self.socket.as_fd(),MAX_WIRE,8)?;
+        let packet=retrieval_peer::receive(self.socket.as_fd(),MAX_WIRE,count)?;
         if let Some(value)=&packet{
             require(retrieval_peer::same_credentials(&value.credentials,&self.peer))?;
             retrieval_peer::same_process(value.pidfd.as_fd(),self.peer.pid)?;
         }
         self.check()?;Ok(packet)
     }
-    fn quiet(&self)->Result<(),ShadowError>{
+    pub(super) fn endpoint_command(&self)->Result<Option<retrieval_peer::Packet>,ShadowError>{
+        self.check()?;let packet=retrieval_peer::receive_genesis_endpoints(self.socket.as_fd(),MAX_WIRE)?;
+        if let Some(value)=&packet{
+            require(retrieval_peer::same_credentials(&value.credentials,&self.peer))?;
+            retrieval_peer::same_process(value.pidfd.as_fd(),self.peer.pid)?;
+        }
+        self.check()?;Ok(packet)
+    }
+    pub(super) fn quiet(&self)->Result<(),ShadowError>{
         self.check()?;let mut byte=0u8;
         let result=unsafe{libc::recv(self.socket.as_raw_fd(),(&mut byte as *mut u8).cast(),1,libc::MSG_PEEK|libc::MSG_DONTWAIT)};
         require(result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EAGAIN))

@@ -161,6 +161,13 @@ pub(in crate::policy_shadow::policy_custody::services) fn receive(fd:BorrowedFd<
 pub(in crate::policy_shadow::policy_custody::services) fn receive_lifecycle(fd:BorrowedFd<'_>,maximum:usize)->Result<Option<Packet>,ShadowError> {
     receive_rights(fd,maximum,0,1)
 }
+/// The cold two-endpoint controller selects either stop (zero) or its single
+/// exact five-descriptor release. No general descriptor intake is exposed.
+pub(super) fn receive_genesis_endpoints(fd:BorrowedFd<'_>,maximum:usize)->Result<Option<Packet>,ShadowError>{
+    let packet=receive_rights(fd,maximum,0,5)?;
+    if let Some(value)=&packet{require(value.rights.is_empty() || value.rights.len()==5)?;}
+    Ok(packet)
+}
 fn receive_rights(fd:BorrowedFd<'_>,maximum:usize,minimum_rights:usize,maximum_rights:usize)->Result<Option<Packet>,ShadowError> {
     let mut bytes=vec![0;maximum];let mut control=[0usize;32];
     let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};

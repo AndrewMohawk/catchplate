@@ -14,6 +14,8 @@ mod proof_cohort;
 mod genesis_controller;
 #[path="genesis_parked.rs"]
 mod genesis_parked;
+#[path="genesis_endpoints.rs"]
+mod genesis_endpoints;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;

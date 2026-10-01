@@ -102,6 +102,10 @@ pub(super) fn run()->! {
         .and_then(|()|Output::stdout());
     let Ok(output)=output else{unsafe{libc::_exit(1)}};
     if std::env::args_os().count()==2
+        && std::env::args_os().nth(1).as_deref()==Some(std::ffi::OsStr::new("--parked-genesis-endpoints")){
+        return super::genesis_endpoints::run(output);
+    }
+    if std::env::args_os().count()==2
         && std::env::args_os().nth(1).as_deref()==Some(std::ffi::OsStr::new("--parked-genesis")){
         return super::genesis_parked::run(output);
     }

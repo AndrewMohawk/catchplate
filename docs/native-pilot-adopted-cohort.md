@@ -59,19 +59,78 @@ canonical contract, even where source metadata readers permit full-u64 values.
 
 ## Verification
 
-Source is being frozen for one focused Python batch and one cached offline
-native compile. Authored fixtures use test signatures and synthetic public
-originals. No protected signing command, full retained owner graph, real
-fs-verity transfer, KMS, provider, YubiKey or independently operated service is
-claimed exercised. Results will be recorded against the exact source commit.
+The frozen batch at `98ec71442c472a6222d0f95d2d80533667918f6a` ran 95 Python
+tests in 3.102 seconds. Eight unchanged suites passed all 75 cases. The other
+three suites exposed one shared input-reader defect: the complete 32 MiB key
+recipe was passed to a C9 reader limited to 4 MiB. The reported 32 errors
+include subtests and one failed class setup; they are not 32 distinct tests.
+
+Correction `9ee3923f4eacc8cfb5776322b92fb04e59ce8bd6` restores the outer recipe
+reader and the native signed-i64 canonical contract while leaving each literal
+C9 original separately bounded. Only the three affected suites were rerun:
+all 30 tests passed in 28.797 seconds, with no errors, failures or skips.
+Together the two snapshots cover 105 distinct cases; this was not a single
+105-test run. Both runs passed 39-file Python grammar, both Make inventories
+and six actual module imports. A preliminary inventory harness error was
+corrected before the first batch; it was not a missing source-file entry.
+
+The native snapshot at `98ec7144` passes three std-only adopted-profile controls
+and the offline, locked, frozen check of the gate, proof cohort, guest
+supervisor, genesis controller and adoption validator. The bounded single-CPU
+run completed with exit zero in 142.570 seconds (Cargo: 2m20s); compiler warnings
+remain in its log. The first harness attempt exited 126 because its executable
+was on a no-exec temporary mount; no tests or Cargo check ran in that attempt.
+Only the harness mount flag changed before the successful native run. No native
+source changed in the Python correction, so the native check was not repeated.
+Six-document local file targets also pass; URLs and anchors were not checked.
+
+Both source archives, harnesses and all failed/successful logs are retained with
+checksums at
+`codex-offload/serverware/engineering-builds/9ee3923f-adopted-cohort-xztbVg/`.
+Fixtures use test signatures and synthetic public originals. No complete
+positive adopted service/launch ceremony, protected signing command, full
+retained owner graph, real fs-verity transfer, KMS, provider, YubiKey or
+independently operated service was exercised. There was no full artifact rebuild,
+cloud action or paid test. These results do not close a production gate.
 
 ## Next integration
 
-Connect the other eight endpoint launch producers, genuine DRS/CSA target
-State/v3 and Runtime/v12 history producers, bridge/runtime-v14 intake and
-outgoing publication connection, measured hot12 configuration derivation, and
-the independent supervisor's complete cold-to-operational orchestration.
-Then verify one coherent local lifecycle before external acceptance.
+The remaining work is one connected, explicitly selected ceremony:
+
+1. Complete adopted grant/source admission and launch assembly for the eight
+   remaining endpoints: TrustedTime, GenerationInstall, CommitRequest,
+   IngressAdmission, TerminalAppend, DispatchBarrier, ActiveEffectBarrier and
+   ActiveEffectCommit. Their delivery/key/closure/transport producers do not
+   make the old bundle/v1 installer accept the new closure/v5 profile.
+2. Extend the actual ordinary resource owner before authoring DRS/CSA targets.
+   It must retain a real empty `publication-journal` and preallocated
+   `publication-grant` descriptor before C9. Issue State/v3 and Wrapper/v3 from
+   genuine preparation/resource originals using a checkpoint and all three
+   independent anchor signatures. Runtime/v12 retains generation, dispatch
+   and role-specific spool admissions and adds `publicationAdmission`.
+   `custody_generation_initial_state.py` and
+   `native_pilot_ordinary_runtime_profile.py` currently keep the older exact
+   inventories. Native `services/guest_ordinary.rs` also needs an explicit
+   inspected-adoption entrypoint: its effects selector still requires
+   Runtime/v8, despite the lower-level Runtime/v12 receiver support.
+3. Preserve the acyclic order: resources → State/v3 and signed histories →
+   Runtime/v12, C9 and generation grants → independently signed adoption →
+   native Publication grant → native Retrieval grant → ordinary publication
+   grants → sealed-descriptor release. Runtime/v12 names the grant FD, not a
+   future grant hash. The ordinary Grant/v2 must bind the exact cold receipt,
+   current histories/keys, approved initial transition heads and prior native
+   grant originals; native owners persist the adoption record themselves.
+4. Add the Python bridge Runtime/v14 and Launch/v10 producers/intake, measured
+   hot12 configuration derivation and outgoing publication connection. The
+   closed inventory is eight generic peers (five ordinary services plus three
+   remaining generic signers), eleven native peers and 41 activation FDs:
+   two per peer plus `production-listener`, `production-journal` and
+   `generation-origin`. Existing `native_pilot_bridge_runtime.py` and
+   `native_shadow_driver_outgoing.py` do not yet produce that selection.
+5. Compose these paths in the independently approved supervisor, retaining
+   genuine owners, literal predecessor outputs and original BOOTTIME/UNIX
+   bounds through release and cleanup. Then verify one coherent local
+   lifecycle; this is not permission to renew windows or infer acceptance.
 
 Immutable dependency publication and independent Nitro/KMS, signing, witness,
 provider/hardware and release evidence remain full-production requirements;

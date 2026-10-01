@@ -151,8 +151,8 @@ and native compile pass; bridge composition and live acceptance remain unfinishe
 The next [retained bridge preparation](docs/native-pilot-bridge-preparation.md)
 connects actual-owner trust requests and process observations to the conductor,
 plus bridge-only authorization producers. Its focused checks pass after one
-fixture-only correction; the nine remaining composers and independent live
-acceptance are still open.
+fixture-only correction; nine current composer slots, their remaining helper/
+authorization prerequisites, and independent live acceptance are still open.
 The total includes 20 key/admission and 31 late launch prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
 The [native history handoff repair](docs/native-pilot-operational-histories.md)

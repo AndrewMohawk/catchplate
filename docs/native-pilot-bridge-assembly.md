@@ -169,11 +169,54 @@ connected supervisor composers. Bridge launch also needs
 its approved time-bootstrap settings and the actual TrustedTime service grant.
 The existing bridge launch installer is not a producer for these signatures.
 
+Five explicit signed prerequisite jobs are still absent between bridge C9 and
+launch: `native-role-keys-bridge`, `native-key-admission-bridge`,
+`native-closure-bridge`, `native-encrypted-delivery-bridge` and
+`native-verifier-transport-bridge`. Their producers now exist. Each needs the
+authenticated assignment-supervisor capability, not the bridge C9 cold key.
+There is no bridge request-commitment/HMAC job. The pure endpoint-launch builder
+still excludes bridge; a bridge-specific preparation/result adapter must reuse
+the real installer's public validation, actual TrustedTime grant and original
+bootstrap transport. Do not widen the ten-role endpoint builders.
+
+## Helper bootstrap precedes complete handshake composition
+
+The `.385` request export has one request per ordinary service, and its runtime
+association check binds every handshake for that service to that single
+endpoint role. This is not sufficient for multi-role cleanup-helper startup.
+The actual [helper](../data-plane/decision-gate-rs/src/policy_custody/services/bounded_cleanup_helper.rs)
+derives the ordered distinct endpoint roles from its durably sealed, nonempty
+effect manifest. The [service runner](../data-plane/decision-gate-rs/src/policy_custody/services/mod.rs)
+receives authenticated bootstrap packets until that seal exists, then performs
+the helper handshakes. The
+[production bridge](../data-plane/decision-gate-rs/src/policy_custody/services/production.rs)
+currently proceeds from ordinary connection directly to configured handshakes;
+this path does not implement that helper bootstrap exchange.
+
+The next connected slice must resolve the actual manifest/bootstrap ownership,
+role-indexed request/history/currentness coverage and bootstrap-before-handshake
+ordering. Selecting `expectedHelperEndpointRoles` in policy, repeating one head,
+or relaxing the single-role association is not a substitute. Do not assume five
+current-head jobs complete this dependency graph; its cardinality depends on
+the authenticated helper role set.
+
+For later composition, the handshake wire API is
+`serverware.policyCustodyTrustedHostService/v4`, while its digest uses
+`serverware.policyCustodyTrustedHostServiceHandshakeRequest/v3`: domain, NUL,
+big-endian u64 canonical-array length and the ten-field canonical array in
+[native order](../data-plane/decision-gate-rs/src/policy_custody/services/common.rs).
+Request/reply operation rights are respectively DRS 0/0, Cleanup 0/0, Recovery
+6/2, Current 0/0 and Helper 2/0. Handshake messages themselves carry no rights.
+Authenticating the exact signed current-head results precedes composing these
+later digests; `binding()` alone is only public shape/framing, not authentication.
+
 ## Remaining nine composers
 
-These are the exact remaining jobs, not nine equally sized tasks. Existing
-executors do not substitute for retained composition, explicit approval policy
-or actual predecessor results.
+These are nine unimplemented slots in the **current** inventory, not nine
+equally sized tasks or the complete expanded dependency graph. The five bridge
+signature jobs above and role-complete current-head acquisition must also be
+inventoried before claiming complete coverage. Existing executors do not
+substitute for retained composition, explicit approval or actual predecessors.
 
 | Job, in execution order | Missing connection |
 | --- | --- |

@@ -7,6 +7,8 @@ remains **127/136**, with **9 missing**, **108 selectors**, **36/46 source
 checkpoints** and **0/6 production acceptance gates**. The
 [focused checks](#focused-verification) pass across the initial run and one
 fixture-only recheck; live ownership and bridge operation remain unverified.
+These counts describe the current inventory; the remaining bridge signature
+and role-complete helper prerequisites still need explicit job slots.
 
 ## Initial requests from actual owners
 
@@ -106,6 +108,13 @@ currentness approval, final peer policy, credential bindings and four external
 signer selections, followed by actual bridge C9/launch composition. Fixed
 phase-two public publication and release/constructed/origin/stop continuations
 also remain. See the [nine-composer map](native-pilot-bridge-assembly.md#remaining-nine-composers).
+Next-slice source review identified a prior requirement: the helper must first
+bootstrap its actual durably sealed effect manifest, which determines its
+possibly multiple endpoint roles. This batch's single request per service is
+insufficient for that multi-role path. Resolve role-indexed request/history/
+currentness coverage and native bootstrap-before-handshake ordering before
+claiming a complete runtime composer. See the
+[concrete source gap](native-pilot-bridge-assembly.md#helper-bootstrap-precedes-complete-handshake-composition).
 Independent provisioning, immutable dependencies/release provenance, Nitro/KMS,
 provider/hardware ceremonies and full connected allow/deny/cleanup acceptance
 are not replaced by these source changes.

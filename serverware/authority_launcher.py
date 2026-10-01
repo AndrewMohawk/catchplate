@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import fcntl
 import hashlib
 import importlib.abc
@@ -11,6 +12,7 @@ import json
 import os
 import socket
 import stat
+import struct
 import sys
 import time
 from copy import deepcopy
@@ -39,6 +41,22 @@ MAX_LAUNCH_IDENTITY_CERTIFICATE_BYTES = 1024 * 1024
 MAX_CLOSURE_FILES = 32768
 MAX_CLOSURE_FILE_BYTES = 64 * 1024 * 1024
 MAX_NATIVE_MAPPING_BYTES = 64 * 1024 * 1024
+LOCAL_REQUEST_SCHEMA = "serverware.authorityTrustedHostLocalBootstrapRequest/v1"
+LOCAL_SETUP_SCHEMA = "serverware.authorityTrustedHostLocalAdmission/v1"
+LOCAL_OBSERVATION_SCHEMA = "serverware.authorityTrustedHostLocalObservation/v1"
+LOCAL_DELIVERY_SCHEMA = "serverware.authorityTrustedHostLocalObservationDelivery/v1"
+LOCAL_REPLY_SCHEMA = "serverware.authorityTrustedHostLocalAdmissionReply/v1"
+LOCAL_SLOTS = {"manifest": 256, "certificate": 257, "evidence": 258}
+LOCAL_EXEC_ENVIRONMENT = frozenset({
+    "LANG", "LC_ALL", "PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONHASHSEED", "TZ",
+    "SERVERWARE_ARTIFACT_BUNDLE_DIGEST", "SERVERWARE_AUTHORITY_GENERATION_DIGEST",
+    "SERVERWARE_AUTHORITY_LAUNCH_CERTIFICATE_FD", "SERVERWARE_AUTHORITY_LAUNCH_PRIVATE_KEY_FD",
+    "SERVERWARE_AUTHORITY_ROLE", "SERVERWARE_OPERATION_MANIFEST_DIGEST",
+    BOOTSTRAP_CONTROL_NAME, RUNTIME_EVIDENCE_NAME,
+})
+MAX_LOCAL_SETUP = 1024 * 1024
+MAX_LOCAL_OBSERVATION = 16 * 1024 * 1024
+_LOCAL_OWNER = None
 TRUST_PURPOSES = frozenset(
     {
         "artifact-bundle",
@@ -780,6 +798,7 @@ def _require_sealed_descriptor(descriptor: int, label: str) -> None:
 def _consume_bootstrap_descriptor(
     expected_digest: object,
     descriptor: int,
+    *, close: bool = True,
 ) -> None:
     if (
         not isinstance(descriptor, int)
@@ -802,10 +821,11 @@ def _consume_bootstrap_descriptor(
         if digest != expected_digest:
             raise LaunchError("authority bootstrap digest changed")
     finally:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
+        if close:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _drop_role_identity(role: str) -> None:
@@ -1781,6 +1801,465 @@ def _load_trusted_host_local_identity(
     )
 
 
+def _local_document(raw: bytes, maximum: int) -> dict:
+    def pairs(rows):
+        result = {}
+        for key, value in rows:
+            if key in result:
+                raise LaunchError("local admission duplicate field")
+            result[key] = value
+        return result
+
+    def invalid(_value):
+        raise LaunchError("local admission noninteger scalar")
+
+    if type(raw) is not bytes or not 0 < len(raw) <= maximum:
+        raise LaunchError("local admission original exceeds its bound")
+    try:
+        value = json.loads(raw, object_pairs_hook=pairs, parse_float=invalid, parse_constant=invalid)
+        if type(value) is not dict or _canonical(value) != raw:
+            raise LaunchError("local admission original is not canonical")
+        return value
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise LaunchError("local admission original refused") from error
+
+
+def _local_stat(fd: int, *, regular: bool = True) -> dict:
+    if type(fd) is not int or fd < 3:
+        raise LaunchError("local admission descriptor is invalid")
+    before = os.fstat(fd)
+    if not (stat.S_ISREG(before.st_mode) if regular else stat.S_ISDIR(before.st_mode)):
+        raise LaunchError("local admission descriptor type changed")
+    row = dict(fd=fd, device=before.st_dev, inode=before.st_ino,
+        mode=stat.S_IMODE(before.st_mode), uid=before.st_uid, gid=before.st_gid)
+    if regular:
+        if not 0 <= before.st_size <= MAX_CLOSURE_FILE_BYTES:
+            raise LaunchError("local admission file is oversized")
+        digest = hashlib.sha256()
+        offset = 0
+        while offset < before.st_size:
+            raw = os.pread(fd, min(65536, before.st_size - offset), offset)
+            if not raw:
+                raise LaunchError("local admission file changed")
+            digest.update(raw); offset += len(raw)
+        row.update(size=before.st_size, sha256="sha256:" + digest.hexdigest())
+    if _local_identity(fd) != _local_identity_value(before):
+        raise LaunchError("local admission file changed during observation")
+    return row
+
+
+def _local_identity_value(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+        info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _local_identity(fd):
+    return _local_identity_value(os.fstat(fd))
+
+
+@contextlib.contextmanager
+def _local_owning():
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def _local_boot():
+    return _boot_identity_digest()
+
+
+class _LocalAdmission:
+    """One actual same-PID late-input exchange, before authority admission.
+
+    Static inputs remain borrowed from the exact entrypoint; received originals
+    and kernel control handles are retained here before any fallible validation.
+    No signature or service authority is manufactured by this transport.
+    """
+
+    @classmethod
+    def open(cls, *, role, setup_fd, setup_sha256, channel_fd, bootstrap_fd, assignments):
+        global _LOCAL_OWNER
+        # Do not add native extension mappings to the unchanged native entry.
+        # Selected local imports occur before its actual mapping observation.
+        global array, ctypes, select, signal, threading
+        import array
+        import ctypes
+        import select
+        import signal
+        import threading
+        if cls is not _LocalAdmission or _LOCAL_OWNER is not None:
+            raise LaunchError("local admission is one-shot")
+        owner = cls(); _LOCAL_OWNER = owner
+        owner.role, owner.setup_fd, owner.bootstrap_fd = role, setup_fd, bootstrap_fd
+        owner.assignments = dict(assignments)
+        owner.handles, owner.incoming, owner.stamps = [], [], {}
+        owner.channel = owner.peer_fd = owner.self_fd = None
+        owner.failed = owner.closed = owner.closing = owner.delivered = False
+        owner.exchange_attempted = owner.bind_attempted = False
+        owner.pid, owner.start = os.getpid(), _process_identity(os.getpid())[0]
+        owner.boot = _local_boot()
+        owner.last_boot, owner.last_epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+        try:
+            raw = _require_sealed_descriptor_number(setup_fd, label="local admission setup", maximum=MAX_LOCAL_SETUP)
+            if (os.fstat(setup_fd).st_uid, os.fstat(setup_fd).st_gid,
+                    stat.S_IMODE(os.fstat(setup_fd).st_mode)) != (0, 0, 0o400):
+                raise LaunchError("local admission setup is not root-private")
+            if "sha256:" + hashlib.sha256(raw).hexdigest() != setup_sha256:
+                raise LaunchError("local admission setup pin changed")
+            owner.setup_sha, owner.setup = setup_sha256, _local_document(raw, MAX_LOCAL_SETUP)
+            expected = {"schema", "role", "producer", "bootIdDigest", "issuedAtBoottimeNs",
+                "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos", "retainedFiles",
+                "retainedDirectories", "mutableStateDescriptors", "reservations"}
+            value = owner.setup
+            if set(value) != expected or value["schema"] != LOCAL_SETUP_SCHEMA or value["role"] != role:
+                raise LaunchError("local admission setup schema changed")
+            peer = value["producer"]
+            if type(peer) is not dict or set(peer) != {"pid", "uid", "gid", "startTimeTicks"} or any(
+                    type(peer[name]) is not int for name in peer) or peer["uid"] != 0 or peer["gid"] != 0 or (
+                    peer["pid"] != os.getppid() or peer["pid"] <= 1 or peer["startTimeTicks"] <= 0):
+                raise LaunchError("local admission producer is not the actual root parent")
+            for name in ("issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"):
+                if type(value[name]) is not int or not 0 < value[name] < (1 << 63):
+                    raise LaunchError("local admission clock is invalid")
+            if value["bootIdDigest"] != owner.boot:
+                raise LaunchError("local admission boot changed")
+            purposes = ("manifest", "certificate", "evidence") if role in RUNTIME_EVIDENCE_ROLES else ("manifest", "certificate")
+            if type(value["reservations"]) is not dict or set(value["reservations"]) != set(purposes):
+                raise LaunchError("local admission reservation roster changed")
+            owner.purposes = purposes
+            for purpose in purposes:
+                row = value["reservations"][purpose]
+                if type(row) is not dict or set(row) != {"fd", "device", "inode"} or row["fd"] != LOCAL_SLOTS[purpose]:
+                    raise LaunchError("local admission reservation is not fixed")
+                fd = row["fd"]; info = os.fstat(fd)
+                if (info.st_dev, info.st_ino, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_size,
+                        info.st_nlink) != (row["device"], row["inode"], 0, 0, 0o400, 0, 0) or not stat.S_ISREG(info.st_mode):
+                    raise LaunchError("local admission reservation is not the original empty slot")
+                _require_sealed_descriptor(fd, "local admission empty reservation")
+            if assignments.get(BOOTSTRAP_CONTROL_NAME) != 256 or _environment_descriptor(
+                    "SERVERWARE_AUTHORITY_LAUNCH_CERTIFICATE") != 257 or (
+                    role in RUNTIME_EVIDENCE_ROLES and assignments.get(RUNTIME_EVIDENCE_NAME) != 258):
+                raise LaunchError("local admission late descriptor assignments changed")
+            for name, limit in (("retainedFiles", MAX_CLOSURE_FILES), ("retainedDirectories", 64)):
+                rows = value[name]
+                if type(rows) is not list or not 1 <= len(rows) <= limit or any(type(fd) is not int or fd < 3 for fd in rows) or rows != sorted(set(rows)):
+                    raise LaunchError("local admission static descriptor roster changed")
+            states = value["mutableStateDescriptors"]
+            if type(states) is not list or len(states) != (1 if role == "witness" else 0):
+                raise LaunchError("local admission mutable-state roster changed")
+            static = [setup_fd, channel_fd, bootstrap_fd, 3, *assignments.values(),
+                _environment_descriptor("SERVERWARE_AUTHORITY_LAUNCH_PRIVATE_KEY"), 257,
+                *value["retainedFiles"], *value["retainedDirectories"], *(row["fd"] for row in states)]
+            if len(static) != len(set(static)):
+                raise LaunchError("local admission descriptor aliases another role input")
+            for fd in static:
+                owner.stamps[fd] = _local_identity(fd)
+            with _local_owning():
+                owner.channel = socket.socket(fileno=channel_fd)
+                owner.channel.setblocking(False); owner.channel.set_inheritable(False)
+                owner.channel.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+                owner.peer_fd = struct.unpack("=i", owner.channel.getsockopt(socket.SOL_SOCKET, 77, 4))[0]
+                owner.handles.append(owner.peer_fd)
+                os.set_inheritable(owner.peer_fd, False)
+                owner.self_fd = os.pidfd_open(owner.pid, 0); owner.handles.append(owner.self_fd)
+                os.set_inheritable(owner.self_fd, False)
+            owner.check(peer=True)
+            owner.observation = owner.observe()
+            owner.original = _canonical(owner.observation)
+            if len(owner.original) > MAX_LOCAL_OBSERVATION:
+                raise LaunchError("local admission observation exceeds bound")
+            owner.observation_sha = "sha256:" + hashlib.sha256(owner.original).hexdigest()
+            owner.check(peer=True)
+            return owner
+        except BaseException:
+            owner.failed = True
+            raise
+
+    def check(self, *, peer=False):
+        if self.closed or self.closing or self.failed or os.getpid() != self.pid or _process_identity(self.pid)[0] != self.start or (
+                os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0) or
+                threading.current_thread() is not threading.main_thread() or _local_boot() != self.boot):
+            raise LaunchError("local admission process changed")
+        now_boot, now_epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+        if not (self.setup["issuedAtBoottimeNs"] <= self.last_boot <= now_boot < self.setup["deadlineBoottimeNs"] and
+                self.setup["issuedAtUnixNanos"] <= self.last_epoch <= now_epoch < self.setup["expiresAtUnixNanos"]):
+            raise LaunchError("local admission original clock expired or regressed")
+        self.last_boot, self.last_epoch = now_boot, now_epoch
+        if hasattr(self, "observation") and (
+                os.getcwd() != self.observation["execution"]["cwd"] or
+                list(sys.orig_argv) != self.observation["argv"] or
+                {name: value for name, value in os.environ.items() if name in LOCAL_EXEC_ENVIRONMENT}
+                    != self.observation["environment"]):
+            raise LaunchError("local admission observed execution context changed")
+        for fd, expected in self.stamps.items():
+            if _local_identity(fd) != expected:
+                raise LaunchError("local admission retained descriptor changed")
+        if peer:
+            expected = self.setup["producer"]
+            observed = struct.unpack("=iII", self.channel.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if observed != (expected["pid"], 0, 0) or os.getppid() != expected["pid"] or (
+                    _process_identity(expected["pid"])[0] != expected["startTimeTicks"] or
+                    select.select([self.peer_fd], [], [], 0)[0] or self.channel.family != socket.AF_UNIX or
+                    self.channel.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_SEQPACKET or
+                    self.channel.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 0):
+                raise LaunchError("local admission authenticated producer changed")
+            with open(f"/proc/self/fdinfo/{self.peer_fd}", "rt", encoding="ascii") as stream:
+                pid_rows = [line.split()[1] for line in stream.read(16384).splitlines() if line.startswith("Pid:")]
+            if pid_rows != [str(expected["pid"])]:
+                raise LaunchError("local admission producer PIDFD changed")
+
+    def observe(self):
+        files = [_local_stat(fd) for fd in self.setup["retainedFiles"]]
+        directories = [_local_stat(fd, regular=False) for fd in self.setup["retainedDirectories"]]
+        executable = os.stat("/proc/self/exe")
+        selected = [row for row in files if (row["device"], row["inode"]) == (executable.st_dev, executable.st_ino)]
+        if len(selected) != 1:
+            raise LaunchError("local admission interpreter is not uniquely retained")
+        credentials = []
+        for name in sorted(self.assignments):
+            if name in {BOOTSTRAP_CONTROL_NAME, RUNTIME_EVIDENCE_NAME}:
+                continue
+            fd = self.assignments[name]
+            _require_sealed_descriptor(fd, "local admission credential")
+            credentials.append(dict(name=name, **_local_stat(fd), seals=fcntl.fcntl(fd, fcntl.F_GET_SEALS)))
+        allowed = LOCAL_EXEC_ENVIRONMENT | set(self.assignments)
+        if set(os.environ) - allowed:
+            raise LaunchError("local admission environment contains unapproved names")
+        with open("/proc/self/status", "rt", encoding="ascii") as stream:
+            status = stream.read(16385)
+        nnp = [line.split()[1] for line in status.splitlines() if line.startswith("NoNewPrivs:")]
+        if len(status) > 16384 or nnp != ["1"]:
+            raise LaunchError("local admission requires actual no-new-privileges")
+        uid, gid = ROLE_IDENTITIES[self.role]
+        info = os.stat(ROLE_SOCKET_PATHS[self.role], follow_symlinks=False)
+        listener = dict(name=ROLE_LISTENER_NAMES[self.role], fd=3, runtimePath=ROLE_SOCKET_PATHS[self.role],
+            activationName=ROLE_LISTENER_NAMES[self.role], family="AF_UNIX", socketType="SOCK_STREAM", accepting=True,
+            listenPid=self.pid, listenFds=1, listenFdNames=[ROLE_LISTENER_NAMES[self.role]],
+            device=info.st_dev, inode=info.st_ino, mode=0o660, uid=uid, gid=gid)
+        _listener_identity(self.role, listener)
+        for row in self.setup["mutableStateDescriptors"]:
+            actual = _local_stat(row["fd"], regular=False)
+            if any(row.get(key) != actual[key] for key in actual) or row.get("runtimePath") != "/var/lib/serverware/authority-witness":
+                raise LaunchError("local admission witness directory changed")
+            named = os.stat(row["runtimePath"], follow_symlinks=False)
+            if (named.st_dev, named.st_ino) != (actual["device"], actual["inode"]):
+                raise LaunchError("local admission witness path changed")
+            fcntl.flock(row["fd"], fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with open(f"/proc/self/fdinfo/{row['fd']}", "rt", encoding="ascii") as stream:
+                mounts = [line.split()[1] for line in stream.read(16384).splitlines() if line.startswith("mnt_id:")]
+            if mounts != [str(row["mountId"])]:
+                raise LaunchError("local admission witness mount changed")
+        own = os.fstat(self.self_fd); peer = os.fstat(self.peer_fd); setup = os.fstat(self.setup_fd)
+        channel = os.fstat(self.channel.fileno())
+        return dict(schema=LOCAL_OBSERVATION_SCHEMA, role=self.role, setupSha256=self.setup_sha,
+            process=dict(pid=self.pid, uid=0, gid=0, startTimeTicks=self.start, parentPid=os.getppid(),
+                bootIdDigest=self.boot, pidNamespaceInode=_process_identity(self.pid)[1],
+                pidfd=dict(fd=self.self_fd, device=own.st_dev, inode=own.st_ino, processId=self.pid,
+                    processStartTicks=self.start, bootIdDigest=self.boot, surviveExec=False)),
+            listener=listener, bootstrap=_local_stat(self.bootstrap_fd),
+            interpreter=dict(path=os.readlink("/proc/self/exe"), **selected[0]), retainedFiles=files,
+            retainedDirectories=directories, mutableStateDescriptors=deepcopy(self.setup["mutableStateDescriptors"]),
+            credentials=credentials, argv=list(sys.orig_argv),
+            environment={name: value for name, value in os.environ.items() if name in LOCAL_EXEC_ENVIRONMENT},
+            execution=dict(cwd=os.getcwd(), noNewPrivileges=True),
+            startupDescriptors=dict(setup=dict(fd=self.setup_fd, device=setup.st_dev, inode=setup.st_ino,
+                size=setup.st_size, sha256=self.setup_sha), channel=dict(fd=self.channel.fileno(), device=channel.st_dev,
+                inode=channel.st_ino), producerPidfd=dict(fd=self.peer_fd, device=peer.st_dev, inode=peer.st_ino,
+                processId=self.setup["producer"]["pid"], processStartTicks=self.setup["producer"]["startTimeTicks"],
+                bootIdDigest=self.boot)), deadlineBoottimeNs=self.setup["deadlineBoottimeNs"],
+            expiresAtUnixNanos=self.setup["expiresAtUnixNanos"])
+
+    def _wait(self, writing=False):
+        self.check(peer=True)
+        remaining = min(self.setup["deadlineBoottimeNs"] - self.last_boot,
+            self.setup["expiresAtUnixNanos"] - self.last_epoch) / 1_000_000_000
+        select.select([self.peer_fd] + ([] if writing else [self.channel]),
+            [self.channel] if writing else [], [], min(0.05, remaining))
+        self.check(peer=True)
+
+    def exchange(self):
+        if self.exchange_attempted:
+            raise LaunchError("local admission exchange cannot be retried")
+        self.exchange_attempted = True
+        with _local_owning():
+            fd = os.memfd_create("serverware-local-launch-observation", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+            self.handles.append(fd)
+        offset = 0
+        while offset < len(self.original):
+            self.check(peer=True)
+            written = os.write(fd, self.original[offset:offset + 65536])
+            if written <= 0:
+                raise LaunchError("local observation write failed")
+            offset += written
+        os.fchmod(fd, 0o400); fcntl.fcntl(fd, fcntl.F_ADD_SEALS, REQUIRED_MEMFD_SEALS)
+        header = _canonical(dict(schema=LOCAL_DELIVERY_SCHEMA, role=self.role, setupSha256=self.setup_sha,
+            observationSha256=self.observation_sha, observationBytes=len(self.original)))
+        while True:
+            self.check(peer=True)
+            try:
+                sent = self.channel.sendmsg([header], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))], socket.MSG_NOSIGNAL)
+            except (BlockingIOError, InterruptedError):
+                self._wait(True); continue
+            if sent != len(header):
+                raise LaunchError("local observation frame incomplete")
+            break
+        while True:
+            self.check(peer=True)
+            with _local_owning():
+                try:
+                    raw, ancillary, flags, _ = self.channel.recvmsg(65536, socket.CMSG_SPACE(253 * 4) + socket.CMSG_SPACE(12), socket.MSG_CMSG_CLOEXEC)
+                except (BlockingIOError, InterruptedError):
+                    raw = None
+                if raw is not None:
+                    rights, credentials = [], []
+                    for level, kind, data in ancillary:
+                        if level == socket.SOL_SOCKET and kind in (socket.SCM_RIGHTS, 4):
+                            values = array.array("i"); values.frombytes(data[:len(data) - len(data) % 4])
+                            for received in values:
+                                self.incoming.append(received); rights.append(received)
+                        elif level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS:
+                            credentials.append(data)
+            if raw is None:
+                self._wait(); continue
+            break
+        if not raw or flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(rights) != len(self.purposes) or (
+                credentials != [struct.pack("=iII", self.setup["producer"]["pid"], 0, 0)] or any(
+                level != socket.SOL_SOCKET or kind not in (socket.SCM_RIGHTS, socket.SCM_CREDENTIALS) or
+                kind == socket.SCM_RIGHTS and len(data) % 4 for level, kind, data in ancillary)):
+            raise LaunchError("local admission reply transport refused")
+        reply = _local_document(raw, 65536)
+        if set(reply) != {"schema", "role", "setupSha256", "observationSha256", "originals"} or (
+                reply["schema"] != LOCAL_REPLY_SCHEMA or reply["role"] != self.role or
+                reply["setupSha256"] != self.setup_sha or reply["observationSha256"] != self.observation_sha or
+                type(reply["originals"]) is not list or len(reply["originals"]) != len(rights)):
+            raise LaunchError("local admission reply association changed")
+        limits = {"manifest": MAX_MANIFEST_BYTES, "certificate": MAX_LAUNCH_IDENTITY_CERTIFICATE_BYTES, "evidence": MAX_RUNTIME_EVIDENCE_BYTES}
+        original_ids = set()
+        for purpose, received, row in zip(self.purposes, rights, reply["originals"]):
+            self.check(peer=True)
+            original = _require_sealed_descriptor_number(received, label="local independently signed original", maximum=limits[purpose])
+            info = os.fstat(received)
+            if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o400) or (
+                    type(row) is not dict or set(row) != {"purpose", "sha256", "size"} or
+                    row != dict(purpose=purpose, sha256="sha256:" + hashlib.sha256(original).hexdigest(), size=len(original)) or
+                    (info.st_dev, info.st_ino) in original_ids):
+                raise LaunchError("local admission original binding changed")
+            original_ids.add((info.st_dev, info.st_ino))
+        self.check(peer=True)
+        with _local_owning():
+            for purpose, received in zip(self.purposes, rights):
+                target = LOCAL_SLOTS[purpose]
+                if _local_identity(target) != self.stamps[target]:
+                    raise LaunchError("local admission owned reservation changed")
+                os.dup2(received, target, inheritable=False)
+                self.stamps[target] = _local_identity(target)
+            # These transport copies are not part of the signed operational
+            # boundary. Only the exact reserved targets survive admission.
+            try:
+                while self.incoming:
+                    os.close(self.incoming[-1]); self.incoming.pop()
+                os.close(fd)
+                self.handles.remove(fd)
+            except BaseException:
+                self.failed = True
+                self.closing = True  # Never retry an uncertain descriptor close.
+                raise
+        self.delivered = True
+        self.check(peer=True)
+
+    def bind(self, payload):
+        if self.bind_attempted:
+            raise LaunchError("local admission binding cannot be retried")
+        self.bind_attempted = True
+        self.check(peer=True)
+        request = payload.get("stageZeroRequest")
+        if not self.delivered or type(request) is not dict or request.get("schema") != LOCAL_REQUEST_SCHEMA:
+            raise LaunchError("local admission requires its explicit local request")
+        observed = self.observation
+        if request.get("listener") != observed["listener"] or request.get("mutableStateDescriptors") != observed["mutableStateDescriptors"] or (
+                request.get("startupDescriptors") != observed["startupDescriptors"] or
+                request.get("environment", {}).get("values") != observed["environment"] or
+                request.get("execution", {}).get("argv") != observed["argv"] or
+                any(request.get("execution", {}).get(key) != value for key, value in observed["execution"].items()) or
+                os.getcwd() != observed["execution"]["cwd"] or
+                request.get("process") != dict(processId=self.pid, processStartTicks=self.start,
+                    bootIdDigest=self.boot, pidfd=observed["process"]["pidfd"])):
+            raise LaunchError("signed local request differs from actual parked process")
+        bootstrap = request.get("stageZero", {})
+        if any(bootstrap.get(key) != observed["bootstrap"][key] for key in ("fd", "size", "sha256")) or (
+                bootstrap.get("interpreter", {}).get("runtimePath") != observed["interpreter"]["path"] or
+                bootstrap.get("interpreter", {}).get("sha256") != observed["interpreter"]["sha256"] or
+                request["execution"].get("executableFd") != observed["interpreter"]["fd"]):
+            raise LaunchError("signed local bootstrap differs from executed sources")
+        for name in ("retainedFiles", "retainedDirectories"):
+            actual = observed[name]; declared = request.get(name)
+            if type(declared) is not list or len(declared) != len(actual) or {row.get("fd") for row in declared} != {row["fd"] for row in actual}:
+                raise LaunchError("signed local descriptor roster changed")
+            by_fd = {row["fd"]: row for row in declared}
+            if any(any(by_fd[row["fd"]].get(key) != value for key, value in row.items()) for row in actual):
+                raise LaunchError("signed local descriptor identity changed")
+        actual = {row["name"]: row for row in observed["credentials"]}
+        declared = request.get("credentials")
+        if type(declared) is not list or len(declared) != len(actual) or {row.get("name") for row in declared} != set(actual):
+            raise LaunchError("signed local credential roster changed")
+        for row in declared:
+            seen = actual[row["name"]]
+            if any(row.get(key) != seen[source] for key, source in (("fd", "fd"), ("size", "size"),
+                    ("sha256", "sha256"), ("mode", "mode"), ("ownerUid", "uid"), ("seals", "seals"))):
+                raise LaunchError("signed local credential binding changed")
+        self.check(peer=True)
+
+    def credential_resealed(self, descriptor):
+        # The existing launcher replaces an admitted credential with its own
+        # sealed copy. This is a source-fixed transition, not arbitrary rebinding.
+        rows = [row for row in self.observation["credentials"] if row["fd"] == descriptor]
+        actual = _local_stat(descriptor)
+        if len(rows) != 1 or any(actual[key] != rows[0][key] for key in ("fd", "uid", "gid", "mode", "size", "sha256")):
+            raise LaunchError("local admitted credential reseal changed its original")
+        _require_sealed_descriptor(descriptor, "local admitted credential reseal")
+        self.stamps[descriptor] = _local_identity(descriptor)
+
+    def rearm_after_identity_drop(self):
+        expected = self.setup["producer"]
+        if os.getpid() != self.pid or os.getppid() != expected["pid"] or select.select([self.peer_fd], [], [], 0)[0]:
+            raise LaunchError("local authority parent disappeared during identity drop")
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0 or os.getppid() != expected["pid"] or select.select([self.peer_fd], [], [], 0)[0]:
+            raise LaunchError("local authority parent-death containment failed")
+
+    def finish_after_identity_drop(self):
+        self.rearm_after_identity_drop()
+        now_boot, now_epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+        if not (self.last_boot <= now_boot < self.setup["deadlineBoottimeNs"] and
+                self.last_epoch <= now_epoch < self.setup["expiresAtUnixNanos"]):
+            raise LaunchError("local authority original admission interval expired")
+        uid, gid = ROLE_IDENTITIES[self.role]
+        acknowledgment = _canonical(dict(schema="serverware.authorityTrustedHostLocalAdmitted/v1", role=self.role,
+            setupSha256=self.setup_sha, observationSha256=self.observation_sha, pid=self.pid, uid=uid, gid=gid,
+            startTimeTicks=self.start))
+        if self.channel.send(acknowledgment, socket.MSG_NOSIGNAL) != len(acknowledgment):
+            raise LaunchError("local authority admission acknowledgment incomplete")
+        self.close()
+
+    def close(self):
+        if self.closed:
+            return
+        if self.closing or os.getpid() != self.pid or _process_identity(self.pid)[0] != self.start:
+            raise LaunchError("local admission close is uncertain")
+        self.closing = True
+        with _local_owning():
+            while self.incoming:
+                os.close(self.incoming[-1]); self.incoming.pop()
+            while self.handles:
+                os.close(self.handles[-1]); self.handles.pop()
+            if self.channel is not None:
+                self.channel.close(); self.channel = None
+            os.close(self.setup_fd)
+        self.closed = True
+
+
 def _enter(
     role: str,
     *,
@@ -1790,6 +2269,7 @@ def _enter(
     handoff_descriptor: int | None,
     trusted_host_local: bool,
     public_revocation: bool = False,
+    local_admission: tuple[int, str, int] | None = None,
 ) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise LaunchError("public revocation launch selection is not a fixed terminal role")
@@ -1826,9 +2306,22 @@ def _enter(
         raise LaunchError(
             "process mode must be derived after measured launch validation"
         )
+    parking = None
+    if local_admission is not None:
+        if not trusted_host_local or handoff_descriptor is not None:
+            raise LaunchError("late local admission cannot select native or production entry")
+        setup_fd, setup_sha, channel_fd = local_admission
+        assignments = {name: _environment_descriptor(name.removesuffix("_FD"))
+            for name in expected_credentials | {BOOTSTRAP_CONTROL_NAME} | (
+                {RUNTIME_EVIDENCE_NAME} if role in RUNTIME_EVIDENCE_ROLES else set())}
+        parking = _LocalAdmission.open(role=role, setup_fd=setup_fd, setup_sha256=setup_sha,
+            channel_fd=channel_fd, bootstrap_fd=bootstrap_descriptor, assignments=assignments)
+        parking.exchange()
     payload, manifest_digest, bootstrap_control_identity = _load_manifest(
         role, manifest_descriptor=manifest_descriptor,
     )
+    if parking is not None:
+        parking.bind(payload)
     runtime_evidence_identity = _observe_runtime_evidence(
         role, payload["stageZeroRequest"], runtime_evidence_descriptor,
     )
@@ -1901,6 +2394,7 @@ def _enter(
     _consume_bootstrap_descriptor(
         payload.get("bootstrapSha256"),
         bootstrap_descriptor,
+        close=payload["stageZeroRequest"].get("schema") != LOCAL_REQUEST_SCHEMA,
     )
     private_descriptor = _environment_descriptor(
         "SERVERWARE_AUTHORITY_LAUNCH_PRIVATE_KEY"
@@ -2178,6 +2672,8 @@ def _enter(
             binding["environmentName"],
         )
         retained.add(descriptor)
+        if parking is not None:
+            parking.credential_resealed(descriptor)
     _require_bootstrap_control_identity(bootstrap_control_identity)
     if runtime_evidence_identity is not None:
         _require_runtime_evidence_identity(runtime_evidence_identity)
@@ -2286,8 +2782,12 @@ def _enter(
             != certificate_descriptor
     ):
         raise LaunchError("stage-zero launch descriptors changed")
+    if parking is not None:
+        parking.check(peer=True)
     os.environ["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
     _drop_role_identity(role)
+    if parking is not None:
+        parking.rearm_after_identity_drop()
     from serverware import authority_launch_guard
 
     _require_bootstrap_control_identity(bootstrap_control_identity)
@@ -2314,6 +2814,8 @@ def _enter(
         artifact_trust_state=payload["artifactTrustState"],
         launch_assurance=launch_assurance,
     )
+    if parking is not None:
+        parking.finish_after_identity_drop()
     if role == "witness":
         from serverware import authority_witness
 
@@ -2367,6 +2869,9 @@ def main(argv: list[str] | None = None) -> int:
         "--trusted-host-local",
         action="store_true",
     )
+    parser.add_argument("--local-admission-fd", type=int)
+    parser.add_argument("--local-admission-sha256")
+    parser.add_argument("--local-admission-channel-fd", type=int)
     parser.add_argument(
         "--descriptor",
         action="append",
@@ -2375,6 +2880,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("role", choices=sorted(PROCESS_MODES))
     parser.add_argument("--public-webauthn-revocation", action="store_true")
     args = parser.parse_args(argv)
+    selected_local = (args.local_admission_fd, args.local_admission_sha256, args.local_admission_channel_fd)
+    local_admission = None
+    if any(value is not None for value in selected_local):
+        if not all(value is not None for value in selected_local) or not args.trusted_host_local or args.stage_zero_handoff_fd is not None or (
+                args.local_admission_fd < 3 or args.local_admission_channel_fd < 3 or
+                len(args.local_admission_sha256) != 71 or not args.local_admission_sha256.startswith("sha256:") or
+                any(character not in "0123456789abcdef" for character in args.local_admission_sha256[7:])):
+            raise LaunchError("local admission requires the exact explicit descriptor triple")
+        local_admission = selected_local
     if args.public_webauthn_revocation and args.role not in {"verifier", "issuer", "executor"}:
         raise LaunchError("public revocation launch selection has another role")
     required_assignments = (
@@ -2419,9 +2933,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     if args.stage_zero_handoff_fd is not None:
         independent_descriptors.add(args.stage_zero_handoff_fd)
+    if local_admission is not None:
+        independent_descriptors.update((args.local_admission_fd, args.local_admission_channel_fd))
     expected_descriptor_count = len(assignments) + (
         5 if args.stage_zero_handoff_fd is not None else 4
-    )
+    ) + (2 if local_admission is not None else 0)
     if (
         set(assignments)
         != required_assignments
@@ -2446,6 +2962,7 @@ def main(argv: list[str] | None = None) -> int:
         handoff_descriptor=args.stage_zero_handoff_fd,
         trusted_host_local=args.trusted_host_local,
         public_revocation=args.public_webauthn_revocation,
+        local_admission=local_admission,
     )
 
 

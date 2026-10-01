@@ -319,6 +319,7 @@ class StateStore(_Directory):
         self._initializing = False
         self._update_original = None
         self._update_attempted = False
+        self._worker_published = False
 
     @classmethod
     def open(cls, *, directory, check):
@@ -456,10 +457,72 @@ class StateStore(_Directory):
             self._failed = True
             raise StateStoreError(self) from error
 
-    def release(self):
+    def publish_worker_inputs(self, supervisor_inventory_raw, worker_policy_raw):
+        """Explicit gen1 initializer only; inventory first, fixed policy last."""
+        from serverware import native_pilot_initial_state_profile as initial
+        from serverware import native_shadow_nitro_originals as originals
+        from scripts import native_pilot_runtime_artifacts as artifacts
         try:
-            self.check(); p.require(self._locked is not None)
-            if profile.STATE_NAME in self._files:
+            self.check()
+            p.require(self._initializing and self._update_attempted and self._locked == fcntl.LOCK_EX
+                and not self._worker_published and profile.STATE_NAME in self._files)
+            current_raw = self._files[profile.STATE_NAME][2]
+            current = profile.state(current_raw)
+            boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
+            profile._live(current, boot, now, wall)
+            initial.lifecycle._inventory(supervisor_inventory_raw, "supervisor")
+            prepared = profile.prepare(worker_policy_raw, inventory_sha256=p.sha(supervisor_inventory_raw),
+                boot=boot, now_boottime_ns=now, now_unix_ns=wall)
+            value, info = prepared["value"], os.fstat(self.fd)
+            p.require(value["initialStateSha256"] == p.sha(current_raw)
+                and value["initialStateGeneration"] == current["generation"] == 1
+                and value["stateDirectory"] == dict(device=info.st_dev, inode=info.st_ino)
+                and all(value[name] == current[name] for name in (*profile.BOOT, *profile.CLOCKS)))
+            self._absent(initial.INVENTORY_NAME); self._absent(initial.POLICY_NAME)
+            self._publish(initial.INVENTORY_NAME, supervisor_inventory_raw, artifacts.MAX_MANIFEST_BYTES)
+            self._publish(initial.POLICY_NAME, worker_policy_raw, profile.MAX_POLICY)
+            self.check()
+            after, epoch = originals._clock(), time.time_ns()
+            p.require(now <= after and wall <= epoch)
+            profile._live(current, originals._boot(), after, epoch)
+            self._worker_published = True
+        except BaseException as error:
+            self._failed = True
+            raise StateStoreError(self) from error
+
+    def check_retained(self):
+        """Committed initialization source custody, not renewed publication time."""
+        self._origin()
+        p.require(self._worker_published and not self._failed and not self._closing and not self._uncertain)
+        self._retained()
+        p.require(profile.STATE_NAME in self._files)
+        row, _, raw = self._files[profile.STATE_NAME]
+        p.require(os.pread(row[0], len(raw) + 1, 0) == raw)
+        if self._lock is not None:
+            actual = os.fstat(self._lock[0])
+            p.require((actual.st_dev, actual.st_ino) == self._lock[1]
+                and publication._file_identity(actual) == publication._file_identity(os.stat(
+                    profile.LOCK_NAME, dir_fd=self.fd, follow_symlinks=False)))
+        self._origin()
+
+    def worker_inputs(self):
+        """Borrow actual retained readonly public handles, never create authority."""
+        from serverware import native_pilot_initial_state_profile as initial
+        self.check_retained()
+        result = {}
+        for purpose, name in (("supervisor_inventory", initial.INVENTORY_NAME), ("policy", initial.POLICY_NAME)):
+            row, _, raw = self._files[name]
+            p.require(fcntl.fcntl(row[0], fcntl.F_GETFL) & (os.O_ACCMODE | os.O_PATH) == os.O_RDONLY)
+            p.require(os.pread(row[0], len(raw) + 1, 0) == raw)
+            result[purpose + "_fd"], result[purpose + "_sha256"] = row[0], p.sha(raw)
+        self.check_retained()
+        return result
+
+    def release(self, *, retain_current=False):
+        try:
+            self.check(); p.require(self._locked is not None and type(retain_current) is bool
+                and (not retain_current or self._worker_published))
+            if profile.STATE_NAME in self._files and not retain_current:
                 row, _, _ = self._files.pop(profile.STATE_NAME)
                 self._drop(row)
             self._snapshot = None

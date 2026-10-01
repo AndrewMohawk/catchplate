@@ -157,10 +157,20 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     terminal = completion = None
     try:
+        if adopted and failed and executor is not None:
+            # A worker waiting for head requests must receive its own normal
+            # cleanup request before waiting for the conductor's retirement.
+            executor.cancel_current_head_worker()
         if owner is not None:
             terminal = owner.close(cancel=failed)
         if adopted and not failed and terminal is not None and terminal.get("status") == "stopped-cleanup-complete":
-            completion = executor.final_result()
+            try:
+                completion = executor.final_result()
+            except BaseException:
+                # Rejected completion is not itself uncertain cleanup. The
+                # executor latches failure and still closes actual retained
+                # owners; any ambiguous close reaches the outer fence below.
+                failed = True
         # Never release authority originals/capabilities before the actual
         # child cleanup result and reap, or proof it was never spawned.
         if executor is not None:

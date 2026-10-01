@@ -39,6 +39,8 @@ FAMILIES = ("ordinary-initial", "helper-initial", "ordinary-installation", "ordi
 WINDOW = ("issuedAtBoottimeNanos", "expiresAtBoottimeNanos")
 BOOT_FIELDS = ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId")
+INITIAL_STATE_RUNTIME_API = "serverware.nativePilotInitialStateRuntimePolicy/v1"
+INITIAL_STATE_RUNTIME_FIELDS = ("apiVersion", "runtimePolicy", "initialStateDelegationOriginal", "supervisorInventoryOriginal")
 
 
 def _job(selected):
@@ -180,6 +182,13 @@ def _peer(selection, first, observed, observations):
 def _installation(selection, prior, observed, observations):
     first = profile._input(prior, "install-precreation")
     fragment = selection["runtimePolicy"]
+    selected = type(fragment) is dict and fragment.get("apiVersion") == INITIAL_STATE_RUNTIME_API
+    additions = {}
+    if selected:
+        p.fields(fragment, INITIAL_STATE_RUNTIME_FIELDS)
+        additions = {name: fragment[name] for name in INITIAL_STATE_RUNTIME_FIELDS[2:]}
+        fragment = fragment["runtimePolicy"]
+    p.require(type(fragment) is dict)
     p.require(fragment["apiVersion"] == runtime.HELPER_API)
     policy = {"apiVersion": initial_policy.POLICY_API, "services": {
         role: _checkpoint_policy(profile._input(prior, "ordinary-initial-checkpoint-" + role)) for role in g.ROLES}}
@@ -196,11 +205,14 @@ def _installation(selection, prior, observed, observations):
         resources_raw=_raw(observed["ordinaryInitialResourcesOriginal"], 65536),
         launch_raw=_raw(first["ordinaryLaunchOriginal"], 65536), configuration_raw=_raw(first["ordinaryColdOriginals"][role], 65536),
         peer=peer, helper_history_originals=helpers, adopted=True).decode("ascii") for role in g.ROLES}
-    return p.canonical({"apiVersion": installation.API, "launchOriginal": first["ordinaryLaunchOriginal"],
+    value = {"apiVersion": installation.INITIAL_STATE_API if selected else installation.API,
+        "launchOriginal": first["ordinaryLaunchOriginal"],
         "preparationOriginal": observed["ordinaryPreparationOriginal"], "resourcesOriginal": observed["ordinaryInitialResourcesOriginal"],
         **{field: first[field] for field in ("driverConfigurationOriginal", "driverWindowOriginal")},
         "coldOriginals": first["ordinaryColdOriginals"], "historyOriginals": {role: raw.decode("ascii") for role, raw in histories.items()},
-        "runtimeOriginals": values})
+        "runtimeOriginals": values, **additions}
+    installation.installation_value(value)
+    return p.canonical(value)
 
 
 def _delivery(role, selection, prior, observed):

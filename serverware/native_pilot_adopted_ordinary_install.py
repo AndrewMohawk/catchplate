@@ -25,9 +25,12 @@ from serverware import native_shadow_driver_bootstrap as driver
 
 p = g.p
 API = "serverware.nativePilotAdoptedOrdinaryInstallationInput/v1"
+INITIAL_STATE_API = "serverware.nativePilotAdoptedOrdinaryInstallationInput/v2"
 RESULT_API = "serverware.nativePilotAdoptedOrdinaryInstallation/v1"
+INITIAL_STATE_RESULT_API = "serverware.nativePilotAdoptedOrdinaryInstallation/v2"
 FIELDS = ("apiVersion", "launchOriginal", "preparationOriginal", "resourcesOriginal",
     "driverConfigurationOriginal", "driverWindowOriginal", "coldOriginals", "historyOriginals", "runtimeOriginals")
+INITIAL_STATE_FIELDS = FIELDS + ("initialStateDelegationOriginal", "supervisorInventoryOriginal")
 MAX_INPUT = 32 * 1024 * 1024
 _CLAIMED = False
 
@@ -38,10 +41,29 @@ def _original(text, maximum):
     return raw, g.document(raw, min(maximum, g.MAX_BYTES))
 
 
+def installation_value(value):
+    """Explicit selected shape; legacy Input1 never acquires registry authority."""
+    p.require(type(value) is dict and value.get("apiVersion") in (API, INITIAL_STATE_API))
+    selected = value["apiVersion"] == INITIAL_STATE_API
+    p.fields(value, INITIAL_STATE_FIELDS if selected else FIELDS)
+    if selected:
+        from scripts import native_pilot_runtime_artifacts as artifacts
+        from serverware import native_pilot_initial_state_profile as registry
+        for field, maximum in (("initialStateDelegationOriginal", registry.MAX_DELEGATION),
+                ("supervisorInventoryOriginal", artifacts.MAX_MANIFEST_BYTES)):
+            p.require(type(value[field]) is str and value[field].isascii() and 0 < len(value[field]) <= maximum)
+    return value
+
+
+def base_original(value):
+    """Canonical Input1 projection; no selected delegation survives implicitly."""
+    installation_value(value)
+    return p.canonical({name: API if name == "apiVersion" else value[name] for name in FIELDS})
+
+
 def prepare_input(raw, *, boot, now_boottime_ns, now_unix_ns):
     """Complete public validation; supplied observations are not real owners."""
-    value = p.fields(p.document(raw, MAX_INPUT), FIELDS)
-    p.require(value["apiVersion"] == API)
+    value = installation_value(p.document(raw, MAX_INPUT))
     config_raw, _ = _original(value["driverConfigurationOriginal"], 65536)
     config = windows.validate_configuration(config_raw)
     _, signed_window = _original(value["driverWindowOriginal"], 32768)
@@ -94,7 +116,16 @@ def prepare_input(raw, *, boot, now_boottime_ns, now_unix_ns):
     planned = ordinary.plan(runtime_originals=runtime_raws, history_originals=history_raws,
         cold_originals=cold_raws, launch_original=launch_raw, adopted=True)
     p.require(now_boottime_ns < deadline)
-    return dict(planned=planned, deadline=deadline, epochLimit=None)
+    result = dict(planned=planned, deadline=deadline, epochLimit=None)
+    if value["apiVersion"] == INITIAL_STATE_API:
+        from serverware import native_pilot_initial_state_profile as registry
+        p.require(p.canonical(value) == raw)
+        context = registry.prepare(value["initialStateDelegationOriginal"].encode("ascii"), base_original(value),
+            value["supervisorInventoryOriginal"].encode("ascii"), boot=boot,
+            now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        result.update(initialState=context, deadline=min(deadline, context["deadline"]), epochLimit=context["epochLimit"])
+        p.require(now_boottime_ns < result["deadline"] and now_unix_ns < result["epochLimit"])
+    return result
 
 
 class InstallationError(ValueError):

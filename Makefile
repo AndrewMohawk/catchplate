@@ -1806,6 +1806,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_current_head_decision_service_profile.py \
 	scripts/run_native_pilot_current_head_decisions.py \
 	serverware/native_pilot_current_head_state.py \
+	serverware/native_pilot_initial_state_profile.py \
+	serverware/native_pilot_initial_state_installation.py \
+	serverware/native_pilot_current_head_worker_process.py \
+	scripts/test_native_pilot_initial_state_profile.py \
+	scripts/test_native_pilot_initial_state_installation.py \
+	scripts/test_native_pilot_initial_state_commit.py \
+	scripts/test_native_pilot_current_head_worker_process.py \
 	serverware/native_pilot_current_head_worker.py \
 	serverware/native_pilot_current_head_worker_profile.py \
 	scripts/run_native_pilot_current_head_worker.py \
@@ -4832,6 +4839,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_current_head_decision_service_profile.py \
 				scripts/run_native_pilot_current_head_decisions.py \
 				serverware/native_pilot_current_head_state.py \
+				serverware/native_pilot_initial_state_profile.py \
+				serverware/native_pilot_initial_state_installation.py \
+				serverware/native_pilot_current_head_worker_process.py \
+				scripts/test_native_pilot_initial_state_profile.py \
+				scripts/test_native_pilot_initial_state_installation.py \
+				scripts/test_native_pilot_initial_state_commit.py \
+				scripts/test_native_pilot_current_head_worker_process.py \
 				serverware/native_pilot_current_head_worker.py \
 				serverware/native_pilot_current_head_worker_profile.py \
 				scripts/run_native_pilot_current_head_worker.py \

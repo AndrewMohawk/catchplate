@@ -208,9 +208,8 @@ def _ordinary_rows(value, prior, *, granted, launch_field="launchOriginal"):
 
 
 def _installation(value, prior, observed):
-    p.fields(value, ("apiVersion", "launchOriginal", "preparationOriginal", "resourcesOriginal",
-        "driverConfigurationOriginal", "driverWindowOriginal", "coldOriginals", "historyOriginals", "runtimeOriginals"))
-    p.require(value["apiVersion"] == INSTALLATION_API)
+    from serverware import native_pilot_adopted_ordinary_install as install
+    install.installation_value(value)
     first = _input(prior, "install-precreation")
     _same(value["launchOriginal"], first["ordinaryLaunchOriginal"])
     _same(value["coldOriginals"], first["ordinaryColdOriginals"])
@@ -695,11 +694,23 @@ def checked_result(name, input_raw, result, *, phase, prior, observations, boot,
         elif job.family == "phase-two-public": legacy.phase_two.checked_result(input_raw, result, adopted=True)
         elif job.family == "ordinary-installation":
             from serverware import native_pilot_adopted_ordinary_install as install
-            p.require(result["apiVersion"] == install.RESULT_API and result["inputSha256"] == p.sha(input_raw))
-            p.fields(result, ("apiVersion", "inputSha256", "pins", "services"))
+            selected = value["apiVersion"] == install.INITIAL_STATE_API
+            p.require(result["apiVersion"] == (install.INITIAL_STATE_RESULT_API if selected else install.RESULT_API)
+                and result["inputSha256"] == p.sha(input_raw))
+            p.fields(result, ("apiVersion", "inputSha256", "pins", "services")
+                + (("initialState", "workerProcess") if selected else ()))
             p.fields(result["services"], g.ROLES)
             expected = {row["path"]: {"path": row["path"], "sha256": p.sha(row["raw"])} for row in prepared["planned"]}
             _same(result["pins"], expected)
+            if selected:
+                from serverware import native_pilot_startup_profile as startup
+                initial_state = prepared["initialState"]
+                _same(result["initialState"], dict(stateSha256=p.sha(initial_state["stateOriginal"]), stateGeneration=1,
+                    workerPolicySha256=p.sha(initial_state["workerPolicyOriginal"]),
+                    supervisorInventorySha256=p.sha(value["supervisorInventoryOriginal"].encode("ascii"))))
+                # This validates only the reported source shape. The actual
+                # executor independently owns and retains the child PIDFD.
+                startup.process(result["workerProcess"])
         elif job.family == "launch":
             p.require(result["role"] == job.role and result["launch"] == prepared["pins"]["native-launch-" + job.role])
         else:

@@ -19,6 +19,8 @@ from serverware import native_pilot_adopted_ordinary_install as ordinary_install
 from serverware import native_pilot_adopted_endpoint_publication as endpoint_publication
 from serverware import native_pilot_genesis_parent_control_io as owning
 from serverware.native_pilot_publication_adoption_authority import AdoptionAuthority, AdoptionAuthorityError
+from serverware.native_pilot_initial_state_installation import InitialStateInstallation, InitialStateInstallationError
+from serverware.native_pilot_current_head_worker_process import CurrentHeadWorkerProcess, CurrentHeadWorkerProcessError
 
 p, io = base.p, base.io
 _FAMILIES = frozenset(("driver", "cohort", "precreation", "ordinary-initial", "helper-initial",
@@ -69,6 +71,8 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._request_api, self._reply_api, self._approval_api = profile.API, profile.REPLY_API, profile.APPROVAL_API
         self._prior = {}
         self._ordinary_install = self._adoption_owner = None
+        self._initial_registry = self._head_worker = None
+        self._registry_ready = self._head_worker_ready = self._head_worker_cancelled = False
         self._endpoint_publication = None
         self._public_fds = []
         self._prepared = None
@@ -84,6 +88,10 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._process._origin()
         for original in self._held: original.check()
         if self._ordinary_install is not None: self._ordinary_install.check_retained()
+        # Factories invoke this guard before returning their complete owner.
+        # Do not enter a partial owner or feed its own callback recursively.
+        if self._registry_ready: self._initial_registry.check_retained()
+        if self._head_worker_ready: self._head_worker.check()
         if self._endpoint_publication is not None: self._endpoint_publication.check()
         if self._publisher is not None: self._publisher.check()
         if self._public is not None: self._public.check()
@@ -141,20 +149,28 @@ class AdoptedPhaseExecution(base.PhaseExecution):
 
     def final_result(self):
         """Actual last result only after this executor's conductor is retired."""
-        p.require(base._LIVE is self and not self._closed and not self._failed and not self._close_attempted
-            and os.getpid() == self._pid and base.originals._boot() == self._boot
-            and self._process._closed and self._process._result["status"] == "stopped-cleanup-complete"
-            and self._phase_index == len(base.STAGES) and self._request is None and self._final_stop is not None)
-        for original in self._held: original.check()
-        result = copy.deepcopy(self._final_stop)
-        p.require(result["finalResult"]["inputSha256"] == p.sha(self._inputs["stop"])
-            and result["finalResult"]["resultOriginal"].encode("ascii") == p.canonical(self._previous["result"])
-            == p.canonical(self._installations["stop"]))
-        now, wall = base.originals._clock(), time.time_ns()
-        p.require(self._last_boot <= now < p.ns(result["deadlineBoottimeNs"])
-            and self._last_wall <= wall < self._final_stop_expiry)
-        self._last_boot, self._last_wall = now, wall
-        return result
+        try:
+            p.require(base._LIVE is self and not self._closed and not self._failed and not self._close_attempted
+                and os.getpid() == self._pid and base.originals._boot() == self._boot
+                and self._process._closed and self._process._result["status"] == "stopped-cleanup-complete"
+                and self._phase_index == len(base.STAGES) and self._request is None and self._final_stop is not None)
+            for original in self._held: original.check()
+            if self._initial_registry is not None:
+                p.require(self._registry_ready and self._head_worker_ready and not self._head_worker_cancelled)
+                self._initial_registry.check_retained()
+                self._head_worker.require_complete()  # Exact eight decisions, EOF, exit0 and consuming PIDFD reap.
+            result = copy.deepcopy(self._final_stop)
+            p.require(result["finalResult"]["inputSha256"] == p.sha(self._inputs["stop"])
+                and result["finalResult"]["resultOriginal"].encode("ascii") == p.canonical(self._previous["result"])
+                == p.canonical(self._installations["stop"]))
+            now, wall = base.originals._clock(), time.time_ns()
+            p.require(self._last_boot <= now < p.ns(result["deadlineBoottimeNs"])
+                and self._last_wall <= wall < self._final_stop_expiry)
+            self._last_boot, self._last_wall = now, wall
+            return result
+        except BaseException:
+            self._failed = True
+            raise
 
     def _public_fd(self, raw):
         p.require(type(raw) is bytes and 0 < len(raw) <= profile.MAX_FRAME
@@ -220,6 +236,35 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._during()
         return result
 
+    def _install_initial_state(self, raw, result):
+        """Selected real registry commit and fixed worker, not DTO completion."""
+        p.require(self._initial_registry is None and self._head_worker is None)
+        with owning.owning():
+            try:
+                self._initial_registry = InitialStateInstallation.install(installation=self._ordinary_install,
+                    input_original=raw, expected_sha256=p.sha(raw), check=self._during)
+            except InitialStateInstallationError as error:
+                self._initial_registry = error.owner
+                p.require(type(self._initial_registry) is InitialStateInstallation)
+                raise
+        self._registry_ready = True
+        self._during()
+        # Once committed, this source-only callback deliberately has neither
+        # the executor's old installation-job clock nor recursive worker checks.
+        with owning.owning():
+            try:
+                self._head_worker = CurrentHeadWorkerProcess.prepare(**self._initial_registry.worker_inputs(),
+                    check=self._initial_registry.check_retained)
+            except CurrentHeadWorkerProcessError as error:
+                self._head_worker = error.owner
+                p.require(type(self._head_worker) is CurrentHeadWorkerProcess)
+                raise
+        identity = self._head_worker.start()
+        self._head_worker_ready = True
+        self._during()
+        return {**result, "apiVersion": ordinary_install.INITIAL_STATE_RESULT_API,
+            "initialState": self._initial_registry.result(), "workerProcess": identity}
+
     def _perform(self, job, raw, value, key):
         family, signed = job.family, None
         if family == "driver": signed = base.driver_authority.sign(job.role, raw, key, adopted=True)
@@ -269,6 +314,8 @@ class AdoptedPhaseExecution(base.PhaseExecution):
                 self._ordinary_install = error.owner
                 raise
             result = self._ordinary_install.result()
+            if value["apiVersion"] == ordinary_install.INITIAL_STATE_API:
+                result = self._install_initial_state(raw, result)
         elif family == "launch":
             install = base.launch_install.install_adopted_bridge if job.role == "bridge" else base.launch_install.install_adopted
             result = install(raw, expected_sha256=p.sha(raw))
@@ -325,11 +372,23 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._phase_index += 1
         self._failed = False
 
+    def cancel_current_head_worker(self):
+        """Request actual worker cleanup before conductor cancellation waits."""
+        p.require(base._LIVE is self and not self._closed and not self._close_attempted
+            and os.getpid() == self._pid and base.originals._boot() == self._boot)
+        self._failed = True
+        self._head_worker_cancelled = True
+        if self._head_worker is not None: self._head_worker.cancel()
+
     def close(self):
         if self._closed: return
         p.require(not self._close_attempted and self._process._closed
             and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
         self._close_attempted = True
+        if self._head_worker is not None:
+            self._head_worker.close(cancel=self._head_worker_cancelled or self._failed
+                or self._process._result["status"] != "stopped-cleanup-complete")
+        if self._initial_registry is not None: self._initial_registry.close()
         if self._endpoint_publication is not None: self._endpoint_publication.close()
         if self._adoption_owner is not None: self._adoption_owner.close()
         if self._ordinary_install is not None: self._ordinary_install.close()

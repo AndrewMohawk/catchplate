@@ -93,7 +93,8 @@ compiler check below. Six pure signature/format controls are authored, not
 test-compiled or executed. No successful runtime execution is
 claimed. A separately selected [operational adoption](native-pilot-adoption.md)
 now connects those context changes in source while preserving the literal
-receipt and roots. Its assembled verification and commissioning remain open;
+receipt and roots and passes its focused compiler check. Runtime verification
+and commissioning remain open;
 the legacy Published/Commit-only baseline remains closed.
 Full commissioning/package producers, actual retained handoff consumption,
 uncertain/restart recovery, the remaining signer families, independent service

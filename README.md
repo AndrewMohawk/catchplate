@@ -168,8 +168,8 @@ The native compiler check passes; runtime behavior remains unverified. A separat
 [cold-start receipt producer](docs/native-pilot-genesis.md) now connects durable
 genesis and an independently verified handoff in source and passes the focused
 offline compiler check. Its [operational adoption](docs/native-pilot-adoption.md)
-is now connected in source; assembled verification, commissioning/package
-integration and deployment inputs remain open.
+also passes the focused offline compiler check. Runtime verification,
+commissioning/package integration and deployment inputs remain open.
 These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

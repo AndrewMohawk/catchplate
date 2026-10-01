@@ -74,10 +74,22 @@ place on legacy readers and inspectors.
 
 ## Verification and remaining work
 
-Assembled compilation is pending. No runtime, tests, native guest, journal,
-fs-verity store, proof service, provider or cloud execution has been performed
+Exact source `35f138c6fa82ee4336904e6912aa221364a9424c` passes
+`cargo check --offline --locked --frozen -j1 --bin serverware-decision-gate`
+under pinned Rust 1.88, with one CPU, 8 GiB memory and no network. Cargo reports
+1 minute 5 seconds, with 312 library and 2,469 binary warnings including
+duplicates. The initial `b3786131` snapshot failed with one private-clock
+visibility error. The correction uses the existing adoption accessor's actual
+live-window validation, without exposing the raw clock or weakening a check.
+Both archives and actual logs are preserved.
+
+Five selected documents pass 438 local file targets; anchors and external links
+are not checked. No Rust tests were compiled or executed. No runtime, native
+guest, journal, fs-verity store, proof service, provider or cloud execution ran
 for this slice. Repeated verification of the full bounded authorization is
 currently conservative; its actual timing under original deadlines is unproven.
+The archive, exact harness, compiler logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/35f138c6-adoption-jiMkKv/`.
 
 The new closure originals, authorization producer, commissioning graph,
 package/controller handoff and independent provisioning must still be

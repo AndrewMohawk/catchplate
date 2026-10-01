@@ -124,9 +124,24 @@ its original watchdog; it does not trigger a replacement child or cleanup claim.
 
 ## Verification and remaining work
 
-This source is being assembled; focused frozen checks follow the assembled
-change. Static profile tests and compiler checks cannot establish that the
-privileged park/release/receipt ceremony actually runs.
+Exact `b1ac17ec439782480bf92473f3a881ffdf3f1c29` passes all 49 focused Python
+controls (2.690 seconds), five-file grammar and exact membership in both Make
+inventories. These controls cover static profiles, roots and schema selection;
+they do not authenticate real owners or execute a privileged ceremony.
+
+Its offline native compiler check found one missing initializer in the existing
+operational driver. Correction `7be9b3b7aa79371e0d38736e0405b41d1be4e157`
+explicitly keeps that driver outside the genesis late-runtime profile. The
+corrected snapshot passes the gate, controller and adoption-validator check in
+2m01s under pinned Rust 1.88, one CPU, 8 GiB and no network. Both attempts are
+retained. The seven new inline Rust controls are authored, not test-compiled or
+executed. No release artifact, live ceremony, signer, cloud resource or paid test
+was used. Passing Python controls were not repeated for the one-line Rust fix.
+
+Evidence, archives, commands and checksums are retained at
+`codex-offload/serverware/engineering-builds/7be9b3b7-genesis-bootstrap-F30bpC/`.
+Static and compiler checks cannot establish that the privileged
+park/release/receipt ceremony actually runs.
 
 Independent cold grant/closure issuers, the complete Python commissioning
 owner, actual cold-core descriptor transfer, native-validator-to-signer

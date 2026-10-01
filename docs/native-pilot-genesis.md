@@ -3,8 +3,8 @@
 **Legacy integration blocker:** the cold v1 coordinator's immutable runtime
 hash depends on the assignment that commits that same runtime through its
 closure set. This profile cannot be commissioned coherently. The explicit
-[bootstrap/late-runtime successor](native-pilot-genesis-bootstrap.md) is being
-integrated separately; the acyclic stored core
+[bootstrap/late-runtime successor](native-pilot-genesis-bootstrap.md) is integrated
+in source and passes its focused compiler check; the acyclic stored core
 does not remove this separate configuration cycle. See the
 [confirmed dependency analysis](native-pilot-publication-commissioning.md#remaining-integration).
 

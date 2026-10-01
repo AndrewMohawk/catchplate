@@ -118,6 +118,37 @@ Exact receipt details and the evidence destination are in the
 This command does not supply the peer's decision policy, keys, approved runtime
 installation, protected resource parents, external services or production acceptance.
 
+## Observed startup input composition (.416)
+
+`native_pilot_lifecycle_inputs.bootstrap()` accepts the literal first-frame
+sender/listener observations plus explicitly selected recipe, runtime inventories,
+key bindings, policy mode and absolute UNIX limits. It composes the adopted
+intake with the **observed** sender PID/start identity, then binds that exact
+intake into the adopted supervisor policy. All three inventories must name the
+recipe's same source; the recipe pins the conductor and authority inventories.
+The signed bootstrap window, assignment, trust and closure set are checked,
+and original startup/lifetime/UNIX limits are intersected, never renewed.
+
+The result contains exactly the five candidate original byte strings expected
+by bootstrap transport, their hashes and the intersected bounds. Existing
+recipe/inventory bytes are preserved. Package association is not installed-tree
+admission: the real runtime owners still perform that check.
+
+`rendezvous()` composes the existing Execution/v2 from an independently selected
+request hash and exact expected receiver PID/start/UID/GID. It preserves the
+request's original window and expiry and emits no rendezvous approval.
+
+Both functions are pure candidate compilers, not an approval provider. Their
+caller must independently authorize the resulting bytes before delivering
+protected descriptors. No signing keys, owners, files, approvals or services
+are created. Complete cold66/adopted176 per-job composition and operation of
+that independent provider remain required.
+
+Explicit adopted policy/v2 additionally selects a
+[bounded interactive interval](native-pilot-interactive.md#adopted-lifecycle-selection-416).
+Policy/v1 remains stop-only; the existing lifecycle already waits for actual
+interval completion before cleanup. Focused verification of this batch is pending.
+
 ## Verification and deployment boundary
 
 The preceding `.414` source `90e10cbb` passes all **119 checks in twelve focused suites** in

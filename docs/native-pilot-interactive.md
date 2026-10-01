@@ -49,6 +49,27 @@ retained action bookkeeping are committed under a narrow signal mask; blocking
 I/O waits remain cancellable. Unknown cleanup keeps ownership rather than
 declaring success or retrying the attempt.
 
+## Adopted lifecycle selection (.416)
+
+The cold-to-adopted lifecycle now supports the same action through explicit
+`serverware.nativePilotAdoptedSupervisorPolicy/v2`. Its purpose is
+`independently-approved-adopted-native-commissioning-through-bounded-interactive-shutdown`;
+its required `interactive` field uses the existing policy shown above. V1
+cannot authorize an interval. Either version may still authorize immediate
+`stop`, so an interactive selection never prevents safe early shutdown.
+
+Every action still needs its separate request-bound Approval2. The retained
+policy checks exact interval equality and the actual generation-origin handoff.
+The adopted authority intersects the original driver/cohort/ordinary lifetimes,
+cleanup/reap reserves, adoption and driver authorization expiry, and all five
+ordinary generation-grant limits. It forwards the complete action through the
+existing executor and actual parent/conductor wait paths; no new owner, job,
+key selector, retry or duration-based renewal is introduced. The catalogue stays
+176 jobs and 123 selectors.
+
+This closes a source integration gap, not a live-session demonstration. Focused
+verification is pending; deployment and an application allow/deny run remain open.
+
 ## Result and remaining work
 
 A completed interval reports only its action/handoff hashes, actual start/end

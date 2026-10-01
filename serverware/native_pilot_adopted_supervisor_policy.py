@@ -16,12 +16,15 @@ from scripts.authority import native_pilot_authority_io as io
 from serverware import native_pilot_adopted_intake as intake
 from serverware import native_pilot_adopted_phase_profile as profile
 from serverware import native_pilot_genesis_parent_control_io as ownership
+from serverware import native_pilot_interactive as interactive
 from serverware import native_pilot_supervisor_policy as legacy
 from serverware import native_shadow_nitro_originals as originals
 
 p = profile.p
 API = "serverware.nativePilotAdoptedSupervisorPolicy/v1"
 PURPOSE = "independently-approved-adopted-native-commissioning"
+INTERACTIVE_API = "serverware.nativePilotAdoptedSupervisorPolicy/v2"
+INTERACTIVE_PURPOSE = "independently-approved-adopted-native-commissioning-through-bounded-interactive-shutdown"
 MAX_POLICY = 4 * 1024 * 1024
 FIELDS = ("apiVersion", "purpose", "source", "conductorInventorySha256", "authorityInventorySha256",
     "catalogueSha256", "bootstrapOriginals", "keyBindings", "measuredRecipeSha256",
@@ -37,8 +40,12 @@ def catalogue_original():
 
 
 def shape(raw):
-    value = p.fields(p.document(raw, MAX_POLICY), FIELDS)
-    p.require(value["apiVersion"] == API and value["purpose"] == PURPOSE
+    value = p.document(raw, MAX_POLICY)
+    p.require(type(value) is dict)
+    selected = value.get("apiVersion") == INTERACTIVE_API
+    p.fields(value, FIELDS + (("interactive",) if selected else ()))
+    p.require(value["apiVersion"] == (INTERACTIVE_API if selected else API)
+        and value["purpose"] == (INTERACTIVE_PURPOSE if selected else PURPOSE)
         and value["catalogueSha256"] == p.sha(catalogue_original()))
     artifacts._source(p.fields(value["source"], artifacts.SOURCE_FIELDS))
     for field in ("conductorInventorySha256", "authorityInventorySha256", "measuredRecipeSha256",
@@ -51,7 +58,35 @@ def shape(raw):
     text = value["intakeConfigurationOriginal"]
     p.require(type(text) is str and text.isascii() and 0 < len(text) <= intake.MAX_CONFIGURATION
         and p.sha(text.encode("ascii")) == value["intakeConfigurationSha256"])
+    if selected:
+        interactive.validate_policy(value["interactive"])
     return copy.deepcopy(value)
+
+
+def require_shutdown(value, action, *, origin_handoff, deadline_boottime_ns,
+        expires_at_unix_ns, now_boottime_ns, now_unix_ns):
+    """Join an independently supplied action to the retained policy selection.
+
+    This pure check grants no authority. The caller owns the protected policy,
+    actual request and separately approved action; the phase validator also
+    clips the interval to the authenticated service/cohort predecessor bounds.
+    """
+    selected = value["apiVersion"] == INTERACTIVE_API
+    p.require(value["apiVersion"] == (INTERACTIVE_API if selected else API)
+        and value["purpose"] == (INTERACTIVE_PURPOSE if selected else PURPOSE))
+    p.require(type(action) is dict)
+    if action.get("action") == "stop":
+        p.fields(action, ("action",))
+        return copy.deepcopy(action)
+    p.require(selected)
+    policy = interactive.validate_policy(value["interactive"])
+    checked = interactive.validate_action(action, origin_handoff=origin_handoff)
+    p.require(all(checked[name] == policy[name] for name in interactive.FIELDS[1:]))
+    stop, expiry = checked["stopAtBoottimeNanos"], checked["expiresAtUnixNanos"]
+    p.require(now_boottime_ns < stop < p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
+        and now_unix_ns < expiry <= p.integer(expires_at_unix_ns)
+        and stop - now_boottime_ns < expiry - now_unix_ns)
+    return checked
 
 
 class PolicyError(ValueError):
@@ -97,6 +132,14 @@ class AdoptedSupervisorPolicy:
             owner._startup = min(p.ns(owner._intake["startupDeadlineBoottimeNs"]),
                 p.ns(owner._window["startupDeadlineBoottimeNs"]))
             p.require(originals._clock() < min(owner._startup, owner._deadline - 250_000_000))
+            owner._interactive_deadline = owner._deadline - max(interactive.COHORT_REAP_RESERVE_NS,
+                p.integer(config["lifecycle"]["cleanupReserveNanos"], minimum=1_000_000, maximum=5_000_000_000))
+            if value["apiVersion"] == INTERACTIVE_API:
+                interval = value["interactive"]
+                now, wall = originals._clock(), time.time_ns()
+                p.require(now < interval["stopAtBoottimeNanos"] < owner._interactive_deadline
+                    and wall < interval["expiresAtUnixNanos"] <= owner._intake["expiresAtUnixNanos"]
+                    and interval["stopAtBoottimeNanos"] - now < interval["expiresAtUnixNanos"] - wall)
             selected = config["lifecycle"]["constructedAdmissionAuthority"]
             keys = value["keyBindings"]
             p.require(keys["driver-bootstrap"] == keys["driver-constructed"]
@@ -191,6 +234,15 @@ class AdoptedSupervisorPolicy:
         """
         self.check(process); process.check_request(request)
         job = profile.BY_NAME[request.job][1]
+        if job.family == "stop":
+            action = p.document(raw, job.maximum)
+            observed = process.conductor_request(request.phase)["payload"]
+            require_shutdown(self._value, action, origin_handoff=observed["originHandoff"],
+                deadline_boottime_ns=min(request.deadline_boottime_ns, self._interactive_deadline),
+                expires_at_unix_ns=min(p.ns(request.value["expiresAtUnixNanos"]), self._intake["expiresAtUnixNanos"]),
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            self.check(process); process.check_request(request)
+            return
         selected = job.family in ("native-key", "adoption", "endpoint-inputs") or (
             job.family == "bridge-authorization" and job.role in ("role-keys", "admission"))
         # The bridge catalogue stores its operation in a separate exact map.

@@ -131,74 +131,24 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
-input installation and runtime packaging are connected in source. Signing keys
-stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has **164 of 164 operational jobs handled** and **113 signing selectors**. These
-counts exclude [cold commissioning and adoption](docs/native-pilot-genesis-assembly.md),
-which are still being assembled. They remain separate from the new
-[cold commissioning mode](docs/native-pilot-genesis-commissioning.md),
-now extended with [real core custody and native-validated adoption signing](docs/native-pilot-core-handoff.md).
-The [adopted operational cohort](docs/native-pilot-adopted-cohort.md) now connects
-received-core ownership and the three special adopted endpoint launch producers
-in source. The [adopted release assembly](docs/native-pilot-adopted-release.md)
-adds the remaining endpoint producers, ordinary publication resources and bridge
-runtime. The [adopted authorization path](docs/native-pilot-adopted-authorizations.md)
-now connects current-head/bridge issuers and actual receiving methods in source.
-The [adopted orchestration path](docs/native-pilot-adopted-orchestration.md)
-adds a separate catalogue, packaged core intake and independent per-job approval
-exchange. [Observation-first rendezvous](docs/native-pilot-genesis-rendezvous.md)
-connects actual receiver identification before approval and core transfer.
-The [fixed lifecycle caller](docs/native-pilot-lifecycle.md#fixed-executable-caller-415)
-now drives cold and adopted process ownership with authenticated independent
-input delivery. Its 95 focused checks and changed supervisor export pass; approved runtime installation,
-independent approval provisioning and complete live verification remain open.
-This is not a runnable pilot claim.
-The operational inventory
-includes service histories, delivery/generation grants, endpoint authorizations,
-launch bundles and public material. Explicit policy/v15 connects eight
-[request-bound approval intake jobs](docs/native-pilot-current-head-intake.md),
-which await independent decisions instead of generating their own approval.
-Focused checks pass; live pause/resume remains unverified. The earlier
-[fresh-helper startup path](docs/native-pilot-helper-initial.md) passes focused
-checks and native compilation, but live initialization remains unverified.
+The [fixed lifecycle runner](docs/native-pilot-lifecycle.md) connects startup,
+independently approved input delivery and controlled shutdown. The
+[workload sidecar](docs/native-workload-sidecar.md) supports ordinary HTTPS
+libraries without giving applications provider credentials. These components
+are implemented in source; they are not a demonstrated deployed workflow.
 
-Policy/v18 connects the [final release, publication and shutdown decisions](docs/native-pilot-final-continuations.md).
-All jobs in that operational inventory are connected in source; this batch passed all 25 focused
-controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused-verification)). The new
-[supervisor executable and package](docs/native-pilot-supervisor-executable.md)
-passed 29 focused controls and an engineering artifact build. The
-[dispatch durability work](docs/native-pilot-dispatch-fence.md) fixes v11 effect
-selection and interrupted-request ownership; compilation and eight focused
-reducer controls pass, but actual service/journal execution remains unverified.
-The [invocation fences](docs/native-pilot-invocation-fences.md) reject
-conflicting reuse of operation, replay or fence identities; compilation and
-13 focused controls pass.
-The new [native invocation settlement](docs/native-pilot-native-terminal.md)
-connects stored final replies to an explicitly selected verifier, without
-claiming process termination or upstream business success. Compilation and 42
-focused Python controls pass; live settlement remains unverified. Uncertain-operation
-cleanup, external signer paths and connected runtime verification remain open.
-Explicit policy/v20 adds a [bounded interactive interval](docs/native-pilot-interactive.md)
-after the actual origin handoff, retaining original deadlines and controlled
-shutdown. All 27 focused Python controls pass; live use remains unverified.
-The mandatory [policy-publication path](docs/native-pilot-publication.md) now
-connects native signing, immutable storage and independent durable state in source.
-The native compiler check passes; runtime behavior remains unverified. A separate
-[cold-start receipt producer](docs/native-pilot-genesis.md) now connects durable
-genesis and an independently verified handoff in source and passes the focused
-offline compiler check. Its [operational adoption](docs/native-pilot-adoption.md)
-also passes the focused offline compiler check. Runtime verification,
-commissioning/package integration and deployment inputs remain open.
-These counts are not a percentage of
-product readiness or permission to deploy.
-Protected deployment is not provisioned. This is not
-yet an interactive quickstart or running pilot.
-The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
-HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
-application. Remaining pilot work includes native guest assembly with
-approved inputs, service provisioning and the connected application allow/deny/cleanup run.
-Broad testing follows that assembly.
+Before a pilot is ready to try, four milestones remain:
+
+1. Assemble and install compatible, approved runtime packages.
+2. Connect the independent input/approval provider.
+3. Configure the protected test deployment and its required services.
+4. Demonstrate one real application flow: credential replacement, allowed and
+   denied requests, and clean shutdown.
+
+Full production certification is separate from that limited pilot. Current
+AWS provisioning is unverified and setup access has expired; see
+[the access record](docs/aws-test-access.md). Detailed implementation history
+and verification limits are in [production progress](docs/production-status.md).
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

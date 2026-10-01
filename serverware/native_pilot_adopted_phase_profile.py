@@ -12,6 +12,7 @@ from serverware import native_pilot_adopted_cohort_authority as cohort_authority
 from serverware import native_pilot_adopted_delivery as delivery
 from serverware import native_pilot_ordinary_publication_authority as publication
 from serverware import native_pilot_publication_adoption_profile as adoption
+from serverware import native_pilot_interactive as interactive
 
 p, g = legacy.p, legacy.generation
 API = "serverware.nativePilotAuthorityJobRequest/v2"
@@ -412,6 +413,66 @@ def _bridge_runtime(value, prior, observations, clocks):
         cohort_observation_raw=_raw(observations["service-originals"]["cohortObservationOriginal"]), peer_ids=ids)
 
 
+def interactive_deadline(installed, production, *, boot):
+    """Original lifetime arithmetic, not admission of supplied public sources.
+
+    The real caller supplies its already checked, retained precreation input.
+    Startup is not re-admitted or renewed after generation-origin handoff.
+    """
+    configuration = p.document(_raw(installed["driverConfigurationOriginal"]), 65536)
+    driver = p.document(_raw(installed["driverWindowOriginal"]), 32768)
+    cohort = p.document(_raw(installed["cohortPrecreationOriginal"]), legacy.cohort.MAX_BYTES)
+    ordinary = g.document(_raw(installed["ordinaryLaunchOriginal"]), 65536)
+    p.require(configuration["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4"
+        and driver["apiVersion"] == "serverware.nativeShadowDriverBootstrapWindow/v1"
+        and cohort["apiVersion"] == "serverware.nativeShadowProofCohortPrecreation/v1"
+        and ordinary["apiVersion"] == "serverware.custodyFiveServiceLaunch/v7")
+    windows = (driver["payload"], cohort["payload"], ordinary)
+    for window in windows:
+        p.require(tuple(window[field] for field in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode")) == boot
+            and p.ns(window["issuedAtBoottimeNs"]) < p.ns(window["startupDeadlineBoottimeNs"])
+            <= p.ns(window["lifetimeDeadlineBoottimeNs"]))
+    p.fields(production, legacy.scope_authority.PRODUCTION_FIELDS)
+    reserve = max(p.integer(configuration["lifecycle"]["cleanupReserveNanos"],
+        minimum=1_000_000, maximum=5_000_000_000),
+        p.integer(production["cleanupReserveNanos"], maximum=5_000_000_000))
+    deadline = min(min(p.ns(window["lifetimeDeadlineBoottimeNs"]) for window in windows) - reserve,
+        p.ns(cohort["payload"]["lifetimeDeadlineBoottimeNs"]) - interactive.COHORT_REAP_RESERVE_NS)
+    p.require(deadline > 0)
+    return deadline
+
+
+def _interactive_input(value, *, prior, observations, boot, now_boottime_ns, now_unix_ns):
+    """Check the full action; the retained Policy2 separately decides scope."""
+    action = interactive.validate_action(value, origin_handoff=observations["shutdown"]["originHandoff"])
+    deadline = interactive_deadline(_input(prior, "install-precreation"),
+        _input(prior, "endpoint-inputs")["production"], boot=boot)
+    # These are the actual prior signed outputs authenticated by the executor
+    # and supervisor, not new admissions or caller-supplied success objects.
+    adoption_payload = p.document(_output(prior, "publication-adoption"), adoption.MAX_AUTHORIZATION)["payload"]
+    p.require(p.integer(adoption_payload["issuedAtBoottimeNanos"], maximum=p.MAX_U64) <= now_boottime_ns)
+    deadline = min(deadline, p.integer(adoption_payload["expiresAtBoottimeNanos"], maximum=p.MAX_U64))
+    signed = [adoption_payload, *(p.document(_output(prior, name), 16384)["payload"]
+        for name in ("driver-bootstrap", "driver-constructed"))]
+    for payload in signed:
+        p.require(p.integer(payload["issuedAtUnixNanos"]) <= now_unix_ns < p.integer(payload["expiresAtUnixNanos"]))
+    expiry = min(payload["expiresAtUnixNanos"] for payload in signed)
+    for role in g.ROLES:
+        payload = g.document(_output(prior, "ordinary-generation-" + role), g.MAX_BYTES)["payload"]
+        p.require(payload["serviceRole"] == role
+            and p.integer(payload["issuedAtBoottimeNanos"], maximum=p.MAX_U64) <= now_boottime_ns)
+        deadline = min(deadline, p.integer(payload["expiresAtBoottimeNanos"], maximum=p.MAX_U64))
+        p.require(p.integer(payload["scope"]["installationIssuedAtUnixNanos"]) <= now_unix_ns)
+        expiry = min(expiry, p.integer(payload["scope"]["installationExpiresAtUnixNanos"]))
+    stop, selected_expiry = action["stopAtBoottimeNanos"], action["expiresAtUnixNanos"]
+    p.require(now_boottime_ns < stop < deadline and now_unix_ns < selected_expiry <= expiry
+        and stop - now_boottime_ns < selected_expiry - now_unix_ns)
+    # Approval installation and forwarding must finish before the selected
+    # interval ends. Actual process waits retain their original request's
+    # lifetime/cleanup cap; this delivery cap is not a new serving deadline.
+    return {"deadline": stop, "epochLimit": selected_expiry}
+
+
 def prepare_input(name, raw, *, phase, prior, observations, boot, now_boottime_ns, now_unix_ns):
     """Validate the fixed full input before key reads or publication side effects."""
     job = _prefix(name, phase, prior, observations)
@@ -603,8 +664,11 @@ def prepare_input(name, raw, *, phase, prior, observations, boot, now_boottime_n
         p.fields(value["production"], legacy.scope_authority.PRODUCTION_FIELDS)
     else:
         p.require(family in ("origin", "stop"))
-        p.fields(value, ("action",))
-        p.require(value["action"] == ("observe-installed-generation" if family == "origin" else "stop"))
+        if family == "stop" and value.get("action") == "run-interactive":
+            context = _interactive_input(value, prior=prior, observations=observations, **clocks)
+        else:
+            p.fields(value, ("action",))
+            p.require(value["action"] == ("observe-installed-generation" if family == "origin" else "stop"))
     result = {"deadline": None, "epochLimit": None} if context is None else dict(context)
     result.setdefault("deadline", None); result.setdefault("epochLimit", None)
     if result["deadline"] is not None: p.require(now_boottime_ns < result["deadline"])

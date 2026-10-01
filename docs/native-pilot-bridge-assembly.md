@@ -94,6 +94,19 @@ inventing a headless-handshake digest. This does not inherently require a
 post-service handshake result, but still needs genuine request/currentness
 acquisition and fixed supervisor wiring before the unsigned handshake can be composed.
 
+The existing trust-request creator, `TrustedHostNoTeeEndpointTrustProvider`,
+retains genuine request bytes, entropy, BOOTTIME and a socket in its pending
+exchange. However, its systemd/provisioned-floor startup requires an
+authenticated signed consume head with a positive sequence. Fresh ordinary
+runtime recipes instead select a zero-consumed cursor. The initial wrapper is
+not a consume receipt, and the four service-material originals do not produce
+one. Exporting the old pending request alone therefore cannot unlock fresh
+native startup. Add an explicit initial-only retained request owner, bound to
+the actual authenticated wrapper, approved runtime cursor and original window;
+keep request preparation separate from transmission and independent currentness
+approval. Do not weaken the legacy floor or relabel an initial predecessor as a
+signed receipt.
+
 ## Peer, history and external-service gaps
 
 Full `ExpectedPeerCredentialV3` includes UID/GID, PID/start, executable
@@ -105,6 +118,17 @@ expectations through real parent inspection; it does not replace them with
 unchecked observations. Connect a genuine owner-derived measurement or an
 explicit independently approved expected-final-state contract with the exact
 receiver recipe. Do not invent cgroup/label facts or claim final exec happened.
+
+The next owner extension can retain the parked PID/start and intended executable
+alongside actual cgroup path hash/mount/inode, requiring that observed cgroup to
+remain unchanged. Ordinary `FiveServiceLaunch`, native `proof_cohort`, and the
+actual gate's `driver_lifecycle` provide the distinct retained-owner entrypoints.
+Final cold UID/GID, socket security label and configuration-generation selection
+must be explicitly approved expectations where they are not yet observations.
+Existing kernel-facing peer inspectors still check the actual connection after
+execution; configuration generation remains a protocol pin, not a kernel
+measurement. The four external signers need independent identities rather than
+substituting one of these child owners.
 
 The legacy history receiver has a concrete format mismatch:
 [`load_production_histories`](../data-plane/decision-gate-rs/src/policy_custody/services/production.rs)
@@ -139,6 +163,24 @@ producers select exactly ten endpoint roles. They cannot silently accept
 the original bootstrap `continuation.keyTransport`. Bridge launch also needs
 its approved time-bootstrap settings and the actual TrustedTime service grant.
 The existing bridge launch installer is not a producer for these signatures.
+
+## Remaining nine composers
+
+These are the exact remaining jobs, not nine equally sized tasks. Existing
+executors do not substitute for retained composition, explicit approval policy
+or actual predecessor results.
+
+| Job, in execution order | Missing connection |
+| --- | --- |
+| `install-bridge-runtime` | Full retained bridge context, genuine initial trust requests/currentness, complete peer expectations, credential bindings and four external signer selections. |
+| `native-delivery-bridge` | Compose the existing issuer input from the installed runtime and actual activation observation. |
+| `install-launch-bridge` | Bridge-specific key/admission/encrypted-delivery/verifier producers and retained installation composition. |
+| `cohort-release` | Explicit policy and retained composition from actual precreation/cohort/bridge originals. |
+| `driver-scope` | Compose the existing issuer input from the genuine operation and retained bootstrap/launch/runtime/C9/generation originals. |
+| `phase-two-public` | Add a fixed exclusive publisher; the current executor only opens a supplied pin and compares it with the approved scope bundle. |
+| `driver-constructed` | Compose the existing issuer input from the actual post-release driver export. |
+| `observe-generation-origin` | Compose the fixed action only after actual constructed admission; an action request is not origin-installation proof. |
+| `stop` | Compose the fixed action at genuine origin handoff, retaining terminal cleanup and result checks. |
 
 The `.383` [service-material owner](native-pilot-service-material.md) now provides
 `require_material` at the genuine `bridge-runtime` / `install-bridge-runtime`

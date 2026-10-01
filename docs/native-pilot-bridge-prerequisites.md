@@ -3,7 +3,8 @@
 The `.384` batch connects prerequisite producers and readers, not a bridge
 supervisor composer or a runnable pilot. Coverage remains **127/136**, with
 **9 missing** and **108 key selectors**. Source checkpoints stay **36/46** and
-production acceptance **0/6**. Verification is pending until this batch freezes.
+production acceptance **0/6**. The [focused checks and native compile](#focused-verification)
+pass; live bridge operation remains unverified.
 
 ## One separately approved current-head signature
 
@@ -91,6 +92,7 @@ the public shape/version limits. These are not signature or deployment approval.
 | Complete bridge runtime | 64 KiB | 4 MiB, matching the native configuration ceiling |
 | Embedded Head / Current / Cleanup grants | 64 KiB each | Head 64 KiB; Current and Cleanup 128 KiB each |
 | Complete bridge installation/C9 input | Existing purpose-specific limit | 16 MiB, with branch-specific legacy refusal |
+| Phase-two public bundle | 1 MiB | 16 MiB; native admission still requires configuration/scope v4 |
 
 The fixed outgoing, C9, launch and scope readers must agree on the actual new
 version and original digest; a larger parser buffer alone does not authorize
@@ -105,5 +107,50 @@ remain. See the [assembly map](native-pilot-bridge-assembly.md). No source-only
 adapter or synthetic signature is service, hardware, provider or release
 acceptance.
 
-Focused Python verification and the cached offline native compile are pending.
-No cloud or paid action is part of this batch.
+Fresh trust-request acquisition is a distinct remaining producer, not just an
+export of the old systemd trust client. That client's authenticated startup
+floor requires a signed consume head with a positive consumer sequence. The
+fresh ordinary runtime instead binds an independently approved zero-consumed
+cursor; an initial-history commitment is not a consume receipt. The next
+initial-request owner must authenticate those actual originals under an
+explicit fresh profile, preserving the old floor checks. The separate
+currentness decision remains required. See the [source map](native-pilot-bridge-assembly.md#handshakes-need-a-genuine-current-head-producer).
+
+## Focused verification
+
+The first snapshot, `da5385a6`, stopped during preflight: an existing bridge
+resource reader was absent from both Make inventories, and the exact compiler
+image was no longer locally cached. No test suite or compiler ran in that
+attempt. `fc919348` adds the missing inventory entries; the same pinned compiler
+image was restored without changing the dependency candidate.
+
+Exact source `fc919348b41ba98c8e20f204e3795da2bb248031` passed **157 controls in
+19 suites**, nineteen-file Python 3.11 grammar/both Make inventories, and **50
+relative documentation links**. The isolated CPU-0 Python **3.11.15** run exited
+**0**, from `2026-10-01T01:44:33.432686972Z` to
+`2026-10-01T01:45:23.762254335Z`. The nine new current-head controls use real
+signatures over synthetic initial-history/request/currentness fixtures; the
+seven runtime controls cover public grammar, exact versions and bounds, not
+authenticated native history admission or genuine process ownership.
+
+The first native compile found a missing `InitialHistoryBridge` arm in the
+parent's exhaustive selection. `c54f343031ff6cdb04713070d094970d5c481a37` makes
+the single-line routing correction to the existing proof inspector. It changes
+no Python, Make inventory or checked documentation bytes; those checks were
+not repeated. The corrected source passed
+`cargo check --offline --locked --frozen -j 1 --bin serverware-decision-gate`
+in the pinned Rust 1.88 container, network disabled, one CPU and 8 GiB memory.
+Exit was **0**, from `2026-10-01T01:46:14.900419557Z` to
+`2026-10-01T01:47:15.023094764Z`; Cargo reported **57.67 seconds**. The result is
+not warning-free: 312 library and 2,428 binary warnings were reported, including
+duplicates. No warning cleanup or release-artifact rebuild was included.
+
+All three source archives, original failed attempts, successful logs, exact
+harness/commands, structured result and 21-file checksums are retained at
+`codex-offload/serverware/engineering-builds/c54f3430-bridge-prerequisites-2Yj6qc/`.
+The final archive is **85,616,640 bytes**, SHA-256
+`3778a05e669062c448b0ed18fec7b175f7a7b4f7d190460c72a6cccd76c705a8`.
+Every retained checksum passed. These are engineering checks using the existing
+unpublished dependency candidate, not release qualification. No DB/app/authority-store
+modules, protected signing command, live owner, installer, service, provider or
+hardware was invoked. No cloud resources or paid actions were used.

@@ -153,25 +153,25 @@ connects the fixed transcript to an explicit delegation policy and a separate
 fresh-decision peer. The public-evidence handoff and an operator-controlled
 receiving service connect in source to the [fresh-state worker](docs/native-pilot-current-head-worker.md).
 The [startup provisioner](docs/native-pilot-startup-provisioning.md) now automates
-late public-file preparation. The initial live-state commit and worker launch
-still need connection before the first head request; signed history is not
-freshness. Current exports predate these changes and are not approved packages
-or a deployment.
+late public-file preparation. The .426 source connects independently
+delegated initial state and a coordinator-retained worker across later phases.
+All 84 focused controls are resolved across recorded test-fixture corrections;
+current exports predate these changes and are not approved packages or deployment.
 
-Before a pilot is ready to try, four milestones remain:
+The fastest testable pilot is the existing non-production development stack:
 
-1. Publish the reviewed dependency snapshot, then build and install approved
-   matching runtime packages.
-2. Connect the initial live-state registry commit and launch the
-   [independent fresh-state worker](docs/native-pilot-current-head-worker.md) before the first head request.
-3. Configure the protected test deployment and its required services.
-4. Demonstrate one real application flow: credential replacement, allowed and
-   denied requests, and clean shutdown.
+1. Freeze and build the [local Compose stack](docs/development-reference.md)
+   once: control UI, Rust proxy and synthetic upstream.
+2. Verify current startup and fix any concrete application integration failure.
+3. Demonstrate credential replacement, an allowed request and a denied request
+   against the synthetic upstream, then verify cleanup.
+4. Hand over the working local UI and repeatable application commands, explicitly
+   non-TEE and non-production, with no real provider credentials.
 
-Full production certification is separate from that limited pilot. The
-[last AWS access check](docs/aws-test-access.md) found expired setup credentials;
-provisioning remains unverified. No AWS recheck ran for this update. Implementation
-history and verification limits are in [production progress](docs/production-status.md).
+That demo does not require AWS or native commissioning. The protected native
+pilot still needs approved matching packages, independent authority provisioning
+and a live run; the [last AWS access check](docs/aws-test-access.md) found expired
+setup credentials. [Production progress](docs/production-status.md) retains the full goal.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

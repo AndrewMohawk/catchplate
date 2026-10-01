@@ -43,13 +43,36 @@ The subsequent `.422` [evidence handoff and receiving service](native-pilot-appr
 and `.423` [three-process startup](native-pilot-startup.md), plus the `.424`
 [fresh-state worker and state store](native-pilot-current-head-worker.md) and `.425`
 [late startup public-file provisioner](native-pilot-startup-provisioning.md), are
-source changes not included in these `.421` exports. New matching approved
+source changes not included in these `.421` exports. The `.426` initial-state
+and retained-worker integration is likewise not included. New matching approved
 packages and protected installation remain required; no new runtime build is
 claimed by the source integration.
-The provisioner closes late public-file preparation in source, not initial
-live-state registry commitment or worker launch before the first head request;
-that connection remains outstanding. Its [focused controls](native-pilot-startup-provisioning.md#verification-boundary)
-do not rebuild these packages or establish installed execution.
+The `.426` source explicitly selects installation Input2 to initialize delegated
+generation-one current state from the actual authenticated histories and retain
+a fixed worker child across coordinator phases. Legacy Input1 stays unchanged.
+Full installed-runtime checks occur at preparation, launch and completion;
+polls check retained source-FD identities, registry and PIDFD, and the child
+independently admits its runtime. Polls do not rescan the full runtime namespace.
+Frozen `f901de6c` ran 84 controls in ten suites in 18.110 seconds: 78 passed and
+six isolated-storage controls failed because their private chroot lacked the
+real lazy ASCII codec. Test-only correction `1bfe6fd6` reran those six in 3.077
+seconds: one passed and five exposed another missing preloaded real module,
+`startup_profile`. Test-only correction `b9c98cc6` reran those five; all passed in
+2.978 seconds. Production source bytes were unchanged after `f901de6c`.
+All 84 distinct controls are resolved, not a full final-snapshot rerun.
+Thirteen-file grammar, both Make inventories and nine actual imports passed;
+there were no errors or skips. Evidence is retained at
+`codex-offload/serverware/engineering-builds/f901de6c-initial-state-e5cydo/`.
+These checks did not rebuild packages or establish installed execution.
+
+Further matching native engineering exports are on hold while the next bounded
+assembly targets the existing [development Compose stack](development-reference.md):
+control UI, Rust gate and synthetic upstream, followed by actual credential-
+replacement allow/deny and cleanup checks. This is a non-TEE, non-production
+application pilot; its current startup is not yet verified. It does not require
+AWS or the native commissioning ceremony. The protected native path still needs
+approved matching runtimes, including actual supervisor-runtime visibility from
+the authority namespace, independent provisioning and a real run.
 The [dependency audit](production-dependency-snapshot.md) confirms that current
 locks still match the retained candidate; review/publication and all-three-manifest
 promotion, not regeneration, are the remaining dependency handoff.

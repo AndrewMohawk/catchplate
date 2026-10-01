@@ -4,8 +4,9 @@ The `.385` batch connects initial trust-request acquisition and peer preparation
 to the actual conductor, and adds four bridge-specific authorization producers.
 It does **not** add a supervisor composer or make the pilot runnable. Coverage
 remains **127/136**, with **9 missing**, **108 selectors**, **36/46 source
-checkpoints** and **0/6 production acceptance gates**. Focused verification is
-pending for this source snapshot.
+checkpoints** and **0/6 production acceptance gates**. The
+[focused checks](#focused-verification) pass across the initial run and one
+fixture-only recheck; live ownership and bridge operation remain unverified.
 
 ## Initial requests from actual owners
 
@@ -113,6 +114,32 @@ Four new suites contain 32 focused controls over synthetic signed originals,
 public grammar, associations and refusals. They do not exercise genuine kernel
 owner capture, protected signing commands, actual service launch or full native
 bridge admission. The composite fixture is intentionally a bounded grammar/
-binding fixture, not a fully authenticated operational runtime. One assembled
-Python pass is planned after freeze; unchanged native and release artifacts
-will not be rebuilt, and no cloud or paid action is included.
+binding fixture, not a fully authenticated operational runtime. Unchanged
+native and release artifacts were not rebuilt; no cloud or paid action ran.
+
+## Focused verification
+
+Exact source `cd38e7f9afe42b2d01d9739633cfdb8565d305b3` ran **189 controls in
+23 suites**: **186 passed**, with three errors in the new bridge-authorization
+suite. Its fixture used two shorthand service names that the actual outgoing
+selector correctly refused. The other 22 suites passed. The first isolated
+Python **3.11.15** run exited **1**, from `2026-10-01T02:20:17.959770231Z` to
+`2026-10-01T02:21:09.998104941Z`.
+
+`4ddc77df5e78f80ecc960fbdf3a66e75be8f01e8` corrects only those fixture names
+to `cleanup-authorization-consumer` and `recovery-target-provider`. No production
+code or admission check changed. All **8 targeted rechecks passed**, with
+**22-file Python 3.11 grammar/both Make inventories** and **57 relative links**.
+Exit was **0**, from `2026-10-01T02:23:38.327894577Z` to
+`2026-10-01T02:23:41.909756388Z`; the suite reported **2.473 seconds**.
+The final commit did not rerun the 22 unchanged passing suites.
+
+Both exact source archives, harnesses, commands, logs, structured results and
+checksums are retained at
+`codex-offload/serverware/engineering-builds/4ddc77df-bridge-preparation-ASPOkl/`.
+The final archive is **85,790,720 bytes**, SHA-256
+`0587bea3b78e2593a804db3eb3cbd751276dd71103567990af033ab0812ef1b4`.
+All 16 retained-file checksums passed, and the copied checksum manifest matches
+the original. These checks use the existing unpublished dependency candidate. They invoked
+no DB/app/authority-store modules, protected signing commands, live owners,
+installers, services, providers or hardware and do not qualify a release.

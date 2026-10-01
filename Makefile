@@ -1352,6 +1352,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_helper_ceremonies.py \
 	scripts/test_native_pilot_current_head_intake.py \
 	scripts/test_native_pilot_bridge_composition.py \
+	scripts/test_native_pilot_bridge_commissioning.py \
 	scripts/test_native_pilot_service_handshakes.py \
 	scripts/test_native_pilot_initial_requests.py \
 	scripts/test_native_pilot_peer_preparation.py \
@@ -1669,6 +1670,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_bridge_preparation.py \
 	serverware/native_pilot_bridge_runtime_policy.py \
 	serverware/native_pilot_bridge_runtime_profile.py \
+	serverware/native_pilot_bridge_commissioning_policy.py \
+	serverware/native_pilot_bridge_delivery_profile.py \
+	serverware/native_pilot_bridge_authorization_profile.py \
+	serverware/native_pilot_bridge_launch_profile.py \
 	serverware/native_pilot_bridge_launch_publication.py \
 	serverware/native_pilot_helper_bootstrap_profile.py \
 	serverware/native_pilot_service_handshakes.py \
@@ -1701,6 +1706,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_current_head_profile.py \
 	serverware/native_pilot_supervisor_current_heads.py \
 	serverware/native_pilot_supervisor_bridge_runtime.py \
+	serverware/native_pilot_supervisor_bridge_commissioning.py \
 	serverware/native_pilot_supervisor_ordinary_deliveries.py \
 	serverware/native_pilot_supervisor_ordinary_generations.py \
 	serverware/native_pilot_supervisor_native_deliveries.py \
@@ -4151,6 +4157,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_helper_ceremonies.py \
 				scripts/test_native_pilot_current_head_intake.py \
 				scripts/test_native_pilot_bridge_composition.py \
+				scripts/test_native_pilot_bridge_commissioning.py \
 				scripts/test_native_pilot_service_handshakes.py \
 				scripts/test_native_pilot_initial_requests.py \
 				scripts/test_native_pilot_peer_preparation.py \
@@ -4462,6 +4469,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_bridge_preparation.py \
 				serverware/native_pilot_bridge_runtime_policy.py \
 				serverware/native_pilot_bridge_runtime_profile.py \
+				serverware/native_pilot_bridge_commissioning_policy.py \
+				serverware/native_pilot_bridge_delivery_profile.py \
+				serverware/native_pilot_bridge_authorization_profile.py \
+				serverware/native_pilot_bridge_launch_profile.py \
 				serverware/native_pilot_bridge_launch_publication.py \
 				serverware/native_pilot_helper_bootstrap_profile.py \
 				serverware/native_pilot_service_handshakes.py \
@@ -4494,6 +4505,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_current_head_profile.py \
 				serverware/native_pilot_supervisor_current_heads.py \
 				serverware/native_pilot_supervisor_bridge_runtime.py \
+				serverware/native_pilot_supervisor_bridge_commissioning.py \
 				serverware/native_pilot_supervisor_ordinary_deliveries.py \
 				serverware/native_pilot_supervisor_ordinary_generations.py \
 				serverware/native_pilot_supervisor_native_deliveries.py \

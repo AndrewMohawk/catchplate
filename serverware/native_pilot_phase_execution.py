@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import fcntl
 import os
+import time
 from typing import NamedTuple
 
 from scripts.authority import native_pilot_authority_io as io
@@ -23,7 +24,10 @@ from serverware import custody_commitment_inputs as commitment
 from serverware import custody_generation_grants as generation
 from serverware import custody_generation_originals as generation_originals
 from serverware import custody_spool_inputs as spool
+from serverware import native_pilot_bridge_authority as bridge_authority
+from serverware import native_pilot_bridge_authorization_profile as bridge_authorization_profile
 from serverware import native_pilot_bridge_install as bridge_install
+from serverware import native_pilot_bridge_launch_publication as bridge_launch
 from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_closure_authority as closure_authority
 from serverware import native_pilot_current_head_authority as current_head_authority
@@ -136,6 +140,14 @@ LAUNCH_AUTHORIZATION_JOBS = tuple(_signed("native-" + operation + "-" + role,
 LAUNCH_AUTHORIZATION_JOB_INFO = {job.name: selected for job, selected in
     zip(LAUNCH_AUTHORIZATION_JOBS, _LAUNCH_AUTHORIZATION_ORDER, strict=True)}
 
+BRIDGE_AUTHORIZATION_JOBS = tuple(_signed(
+    ("native-key-admission-bridge" if operation == "admission" else "native-" + operation + "-bridge"),
+    "bridge-authorization", "bridge",
+    closure_authority.MAX_BRIDGE_INPUT if operation == "closure" else bridge_authority.MAX_INPUT)
+    for operation in bridge_authorization_profile.OPERATIONS)
+BRIDGE_AUTHORIZATION_JOB_INFO = {job.name: operation for job, operation in
+    zip(BRIDGE_AUTHORIZATION_JOBS, bridge_authorization_profile.OPERATIONS, strict=True)}
+
 
 # No user-controlled operation list. Dependencies intentionally precede later
 # approval requests; every later producer receives its complete approved bytes.
@@ -175,6 +187,7 @@ JOBS = {
         _plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_BRIDGE_INPUT)),
     "bridge-delivery": (_signed("native-delivery-bridge", "delivery", "bridge", delivery_authority.MAX_BRIDGE_INPUT,
                                 "native-delivery-bridge"),
+        *BRIDGE_AUTHORIZATION_JOBS,
         _plain("install-launch-bridge", "launch", launch_install.MAX_INPUT, "bridge")),
     "release": (_signed("cohort-release", "cohort", "release", 2 * 1024 * 1024, "cohort-release"),
         _signed("driver-scope", "scope", None, scope_authority.MAX_BRIDGE_INPUT, "driver-scope"),
@@ -408,6 +421,63 @@ class PhaseExecution:
             if operation == "encrypted-delivery" and role == "commitRequest":
                 self._known("requestCommitmentOriginal", value, "native-request-commitment-commitRequest")
 
+    def _bridge_pair(self):
+        """Literal actual results, never a reconstructed early live owner."""
+        return {"roleKeyInputOriginal": self._inputs["native-role-keys-bridge"].decode("ascii"),
+            "roleKeyOriginal": self._outputs["native-role-keys-bridge"].decode("ascii"),
+            "admissionInputOriginal": self._inputs["native-key-admission-bridge"].decode("ascii"),
+            "admissionOriginal": self._outputs["native-key-admission-bridge"].decode("ascii")}
+
+    def _bind_bridge_authorization(self, job, value):
+        """Associate complete approved bytes before opening this job's key."""
+        operation = BRIDGE_AUTHORIZATION_JOB_INFO[job.name]
+        p.require(job.role == "bridge")
+        prior = delivery_authority.input_document(self._inputs["native-delivery-bridge"])
+        bootstrap = p.document(self._inputs["driver-bootstrap"], driver_authority.MAX_INPUT)
+        retrieval_keys = p.document(self._inputs["native-role-keys-retrieval"], key_authority.MAX_INPUT)
+        if operation in bridge_authority.keys.OPERATIONS:
+            p.require(value["operation"] == operation)
+            _same(value["controlOriginal"], bootstrap["controlOriginal"])
+            p.require(_raw(value["deliveryInputOriginal"], delivery_authority.MAX_BRIDGE_INPUT)
+                == self._inputs["native-delivery-bridge"])
+            self._known("deliveryOriginal", value, "native-delivery-bridge")
+            for field in ("recipeOriginals", "measured"):
+                _same(value[field], retrieval_keys[field])
+            if operation == "admission":
+                self._known("roleKeyOriginal", value, "native-role-keys-bridge")
+                first = p.document(self._inputs["native-role-keys-bridge"], bridge_authority.MAX_INPUT)
+                for field in bridge_authority.keys.INPUT_FIELDS:
+                    if field != "operation":
+                        _same(value[field], first[field])
+        elif operation == "closure":
+            p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v2"
+                and value["guestRole"] == "bridge")
+            _same(value["controlOriginal"], bootstrap["controlOriginal"])
+            for target, source in (("configurationOriginal", "ownerConfigurationOriginal"),
+                    ("windowOriginal", "windowOriginal"), ("observationOriginal", "observationOriginal"),
+                    ("deliveryConfigurationOriginal", "configurationOriginal"), ("runtimeOriginal", "runtimeOriginal")):
+                _same(value[target], prior[source])
+            self._known("deliveryOriginal", value, "native-delivery-bridge")
+            for field in ("trustOriginal", "trustSha256", "assignmentOriginal", "closureSetOriginal"):
+                _same(value[field], retrieval_keys["recipeOriginals"][field])
+        else:
+            p.require(value["operation"] == operation)
+            for field, literal in self._bridge_pair().items():
+                _same(value[field], literal)
+        prepared = bridge_authorization_profile.prepare_input(operation, p.canonical(value),
+            boot=self._boot, now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+        if operation == "closure":
+            # Closure has no embedded pair fields. Its actual signed authority
+            # context still must be this attempt's preceding bridge pair.
+            pair = self._bridge_pair()
+            admitted = bridge_authority.keys.admitted_pair(*(pair[name].encode("ascii")
+                for name in bridge_authority.PAIR_FIELDS), boot=self._boot,
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            scope = admitted["expectedScope"]
+            for field in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "guest"):
+                _same(prepared["payload"][field], scope[field])
+        self._process._io_check(prepared["deadline"])
+
     def _bind_initial(self, job, value):
         supplemental = job.family == "helper-initial"
         if supplemental:
@@ -626,6 +696,10 @@ class PhaseExecution:
             _same(value["observationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"]
                 if job.role == "bridge" else observed["cohortObservationOriginal"])
             if job.role == "bridge":
+                bootstrap = p.document(self._inputs["driver-bootstrap"], driver_authority.MAX_INPUT)
+                for target, source in (("ownerConfigurationOriginal", "configurationOriginal"),
+                        ("configurationOriginal", "deliveryConfigurationOriginal"), ("windowOriginal", "windowOriginal")):
+                    _same(value[target], bootstrap[source])
                 prior = p.document(self._inputs["install-bridge-runtime"], bridge_install.MAX_BRIDGE_INPUT)
                 _same(value["runtimeOriginal"], prior["runtimeOriginal"])
                 runtime_raw, runtime = bridge_runtime.original(value["runtimeOriginal"])
@@ -668,6 +742,8 @@ class PhaseExecution:
                 self._known("roleKeyOriginal", value, "native-role-keys-" + role)
         elif job.family == "native-launch-authorization":
             self._bind_launch_authorization(job, value)
+        elif job.family == "bridge-authorization":
+            self._bind_bridge_authorization(job, value)
         elif job.family == "native":
             if value["apiVersion"] == "serverware.nativePilotNativeServiceAuthorityInput/v3":
                 self._native_histories(value)
@@ -703,6 +779,20 @@ class PhaseExecution:
                 _same(value["runtimeOriginal"], prior_delivery["runtimeOriginal"])
                 for target, source in (("ownerConfigurationSha256", "ownerConfigurationOriginal"), ("windowSha256", "windowOriginal")):
                     p.require(value[target] == p.sha(_raw(prior_delivery[source], 65536)))
+                prior_key = p.document(self._inputs["native-role-keys-bridge"], bridge_authority.MAX_INPUT)
+                for name in ("trust", "assignment"):
+                    _same(value["originals"][name], prior_key["recipeOriginals"][name + "Original"])
+                keys = p.document(_raw(value["originals"]["keys"], 65536), 65536)
+                p.require(p.canonical(keys["authorization"]) == self._outputs["native-role-keys-bridge"])
+                self._known("admission", value["originals"], "native-key-admission-bridge")
+                p.require(_raw(value["originals"]["closure"], closure_authority.MAX_BYTES)
+                    == self._outputs["native-closure-bridge"])
+                self._known("encryptedKeys", value["originals"], "native-encrypted-delivery-bridge")
+                self._known("verifierTransport", value["originals"], "native-verifier-transport-bridge")
+                checked = bridge_launch.prepare_bridge_bundle(p.canonical(value), pair_context=self._bridge_pair(),
+                    service_grant_original=self._outputs["native-service-trustedTime"],
+                    boot=self._boot, now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+                self._process._io_check(checked["deadline"])
             else:
                 prior_key = p.document(self._inputs["native-role-keys-" + job.role], key_authority.MAX_INPUT)
                 prior_delivery = p.document(_raw(prior_key["deliveryInputOriginal"], delivery_authority.MAX_INPUT),
@@ -863,6 +953,14 @@ class PhaseExecution:
             else:
                 signed, original_deadline = encrypted_authority.sign(
                     "delivery" if operation == "encrypted-delivery" else operation, role, raw, key)
+            deadline = min(deadline, original_deadline)
+            self._process._io_check(deadline)
+        elif job.family == "bridge-authorization":
+            operation = BRIDGE_AUTHORIZATION_JOB_INFO[job.name]
+            if operation == "closure":
+                signed, original_deadline = closure_authority.sign(input_original=raw, signing_key=key)
+            else:
+                signed, original_deadline = bridge_authority.sign(operation, raw, key)
             deadline = min(deadline, original_deadline)
             self._process._io_check(deadline)
         elif job.family == "native":

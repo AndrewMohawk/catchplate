@@ -15,6 +15,7 @@ import time
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_bridge_runtime_profile as profile
 from serverware import native_pilot_endpoint_launch_profile as endpoint_launch
+from serverware import native_pilot_key_profile as key_profile
 from serverware import native_pilot_native_service_profile as native
 from serverware import native_pilot_ordinary_transition_profile as transitions
 from serverware import native_pilot_publication as publication
@@ -22,6 +23,7 @@ from serverware import native_pilot_supervisor_current_heads as heads
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_assignment as cohort
+from serverware import native_shadow_retrieval_artifacts as retrieval
 from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
 
 p = generation.p
@@ -54,6 +56,7 @@ class _Attempt:
         self.policy, self.process = policy, process
         self.pid, self.boot = os.getpid(), originals._boot()
         self.failed = self.closed = self.close_attempted = self.composed = False
+        self.commissioning_attempted = False
         self.inflight = self.kwargs = self.handoff = self.window = None
         self.input_raw = self.result_raw = self.result = self.fragment = None
         self.sources, self.source_results, self.phases = {}, {}, {}
@@ -253,6 +256,62 @@ def require_runtime(policy, *, process, request):
     """Return immutable public data at the real first bridge-delivery job only."""
     result = checked_result(policy, process=process, request=request)
     return {"inputOriginal": _LIVE.input_raw, "result": result}
+
+
+def require_commissioning_context(policy, *, process, request):
+    """One verified immutable handoff at the actual first bridge C9 job.
+
+    The complete recipe is recovered from actual approved retrieval key inputs,
+    not reconstructed from native verifier summaries or an earlier live owner.
+    """
+    _owners(policy, process, request)
+    owner = _LIVE
+    p.require(owner is not None and not owner.commissioning_attempted)
+    owner.commissioning_attempted = True
+    try:
+        installed = require_runtime(policy, process=process, request=request)
+        first, key_result = _remember(owner, "service-originals", "native-role-keys-retrieval")
+        second, admission_result = _remember(owner, "service-originals", "native-key-admission-retrieval")
+        for result in (key_result, admission_result):
+            p.fields(result, ("original", "sha256"))
+            p.require(type(result["original"]) is str and result["original"].isascii()
+                and p.sha(result["original"].encode("ascii")) == p.digest(result["sha256"]))
+        now, epoch = owner.clock(request)
+        pair = key_profile.admitted_pair("retrieval", first, key_result["original"].encode("ascii"),
+            second, admission_result["original"].encode("ascii"), boot=owner.boot,
+            now_boottime_ns=now, now_unix_ns=epoch)
+        selected = p.document(first, key_profile.MAX_INPUT)
+        delivered = owner.kwargs["native_delivery_context"]["retrieval"]
+        p.require(selected["deliveryInputOriginal"].encode("ascii") == delivered["inputOriginal"]
+            and selected["deliveryOriginal"].encode("ascii") == delivered["deliveryOriginal"])
+        native_row = owner.kwargs["native_context"]["retrieval"]
+        native_input = p.document(native_row["inputOriginal"], native.MAX_INPUT)
+        configuration = p.document(native_input["configurationOriginal"].encode("ascii"), p.MAX_CONFIG)
+        for name, value in pair.items():
+            _same(configuration[name], value)
+        recipe, measured = selected["recipeOriginals"], selected["measured"]
+        assignment = p.document(recipe["assignmentOriginal"].encode("ascii"), 4 * 1024 * 1024)
+        p.require(p.canonical(assignment["payload"]).decode("ascii") == native_input["assignmentPayloadOriginal"]
+            and measured["proofScopeOriginal"] == native_input["proofScopeOriginal"])
+        proof = retrieval.scope_original(measured["proofScopeOriginal"].encode("ascii"))
+        native_grant = p.document(native_row["grantOriginal"], native.MAX_OUTPUT)["payload"]
+        p.require(measured["configurationBindingSha256"] == proof["production_configuration_binding_sha256"]
+            == native_grant["spoolScope"]["productionConfigurationBindingSha256"])
+        owner.epoch_limit = min(owner.epoch_limit, pair["authorization"]["payload"]["expiresAtUnixNanos"],
+            pair["admissionAuthorization"]["payload"]["expiresAtUnixNanos"])
+        _current(owner, request, installed=True)
+        ordinary = owner.kwargs["current_context"]["sources"]["ordinary_context"]
+        return {**installed, "bootstrapOriginals": owner.kwargs["bootstrap_originals"].copy(),
+            "recipeOriginals": copy.deepcopy(recipe), "measured": copy.deepcopy(measured),
+            "historyOriginals": {role: ordinary[role]["historyOriginal"].encode("ascii") for role in generation.ROLES},
+            "trustedTime": owner.kwargs["native_context"]["trustedTime"].copy(),
+            "sourceInputs": owner.sources | {(PHASE, JOB): owner.input_raw},
+            "sourceResults": owner.source_results | {(PHASE, JOB): owner.result_raw},
+            "conductorOriginals": owner.phases.copy(), "window": copy.deepcopy(owner.window),
+            "deadline": owner.deadline, "epochLimit": owner.epoch_limit}
+    except BaseException:
+        owner.failed = True
+        raise
 
 
 def close(process):

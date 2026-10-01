@@ -151,10 +151,10 @@ class CurrentHeadIntakeControls(unittest.TestCase):
             self.assertIn(job.key, execution.KEY_PURPOSES)
             self.assertIn(("bridge-runtime", job.name), supervisor.SUPPORTED_JOBS)
             self.assertNotIn(("bridge-runtime", job.name), supervisor._COMPOSERS)
-        self.assertEqual((len(execution.KEY_PURPOSES), len(supervisor._COMPOSERS)), (108, 140))
+        self.assertEqual((len(execution.KEY_PURPOSES), len(supervisor._COMPOSERS)), (113, 147))
         self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())),
-            (151, 159, 8))
-        self.assertEqual(supervisor.missing_jobs()[0], ("bridge-delivery", "native-delivery-bridge"))
+            (158, 164, 6))
+        self.assertEqual(supervisor.missing_jobs()[0], ("release", "cohort-release"))
         with self.assertRaises(ValueError): supervisor.require_complete_coverage()
 
     def test_static_intake_policy_is_closed_and_never_contains_future_currentness(self):

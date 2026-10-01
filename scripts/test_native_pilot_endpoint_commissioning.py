@@ -70,12 +70,12 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             ("endpoint-deliveries", "native-delivery-trustedTime"))
         self.assertEqual(supervisor.SUPPORTED_JOBS[:7], expected)
         self.assertEqual(supervisor._ORDER[:7], expected)
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 151)
-        self.assertEqual(supervisor._ORDER[:151], supervisor.SUPPORTED_JOBS)
-        self.assertEqual(len(supervisor._ORDER), 159)
-        self.assertEqual(len(supervisor.missing_jobs()), 8)
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 158)
+        self.assertEqual(supervisor._ORDER[:158], supervisor.SUPPORTED_JOBS)
+        self.assertEqual(len(supervisor._ORDER), 164)
+        self.assertEqual(len(supervisor.missing_jobs()), 6)
         self.assertEqual(supervisor.missing_jobs()[0],
-            ("bridge-delivery", "native-delivery-bridge"))
+            ("release", "cohort-release"))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 
@@ -85,8 +85,8 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             len(policy.NATIVE_DELIVERY_FIELDS), len(policy.KEY_AUTHORIZATION_FIELDS), len(policy.NATIVE_SERVICE_FIELDS),
             len(policy.ORDINARY_TRANSITION_FIELDS), len(policy.LAUNCH_AUTHORIZATION_FIELDS),
             len(policy.ENDPOINT_LAUNCH_FIELDS), len(policy.SERVICE_MATERIAL_FIELDS), len(policy.HELPER_INITIAL_FIELDS),
-            len(policy.CURRENT_HEAD_FIELDS), len(policy.BRIDGE_RUNTIME_FIELDS)),
-            (8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24))
+            len(policy.CURRENT_HEAD_FIELDS), len(policy.BRIDGE_RUNTIME_FIELDS), len(policy.BRIDGE_COMMISSIONING_FIELDS)),
+            (8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25))
         self.assertEqual(set(policy.MEASURED_FIELDS) - set(policy.FIELDS), {"measuredRecipeSha256"})
         self.assertEqual(set(policy.ENDPOINT_FIELDS) - set(policy.MEASURED_FIELDS),
             {"endpointPreparation", "endpointDeliveries"})
@@ -109,16 +109,20 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             {"currentHeadIntakeOriginal"})
         self.assertEqual(set(policy.BRIDGE_RUNTIME_FIELDS) - set(policy.CURRENT_HEAD_FIELDS),
             {"bridgeRuntimeOriginal"})
+        self.assertEqual(set(policy.BRIDGE_COMMISSIONING_FIELDS) - set(policy.BRIDGE_RUNTIME_FIELDS),
+            {"bridgeCommissioningOriginal"})
         self.assertEqual(len({policy.POLICY_API, policy.MEASURED_POLICY_API, policy.ENDPOINT_POLICY_API,
             policy.INITIAL_POLICY_API, policy.DELIVERY_POLICY_API, policy.GENERATION_POLICY_API,
             policy.NATIVE_DELIVERY_POLICY_API, policy.KEY_AUTHORIZATION_POLICY_API, policy.NATIVE_SERVICE_POLICY_API,
             policy.ORDINARY_TRANSITION_POLICY_API, policy.LAUNCH_AUTHORIZATION_POLICY_API,
             policy.ENDPOINT_LAUNCH_POLICY_API, policy.SERVICE_MATERIAL_POLICY_API, policy.HELPER_INITIAL_POLICY_API,
-            policy.CURRENT_HEAD_POLICY_API, policy.BRIDGE_RUNTIME_POLICY_API}), 16)
+            policy.CURRENT_HEAD_POLICY_API, policy.BRIDGE_RUNTIME_POLICY_API, policy.BRIDGE_COMMISSIONING_POLICY_API}), 17)
         self.assertEqual(policy.HELPER_INITIAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v14")
         self.assertEqual(policy.CURRENT_HEAD_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v15")
         self.assertEqual(policy.BRIDGE_RUNTIME_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v16")
-        self.assertEqual(policy.CURRENT_HEAD_POLICY_APIS, (policy.CURRENT_HEAD_POLICY_API, policy.BRIDGE_RUNTIME_POLICY_API))
+        self.assertEqual(policy.BRIDGE_COMMISSIONING_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v17")
+        self.assertEqual(policy.BRIDGE_RUNTIME_POLICY_APIS, (policy.BRIDGE_RUNTIME_POLICY_API, policy.BRIDGE_COMMISSIONING_POLICY_API))
+        self.assertEqual(policy.CURRENT_HEAD_POLICY_APIS, (policy.CURRENT_HEAD_POLICY_API,) + policy.BRIDGE_RUNTIME_POLICY_APIS)
         self.assertEqual(policy.HELPER_INITIAL_POLICY_APIS, (policy.HELPER_INITIAL_POLICY_API,) + policy.CURRENT_HEAD_POLICY_APIS)
         self.assertEqual(policy.SERVICE_MATERIAL_POLICY_APIS,
             (policy.SERVICE_MATERIAL_POLICY_API,) + policy.HELPER_INITIAL_POLICY_APIS)
@@ -140,9 +144,12 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
         self.assertEqual(len(policy.LEGACY_KEY_PURPOSES), 42)
         self.assertEqual(len(policy.INITIAL_KEY_PURPOSES), 57)
         self.assertEqual(len(policy.NATIVE_KEY_PURPOSES), 77)
-        self.assertEqual(len(policy.KEY_PURPOSES), 108)
-        self.assertEqual(set(policy.KEY_PURPOSES) - set(policy.NATIVE_KEY_PURPOSES),
+        self.assertEqual(len(policy.LAUNCH_KEY_PURPOSES), 108)
+        self.assertEqual(len(policy.KEY_PURPOSES), 113)
+        self.assertEqual(set(policy.LAUNCH_KEY_PURPOSES) - set(policy.NATIVE_KEY_PURPOSES),
             {job.key for job in policy.LAUNCH_AUTHORIZATION_JOBS})
+        self.assertEqual(set(policy.KEY_PURPOSES) - set(policy.LAUNCH_KEY_PURPOSES),
+            {job.key for job in policy.BRIDGE_AUTHORIZATION_JOBS})
 
     def test_static_fragment_is_explicit_and_copied(self):
         value = fragment()

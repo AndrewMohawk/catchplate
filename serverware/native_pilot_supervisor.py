@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 151 of 159 jobs have fixed composers or protected late intake. The complete-coverage check refuses
+The initial 158 of 164 jobs have fixed composers or protected late intake. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -25,6 +25,7 @@ from serverware import native_pilot_supervisor_endpoint_launches as endpoint_lau
 from serverware import native_pilot_supervisor_service_material as service_material
 from serverware import native_pilot_supervisor_current_heads as current_heads
 from serverware import native_pilot_supervisor_bridge_runtime as bridge_runtime
+from serverware import native_pilot_supervisor_bridge_commissioning as bridge_commissioning
 from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
@@ -52,7 +53,8 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     *(("service-originals", name) for name in endpoint_launches.JOB_NAMES),
     (service_material.PHASE, service_material.JOB),
     *(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS),
-    (bridge_runtime.PHASE, bridge_runtime.JOB))
+    (bridge_runtime.PHASE, bridge_runtime.JOB),
+    *((bridge_commissioning.PHASE, name) for name in bridge_commissioning.JOB_NAMES))
 _LATE_JOBS = tuple(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS)
 _COMPOSER_GROUPS = (
     ("endpoint-inputs", ("endpoint-inputs",), endpoint_inputs.compose),
@@ -68,6 +70,7 @@ _COMPOSER_GROUPS = (
     ("service-originals", endpoint_launches.JOB_NAMES, endpoint_launches.compose),
     (service_material.PHASE, (service_material.JOB,), service_material.compose),
     (bridge_runtime.PHASE, (bridge_runtime.JOB,), bridge_runtime.compose),
+    (bridge_commissioning.PHASE, bridge_commissioning.JOB_NAMES, bridge_commissioning.compose),
 )
 _COMPOSERS = {(phase, name): composer for phase, names, composer in _COMPOSER_GROUPS for name in names}
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])

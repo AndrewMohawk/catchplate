@@ -47,6 +47,10 @@ approval after request acquisition; static policy never decides currentness.
 Explicit v16 additionally delegates the bridge runtime/outgoing installation
 from those actual signed heads, measured peers and authenticated service grants.
 It neither provisions bridge credentials nor authorizes subsequent release.
+Explicit v17 adds seven bridge delivery, authorization and launch decisions
+with five new supervisor capabilities. Legacy v11-v16 policies retain exactly
+108 selectors. Actual credentials remain independently provisioned, and
+release, origin and lifetime decisions remain separate.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -70,7 +74,7 @@ from serverware import native_pilot_window_authority as window_authority
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_phase_execution import (
-    JOBS, KEY_AUTHORIZATION_JOBS, LAUNCH_AUTHORIZATION_JOBS, KEY_PURPOSES, MAX_APPROVAL)
+    JOBS, KEY_AUTHORIZATION_JOBS, LAUNCH_AUTHORIZATION_JOBS, BRIDGE_AUTHORIZATION_JOBS, KEY_PURPOSES, MAX_APPROVAL)
 
 p = driver.p
 MAX_POLICY = 4 * 1024 * 1024
@@ -123,7 +127,11 @@ CURRENT_HEAD_FIELDS = HELPER_INITIAL_FIELDS + ("currentHeadIntakeOriginal",)
 BRIDGE_RUNTIME_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v16"
 BRIDGE_RUNTIME_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-bridge-runtime"
 BRIDGE_RUNTIME_FIELDS = CURRENT_HEAD_FIELDS + ("bridgeRuntimeOriginal",)
-CURRENT_HEAD_POLICY_APIS = (CURRENT_HEAD_POLICY_API, BRIDGE_RUNTIME_POLICY_API)
+BRIDGE_COMMISSIONING_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v17"
+BRIDGE_COMMISSIONING_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-bridge-commissioning"
+BRIDGE_COMMISSIONING_FIELDS = BRIDGE_RUNTIME_FIELDS + ("bridgeCommissioningOriginal",)
+BRIDGE_RUNTIME_POLICY_APIS = (BRIDGE_RUNTIME_POLICY_API, BRIDGE_COMMISSIONING_POLICY_API)
+CURRENT_HEAD_POLICY_APIS = (CURRENT_HEAD_POLICY_API,) + BRIDGE_RUNTIME_POLICY_APIS
 HELPER_INITIAL_POLICY_APIS = (HELPER_INITIAL_POLICY_API,) + CURRENT_HEAD_POLICY_APIS
 SERVICE_MATERIAL_POLICY_APIS = (SERVICE_MATERIAL_POLICY_API,) + HELPER_INITIAL_POLICY_APIS
 ENDPOINT_LAUNCH_POLICY_APIS = (ENDPOINT_LAUNCH_POLICY_API,) + SERVICE_MATERIAL_POLICY_APIS
@@ -139,7 +147,9 @@ DELIVERY_POLICY_APIS = (DELIVERY_POLICY_API,) + GENERATION_POLICY_APIS
 INITIAL_POLICY_APIS = (INITIAL_POLICY_API,) + DELIVERY_POLICY_APIS
 ENDPOINT_POLICY_APIS = (ENDPOINT_POLICY_API,) + INITIAL_POLICY_APIS
 MEASURED_POLICY_APIS = (MEASURED_POLICY_API,) + ENDPOINT_POLICY_APIS
-NATIVE_KEY_PURPOSES = tuple(name for name in KEY_PURPOSES
+LAUNCH_KEY_PURPOSES = tuple(name for name in KEY_PURPOSES
+    if name not in {job.key for job in BRIDGE_AUTHORIZATION_JOBS})
+NATIVE_KEY_PURPOSES = tuple(name for name in LAUNCH_KEY_PURPOSES
     if name not in {job.key for job in LAUNCH_AUTHORIZATION_JOBS})
 INITIAL_KEY_PURPOSES = tuple(name for name in NATIVE_KEY_PURPOSES
     if name not in {job.key for job in KEY_AUTHORIZATION_JOBS})
@@ -223,6 +233,7 @@ class SupervisorPolicy:
         self._helper_initial = None
         self._current_head_intake = None
         self._bridge_runtime = None
+        self._bridge_commissioning = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -243,7 +254,8 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            bridge_runtime = value["apiVersion"] == BRIDGE_RUNTIME_POLICY_API
+            bridge_commissioning = value["apiVersion"] == BRIDGE_COMMISSIONING_POLICY_API
+            bridge_runtime = value["apiVersion"] in BRIDGE_RUNTIME_POLICY_APIS
             current_head_intake = value["apiVersion"] in CURRENT_HEAD_POLICY_APIS
             helper_initial = value["apiVersion"] in HELPER_INITIAL_POLICY_APIS
             service_material = value["apiVersion"] in SERVICE_MATERIAL_POLICY_APIS
@@ -258,9 +270,9 @@ class SupervisorPolicy:
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, BRIDGE_RUNTIME_FIELDS if bridge_runtime else CURRENT_HEAD_FIELDS if current_head_intake else HELPER_INITIAL_FIELDS if helper_initial else SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, BRIDGE_COMMISSIONING_FIELDS if bridge_commissioning else BRIDGE_RUNTIME_FIELDS if bridge_runtime else CURRENT_HEAD_FIELDS if current_head_intake else HELPER_INITIAL_FIELDS if helper_initial else SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (BRIDGE_RUNTIME_PURPOSE if bridge_runtime else CURRENT_HEAD_PURPOSE if current_head_intake else HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (BRIDGE_COMMISSIONING_PURPOSE if bridge_commissioning else BRIDGE_RUNTIME_PURPOSE if bridge_runtime else CURRENT_HEAD_PURPOSE if current_head_intake else HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -268,7 +280,7 @@ class SupervisorPolicy:
             source = artifact._source(value["source"])
             for field in ("conductorInventorySha256", "authorityInventorySha256"):
                 p.digest(value[field])
-            keys = p.fields(value["keyBindings"], KEY_PURPOSES if launch_authorization else NATIVE_KEY_PURPOSES if key_authorization
+            keys = p.fields(value["keyBindings"], KEY_PURPOSES if bridge_commissioning else LAUNCH_KEY_PURPOSES if launch_authorization else NATIVE_KEY_PURPOSES if key_authorization
                 else INITIAL_KEY_PURPOSES if initial else LEGACY_KEY_PURPOSES)
             for digest in keys.values():
                 p.digest(digest)
@@ -343,6 +355,15 @@ class SupervisorPolicy:
                 p.require(type(policy_text) is str and policy_text.isascii())
                 bridge_runtime_policy = bridge_policy.validate_policy(
                     generation.document(policy_text.encode("ascii"), bridge_policy.MAX_POLICY))
+            if bridge_commissioning:
+                from serverware import native_pilot_bridge_commissioning_policy as bridge_policy
+                policy_text = value["bridgeCommissioningOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                bridge_commissioning_policy = bridge_policy.validate_policy(
+                    generation.document(policy_text.encode("ascii"), bridge_policy.MAX_POLICY),
+                    bootstrap_configuration=config, cold_original=raw["deliveryConfiguration"],
+                    runtime_policy=bridge_runtime_policy)
+                p.require(keys["native-delivery-bridge"] == cold["authority"]["keyId"])
             if native_delivery:
                 from serverware import native_pilot_native_delivery_profile as native
                 policy_text = value["nativeDeliveriesOriginal"]
@@ -427,6 +448,8 @@ class SupervisorPolicy:
                 owner._current_head_intake = current_head_policy
             if bridge_runtime:
                 owner._bridge_runtime = bridge_runtime_policy
+            if bridge_commissioning:
+                owner._bridge_commissioning = bridge_commissioning_policy
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -590,12 +613,43 @@ class SupervisorPolicy:
         return copy.deepcopy(self._current_head_intake)
 
     def bridge_runtime_policy(self, *, process, request) -> dict:
-        """V16 alone delegates composition, never future signing or release."""
+        """V16+ delegate composition, never release or credential provisioning."""
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == BRIDGE_RUNTIME_POLICY_API
+        p.require(self._value["apiVersion"] in BRIDGE_RUNTIME_POLICY_APIS
             and self._bridge_runtime is not None)
         return copy.deepcopy(self._bridge_runtime)
+
+    def bridge_commissioning_policy(self, *, process, request) -> dict:
+        """Only v17 delegates the seven fixed bridge decisions."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == BRIDGE_COMMISSIONING_POLICY_API
+            and self._bridge_commissioning is not None)
+        return copy.deepcopy(self._bridge_commissioning)
+
+    def require_bridge_keys(self, recipe_originals, *, process, request):
+        """Bind five capabilities to the genuine runtime owner's retained recipe."""
+        from serverware import native_pilot_measured_configuration as measured
+        from serverware import native_pilot_native_delivery_profile as native
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == BRIDGE_COMMISSIONING_POLICY_API
+            and (request.phase, request.job, request.job_index)
+                == ("bridge-delivery", "native-delivery-bridge", 1))
+        p.fields(recipe_originals, native.RECIPE_FIELDS)
+        _, bindings, _ = measured._assignment(
+            {"apiVersion": "serverware.nativePilotMeasuredConfigurationRecipe/v2", **recipe_originals}, time.time_ns())
+        _, trust = scope._original(recipe_originals["trustOriginal"], 1024 * 1024)
+        selected = [row["key"] for row in trust["roleKeys"]
+            if row["role"] == "custody-supervisor-capability"]
+        p.require(len(selected) == 1 and selected[0]["keyId"]
+            == bindings["custody-supervisor-capability"]["keyId"])
+        digest = p.sha(p.decoded(selected[0]["publicKeyBase64url"], size=32))
+        p.require(all(self._value["keyBindings"][job.key] == digest for job in BRIDGE_AUTHORIZATION_JOBS)
+            and digest != self._value["keyBindings"]["native-delivery-bridge"])
+        self.check(process)
+        process.check_request(request)
 
     def ordinary_generation_policy(self, *, process, request) -> dict:
         """Only v6+ delegate the five fixed ordinary generation decisions."""
@@ -758,7 +812,10 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == BRIDGE_RUNTIME_POLICY_API:
+            if self._value["apiVersion"] == BRIDGE_COMMISSIONING_POLICY_API:
+                from serverware import native_pilot_supervisor_bridge_commissioning as bridge_commissioning
+                bridge_commissioning.close(self._process)
+            if self._value["apiVersion"] in BRIDGE_RUNTIME_POLICY_APIS:
                 from serverware import native_pilot_supervisor_bridge_runtime as bridge_runtime
                 bridge_runtime.close(self._process)
             if self._value["apiVersion"] in CURRENT_HEAD_POLICY_APIS:

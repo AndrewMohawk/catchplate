@@ -134,7 +134,7 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has **151 of 159 current jobs handled** and **108 signing selectors**. This
+has **158 of 164 current jobs handled** and **113 signing selectors**. This
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight
 [request-bound approval intake jobs](docs/native-pilot-current-head-intake.md),
@@ -146,9 +146,10 @@ checks and native compilation, but live initialization remains unverified.
 Policy/v16 adds [complete bridge runtime composition](docs/native-pilot-bridge-composition.md)
 from actual signed heads and service originals. Focused checks pass; complete
 authenticated/live execution remains unverified.
-Startup still refuses until the remaining eight current jobs, beginning with
-bridge credential delivery, are connected. Five additional bridge authorization
-prerequisites are not yet included in that inventory;
+Policy/v17 connects [bridge credential delivery, five authorizations and launch](docs/native-pilot-bridge-commissioning.md).
+Those five prerequisites are now included in the inventory; focused verification
+of this assembled batch is pending. Startup still refuses until the remaining
+six jobs, beginning with cohort release, are connected;
 these counts are not a percentage of product readiness.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.

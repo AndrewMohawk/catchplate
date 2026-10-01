@@ -1,10 +1,19 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.389` source adds [complete bridge runtime composition](native-pilot-bridge-composition.md)
+The `.390` source connects [bridge delivery and launch commissioning](native-pilot-bridge-commissioning.md)
+under explicit policy/v17. Seven decisions use the actual runtime-owner handoff,
+five newly represented signing jobs and complete existing producer validators.
+Coverage is **158/164** handled jobs, **113** selectors and **six** missing slots
+starting at cohort release. Legacy v11-v16 remain closed to 108 selectors.
+Focused verification of the assembled batch is pending. Startup still refuses;
+credential provisioning, full positive launch authentication and live owner
+execution are not established.
+
+The preceding `.389` source adds [complete bridge runtime composition](native-pilot-bridge-composition.md)
 under explicit policy/v16. Actual current-head, peer, C9 and service originals
 feed the complete runtime/outgoing bundle and retained installation handoff.
-**151/159** jobs are handled: 143 fixed composition decisions and eight late
+At that checkpoint, **151/159** jobs were handled: 143 fixed composition decisions and eight late
 intakes, with **108** signing selectors and **eight current missing slots**.
 Five additional bridge authorization jobs remain omitted. Source `131b2bbb`
 passed 97/99 controls; fixture-only `50f9d190` passed all nine targeted rechecks.
@@ -41,8 +50,8 @@ Source checkpoints
 remain **36/46**; independent production acceptance remains separate.
 Older numbered examples below describe their original source batches; use the
 current [sequencing table](native-pilot-helper-ceremonies.md#source-derived-sequencing)
-for current service-originals job positions. Remaining bridge prerequisites are
-not yet fully represented in the inventory.
+for current service-originals job positions. The five additional bridge
+authorization prerequisites are represented beginning with policy/v17.
 
 ## Decision and process ownership
 
@@ -77,7 +86,7 @@ The original short startup window is never renewed to accommodate preparation.
 
 `native_pilot_supervisor_policy.SupervisorPolicy` retains a protected policy FD
 whose literal bytes match an independently supplied pin. Its closed grammar binds
-both runtime inventories, their source metadata, all 108 measured public-key
+both runtime inventories, their source metadata, all 113 measured public-key
 bindings, the four approved bootstrap originals and the explicit precreation
 fragment. Selecting these values and approving their digest remains a separate
 commissioning responsibility. Computing a digest locally does not approve it.

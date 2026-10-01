@@ -119,7 +119,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             for role in ROLES for operation in OPERATIONS)
         jobs = execution.JOBS["service-originals"][:25]
         self.assertEqual(tuple(job.name for job in jobs), expected)
-        self.assertEqual(len(execution.KEY_PURPOSES), 108)
+        self.assertEqual(len(execution.KEY_PURPOSES), 113)
         initial_keys = set()
         for job, (role, operation) in zip(jobs,
                 ((role, operation) for role in ROLES for operation in OPERATIONS), strict=True):
@@ -185,7 +185,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         self.assertEqual(tuple(job.name for job in execution.JOBS[phase]), service_names)
         self.assertEqual(tuple(slot for slot in supervisor.SUPPORTED_JOBS if slot[0] == phase),
             tuple((phase, name) for name in service_names))
-        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (151, 159, 8))
+        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (158, 164, 6))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

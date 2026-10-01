@@ -89,6 +89,27 @@ an artifact build, protected installation or actual ceremony execution.
 
 ## Remaining integration
 
+**First resolve the cold runtime dependency cycle.** Source review after this
+checkpoint found that the immutable cold v1 coordinator profile cannot be
+issued coherently. `Configuration.scope` directly contains the assignment
+payload hash, while the signed assignment commits the three-member set whose
+coordinator manifest commits that same complete runtime configuration hash:
+
+`runtime → assignment payload → closure set → coordinator manifest → runtime`
+
+This is enforced by `publication_genesis_client::Configuration`, the actual
+C9 runtime reader in `native_guest::genesis_client`, native closure assignment
+verification, and the cold native authorization's exact assignment join.
+Embedding ordinary grants in the runtime adds the same dependency again.
+Static fixture/schema/compile success does not resolve this cycle. There is
+no valid producer ordering for the existing profile without a hash fixed point.
+
+The next implementation must explicitly separate the measured static bootstrap
+from later independently authorized runtime input, while retaining the exact
+late runtime, assignment, owner and original-window checks. Do not omit hashes,
+use placeholder originals or silently reinterpret the old profile. This is an
+internal source-design blocker; provisioning external services cannot fix it.
+
 Complete cold grants/closures and provisioning, the expanded commissioning
 graph, validator-to-signer handoff, operational grant composition and retained
 core delivery remain open. So do uncertain/restart recovery, later authority
@@ -102,6 +123,22 @@ See [cold genesis](native-pilot-genesis.md),
 
 ## Verification
 
-Source is being assembled for one frozen, focused Python/native check. No live
-ceremony, signing key, provider, deployment, cloud resource or paid test has
-been used for this slice. Results will be recorded after the actual check.
+Exact source `9676fa73ff9907059d9057e4feea968c007662c2` passes all 52 controls in
+five focused Python suites (2.326 seconds), with Python 3.11.15, one CPU and an
+isolated network namespace. Twelve changed Python files pass grammar and exact
+membership in both Make inventories. The controls cover static profile/hash
+selection, legacy refusal, command syntax and synthetic package/build joins;
+they do not run the privileged entrypoint, sign an assignment or admit an owner.
+
+The same frozen source passes one offline, locked, frozen native compiler check
+for `serverware-decision-gate`, `serverware-native-publication-genesis-controller`
+and `serverware-native-publication-adoption-validator`, under pinned Rust 1.88,
+one CPU, 8 GiB memory and no network. Cargo reports 2m28s, with 312 library,
+2,520 gate, 2,805 controller and 3,063 validator warnings including duplicates.
+No Rust tests were compiled or executed; the seven new controller primitives
+remain unexecuted. No release image was rebuilt.
+
+Archive, exact harnesses, logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/9676fa73-commissioning-VBipDM/`.
+No live ceremony, signing key, provider, deployment, cloud resource or paid test
+was used. These results do not establish a testable pilot or production acceptance.

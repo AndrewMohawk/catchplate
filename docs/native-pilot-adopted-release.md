@@ -41,11 +41,10 @@ BridgePreparation/v3 requires the actual eleven-member native peer observation.
 The adopted late-current-head path retains the actual new ordinary resources
 and verifies the selected wrappers; current-head requests still require
 independent decisions rather than deriving approval from an observation.
-It does not require DRS/CSA's later guest-launch artifact: that artifact is
-published only after the publication grant is sealed. Actual parked owners,
-unchanged C9/history/generation originals and pristine retained descriptors
-remain mandatory, avoiding a request/grant dependency cycle without permitting
-early service release.
+Request acquisition does not require DRS/CSA's final guest-launch artifact:
+that artifact is published only after the publication grant is sealed. Actual
+parked owners, unchanged C9/history/generation originals and pristine retained
+descriptors remain mandatory. Acquiring a request does not authorize release.
 
 Explicit bridge policy/v3 and runtime bundle/v2 compose Runtime/v14 and
 Launch/v10. The runtime carries both literal root-signed publication grants and
@@ -70,20 +69,52 @@ service readiness or permission to release the cohort.
 
 ## Verification
 
-The implementation will be frozen before one focused Python batch and one
-cached offline native compiler check. Results and exact source commits will be
-recorded here. No cloud action, paid test or full artifact build is part of this
-slice. Synthetic fixtures are not proof of the privileged complete owner graph.
+Implementation snapshot `8afb6b6d` ran 152 Python controls in 17 suites:
+150 passed and two fixture errors occurred in 35.922 seconds. Both incomplete
+fixtures were corrected in `b9957b14`, without changing production code. All
+17 controls in the two affected suites then passed in 0.421 seconds; the other
+15 suites and their 135 passing controls were not repeated. This is 152 distinct
+passing cases across two snapshots, not one full green run.
+
+The first snapshot passes 46-file Python grammar, both Make inventories and
+six real module imports. The corrected snapshot passes the same checks for
+its two changed files. Seven documents resolve 631 local file targets; anchors
+and remote URLs are not checked.
+
+The exact native snapshot passes all seven offline compiler targets in
+175.679 seconds. The first preflight found the pinned Docker image reference
+absent; restoring that exact digest recovered existing layers and verified the
+same image ID. No source or dependency lock changed, and the compiler ran once.
+Three new inline Rust controls remain unexecuted. No cloud action, paid test or
+full artifact build occurred. Synthetic fixtures are not proof of the privileged
+complete owner graph.
+
+Both exact source archives, unsuccessful and successful attempts, harnesses,
+logs, results and checksums are retained locally at
+`codex-offload/serverware/engineering-builds/b9957b14-adopted-release-7DFGW6/`.
 
 ## Remaining pilot work
 
-The adopted bridge still needs its complete hot12 measured configuration,
+The actual current-head issuer still selects the old launch/runtime/history
+branch. Its separately selected successor is required before the adopted
+supervisor context can yield signed heads and complete Runtime14 composition.
+The runtime projection and transport do not make that signing path operational.
+
+The adopted bridge also needs its complete hot12 measured configuration,
 key/closure/transport/launch issuer composition. Its older issuer paths remain
-closed; the new transport and runtime do not silently make those paths valid.
-The independent supervisor must then compose cold commissioning, actual core
-custody, ordinary histories, all endpoint inputs and bridge release/cleanup
-through their original deadlines. A coherent local lifecycle and its error
-paths remain unverified.
+closed. The next connected source work is:
+
+1. Select hot12 in the retained measured recipe and bridge key/admission/closure
+   inputs, preserving bootstrap measurements separately from the late runtime.
+2. Connect RuntimeBundle/v2 and installation/v2 to actual C9 Input/v3 activation,
+   then bridge-only closure, encrypted/verifier and Launch/v10 publication.
+3. Select the adopted operator/supervisor graph explicitly: real received core,
+   State3/C9/generation predecessors, eleven endpoints, two publication grants,
+   actual grant-FD sealing, independently signed current heads and bridge release.
+
+Existing owner methods and pure producers are not this complete orchestration.
+Original deadlines and cleanup ownership remain mandatory; a coherent local
+lifecycle and its error paths remain unverified.
 
 Immutable dependencies, independently operated signing/witness and Nitro/KMS
 services, provider/YubiKey integration and complete release acceptance remain

@@ -151,11 +151,16 @@ invocation/serializer and source-order checks are not an executed protected
 provider process. No complete valid cold66/adopted176 ceremony is claimed.
 
 The `.422` evidence projection, explicitly selected transport and protected-file
-receiver described above are implemented in source, **pending the frozen
-verification pass**. They replace the missing public-source handoff; they do not
+receiver described above are implemented in source. Frozen `a6610852` passes
+**130 controls in thirteen focused suites in 46.984 seconds**, with no failures,
+errors, skips or reruns. Fourteen-file grammar/both Make inventories and ten
+imports pass. Actual selected-mode local sockets carry synthetic evidence and
+protected pairs; the receiver's profile, entrypoint and source-order checks do
+not execute an installed protected filesystem service or a full commissioning
+run. They replace the missing public-source handoff; they do not
 implement the external fresh-head state backend or establish a deployed
-independent decision service. No new test result, installed-package admission or
-live-pilot success is implied by this source integration.
+independent decision service. Installed-package admission and live-pilot success
+remain unverified.
 
 The source does not provision independent policy/current-head operators, issue
 their decisions, approve dependency publication, install compatible packages,

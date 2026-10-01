@@ -131,47 +131,21 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The [fixed lifecycle runner](docs/native-pilot-lifecycle.md) connects startup,
-independently approved input delivery and controlled shutdown. The
-[workload sidecar](docs/native-workload-sidecar.md) supports ordinary HTTPS
-libraries without giving applications provider credentials. The new
-[three-process launcher](docs/native-pilot-startup.md) connects the real peers
-before accepting identity-bound configuration. These are source implementations,
-not a demonstrated deployed workflow.
+**Development pilot — current focus:** a local control UI, Rust proxy and
+synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).
+Python and Rust images are built and supporting services are healthy. A slow
+startup path is fixed; database and authority provisioning plus
+[policy commissioning](docs/pilot-commissioning.md) remain. **There is not yet a working pilot.** The planned
+walkthrough is non-TEE, non-production and uses no real provider credentials.
+Its current authority requirements cannot be replaced by a SQLite shortcut.
 
-[Cold-start input composition](docs/native-pilot-genesis-inputs.md) connects the
-66 existing startup jobs to their actual observations and previous results.
-[Operational input composition](docs/native-pilot-adopted-inputs.md) extends
-that source path through the 176 operational jobs.
-[Protected endpoint publication](docs/native-pilot-adopted-endpoint-publication.md)
-connects approved configuration to its runtime files. Independent decisions,
-approved installation, deployment and a complete live run remain open.
-The lifecycle also returns actual startup/shutdown results after verified child
-exit; input-delivery receipts alone are not treated as completed work.
-The [approval-provider executable](docs/native-pilot-approval-provider.md) now
-connects the fixed transcript to an explicit delegation policy and a separate
-fresh-decision peer. The public-evidence handoff and an operator-controlled
-receiving service connect in source to the [fresh-state worker](docs/native-pilot-current-head-worker.md).
-The [startup provisioner](docs/native-pilot-startup-provisioning.md) now automates
-late public-file preparation. The .426 source connects independently
-delegated initial state and a coordinator-retained worker across later phases.
-All 84 focused controls are resolved across recorded test-fixture corrections;
-current exports predate these changes and are not approved packages or deployment.
-
-The fastest testable pilot is the existing non-production development stack:
-
-1. Freeze and build the [local Compose stack](docs/development-reference.md)
-   once: control UI, Rust proxy and synthetic upstream.
-2. Verify current startup and fix any concrete application integration failure.
-3. Demonstrate credential replacement, an allowed request and a denied request
-   against the synthetic upstream, then verify cleanup.
-4. Hand over the working local UI and repeatable application commands, explicitly
-   non-TEE and non-production, with no real provider credentials.
-
-That demo does not require AWS or native commissioning. The protected native
-pilot still needs approved matching packages, independent authority provisioning
-and a live run; the [last AWS access check](docs/aws-test-access.md) found expired
-setup credentials. [Production progress](docs/production-status.md) retains the full goal.
+**Protected native production:** the [full goal](goal.md) remains unchanged.
+The [native lifecycle](docs/native-pilot-lifecycle.md) still requires approved
+matching packages, independent authority provisioning and a complete live run.
+The development demo cannot establish enclave custody or production acceptance.
+[Production progress](docs/production-status.md) retains the implementation and
+verification history; [AWS access](docs/aws-test-access.md) remains a separate
+deployment prerequisite, not a requirement for the local demo.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

@@ -1,10 +1,20 @@
 # Local development pilot
 
-Status: **preparation in progress, not yet a verified running pilot**. The
-selected source is `17ab194b`, with isolated Compose project
-`serverware-pilot-17ab194b`. The addresses below are the selected deployment
-ports, not a claim that services are listening. Wait for the operator's runtime
-handoff and public CA file before trying this walkthrough.
+Status: **not yet a working pilot; walkthrough pending commissioning**. The
+Rust image is built from `17ab194b`; Python `9efad924` includes the subsequent
+startup, bootstrap and demo-admission fixes. The isolated Compose project is
+`serverware-pilot-17ab194b`. Database, audit sink and synthetic upstream run,
+but the control plane has not started successfully. No demo seed, verified CA
+handoff, browser acceptance or proxy request has completed.
+
+Current startup reaches the missing PostgreSQL runtime-role configuration gate.
+The required [commissioning sequence](pilot-commissioning.md) covers provisioned
+roles/services, explicit offline bootstrap and genuine policy genesis. The
+repaired demo seed reuses an already committed policy; it cannot publish one.
+SQLite/non-atomic
+settings do **not** provide a supported substitute. The addresses and commands
+below describe the intended handoff, not a currently usable release. Wait for
+the operator's verified runtime handoff and public CA file before using them.
 
 This exercises the actual control UI and Rust proxy against a synthetic HTTPS
 upstream. It is **non-TEE and non-production**: host administrators can inspect
@@ -33,9 +43,10 @@ ssh -N -o ExitOnForwardFailure=yes \
 1. Enter `dev-admin-token` in **Admin token or OIDC JWT**, then click **Refresh**.
    This is the explicit development operator token, not a username/password
    login. The optional **Sign in** button is for separately configured OIDC.
-2. The operator seeds this isolated pilot once during startup. Do not click
-   **Seed demo** during the walkthrough: it replaces demo data and advances
-   the policy sequence. If the demo data is missing, stop and ask the operator.
+2. The operator must first commission the policy through the supported authority
+   path, then seed this isolated pilot once. Do not click **Seed demo** during
+   the walkthrough or attempt to manufacture policy-authority records. If demo
+   data is missing, stop and ask the operator.
 3. Inspect **Credentials** for **Demo bearer token** and **Policies** for the
    demo policy/`demo.echo` route. Do not enter an upstream token yourself.
    After the requests below, **Audit** can show the resulting traffic.

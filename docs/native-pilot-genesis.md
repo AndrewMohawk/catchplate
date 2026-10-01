@@ -80,6 +80,12 @@ parent API returns owned bundle bytes while retaining its real process/reaper
 owner; the caller must still close it through bounded cleanup. Normal process
 exit behavior, stdout and installation paths are unchanged.
 
+The parent keeps servicing inspections after sending the acknowledgment. It
+releases the retained bundle only after replying to a distinct, one-use
+inspection proving that the child received the exact handoff acknowledgment.
+Actual child identity and the original scope are rechecked after both writes
+and before release. This is not a child-exit or cleanup success claim.
+
 ## Remaining integration and verification
 
 The connected native producer and retained handoff are implemented in source;

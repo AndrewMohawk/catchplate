@@ -279,6 +279,11 @@ impl GenesisParent {
             require(now()?<inspector.genesis_deadline()?
                 && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::CounterOverflow)?<running.files.lifetime())?;
             inspector.progress(&running.child,&running.files)?;
+            let deadline=inspector.genesis_deadline()?;
+            running.check_originals()?;
+            require(now()?<deadline
+                && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::CounterOverflow)?<running.files.lifetime())?;
+            let Some(Inspection::ProofClient(inspector))=running.inspector.as_mut() else{return Err(ShadowError::BindingDrift);};
             if let Some(bundle)=inspector.take_genesis_result()?{return Ok(bundle);}
             let result=unsafe{libc::poll(std::ptr::null_mut(),0,1)};
             require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;

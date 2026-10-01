@@ -69,15 +69,17 @@ impl OrdinaryDirectory {
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Request {api_version:String,sequence:u64,slot:usize,initial:bool,runtime_configuration_sha256:Sha256Digest,
-    process_identity_sha256:Sha256Digest,socket_device:u64,socket_inode:u64,deadline_boottime_ns:String}
+    process_identity_sha256:Sha256Digest,socket_device:u64,socket_inode:u64,deadline_boottime_ns:String,
+    acknowledged_handoff_sha256:Option<Sha256Digest>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Reply {api_version:String,request_sha256:Sha256Digest,process_identity_sha256:Sha256Digest}
 struct Target {socket:OwnedFd,identity:(u64,u64),expected:ExpectedPeerCredentials,
     path:Option<PathBuf>,paths:Vec<Identity>,directory:Option<OrdinaryDirectory>,peer:Option<AuthenticatedInheritedSeqpacket>}
-struct Pending {original:packet::Packet,raw:Vec<u8>,slot:usize,deadline:u64}
+struct Pending {original:packet::Packet,raw:Vec<u8>,slot:usize,deadline:u64,releases_result:bool}
 struct ResultOwner {socket:OwnedFd,identity:(u64,u64),configuration:Configuration,
-    pending:Option<(packet::Packet,Vec<u8>)>,bundle:Option<Vec<u8>>,acknowledged:bool,released:bool}
+    pending:Option<(packet::Packet,Vec<u8>)>,bundle:Option<Vec<u8>>,handoff_sha256:Option<Sha256Digest>,
+    acknowledged:bool,post_ack_inspected:bool,released:bool}
 pub(super) struct Inspector {targets:Vec<Target>,runtime:Sha256Digest,pending:Option<Pending>,result:ResultOwner}
 impl Inspector {
     pub(super) fn prepare(files:&super::super::FileAdmission,activation:&BTreeMap<String,OwnedFd>)->Result<Self,ShadowError>{
@@ -128,7 +130,7 @@ impl Inspector {
         files.check_preparation().map_err(fail)?;
         config.scope.live(now()?).map_err(fail)?;
         let result=ResultOwner{socket:parent,identity:parent_identity,configuration:config,
-            pending:None,bundle:None,acknowledged:false,released:false};
+            pending:None,bundle:None,handoff_sha256:None,acknowledged:false,post_ack_inspected:false,released:false};
         Ok(Self{targets,runtime:Sha256Digest::compute(&raw),pending:None,result})
     }
     fn check(&self,files:&super::super::FileAdmission)->Result<(),ShadowError>{
@@ -144,7 +146,8 @@ impl Inspector {
     pub(super) fn deadline(&self)->u64{self.result.configuration.scope.expires_at_boottime_nanos}
     pub(super) fn take_result(&mut self)->Result<Option<Vec<u8>>,ShadowError>{
         require(!self.result.released)?;
-        if !self.result.acknowledged{return Ok(None);}
+        if !self.result.acknowledged || !self.result.post_ack_inspected{return Ok(None);}
+        require(now()?<self.deadline())?;
         let result=self.result.bundle.take().ok_or(ShadowError::BindingDrift)?;
         self.result.released=true;Ok(Some(result))
     }
@@ -156,6 +159,8 @@ impl Inspector {
             child.require_inspection_sender(original,files.payload.uid,files.payload.gid)?;
             require(self.result.bundle.is_some() && now()?<deadline)?;
             if packet::send(self.result.socket.as_fd(),ack,&[])?{
+                child.require_inspection_sender(original,files.payload.uid,files.payload.gid)?;
+                self.check(files)?;require(now()?<deadline)?;
                 self.result.pending=None;self.result.acknowledged=true;
             }
             return Ok(true);
@@ -167,6 +172,7 @@ impl Inspector {
         child.require_inspection_sender(&original,files.payload.uid,files.payload.gid)?;
         self.check(files)?;require(now()?<deadline)?;
         // Retain the independently verified exact bundle before committing ACK.
+        self.result.handoff_sha256=Some(Sha256Digest::compute(&original.bytes));
         self.result.bundle=Some(bundle);self.result.pending=Some((original,ack));Ok(true)
     }
     pub(super) fn receive(&mut self,original:packet::Packet,sequence:u64,child:&parent::child::Child,
@@ -174,6 +180,12 @@ impl Inspector {
         self.check(files)?;require(self.pending.is_none() && original.rights.len()==1)?;
         child.require_inspection_sender(&original,files.payload.uid,files.payload.gid)?;
         let request:Request=exact(&original.bytes)?;let deadline=decimal(&request.deadline_boottime_ns)?;
+        let releases_result=request.acknowledged_handoff_sha256.is_some();
+        if releases_result{
+            require(request.slot==RESULT_SLOT && !request.initial && self.result.acknowledged
+                && !self.result.post_ack_inspected && !self.result.released && self.result.bundle.is_some()
+                && request.acknowledged_handoff_sha256==self.result.handoff_sha256)?;
+        }
         let target=self.targets.get_mut(request.slot).ok_or(ShadowError::BindingDrift)?;
         require(request.api_version==INSPECTION_API && request.sequence==sequence
             && request.runtime_configuration_sha256==self.runtime
@@ -195,7 +207,7 @@ impl Inspector {
             packet::peer_pidfd(original.rights[0].as_fd())?.as_fd()).map_err(fail)?;
         let raw=canonical_json_bytes(&Reply{api_version:INSPECTION_API.into(),request_sha256:Sha256Digest::compute(&original.bytes),
             process_identity_sha256:target.expected.process_identity_sha256.clone()})?;
-        self.pending=Some(Pending{original,raw,slot:request.slot,deadline});Ok(())
+        self.pending=Some(Pending{original,raw,slot:request.slot,deadline,releases_result});Ok(())
     }
     pub(super) fn progress(&mut self,channel:BorrowedFd<'_>,child:&parent::child::Child,
         files:&super::super::FileAdmission)->Result<bool,ShadowError>{
@@ -207,7 +219,13 @@ impl Inspector {
         require(socket_identity(pending.original.rights[0].as_fd())?==target.identity && now()?<pending.deadline)?;
         target.peer.as_ref().ok_or(ShadowError::BindingDrift)?.revalidate_packet_pidfd(
             packet::peer_pidfd(pending.original.rights[0].as_fd())?.as_fd()).map_err(fail)?;
-        if packet::send(channel,&pending.raw,&[])?{self.pending=None;}Ok(true)
+        if packet::send(channel,&pending.raw,&[])?{
+            child.require_inspection_sender(&pending.original,files.payload.uid,files.payload.gid)?;
+            self.check(files)?;require(now()?<pending.deadline && now()?<self.deadline())?;
+            if pending.releases_result{self.result.post_ack_inspected=true;}
+            self.pending=None;
+        }
+        Ok(true)
     }
 }
 
@@ -242,14 +260,19 @@ impl Session {
         packet::same_process(pidfd,self.expected.pid)?;self.check(socket)
     }
     fn exchange(&self,socket:BorrowedFd<'_>,initial:bool,deadline:u64)->Result<(),ShadowError>{
+        self.exchange_selected(socket,initial,deadline,None)
+    }
+    fn exchange_selected(&self,socket:BorrowedFd<'_>,initial:bool,deadline:u64,
+        acknowledged_handoff_sha256:Option<Sha256Digest>)->Result<(),ShadowError>{
         self.check(socket)?;require(now()?<deadline && deadline<=self.deadline && deadline<=self.owner.delivery().lifetime
-            && (!initial || deadline<=self.owner.delivery().startup))?;
+            && (!initial || deadline<=self.owner.delivery().startup)
+            && (acknowledged_handoff_sha256.is_none() || self.slot==RESULT_SLOT && !initial))?;
         let mut state=self.channel.state.lock().map_err(fail)?;
         state.sequence=state.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?;
         let raw=canonical_json_bytes(&Request{api_version:INSPECTION_API.into(),sequence:state.sequence,slot:self.slot,initial,
             runtime_configuration_sha256:self.owner.delivery().payload.runtime_config.sha256.clone(),
             process_identity_sha256:self.expected.process_identity_sha256.clone(),socket_device:self.identity.0,socket_inode:self.identity.1,
-            deadline_boottime_ns:deadline.to_string()})?;require(raw.len()<=MAX_IPC)?;
+            deadline_boottime_ns:deadline.to_string(),acknowledged_handoff_sha256})?;require(raw.len()<=MAX_IPC)?;
         loop {self.check(socket)?;require(now()?<deadline)?;
             if packet::send(self.channel.fd.as_fd(),&raw,&[socket])?{break;}unsafe{libc::poll(std::ptr::null_mut(),0,1);}}
         loop {self.check(socket)?;require(now()?<deadline)?;
@@ -263,14 +286,21 @@ impl Session {
             }unsafe{libc::poll(std::ptr::null_mut(),0,1);}}
     }
 }
-pub(in crate::policy_shadow::policy_custody::services) struct ResultChannel {socket:OwnedFd,session:Session}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct HandoffAcknowledgment {api_version:String,handoff_sha256:Sha256Digest}
+pub(in crate::policy_shadow::policy_custody::services) struct ResultChannel {
+    socket:OwnedFd,session:Session,sent_handoff:std::sync::Mutex<Option<Sha256Digest>>,
+}
 impl ResultChannel {
     pub(in crate::policy_shadow::policy_custody::services) fn check(&self)->Result<(),ShadowError>{self.session.check(self.socket.as_fd())}
     pub(in crate::policy_shadow::policy_custody::services) fn progress_fd(&self)->BorrowedFd<'_>{self.socket.as_fd()}
     pub(in crate::policy_shadow::policy_custody::services) fn send(&self,raw:&[u8],deadline:u64)->Result<bool,ShadowError>{
         require(!raw.is_empty() && raw.len()<=services::common::MAX_SERVICE_FRAME_BYTES)?;
+        let mut sent_handoff=self.sent_handoff.lock().map_err(fail)?;require(sent_handoff.is_none())?;
         self.session.exchange(self.socket.as_fd(),false,deadline)?;
         require(now()?<deadline)?;let sent=packet::send(self.socket.as_fd(),raw,&[])?;
+        if sent{*sent_handoff=Some(Sha256Digest::compute(raw));}
         self.check()?;require(now()?<deadline)?;Ok(sent)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn receive(&self,deadline:u64)->Result<Option<Vec<u8>>,ShadowError>{
@@ -280,7 +310,14 @@ impl ResultChannel {
         require(original.credentials.pid==self.session.expected.pid && original.credentials.uid==self.session.expected.uid
             && original.credentials.gid==self.session.expected.gid && original.rights.is_empty())?;
         packet::same_process(original.pidfd.as_fd(),self.session.expected.pid)?;
-        self.session.exchange(self.socket.as_fd(),false,deadline)?;
+        let expected=self.sent_handoff.lock().map_err(fail)?.clone().ok_or(ShadowError::BindingDrift)?;
+        let acknowledgment:HandoffAcknowledgment=exact(&original.bytes)?;
+        require(acknowledgment.api_version=="serverware.nativePublicationGenesisHandoffAck/v1"
+            && acknowledgment.handoff_sha256==expected)?;
+        // The parent keeps progressing until this exact post-ACK inspection
+        // reply is committed. Once it releases its bundle, no further remote
+        // inspection is needed to finish the child's local ACK validation.
+        self.session.exchange_selected(self.socket.as_fd(),false,deadline,Some(expected))?;
         packet::same_process(original.pidfd.as_fd(),self.session.expected.pid)?;self.check()?;
         require(now()?<deadline)?;Ok(Some(original.bytes))
     }
@@ -340,6 +377,7 @@ impl Prepared {
             identity:socket_identity(socket.as_fd())?,path:None,directory:None,deadline};
         session.exchange(socket.as_fd(),true,deadline.min(owner.delivery().startup))?;
         require(self.activation.is_empty())?;
-        services::publication_genesis_client::run(self.configuration,owner,native,ordinary,ResultChannel{socket,session}).map_err(fail)
+        services::publication_genesis_client::run(self.configuration,owner,native,ordinary,
+            ResultChannel{socket,session,sent_handoff:std::sync::Mutex::new(None)}).map_err(fail)
     }
 }

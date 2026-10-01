@@ -141,7 +141,7 @@ def _runtime(selected, selection, prior, observations, mono):
     jobs._same(actual_inputs, {name: header[name] for name in actual_inputs})
     item = held[role]
     cold, state = item["observed"]["cold"], item["state"]
-    activation = g.document(jobs._observed(observations, "ordinary.activation." + role), 65536)
+    activation = jobs.delivery._activation(jobs._observed(observations, "ordinary.activation." + role))
     credentials = copy.deepcopy(value["runtimePolicy"]["services"][role]["credentials"])
     inspection_raw = runtime.inspection_original(role, runtime_raw, cold, state)
     prefix = "/etc/serverware/custody-" + role + "-"
@@ -165,7 +165,7 @@ def _grant(selected, selection, prior, observations):
     cold_raw = jobs._record(prior, "cold-binding", "input")
     return {**{name: copy.deepcopy(original[name]) for name in ordinary.COMMON}, "operation": "grant",
         "deliveryOriginals": {role: _text(jobs._record(prior, "ordinary-delivery-" + role)) for role in jobs.ORDINARY},
-        "activation": {role: g.document(jobs._observed(observations, "ordinary.activation." + role), 65536)
+        "activation": {role: jobs.delivery._activation(jobs._observed(observations, "ordinary.activation." + role))
             for role in jobs.ORDINARY}, "coldBindingInputOriginal": _text(cold_raw), "coldBindingInputSha256": p.sha(cold_raw),
         "nativePublicationOriginal": _text(jobs._record(prior, "native-publication-grant")),
         "nativeRetrievalOriginal": _text(jobs._record(prior, "native-retrieval-grant")), **copy.deepcopy(selection)}

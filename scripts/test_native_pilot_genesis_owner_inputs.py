@@ -80,7 +80,7 @@ def fixture():
     observed = {"apiVersion": compiler.assembly.OBSERVATION, **pins, "window": configured["window"],
         "observedAtBoottimeNs": str(clocks["now_boottime_ns"]),
         "peers": {role: assembly_tests.measured(peers[role], index) for index, role in enumerate(compiler.assembly.ROLES)},
-        "activation": g.document(observations["coordinator.activation"], 65536)}
+        "activation": jobs.delivery._activation(observations["coordinator.activation"])}
     observations["coordinator.observation"] = g.canonical(observed)
     selections = {name: {} for name in compiler.NAMES}
     selections["parent-start"] = {"controllerExecutableSha256": p.sha(b"SYNTHETIC selected controller executable")}

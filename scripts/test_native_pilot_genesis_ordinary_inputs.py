@@ -176,11 +176,23 @@ class GenesisOrdinaryInputControls(unittest.TestCase):
         with self.assertRaises(InvalidSignature): compose(self.value, name, records=records)
         for suffix in ("activation.", "runtime-inputs."):
             observations = copy.deepcopy(self.value["observations"])
-            observed = g.document(observations["ordinary." + suffix + jobs.ORDINARY[0]], 65536)
+            raw = observations["ordinary." + suffix + jobs.ORDINARY[0]]
+            observed = jobs.delivery._activation(raw) if suffix == "activation." else g.document(raw, 65536)
             if suffix == "activation.": observed[1]["inode"] += 1
             else: observed["listenerSocketPath"] = "/run/unselected-listener.sock"
             observations["ordinary." + suffix + jobs.ORDINARY[0]] = g.canonical(observed)
             with self.subTest(suffix=suffix), self.assertRaises(FAILURES): compose(self.value, name, observations=observations)
+
+    def test_activation_original_is_a_bounded_canonical_list_not_a_document(self):
+        role = jobs.ORDINARY[0]
+        key = "ordinary.activation." + role
+        original = self.value["observations"][key]
+        self.assertIsInstance(jobs.delivery._activation(original), list)
+        for raw in (b"{}", original + b"\n", b'[{"fd":6,"fd":7}]', b'[{"fd":6.0}]',
+                b"[" + b" " * 32768 + b"]"):
+            observations = self.value["observations"] | {key: raw}
+            with self.subTest(raw=raw[:40]), self.assertRaises(ValueError):
+                compose(self.value, "ordinary-runtime-" + role, observations=observations)
 
     def test_second_runtime_and_deliveries_cannot_reselect_policy_or_reframe_input(self):
         first, second = ("ordinary-runtime-" + role for role in jobs.ORDINARY)

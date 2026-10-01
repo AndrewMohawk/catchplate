@@ -140,7 +140,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
         retrieval:None,activation:None,persistence:None,retrieval_client:None,bridge_selected:true,trusted_time:None,
         proof_client:Some(proof_client),generation:None,time_grant:Some(time_grant),proof_bridge:true,
         commit_request:None,commitment_bridge,spool_bridge,publication_bridge,publication_adoption_bridge,ledger_retrieval:None,spool_signer:None,publication:None,
-        genesis_client:None,genesis_coordinator:false,
+        genesis_client:None,genesis_coordinator:false,genesis_late_runtime:false,
         bridge_activation,native_configuration:Some(native_configuration)};
     owner.check()?;
     owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,&owner.time_endpoint()?,&owner.trust,owner.time.as_ref())?;

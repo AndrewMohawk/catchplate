@@ -1,7 +1,9 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Supervisor helper signing ceremonies
 
 The `.387` source connects fifteen supplemental helper ceremony jobs and the
-four-history runtime handoff. Verification is pending at source freeze. The
+four-history runtime handoff. All 158 focused controls pass at `0295499c`. The
 current inventory is **142/151 composed jobs**, **108 signing selectors**, with
 nine current slots still missing; additional bridge-currentness and late
 authorization prerequisites are not yet represented in that total. Source
@@ -83,8 +85,26 @@ hardware, provenance and final release acceptance remain required.
 
 ## Focused verification
 
-Pending at source freeze. No tests, native or artifact rebuild, protected owner,
-signing command, service, cloud or paid operation has run for this batch.
-Verification will use one focused Python pass; unchanged native source is not
-recompiled. Synthetic signed transcripts do not establish live execution or
-independent approval provenance.
+Exact source `0295499c18474f6ee86c9208cdd392949becc097` passed all **158 controls
+in 19 suites** in one Python 3.11.15 run (exit **0**, about **56 seconds**).
+All **20 changed Python files** passed grammar and both Make inventories;
+**46 relative documentation links** resolved. The nine new controls took
+**0.969 seconds** within that pass. Native source and dependencies are unchanged,
+so native/artifact builds and unrelated bridge-launch suites were not repeated.
+
+The new controls cover separately signed synthetic outputs for all fifteen
+supplemental jobs, exact role/key selection, actual-prior-output tampering,
+unpublished assemblies and the four-wrapper runtime handoff. The u64 regression
+calls only the inner conductor association with explicitly unsigned synthetic
+data; it does not authenticate a full input or acquire a real phase owner.
+
+The exact archive, harness, commands, logs, result and eight-file verified
+checksum manifest are retained locally at
+`/home/catchplate/codex-offload/serverware/engineering-builds/0295499c-helper-ceremonies-wLTBeO/`.
+Archive SHA-256:
+`66e2e7b8fa34f0795d33a0043358948e59462f41708efa2bfed9be2512deb605`.
+
+No protected supervisor/policy owner, signing entrypoint, publication, native
+service, actual helper initialization, provider, hardware, cloud or paid action
+ran. Live forty-job orchestration and independent approval provenance remain
+unverified. These results are engineering checks, not pilot acceptance.

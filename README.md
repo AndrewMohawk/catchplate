@@ -138,7 +138,7 @@ has **142 of 151 current job composers** and **108 signing selectors**. This
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v14 connects the
 [helper's four-role signing ceremonies](docs/native-pilot-helper-ceremonies.md);
-its focused verification is pending. The earlier
+its 158 focused controls pass. The earlier
 [fresh-helper startup path](docs/native-pilot-helper-initial.md) passes focused
 checks and native compilation, but live initialization remains unverified.
 

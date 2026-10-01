@@ -10,8 +10,10 @@ jobs now have fixed policy/input composers. Source coverage is not production
 acceptance, which remains **0/6**. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
 is no CLI, generic template renderer, approval callback or implicit approval of
-future inputs. Verification of this batch is pending at source freeze; live
-installation and connected acceptance remain unverified. Source checkpoints
+future inputs. Exact source `0295499c` passes all 158 focused controls in 19
+suites; live installation and connected acceptance remain unverified.
+[Verification and limits](native-pilot-helper-ceremonies.md#focused-verification).
+Source checkpoints
 remain **36/46**; independent production acceptance remains separate.
 Older numbered examples below describe their original source batches; use the
 current [sequencing table](native-pilot-helper-ceremonies.md#source-derived-sequencing)

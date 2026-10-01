@@ -63,5 +63,38 @@ and connected application allow/deny/cleanup run remain required. Source
 coverage is not a readiness percentage. Independent Nitro/KMS, signing,
 witness, provider and hardware approval acceptance remain separate.
 
-Focused verification is pending for this assembled batch. No live signer,
-retained-owner acceptance, native rebuild, cloud or paid action is claimed.
+The immediate next group is ten `install-launch-*` jobs. The existing launch
+installer verifies complete bundles, but late closure, encrypted-delivery and
+verifier-transport authorizations bind actual C9 Guest13 and need genuine
+post-observation issuance. Existing closure and CommitRequest encrypted-delivery
+producers are not yet routed through the fixed jobs. Verifier-transport and
+other encrypted-delivery producers still need locating or implementing. A
+future-guest placeholder, invented ciphertext or pre-start policy literal is
+not a substitute. After those launches, service material, bridge, release,
+constructed admission, origin observation and shutdown decisions remain.
+
+## Focused verification
+
+Exact source `b0c98be1b5ab602d14cfd3deade95b8c5f832d66` passed **115 focused
+Python controls**, grammar and both Make inventories for all twelve changed
+Python files, and **61 relative documentation links**, in one run (exit **0**).
+The run was 2026-10-01 00:30:06.657986480–00:30:19.323415148 UTC, using Python
+3.11.15, cleared environment, CPU 0, isolated user/network namespaces and
+`-I -S -B`, under a 120-second limit. No database, application or authority-store
+module was imported.
+
+The eight new controls cover closed policy/routing, starting-head and capacity
+refusals, authenticated synthetic initial-history epoch projection and tamper
+refusals, semantic history hashes, unsigned-only Head projection, independent
+signature framing and incomplete-input refusal. They do **not** cover a full
+positive eleven-native/five-transition transcript or actual retained-owner,
+signing-entrypoint, service or hardware acceptance.
+
+The 85,278,720-byte source archive has SHA256
+`543a98d7f469c5267da9b37e3af7fbcb2301a1e3468700e600ccea8925a41af4`.
+Archive, source revision, exact harness/command, log, structured result and
+verified checksums are retained outside disposable scratch at
+`codex-offload/serverware/engineering-builds/b0c98be1-ordinary-transitions-wrwhMX/`.
+Native source, schemas and dependency lock are unchanged from the previously
+compiled `03d4075d`; no native/artifact rebuild was repeated. The reused runtime
+is still an unpublished engineering candidate. No cloud or paid action ran.

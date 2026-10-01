@@ -39,6 +39,7 @@ AUTHORITY_FILES = (
     "scripts/native_pilot_runtime_artifacts.py",
     "scripts/verify_nitro_tee.py",
     "scripts/authority/native_pilot_authority_io.py",
+    "scripts/authority/prepare_native_pilot_closure_set.py",
 )
 AUTHORITY_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + AUTHORITY_ENTRYPOINT, "--run-native-pilot"]
 SUPERVISOR_API_VERSION = "serverware.nativePilotSupervisorRuntime/v1"
@@ -47,6 +48,7 @@ SUPERVISOR_ENTRYPOINT = "supervisor/app/scripts/native_pilot_supervisor_runtime_
 SUPERVISOR_FILES = (
     "scripts/native_pilot_supervisor_runtime_entrypoint.py",
     "scripts/run_native_pilot_supervisor.py",
+    "scripts/native_pilot_publication_runtime_entrypoint.py",
 )
 SUPERVISOR_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + SUPERVISOR_ENTRYPOINT, "--run-native-pilot"]
 SUPERVISOR_REQUIRED_ARGUMENTS = {

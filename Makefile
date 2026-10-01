@@ -1334,6 +1334,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_native_pilot_assignment.py \
 	scripts/authority/prepare_native_pilot_closure_set.py \
 	scripts/test_native_pilot_closure_set.py \
+	scripts/test_native_pilot_assignment_profiles.py \
+	scripts/test_native_pilot_publication_cli.py \
+	scripts/native_pilot_publication_runtime_entrypoint.py \
 	scripts/test_native_pilot_fresh_ledger.py \
 	scripts/test_native_pilot_endpoint_commissioning.py \
 	scripts/test_native_pilot_ordinary_keys.py \
@@ -4157,6 +4160,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_native_pilot_assignment.py \
 				scripts/authority/prepare_native_pilot_closure_set.py \
 				scripts/test_native_pilot_closure_set.py \
+				scripts/test_native_pilot_assignment_profiles.py \
+				scripts/test_native_pilot_publication_cli.py \
+				scripts/native_pilot_publication_runtime_entrypoint.py \
 				scripts/test_native_pilot_fresh_ledger.py \
 				scripts/test_native_pilot_endpoint_commissioning.py \
 				scripts/test_native_pilot_ordinary_keys.py \
@@ -4899,6 +4905,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-proof-cohort.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-publication-genesis-controller.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-publication-adoption-validator.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-retrieval-pair.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
@@ -4906,6 +4914,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_seccomp_export.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_controller.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/publication_adoption_validator.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/publication_adoption_validator_io.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap_parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_facade_receiver.rs \
@@ -5426,6 +5437,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/policy-shadow-assignment.v2.schema.json \
 				schemas/native-custody-execution-closure-set.v1.schema.json \
 				schemas/native-pilot-closure-set-preparation.v1.schema.json \
+				schemas/native-pilot-closure-set-preparation.v2.schema.json \
+				schemas/native-custody-execution-closure-set.v2.schema.json \
+				schemas/native-publication-genesis-closure-set.v1.schema.json \
+				schemas/native-pilot-assignment-authority-input.v2.schema.json \
 				schemas/native-shadow-role-keys.v1.schema.json \
 				schemas/native-shadow-nitro-verifier.v1.schema.json \
 				schemas/native-shadow-verifier-launch.v1.schema.json \

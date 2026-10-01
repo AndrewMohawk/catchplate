@@ -327,6 +327,7 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/native_pilot_runtime_artifacts.py /authority-runtime-root/authority/app/scripts/native_pilot_runtime_artifacts.py; \
     install -m 0444 /source/scripts/verify_nitro_tee.py /authority-runtime-root/authority/app/scripts/verify_nitro_tee.py; \
     install -m 0444 /source/scripts/authority/native_pilot_authority_io.py /authority-runtime-root/authority/app/scripts/authority/native_pilot_authority_io.py; \
+    install -m 0444 /source/scripts/authority/prepare_native_pilot_closure_set.py /authority-runtime-root/authority/app/scripts/authority/prepare_native_pilot_closure_set.py; \
     test -z "$(find /authority-runtime-root -type l -print -quit)"; \
     find /authority-runtime-root -type d -exec chmod 0555 {} +; \
     find /authority-runtime-root -type f -exec chmod 0444 {} +; \
@@ -348,6 +349,7 @@ RUN --network=none set -eu; \
     install -d -m 0555 /supervisor-runtime-root/supervisor/app/scripts; \
     install -m 0444 /source/scripts/native_pilot_supervisor_runtime_entrypoint.py /supervisor-runtime-root/supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py; \
     install -m 0444 /source/scripts/run_native_pilot_supervisor.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_supervisor.py; \
+    install -m 0444 /source/scripts/native_pilot_publication_runtime_entrypoint.py /supervisor-runtime-root/supervisor/app/scripts/native_pilot_publication_runtime_entrypoint.py; \
     test -z "$(find /supervisor-runtime-root -type l -print -quit)"; \
     find /supervisor-runtime-root -type d -exec chmod 0555 {} +; \
     find /supervisor-runtime-root -type f -exec chmod 0444 {} +; \

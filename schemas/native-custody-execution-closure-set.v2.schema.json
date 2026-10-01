@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-custody-execution-closure-set.v2.schema.json",
+  "description": "Unsigned exact operational-twelve static set with a distinct publicationReconciliation member before bridge. Canonical ASCII no-LF original <=12MiB; each manifest <=1MiB. New v2 hash domains do not confer signing, provenance or live custody authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "members", "setRootSha256", "seccompSetRootSha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeCustodyExecutionClosureSet/v2"},
+    "setRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
+    "seccompSetRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
+    "members": {
+      "type": "array", "minItems": 12, "maxItems": 12, "items": false,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "retrieval"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "persistence"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "trustedTime"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "generationInstall"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "commitRequest"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "ingressAdmission"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "terminalAppend"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "dispatchBarrier"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "activeEffectBarrier"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "activeEffectCommit"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "publicationReconciliation"}}}]},
+        {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/bridge"}
+      ]
+    }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["role", "manifest"],
+      "properties": {
+        "role": {"enum": ["retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "publicationReconciliation"]},
+        "manifest": {"$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"}
+      }
+    }
+  }
+}

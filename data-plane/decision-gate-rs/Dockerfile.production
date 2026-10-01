@@ -158,6 +158,8 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-policy-shadow-custody-guest \
         --bin serverware-native-shadow-guest-supervisor \
         --bin serverware-native-shadow-proof-cohort \
+        --bin serverware-native-publication-genesis-controller \
+        --bin serverware-native-publication-adoption-validator \
         --bin serverware-native-shadow-verifier \
         --bin serverware-native-shadow-verifier-transport \
         --bin serverware-native-shadow-time-issuer \
@@ -212,6 +214,12 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-proof-cohort | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-proof-cohort | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-proof-cohort)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-publication-genesis-controller | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-publication-genesis-controller | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-publication-genesis-controller)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-publication-adoption-validator | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-publication-adoption-validator | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-publication-adoption-validator)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-time-issuer | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-time-issuer | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864 \
@@ -491,6 +499,8 @@ FROM scratch AS native-pilot-artifacts
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-policy-shadow-custody-guest /native-install/usr/local/bin/serverware-policy-shadow-custody-guest
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-proof-cohort /native-install/opt/serverware/serverware-native-shadow-proof-cohort
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /native-install/opt/serverware/serverware-native-shadow-guest-supervisor
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-genesis-controller /native-install/opt/serverware/serverware-native-publication-genesis-controller
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-adoption-validator /native-install/opt/serverware/serverware-native-publication-adoption-validator
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /native-install/usr/local/bin/serverware-native-shadow-worker
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /native-install/opt/serverware/native-shadow-custody-runtime.squashfs
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /native-install/usr/share/serverware/native-shadow-custody-runtime.json

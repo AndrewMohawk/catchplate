@@ -250,6 +250,19 @@ pub(super) fn load_retained_completed_invocation(raw: &[u8], runtime: &RuntimeCo
     Ok((owner.history, deadline))
 }
 
+/// Public issuer validation of a selected adoption target, not startup or
+/// directory admission. Both ends of the requested original interval must be
+/// inside the authenticated initial checkpoint and lifetime.
+pub(super) fn load_retained_adoption_authorization(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, issued: u64, expires: u64)
+    -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+    require(runtime.api_version == super::publication_service::ADOPTION_RUNTIME)?;
+    let owner = authenticate_window(raw, runtime, role, false)?;
+    owner.state.domain()?.require_current().map_err(error)?;
+    require_genesis_window_owner(&owner, issued, expires)?;
+    Ok(owner.history)
+}
+
 pub(super) struct HelperAuthorization {
     pub(super) checkpoint: SignedEndpointKeyAuthorizationCheckpoint,
     pub(super) checkpoint_authority: VerifyingKey,

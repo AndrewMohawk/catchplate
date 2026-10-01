@@ -6,6 +6,9 @@ preprovisioned assignment-key FD. The issuer creates no scope/timestamp/keys and
 does not install, publish or approve input. Output is canonical no-LF bytes on
 the root supervisor pipe; incomplete output/nonzero exit must be discarded.
 An independent supervisor must bound filesystem and cryptographic stalls.
+Input/v1 selects only the legacy eleven-member closure. Input/v2 explicitly
+selects the cold three-member or operational twelve-member closure set; it does
+not change the signed Assignment/v2 format or derive a profile from its members.
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ def main():
         owner = os.getpid(), originals._start(), originals._boot()
         before_boot, before_wall = originals._clock(), time.time_ns()
         raw = io.read_public(args.input_fd, authority.MAX_INPUT)
+        authority.input_document(raw)  # Refuse unknown selector/fields before reading key bytes.
         result = authority.sign(input_original=raw, signing_key=io.signing_key(args.authority_key_fd))
         payload = p.document(result, authority.MAX_BYTES)["payload"]
         now_boot, now_wall = originals._clock(), time.time_ns()

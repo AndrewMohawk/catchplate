@@ -22,7 +22,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts" / "authority"))
 
+import prepare_native_pilot_closure_set as preparation
 from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_assignment as assignment_profile
 from serverware import native_pilot_launch_publication as launch
@@ -34,6 +36,8 @@ EXPECTED_ROLES = (
     "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier",
     "activeEffectCommit", "bridge",
 )
+EXPECTED_GENESIS_ROLES = ("publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator")
+EXPECTED_PUBLICATION_ROLES = EXPECTED_ROLES[:-1] + ("publicationReconciliation", "bridge")
 MANIFEST_FIELDS = ("apiVersion", "profile", "imageSha256", "workerExecutableSha256", "seccompPolicy",
     "runtimeConfigurationSha256", "buildProvenance", "manifestSha256")
 PROVENANCE_FIELDS = ("sourceTreeSha256", "dependencyLockSha256", "buildRecipeSha256", "toolchainClosureSha256",
@@ -344,6 +348,184 @@ class ClosureSetStaticTests(unittest.TestCase):
             value[name] = synthetic("forbidden/" + name)
             with self.subTest(field=name), self.assertRaises(ValueError):
                 closure_set.validate(canonical(value))
+
+
+class ClosureSetSuccessorTests(unittest.TestCase):
+    # These exercise static bytes and public schema only. They do not run a
+    # protected FD command, sign a closure, or admit any native owner.
+    PROFILES = (
+        ("serverware.nativePublicationGenesisClosureSet/v1", EXPECTED_GENESIS_ROLES,
+            "serverware.nativePublicationGenesisClosureSetLeaf/v1",
+            "serverware.nativePublicationGenesisClosureSetRoot/v1",
+            "serverware.nativePublicationGenesisSeccompSetRoot/v1"),
+        ("serverware.nativeCustodyExecutionClosureSet/v2", EXPECTED_PUBLICATION_ROLES,
+            "serverware.nativeCustodyExecutionClosureSetLeaf/v2",
+            "serverware.nativeCustodyExecutionClosureSetRoot/v2",
+            "serverware.nativeCustodySeccompSetRoot/v2"),
+    )
+
+    def members(self, roles):
+        return [{"role": role, "manifest": manifest_fixture(role)} for role in roles]
+
+    def assert_recipe(self, profile):
+        api, roles, leaf_domain, root_domain, seccomp_domain = profile
+        members = self.members(roles)
+        raw = closure_set.set_original(members, api_version=api)
+        value = closure_set.validate(raw, api_version=api)
+        leaves = [frame(leaf_domain, [row["role"], row["manifest"]]) for row in members]
+        policies = [[row["role"], row["manifest"]["seccompPolicy"]["structurallyVerifiedPolicySha256"]]
+            for row in members]
+        self.assertEqual(tuple(row["role"] for row in value["members"]), roles)
+        self.assertEqual(raw, canonical(value))
+        self.assertEqual(value["setRootSha256"], frame(root_domain, leaves))
+        self.assertEqual(value["seccompSetRootSha256"], frame(seccomp_domain, policies))
+        self.assertEqual(closure_set.require_binding(raw, api_version=api,
+            expected_set_root=value["setRootSha256"], expected_seccomp_set_root=value["seccompSetRootSha256"]), value)
+        for index, role in enumerate(roles):
+            binding = closure_set.leaf_binding(value, role, api_version=api)
+            self.assertEqual(binding["leafSha256"], leaves[index])
+            self.assertEqual(binding["manifestSha256"], members[index]["manifest"]["manifestSha256"])
+        return value
+
+    def test_cold_three_exact_order_native_hashes_and_immutable_coordinator(self):
+        self.assertEqual(closure_set.GENESIS_API, self.PROFILES[0][0])
+        self.assertEqual(closure_set.GENESIS_ROLES, EXPECTED_GENESIS_ROLES)
+        value = self.assert_recipe(self.PROFILES[0])
+        self.assertTrue(all(row["manifest"]["apiVersion"] == "serverware.nativeCustodyExecutionClosure/v1"
+            for row in value["members"]))
+
+    def test_hot_twelve_exact_order_native_hashes_and_distinct_publication_member(self):
+        self.assertEqual(closure_set.PUBLICATION_API, self.PROFILES[1][0])
+        self.assertEqual(closure_set.PUBLICATION_ROLES, EXPECTED_PUBLICATION_ROLES)
+        value = self.assert_recipe(self.PROFILES[1])
+        publication, bridge = value["members"][-2:]
+        self.assertEqual(publication["manifest"]["apiVersion"], "serverware.nativeCustodyExecutionClosure/v1")
+        self.assertEqual(bridge["manifest"]["apiVersion"], "serverware.nativeCustodyExecutionClosure/v2")
+        self.assertNotEqual(publication["manifest"]["manifestSha256"], bridge["manifest"]["manifestSha256"])
+
+    def test_successor_selection_is_explicit_and_legacy_default_stays_closed(self):
+        legacy = closure_set.set_original(members_fixture())
+        self.assertEqual(legacy, closure_set.set_original(members_fixture(), api_version=closure_set.API))
+        for api, roles, *_ in self.PROFILES:
+            members = self.members(roles)
+            raw = closure_set.set_original(members, api_version=api)
+            value = closure_set.validate(raw, api_version=api)
+            for call in (lambda: closure_set.set_original(members), lambda: closure_set.validate(raw),
+                    lambda: closure_set.leaf_binding(value, roles[0]),
+                    lambda: closure_set.require_binding(raw, expected_set_root=value["setRootSha256"],
+                        expected_seccomp_set_root=value["seccompSetRootSha256"])):
+                with self.subTest(api=api), self.assertRaises(ValueError):
+                    call()
+            with self.assertRaises(ValueError):
+                closure_set.validate(legacy, api_version=api)
+        for api in (None, False, 2, [], "serverware.nativeCustodyExecutionClosureSet/v3"):
+            with self.subTest(api=api), self.assertRaises(ValueError):
+                closure_set.set_original(members_fixture(), api_version=api)
+
+    def test_successor_inventory_rejects_missing_extra_duplicate_and_reordered_members(self):
+        for api, roles, *_ in self.PROFILES:
+            members = self.members(roles)
+            duplicate = copy.deepcopy(members)
+            duplicate[1] = copy.deepcopy(duplicate[0])
+            reordered = copy.deepcopy(members)
+            reordered[0], reordered[1] = reordered[1], reordered[0]
+            unknown = copy.deepcopy(members)
+            unknown[0]["role"] = "bridge" if api == self.PROFILES[0][0] else "publicationGenesis"
+            for changed in (members[:-1], members + [members[0]], duplicate, reordered, unknown):
+                with self.subTest(api=api), self.assertRaises(ValueError):
+                    closure_set.set_original(changed, api_version=api)
+
+    def test_successor_manifest_profiles_commitments_and_wire_are_not_inferred(self):
+        for api, roles, *_ in self.PROFILES:
+            members = self.members(roles)
+            raw = closure_set.set_original(members, api_version=api)
+            for index in (0, len(members) - 1):
+                changed = copy.deepcopy(members)
+                changed[index]["manifest"] = manifest_fixture("retrieval" if roles[index] == "bridge" else "bridge")
+                with self.subTest(api=api, index=index), self.assertRaises(ValueError):
+                    closure_set.set_original(changed, api_version=api)
+            changed = copy.deepcopy(members)
+            changed[0]["manifest"]["buildProvenance"]["sourceTreeSha256"] = synthetic("successor-tamper")
+            with self.assertRaises(ValueError):
+                closure_set.set_original(changed, api_version=api)
+            value = json.loads(raw)
+            value["guest"] = {}
+            for changed_raw in (raw + b"\n", canonical(value), raw.replace(b'"members":', b'"members":[],"members":', 1)):
+                with self.subTest(api=api), self.assertRaises(ValueError):
+                    closure_set.validate(changed_raw, api_version=api)
+        self.assertEqual(closure_set.MAX_BYTES, 12 * 1024 * 1024)
+        self.assertEqual(closure_set.MAX_MANIFEST, 1024 * 1024)
+        with self.assertRaises(ValueError):
+            closure_set.validate(b" " * (closure_set.MAX_BYTES + 1), api_version=closure_set.GENESIS_API)
+
+    def test_successor_domains_and_both_expected_roots_are_not_interchangeable(self):
+        for api, roles, *_ in self.PROFILES:
+            members = self.members(roles)
+            raw = closure_set.set_original(members, api_version=api)
+            value = closure_set.validate(raw, api_version=api)
+            for wrong_root, wrong_seccomp in ((synthetic("wrong-set"), value["seccompSetRootSha256"]),
+                    (value["setRootSha256"], synthetic("wrong-seccomp")),
+                    (value["seccompSetRootSha256"], value["setRootSha256"])):
+                with self.assertRaises(ValueError):
+                    closure_set.require_binding(raw, api_version=api, expected_set_root=wrong_root,
+                        expected_seccomp_set_root=wrong_seccomp)
+            old_leaves = [frame("serverware.nativeCustodyExecutionClosureSetLeaf/v1", [row["role"], row["manifest"]])
+                for row in members]
+            value["setRootSha256"] = frame("serverware.nativeCustodyExecutionClosureSetRoot/v1", old_leaves)
+            with self.assertRaises(ValueError):
+                closure_set.validate(canonical(value), api_version=api)
+
+    def test_preparation_original_selects_exact_api_and_keeps_pin_and_canonical_checks(self):
+        legacy = {"apiVersion": preparation.INPUT_API, "members": members_fixture()}
+        raw = canonical(legacy)
+        self.assertEqual(preparation.prepare(raw, sha(raw)), closure_set.set_original(legacy["members"]))
+        for api, roles, *_ in self.PROFILES:
+            value = {"apiVersion": "serverware.nativePilotClosureSetPreparation/v2",
+                "setApiVersion": api, "members": self.members(roles)}
+            raw = canonical(value)
+            self.assertEqual(preparation.prepare(raw, sha(raw)), closure_set.set_original(value["members"], api_version=api))
+            cases = [dict(value, apiVersion=preparation.INPUT_API), dict(value, setApiVersion=closure_set.API),
+                dict(value, setApiVersion=None), dict(value, guest={}),
+                {key: item for key, item in value.items() if key != "setApiVersion"},
+                {"apiVersion": preparation.INPUT_API, "members": value["members"]}]
+            for changed in cases:
+                changed_raw = canonical(changed)
+                with self.subTest(api=api), self.assertRaises(ValueError):
+                    preparation.prepare(changed_raw, sha(changed_raw))
+            with self.assertRaises(ValueError):
+                preparation.prepare(raw, synthetic("not-the-pinned-original"))
+            for changed_raw in (raw + b"\n", raw.replace(b'"setApiVersion":', b'"setApiVersion":null,"setApiVersion":', 1)):
+                with self.assertRaises(ValueError):
+                    preparation.prepare(changed_raw, sha(changed_raw))
+
+    def test_successor_schemas_match_exact_closed_profile_selection(self):
+        from jsonschema import Draft202012Validator
+        from referencing import Registry, Resource
+        names = ("native-custody-closure.v1.schema.json", "native-custody-closure.v2.schema.json",
+            "native-custody-execution-closure-set.v1.schema.json", "native-custody-execution-closure-set.v2.schema.json",
+            "native-publication-genesis-closure-set.v1.schema.json", "native-pilot-closure-set-preparation.v1.schema.json",
+            "native-pilot-closure-set-preparation.v2.schema.json")
+        schemas = {name: json.loads((ROOT / "schemas" / name).read_text()) for name in names}
+        registry = Registry().with_resources((value["$id"], Resource.from_contents(value)) for value in schemas.values())
+        for value in schemas.values():
+            Draft202012Validator.check_schema(value)
+        prepared_schema = schemas["native-pilot-closure-set-preparation.v2.schema.json"]
+        for profile, schema_name in zip(self.PROFILES, ("native-publication-genesis-closure-set.v1.schema.json",
+                "native-custody-execution-closure-set.v2.schema.json"), strict=True):
+            api, roles, *_ = profile
+            value = closure_set.validate(closure_set.set_original(self.members(roles), api_version=api), api_version=api)
+            validator = Draft202012Validator(schemas[schema_name], registry=registry)
+            validator.validate(value)
+            prepared = {"apiVersion": preparation.SUCCESSOR_INPUT_API, "setApiVersion": api, "members": value["members"]}
+            preparation_validator = Draft202012Validator(prepared_schema, registry=registry)
+            preparation_validator.validate(prepared)
+            changed = copy.deepcopy(value)
+            changed["members"][0], changed["members"][1] = changed["members"][1], changed["members"][0]
+            self.assertTrue(list(validator.iter_errors(changed)))
+            self.assertTrue(list(preparation_validator.iter_errors(dict(prepared, setApiVersion=closure_set.API))))
+            self.assertTrue(list(preparation_validator.iter_errors(dict(prepared, members=changed["members"]))))
+            legacy_validator = Draft202012Validator(schemas["native-custody-execution-closure-set.v1.schema.json"], registry=registry)
+            self.assertTrue(list(legacy_validator.iter_errors(value)))
 
 
 class AssignmentClosureContractTests(unittest.TestCase):

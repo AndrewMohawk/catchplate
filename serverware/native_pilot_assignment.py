@@ -9,6 +9,12 @@ fleet, policy, identities, provenance or authority. Existing independently
 provisioned trust selects the matching assignment signing key. Public structural
 checks and signatures are not native runtime/trusted-time/provenance acceptance.
 Generic DB admission remains v1; this is the explicit native-only successor.
+
+Authority Input/v2 additionally selects setApiVersion for the cold three-member
+or operational twelve-member set. The signed Assignment/v2 wire is unchanged:
+its domain-separated roots commit the selected profile. Legacy Input/v1 and
+binding callers retain the exact eleven-member set. Cold assignments anchor
+custody authority to the coordinator, never a fabricated bridge manifest.
 """
 from __future__ import annotations
 
@@ -28,6 +34,33 @@ MAX_INPUT = 8 * 1024 * 1024
 FIELDS = ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256",
     "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature")
 INPUT_FIELDS = ("apiVersion", "trustOriginal", "trustSha256", "payloadOriginal", "closureSetOriginal")
+SUCCESSOR_INPUT_FIELDS = INPUT_FIELDS + ("setApiVersion",)
+
+
+def input_document(input_original: bytes) -> tuple[dict, str]:
+    """Select only an explicitly approved producer profile, before key use."""
+    value = p.document(input_original, MAX_INPUT)
+    if value.get("apiVersion") == "serverware.nativePilotAssignmentAuthorityInput/v1":
+        p.fields(value, INPUT_FIELDS)
+        return value, closure_set.API
+    p.fields(value, SUCCESSOR_INPUT_FIELDS)
+    p.require(value["apiVersion"] == "serverware.nativePilotAssignmentAuthorityInput/v2"
+        and value["setApiVersion"] in (closure_set.GENESIS_API, closure_set.PUBLICATION_API))
+    return value, value["setApiVersion"]
+
+
+def _closure_selection(payload: dict, set_original: bytes, *, set_api_version: str):
+    """Bind selected static roots and their exact authority anchor, not owners."""
+    pins = payload["nativeClosureSet"]
+    selected = closure_set.require_binding(set_original,
+        expected_set_root=pins["setRootSha256"], expected_seccomp_set_root=pins["seccompSetRootSha256"],
+        api_version=set_api_version)
+    anchor_role = "publicationGenesisCoordinator" if set_api_version == closure_set.GENESIS_API else "bridge"
+    anchor = closure_set.leaf_binding(selected, anchor_role, api_version=set_api_version)
+    p.require(anchor["manifestSha256"] == payload["custodyAuthority"]["executionClosureManifestSha256"]
+        and anchor["structurallyVerifiedPolicySha256"]
+        == payload["custodyAuthority"]["structurallyVerifiedSeccompPolicySha256"])
+    return selected
 
 
 def version(envelope: dict) -> int:
@@ -58,19 +91,12 @@ def domain(envelope: dict) -> str:
     return shape(envelope)["signatureDomain"]
 
 
-def closure_binding(envelope: dict, set_original: bytes, role: str) -> dict:
+def closure_binding(envelope: dict, set_original: bytes, role: str, *, set_api_version: str = closure_set.API) -> dict:
     """Join an authenticated v2 assignment to a static member, not live custody."""
     shape(envelope)
     p.require(version(envelope) == 2)
-    payload = envelope["payload"]
-    pins = payload["nativeClosureSet"]
-    selected = closure_set.require_binding(set_original, expected_set_root=pins["setRootSha256"],
-        expected_seccomp_set_root=pins["seccompSetRootSha256"])
-    bridge = closure_set.leaf_binding(selected, "bridge")
-    p.require(bridge["manifestSha256"] == payload["custodyAuthority"]["executionClosureManifestSha256"]
-        and bridge["structurallyVerifiedPolicySha256"]
-        == payload["custodyAuthority"]["structurallyVerifiedSeccompPolicySha256"])
-    return closure_set.leaf_binding(selected, role)
+    selected = _closure_selection(envelope["payload"], set_original, set_api_version=set_api_version)
+    return closure_set.leaf_binding(selected, role, api_version=set_api_version)
 
 
 def _original(text, maximum):
@@ -84,8 +110,7 @@ def sign(*, input_original: bytes, signing_key) -> bytes:
     # Local import avoids publication -> assignment -> publication cycles.
     from serverware import native_pilot_launch_publication as launch
     p.require(isinstance(signing_key, Ed25519PrivateKey))
-    value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotAssignmentAuthorityInput/v1")
+    value, set_api_version = input_document(input_original)
     trust_raw, _ = _original(value["trustOriginal"], 1024 * 1024)
     p.require(p.sha(trust_raw) == p.digest(value["trustSha256"]))
     trust = launch.shape("native-bridge-trust", trust_raw)
@@ -101,13 +126,7 @@ def sign(*, input_original: bytes, signing_key) -> bytes:
     # fleet/policy/threshold semantics remain the full native receiver's checks.
     opening._keys(payload, "custody-supervisor-capability")
     set_raw, _ = _original(value["closureSetOriginal"], 1024 * 1024)
-    selected = closure_set.require_binding(set_raw,
-        expected_set_root=payload["nativeClosureSet"]["setRootSha256"],
-        expected_seccomp_set_root=payload["nativeClosureSet"]["seccompSetRootSha256"])
-    bridge = closure_set.leaf_binding(selected, "bridge")
-    p.require(bridge["manifestSha256"] == payload["custodyAuthority"]["executionClosureManifestSha256"]
-        and bridge["structurallyVerifiedPolicySha256"]
-        == payload["custodyAuthority"]["structurallyVerifiedSeccompPolicySha256"])
+    _closure_selection(payload, set_raw, set_api_version=set_api_version)
     now = time.time_ns()
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now)
     p.freshness(trust["issuedAtUnixNanos"], trust["expiresAtUnixNanos"], now)

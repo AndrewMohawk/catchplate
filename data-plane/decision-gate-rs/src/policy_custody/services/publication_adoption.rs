@@ -17,6 +17,8 @@ use crate::policy_shadow::{AtomicTrustCheckpoint, AuthorityRole, CanonicalEd2551
 pub(in crate::policy_shadow) const MAX_AUTHORIZATION: usize = 2 * 1024 * 1024;
 const DOMAIN: &str = "serverware.nativePublicationAdoptionAuthorization.signature/v1";
 fn shadow(_: impl std::fmt::Display) -> ShadowError { ShadowError::BindingDrift }
+#[path="publication_adoption_validator.rs"]
+pub(in crate::policy_shadow) mod validator;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
@@ -85,13 +87,15 @@ impl TargetHistory {
     }
 }
 
-impl Authorization {
-    // This verifies signatures and all original bounds. Key provenance comes
-    // from require_authority(actual current assignment) or the independently
-    // root-signed ordinary grant containing this exact whole authorization.
+impl Payload {
+    // Shared unsigned semantics. The producer reaches this before signing;
+    // consumers additionally verify the real authorization signature below.
     fn verified_cold(&self) -> Result<(Configuration, cold::Bundle), ServiceError> {
-        let p = &self.payload;
-        require(encode_canonical_frame(self)?.len() <= MAX_AUTHORIZATION
+        let p = self;
+        // Exact canonical envelope overhead, including an 86-byte Ed25519
+        // signature encoding. No provisional or fabricated signature exists.
+        const ENVELOPE_OVERHEAD:usize=b"{\"payload\":,\"signature\":\"\"}".len()+86;
+        require(encode_canonical_frame(self)?.len() <= MAX_AUTHORIZATION-ENVELOPE_OVERHEAD
             && p.api_version == "serverware.nativePublicationAdoptionAuthorization/v1"
             && p.purpose == "cold-publication-to-operational"
             && p.adoption_id_sha256 != Sha256Digest::compute(&[])
@@ -106,8 +110,6 @@ impl Authorization {
             require(!raw.is_empty() && raw.is_ascii() && raw.len() <= MAX_AUTHORIZATION)?;
         }
         let authority = p.authority.material()?;
-        authority.verify_strict(&signature_preimage(DOMAIN, &encode_canonical_frame(p)?),
-            &Signature::from_bytes(&self.signature.decode().map_err(|_| invalid())?)).map_err(|_| invalid())?;
         let configuration: Configuration = decode_canonical_frame(p.cold_configuration_original.as_bytes())?;
         let handoff = Handoff {
             api_version: "serverware.nativePublicationGenesisHandoff/v1".into(),
@@ -158,6 +160,16 @@ impl Authorization {
         for target in &p.target_histories { let (root, key) = target.keys()?; keys.push(root); keys.push(key); }
         require(keys.iter().enumerate().all(|(i, key)| keys.iter().skip(i + 1).all(|other| key != other)))?;
         Ok((configuration, bundle))
+    }
+}
+impl Authorization {
+    // Key provenance comes from require_authority(actual current assignment)
+    // or the independently root-signed grant carrying this exact authorization.
+    fn verified_cold(&self)->Result<(Configuration,cold::Bundle),ServiceError>{
+        require(encode_canonical_frame(self)?.len()<=MAX_AUTHORIZATION)?;
+        self.payload.authority.material()?.verify_strict(&signature_preimage(DOMAIN,&encode_canonical_frame(&self.payload)?),
+            &Signature::from_bytes(&self.signature.decode().map_err(|_|invalid())?)).map_err(|_|invalid())?;
+        self.payload.verified_cold()
     }
     pub(super) fn validate(&self) -> Result<(), ServiceError> { self.verified_cold().map(|_| ()) }
     pub(super) fn identity(&self) -> Result<Sha256Digest, ServiceError> { self.validate()?; sha(self) }

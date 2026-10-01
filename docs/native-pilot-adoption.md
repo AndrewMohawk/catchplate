@@ -91,9 +91,11 @@ currently conservative; its actual timing under original deadlines is unproven.
 The archive, exact harness, compiler logs and checksums are retained at
 `codex-offload/serverware/engineering-builds/35f138c6-adoption-jiMkKv/`.
 
-The new closure originals, authorization producer, commissioning graph,
-package/controller handoff and independent provisioning must still be
-integrated. Uncertain/restart recovery, later ownership/authority transitions,
+The [commissioning tools slice](native-pilot-publication-commissioning.md) adds
+explicit static closure/assignment producers, a packaged entrypoint, retained
+cold-result controller and native adoption validation. The authorization signer,
+expanded commissioning graph, operational grant composition and independent
+provisioning still need integration. Uncertain/restart recovery, later ownership/authority transitions,
 remaining signer families and connected workload acceptance remain required.
 This initial adoption is not a perpetual operational renewal path.
 

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-pilot-closure-set-preparation.v2.schema.json",
+  "description": "Explicit cold-three or operational-twelve static set selection. Canonical ASCII no-LF original <=12MiB, each manifest <=1MiB. No signing, provenance authentication, installation or live owner is supplied.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "setApiVersion", "members"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativePilotClosureSetPreparation/v2"},
+    "setApiVersion": {"enum": ["serverware.nativePublicationGenesisClosureSet/v1", "serverware.nativeCustodyExecutionClosureSet/v2"]},
+    "members": {"type": "array"}
+  },
+  "allOf": [{
+    "if": {"properties": {"setApiVersion": {"const": "serverware.nativePublicationGenesisClosureSet/v1"}}},
+    "then": {"properties": {"members": {"$ref": "native-publication-genesis-closure-set.v1.schema.json#/properties/members"}}},
+    "else": {"properties": {"members": {"$ref": "native-custody-execution-closure-set.v2.schema.json#/properties/members"}}}
+  }]
+}

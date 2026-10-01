@@ -58,15 +58,17 @@ def fixture(parent, profile="supervisor"):
         "scripts/native_pilot_authority_runtime_entrypoint.py",
         "scripts/run_native_pilot_authority_coordinator.py", "scripts/native_pilot_runtime_artifacts.py",
         "scripts/verify_nitro_tee.py", "scripts/authority/native_pilot_authority_io.py",
+        "scripts/authority/prepare_native_pilot_closure_set.py",
         "scripts/native_pilot_supervisor_runtime_entrypoint.py", "scripts/run_native_pilot_supervisor.py",
+        "scripts/native_pilot_publication_runtime_entrypoint.py",
     )
     originals = {name: ("# synthetic source original: " + name + "\n").encode("ascii") for name in source_names}
     for name, raw in originals.items():
         if name.startswith("serverware/") or name in source_names[2:4]:
             prefix = "app/"
-        elif name in source_names[4:9] and profile in ("authority", "supervisor"):
+        elif name in source_names[4:10] and profile in ("authority", "supervisor"):
             prefix = "authority/app/"
-        elif name in source_names[9:] and profile == "supervisor":
+        elif name in source_names[10:] and profile == "supervisor":
             prefix = "supervisor/app/"
         else:
             continue
@@ -128,8 +130,10 @@ class SupervisorRuntimeTests(unittest.TestCase):
         files = {row["path"] for row in observed["records"] if row["type"] == "file"}
         self.assertEqual({name for name in files if name.startswith("supervisor/")}, {
             "supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py",
-            "supervisor/app/scripts/run_native_pilot_supervisor.py"})
+            "supervisor/app/scripts/run_native_pilot_supervisor.py",
+            "supervisor/app/scripts/native_pilot_publication_runtime_entrypoint.py"})
         self.assertIn("authority/app/scripts/authority/native_pilot_authority_io.py", files)
+        self.assertIn("authority/app/scripts/authority/prepare_native_pilot_closure_set.py", files)
         self.assertIn("authority/app/scripts/verify_nitro_tee.py", files)
         self.assertIn("app/serverware/synthetic.py", files)
         self.assertFalse(observed["requiredArguments"]["childInventoriesDerived"])

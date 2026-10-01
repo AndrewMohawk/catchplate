@@ -93,6 +93,14 @@ pub(crate) fn run_native_shadow_guest_supervisor()->! {
     policy_custody::services::guest::native_guest::run_parent()
 }
 #[cfg(target_os="linux")]
+pub(crate) fn run_native_publication_adoption_validator()->! {
+    policy_custody::services::publication_adoption::validator::run()
+}
+#[cfg(target_os="linux")]
+pub(crate) fn run_native_publication_genesis_controller()->! {
+    policy_custody::services::guest::native_guest::run_genesis_controller()
+}
+#[cfg(target_os="linux")]
 pub(crate) fn run_commitment_custody_guest(role:&str,inspected:bool)->! {
     policy_custody::services::guest::ordinary::run_commitment(role,inspected)
 }

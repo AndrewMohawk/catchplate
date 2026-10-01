@@ -564,6 +564,7 @@ pub(crate) fn run()->! {
     unsafe{libc::_exit(1)}
 }
 pub(crate) fn run_parent()->! {parent::run()}
+pub(crate) fn run_genesis_controller()->! {parent::run_genesis_controller()}
 pub(crate) fn run_driver_bootstrap()->! {driver_bootstrap::run()}
 pub(crate) fn run_driver_bootstrap_parent()->! {driver_bootstrap_parent::run()}
 pub(crate) fn run_retrieval_pair()->! {parent::run_pair()}

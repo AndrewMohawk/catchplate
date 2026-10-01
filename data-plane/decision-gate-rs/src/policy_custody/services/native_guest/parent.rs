@@ -10,6 +10,8 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) mod 
 mod pair;
 #[path="proof_cohort.rs"]
 mod proof_cohort;
+#[path="genesis_controller.rs"]
+mod genesis_controller;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;
@@ -234,8 +236,19 @@ impl Running {
         let child=child::Child::spawn(image.executable(),&ordered,inspection.as_ref().map(AsFd::as_fd),files.lifetime())?;
         drop(inspection);
         let mut owner=Self{child,image,files,activation,launch,launch_bytes,_watchdog:watchdog,inspector};
-        owner.check_originals()?;owner.files.check_preparation().map_err(fail)?;
-        owner.child.release()?;Ok(owner)
+        let admitted=owner.check_originals()
+            .and_then(|()|owner.files.check_preparation().map_err(fail))
+            .and_then(|()|owner.child.release());
+        if let Err(error)=admitted {
+            // The cold controller must retain even a partially started real
+            // child when its one bounded cleanup attempt cannot prove reap.
+            // Other entrypoints retain their existing Drop behavior.
+            if require_genesis && owner.child.stop_and_reap().is_err(){
+                genesis_controller::retain_uncertain(GenesisParent{running:Some(owner)},None);
+            }
+            return Err(error);
+        }
+        Ok(owner)
     }
     fn check_originals(&self)->Result<(),ShadowError> {
         self.files.check().map_err(fail)?;self.image.check(&self.files)?;
@@ -274,8 +287,12 @@ impl GenesisParent {
         Ok(Self{running:Some(Running::start_selected(true)?)})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn run_until_genesis_handoff(&mut self)->Result<Vec<u8>,ShadowError>{
+        self.run_until_genesis_handoff_checked(||Ok(()))
+    }
+    fn run_until_genesis_handoff_checked(&mut self,mut check:impl FnMut()->Result<(),ShadowError>)->Result<Vec<u8>,ShadowError>{
         let running=self.running.as_mut().ok_or(ShadowError::BindingDrift)?;
         loop {
+            check()?;
             running.check_originals()?;require(running.child.check()?)?;
             let Some(Inspection::ProofClient(inspector))=running.inspector.as_mut() else{return Err(ShadowError::BindingDrift);};
             require(now()?<inspector.genesis_deadline()?
@@ -286,16 +303,20 @@ impl GenesisParent {
             require(now()?<deadline
                 && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::CounterOverflow)?<running.files.lifetime())?;
             let Some(Inspection::ProofClient(inspector))=running.inspector.as_mut() else{return Err(ShadowError::BindingDrift);};
-            if let Some(bundle)=inspector.take_genesis_result()?{return Ok(bundle);}
+            if let Some(bundle)=inspector.take_genesis_result()?{check()?;return Ok(bundle);}
             let result=unsafe{libc::poll(std::ptr::null_mut(),0,1)};
             require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;
         }
     }
     pub(in crate::policy_shadow::policy_custody::services) fn close(&mut self)->Result<(),ShadowError>{
-        if let Some(mut running)=self.running.take(){running.child.stop_and_reap()?;}
+        // An uncertain reap keeps every original, PIDFD and watchdog in this
+        // owner. Taking first would invoke Drop on the error path instead.
+        if let Some(running)=self.running.as_mut(){running.child.stop_and_reap()?;}
+        self.running.take();
         Ok(())
     }
 }
+pub(super) fn run_genesis_controller()->! {genesis_controller::run()}
 pub(super) fn run()->! {
     let _=Running::start().and_then(Running::hold);
     unsafe{libc::_exit(1)}

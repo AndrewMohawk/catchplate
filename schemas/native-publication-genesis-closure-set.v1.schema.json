@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-publication-genesis-closure-set.v1.schema.json",
+  "description": "Unsigned exact cold-three static set. All three use immutable v1 manifests, including the coordinator. Canonical ASCII no-LF original <=12MiB; each manifest <=1MiB. Schema validation does not authenticate provenance, assignment or live custody.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "members", "setRootSha256", "seccompSetRootSha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativePublicationGenesisClosureSet/v1"},
+    "setRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
+    "seccompSetRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
+    "members": {
+      "type": "array", "minItems": 3, "maxItems": 3, "items": false,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/member"}, {"properties": {"role": {"const": "publicationGenesisRetrieval"}}}]},
+        {"allOf": [{"$ref": "#/$defs/member"}, {"properties": {"role": {"const": "publicationGenesis"}}}]},
+        {"allOf": [{"$ref": "#/$defs/member"}, {"properties": {"role": {"const": "publicationGenesisCoordinator"}}}]}
+      ]
+    }
+  },
+  "$defs": {
+    "member": {
+      "type": "object", "additionalProperties": false, "required": ["role", "manifest"],
+      "properties": {
+        "role": {"enum": ["publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator"]},
+        "manifest": {"$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"}
+      }
+    }
+  }
+}

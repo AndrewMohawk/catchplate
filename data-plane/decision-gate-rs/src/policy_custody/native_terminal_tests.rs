@@ -87,3 +87,50 @@ fn original_boottime_fields_preserve_native_u64_limits() {
         Sha256Digest::compute(b"f"),Sha256Digest::compute(b"c"),Sha256Digest::compute(b"k"),
         Sha256Digest::compute(b"s"),Sha256Digest::compute(b"g"),10,20,20).is_err());
 }
+
+#[test]
+fn explicit_publication_query_is_required_for_recovery() {
+    let mut value=query(Dispatch::RecoverCurrentState{
+        binding:binding(PolicyCustodyOperation::RecoverCurrentState,10,20,30)});
+    assert!(value.validate().is_err());
+    value.api_version=Query::api_for_publication(true).into();
+    assert!(value.publication_selected());
+    assert_eq!(value.proof_api(),PUBLICATION_PROOF_API);
+    assert!(value.validate().is_ok());
+    value.api_version="serverware.nativeCompletedInvocationQuery/v3".into();
+    assert!(value.validate().is_err());
+}
+
+#[test]
+fn publication_query_keeps_old_operations_and_original_cleanup_marker() {
+    let mut value=query(begin(10,20,30));
+    value.api_version=PUBLICATION_QUERY_API.into();
+    assert!(value.validate().is_ok());
+    // Early successful final completion may be exported before the operation
+    // deadline; this immutable marker is not a destructive cleanup timer.
+    for changed in [10,19,21,30] {
+        let mut altered=value.clone();altered.cleanup_not_before_boottime_nanos=changed;
+        assert!(altered.validate().is_err());
+    }
+    value.api_version=Query::api_for_publication(false).into();
+    assert_eq!(value.proof_api(),PROOF_API);
+    assert!(value.validate().is_ok());
+}
+
+#[test]
+fn publication_commit_and_abort_shapes_do_not_expand_legacy_query() {
+    use super::super::production_dispatch::{CanonicalProductionArtifactV4 as Artifact,ProductionArtifactKindV4 as Kind};
+    // Deliberately data-only artifact: Query checks closed routing/binding,
+    // while the real producer/receiver must authenticate the complete type.
+    let prepared=Artifact::from_serializable(Kind::PreparedGenerationPublication,&serde_json::json!({"synthetic":"shape-only"})).unwrap();
+    for dispatch in [
+        Dispatch::CommitGenerationPublication{binding:binding(PolicyCustodyOperation::CommitGenerationPublication,10,20,30),prepared:prepared.clone()},
+        Dispatch::AbortGenerationPublication{binding:binding(PolicyCustodyOperation::AbortGenerationPublication,10,20,30),prepared},
+    ] {
+        let mut value=query(dispatch);
+        assert!(value.validate().is_err());
+        value.api_version=PUBLICATION_QUERY_API.into();
+        assert!(value.validate().is_ok());
+        assert_eq!(value.proof_api(),PUBLICATION_PROOF_API);
+    }
+}

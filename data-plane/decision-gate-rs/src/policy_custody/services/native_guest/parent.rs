@@ -115,7 +115,7 @@ impl Running {
         }
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::super::NativeLock::Persistence),
-            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)=>Some(super::super::NativeLock::Ledger),
+            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)=>Some(super::super::NativeLock::Ledger),
             _=>None,
         };
         let (activation,_)=take_activation(&files.payload.activation,false,false,false,native_lock).map_err(fail)?;
@@ -125,7 +125,8 @@ impl Running {
             service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
                 |SelectedService::CompletionRetrieval(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)|SelectedService::TerminalBridge(_)
                 |SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::DispatchSpool(_)
-                |SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_))=>{
+                |SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)
+                |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(_))=>{
                 let (owner,channel)=proof_cohort::prepare_inspection(service,&files,&activation)?;
                 (Some(owner),Some(channel))
             }

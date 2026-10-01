@@ -84,6 +84,9 @@ struct ActiveEffectBarrierLaunch {api_version:String,key_admission:Launch,active
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct ActiveEffectCommitLaunch {api_version:String,key_admission:Launch,active_effect_commit:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct PublicationLaunch {api_version:String,key_admission:Launch,publication:Pin}
 // Nonsecret identity marker for source-selected endpoints, not RPC settings or
 // service permission. The actual runtime original stays bound by signed C9 and
 // the selected execution-closure manifest; grants still authorize operations.
@@ -93,9 +96,11 @@ struct EndpointRuntime {api_version:String,role:String}
 enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
-    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin,bool,bool)}
+    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin,bool,bool),
+    Publication(Pin),PublicationRetrieval(Pin),PublicationBridge(Pin)}
 impl SelectedService {
     fn endpoint_runtime_role(&self)->Option<&'static str>{
+        if matches!(self,Self::Publication(_)){return Some("publicationReconciliation");}
         self.closure_set_role().filter(|role|*role!="bridge")
     }
     fn check_endpoint_runtime(&self,raw:&[u8])->Result<(),ShadowError>{
@@ -116,7 +121,7 @@ impl SelectedService {
     fn verifier_role(&self)->Option<NativeVerifierTransportRole>{
         use NativeVerifierTransportRole as Role;
         match self {
-            Self::EffectRetrieval(_)=>Some(Role::Retrieval),
+            Self::EffectRetrieval(_)|Self::PublicationRetrieval(_)=>Some(Role::Retrieval),
             Self::PersistenceLocked(_)=>Some(Role::Persistence),
             Self::TrustedTime(_)=>Some(Role::TrustedTime),
             Self::Generation(_)=>Some(Role::GenerationInstall),
@@ -126,7 +131,7 @@ impl SelectedService {
             Self::DispatchSpool(_)=>Some(Role::DispatchBarrier),
             Self::ActiveEffectBarrier(_)=>Some(Role::ActiveEffectBarrier),
             Self::ActiveEffectCommit(_)=>Some(Role::ActiveEffectCommit),
-            Self::ActiveEffectBridge(_)|Self::InitialHistoryBridge(..)=>Some(Role::Bridge),
+            Self::ActiveEffectBridge(_)|Self::InitialHistoryBridge(..)|Self::PublicationBridge(_)=>Some(Role::Bridge),
             _=>None,
         }
     }
@@ -135,7 +140,7 @@ impl SelectedService {
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
     Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch),CommitRequest(CommitRequestLaunch),Ingress(IngressLaunch),
-    TerminalSpool(TerminalSpoolLaunch),DispatchBarrier(DispatchBarrierLaunch),ActiveEffectBarrier(ActiveEffectBarrierLaunch),ActiveEffectCommit(ActiveEffectCommitLaunch)}
+    TerminalSpool(TerminalSpoolLaunch),DispatchBarrier(DispatchBarrierLaunch),ActiveEffectBarrier(ActiveEffectBarrierLaunch),ActiveEffectCommit(ActiveEffectCommitLaunch),Publication(PublicationLaunch)}
 fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
@@ -146,6 +151,7 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 "serverware.nativeShadowRetrievalGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerRetrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionRetrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v4"=>(value.key_admission,SelectedService::EffectRetrieval(value.retrieval)),
+                "serverware.nativeShadowRetrievalGuestLaunch/v5"=>(value.key_admission,SelectedService::PublicationRetrieval(value.retrieval)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
@@ -181,6 +187,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,false))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v8" {
                 (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,true))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v9" {
+                (value.key_admission,SelectedService::PublicationBridge(value.trusted_time))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -212,6 +220,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             (value.key_admission,SelectedService::ActiveEffectBarrier(value.active_effect_barrier))}
         Selection::ActiveEffectCommit(value)=>{require(value.api_version=="serverware.nativeShadowActiveEffectCommitGuestLaunch/v1")?;
             (value.key_admission,SelectedService::ActiveEffectCommit(value.active_effect_commit))}
+        Selection::Publication(value)=>{require(value.api_version=="serverware.nativeShadowPublicationGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::Publication(value.publication))}
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
     Ok((launch,service))
@@ -222,6 +232,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     retrieval:Option<admission::retrieval::Service>,
     ledger_retrieval:Option<admission::ledger_retrieval::Service>,
     spool_signer:Option<admission::spool_endpoint::Service>,
+    publication:Option<admission::publication::Service>,
     activation:Option<admission::activation::Service>,
     persistence:Option<admission::persistence::Service>,
     retrieval_client:Option<retrieval_client::Prepared>,bridge_selected:bool,
@@ -230,6 +241,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     time_grant:Option<admission::trusted_time::ClientGrant>,proof_bridge:bool,
     commit_request:Option<admission::commit_request::Service>,commitment_bridge:bool,
     spool_bridge:bool,
+    publication_bridge:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
     // Old context-only admission leaves this unactivated. Explicit driver v3
     // populates it only from the genuine combined-purpose key owner.
@@ -260,17 +272,19 @@ impl AdmittedGuest {
         let closure_set_role=service_selection.closure_set_role();
         let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
-        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..));
-        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..));
+        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(_));
+        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(_));
+        let publication_bridge=matches!(&service_selection,SelectedService::PublicationBridge(_));
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
             |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)
             |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
             |SelectedService::TerminalSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::CompletionRetrieval(_)|SelectedService::TerminalBridge(_)
-            |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)))?;
+            |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)
+            |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(_)))?;
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::NativeLock::Persistence),
-            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)=>Some(super::NativeLock::Ledger),
+            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)=>Some(super::NativeLock::Ledger),
             _=>None,
         };
         let mut delivery=PreparedGuestServiceDelivery::admit_selected(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
@@ -300,11 +314,16 @@ impl AdmittedGuest {
         // The successor takes its complete four-resource inventory before any
         // other purpose consumes a descriptor. It is not old v1 plus a flag.
         let (ledger_retrieval,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::PublicationRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_publication(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::EffectRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_effects(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::CompletionRetrieval(pin),Some(channel))=>(
                 Some(admission::ledger_retrieval::Prepared::open_completion(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::LedgerRetrieval(pin),Some(channel))=>(
                 Some(admission::ledger_retrieval::Prepared::open(&pin,&mut delivery,channel)?),SelectedService::None,None),
+            (selected,inspection)=>(None,selected,inspection),
+        };
+        let (publication,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::Publication(pin),Some(channel))=>(Some(admission::publication::Prepared::open(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (selected,inspection)=>(None,selected,inspection),
         };
         let (retrieval,retrieval_client,activation,persistence,trusted_time,proof_client,time_grant,generation,commit_request)=match (service_selection,inspection) {
@@ -337,6 +356,10 @@ impl AdmittedGuest {
             }
             (SelectedService::InitialHistoryBridge(pin,helper_initial,native_terminal),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open_initial_history(&mut delivery,channel,&pin,helper_initial,native_terminal)?;
+                (None,None,None,None,None,Some(prepared),Some(grant),None,None)
+            }
+            (SelectedService::PublicationBridge(pin),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_publication(&mut delivery,channel,&pin)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,
@@ -376,6 +399,7 @@ impl AdmittedGuest {
         let retrieval=retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let ledger_retrieval=ledger_retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let spool_signer=spool_signer.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
+        let publication=publication.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let activation=activation.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let persistence=persistence.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let trusted_time=trusted_time.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
@@ -390,7 +414,7 @@ impl AdmittedGuest {
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
             retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge,generation,
-            commit_request,commitment_bridge,spool_bridge,ledger_retrieval,spool_signer,native_configuration:None};
+            commit_request,commitment_bridge,spool_bridge,publication_bridge,ledger_retrieval,spool_signer,publication,native_configuration:None};
         owner.check()?;
         if owner.proof_bridge {
             owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,
@@ -410,6 +434,9 @@ impl AdmittedGuest {
         Ok(())
     }
     fn hold(mut self)->Result<(),ShadowError> {
+        if let Some(service)=self.publication.take(){
+            return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
+        }
         if let Some(service)=self.spool_signer.take(){
             return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
         }
@@ -448,6 +475,7 @@ impl AdmittedGuest {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn commitment_bridge_selected(&self)->bool {self.commitment_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn spool_bridge_selected(&self)->bool {self.spool_bridge}
+    pub(in crate::policy_shadow::policy_custody::services) fn publication_bridge_selected(&self)->bool {self.publication_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {self.keys.guest_binding()}
     pub(in crate::policy_shadow::policy_custody::services) fn delivery(&self)->&Arc<super::Delivery> {
         &self._delivery.owner

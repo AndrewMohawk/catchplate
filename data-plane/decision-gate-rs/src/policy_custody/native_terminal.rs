@@ -9,6 +9,10 @@ pub(in crate::policy_shadow) const RUNTIME:&str="serverware.policyCustodyProduct
 pub(in crate::policy_shadow) const QUERY_API:&str="serverware.nativeCompletedInvocationQuery/v1";
 pub(in crate::policy_shadow) const PROOF_API:&str="serverware.nativeCompletedInvocationProof/v1";
 pub(in crate::policy_shadow) const WIRE_API:&str="serverware.nativeInvocationSettlement/v1";
+pub(in crate::policy_shadow) const PUBLICATION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v13";
+pub(in crate::policy_shadow) const PUBLICATION_QUERY_API:&str="serverware.nativeCompletedInvocationQuery/v2";
+pub(in crate::policy_shadow) const PUBLICATION_PROOF_API:&str="serverware.nativeCompletedInvocationProof/v2";
+pub(in crate::policy_shadow) const PUBLICATION_WIRE_API:&str="serverware.nativeInvocationSettlement/v2";
 
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -19,15 +23,26 @@ pub(in crate::policy_shadow) struct Query {
     pub(in crate::policy_shadow) cleanup_not_before_boottime_nanos:u64,
 }
 impl Query {
+    pub(in crate::policy_shadow) fn api_for_publication(selected:bool)->&'static str {
+        if selected {PUBLICATION_QUERY_API} else {QUERY_API}
+    }
+    pub(in crate::policy_shadow) fn publication_selected(&self)->bool {self.api_version==PUBLICATION_QUERY_API}
+    pub(in crate::policy_shadow) fn proof_api(&self)->&'static str {
+        if self.publication_selected() {PUBLICATION_PROOF_API} else {PROOF_API}
+    }
     pub(in crate::policy_shadow) fn validate(&self)->Result<(),&'static str>{
         self.dispatch.validate()?;
-        if self.api_version!=QUERY_API
+        let ordinary=matches!(self.dispatch.operation(),PolicyCustodyOperation::BeginIngress
+            |PolicyCustodyOperation::CommitRequest|PolicyCustodyOperation::ReserveSpoolAppend
+            |PolicyCustodyOperation::AppendSpoolEvent|PolicyCustodyOperation::AppendTerminal
+            |PolicyCustodyOperation::AppendActiveEffectBarrier|PolicyCustodyOperation::CommitActiveEffect
+            |PolicyCustodyOperation::ReconcileActiveEffect);
+        let publication=self.publication_selected() && matches!(self.dispatch.operation(),
+            PolicyCustodyOperation::RecoverCurrentState|PolicyCustodyOperation::PrepareGenerationPublication
+            |PolicyCustodyOperation::CommitGenerationPublication|PolicyCustodyOperation::AbortGenerationPublication);
+        if !matches!(self.api_version.as_str(),QUERY_API|PUBLICATION_QUERY_API)
             || self.cleanup_not_before_boottime_nanos!=self.dispatch.binding().operation_deadline_boottime_nanos
-            || !matches!(self.dispatch.operation(),PolicyCustodyOperation::BeginIngress
-                |PolicyCustodyOperation::CommitRequest|PolicyCustodyOperation::ReserveSpoolAppend
-                |PolicyCustodyOperation::AppendSpoolEvent|PolicyCustodyOperation::AppendTerminal
-                |PolicyCustodyOperation::AppendActiveEffectBarrier|PolicyCustodyOperation::CommitActiveEffect
-                |PolicyCustodyOperation::ReconcileActiveEffect) {
+            || !(ordinary || publication) {
             return Err("native completed invocation query is outside the selected final protocol");
         }
         Ok(())

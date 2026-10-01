@@ -311,6 +311,26 @@ impl SignedProductionArtifactMaterialV4 {
         expected_role: HistoricalServiceRoleV3,
         keyrings: &FiveServiceHistoricalKeyringsV4<'_>,
     ) -> Result<(), &'static str> {
+        self.validate_with_history(reference, binding, expected_kind, expected_role,
+            |epoch, domain, payload, signature| {
+                keyrings.history(self.issuing_service_role)
+                    .verify_service_signature(epoch, domain, payload, signature)
+                    .map_err(|_| "sealed production artifact signature is invalid or its authority epoch is not retained")
+            })
+    }
+
+    /// The ordinary mirror has an independently admitted issuing-service
+    /// epoch, not a fabricated five-service keyring. All material checks are
+    /// shared with the complete production response validator.
+    pub(super) fn validate_with_history(
+        &self,
+        reference: &SealedProductionArtifactReferenceV4,
+        binding: &ProductionDispatchBindingV4,
+        expected_kind: ProductionArtifactKindV4,
+        expected_role: HistoricalServiceRoleV3,
+        verify: impl FnOnce(&AuthorityEpochRefV3, &[u8], &[u8], &str) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        reference.validate()?;
         for digest in [
             &self.origin_operation_id_sha256,
             &self.origin_request_sha256,
@@ -358,9 +378,7 @@ impl SignedProductionArtifactMaterialV4 {
                 "sealed production artifact signature payload bytes are not exact canonical bytes",
             );
         }
-        keyrings
-            .history(self.issuing_service_role)
-            .verify_service_signature(
+        verify(
                 &self.authority_epoch,
                 ARTIFACT_SIGNATURE_DOMAIN,
                 &payload,

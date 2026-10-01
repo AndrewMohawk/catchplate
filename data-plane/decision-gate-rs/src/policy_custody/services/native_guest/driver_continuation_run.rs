@@ -22,11 +22,12 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let (selected,service)=selection(&launch_bytes)?;
     let verifier_role=service.verifier_role();
     let closure_set_role=service.closure_set_role();
-    let (time_pin,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge,initial_history_bridge,helper_initial,native_terminal)=match service {
-        SelectedService::ProofBridge(p)=>(p,false,false,false,false,false,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false,false,false,false,false,false),
-        SelectedService::SpoolBridge(p)=>(p,true,true,false,false,false,false,false),SelectedService::TerminalBridge(p)=>(p,true,true,true,false,false,false,false),
-        SelectedService::ActiveEffectBridge(p)=>(p,true,true,true,true,false,false,false),
-        SelectedService::InitialHistoryBridge(p,helper_initial,native_terminal)=>(p,true,true,true,true,true,helper_initial,native_terminal),
+    let (time_pin,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge,initial_history_bridge,helper_initial,native_terminal,publication_bridge)=match service {
+        SelectedService::ProofBridge(p)=>(p,false,false,false,false,false,false,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false,false,false,false,false,false,false),
+        SelectedService::SpoolBridge(p)=>(p,true,true,false,false,false,false,false,false),SelectedService::TerminalBridge(p)=>(p,true,true,true,false,false,false,false,false),
+        SelectedService::ActiveEffectBridge(p)=>(p,true,true,true,true,false,false,false,false),
+        SelectedService::InitialHistoryBridge(p,helper_initial,native_terminal)=>(p,true,true,true,true,true,helper_initial,native_terminal,false),
+        SelectedService::PublicationBridge(p)=>(p,true,true,true,true,true,true,true,true),
         _=>return Err(ShadowError::BindingDrift),
     };
     require(selected.delivery_configuration.sha256==prepared.cold.config.delivery_configuration.sha256
@@ -132,13 +133,13 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let native_configuration=if full {keys.admitted_bridge_configuration(&trust,time.as_ref())?.clone()}
         else{native_configuration};
     retained.publish_public_admission(&keys,&closure_original,&assignment_original,&trust,time.as_ref())?;
-    let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge,initial_history_bridge,helper_initial,native_terminal)?;
+    let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge,initial_history_bridge,helper_initial,native_terminal,publication_bridge)?;
     let bridge_activation=std::sync::Mutex::new(Some(std::mem::take(&mut delivery.activation)));
     let owner=AdmittedGuest{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
         originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
         retrieval:None,activation:None,persistence:None,retrieval_client:None,bridge_selected:true,trusted_time:None,
         proof_client:Some(proof_client),generation:None,time_grant:Some(time_grant),proof_bridge:true,
-        commit_request:None,commitment_bridge,spool_bridge,ledger_retrieval:None,spool_signer:None,
+        commit_request:None,commitment_bridge,spool_bridge,publication_bridge,ledger_retrieval:None,spool_signer:None,publication:None,
         bridge_activation,native_configuration:Some(native_configuration)};
     owner.check()?;
     owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,&owner.time_endpoint()?,&owner.trust,owner.time.as_ref())?;

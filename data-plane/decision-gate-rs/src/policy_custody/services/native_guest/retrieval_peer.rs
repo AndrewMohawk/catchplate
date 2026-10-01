@@ -11,7 +11,7 @@ const MAX_IPC:usize=4096;
 /// Source-selected endpoint mechanics only. This is not a purpose grant.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
-pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope,CommitRequest,IngressAdmission,TerminalAppend,DispatchBarrier,ActiveEffectBarrier,ActiveEffectCommit}
+pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope,CommitRequest,IngressAdmission,TerminalAppend,DispatchBarrier,ActiveEffectBarrier,ActiveEffectCommit,PublicationReconciliation}
 impl EndpointKind {
     pub(in crate::policy_shadow::policy_custody::services) fn socket_path(self)->&'static str {match self {
         Self::Retrieval=>"/run/serverware-shadow-retrieval/listener.sock",
@@ -23,6 +23,7 @@ impl EndpointKind {
         Self::DispatchBarrier=>"/run/serverware-shadow-dispatch-barrier/listener.sock",
         Self::ActiveEffectBarrier=>"/run/serverware-shadow-active-effect-barrier/listener.sock",
         Self::ActiveEffectCommit=>"/run/serverware-shadow-active-effect-commit/listener.sock",
+        Self::PublicationReconciliation=>"/run/serverware-shadow-publication-reconciliation/listener.sock",
         Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install/listener.sock"}}
     pub(in crate::policy_shadow::policy_custody::services) fn directory_path(self)->&'static str {match self {
         Self::Retrieval=>"/run/serverware-shadow-retrieval",Self::Persistence=>"/run/serverware-shadow-persistence",
@@ -33,6 +34,7 @@ impl EndpointKind {
         Self::DispatchBarrier=>"/run/serverware-shadow-dispatch-barrier",
         Self::ActiveEffectBarrier=>"/run/serverware-shadow-active-effect-barrier",
         Self::ActiveEffectCommit=>"/run/serverware-shadow-active-effect-commit",
+        Self::PublicationReconciliation=>"/run/serverware-shadow-publication-reconciliation",
         Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install"}}
     pub(in crate::policy_shadow::policy_custody::services) fn listener_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-listener",Self::Persistence=>"persistence-listener",Self::TrustedTime=>"trusted-time-listener",
@@ -42,6 +44,7 @@ impl EndpointKind {
         Self::DispatchBarrier=>"dispatch-barrier-listener",
         Self::ActiveEffectBarrier=>"active-effect-barrier-listener",
         Self::ActiveEffectCommit=>"active-effect-commit-listener",
+        Self::PublicationReconciliation=>"publication-reconciliation-listener",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-listener"}}
     pub(in crate::policy_shadow::policy_custody::services) fn peer_directory_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-peer-directory",Self::Persistence=>"persistence-peer-directory",Self::TrustedTime=>"trusted-time-peer-directory",
@@ -51,6 +54,7 @@ impl EndpointKind {
         Self::DispatchBarrier=>"dispatch-barrier-peer-directory",
         Self::ActiveEffectBarrier=>"active-effect-barrier-peer-directory",
         Self::ActiveEffectCommit=>"active-effect-commit-peer-directory",
+        Self::PublicationReconciliation=>"publication-reconciliation-peer-directory",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-directory"}}
     pub(in crate::policy_shadow::policy_custody::services) fn inspection_api(self)->&'static str {match self {
         Self::Retrieval=>"serverware.nativeShadowRetrievalInspection/v1",
@@ -62,13 +66,14 @@ impl EndpointKind {
         Self::DispatchBarrier=>"serverware.nativeShadowDispatchBarrierInspection/v1",
         Self::ActiveEffectBarrier=>"serverware.nativeShadowActiveEffectBarrierInspection/v1",
         Self::ActiveEffectCommit=>"serverware.nativeShadowActiveEffectCommitInspection/v1",
+        Self::PublicationReconciliation=>"serverware.nativeShadowPublicationReconciliationInspection/v1",
         Self::GenerationInstallEnvelope=>"serverware.nativeShadowGenerationInstallPeerInspection/v1"}}
     pub(in crate::policy_shadow::policy_custody::services) fn production_kind(self)->Option<services::production::ProductionProofEndpointKindV4> {match self {
         Self::Retrieval=>Some(services::production::ProductionProofEndpointKindV4::Retrieval),
         Self::Persistence=>Some(services::production::ProductionProofEndpointKindV4::Persistence),
         Self::TrustedTime=>Some(services::production::ProductionProofEndpointKindV4::TrustedTime),
         Self::GenerationInstallEnvelope=>Some(services::production::ProductionProofEndpointKindV4::GenerationInstallEnvelope),
-        Self::CommitRequest|Self::IngressAdmission|Self::TerminalAppend|Self::DispatchBarrier|Self::ActiveEffectBarrier|Self::ActiveEffectCommit=>None}}
+        Self::CommitRequest|Self::IngressAdmission|Self::TerminalAppend|Self::DispatchBarrier|Self::ActiveEffectBarrier|Self::ActiveEffectCommit|Self::PublicationReconciliation=>None}}
     pub(super) fn signer_role(self)->Option<PolicyShadowCustodySignerRole>{match self{
         Self::CommitRequest=>Some(PolicyShadowCustodySignerRole::LedgerAppend),
         Self::IngressAdmission=>Some(PolicyShadowCustodySignerRole::IngressAdmission),
@@ -76,6 +81,7 @@ impl EndpointKind {
         Self::DispatchBarrier=>Some(PolicyShadowCustodySignerRole::DispatchBarrier),
         Self::ActiveEffectBarrier=>Some(PolicyShadowCustodySignerRole::ActiveEffectBarrier),
         Self::ActiveEffectCommit=>Some(PolicyShadowCustodySignerRole::ActiveEffectCommit),
+        Self::PublicationReconciliation=>Some(PolicyShadowCustodySignerRole::PublicationReconciliation),
         _=>None,
     }}
 }
@@ -256,7 +262,8 @@ impl Inspector {
         expected:services::common::ExpectedPeerCredentials,guest_uid:u32,socket:&OwnedFd,endpoint:EndpointKind)
         ->Result<(Self,OwnedFd),ShadowError> {
         require(matches!(endpoint,EndpointKind::CommitRequest|EndpointKind::IngressAdmission|EndpointKind::TerminalAppend
-            |EndpointKind::DispatchBarrier|EndpointKind::ActiveEffectBarrier|EndpointKind::ActiveEffectCommit|EndpointKind::GenerationInstallEnvelope))?;
+            |EndpointKind::DispatchBarrier|EndpointKind::ActiveEffectBarrier|EndpointKind::ActiveEffectCommit|EndpointKind::GenerationInstallEnvelope
+            |EndpointKind::PublicationReconciliation))?;
         Self::prepare_bounded(original,expected,guest_uid,socket,endpoint,super::super::native_keys::admission::ordinary_histories::MAX_CONFIGURATION)
     }
     fn prepare_bounded(original:Original,expected:services::common::ExpectedPeerCredentials,guest_uid:u32,

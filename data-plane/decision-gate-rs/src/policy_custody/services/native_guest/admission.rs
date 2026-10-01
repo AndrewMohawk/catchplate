@@ -17,6 +17,8 @@ pub(crate) mod trusted_time;
 pub(crate) mod generation_install;
 #[path="activation.rs"]
 pub(crate) mod activation;
+#[path="publication.rs"]
+pub(crate) mod publication;
 #[path="commit_request.rs"]
 pub(crate) mod commit_request;
 #[path="ordinary_histories.rs"]

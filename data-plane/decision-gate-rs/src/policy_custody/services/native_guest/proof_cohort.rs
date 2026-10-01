@@ -435,7 +435,7 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
         SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)=>{
             let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             require(grant.completion_selected()==matches!(service,SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_))
-                && grant.effects_selected()==matches!(service,SelectedService::EffectRetrieval(_)))?;
+                && grant.effects_selected()==matches!(service,SelectedService::EffectRetrieval(_)) && !grant.publication_selected())?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::CommitRequest(pin)=>{
@@ -491,6 +491,17 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
 pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
     ->Result<(Inspection,OwnedFd),ShadowError> {
     match service {
+        SelectedService::Publication(pin)=>{
+            let original=pin.open(admission::publication::MAX_CONFIGURATION)?;
+            let grant:admission::publication::Configuration=exact(&original.read(admission::publication::MAX_CONFIGURATION).map_err(fail)?)?;
+            grant.validate_shape()?;
+            let endpoint=retrieval_peer::EndpointKind::PublicationReconciliation;
+            require(activation.len()==1)?;
+            let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,
+                grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
+            Ok((Inspection::Server(owner),remote))
+        }
         selected @ (SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_))=>{
             let (pin,kind,endpoint)=match selected {
                 SelectedService::DispatchSpool(pin)=>(pin,admission::spool_signer::Kind::DispatchBarrier,retrieval_peer::EndpointKind::DispatchBarrier),
@@ -523,15 +534,17 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
             let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
             Ok((Inspection::Server(owner),remote))
         }
-        selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_))=>{
-            let completion=matches!(&selected,SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_));
-            let effects=matches!(&selected,SelectedService::EffectRetrieval(_));
-            let pin=match selected{SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)=>pin,
+        selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_))=>{
+            let publication=matches!(&selected,SelectedService::PublicationRetrieval(_));
+            let completion=publication || matches!(&selected,SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_));
+            let effects=publication || matches!(&selected,SelectedService::EffectRetrieval(_));
+            let pin=match selected{SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)|SelectedService::PublicationRetrieval(pin)=>pin,
                 _=>return Err(ShadowError::BindingDrift)};
             require(activation.len()==4 && activation.contains_key("ledger-spool-store") && activation.contains_key("ledger-spool-lock")
                 && activation.contains_key("retrieval-objects"))?;
             let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
-            require(grant.completion_selected()==completion && grant.effects_selected()==effects)?;
+            require(grant.completion_selected()==completion && grant.effects_selected()==effects
+                && grant.publication_selected()==publication)?;
             grant.validate_shape()?;let socket=activation.get("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
             let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
             Ok((Inspection::Server(owner),remote))
@@ -615,6 +628,10 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
         SelectedService::InitialHistoryBridge(_,helper_initial,native_terminal)=>{
             proof_client::check_runtime_selection(files,true,helper_initial,native_terminal)?;
             let (owner,remote)=proof_client::Inspector::prepare_effects(files,activation)?;
+            Ok((Inspection::ProofClient(owner),remote))
+        }
+        SelectedService::PublicationBridge(_)=>{
+            let (owner,remote)=proof_client::Inspector::prepare_publication(files,activation)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
         _=>Err(ShadowError::CustodyUnavailable),

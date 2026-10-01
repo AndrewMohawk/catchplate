@@ -286,6 +286,15 @@ impl super::spool_current::Owner for TrustedHostNoTeeCurrentSignatureAuthoritySe
         input.sign(&self.signer.signing_key)
     }
 }
+impl super::publication_service::Owner for TrustedHostNoTeeCurrentSignatureAuthorityServer {
+    fn sign_publication_snapshot(&self,_input:&super::publication_service::SnapshotInput)
+        ->Result<super::publication::Snapshot,ServiceError>{Err(ServiceError::Invalid("only DRS may snapshot publication state"))}
+    fn sign_publication_witness(&self,input:&super::publication_service::WitnessInput)
+        ->Result<super::publication_service::Witness,ServiceError>{
+        self.signer.pin.validate().map_err(|_|ServiceError::Invalid("publication current signer changed"))?;
+        input.sign(&self.signer.signing_key)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CurrentAuthoritySubjectKey {

@@ -115,4 +115,29 @@ impl Store {
             &[scope_original,&canonical_json_bytes(&role)?,id.as_str().as_bytes(),receipt,authority]))?;
         self.check()?;let read=Read{file,identity,bytes,verity};read.check()?;Ok(read)
     }
+    /// The explicit publication successor supplies an independently admitted
+    /// signed Prepared/Stored pair before this call. Read the acyclic CORE,
+    /// not an object containing a receipt and its own derived retrieval ID.
+    pub(super) fn read_publication_core(&self,core:&[u8],id:&Sha256Digest,object:&Sha256Digest,
+        expected_verity:&Sha256Digest)->Result<Read,ShadowError>{
+        self.check()?;
+        require(!self.empty && !core.is_empty()
+            && core.len()<=crate::policy_shadow::policy_custody::services::ledger_spool_values::MAX_CORE
+            && Sha256Digest::compute(core)==*object)?;
+        let name=format!("{}.json",id.as_str().strip_prefix("sha256:").ok_or(ShadowError::BindingDrift)?);
+        require(name.len()==69 && name[..64].bytes().all(|c|c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))?;
+        let name=std::ffi::CString::new(name).map_err(fail)?;
+        let raw=unsafe{libc::openat(self.directory.as_raw_fd(),name.as_ptr(),
+            libc::O_RDONLY|libc::O_CLOEXEC|libc::O_NOFOLLOW|libc::O_NONBLOCK)};
+        require(raw>=0)?;let file=unsafe{File::from_raw_fd(raw)};
+        let measured=verity(&file)?;let measured_sha=Sha256Digest::parse(&format!("sha256:{}",
+            measured.iter().map(|byte|format!("{byte:02x}")).collect::<String>()))?;
+        require(measured_sha==*expected_verity)?;
+        let identity=Identity::of(&file)?;
+        require(identity.mode&libc::S_IFMT==libc::S_IFREG && identity.mode&0o7777==0o444
+            && identity.uid==0 && identity.gid==0 && identity.links==1 && identity.len==core.len() as u64)?;
+        let mut bytes=vec![0;core.len()];file.read_exact_at(&mut bytes,0).map_err(fail)?;
+        require(bytes==core && Identity::of(&file)?==identity)?;
+        self.check()?;let read=Read{file,identity,bytes,verity:measured};read.check()?;Ok(read)
+    }
 }

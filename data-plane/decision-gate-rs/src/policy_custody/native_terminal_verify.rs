@@ -168,7 +168,8 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
     configuration: &ProductionCustodyConfiguration, trust: &dyn EnvelopeKeyTrust, time: &dyn TrustedTime)
     -> Result<NativeEvidence, ShadowError> {
     factory.check(trust, time)?;
-    ensure(factory.native_terminal_selected() && value.api_version == wire::WIRE_API
+    let publication_selected = factory.publication_terminal_selected();
+    ensure(factory.native_terminal_selected() && value.api_version == (if publication_selected {wire::PUBLICATION_WIRE_API}else{wire::WIRE_API})
         && value.dispatch_request_original_sha256 == Sha256Digest::compute(request_raw)
         && value.dispatch_response_original_sha256 == Sha256Digest::compute(response_raw))?;
     configuration.revalidate_active_attestation(trust, time)?;
@@ -191,13 +192,15 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
     let binding = dispatch.binding();
     ensure(binding == expected && binding.opened_at_boottime_nanos <= now && now < binding.cleanup_deadline_boottime_nanos)?;
     let (runtime, histories, history_deadline) = histories(&factory, configuration, trust, time, now)?;
+    ensure(runtime.publication_selected() == publication_selected)?;
     response.validate(dispatch, &histories.borrowed()).map_err(|_| ShadowError::BindingDrift)?;
     let request: ProductionAuthorityEndpointRequestV4 = exact(value.persistence_request_original.as_bytes())?;
     let reply: ProductionAuthorityEndpointReplyV4 = exact(value.persistence_reply_original.as_bytes())?;
     let ProductionAuthorityEndpointRequestBodyV4::VerifyCompletedInvocation { query } = &request.request
         else { return Err(ShadowError::BindingDrift); };
     query.validate().map_err(|_| ShadowError::BindingDrift)?;
-    ensure(query.dispatch == *dispatch && query.dispatch_response_sha256 == Sha256Digest::compute(&canonical_json_bytes(response)?)
+    ensure(query.api_version == wire::Query::api_for_publication(publication_selected)
+        && query.dispatch == *dispatch && query.dispatch_response_sha256 == Sha256Digest::compute(&canonical_json_bytes(response)?)
         && request.endpoint == ProductionAuthorityEndpointIdentityV4::Proof(ProductionProofEndpointKindV4::Persistence)
         && request.replay_id_sha256 == binding.replay_id_sha256
         && request.deadline_boottime_nanos == binding.cleanup_deadline_boottime_nanos)?;
@@ -206,7 +209,7 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
         &checkpoint, binding.opened_at_boottime_nanos, now)?;
     let ProductionAuthorityEndpointResultV4::CompletedInvocation(proof) = &reply.result
         else { return Err(ShadowError::BindingDrift); };
-    ensure(proof.api_version == wire::PROOF_API)?;
+    ensure(proof.api_version == query.proof_api())?;
     let commit: persistence::Commit = exact(proof.commit_original.as_bytes())?;
     let head: persistence::PersistenceHead = exact(proof.head_original.as_bytes())?;
     let payload = &commit.payload;
@@ -257,14 +260,17 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
     ensure(final_request.endpoint == ProductionAuthorityEndpointIdentityV4::ParentSigner(role))?;
     let signer = endpoint_reply(&final_request, &final_reply, authority_role_for_custody_signer(role),
         role.signature_domain(), configuration, trust, &checkpoint, binding.opened_at_boottime_nanos, now)?;
-    verify_final_request(&final_request, response, &signer, &final_reply)?;
+    verify_final_request(&final_request, response, &signer, &final_reply, publication_selected)?;
+    let publication_deadline = if let ProductionAuthorityEndpointRequestBodyV4::FinishNativePublication { proposal, .. } = &final_request.request {
+        verify_publication_admission(&runtime, &histories, configuration, trust, &checkpoint, proposal, now)?
+    } else { u64::MAX };
     factory.check(trust, time)?;
     ensure(trust.current_checkpoint()? == checkpoint)?;
     let completed = reply.completed_at_boottime_nanos;
     let original_sha256 = Sha256Digest::compute(&canonical_json_bytes(&value)?);
     // Authentication can consume time. Preserve every authenticated original
     // bound through both this return and the caller's final capability check.
-    let expires_at_boottime_nanos = history_deadline.min(lifetime).min(binding.cleanup_deadline_boottime_nanos);
+    let expires_at_boottime_nanos = history_deadline.min(lifetime).min(binding.cleanup_deadline_boottime_nanos).min(publication_deadline);
     let final_now = boottime_now_nanos().map_err(|_| ShadowError::CustodyUnavailable)?;
     ensure(final_now >= now && final_now >= completed && final_now < expires_at_boottime_nanos)?;
     Ok(NativeEvidence { factory, binding: binding.clone(), operation: permit.operation(), checkpoint,
@@ -272,12 +278,18 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
 }
 
 fn verify_final_request(request: &ProductionAuthorityEndpointRequestV4, response: &ClosedProductionDispatchResponseV4,
-    key: &VerifyingKey, reply: &ProductionAuthorityEndpointReplyV4) -> Result<(), ShadowError> {
+    key: &VerifyingKey, reply: &ProductionAuthorityEndpointReplyV4, publication_selected: bool) -> Result<(), ShadowError> {
     use ProductionAuthorityEndpointRequestBodyV4 as Body;
     match &request.request {
         // v12's admitted operation set uses genuine native completion paths;
         // an old final Dispatch signature cannot stand in for that execution.
         Body::Dispatch(_) => Err(ShadowError::BindingDrift),
+        Body::FinishNativePublication { proposal, result, service_transitions } => {
+            ensure(publication_selected
+                && request.endpoint == ProductionAuthorityEndpointIdentityV4::ParentSigner(PolicyShadowCustodySignerRole::PublicationReconciliation))?;
+            persistence::verify_publication_final(proposal, result, service_transitions, response, key,
+                &reply.authority_key_id, &reply.authority_key_spki_sha256)
+        },
         Body::FinishCommitRequest { computation, service_transitions } => {
             ensure(matches!(computation.request, ClosedProductionDispatchRequestV4::CommitRequest { .. })
                 && request.endpoint == ProductionAuthorityEndpointIdentityV4::ParentSigner(PolicyShadowCustodySignerRole::LedgerAppend)
@@ -318,6 +330,55 @@ fn verify_final_request(request: &ProductionAuthorityEndpointRequestV4, response
         },
         _ => Err(ShadowError::BindingDrift),
     }
+}
+
+fn verify_publication_admission(runtime: &ProductionRpcRuntimeConfigV4, histories: &ProductionServiceHistoricalKeyringsV4,
+    configuration: &ProductionCustodyConfiguration, trust: &dyn EnvelopeKeyTrust, checkpoint: &AtomicTrustCheckpoint,
+    proposal: &super::super::publication::Proposal, now: u64) -> Result<u64, ShadowError> {
+    use super::super::publication_service::Grant;
+    ensure(runtime.publication_selected())?;
+    let selection = runtime.publication.as_ref().ok_or(ShadowError::BindingDrift)?;
+    selection.validate().map_err(|_| ShadowError::BindingDrift)?;
+    let (durable_raw, current_raw) = selection.originals();
+    let durable: Grant = exact(durable_raw.as_bytes())?;
+    let current: Grant = exact(current_raw.as_bytes())?;
+    let rings = histories.borrowed();
+    let drs = rings.history(HistoricalServiceRoleV3::DurableRecoveryStore);
+    let csa = rings.history(HistoricalServiceRoleV3::CurrentSignatureAuthority);
+    let durable_key = durable.verify(drs).map_err(|_| ShadowError::BindingDrift)?;
+    current.verify(csa).map_err(|_| ShadowError::BindingDrift)?;
+    let d = &durable.payload;
+    let c = &current.payload;
+    let bridge = configuration.remote_native_execution_closure().ok_or(ShadowError::BindingDrift)?.guest();
+    ensure(d.service_role == TrustedHostServiceRoleV3::DurableRecoveryStore
+        && c.service_role == TrustedHostServiceRoleV3::CurrentSignatureAuthority
+        && d.admission == c.admission && d.native == c.native && d.retrieval == c.retrieval
+        && d.durable_authority_epoch == c.durable_authority_epoch
+        && d.durable_public_key_base64url == c.durable_public_key_base64url
+        && d.initial_transition_head_sha256 == c.initial_durable_transition_head_sha256
+        && d.guest.uid != c.guest.uid && d.guest.gid != c.guest.gid
+        && d.admission.proof_scope_original.as_bytes() == canonical_json_bytes(configuration.proof_scope())?.as_slice()
+        && d.admission.scope.assignment_payload_sha256 == *configuration.assignment_payload_sha256()
+        && d.admission.scope.assignment_revision == configuration.assignment_revision()
+        && d.admission.scope.retrieval_namespace_sha256 == *configuration.retrieval_namespace_sha256()
+        && d.admission.scope.issued_at_boottime_nanos <= now && now < d.admission.scope.expires_at_boottime_nanos)?;
+    for p in [d, c] {
+        ensure(runtime.expected_service_configuration_sha256.get(&p.service_role) == Some(&p.runtime_configuration_sha256)
+            && p.guest.uid != bridge.uid && p.guest.gid != bridge.gid
+            && p.guest.boot_id_base64url == bridge.boot_id_base64url
+            && p.guest.time_namespace_device == bridge.time_namespace_device && p.guest.time_namespace_inode == bridge.time_namespace_inode)?;
+    }
+    for role_key in [&d.native, &d.retrieval] {
+        let domain = if role_key.role == AuthorityRole::CustodyPublicationReconciliation {
+            PolicyShadowCustodySignerRole::PublicationReconciliation.signature_domain()
+        } else { authority_role_signature_domain(AuthorityRole::CustodyRetrievalResponse) };
+        let assigned = key(configuration, trust, checkpoint, role_key.role, &role_key.key_id, &role_key.key_spki_sha256, domain)?;
+        ensure(assigned == role_key.material().map_err(|_| ShadowError::BindingDrift)?)?;
+    }
+    proposal.verify_with_key(&d.admission, &d.native, &d.retrieval, &d.durable_authority_epoch, &durable_key)
+        .map_err(|_| ShadowError::BindingDrift)?;
+    ensure(proposal.completed_at_boottime_nanos <= now)?;
+    Ok(d.admission.scope.expires_at_boottime_nanos)
 }
 fn final_artifact(result: &crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResultV4)
     -> Result<&CanonicalProductionArtifactV4, ShadowError> {

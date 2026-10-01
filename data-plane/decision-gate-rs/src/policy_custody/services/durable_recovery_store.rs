@@ -1220,6 +1220,12 @@ impl super::spool_head::Owner for TrustedHostNoTeeDurableRecoveryStoreServer {
     fn sign_spool_commit(&self,input:&super::spool_head::CommitInput)
         ->Result<super::spool_head_values::Reply,ServiceError>{input.sign(&self.signer.signing_key)}
 }
+impl super::publication_service::Owner for TrustedHostNoTeeDurableRecoveryStoreServer {
+    fn sign_publication_snapshot(&self,input:&super::publication_service::SnapshotInput)
+        ->Result<super::publication::Snapshot,ServiceError>{input.sign(&self.signer.signing_key)}
+    fn sign_publication_witness(&self,input:&super::publication_service::WitnessInput)
+        ->Result<super::publication_service::Witness,ServiceError>{input.sign(&self.signer.signing_key)}
+}
 
 impl TrustedHostNoTeeDurableRecoveryStoreServer {
     pub(super) fn from_seed(

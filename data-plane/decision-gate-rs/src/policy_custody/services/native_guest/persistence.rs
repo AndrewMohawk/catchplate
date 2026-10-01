@@ -21,10 +21,11 @@ use std::os::fd::OwnedFd;
 pub(in crate::policy_shadow::policy_custody) use store::Head as PersistenceHead;
 const GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v1";
 const COMPLETED_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v2";
+const PUBLICATION_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v3";
 pub(in crate::policy_shadow::policy_custody) const COMMIT_DOMAIN:&str="serverware.nativeShadowPersistenceCommit.signature/v1";
 #[derive(Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
-enum Permission {StoreDispatchOriginal,VerifyPersistence,VerifyCompletedInvocation}
+enum Permission {StoreDispatchOriginal,VerifyPersistence,VerifyCompletedInvocation,VerifyPublicationInvocation}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -45,6 +46,8 @@ impl Configuration {
                 [Permission::VerifyPersistence]|[Permission::StoreDispatchOriginal,Permission::VerifyPersistence]),
             "serverware.nativeShadowPersistenceServiceAssignment/v2"=>p.permissions==[
                 Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation],
+            "serverware.nativeShadowPersistenceServiceAssignment/v3"=>p.permissions==[
+                Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation,Permission::VerifyPublicationInvocation],
             _=>false,
         };
         require(permissions && p.purpose=="native-shadow-receipt-persistence" && p.guest.service_role=="production-bridge"
@@ -70,7 +73,9 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &binding.key_id,&binding.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256)?;
-        let domain=if p.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v2" {COMPLETED_GRANT_DOMAIN}else{GRANT_DOMAIN};
+        let domain=match p.api_version.as_str() {
+            "serverware.nativeShadowPersistenceServiceAssignment/v3"=>PUBLICATION_GRANT_DOMAIN,
+            "serverware.nativeShadowPersistenceServiceAssignment/v2"=>COMPLETED_GRANT_DOMAIN,_=>GRANT_DOMAIN};
         key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         scope.check(keys)?;
@@ -124,6 +129,7 @@ pub(in crate::policy_shadow::policy_custody) fn final_dispatch(request:&Request)
         Body::FinishCommitRequest{computation,..}=>Ok(&computation.request),
         Body::FinishNativeSpool{completion,..}=>Ok(&completion.payload.claim.request),
         Body::FinishNativeActiveEffect{completion,..}=>Ok(&completion.prepared.core.request),
+        Body::FinishNativePublication{proposal,..}=>Ok(&proposal.prepared.core.request),
         _=>Err(ShadowError::BindingDrift),
     }
 }
@@ -210,6 +216,9 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
         key.verify_strict(&completion.preimage().map_err(fail)?,&Signature::from_bytes(&completion.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
     }
+    if let Body::FinishNativePublication{proposal,result,service_transitions}=&request.request {
+        verify_publication_final(proposal,result,service_transitions,response,&key,&reply.authority_key_id,&reply.authority_key_spki_sha256)?;
+    }
     let rebuilt=ClosedProductionDispatchResponseV4::from_parts(dispatch,response.result.clone(),response.service_transitions.clone()).map_err(fail)?;
     require(canonical_json_bytes(&rebuilt)?==canonical_json_bytes(response)? && !response.service_transitions.is_empty()
         && response.service_transitions.len()<=5)?;
@@ -228,6 +237,34 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
             &Signature::from_bytes(&receipt.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
     }
     Ok((request,raw,receipt))
+}
+
+/// Authenticate the nested native originals already bound by the final
+/// endpoint signature. Admission/history/state authority is checked by the
+/// native issuer and again by the selected terminal receiver, not invented by
+/// this immutable original store.
+pub(in crate::policy_shadow::policy_custody) fn verify_publication_final(
+    proposal:&services::publication::Proposal,
+    result:&crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResultV4,
+    transitions:&[crate::policy_shadow::policy_custody::production_dispatch::SignedProductionServiceTransitionV4],
+    response:&ClosedProductionDispatchResponseV4,key:&VerifyingKey,id:&Sha256Digest,spki:&Sha256Digest)->Result<(),ShadowError>{
+    let core=&proposal.prepared.core;let binding=core.request.binding();
+    core.request.validate().map_err(fail)?;core.snapshot.validate().map_err(fail)?;
+    require(services::publication_client::selected(&core.request)
+        && core.request==core.snapshot.request && core.native_grant_sha256==core.snapshot.native_grant_sha256
+        && core.signing_key_id==*id && core.signing_key_spki_sha256==*spki
+        && core.api_version=="serverware.nativePublicationCore/v1"
+        && proposal.api_version=="serverware.nativePublicationProposal/v1"
+        && binding.opened_at_boottime_nanos<=core.snapshot.observed_at_boottime_nanos
+        && core.snapshot.observed_at_boottime_nanos<=proposal.prepared.prepared_at_boottime_nanos
+        && proposal.prepared.prepared_at_boottime_nanos<=proposal.completed_at_boottime_nanos
+        && proposal.completed_at_boottime_nanos<binding.operation_deadline_boottime_nanos
+        && response.result==*result && response.service_transitions==transitions)?;
+    proposal.require_result(result).map_err(fail)?;
+    key.verify_strict(&proposal.prepared.preimage().map_err(fail)?,&Signature::from_bytes(&proposal.prepared.signature.decode()?))
+        .map_err(|_|ShadowError::SignatureInvalid)?;
+    key.verify_strict(&signature_preimage(services::publication::PROPOSAL_DOMAIN,&proposal.payload().map_err(fail)?),
+        &Signature::from_bytes(&proposal.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)
 }
 pub(crate) struct Prepared {original:services::guest_original::Original,configuration:Configuration,
     scope_original:Vec<u8>,scope:scope::Scope,directory:OwnedFd,listener:OwnedFd,inspection:OwnedFd,lock:Option<OwnedFd>}
@@ -273,6 +310,13 @@ impl Prepared {
 pub(crate) struct Service {original:services::guest_original::Original,configuration:Configuration,scope_original:Vec<u8>,scope:scope::Scope,
     store:store::Store,channel:peer::Client}
 impl Service {
+    fn require_selected_final(&self,request:&Request)->Result<(),ShadowError>{
+        if matches!(request.request,Body::FinishNativePublication{..}) {
+            require(self.configuration.payload.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v3"
+                && self.configuration.payload.permissions.contains(&Permission::VerifyPublicationInvocation))?;
+        }
+        Ok(())
+    }
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,&self.scope,trust,time)?;self.store.check()?;self.channel.check()?;
@@ -286,6 +330,7 @@ impl Service {
             key.verify_strict(&signature_preimage(COMMIT_DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&commit.signature.decode()?))
                 .map_err(|_|ShadowError::SignatureInvalid)?;
             let (request,raw,receipt)=dispatch_original(&p.request_original_base64url,&p.reply_original_base64url,&self.scope,keys,trust,time)?;
+            self.require_selected_final(&request)?;
             require(p.original_deadline_boottime_nanos==request.deadline_boottime_nanos && p.request_original_sha256==Sha256Digest::compute(&raw)
                 && p.stored_at_boottime_nanos>0 && p.stored_at_boottime_nanos<p.original_deadline_boottime_nanos
                 && p.stored_at_boottime_nanos<=guest::now()? && canonical_json_bytes(&p.receipt)?==canonical_json_bytes(&receipt)?)?;
@@ -300,6 +345,7 @@ impl Service {
         time:&dyn TrustedTime,check:&impl Fn()->Result<(),ShadowError>)->Result<Sha256Digest,ShadowError>{
         require(self.configuration.payload.permissions.contains(&Permission::StoreDispatchOriginal))?;
         let (original,raw,receipt)=dispatch_original(request_encoded,reply_encoded,&self.scope,keys,trust,time)?;
+        self.require_selected_final(&original)?;
         require(request.deadline_boottime_nanos==original.deadline_boottime_nanos && request.replay_id_sha256==original.replay_id_sha256)?;
         let replay=self.store.replay(request_encoded,reply_encoded)?;
         for commit in self.store.originals() {

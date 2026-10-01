@@ -4,6 +4,7 @@ use super::*;
 use guest::exact;
 use crate::policy_shadow::policy_custody::services::ledger_spool_values as wire;
 use crate::policy_shadow::policy_custody::services::active_effect_values as effect;
+use crate::policy_shadow::policy_custody::services::publication;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd,FromRawFd,OwnedFd};
@@ -58,18 +59,22 @@ fn read(file:&File,uid:u32,gid:u32)->Result<Vec<u8>,ShadowError>{
         ==(n.dev(),n.ino(),n.len(),n.mode(),n.uid(),n.gid(),n.mtime(),n.mtime_nsec(),n.ctime(),n.ctime_nsec()))?;Ok(bytes)
 }
 struct Held {name:String,file:File,identity:Identity,raw:Vec<u8>,verity:Option<Sha256Digest>}
-/// A closed two-family storage inventory, sharing one sequence, lock and the
+/// A closed storage inventory, sharing one sequence, lock and the
 /// unchanged 128-object/32-MiB aggregate ceiling. Old originals keep their bytes.
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
-pub(super) enum PreparedOriginal {Ledger(wire::Prepared),Effect(effect::Prepared)}
+pub(super) enum PreparedOriginal {Ledger(wire::Prepared),Effect(effect::Prepared),Publication(publication::Prepared)}
 impl PreparedOriginal {
     fn core_bytes(&self)->Result<Vec<u8>,ShadowError>{match self {
         Self::Ledger(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)},
-        Self::Effect(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)}}}
-    fn identity(&self)->Result<Sha256Digest,ShadowError>{match self{Self::Ledger(v)=>v.core.identity(),Self::Effect(v)=>v.core.identity()}.map_err(fail)}
+        Self::Effect(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)},
+        // Full admission/snapshot/signature checks belong to the selected
+        // retained Retrieval owner both before put and after opening a chain.
+        Self::Publication(v)=>{v.core.request.validate().map_err(fail)?;canonical_json_bytes(&v.core)}}}
+    fn identity(&self)->Result<Sha256Digest,ShadowError>{match self{Self::Ledger(v)=>v.core.identity(),Self::Effect(v)=>v.core.identity(),
+        Self::Publication(v)=>v.core.identity()}.map_err(fail)}
     fn request(&self)->&crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchRequestV4 {
-        match self{Self::Ledger(v)=>&v.core.request,Self::Effect(v)=>&v.core.request}}
+        match self{Self::Ledger(v)=>&v.core.request,Self::Effect(v)=>&v.core.request,Self::Publication(v)=>&v.core.request}}
 }
 pub(super) struct Store {directory:File,identity:Identity,lock:File,held:Vec<Held>,
     originals:Vec<(PreparedOriginal,wire::Stored)>,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
@@ -156,6 +161,11 @@ impl Store {
     pub(super) fn put_effect(&mut self,prepared:effect::Prepared,sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
         check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
         self.put_original(PreparedOriginal::Effect(prepared),sign,check)
+    }
+    pub(super) fn put_publication(&mut self,prepared:publication::Prepared,
+        sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
+        check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
+        self.put_original(PreparedOriginal::Publication(prepared),sign,check)
     }
     fn put_original(&mut self,prepared:PreparedOriginal,sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
         check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{

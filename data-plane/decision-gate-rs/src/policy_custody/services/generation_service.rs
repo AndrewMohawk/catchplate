@@ -31,6 +31,7 @@ pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError> {
     Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|super::generation_certification::API)))
 }
 pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
+    if super::publication_service::is_command(raw)? {return decode_canonical_frame::<super::publication_service::Command>(raw)?.deadline();}
     if super::spool_current::is_command(raw)? {return decode_canonical_frame::<super::spool_current::Command>(raw)?.deadline();}
     if super::active_effect_cleanup::is_command(raw)? {return decode_canonical_frame::<super::active_effect_cleanup::Command>(raw)?.deadline();}
     if super::spool_head_values::is_command(raw)? {
@@ -55,6 +56,7 @@ pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
 }
 pub(super) fn check_response_deadline(raw:&[u8],deadline:u64)->Result<(),ServiceError> {
     let value:serde_json::Value=decode_canonical_frame(raw)?;
+    if value.get("publicationResult").is_some() {return super::publication_service::response_deadline(raw,deadline);}
     if matches!(value.get("phase").and_then(|v|v.as_str()),
         Some("native-spool-allocated"|"native-spool-committed"|"effect-allocated"|"effect-committed")) {
         return ensure(match decode_canonical_frame::<super::spool_head_values::Reply>(raw)? {

@@ -57,7 +57,7 @@ impl Gate {
     pub(super) fn open<T>(loaded:&LoadedConfig<T>,runtime:&RuntimeConfigHeaderV3,bootstrap:&Bootstrap,
         activation:&mut BTreeMap<String,OwnedFd>,role:TrustedHostServiceRoleV3)->Result<Option<Self>,ServiceRunnerError>{
         let Some(selection)=&runtime.dispatch_admission else{return Ok(None);};
-        require(matches!(runtime.api_version.as_str(),RUNTIME|super::spool_head::RUNTIME|super::active_effect_cleanup::RUNTIME) && runtime.generation_admission.is_some() && selection.grant_fd_name==GRANT_FD
+        require(matches!(runtime.api_version.as_str(),RUNTIME|super::spool_head::RUNTIME|super::active_effect_cleanup::RUNTIME|super::publication_service::RUNTIME) && runtime.generation_admission.is_some() && selection.grant_fd_name==GRANT_FD
             && matches!(role,TrustedHostServiceRoleV3::DurableRecoveryStore|TrustedHostServiceRoleV3::CurrentSignatureAuthority))?;
         bootstrap.check()?;let association=bootstrap.generation_association()?;
         let grant_file=std::fs::File::from(take_activation_fd(activation,GRANT_FD)?);

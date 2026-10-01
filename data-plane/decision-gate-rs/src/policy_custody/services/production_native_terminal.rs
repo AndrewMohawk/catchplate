@@ -50,7 +50,8 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             ProductionRpcResponseBodyV4::NativeCommitRequest{dispatch,..}=>dispatch,
             _=>return Err(refused()),
         };
-        let query=native_terminal::Query{api_version:native_terminal::QUERY_API.into(),
+        let publication=self.publication.is_some();
+        let query=native_terminal::Query{api_version:(if publication{native_terminal::PUBLICATION_QUERY_API}else{native_terminal::QUERY_API}).into(),
             cleanup_not_before_boottime_nanos:dispatch.binding().operation_deadline_boottime_nanos,
             dispatch_response_sha256:super::super::super::super::Sha256Digest::compute(
                 &super::super::super::super::canonical_json_bytes(&closed).map_err(|_|refused())?),dispatch};
@@ -60,10 +61,10 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             settlement.deadline_boottime_nanos,ProductionAuthorityEndpointRequestBodyV4::VerifyCompletedInvocation{query})?;
         let reply=self.call_endpoint_original(endpoint,wire.clone(),ProductionRpcRejectionCodeV4::CleanupUnauthorized)?;
         let ProductionAuthorityEndpointResultV4::CompletedInvocation(proof)=&reply.result else{return Err(refused());};
-        if proof.api_version!=native_terminal::PROOF_API || proof.commit_original.is_empty()
+        if proof.api_version!=(if publication{native_terminal::PUBLICATION_PROOF_API}else{native_terminal::PROOF_API}) || proof.commit_original.is_empty()
             || proof.head_original.is_empty() || !proof.commit_original.is_ascii() || !proof.head_original.is_ascii()
             || proof.current_head_sequence==0 || proof.current_head_sequence>128 {return Err(refused());}
-        let artifact=native_terminal::Wire{api_version:native_terminal::WIRE_API.into(),
+        let artifact=native_terminal::Wire{api_version:(if publication{native_terminal::PUBLICATION_WIRE_API}else{native_terminal::WIRE_API}).into(),
             persistence_request_original:String::from_utf8(encode_canonical_frame(&wire).map_err(|_|refused())?).map_err(|_|refused())?,
             persistence_reply_original:String::from_utf8(encode_canonical_frame(&reply).map_err(|_|refused())?).map_err(|_|refused())?,
             dispatch_request_original_sha256:super::super::super::super::Sha256Digest::compute(request_raw),

@@ -327,6 +327,9 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     pub(super) commit_request:Option<super::dispatch_service::client::Selection>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub(super) spool:Option<super::spool_head_client::Selection>,
+    #[serde(default,skip_serializing_if="Option::is_none",
+        deserialize_with="crate::policy_shadow::deserialize_optional_present")]
+    pub(super) publication:Option<super::publication_client::Selection>,
     #[serde(default, skip_serializing_if = "Option::is_none",
         deserialize_with = "crate::policy_shadow::deserialize_optional_present")]
     ordinary_initial_histories: Option<initial_history::Members>,
@@ -338,13 +341,16 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
 impl ProductionRpcRuntimeConfigV4 {
     pub(super) fn initial_history_selected(&self) -> bool {
         matches!(self.api_version.as_str(), super::spool_head_client::INITIAL_HISTORY_RUNTIME
-            |super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
+            |super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
     }
     pub(super) fn helper_initial_selected(&self) -> bool {
-        matches!(self.api_version.as_str(),super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
+        matches!(self.api_version.as_str(),super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
     }
     pub(super) fn native_terminal_selected(&self)->bool {
-        self.api_version == super::super::native_terminal::RUNTIME
+        matches!(self.api_version.as_str(),super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
+    }
+    pub(super) fn publication_selected(&self)->bool {
+        self.api_version==super::publication_client::RUNTIME
     }
     pub(super) fn native_driver_selection(&self)->Result<(super::super::super::Sha256Digest,super::super::super::Sha256Digest),ServiceRunnerError>{
         self.validate()?;Ok((self.expected_driver_process_identity_sha256.clone(),
@@ -395,12 +401,14 @@ impl ProductionRpcRuntimeConfigV4 {
             |(super::spool_head_client::EFFECTS_RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::INITIAL_HISTORY_RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::HELPER_INITIAL_RUNTIME,Some(_),Some(_),Some(_))
-            |(super::super::native_terminal::RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::super::native_terminal::RUNTIME,Some(_),Some(_),Some(_))
+            |(super::publication_client::RUNTIME,Some(_),Some(_),Some(_)))
+            || self.publication_selected()!=self.publication.is_some()
             || self.spool.as_ref().is_some_and(|value|value.completion_selected())
                 != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME
-                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
+                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
             || self.spool.as_ref().is_some_and(|value|value.effects_selected())
-                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
+                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -437,6 +445,7 @@ impl ProductionRpcRuntimeConfigV4 {
         self.journal_directory_identity.validate()?;
         if let Some(selection)=&self.commit_request {selection.validate()?;}
         if let Some(selection)=&self.spool {selection.validate()?;}
+        if let Some(selection)=&self.publication {selection.validate()?;}
         let mut names = BTreeSet::from([
             PRODUCTION_RPC_LISTENER_FD_NAME.to_owned(),
             PRODUCTION_RPC_JOURNAL_FD_NAME.to_owned(),
@@ -583,6 +592,12 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     /// this effect. A legacy retrieval proof can never trigger a write.
     StoreLedgerCore {prepared:super::ledger_spool_values::Prepared},
     StoreActiveEffectCore {prepared:super::active_effect_values::Prepared},
+    /// Explicit publication successor only; legacy Retrieval refuses this body.
+    StoreNativePublicationCore {prepared:super::publication::Prepared},
+    PrepareNativePublication {snapshot:super::publication::Snapshot},
+    CompleteNativePublication {prepared:super::publication::Prepared,stored:Option<super::ledger_spool_values::Stored>},
+    FinishNativePublication {proposal:super::publication::Proposal,result:super::super::production_dispatch::ClosedProductionDispatchResultV4,
+        service_transitions:Vec<super::super::production_dispatch::SignedProductionServiceTransitionV4>},
     PrepareNativeActiveEffect {request:ClosedProductionDispatchRequestV4,allocation:super::active_effect_values::Allocation,head_grant_original:String},
     CompleteNativeActiveEffect {prepared:super::active_effect_values::Prepared,stored:super::ledger_spool_values::Stored},
     FinishNativeActiveEffect {completion:super::active_effect_values::Completion,result:super::super::production_dispatch::ClosedProductionDispatchResultV4,
@@ -699,6 +714,9 @@ pub(super) enum ProductionAuthorityEndpointResultV4 {
     NativeSpoolPrepared(super::ledger_spool_values::Prepared),
     NativeSpoolCompletion(super::spool_head_values::Completion),
     ActiveEffectCoreStored(super::ledger_spool_values::Stored),
+    NativePublicationCoreStored(super::ledger_spool_values::Stored),
+    NativePublicationPrepared(super::publication::Prepared),
+    NativePublicationProposed(super::publication::Proposal),
     NativeActiveEffectPrepared(super::active_effect_values::Prepared),
     NativeActiveEffectCompletion(super::active_effect_values::Completion),
     Generation(ClosedProductionGenerationResponseV4),
@@ -837,6 +855,7 @@ pub(super) struct ConcreteFiveV3ProductionAuthoritiesV4 {
     generation_admission:Option<std::sync::Mutex<super::generation_service_client::Client>>,
     commit_request:Option<std::sync::Mutex<super::dispatch_service::client::Client>>,
     spool:Option<std::sync::Mutex<super::spool_head_client::Client>>,
+    publication:Option<std::sync::Mutex<super::publication_client::Client>>,
     native_terminal:bool,
 }
 
@@ -894,6 +913,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             generation_admission:None,
             commit_request:None,
             spool:None,
+            publication:None,
             native_terminal:false,
         })
     }
@@ -1189,6 +1209,10 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         })?;
         let role = production_signer_role(request)?;
         let endpoint = self.parent_signer_endpoint(role)?;
+        let mut publication=if super::publication_client::selected(request) {
+            self.publication.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"publication owner is busy"))?
+        }else{None};
         let mut commitment=if matches!(request,ClosedProductionDispatchRequestV4::CommitRequest{..}) {
             self.commit_request.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest owner is busy"))?
@@ -1206,7 +1230,19 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             spool=None;
         }
         if super::active_effect_values::selected(request) && spool.as_ref().is_some_and(|owner|!owner.effects_selected()){spool=None;}
-        let (wire,reply)=if let Some(owner)=spool.as_mut(){
+        let (wire,reply)=if let Some(owner)=publication.as_mut(){
+            owner.run(&self.sessions,request,|identity,body|{
+                let target=match identity {
+                    ProductionAuthorityEndpointIdentityV4::ParentSigner(role)=>self.parent_signer_endpoint(role),
+                    ProductionAuthorityEndpointIdentityV4::Proof(kind)=>self.proof_endpoint(kind),
+                }.map_err(|_|super::ledger_spool_values::invalid())?;
+                let wire=ProductionAuthorityEndpointRequestV4::new(identity,request.binding().replay_id_sha256.clone(),
+                    request.binding().operation_deadline_boottime_nanos,body).map_err(|_|super::ledger_spool_values::invalid())?;
+                let reply=self.call_endpoint_original(target,wire.clone(),ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable)
+                    .map_err(|_|super::ledger_spool_values::invalid())?;Ok((wire,reply))
+            }).map_err(|_|ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,
+                "native publication incomplete or uncertain"))?
+        }else if let Some(owner)=spool.as_mut(){
             owner.run(&self.sessions,request,|identity,body|{
                 let target=match identity {
                     ProductionAuthorityEndpointIdentityV4::ParentSigner(role)=>self.parent_signer_endpoint(role),
@@ -1270,6 +1306,8 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         }
         match reply.result {
             ProductionAuthorityEndpointResultV4::Dispatch(response) => {
+                if let Some(owner)=publication.as_mut(){owner.completed(request,&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                    ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native publication completion differs"))?;}
                 if let Some(owner)=spool.as_mut(){owner.completed(request,&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                     ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native spool completion differs"))?;}
                 if let Some(owner)=commitment.as_mut() {owner.completed(&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
@@ -2645,6 +2683,7 @@ fn run_production_rpc_service_loaded_inner(
             .map_err(|_|ServiceRunnerError::invalid("native proof endpoint construction refused"))?
     } else {(BTreeMap::new(),BTreeMap::new(),None)};
     if loaded.value.commit_request.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::LedgerAppend)
+        || loaded.value.publication_selected()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::PublicationReconciliation)
         || loaded.value.spool.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::IngressAdmission)
         || loaded.value.spool.as_ref().is_some_and(|value|value.completion_selected())
             !=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::TerminalAppend)
@@ -2782,7 +2821,8 @@ fn run_production_rpc_service_loaded_inner(
             |super::super::super::PolicyShadowCustodySignerRole::IngressAdmission|super::super::super::PolicyShadowCustodySignerRole::TerminalAppend
             |super::super::super::PolicyShadowCustodySignerRole::DispatchBarrier
             |super::super::super::PolicyShadowCustodySignerRole::ActiveEffectBarrier
-            |super::super::super::PolicyShadowCustodySignerRole::ActiveEffectCommit) {
+            |super::super::super::PolicyShadowCustodySignerRole::ActiveEffectCommit)
+            || (loaded.value.publication_selected() && configured.signer_role==super::super::super::PolicyShadowCustodySignerRole::PublicationReconciliation) {
             if let Some(session)=native_signers.remove(&configured.signer_role) {
                 parent_signer_endpoints.push(load_pinned_endpoint_session(
                     ProductionAuthorityEndpointIdentityV4::ParentSigner(configured.signer_role),EndpointSession::NativeProof(session),
@@ -2870,6 +2910,11 @@ fn run_production_rpc_service_loaded_inner(
     )?;
     if let Some(owner)=native_proof_owner {
         authority.native_terminal=loaded.value.native_terminal_selected();
+        if let Some(selection)=loaded.value.publication.clone(){
+            authority.publication=Some(std::sync::Mutex::new(super::publication_client::Client::new(selection,
+                load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,Arc::clone(&owner),
+                &loaded.value.expected_service_configuration_sha256)?));
+        }
         if let Some(selection)=loaded.value.spool.clone(){
             authority.spool=Some(std::sync::Mutex::new(super::spool_head_client::Client::new(selection,
                 load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,Arc::clone(&owner),

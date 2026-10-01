@@ -145,7 +145,7 @@ def execution(input_raw, request_raw, *, boot, now_boottime_ns, now_unix_ns):
     p.require(p.canonical(selected) == input_raw)
     configuration = _configuration(ticket["configurationOriginal"].encode("ascii"))
     receiver = p.document(ticket["receiverOriginal"].encode("ascii"), MAX_RECEIVER)["receiver"]
-    p.require(p.canonical(selected["window"]) == p.canonical(configuration["window"])
+    p.require(p.canonical(selected["window"]) == p.canonical(configuration["window"]))
     p.require(selected["expiresAtUnixNanos"] == configuration["expiresAtUnixNanos"]
         and selected["coreHandoff"] == {"peerPid": receiver["pid"], "peerUid": receiver["uid"], "peerGid": receiver["gid"]})
     return copy.deepcopy(selected)

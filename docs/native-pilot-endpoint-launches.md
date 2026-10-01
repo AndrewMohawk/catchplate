@@ -75,5 +75,38 @@ records remain the explicitly selected empty list. Fixed publication slots and
 a retained job120 composer are still missing. Durable journal initialization
 belongs to the later existing conductor owners, not a `publicPinsOpened` result.
 
-One focused assembled verification batch is pending. No live retained owner,
-installer, guest, signer entrypoint, cloud or paid execution is claimed.
+## Focused verification
+
+The assembled run on `1b005344` attempted **133 controls**. Its preceding **125
+passed**, but the new eight-control suite reported six errors: the existing
+native-service builder passed a 32 MiB native-key input bound to an ordinary
+parser capped at 4 MiB. `6618d2208c534d25611d56862744c3106b121a61` fixes that
+parser selection while retaining the native bounds and all signature checks.
+Tests were unchanged. All **16 targeted rechecks** (native-service and new
+endpoint-launch suites) then passed, exit **0**, along with fifteen-file
+Python grammar/both Make inventories and **59 relative links**. The final
+revision did not rerun the full 133-control set.
+
+The eight new controls include complete signed synthetic public-composition
+paths for Persistence and TrustedTime, exact seven-field reported results,
+all-ten bundle/pin projection, original TrustedTime bootstrap preservation,
+and policy/signature/role/pin/clock/incomplete-context refusals. The other eight
+roles do not yet have complete authenticated operational-history transcripts.
+No actual retained owner, installer, guest, signer entrypoint, KMS or hardware
+was exercised; connected startup timing and application/provider acceptance
+remain unverified.
+
+Both runs used Python 3.11.15, cleared environment, CPU 0, isolated user/network
+namespaces and `-I -S -B`, under a 180-second limit. The first ran on 2026-10-01
+01:01:52.299684442–01:02:30.001689340 UTC; the recheck ran
+01:03:53.937459016–01:04:10.396889007 UTC. No database, application or
+authority-store module was imported.
+
+The final 85,452,800-byte source archive has SHA256
+`86a29484c3ba509bd1a63af38ca5f615f241a3a0a5a9dc1f6a665a578994edc7`.
+Both source archives, revisions, exact harnesses/commands and logs, plus the
+structured result and verified checksums, are retained at
+`codex-offload/serverware/engineering-builds/6618d220-endpoint-launches-4k10ga/`.
+Native source, schemas and dependency lock are unchanged from `03d4075d`;
+no native/artifact rebuild was repeated. The reused runtime is an unpublished
+engineering candidate. No cloud or paid action ran.

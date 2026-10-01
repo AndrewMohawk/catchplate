@@ -5,6 +5,11 @@ the actual authority services and PostgreSQL policy authority; it is not a
 second demo authority. Host root remains trusted. Co-location does not establish
 hardware-backed keys, native stage-zero execution or an independent witness.
 
+Frozen source `a51562e0` passes 33 focused controls in 0.411 seconds, the fixed
+CLI help check, 12 changed-file syntax checks and four test-inventory checks.
+That is source/contract/descriptor/filesystem verification, not a successful
+signed-package launch. No installed authority role or working pilot is claimed.
+
 ## What the implementation connects
 
 The existing systemd listener and protected static credentials are retained.
@@ -24,6 +29,13 @@ Local bootstrap evidence explicitly binds the Python interpreter and retained
 bootstrap source and declares `pathname-execve`. Its request, certificate and
 signature domains are separate from the native static-ELF/`execveat` profile.
 The latter's admission requirements are unchanged.
+
+The local signed role selects one closed argument grammar; it cannot predict a
+future invocation's setup digest. The late signed request binds the actual
+literal argv and descriptors at the explicit post-local-admission boundary.
+Temporary transport copies close before that boundary; setup and control
+ownership remain through the post-guard acknowledgment and then close. Parent
+supervision continues without extending the original admission window.
 
 ## Operator interface
 

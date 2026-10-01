@@ -325,6 +325,7 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/native_pilot_authority_runtime_entrypoint.py /authority-runtime-root/authority/app/scripts/native_pilot_authority_runtime_entrypoint.py; \
     install -m 0444 /source/scripts/run_native_pilot_authority_coordinator.py /authority-runtime-root/authority/app/scripts/run_native_pilot_authority_coordinator.py; \
     install -m 0444 /source/scripts/native_pilot_runtime_artifacts.py /authority-runtime-root/authority/app/scripts/native_pilot_runtime_artifacts.py; \
+    install -m 0444 /source/scripts/verify_nitro_tee.py /authority-runtime-root/authority/app/scripts/verify_nitro_tee.py; \
     install -m 0444 /source/scripts/authority/native_pilot_authority_io.py /authority-runtime-root/authority/app/scripts/authority/native_pilot_authority_io.py; \
     test -z "$(find /authority-runtime-root -type l -print -quit)"; \
     find /authority-runtime-root -type d -exec chmod 0555 {} +; \

@@ -4,8 +4,8 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. Current v8 source composes 69 of 105 jobs;
-the decision spine refuses startup while the remaining 36 are unimplemented.
+approval of unimplemented future jobs. Current v9 source composes 80 of 105 jobs;
+the decision spine refuses startup while the remaining 25 are unimplemented.
 Production acceptance remains 0/6.
 
 ## External approval boundary
@@ -15,8 +15,9 @@ protected FD and its independently authenticated SHA256. Computing the digest
 locally, owning a root pipe, or passing validation is not that approval. Runtime
 inventories, approved image/source identities, existing keys, original cold
 configurations and the already signed driver window remain externally
-provisioned. No key, timestamp, invocation, permission, history or genesis is
-generated here.
+provisioned. No key, timestamp, invocation, permission or historical receipt is
+generated here. V9's explicitly approved fresh-store genesis is unsigned
+initialization data, not a claim of prior state or observed empty storage.
 
 The source API is:
 
@@ -248,3 +249,27 @@ preceding signed role-key original, not a predicted digest. Job 63 provides a
 verified read-only handoff. No verifier configuration, Nitro result, key seed,
 launch or service grant is fabricated. The outer 4 MiB policy limit and original
 legacy integer rules remain unchanged. See [full contracts](native-pilot-key-authorizations.md).
+
+## Native-operational-service successor: v9
+
+Policy/v9 retains v8's sixteen fields and adds only `nativeServicesOriginal`,
+with purpose
+`initial-driver-bootstrap-precreation-endpoints-generations-and-native-services`.
+The literal closed eight-field native-service policy selects verifier settings,
+original operation intervals, spool/origin policy, an independently trusted
+startup runtime receipt and explicit fresh persistence/coordinator/time settings.
+The outer 4 MiB bound and exact 77 selectors remain unchanged.
+
+`native_service_policy(process=..., request=...)` resolves all eleven native
+service/generation-install purpose keys through the actual retained assignment
+and independent trust. It returns a copied admitted fragment only for v9 and
+the real pending owner. No older policy gains these grant decisions.
+Jobs 63–73 revalidate the actual authorization pairs and complete predecessor
+inputs/results. Job 74 is only a read-only verified handoff; earlier installer
+entry points are not reopened by extending completed-owner rechecks.
+
+Fresh genesis/journal projections are explicitly approved unsigned inputs.
+Actual receiving owners still enforce empty directories, retained identities
+and exclusive creation. The verifier configuration is not a Nitro verdict,
+and the runtime-receipt verifier is not the independent receipt producer.
+See [contracts and remaining acceptance](native-pilot-native-services.md).

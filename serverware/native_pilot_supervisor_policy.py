@@ -22,6 +22,9 @@ Explicit v7 additionally delegates the remaining seven native C9 deliveries;
 it does not authorize subsequent native grants, launches or release jobs.
 Explicit v8 adds two ordered key/admission authorizations per native endpoint.
 Legacy capability inventories remain closed; downstream grants are separate.
+Explicit v9 delegates eleven native operational grants with authenticated
+ordinary histories and independently selected verifier/fresh-input settings.
+It retains v8's 77 selectors and does not authorize subsequent launches.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -44,7 +47,7 @@ from serverware import native_pilot_scope_authority as scope
 from serverware import native_pilot_window_authority as window_authority
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import KEY_AUTHORIZATION_JOBS, KEY_PURPOSES, MAX_APPROVAL
+from serverware.native_pilot_phase_execution import JOBS, KEY_AUTHORIZATION_JOBS, KEY_PURPOSES, MAX_APPROVAL
 
 p = driver.p
 MAX_POLICY = 4 * 1024 * 1024
@@ -73,7 +76,13 @@ NATIVE_DELIVERY_FIELDS = GENERATION_FIELDS + ("nativeDeliveriesOriginal",)
 KEY_AUTHORIZATION_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v8"
 KEY_AUTHORIZATION_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-native-key-authorizations"
 KEY_AUTHORIZATION_FIELDS = NATIVE_DELIVERY_FIELDS + ("nativeKeyAuthorizationsOriginal",)
-NATIVE_DELIVERY_POLICY_APIS = (NATIVE_DELIVERY_POLICY_API, KEY_AUTHORIZATION_POLICY_API)
+NATIVE_SERVICE_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v9"
+NATIVE_SERVICE_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-native-services"
+NATIVE_SERVICE_FIELDS = KEY_AUTHORIZATION_FIELDS + ("nativeServicesOriginal",)
+KEY_AUTHORIZATION_POLICY_APIS = (KEY_AUTHORIZATION_POLICY_API, NATIVE_SERVICE_POLICY_API)
+NATIVE_DELIVERY_POLICY_APIS = (NATIVE_DELIVERY_POLICY_API,) + KEY_AUTHORIZATION_POLICY_APIS
+NATIVE_SERVICE_JOBS = tuple(job for job in JOBS["service-originals"]
+    if job.family in ("native", "generation-install"))
 GENERATION_POLICY_APIS = (GENERATION_POLICY_API,) + NATIVE_DELIVERY_POLICY_APIS
 DELIVERY_POLICY_APIS = (DELIVERY_POLICY_API,) + GENERATION_POLICY_APIS
 INITIAL_POLICY_APIS = (INITIAL_POLICY_API,) + DELIVERY_POLICY_APIS
@@ -153,6 +162,7 @@ class SupervisorPolicy:
         self._ordinary_generations = None
         self._native_deliveries = None
         self._native_key_authorizations = None
+        self._native_services = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -173,16 +183,17 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            key_authorization = value["apiVersion"] == KEY_AUTHORIZATION_POLICY_API
+            native_service = value["apiVersion"] == NATIVE_SERVICE_POLICY_API
+            key_authorization = value["apiVersion"] in KEY_AUTHORIZATION_POLICY_APIS
             native_delivery = value["apiVersion"] in NATIVE_DELIVERY_POLICY_APIS
             ordinary_generation = value["apiVersion"] in GENERATION_POLICY_APIS
             ordinary_delivery = value["apiVersion"] in DELIVERY_POLICY_APIS
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -263,6 +274,12 @@ class SupervisorPolicy:
                 p.require(type(policy_text) is str and policy_text.isascii())
                 native_key_authorizations = key_profile.validate_policy(
                     p.document(policy_text.encode("ascii"), MAX_POLICY))
+            if native_service:
+                from serverware import native_pilot_native_service_profile as services
+                policy_text = value["nativeServicesOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                native_services = services.validate_policy(
+                    generation.document(policy_text.encode("ascii"), MAX_POLICY))
             owner._value = copy.deepcopy(value)
             owner._value["precreation"] = precreation
             if endpoint:
@@ -278,6 +295,8 @@ class SupervisorPolicy:
                 owner._native_deliveries = native_deliveries
             if key_authorization:
                 owner._native_key_authorizations = native_key_authorizations
+            if native_service:
+                owner._native_services = native_services
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -314,7 +333,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2-v8 require the already independently
+        Legacy policy forbids a recipe. v2-v9 require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -438,11 +457,26 @@ class SupervisorPolicy:
         return copy.deepcopy(self._native_deliveries)
 
     def native_key_authorization_policy(self, *, process, request) -> dict:
-        """V8 only: match every new capability to the actual signed recipe key."""
+        """V8+: match every key capability to the actual signed recipe key."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] in KEY_AUTHORIZATION_POLICY_APIS)
+        self._require_native_signers(process, request, KEY_AUTHORIZATION_JOBS)
+        return copy.deepcopy(self._native_key_authorizations)
+
+    def native_service_policy(self, *, process, request) -> dict:
+        """V9 only: eleven grants under the assignment's supervisor authority."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == NATIVE_SERVICE_POLICY_API)
+        self._require_native_signers(process, request, NATIVE_SERVICE_JOBS)
+        return copy.deepcopy(self._native_services)
+
+    def _require_native_signers(self, process, request, jobs):
+        """Check source-selected purposes against independent assignment trust."""
         from serverware import native_pilot_measured_configuration as measured
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == KEY_AUTHORIZATION_POLICY_API)
         recipe = {"apiVersion": "serverware.nativePilotMeasuredConfigurationRecipe/v2",
             **self.endpoint_recipe_originals(process=process, request=request)}
         _, bindings, _ = measured._assignment(recipe, time.time_ns())
@@ -455,10 +489,9 @@ class SupervisorPolicy:
         p.require(len(selected) == 1 and selected[0]["keyId"]
             == bindings["custody-supervisor-capability"]["keyId"])
         digest = p.sha(p.decoded(selected[0]["publicKeyBase64url"], size=32))
-        p.require(all(self._value["keyBindings"][job.key] == digest for job in KEY_AUTHORIZATION_JOBS))
+        p.require(all(self._value["keyBindings"][job.key] == digest for job in jobs))
         self.check(process)
         process.check_request(request)
-        return copy.deepcopy(self._native_key_authorizations)
 
     def precreation(self):
         self.check()
@@ -541,7 +574,10 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == KEY_AUTHORIZATION_POLICY_API:
+            if self._value["apiVersion"] == NATIVE_SERVICE_POLICY_API:
+                from serverware import native_pilot_supervisor_native_services as native_services
+                native_services.close(self._process)
+            if self._value["apiVersion"] in KEY_AUTHORIZATION_POLICY_APIS:
                 from serverware import native_pilot_supervisor_key_authorizations as key_authorizations
                 key_authorizations.close(self._process)
             if self._value["apiVersion"] in NATIVE_DELIVERY_POLICY_APIS:

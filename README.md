@@ -134,14 +134,15 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has 69 of 105 job composers, including initial history, ordinary-service
+has 80 of 105 job composers, including initial history, ordinary-service
 delivery/generation grants, all ten native deliveries and their ordered key
-authorizations; it refuses launch until
-the remaining 36 are implemented.
+authorizations, and eleven [native operational grants](docs/native-pilot-native-services.md);
+it refuses launch until the remaining 25 are implemented.
 The total includes 20 newly connected authorization prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
-The current [native history handoff repair](docs/native-pilot-operational-histories.md)
-addresses startup blockers without counting unfinished composers as complete.
+The [native history handoff repair](docs/native-pilot-operational-histories.md)
+connects the service grants to actual ordinary histories and a separately
+authenticated fleet startup receipt.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary

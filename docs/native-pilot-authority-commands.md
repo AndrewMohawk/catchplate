@@ -38,8 +38,8 @@ assembles the explicit wrapper without a private key. Typed INITIAL commitments
 are not past receipts. Native opt-in admission checks the actual process and
 empty directories before gates write; legacy raw history remains unchanged.
 Supervisor history/runtime/delivery wiring has since landed, followed by
-generation, native-delivery and key-authorization decisions. Current coverage is
-69/105 fixed jobs, 36 unsupported and 0/6 production acceptance; these commands
+generation, native-delivery, key-authorization and native-service decisions. Current coverage is
+80/105 fixed jobs, 25 unsupported and 0/6 production acceptance; these commands
 do not bypass the startup guard. See [current supervisor scope](native-pilot-supervisor.md).
 
 The [driver-window issuer](native-pilot-window-authority.md) handles the existing
@@ -213,8 +213,8 @@ fixed inventory, never a caller-supplied path or extensible role list.
 | `ordinary-head`, `ordinary-cleanup`, `ordinary-current` | DRS, Cleanup, Current respectively | 65,536 / 131,072 / 131,072 |
 | `native-cold-<role>`, `ordinary-cold-<role>` | Ten endpoint and five ordinary cold configurations | 65,536 |
 | `bridge-runtime` | Approved bridge runtime/v9 public original | 65,536 |
-| `native-generation-install-grant` | Existing native coordinator assignment envelope | 65,536 |
-| `native-service-<operation>` | Ten native operations listed below | 65,536 |
+| `native-generation-install-grant` | Native coordinator assignment; v1 retains its old limit | 4,194,304 for v2; 65,536 for v1 |
+| `native-service-<operation>` | Ten native operations listed below, version-checked | 4,194,304 for the seven history-bearing successors; 65,536 otherwise |
 | `native-launch-<role>` | Ten endpoint roles plus `bridge` | 32,768 |
 | `native-runtime-<role>` | Ten endpoint roles only; bridge uses `bridge-runtime` | 65,536 |
 | `native-<role>-trust`, `native-<role>-closure` | Eleven launch roles | 1 MiB each |
@@ -345,7 +345,7 @@ Every signature domain is fixed by the operation:
 | `persistence` | `proofScopeOriginal`, `genesisOriginal`, `journalOriginal`, `permissions` | `serverware.nativeShadowPersistenceServiceAssignment.signature/v1` |
 | `trustedTime` | `bootstrapOriginal` | `serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1` |
 
-Outputs are the existing `{payload,signature}` envelopes, at most 65,536 bytes,
+Legacy outputs are the existing `{payload,signature}` envelopes, at most 65,536 bytes,
 published under `native-service-<operation>`. `commitRequest` produces the
 separate companion grant for the same actual ledger guest; `ledger` verifies
 that original before binding its pin. Retrieval's `nativeGrantOriginals` has
@@ -360,6 +360,18 @@ namespace and startup deadline, and authenticate the supplied predecessor
 associations. They do not synthesize peers, journal history, permissions, keys
 or evidence. Native operational consumers still check their actual retained
 resources, trusted time and admission before use.
+
+Explicit input/v3 adds the actual ordinary launch and complete five-service
+contexts for CommitRequest and the six spool operations; CommitRequest also
+requires `runtimeEvidence` and the actual `assignmentOriginal`. Their eight
+output successor versions (including GenerationInstall below) and changed
+version-specific limits are documented in
+[operational-history handoff](native-pilot-operational-histories.md).
+Retrieval input/v4 accepts all six actual new spool grants while preserving its
+existing fresh output/v4. New native inputs are bounded to 32 MiB; legacy
+inputs retain 4 MiB. Explicit supervisor/v9 composes these through the shared
+pure payload validators also used by the real live signing wrappers; payload
+preparation is not signing or live acceptance.
 
 ## Endpoint-precreation configuration installation
 
@@ -480,6 +492,14 @@ signature domain and original host/window/output deadline. The fixed public
 publication purpose is `native-generation-install-grant`, beneath
 `/etc/serverware/native-pilot-inputs/`; publication is not signature admission,
 actual generation installation or pilot readiness.
+
+Explicit input/v2 preserves the fifteen-field input and selects
+`nativeGenerationCoordinatorAssignment/v2` with its own signature domain and
+4 MiB complete-output limit. Each output service member additionally retains
+its actual `runtimeOriginal` for initial-history wrapper admission. V1 remains
+closed and retains its old bound. The v9 supervisor may derive unsigned fresh
+genesis from the independently approved fresh policy and actual guest/services;
+this does not claim historical state or replace receiving-owner emptiness checks.
 
 ## Endpoint and bridge launch installation
 

@@ -143,7 +143,11 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             self.assertEqual((job.family, job.purpose, job.key, job.maximum),
                 ("native-key", None, job.name, 32 * 1024 * 1024))
         self.assertEqual(execution.JOBS["service-originals"][62].name, "native-service-commitRequest")
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (105, 36))
+        native_names = tuple("native-service-" + operation for operation in ("commitRequest", "ingress", "ledger",
+            "terminal", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "retrieval", "persistence", "trustedTime"))
+        native_names += ("native-generation-install-grant",)
+        self.assertEqual(supervisor.SUPPORTED_JOBS[69:80], tuple(("service-originals", name) for name in native_names))
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (105, 25))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

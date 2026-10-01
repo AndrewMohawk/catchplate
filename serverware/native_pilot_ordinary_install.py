@@ -38,7 +38,10 @@ _LIVE = None
 _NATIVE_FIRST_INDEX = len(INITIAL_JOBS) + 2 * len(g.ROLES) + 1
 _NATIVE_COMPLETED_JOBS = tuple("native-delivery-" + role for role in ENDPOINT_ROLES
     if role not in ("retrieval", "persistence", "trustedTime")) + tuple(
-        job.name for job in KEY_AUTHORIZATION_JOBS) + ("native-service-commitRequest",)
+        job.name for job in KEY_AUTHORIZATION_JOBS) + tuple("native-service-" + operation for operation in
+            ("commitRequest", "ingress", "ledger", "terminal", "dispatchBarrier", "activeEffectBarrier",
+             "activeEffectCommit", "retrieval", "persistence", "trustedTime")) + (
+                "native-generation-install-grant", "ordinary-dispatch-durable-recovery-store")
 
 
 def native_completed_boundary(request):

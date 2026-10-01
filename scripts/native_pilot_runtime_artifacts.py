@@ -37,6 +37,7 @@ AUTHORITY_FILES = (
     "scripts/native_pilot_authority_runtime_entrypoint.py",
     "scripts/run_native_pilot_authority_coordinator.py",
     "scripts/native_pilot_runtime_artifacts.py",
+    "scripts/verify_nitro_tee.py",
     "scripts/authority/native_pilot_authority_io.py",
 )
 AUTHORITY_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + AUTHORITY_ENTRYPOINT, "--run-native-pilot"]

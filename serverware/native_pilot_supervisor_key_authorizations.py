@@ -13,6 +13,7 @@ import time
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_key_profile as profile
+from serverware import native_pilot_ordinary_install as installation
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_native_deliveries as native
@@ -67,6 +68,7 @@ class _Attempt:
         self.next = self.retained_bytes = 0
         self.inflight = None
         self.failed = self.closed = self.close_attempted = False
+        self.service_boundary_open = False
         self.inputs, self.outputs, self.results = {}, {}, {}
         self.delivery_inputs, self.deliveries, self.delivery_results = {}, {}, {}
         self.cold, self.delivery_policy = {}, {}
@@ -279,13 +281,23 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_authorizations(policy, *, process, request) -> dict:
     """Verified ten literal pairs at job63, not fabricated verifier configs."""
+    return _verified_authorizations(policy, process=process, request=request, first=True)
+
+
+def recheck_authorizations(policy, *, process, request) -> dict:
+    """Recheck the previously opened boundary through fixed service jobs/handoff74."""
+    return _verified_authorizations(policy, process=process, request=request, first=False)
+
+
+def _verified_authorizations(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None
-        and owner.next == len(KEY_AUTHORIZATION_JOBS) and request.phase == "service-originals"
-        and request.job_index == FIRST_INDEX + len(KEY_AUTHORIZATION_JOBS) and request.job == NEXT_JOB
-        and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and owner.next == len(KEY_AUTHORIZATION_JOBS) and installation.native_completed_boundary(request)
+        and request.job_index >= FIRST_INDEX + len(KEY_AUTHORIZATION_JOBS)
+        and (request.job_index == FIRST_INDEX + len(KEY_AUTHORIZATION_JOBS) and request.job == NEXT_JOB
+             if first else owner.service_boundary_open))
     owner.inflight = request
     try:
         now, epoch = _current(owner, request)
@@ -294,6 +306,7 @@ def require_authorizations(policy, *, process, request) -> dict:
         p.require(tuple(owner.outputs) == tuple(job.name for job in KEY_AUTHORIZATION_JOBS))
         result = {role: {"roleKeyOriginal": owner.outputs["native-role-keys-" + role],
             "admissionOriginal": owner.outputs["native-key-admission-" + role]} for role in ROLES}
+        owner.service_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

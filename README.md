@@ -144,8 +144,8 @@ Focused checks pass; live pause/resume remains unverified. The earlier
 checks and native compilation, but live initialization remains unverified.
 
 Policy/v18 connects the [final release, publication and shutdown decisions](docs/native-pilot-final-continuations.md).
-All current jobs are now connected in source; focused verification of this
-batch is pending. Executable packaging, real cleanup ownership and connected
+All current jobs are now connected in source; this batch passed all 25 focused
+controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused-verification)). Executable packaging, real cleanup ownership and connected
 runtime verification are still needed. These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

@@ -81,5 +81,33 @@ Executable supervisor packaging, approved immutable dependencies, provisioning,
 independent services and connected application/provider/hardware acceptance
 remain required. No newly generated hash replaces any of those authorities.
 
-One focused assembled verification pass is pending. No actual signing entrypoint,
-retained-owner acceptance, service, hardware, cloud or paid execution is claimed.
+## Focused verification
+
+Exact source `02640a813614b990464f24e5bb999a1f3e7252e2` passed **125 focused
+Python controls**, grammar and both Make inventories for eighteen changed
+Python files, and **1,262 relative documentation links**, in one run (exit **0**).
+The run was 2026-10-01 00:48:46.310656352–00:49:21.324384705 UTC, using Python
+3.11.15, a cleared environment, CPU 0, isolated user/network namespaces and
+`-I -S -B`, under a 180-second limit. No database, application or authority-store
+module was imported.
+
+The ten new controls cover all 31 preparation/result paths with independent
+signature frames and complete signed synthetic wrappers. They also check
+closed policy fields, authenticated key pairs, role/transport/ciphertext joins,
+original intervals, exact prior-HMAC policy binding, signature domains and
+authorities, closure-set roots/member leaves and the distinct verifier key.
+Fixture C9 and assignment signatures are real test-key signatures, but their
+ciphertext, KMS and image metadata are unprovisioned. The fixture assignment
+omits unrelated operational policy; this is not full operational-assignment
+acceptance. No actual retained owner, signing entrypoint, service, KMS or
+hardware was exercised. Connected startup timing and application/provider
+acceptance remain unverified.
+
+The 85,381,120-byte source archive has SHA256
+`a1431778999a818236b9094c585c3549c0bbb97b18cbfc328643df28ae2d0f75`.
+Archive, source revision, exact harness/command, log, structured result and
+verified checksums are retained outside disposable scratch at
+`codex-offload/serverware/engineering-builds/02640a81-launch-authorizations-MJTwfT/`.
+Native source, schemas and dependency lock are unchanged from the previously
+compiled `03d4075d`; no native/artifact rebuild was repeated. The reused runtime
+is still an unpublished engineering candidate. No cloud or paid action ran.

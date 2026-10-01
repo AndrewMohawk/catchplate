@@ -143,7 +143,8 @@ def prepare(*, fragment, runtime_bundle_raw, runtime_result, bootstrap_originals
     identity = runtime["journalDirectoryIdentity"]
     _same({name: identity[name] for name in ("inode", "uid", "gid", "mode")},
         {name: journal[name] for name in ("inode", "uid", "gid", "mode")})
-    _same([identity["deviceMajor"], identity["deviceMinor"]], [os.major(journal["device"]), os.minor(journal["device"]])
+    _same([identity["deviceMajor"], identity["deviceMinor"]],
+        [os.major(journal["device"]), os.minor(journal["device"])])
     p.require(stat.S_IMODE(journal["mode"]) == 0o700
         and (journal["uid"], journal["gid"]) == (cold["uid"], cold["gid"]))
     payload = {"configurationSha256": p.sha(bootstrap_originals["deliveryConfiguration"]),

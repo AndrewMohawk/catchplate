@@ -1,5 +1,9 @@
 # Cold ordinary-service retirement
 
+The follow-on [cold commissioning mode](native-pilot-genesis-commissioning.md)
+connects these owners to fixed jobs and protected public installation. The
+remaining-work discussion below records the boundary at this earlier checkpoint.
+
 This continues [cold launch and coordinator assembly](native-pilot-genesis-assembly.md).
 Its purpose is to retire the two real inspected ordinary services and their
 inspection helpers. A finished coordinator is not evidence that those processes
@@ -99,8 +103,8 @@ Publication then Retrieval grants, ordinary grants, endpoint launches/releases,
 then complete coordinator Runtime/v2 and its C9/key/launch inputs. The existing
 assembly needs the actual services released before that coordinator runtime
 can be approved. Install components before their launch file, with exclusive
-fixed destinations and exact readback; public root-owned originals and
-role-owned credential/runtime files have distinct ownership requirements.
+fixed destinations and exact readback; native C9 requires root-owned public
+runtime originals and separately role-owned credential originals.
 
 Before endpoint cleanup, a separate retained owner must acquire and transfer
 the actual fs-verity cold-core descriptor for operational adoption. A public

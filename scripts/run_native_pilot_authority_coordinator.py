@@ -42,6 +42,16 @@ def _result(status, phase, interactive_result=None):
 
 
 def main():
+    if sys.argv[1:2] == ["--run-native-genesis"]:
+        # A separate cold profile in the supervisor package. It neither feeds
+        # cold jobs into the old conductor nor derives its operational inventory.
+        if not (sys.flags.isolated and sys.flags.dont_write_bytecode
+                and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)):
+            _result("not-started", "open")
+            return 1
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from serverware.native_pilot_genesis_authority import main as cold_main
+        return cold_main(sys.argv[1:])
     owner = executor = channel = None
     phase, failed = "open", False
     signal.signal(signal.SIGTERM, _stop)

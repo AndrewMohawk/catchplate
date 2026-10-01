@@ -12,6 +12,33 @@ import runpy
 import sys
 
 
+def valid_arguments(arguments):
+    """Keep the operational invocation closed; cold commissioning is explicit."""
+    if type(arguments) is not list or not arguments or not all(type(v) is str for v in arguments):
+        return False
+    cold = arguments[0] == "--run-native-genesis"
+    if arguments[0] not in ("--run-native-pilot", "--run-native-genesis"):
+        return False
+    prefix = (("--supervisor-inventory-fd", "fd"), ("--supervisor-inventory-sha256", "sha"),
+        ("--genesis-configuration-fd", "fd"), ("--genesis-configuration-sha256", "sha")) if cold else (
+        ("--runtime-inventory-fd", "fd"), ("--runtime-inventory-sha256", "sha"))
+    offset = 1 + 2 * len(prefix)
+    if not offset + 2 <= len(arguments) <= offset + 256 or len(arguments) % 2 != 1:
+        return False
+    for index, (flag, kind) in enumerate(prefix):
+        if arguments[1 + index * 2] != flag:
+            return False
+        value = arguments[2 + index * 2]
+        if kind == "sha":
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                return False
+        elif re.fullmatch(r"[1-9][0-9]{0,9}", value) is None or not 3 <= int(value) < (1 << 31):
+            return False
+    return all(arguments[index] == "--authority-key"
+        and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,127}=[1-9][0-9]{0,9}", arguments[index + 1]) is not None
+        for index in range(offset, len(arguments), 2))
+
+
 def main():
     script = "/authority/app/scripts/native_pilot_authority_runtime_entrypoint.py"
     python = "/runtime/python/bin/python3"
@@ -24,16 +51,7 @@ def main():
         and sys.flags.isolated == 1 and sys.flags.ignore_environment == 1
         and sys.flags.no_user_site == 1 and sys.flags.safe_path
         and sys.flags.dont_write_bytecode == 1
-        and 7 <= len(arguments) <= 261 and len(arguments) % 2 == 1
-        and arguments[0] == "--run-native-pilot"
-        and arguments[1] == "--runtime-inventory-fd"
-        and re.fullmatch(r"[1-9][0-9]{0,9}", arguments[2]) is not None
-        and 3 <= int(arguments[2]) < (1 << 31)
-        and arguments[3] == "--runtime-inventory-sha256"
-        and re.fullmatch(r"sha256:[0-9a-f]{64}", arguments[4]) is not None
-        and all(arguments[index] == "--authority-key"
-                and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,127}=[1-9][0-9]{0,9}", arguments[index + 1]) is not None
-                for index in range(5, len(arguments), 2))
+        and valid_arguments(arguments)
     ):
         raise SystemExit("native pilot authority runtime invocation refused")
     # The separate namespace leaves the conductor's exact /app/scripts intact.

@@ -240,9 +240,10 @@ def main():
                 signing_key=io.signing_key(key_fd))
             p.require(result_deadline == deadline)
         elif mode == "--sign-assignment":
-            assignment.input_document(raw)
+            approved = assignment.prepare_input(raw, now_unix_ns=time.time_ns())
+            epoch_limit = approved["epochLimit"]
             key_identity = io._input(key_fd, 32, private=True)
-            check()  # Running package and approved input admitted before key bytes.
+            check()  # Complete trust/closure/window admission precedes key bytes.
             result = assignment.sign(input_original=raw, signing_key=io.signing_key(key_fd))
             payload = p.document(result, assignment.MAX_BYTES)["payload"]
             # Sample boot first: a scheduling pause cannot extend the UNIX
@@ -251,7 +252,7 @@ def main():
             p.require(previous_boot <= now_boot and previous_wall <= now_wall)
             previous_boot, previous_wall = now_boot, now_wall
             p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now_wall)
-            deadline = now_boot + payload["expiresAtUnixNanos"] - now_wall
+            deadline = now_boot + min(payload["expiresAtUnixNanos"], epoch_limit) - now_wall
             # Runtime reinspection consumes the original grant budget, not a
             # freshly opened signing window. write_public separately applies
             # its one-second pipe-write ceiling inside this original expiry.

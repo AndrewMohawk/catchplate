@@ -343,7 +343,9 @@ class GenesisOrdinaryControl:
                 p.require(type(payload["credentials"]) is list and 1 <= len(payload["credentials"]) <= 64)
                 runtime_pin = payload["runtimeConfig"]
                 g.c9._pin(runtime_pin)
-                runtime = self._role_open(runtime_pin["path"], g.MAX_BYTES, role, digest=runtime_pin["sha256"])
+                # Native C9 admits its public runtime as root:root 0400;
+                # only credential originals belong to the final service role.
+                runtime = self._open(runtime_pin["path"], g.MAX_BYTES, runtime_pin["sha256"])
                 originals, total = {}, 0
                 for credential in payload["credentials"]:
                     p.fields(credential, ("name", "original", "length", "signing"))
@@ -358,7 +360,7 @@ class GenesisOrdinaryControl:
                     p.require(original.expected[6] == maximum)
                     originals[credential["name"]] = original
                 history_raw = originals["authority-history"].read()
-                runtime_raw = runtime.read()
+                runtime_raw = runtime.raw
                 checked = authority.verify_delivery(signed_raw=delivery.raw,
                     configuration_raw=item["configuration"].raw, runtime_raw=runtime_raw,
                     history_raw=history_raw, activation=self._resources.roles[role]["activation"],

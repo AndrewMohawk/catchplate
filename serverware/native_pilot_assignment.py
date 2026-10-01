@@ -112,11 +112,10 @@ def _original(text, maximum):
     return raw, p.document(raw, maximum)
 
 
-def sign(*, input_original: bytes, signing_key) -> bytes:
-    """Sign only the complete approved native v2 payload with its cold key."""
+def prepare_input(input_original: bytes, *, now_unix_ns: int) -> dict:
+    """Admit the complete public input before a caller reads private key bytes."""
     # Local import avoids publication -> assignment -> publication cycles.
     from serverware import native_pilot_launch_publication as launch
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
     value, set_api_version = input_document(input_original)
     trust_raw, _ = _original(value["trustOriginal"], 1024 * 1024)
     p.require(p.sha(trust_raw) == p.digest(value["trustSha256"]))
@@ -134,7 +133,7 @@ def sign(*, input_original: bytes, signing_key) -> bytes:
     opening._keys(payload, "custody-supervisor-capability")
     set_raw, _ = _original(value["closureSetOriginal"], 1024 * 1024)
     _closure_selection(payload, set_raw, set_api_version=set_api_version)
-    now = time.time_ns()
+    now = p.integer(now_unix_ns)
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now)
     p.freshness(trust["issuedAtUnixNanos"], trust["expiresAtUnixNanos"], now)
     checkpoint = p.fields(trust["checkpoint"], ("checkpointId", "asOfUnixNanos", "revocationGeneration", "revocationRootSha256"))
@@ -144,8 +143,6 @@ def sign(*, input_original: bytes, signing_key) -> bytes:
     authority = trust["assignmentKey"]
     public = launch._key(authority, now)
     launch._key(trust["timeKey"], now)
-    actual = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(actual) == authority["publicKeyBase64url"])
     materials = {authority["publicKeyBase64url"], trust["timeKey"]["publicKeyBase64url"]}
     p.require(len(materials) == 2)
     keys = {}
@@ -174,13 +171,32 @@ def sign(*, input_original: bytes, signing_key) -> bytes:
     # Signature encoding is exactly 86 ASCII bytes; reject an oversized full
     # envelope before using the signing capability, without fabricating a signature.
     p.require(len(p.canonical(result)) + 86 <= MAX_BYTES)
+    epoch_limit = min(payload["expiresAtUnixNanos"], trust["expiresAtUnixNanos"],
+        payload["issuedAtUnixNanos"] + 300_000_000_001, trust["issuedAtUnixNanos"] + 300_000_000_001,
+        checkpoint["asOfUnixNanos"] + 300_000_000_000, authority["notAfterUnixNanos"],
+        trust["timeKey"]["notAfterUnixNanos"], *(row["notAfterUnixNanos"] for row in keys.values()))
+    return {"value": value, "payload": payload, "trust": trust, "checkpoint": checkpoint,
+        "authority": authority, "public": public, "message": message, "envelope": result,
+        "epochLimit": epoch_limit}
+
+
+def sign(*, input_original: bytes, signing_key) -> bytes:
+    """Sign only the complete approved native v2 payload with its cold key."""
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    now = time.time_ns()
+    prepared = prepare_input(input_original, now_unix_ns=now)
+    authority, public = prepared["authority"], prepared["public"]
+    payload, trust, checkpoint = (prepared[name] for name in ("payload", "trust", "checkpoint"))
+    message, result = prepared["message"], prepared["envelope"]
+    actual = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(actual) == authority["publicKeyBase64url"])
     signature = signing_key.sign(message)
     public.verify(signature, message)
     result["signature"] = p.encoded(signature)
     raw = p.canonical(shape(result))
     p.require(len(raw) <= MAX_BYTES)
     after = time.time_ns()
-    p.require(now <= after < checkpoint["asOfUnixNanos"] + 300_000_000_000)
+    p.require(now <= after < prepared["epochLimit"])
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after)
     p.freshness(trust["issuedAtUnixNanos"], trust["expiresAtUnixNanos"], after)
     return raw

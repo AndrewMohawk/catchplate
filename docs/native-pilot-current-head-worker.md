@@ -96,6 +96,17 @@ driver startup window expires. This still needs automated late provisioning.
 
 ## Pilot boundary
 
+Frozen `da4be6a5` ran 99 focused controls across eleven suites in 29.883 seconds:
+92 passed and seven storage controls exposed the `AT_EMPTY_PATH` capability
+limitation in mapped-root isolation. The procfs-link correction `00dd6007`
+passed those seven real storage controls in 5.073 seconds, with no errors or
+skips. The 92 successes were not rerun. Initial fifteen-file grammar, both Make
+inventories and nine imports passed; the correction's two Python files also
+passed grammar/inventory checks. Pure signed fixtures and worker source-order
+controls are not installed-runtime admission. Real storage controls exercise
+initialization, CAS/revocation, locks, durable one-use receipts, no-overwrite
+publication and retained cleanup—not complete commissioning.
+
 The source alone does not establish an installed authority or a successful
 application flow. Approved matching packages, independent policy/state custody,
 automated provisioning and the real credential-replacement allow/deny/cleanup

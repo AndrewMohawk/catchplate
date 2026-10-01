@@ -151,16 +151,16 @@ exit; input-delivery receipts alone are not treated as completed work.
 The [approval-provider executable](docs/native-pilot-approval-provider.md) now
 connects the fixed transcript to an explicit delegation policy and a separate
 fresh-decision peer. The public-evidence handoff and an operator-controlled
-receiving service are implemented in source. An independently operated backend
-must still establish fresh state and supply the decisions; the receiver cannot
-infer permission from historical signatures. The latest three-runtime engineering
-exports predate this new connection and are not approved packages or a deployment.
+receiving service connect in source to the [.424 fresh-state worker](docs/native-pilot-current-head-worker.md).
+Independent state provisioning and automatic late configuration remain unfinished;
+historical signatures cannot establish freshness. The latest runtime exports predate
+these source changes and are not approved packages or a deployment.
 
 Before a pilot is ready to try, four milestones remain:
 
 1. Publish the reviewed dependency snapshot, then build and install approved
    matching runtime packages.
-2. Implement and provision the fresh-state decision backend, then configure the
+2. Provision independent current state and automate late configuration of the
    [independent approval services](docs/native-pilot-approval-provider.md).
 3. Configure the protected test deployment and its required services.
 4. Demonstrate one real application flow: credential replacement, allowed and

@@ -32,6 +32,7 @@ UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v7"
 ROLE_BINDING_DOMAIN = "serverware.authorityRoleBinding/v1"
 ROLE_RUNTIME_CLOSURE_SCHEMA = "serverware.policyAuthorityRoleRuntimeClosure/v1"
 LOCAL_STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityTrustedHostLocalBootstrapInterface/v1"
+LOCAL_ARGUMENTS_SCHEMA = "serverware.authorityTrustedHostLocalArguments/v1"
 RUNTIME_EVIDENCE_NAME = "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"
 RUNTIME_EVIDENCE_ROLES = frozenset(
     {"verifier", "planner", "planner-writer", "issuer", "executor"}
@@ -1965,9 +1966,14 @@ def validate_role_reference(reference: object) -> None:
         _require_runtime_path(path_entry, name="role PATH entry")
     if list(path_entries) != list(dict.fromkeys(path_entries)):
         raise ArtifactContractError("role PATH entries are repeated")
-    argv = _require_list(role["argv"], name="role argv", minimum=1, maximum=256)
-    for argument in argv:
-        _require_ascii(argument, name="role argv value", maximum=4096)
+    if isinstance(role["argv"], Mapping):
+        argv_profile = _require_mapping(role["argv"], name="local role argument profile", keys={"schema"})
+        if argv_profile["schema"] != LOCAL_ARGUMENTS_SCHEMA:
+            raise ArtifactContractError("local role argument profile changed")
+    else:
+        argv = _require_list(role["argv"], name="role argv", minimum=1, maximum=256)
+        for argument in argv:
+            _require_ascii(argument, name="role argv value", maximum=4096)
     environment_allowlist = _require_list(
         role["environmentAllowlist"], name="role environment allowlist", maximum=256,
     )
@@ -2921,6 +2927,8 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
     stage_zero = value["stageZero"]
     local_bootstrap = validate_stage_zero_reference(stage_zero, native_executables=executables,
         trust_mode=value["trustMode"]["mode"])
+    if any((role["argv"] == {"schema": LOCAL_ARGUMENTS_SCHEMA}) != local_bootstrap for role in roles):
+        raise ArtifactContractError("role argument profile differs from the explicit bootstrap selection")
     if stage_zero != closure_payload["stageZero"]:
         raise ArtifactContractError(
             "stage zero differs from the exact signed closure evidence"
@@ -4127,7 +4135,8 @@ ROLE_MANIFEST_REFERENCE_JSON_SCHEMA = _closed_object_schema(
         },
         "cwd": TEXT_JSON_SCHEMA,
         "pathEntries": STRING_ARRAY_JSON_SCHEMA,
-        "argv": STRING_ARRAY_JSON_SCHEMA,
+        "argv": {"oneOf": [STRING_ARRAY_JSON_SCHEMA,
+            _closed_object_schema({"schema": {"const": LOCAL_ARGUMENTS_SCHEMA}})]},
         "environmentAllowlist": {
             **STRING_ARRAY_JSON_SCHEMA,
             "contains": {
@@ -4416,9 +4425,14 @@ ARTIFACT_BUNDLE_JSON_SCHEMA["allOf"] = [{
     "if": {"properties": {"stageZero": {"properties": {
         "interfaceSchema": {"const": LOCAL_STAGE_ZERO_INTERFACE_SCHEMA},
     }}}},
-    "then": {"properties": {"trustMode": {"properties": {
-        "mode": {"const": "trusted-host-local"},
-    }}}},
+    "then": {"properties": {
+        "trustMode": {"properties": {"mode": {"const": "trusted-host-local"}}},
+        "roleManifests": {"items": {"properties": {"argv":
+            _closed_object_schema({"schema": {"const": LOCAL_ARGUMENTS_SCHEMA}})}}},
+    }},
+    "else": {"properties": {"roleManifests": {"items": {"properties": {
+        "argv": STRING_ARRAY_JSON_SCHEMA,
+    }}}}},
 }]
 TRUST_MODE_JSON_SCHEMA = _closed_object_schema(
     {

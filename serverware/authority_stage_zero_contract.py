@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from . import authority_contract
 from .authority_artifact_spec import (
     ALLOWED_MUTABLE_STATE_PROTOCOLS,
+    LOCAL_ARGUMENTS_SCHEMA,
     LOCAL_STAGE_ZERO_INTERFACE_SCHEMA,
     RUNTIME_EVIDENCE_NAME,
     RUNTIME_EVIDENCE_ROLES,
@@ -772,6 +773,52 @@ def _validate_host_evidence(value: object, trust_mode: str) -> None:
         raise StageZeroContractError("trust mode is not recognized")
 
 
+def _validate_local_startup(value: object, process: Mapping[str, Any]) -> Mapping[str, Any]:
+    startup = _mapping(value, name="local startup descriptors", keys={"setup", "channel", "producerPidfd"})
+    for name, fields in (
+        ("setup", {"fd", "device", "inode", "size", "sha256"}),
+        ("channel", {"fd", "device", "inode"}),
+        ("producerPidfd", {"fd", "device", "inode", "processId", "processStartTicks", "bootIdDigest"}),
+    ):
+        entry = _mapping(startup[name], name=f"local {name}", keys=fields)
+        _integer(entry["fd"], name=f"local {name} fd", minimum=3, maximum=2**31 - 1)
+        _integer(entry["device"], name=f"local {name} device", minimum=0, maximum=2**64 - 1)
+        _integer(entry["inode"], name=f"local {name} inode", minimum=1, maximum=2**64 - 1)
+    _integer(startup["setup"]["size"], name="local setup size", minimum=1, maximum=1024 * 1024)
+    _digest(startup["setup"]["sha256"], name="local setup digest")
+    peer = startup["producerPidfd"]
+    _integer(peer["processId"], name="local producer PID", minimum=1, maximum=2**31 - 1)
+    _integer(peer["processStartTicks"], name="local producer start ticks", minimum=1, maximum=2**64 - 1)
+    _digest(peer["bootIdDigest"], name="local producer boot")
+    if peer["processId"] == process["processId"] or peer["bootIdDigest"] != process["bootIdDigest"]:
+        raise StageZeroContractError("local producer is not a separate process in the retained boot")
+    if len({entry["fd"] for entry in startup.values()}) != 3:
+        raise StageZeroContractError("local startup descriptor is reused")
+    return startup
+
+
+def validate_local_argument_vector(argv: Sequence[str], *, role: str, entrypoint: str,
+        bootstrap_fd: int, startup: Mapping[str, Any], descriptor_bindings: Mapping[str, int]) -> None:
+    """One fixed local command grammar; no templates or caller-selected flags."""
+    prefix = [entrypoint, *REQUIRED_PYTHON_ISOLATION_FLAGS, f"/proc/self/fd/{bootstrap_fd}",
+        "--bootstrap-fd", str(bootstrap_fd), "--trusted-host-local",
+        "--local-admission-fd", str(startup["setup"]["fd"]),
+        "--local-admission-sha256", startup["setup"]["sha256"],
+        "--local-admission-channel-fd", str(startup["channel"]["fd"])]
+    if len(argv) != len(prefix) + 2 * len(descriptor_bindings) + 1 or list(argv[:len(prefix)]) != prefix or argv[-1] != role:
+        raise StageZeroContractError("local argv differs from the fixed admitted command grammar")
+    observed = {}
+    for index in range(len(prefix), len(argv) - 1, 2):
+        if argv[index] != "--descriptor" or not isinstance(argv[index + 1], str):
+            raise StageZeroContractError("local descriptor argument changed")
+        name, separator, number = argv[index + 1].partition("=")
+        if not separator or name in observed or name not in descriptor_bindings or number != str(descriptor_bindings[name]):
+            raise StageZeroContractError("local argv descriptor is not its exact signed semantic slot")
+        observed[name] = descriptor_bindings[name]
+    if observed != dict(descriptor_bindings):
+        raise StageZeroContractError("local argv descriptor inventory changed")
+
+
 def validate_stage_zero_request(
     request: Mapping[str, Any],
     *,
@@ -811,6 +858,7 @@ def validate_stage_zero_request(
         raise StageZeroContractError(
             "socket-activated stage zero and launched peer PID differ"
         )
+    local = isinstance(request, Mapping) and request.get("schema") == LOCAL_STAGE_ZERO_REQUEST_SCHEMA
     value = _mapping(
         request,
         name="stage-zero request",
@@ -833,9 +881,8 @@ def validate_stage_zero_request(
             "execution",
             "launch",
             "trustMode",
-        },
+        } | ({"startupDescriptors"} if local else set()),
     )
-    local = value["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA
     if value["schema"] not in {STAGE_ZERO_REQUEST_SCHEMA, LOCAL_STAGE_ZERO_REQUEST_SCHEMA}:
         raise StageZeroContractError("stage-zero request schema changed")
     if local and (value["trustMode"] != "trusted-host-local"
@@ -1032,12 +1079,16 @@ def validate_stage_zero_request(
         )
     _runtime_path(role["entrypointPath"], name="role entrypoint path")
     _identifier(role["listenerName"], name="role listener name")
+    if local and role["argv"] != {"schema": LOCAL_ARGUMENTS_SCHEMA}:
+        raise StageZeroContractError("local role must select the fixed static argument profile")
     for field, maximum, validator in (
         ("credentialNames", MAX_CREDENTIALS, _identifier),
         ("pathEntries", 64, _runtime_path),
         ("argv", MAX_ARGUMENTS, _ascii),
         ("environmentAllowlist", MAX_ENVIRONMENT_ENTRIES, _ascii),
     ):
+        if local and field == "argv":
+            continue
         role_values = _list(
             role[field],
             name=f"role {field}",
@@ -1489,6 +1540,7 @@ def validate_stage_zero_request(
             "working directory has no retained immutable identity"
         )
 
+    startup = _validate_local_startup(value["startupDescriptors"], process) if local else None
     execution = _mapping(
         value["execution"],
         name="execution",
@@ -1502,7 +1554,7 @@ def validate_stage_zero_request(
             "noNewPrivileges",
             "closeRangeFrom",
             "preserveFds",
-        } | ({"transition"} if local else {"execveatFlags"}),
+        } | ({"transition", "descriptorBoundary"} if local else {"execveatFlags"}),
     )
     executable_fd = _integer(
         execution["executableFd"],
@@ -1516,6 +1568,7 @@ def validate_stage_zero_request(
             "execution pathname differs from the selected native or local transition"
         )
     if local and (execution["transition"] != "pathname-execve"
+            or execution["descriptorBoundary"] != "post-local-admission"
             or stage_zero["interpreter"]["runtimePath"] != role["entrypointPath"]
             or stage_zero["interpreter"]["sha256"] != execution["executableDigest"]):
         raise StageZeroContractError("local pathname transition differs from the measured interpreter")
@@ -1532,13 +1585,17 @@ def validate_stage_zero_request(
         ) + 1
     if argument_bytes > MAX_ARGUMENT_BYTES:
         raise StageZeroContractError("argv exceeds its byte limit")
-    if list(argv) != role["argv"]:
+    if not local and list(argv) != role["argv"]:
         raise StageZeroContractError(
             "argv differs from exact signed role manifest"
         )
-    if local and list(argv[:7]) != [stage_zero["interpreter"]["runtimePath"],
-            *REQUIRED_PYTHON_ISOLATION_FLAGS, f"/proc/self/fd/{stage_zero['fd']}"]:
-        raise StageZeroContractError("local argv does not execute the exact retained bootstrap source")
+    if local:
+        bindings = {entry["name"]: entry["fd"] for entry in credentials}
+        bindings[BOOTSTRAP_CONTROL_NAME] = bootstrap_control["fd"]
+        if runtime_evidence is not None:
+            bindings[RUNTIME_EVIDENCE_NAME] = runtime_evidence["fd"]
+        validate_local_argument_vector(argv, role=role_name, entrypoint=stage_zero["interpreter"]["runtimePath"],
+            bootstrap_fd=stage_zero["fd"], startup=startup, descriptor_bindings=bindings)
     isolation_positions = []
     for flag in REQUIRED_PYTHON_ISOLATION_FLAGS:
         if list(argv).count(flag) != 1:
@@ -1628,6 +1685,8 @@ def validate_stage_zero_request(
         *(entry["fd"] for entry in mutable_state),
         pidfd["fd"],
     ]
+    if local:
+        independent_descriptors.extend(entry["fd"] for entry in startup.values())
     if len(independent_descriptors) != len(set(independent_descriptors)):
         raise StageZeroContractError("retained descriptor identity is reused")
     launch = _mapping(
@@ -1708,7 +1767,7 @@ def validate_stage_zero_request(
         certificate_target,
     }
     if local:
-        expected_preserved.add(stage_zero["fd"])
+        expected_preserved.update({stage_zero["fd"], pidfd["fd"], *(entry["fd"] for entry in startup.values())})
     if set(preserve) != expected_preserved:
         raise StageZeroContractError(
             "preserved descriptor set is not exact"
@@ -3255,10 +3314,28 @@ STAGE_ZERO_HANDOFF_JSON_SCHEMA = _closed_schema(
 )
 
 
+LOCAL_STARTUP_DESCRIPTORS_JSON_SCHEMA = _closed_schema({
+    "setup": _closed_schema({
+        "fd": INTEGER_JSON_SCHEMA, "device": INTEGER_JSON_SCHEMA, "inode": INTEGER_JSON_SCHEMA,
+        "size": {"type": "integer", "minimum": 1, "maximum": 1024 * 1024}, "sha256": SHA256_JSON_SCHEMA,
+    }),
+    "channel": _closed_schema({
+        "fd": INTEGER_JSON_SCHEMA, "device": INTEGER_JSON_SCHEMA, "inode": INTEGER_JSON_SCHEMA,
+    }),
+    "producerPidfd": _closed_schema({
+        "fd": INTEGER_JSON_SCHEMA, "device": INTEGER_JSON_SCHEMA, "inode": INTEGER_JSON_SCHEMA,
+        "processId": INTEGER_JSON_SCHEMA, "processStartTicks": INTEGER_JSON_SCHEMA, "bootIdDigest": SHA256_JSON_SCHEMA,
+    }),
+})
+LOCAL_ROLE_BINDING_JSON_SCHEMA = deepcopy(ROLE_BINDING_JSON_SCHEMA)
+LOCAL_ROLE_BINDING_JSON_SCHEMA["properties"]["argv"] = _closed_schema({"schema": {"const": LOCAL_ARGUMENTS_SCHEMA}})
 LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA = deepcopy(STAGE_ZERO_REQUEST_JSON_SCHEMA)
+LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["required"].append("startupDescriptors")
 LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"].update({
     "schema": {"const": LOCAL_STAGE_ZERO_REQUEST_SCHEMA},
     "trustMode": {"const": "trusted-host-local"},
+    "role": LOCAL_ROLE_BINDING_JSON_SCHEMA,
+    "startupDescriptors": LOCAL_STARTUP_DESCRIPTORS_JSON_SCHEMA,
     "stageZero": _closed_schema({
         "fd": INTEGER_JSON_SCHEMA,
         "path": STRING_JSON_SCHEMA,
@@ -3278,6 +3355,7 @@ LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"].update({
             if key not in {"pathname", "execveatFlags"}},
         "pathname": STRING_JSON_SCHEMA,
         "transition": {"const": "pathname-execve"},
+        "descriptorBoundary": {"const": "post-local-admission"},
     }),
 })
 LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA = deepcopy(LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA)
@@ -3296,6 +3374,10 @@ LOCAL_SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA["properties"].update({
 
 
 __all__ = [
+    "LOCAL_ARGUMENTS_SCHEMA",
+    "LOCAL_STARTUP_DESCRIPTORS_JSON_SCHEMA",
+    "LOCAL_ROLE_BINDING_JSON_SCHEMA",
+    "validate_local_argument_vector",
     "LOCAL_STAGE_ZERO_REQUEST_SCHEMA",
     "LOCAL_STAGE_ZERO_INTERFACE_SCHEMA",
     "LOCAL_STAGE_ZERO_REQUEST_DIGEST_DOMAIN",

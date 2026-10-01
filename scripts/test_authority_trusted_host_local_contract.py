@@ -84,6 +84,7 @@ class TrustedHostLocalContractTests(unittest.TestCase):
         source, _ = fixture()
         value = {"executableFd": 40, "executableDigest": source["interpreter"]["sha256"],
                  "pathname": source["interpreter"]["runtimePath"], "transition": "pathname-execve",
+                 "descriptorBoundary": "post-local-admission",
                  "argv": [source["interpreter"]["runtimePath"], *stage.REQUIRED_PYTHON_ISOLATION_FLAGS,
                           "/proc/self/fd/41"], "cwd": "/runtime", "noNewPrivileges": True,
                  "pythonIsolationFlags": list(stage.REQUIRED_PYTHON_ISOLATION_FLAGS),
@@ -94,6 +95,7 @@ class TrustedHostLocalContractTests(unittest.TestCase):
             Draft202012Validator(stage.EXECUTION_JSON_SCHEMA).validate(value)
         native = dict(value, pathname="", execveatFlags=["AT_EMPTY_PATH"])
         native.pop("transition")
+        native.pop("descriptorBoundary")
         Draft202012Validator(stage.EXECUTION_JSON_SCHEMA).validate(native)
         with self.assertRaises(ValidationError):
             Draft202012Validator(local).validate(native)
@@ -115,17 +117,65 @@ class TrustedHostLocalContractTests(unittest.TestCase):
     def test_local_schema_copies_final_native_shared_constraints(self):
         for native, local, changed in (
             (stage.STAGE_ZERO_REQUEST_JSON_SCHEMA, stage.LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA,
-             {"schema", "trustMode", "stageZero", "execution"}),
+             {"schema", "trustMode", "stageZero", "execution", "role", "startupDescriptors"}),
             (stage.LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA, stage.LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA,
              {"schema", "stageZeroContract", "trustMode", "coLocated", "hardwareBacked"}),
             (stage.SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA, stage.LOCAL_SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA,
              {"schema", "payload"}),
         ):
-            self.assertEqual(set(local["required"]), set(native["required"]))
+            extra = {"startupDescriptors"} if native is stage.STAGE_ZERO_REQUEST_JSON_SCHEMA else set()
+            self.assertEqual(set(local["required"]), set(native["required"]) | extra)
             self.assertEqual(local.get("allOf"), native.get("allOf"))
             for field in set(native["properties"]) - changed:
                 self.assertEqual(local["properties"][field], native["properties"][field])
                 self.assertIsNot(local["properties"][field], native["properties"][field])
+
+    def test_static_local_argument_profile_is_closed(self):
+        profile = {"schema": artifact.LOCAL_ARGUMENTS_SCHEMA}
+        schema = stage.LOCAL_ROLE_BINDING_JSON_SCHEMA["properties"]["argv"]
+        Draft202012Validator(schema).validate(profile)
+        for value in (dict(profile, argv=["arbitrary"]), ["python", "-c", "arbitrary"],
+                      {"schema": "another-profile"}):
+            with self.assertRaises(ValidationError):
+                Draft202012Validator(schema).validate(value)
+        with self.assertRaises(ValidationError):
+            Draft202012Validator(stage.ROLE_BINDING_JSON_SCHEMA["properties"]["argv"]).validate(profile)
+
+    def test_fixed_local_argv_binds_observed_slots_without_static_setup_digest(self):
+        startup = {"setup": {"fd": 50, "sha256": "sha256:" + "5" * 64}, "channel": {"fd": 51}}
+        bindings = {stage.BOOTSTRAP_CONTROL_NAME: 256, "ROLE_PUBLIC_FD": 52}
+        argv = ["/runtime/python/bin/python3", *stage.REQUIRED_PYTHON_ISOLATION_FLAGS,
+            "/proc/self/fd/41", "--bootstrap-fd", "41", "--trusted-host-local",
+            "--local-admission-fd", "50", "--local-admission-sha256", startup["setup"]["sha256"],
+            "--local-admission-channel-fd", "51", "--descriptor", "ROLE_PUBLIC_FD=52",
+            "--descriptor", stage.BOOTSTRAP_CONTROL_NAME + "=256", "runtime"]
+        arguments = dict(role="runtime", entrypoint=argv[0], bootstrap_fd=41,
+                         startup=startup, descriptor_bindings=bindings)
+        stage.validate_local_argument_vector(argv, **arguments)
+        for index, replacement in ((8, "42"), (11, "51"), (13, "sha256:" + "6" * 64),
+                                   (17, "ROLE_PUBLIC_FD=053"), (19, "ROLE_PUBLIC_FD=52"), (20, "issuer")):
+            changed = list(argv)
+            changed[index] = replacement
+            with self.subTest(index=index), self.assertRaises(stage.StageZeroContractError):
+                stage.validate_local_argument_vector(changed, **arguments)
+        with self.assertRaises(stage.StageZeroContractError):
+            stage.validate_local_argument_vector(argv + ["--unknown"], **arguments)
+
+    def test_local_startup_descriptor_data_is_closed_and_boot_bound(self):
+        process = {"processId": 100, "bootIdDigest": "sha256:" + "7" * 64}
+        value = {"setup": {"fd": 50, "device": 1, "inode": 2, "size": 20, "sha256": "sha256:" + "5" * 64},
+                 "channel": {"fd": 51, "device": 2, "inode": 3},
+                 "producerPidfd": {"fd": 53, "device": 3, "inode": 4, "processId": 99,
+                                   "processStartTicks": 10, "bootIdDigest": process["bootIdDigest"]}}
+        stage._validate_local_startup(value, process)
+        for change in (lambda v: v["producerPidfd"].update(processId=100),
+                       lambda v: v["producerPidfd"].update(bootIdDigest="sha256:" + "8" * 64),
+                       lambda v: v["channel"].update(fd=50),
+                       lambda v: v["setup"].update(extra=True)):
+            changed = copy.deepcopy(value)
+            change(changed)
+            with self.assertRaises(stage.StageZeroContractError):
+                stage._validate_local_startup(changed, process)
 
     def test_native_handoff_refuses_local_request_before_package_admission(self):
         with self.assertRaises(stage.StageZeroContractError):

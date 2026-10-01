@@ -129,6 +129,11 @@ production gates **0/6**; these are not a claim of pilot readiness.
 
 ### Next acyclic issuer order
 
+The [cold endpoint successor](native-pilot-genesis-endpoints.md) implements
+endpoint ownership, C9, key/closure and native grant issuers from this order.
+Its verification boundary and remaining composition work are tracked there;
+the historical checks above are not evidence for that newer code.
+
 1. Add a genuine retained cold endpoint owner and C9 source adapter. The
    existing ten-role adapter requires hot cohort/precreation originals and
    cannot be reused by changing role labels. Endpoint image runtimes stay

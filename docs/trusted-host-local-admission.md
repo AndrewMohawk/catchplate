@@ -66,6 +66,15 @@ them in arguments, logs or chat. Native and production profiles are unchanged.
    delivery can immediately release that child; subsequent checks require only
    unreleased roles to stay parked and retain the released roles' originals.
    Runtime and replay-witness launches have no cohort evidence slot.
+   For first database commissioning, the in-process owner calls `issue()` to
+   sign and retain these same originals while all five children remain parked.
+   `bootstrap_originals()` returns the literal cohort, complete runtime delivery
+   and five inner receipts only before publication, under unchanged live checks.
+   The commissioning owner uses their actual digests for the source-owned schema
+   bootstrap, then calls `publish()` on that same retained owner. Publication
+   does not re-sign or renew the receipts. Failed or partial publication cannot
+   be retried. The existing CLI still performs issue-and-publish together; it
+   is not the hold-before-bootstrap coordinator.
 5. The [RuntimeTrust issuer](../scripts/authority/local_runtime_trust.py) signs the
    existing `signedPolicyAuthorityRuntimeTrust/v1` only from an independently
    approved payload, authentic signed Service6 configuration and supplied signed

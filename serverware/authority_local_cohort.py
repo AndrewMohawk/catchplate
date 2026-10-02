@@ -231,7 +231,7 @@ class LocalCohortIssuer:
     def open(cls, *, approval_fd, approval_sha256, signing_key_fd, role_inputs):
         self = cls()
         self.observers, self.named, self.originals, self.released = {}, [], {}, set()
-        self.used = self.closed = self.closing = False
+        self.used = self.issued = self.publication_started = self.closed = self.closing = False
         self.context = self.raw = self.value = self.cohort_raw = self.verifier_raw = self.delivery_raw = None
         self.pid, self.start = os.getpid(), launch._process_identity(os.getpid())[0]
         try:
@@ -314,7 +314,13 @@ class LocalCohortIssuer:
             self.check()
         require(io.read_public(self.fd, io.MAX_PUBLIC) == self.raw)
 
-    def publish(self):
+    def issue(self):
+        """Retain genuine signed originals while every approved child stays parked.
+
+        The commissioning owner can now bind the database to these exact
+        receipts before releasing services. This is one signing attempt, not
+        an expiry renewal, and it publishes nothing to an exchange directory.
+        """
         try:
             require(not self.used)
             self.used = True
@@ -325,6 +331,31 @@ class LocalCohortIssuer:
             self.cohort_raw, self.verifier_raw, self.delivery_raw = _signed_runtime_evidence(
                 self.context, key, now_unix_ns=time.time_ns())
             del key
+            self.verify_live()
+            self.issued = True
+            return self.bootstrap_originals()
+        except BaseException as error:
+            raise LocalCohortError(self) from error
+
+    def bootstrap_originals(self):
+        """Return original receipts only while the full cohort remains parked."""
+        self.verify_live()
+        require(self.issued and not self.publication_started and not self.released
+            and self.cohort_raw is not None and self.delivery_raw is not None)
+        signed = document(self.cohort_raw, cohort.MAX_BYTES)
+        receipts = {row["payload"]["role"]: canonical(row) for row in signed["payload"]["receipts"]}
+        require(set(receipts) == set(cohort.ROLES) and receipts["verifier"] == self.verifier_raw)
+        return dict(cohortOriginal=self.cohort_raw, runtimeEvidenceOriginal=self.delivery_raw,
+            receiptOriginals=receipts)
+
+    def publish(self):
+        """Release the same retained cohort once; never re-sign held originals."""
+        try:
+            require(not self.publication_started)
+            if not self.used:
+                self.issue()
+            require(self.issued)
+            self.publication_started = True
             self.verify_live()
             for role in cohort.ROLES:
                 # Earlier recipients may immediately resume. Never demand their

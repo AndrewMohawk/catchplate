@@ -192,13 +192,18 @@ class LocalCohortTests(unittest.TestCase):
     def test_source_live_check_sign_release_and_output_order(self):
         tree = ast.parse(Path(subject.__file__).read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalCohortIssuer")
+        issue = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "issue")
         publish = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "publish")
-        calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(publish) if isinstance(node, ast.Call)]
+        calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(issue) if isinstance(node, ast.Call)]
         signed = next(line for line, name in calls if name == "_signed_runtime_evidence")
         live = sorted(line for line, name in calls if name == "self.verify_live")
         self.assertLess(live[0], signed)
         self.assertGreater(live[1], signed)
-        self.assertGreater(next(line for line, name in calls if name == "pair.publish_late_original"), live[1])
+        self.assertNotIn("pair.publish_late_original", [name for _, name in calls])
+        calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(publish) if isinstance(node, ast.Call)]
+        self.assertNotIn("_signed_runtime_evidence", [name for _, name in calls])
+        live = sorted(line for line, name in calls if name == "self.verify_live")
+        self.assertGreater(next(line for line, name in calls if name == "pair.publish_late_original"), live[-1])
         source = ast.unparse(owner)
         self.assertIn("open_observer", source)
         self.assertIn("observer.check_sources() if role in self.released else observer.check()", source)
@@ -207,6 +212,60 @@ class LocalCohortTests(unittest.TestCase):
         self.assertNotIn("os.kill", source)
         cli_source = Path(cli.__file__).read_text()
         self.assertLess(cli_source.index("owner.publish()"), cli_source.index("io.write_public(owner.verifier_original()"))
+
+    def _held_codec_owner(self):
+        # State/codec unit fixture only. The no-op live check is not runtime
+        # evidence and this fixture never performs a real publication.
+        key, _, context = fixture()
+        owner = object.__new__(subject.LocalCohortIssuer)
+        owner.used = owner.issued = True
+        owner.publication_started = False
+        owner.released = set()
+        owner.verify_live = lambda: None
+        owner.cohort_raw, owner.verifier_raw, owner.delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+        return owner
+
+    def test_held_bootstrap_returns_exact_independent_receipt_copies(self):
+        owner = self._held_codec_owner()
+        result = owner.bootstrap_originals()
+        self.assertEqual(result["runtimeEvidenceOriginal"], owner.delivery_raw)
+        self.assertEqual(result["cohortOriginal"], owner.cohort_raw)
+        self.assertEqual(result["receiptOriginals"]["verifier"], owner.verifier_raw)
+        self.assertEqual(set(result["receiptOriginals"]), set(subject.cohort.ROLES))
+        result["receiptOriginals"].clear()
+        self.assertEqual(len(owner.bootstrap_originals()["receiptOriginals"]), 5)
+        self.assertFalse(owner.released or owner.publication_started)
+
+    def test_held_bootstrap_refuses_unsigned_released_and_stale_state(self):
+        for change in (dict(issued=False), dict(publication_started=True),
+                       dict(released={"executor"}), dict(delivery_raw=None)):
+            owner = self._held_codec_owner()
+            for name, value in change.items():
+                setattr(owner, name, value)
+            with self.assertRaises(ValueError):
+                owner.bootstrap_originals()
+        owner = self._held_codec_owner()
+        with patch.object(owner, "verify_live", side_effect=ValueError("expired or child changed")):
+            with self.assertRaises(ValueError):
+                owner.bootstrap_originals()
+
+    def test_held_publication_cannot_resign_or_retry_a_failed_release(self):
+        from types import SimpleNamespace
+        owner = self._held_codec_owner()
+        owner.observers = {role: SimpleNamespace(directory=-1, _hold=None) for role in subject.cohort.ROLES}
+        owner.named = []
+        owner.check = lambda: None
+        with patch.object(owner, "issue", side_effect=AssertionError("must not renew")) as issue, \
+             patch.object(subject.pair, "publish_late_original", side_effect=ValueError("deliberate release refusal")) as publish:
+            with self.assertRaises(subject.LocalCohortError):
+                owner.publish()
+            self.assertTrue(owner.publication_started)
+            issue.assert_not_called()
+            publish.assert_called_once()
+            self.assertEqual(publish.call_args.args[2], owner.delivery_raw)
+            with self.assertRaises(subject.LocalCohortError):
+                owner.publish()
+            publish.assert_called_once()
 
 
 if __name__ == "__main__":

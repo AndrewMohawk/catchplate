@@ -54,7 +54,10 @@ class _VerifiedTransitionResponse:
 def _scope(configuration_digest, generation_sequence, generation_digest, operation):
     shape = evidence.plan.contract
     shape._digest(configuration_digest)
-    shape._integer(generation_sequence, minimum=1)
+    # Artifact generation zero is representable on the wire. Its authorization
+    # remains with independent configuration/launch admission, and verification
+    # below binds the response to that exact configured generation scope.
+    shape._integer(generation_sequence, minimum=0)
     shape._digest(generation_digest)
     if type(operation) is not str or operation not in plan.contract.OPERATIONS:
         raise WebAuthnTransitionResponseError("transition response operation is not source fixed")

@@ -5,8 +5,13 @@ from pathlib import Path
 import sys
 import unittest
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serverware import authority_revocation_configuration as configuration
+from serverware import authority_webauthn_transition_custody_wire as custody_wire
+from serverware import authority_webauthn_transition_request as request_wire
+from serverware import authority_webauthn_transition_response as response_wire
 from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 PIN = "sha256:" + "1" * 64
@@ -74,6 +79,51 @@ class LocalInitialGenerationControls(unittest.TestCase):
         self.assertEqual(check(payload, launch, runtime), runtime)
         launch["predecessorDigest"] = None
         with self.assertRaises(ValueError): check(payload, launch, runtime)
+
+    def test_transition_wire_zero_is_syntax_not_generation_admission(self):
+        operation = "webauthn.registration.finalize"
+        for mapper in (custody_wire._pins, request_wire._pins, response_wire._scope):
+            self.assertEqual(mapper(PIN, 0, PIN, operation), (PIN, 0, PIN, operation))
+        payload, launch, runtime = fixture()
+        payload.pop("credentialReleaseTrust")
+        with self.assertRaises(ValueError): check(payload, launch, runtime)
+
+    def test_transition_wire_negative_and_noninteger_sequences_refused(self):
+        for mapper in (custody_wire._pins, request_wire._pins, response_wire._scope):
+            for sequence in (-1, False, 0.0, "0"):
+                with self.subTest(mapper=mapper.__module__, sequence=sequence):
+                    with self.assertRaises(ValueError):
+                        mapper(PIN, sequence, PIN, "webauthn.registration.finalize")
+
+    def test_signed_zero_custody_controls_require_exact_independent_scope(self):
+        private = Ed25519PrivateKey.generate()
+        public = private.public_key()
+        operation = "webauthn.registration.finalize"
+        for relay in (False, True):
+            work = _ValidationWork(QueryReadValidationLimits())
+            unsigned = dict(schema=custody_wire._schema(relay),
+                sourceRevision=custody_wire.authority.SOURCE_REVISION,
+                purpose=custody_wire.RELAY_PURPOSE if relay else custody_wire.INTENT_PURPOSE,
+                configurationDigest=PIN, generationSequence=0, generationDigest=PIN,
+                operation=operation, retainedRecordDigest=PIN,
+                issuedAtEpochNs=1, expiresAtEpochNs=2)
+            for name in (("intent",) if relay else custody_wire._BODY_NAMES):
+                unsigned[name + "BytesDigest"] = PIN
+                unsigned[name + "ByteCount"] = 2
+            original = custody_wire._sign_control(unsigned, relay=relay,
+                private_key=private, public_key=public, work=work)
+            value, signature, unsigned_wire = custody_wire._read_control(original, relay=relay, work=work)
+            custody_wire._signature(signature, unsigned_wire, relay=relay, public_key=public, work=work)
+            expected = dict(configuration_digest=PIN, generation_sequence=0,
+                generation_digest=PIN, operation=operation)
+            custody_wire._bind_control(value, **expected, work=work)
+            for field, other in (("generation_sequence", 1),
+                    ("generation_digest", "sha256:" + "2" * 64),
+                    ("configuration_digest", "sha256:" + "2" * 64),
+                    ("operation", "webauthn.trust.stage")):
+                with self.subTest(relay=relay, field=field):
+                    with self.assertRaises(ValueError):
+                        custody_wire._bind_control(value, **dict(expected, **{field: other}), work=work)
 
 
 if __name__ == "__main__": unittest.main()

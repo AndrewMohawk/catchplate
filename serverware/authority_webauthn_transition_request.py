@@ -67,7 +67,10 @@ class _VerifiedPlanRequest:
 def _pins(configuration_digest, generation_sequence, generation_digest, operation):
     shape = plan.contract.shape
     shape._digest(configuration_digest)
-    shape._integer(generation_sequence, minimum=1)
+    # This is artifact-sequence syntax, not configuration/launch admission.
+    # The configured caller retains the native/local generation policy, and
+    # verification below requires the exact independent generation scope.
+    shape._integer(generation_sequence, minimum=0)
     shape._digest(generation_digest)
     if type(operation) is not str or operation not in plan.contract.OPERATIONS:
         raise WebAuthnTransitionRequestError("transition request operation is not source fixed")

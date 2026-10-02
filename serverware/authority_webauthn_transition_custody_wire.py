@@ -58,7 +58,10 @@ def _schema(relay):
 def _pins(configuration_digest, generation_sequence, generation_digest, operation):
     shape = retention.plan.contract.shape
     shape._digest(configuration_digest)
-    shape._integer(generation_sequence, minimum=1)
+    # Wire syntax includes artifact generation zero. Independent owned
+    # configuration/launch admission selects whether that generation is allowed;
+    # _bind_control still requires its exact independently configured scope.
+    shape._integer(generation_sequence, minimum=0)
     shape._digest(generation_digest)
     if type(operation) is not str or operation not in retention.plan.contract.OPERATIONS:
         raise WebAuthnTransitionCustodyWireError("transition custody operation is not source fixed")

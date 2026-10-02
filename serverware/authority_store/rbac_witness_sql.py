@@ -22,6 +22,10 @@ DO $roles$ BEGIN
     CREATE ROLE serverware_rbac_witness_writer LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
   END IF;
 END $roles$;
+-- pg_stat_ssl filters masked activity rows. The SECURITY DEFINER owner must
+-- inherit visibility of its two caller roles, not global statistics access.
+-- Membership is one-way: clients never inherit the owner or each other.
+GRANT serverware_rbac_witness_reader,serverware_rbac_witness_writer TO serverware_rbac_witness_owner;
 DO $database$ BEGIN
  EXECUTE pg_catalog.format('REVOKE CREATE,TEMPORARY ON DATABASE %I FROM PUBLIC,serverware_rbac_witness_reader,serverware_rbac_witness_writer',pg_catalog.current_database());
  IF EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname='public') THEN

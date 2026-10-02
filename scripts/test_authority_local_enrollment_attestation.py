@@ -76,18 +76,18 @@ class EnrollmentAttestationTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("SERVERWARE_TEST_LOCAL_ENROLLMENT_SANDBOX") == "1"
         and os.getresuid() == os.getresgid() == (0, 0, 0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
-        "requires task-owned readonly container, CAP_CHOWN, disposable /run and exact replay tmpfs")
+        "requires task-owned readonly container, CAP_CHOWN, disposable /run and root0700 replay tmpfs")
     def test_actual_retained_files_listener_replay_and_root_signature_then_mutation_refusal(self):
         value, root = selected()
         source_root = Path(local.__file__).parent
         made_files, made_dirs, descriptors = [], [], []
-        owner = listener = None
+        owner = listener = replay_fd = None
         source = Path("/run/source/serverware")
         endpoint_parent = Path(local.entrypoint.LISTENER_PATH).parent
         replay = Path(local.entrypoint.REPLAY_PATH)
         require_empty = lambda path: self.assertEqual(list(path.iterdir()), [])
         self.assertTrue(os.statvfs("/").f_flag & os.ST_RDONLY)
-        self.assertEqual((replay.stat().st_uid, replay.stat().st_gid, stat.S_IMODE(replay.stat().st_mode)), (65517, 65517, 0o700))
+        self.assertEqual((replay.stat().st_uid, replay.stat().st_gid, stat.S_IMODE(replay.stat().st_mode)), (0, 0, 0o700))
         require_empty(replay)
         try:
             for target in (Path("/run/source"), source, Path("/run/serverware"), endpoint_parent):
@@ -108,6 +108,8 @@ class EnrollmentAttestationTests(unittest.TestCase):
             value["listener"] = dict(descriptor=dict(device=fd_stat.st_dev, inode=fd_stat.st_ino),
                 path=dict(device=path_stat.st_dev, inode=path_stat.st_ino))
             replay_fd = os.open(replay, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC); descriptors.append(replay_fd)
+            self.assertEqual(os.listdir(replay_fd), [])
+            os.fchown(replay_fd, 65517, 65517)
             replay_stat = os.fstat(replay_fd); value["replay"] = dict(device=replay_stat.st_dev, inode=replay_stat.st_ino)
             enrollment = local.document(value["enrollmentKeyInventoryOriginal"].encode("ascii"), local.keys.MAX_PUBLIC)
             encoded = next(row["publicKeyBase64Url"] for row in enrollment["keys"] if row["purpose"] == "registration-evidence")
@@ -115,8 +117,12 @@ class EnrollmentAttestationTests(unittest.TestCase):
             root_fd = sealed(root.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())); descriptors.append(root_fd)
             raw = local.canonical(value)
             approval_fd = sealed(raw); descriptors.append(approval_fd)
-            owner = local.LocalEnrollmentSignerAttestationIssuer(approval_fd=approval_fd, approval_sha256=local.sha(raw),
-                signing_key_fd=root_fd, signer_public_key_fd=public_fd, listener_fd=listener.fileno(), replay_directory_fd=replay_fd)
+            try:
+                owner = local.LocalEnrollmentSignerAttestationIssuer(approval_fd=approval_fd, approval_sha256=local.sha(raw),
+                    signing_key_fd=root_fd, signer_public_key_fd=public_fd, listener_fd=listener.fileno(), replay_directory_fd=replay_fd)
+            except local.EnrollmentAttestationError as error:
+                owner = error.owner
+                raise
             receipt = owner.issue()
             _envelope, claims, interval, _opening, _digest = local.signer._read_attestation(receipt, root.public_key(),
                 local.signer.MAX_RECEIPT_AGE_NS, local.configuration._ValidationWork(local.configuration.QueryReadValidationLimits()))
@@ -136,6 +142,7 @@ class EnrollmentAttestationTests(unittest.TestCase):
             for fd in descriptors: os.fstat(fd)
         finally:
             if owner is not None and not owner.closed: owner.close()
+            if replay_fd is not None: os.fchown(replay_fd, 0, 0)
             for fd in descriptors: os.close(fd)
             if listener is not None: listener.close()
             endpoint = Path(local.entrypoint.LISTENER_PATH)

@@ -141,7 +141,10 @@ port was opened, and its identity and volume were preserved. An [isolated VM](do
 supplies the verified immutable-filesystem route and Python runtime. Actual
 provisioning created 29 distinct signing keys, 13 database client certificates,
 initial trust and seven static role inputs; read-only reboots verified persistence.
-These are real dependencies and staging materials, not installed authority.
+Unsigned package staging now also passes in the guest: source, Python/native
+runtime, public keys and all seven roles are assembled. This is not a signed
+installation or running authority. The current integration work connects that
+installation to actual service startup and first-device registration.
 
 **There is not yet a working pilot.** All four slots focus on the remaining
 critical path: [signed package installation](docs/trusted-host-local-package-assembly.md),

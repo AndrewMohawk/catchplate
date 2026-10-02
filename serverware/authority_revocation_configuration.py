@@ -115,17 +115,42 @@ def _key(encoded, work, *, expected_spki=None):
     return key
 
 
+def _initial_trusted_host_local(payload, generation):
+    """Consistency selector only; callers still own root/launch admission.
+
+    Service6 already selects this closed local policy and the real service
+    checks it against its admitted launch assurance. Do not reinterpret the
+    artifact's genuine initial sequence as a later database generation.
+    """
+    policy = payload.get("credentialReleaseTrust")
+    return (type(policy) is dict
+        and set(policy) == {"schema", "trustMode", "maximumReceiptAgeNs"}
+        and policy["schema"] == "serverware.trustedHostLocalCredentialReleaseTrust/v1"
+        and policy["trustMode"] == "trusted-host-local"
+        and type(policy["maximumReceiptAgeNs"]) is int and policy["maximumReceiptAgeNs"] > 0
+        and type(generation.get("sequence")) is int and generation["sequence"] == 0
+        and type(payload.get("generationSequence")) is int and payload["generationSequence"] == 0
+        and generation.get("predecessorDigest") is None
+        and payload.get("generationPredecessorDigest") is None
+        and type(generation.get("minimumRollbackSequence")) is int and generation["minimumRollbackSequence"] == 0
+        and type(payload.get("generationMinimumRollbackSequence")) is int
+        and payload["generationMinimumRollbackSequence"] == 0)
+
+
 def _generation_binding(payload, generation, configuration_digest, work):
     shape = capability.shape
     shape._literal(generation["schema"], GENERATION_SCHEMA)
+    initial_local = _initial_trusted_host_local(payload, generation)
     for value in (generation["sequence"], payload["generationSequence"]):
-        shape._integer(value, minimum=1)
+        shape._integer(value, minimum=0 if initial_local else 1)
     for value in (generation["minimumRollbackSequence"], payload["generationMinimumRollbackSequence"]):
         shape._integer(value)
     for value in (generation["digest"], generation["configurationBindingDigest"],
-                  generation["predecessorDigest"], generation["operationManifestDigest"],
-                  payload["generationBindingDigest"], payload["generationPredecessorDigest"]):
+                  generation["operationManifestDigest"], payload["generationBindingDigest"]):
         shape._digest(value)
+    if not initial_local:
+        shape._digest(generation["predecessorDigest"])
+        shape._digest(payload["generationPredecessorDigest"])
     if generation["minimumRollbackSequence"] > generation["sequence"]:
         raise RevocationConfigurationError("issuer launch rollback floor exceeds its generation")
     # The launch supplies the final generation digest independently. The
@@ -221,7 +246,8 @@ def _capture_runtime_role_identities_on_work(*, runtime_role_identities, owned_p
     shape._literal(owned["schema"], RUNTIME_ROLE_IDENTITIES_SCHEMA)
     for name in ("configurationDigest", "generationDigest", "cohortDigest"):
         shape._digest(owned[name])
-    shape._integer(owned["generationSequence"], minimum=1)
+    shape._integer(owned["generationSequence"],
+        minimum=0 if _initial_trusted_host_local(owned_payload, launch) else 1)
     shape._object(owned["roles"], _ROLE_FIELDS, "runtime roles")
     shape._object(owned_payload["roles"], _ROLE_FIELDS, "configured roles")
     work.prepare_scan(owned)

@@ -115,3 +115,7 @@ enrollment or policy commissioning is established by these source changes.
 After actual installation, follow [local startup](trusted-host-local-startup.md)
 and [pilot commissioning](pilot-commissioning.md), then prove the application's
 credential replacement, denial and redaction before handing over a pilot URL.
+
+The [late-admission handoff](trusted-host-local-admission.md) describes the real
+manifest/certificate and RuntimeTrust issuers, explicit local root delegation,
+same-kernel requirements and the still-missing five-role cohort producer.

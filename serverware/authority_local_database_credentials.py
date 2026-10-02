@@ -174,8 +174,11 @@ def issuance(raw, *, purpose=None):
     require(client.not_valid_before_utc == ca.not_valid_before_utc and client.not_valid_after_utc == ca.not_valid_after_utc
         and type(value["issuedAtUnixNanos"]) is int and before <= value["issuedAtUnixNanos"] < after
         and 0 < after - before <= MAX_CERTIFICATE_SECONDS * 10**9)
-    return dict(purpose=value["purpose"], databaseRole=role, tlsClientDn="CN=" + role,
-        tlsClientSerial=str(client.serial_number), tlsIssuerDn="CN=" + CA_NAME,
+    # PostgreSQL's pg_stat_ssl exposes its slash-form X509 name, not RFC4514.
+    # These certificates have exactly one validated, restricted-ASCII CN, so
+    # this is an exact backend projection, not permissive DN normalization.
+    return dict(purpose=value["purpose"], databaseRole=role, tlsClientDn="/CN=" + role,
+        tlsClientSerial=str(client.serial_number), tlsIssuerDn="/CN=" + CA_NAME,
         credentialIssuanceDigest=sha(raw), certificateSha256=sha(client.public_bytes(serialization.Encoding.DER)),
         caCertificateSha256=sha(ca.public_bytes(serialization.Encoding.DER)), notBeforeEpochNs=before, expiresAtEpochNs=after)
 

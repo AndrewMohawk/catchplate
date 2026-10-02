@@ -130,7 +130,8 @@ class LocalDatabaseCredentialControls(unittest.TestCase):
             raw = f["originals"][role]
             identity = local.issuance(raw, purpose=role)
             self.assertEqual(identity["databaseRole"], local.role_roster(f["selected"])[role])
-            self.assertEqual(identity["tlsClientDn"], "CN="+identity["databaseRole"])
+            self.assertEqual(identity["tlsClientDn"], "/CN="+identity["databaseRole"])
+            self.assertEqual(identity["tlsIssuerDn"], "/CN="+local.CA_NAME)
             self.assertEqual(identity["credentialIssuanceDigest"], local.sha(raw))
             self.assertTrue(identity["tlsClientSerial"].isdigit())
         self.assertEqual(len({local.issuance(raw)["tlsClientSerial"] for raw in f["originals"].values()}), 12)

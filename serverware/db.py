@@ -3184,9 +3184,14 @@ def _read_legacy_rbac_bindings() -> dict[str, dict[str, Any]]:
 
 
 def initialize_rbac_authority(
-    *, _connection: Any | None = None
+    *, _connection: Any | None = None, _local_initial_rbac: dict[str, int] | None = None
 ) -> dict[str, Any]:
     try:
+        if _local_initial_rbac is not None:
+            from serverware.authority_local_rbac_bootstrap import selected_timestamp
+            selected_timestamp(_local_initial_rbac)
+            if not metadata_uses_postgres() or not isinstance(_connection, PostgresMetadataConnection):
+                raise RBACBindingStoreError("selected local RBAC time requires the actual offline PostgreSQL owner")
         if metadata_uses_postgres() and (
             not isinstance(_connection, PostgresMetadataConnection)
             or os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
@@ -3209,6 +3214,8 @@ def initialize_rbac_authority(
                 "FROM rbac_authority_state WHERE authority_id = 1"
             ).fetchone()
             if existing is not None:
+                if _local_initial_rbac is not None:
+                    raise RBACBindingStoreError("selected local RBAC bootstrap refuses existing authority state")
                 if (
                     isinstance(conn, PostgresMetadataConnection)
                     and os.environ.get(
@@ -3241,7 +3248,12 @@ def initialize_rbac_authority(
             else:
                 legacy_subjects = _read_legacy_rbac_bindings()
                 generation = 1 if legacy_subjects else 0
-                now_s = _metadata_utcnow(conn).isoformat()
+                if _local_initial_rbac is not None:
+                    if legacy_subjects or conn.execute("SELECT 1 FROM rbac_role_bindings LIMIT 1").fetchone() is not None:
+                        raise RBACBindingStoreError("selected local RBAC bootstrap refuses existing bindings")
+                    now_s = selected_timestamp(_local_initial_rbac)
+                else:
+                    now_s = _metadata_utcnow(conn).isoformat()
                 for subject_id, binding in sorted(legacy_subjects.items()):
                     status = str(binding["status"])
                     updated_at = str(binding.get("updated_at") or now_s)
@@ -26396,12 +26408,21 @@ def init_db(
     path: Path = DB_PATH,
     *,
     bootstrap_contract_id: str | None = None,
+    local_initial_rbac: dict[str, int] | None = None,
 ) -> None:
     metadata_backend = metadata_store_backend_name()
     audit_backend = audit_store_backend_name()
     borrowed_offline_connection = (
         _policy_candidate_offline_connection.get()
     )
+    if local_initial_rbac is not None:
+        from serverware.authority_local_rbac_bootstrap import selected_timestamp
+        selected_timestamp(local_initial_rbac)
+        if (metadata_backend != "postgres" or audit_backend != "postgres"
+                or borrowed_offline_connection is not None
+                or bootstrap_contract_id != _METADATA_STORE_BOOTSTRAP_CONTRACT_ID):
+            raise MetadataStoreError("selected local RBAC time requires the initial offline PostgreSQL bootstrap")
+        local_initial_rbac = dict(local_initial_rbac)
     if (
         borrowed_offline_connection is None
         and bootstrap_contract_id is None
@@ -26525,7 +26546,10 @@ def init_db(
             metadata_schema_source,
         )
         if isinstance(conn, PostgresMetadataConnection):
-            initialize_rbac_authority(_connection=conn)
+            if local_initial_rbac is None:
+                initialize_rbac_authority(_connection=conn)
+            else:
+                initialize_rbac_authority(_connection=conn, _local_initial_rbac=local_initial_rbac)
         _finalize_policy_candidate_authority_outbox_contract(conn)
         _install_policy_candidate_authority_guards(conn)
         if not isinstance(conn, PostgresMetadataConnection):

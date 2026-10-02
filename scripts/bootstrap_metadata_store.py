@@ -34,6 +34,11 @@ process with PostgreSQL metadata, audit and grant backends, their configured
 admin/runtime identities, and genuine existing authority pins and services.
 No roles, credentials, pins or approvals are generated. Normal runtime startup
 is unchanged. Failure may leave partial initialization; do not assume rollback.
+
+The local development coordinator may supply an initial RBAC timestamp and
+its original UNIX window through the fixed Python API only. This prospective
+initial-state recipe refuses existing state/bindings and production use. It is
+not an observed database head, a CLI flag, or permission to renew an approval.
 """
 
 
@@ -59,7 +64,8 @@ def _load_db():
     return db
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, initial_rbac_timestamp_epoch_ns: int | None = None,
+         original_issued_at_unix_ns: int | None = None, original_expires_at_unix_ns: int | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if arguments == ["--help"]:
         print(USAGE, end="")
@@ -69,6 +75,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         _preflight()
+        local_initial_rbac = None
+        if any(value is not None for value in (initial_rbac_timestamp_epoch_ns,
+                original_issued_at_unix_ns, original_expires_at_unix_ns)):
+            from serverware.authority_local_rbac_bootstrap import selected_timestamp
+            local_initial_rbac = dict(initialRbacTimestamp=initial_rbac_timestamp_epoch_ns,
+                issuedAtUnixNanos=original_issued_at_unix_ns, expiresAtUnixNanos=original_expires_at_unix_ns)
+            selected_timestamp(local_initial_rbac)
     except ValueError:
         print("metadata bootstrap refused: explicit offline PostgreSQL configuration is required", file=sys.stderr)
         return 2
@@ -82,7 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         db._policy_authority_verifier_public_key()
         # The existing installer remains the sole semantic role, schema and
         # authority admission. Never replace its pins or turn off its guards.
-        db.init_db(bootstrap_contract_id=CONTRACT)
+        if local_initial_rbac is None:
+            db.init_db(bootstrap_contract_id=CONTRACT)
+        else:
+            db.init_db(bootstrap_contract_id=CONTRACT, local_initial_rbac=local_initial_rbac)
     except (Exception, KeyboardInterrupt):
         # Database/library exception strings can contain credential-bearing
         # connection details. Do not serialize them or claim atomic rollback.

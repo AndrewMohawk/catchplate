@@ -10,6 +10,8 @@ The [focused results](production-status.md) resolve 46 setup controls across the
 initial and three-case correction snapshots, then31 witness/provenance/genesis
 controls on frozen `96f70c6c`. No full suite, image rebuild,
 successful signed install or live policy transition is claimed.
+The additional roster/composition/audit/assembly batch resolves 36 controls
+across `fee6a0ee` and a single test-only correction; see the exact result record.
 
 ## Connected components
 
@@ -20,9 +22,11 @@ successful signed install or live policy transition is claimed.
 | [`local_composition.py`](../scripts/authority/local_composition.py) | Observes separately selected clean source and retained runtime OCI inputs | Exact source/archive/commit, OCI objects and canonical composition declaration; no source-to-image build claim |
 | [`local_closure.py`](../scripts/authority/local_closure.py) | Measures the selected Python/native roster and actual bounded ELF metadata | Genuine snapshot and frozen tree; local-only assurance, not production complete closure |
 | [`local_artifact_witness.py`](../scripts/authority/local_artifact_witness.py) | Verifies persistent signed history and appends the actual generation/checkpoint under an exclusive lock | Pinned root0700 store, external high-water, authorized witness key and exact expected prior head; no external trust advance |
+| [`assemble_local_package.py`](../scripts/authority/assemble_local_package.py) | Derives the real pre-witness generation core, then assembles the unsigned package with the actual checkpoint | Genuine signed configs/trust and measured originals; fixed core/package modes, no authority issuance |
 | [`local_artifacts.py`](../scripts/authority/local_artifacts.py) | Remeasures source, authenticates upstream evidence, signs package/generation and artifact-verification originals | Unsigned package, genuine snapshot/closure/provenance/witness originals, independently selected trust and purpose-specific keys |
 | [`local_install.py`](../scripts/authority/local_install.py) | Copies and verifies files, applies fs-verity/immutability, publishes an absent generation and its signed receipt | Genuine signed package and verification receipt, protected current trust/high-water, authorized provisioner key, capable destination |
 | [`commission_development_policy.py`](../scripts/commission_development_policy.py) | Calls genuine policy preparation, retains its actual result, then calls finalization after independently supplied audit and WebAuthn evidence | Admitted authority runtime, exact signed demo policy, real enrolled operator and independently produced/registered evidence |
+| [`local_audit_inclusion.py`](../scripts/authority/local_audit_inclusion.py) | Reads actual committed metadata/audit snapshots and signs first-genesis inclusion under its scoped key | Genuine audited preparation, current signer and separately provisioned fixed reader grants/authentication; first inclusion only |
 
 Use each command's `--help` for its closed FD/hash interface. There is no arbitrary
 command, key creation, SQL authority insertion, activation shortcut or synthetic
@@ -72,9 +76,15 @@ The runtime replay witness is a separate protocol. Remaining integration:
   have no actual producer. The implemented local-only measured-roster profile
   claims neither exhaustive future dynamic loading nor rootfs isolation, and
   cannot satisfy production complete-closure admission.
-- Genuine audit-inclusion issuance is being connected to independently read
-  committed audit and metadata state. The existing Merkle audit-anchor receipt
-  is not the policy-authority inclusion receipt.
+- Genuine first-inclusion issuance is source-connected to separately read
+  committed audit and metadata state. Its new restricted reader has an explicit
+  absent-role-only provisioner; it is not applied to the live database yet.
+  The existing Merkle audit-anchor receipt is not the policy-authority inclusion
+  receipt, and co-location is not independent administration.
+- Signed service/replay-witness configurations, trust authorization/revocation
+  documents, role keys and actual DB/TLS credential originals still need genuine
+  provisioning. The [assembly order](trusted-host-local-package-assembly.md)
+  identifies these exact inputs; they are not inferred from image bytes.
 
 Genesis v2 verifies the actual current policy signature and records verification
 inside the real transaction. It avoids the legacy circular evidence/request

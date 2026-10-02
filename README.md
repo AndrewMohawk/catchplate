@@ -145,8 +145,10 @@ Its current authority requirements cannot be replaced by a SQLite shortcut.
 An [isolated VM](docs/trusted-host-local-storage.md) now supplies the verified
 filesystem route. Persistent artifact-witness issuance, measured provenance
 and the corrected first-policy transaction are implemented; their focused
-31-check batch passes. Local closure and audit-inclusion producers are the
-current implementation priorities, followed by installation and the live walkthrough.
+31-check batch passes. Local-only [roster/composition and package assembly](docs/trusted-host-local-package-assembly.md)
+plus first-policy audit-inclusion issuance are now source-connected. The base
+Python guest runtime also boots. Signed service/trust configuration, actual
+authority installation and policy commissioning still precede the live walkthrough.
 
 **Protected native production:** the [full goal](goal.md) remains unchanged.
 The [native lifecycle](docs/native-pilot-lifecycle.md) still requires approved

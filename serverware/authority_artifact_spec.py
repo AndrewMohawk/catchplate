@@ -51,6 +51,21 @@ KEY_REVOCATION_SCHEMA = "serverware.authorityKeyRevocations/v1"
 TRUST_STATE_SCHEMA = "serverware.authorityArtifactTrustState/v1"
 SNAPSHOT_RECEIPT_SCHEMA = "serverware.authorityStableSnapshotReceipt/v1"
 CLOSURE_RECEIPT_SCHEMA = "serverware.authorityCompleteClosureReceipt/v1"
+LOCAL_CLOSURE_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalMeasuredRosterReceipt/v1"
+LOCAL_CLOSURE_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalMeasuredRosterSignature/v1"
+LOCAL_CLOSURE_ASSURANCE = "measured-roster-at-issuance"
+LOCAL_CLOSURE_CLAIMS = {
+    "scope": LOCAL_CLOSURE_ASSURANCE,
+    "pythonImports": "selected-file-bytes-not-complete-import-analysis",
+    "nativeObjects": "selected-file-bytes-and-elf-metadata",
+    "futureDynamicLoading": "not-proven",
+    "rootfsIsolation": "not-proven",
+    "hardwareBacked": False,
+}
+LOCAL_PROVENANCE_PREDICATES = frozenset({
+    "serverware.authorityTrustedHostLocalMeasuredArtifacts/v1",
+    "serverware.authorityTrustedHostLocalSourceRuntimeComposition/v1",
+})
 PROVENANCE_STATEMENT_SCHEMA = (
     "serverware.authoritySupplyChainProvenanceStatement/v2"
 )
@@ -1508,10 +1523,67 @@ def validate_closure_receipt(receipt: Mapping[str, Any]) -> None:
         raise ArtifactContractError("closure receipt ID is not canonical")
 
 
-def closure_receipt_digest(receipt: Mapping[str, Any]) -> str:
+def validate_local_closure_receipt(receipt: Mapping[str, Any]) -> None:
+    """A frozen-tree roster measurement; never CompleteClosure/v1 evidence."""
+    payload = _validate_signed_evidence_envelope(receipt, schema=LOCAL_CLOSURE_RECEIPT_SCHEMA,
+        payload_schema="serverware.authorityTrustedHostLocalMeasuredRosterPayload/v1",
+        payload_keys={"schema", "receiptId", "snapshotReceiptDigest", "treeDigest", "treeEntryCount",
+            "totalBytes", "pythonImportClosure", "nativeClosure", "stageZero", "assurance", "createdAt", "expiresAt"},
+        name="local measured roster")
+    for name in ("receiptId", "snapshotReceiptDigest", "treeDigest"):
+        _require_digest(payload[name], name=name)
+    _require_int(payload["treeEntryCount"], name="local measured file count", minimum=1, maximum=MAX_BUNDLE_FILES)
+    _require_int(payload["totalBytes"], name="local measured bytes", minimum=1, maximum=MAX_TOTAL_BUNDLE_BYTES)
+    imports = _require_list(payload["pythonImportClosure"], name="selected Python roster", maximum=MAX_IMPORTS)
+    for row in imports:
+        _validate_python_import(row)
+    _require_sorted_unique(imports, name="selected Python roster", key=lambda row: (row["module"], row["path"]))
+    native = _require_mapping(payload["nativeClosure"], name="selected native roster", keys={"executables", "objects"})
+    for name, validator in (("executables", _validate_native_executable), ("objects", _validate_native_object)):
+        rows = _require_list(native[name], name=name, maximum=MAX_NATIVE_OBJECTS)
+        for row in rows:
+            validator(row)
+        _require_sorted_unique(rows, name=name, key=lambda row: row["runtimePath"])
+    if not validate_stage_zero_reference(payload["stageZero"], native_executables=native["executables"],
+                                        trust_mode="trusted-host-local"):
+        raise ArtifactContractError("local measured roster requires the local Python bootstrap")
+    assurance = _require_mapping(payload["assurance"], name="local measured assurance", keys=set(LOCAL_CLOSURE_CLAIMS))
+    if (dict(assurance) != LOCAL_CLOSURE_CLAIMS or assurance["hardwareBacked"] is not False):
+        raise ArtifactContractError("local measured roster cannot claim complete loader/rootfs coverage")
+    start = _require_timestamp(payload["createdAt"], name="local roster createdAt")
+    end = _require_timestamp(payload["expiresAt"], name="local roster expiresAt")
+    if end <= start:
+        raise ArtifactContractError("local measured roster interval is not increasing")
+    if payload["receiptId"] != domain_digest("serverware.authorityTrustedHostLocalMeasuredRosterId/v1",
+        canonical_json_bytes({key: value for key, value in payload.items() if key != "receiptId"})):
+        raise ArtifactContractError("local measured roster receipt ID changed")
+
+
+def validate_selected_closure_receipt(receipt: Mapping[str, Any], *, trust_mode: str | None,
+                                     stage_zero: Mapping[str, Any]) -> None:
+    if isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_CLOSURE_RECEIPT_SCHEMA:
+        validate_local_closure_receipt(receipt)
+        if (trust_mode != "trusted-host-local" or stage_zero != receipt["payload"]["stageZero"]
+                or stage_zero.get("interfaceSchema") != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA):
+            raise ArtifactContractError("local measured roster cannot select another launch profile")
+    else:
+        validate_closure_receipt(receipt)
+
+
+def closure_signature_domain(receipt: Mapping[str, Any]) -> str:
+    if isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_CLOSURE_RECEIPT_SCHEMA:
+        validate_local_closure_receipt(receipt)
+        return LOCAL_CLOSURE_SIGNATURE_DOMAIN
     validate_closure_receipt(receipt)
+    return "serverware.authorityCompleteClosureReceiptSignature/v1"
+
+
+def closure_receipt_digest(receipt: Mapping[str, Any]) -> str:
+    local = isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_CLOSURE_RECEIPT_SCHEMA
+    (validate_local_closure_receipt if local else validate_closure_receipt)(receipt)
     return domain_digest(
-        "serverware.authorityCompleteClosureReceiptDigest/v1",
+        "serverware.authorityTrustedHostLocalMeasuredRosterDigest/v1" if local
+            else "serverware.authorityCompleteClosureReceiptDigest/v1",
         canonical_json_bytes(receipt),
     )
 
@@ -1534,6 +1606,13 @@ def verify_external_evidence_receipt(
         validate_closure_receipt(receipt)
         purpose = "closure-verifier"
         signature_domain = "serverware.authorityCompleteClosureReceiptSignature/v1"
+        digest = closure_receipt_digest(receipt)
+    elif receipt_kind == "local-measured-roster":
+        validate_local_closure_receipt(receipt)
+        validate_selected_closure_receipt(receipt, trust_mode=verified_package.trust_mode,
+            stage_zero=verified_package.package["bundle"]["stageZero"])
+        purpose = "closure-verifier"
+        signature_domain = LOCAL_CLOSURE_SIGNATURE_DOMAIN
         digest = closure_receipt_digest(receipt)
     else:
         raise ArtifactContractError("external evidence kind is not recognized")
@@ -2213,7 +2292,8 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
         name="Python import closure",
         key=lambda entry: (entry["module"], entry["path"]),
     )
-    validate_closure_receipt(value["closureReceipt"])
+    validate_selected_closure_receipt(value["closureReceipt"], trust_mode=value["trustMode"]["mode"],
+                                     stage_zero=value["stageZero"])
     closure_payload = value["closureReceipt"]["payload"]
     if (
         closure_payload["snapshotReceiptDigest"]
@@ -2524,6 +2604,11 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
         name="provenance predicate type",
         maximum=1024,
     )
+    if provenance["predicateType"] in LOCAL_PROVENANCE_PREDICATES and (
+            value["trustMode"]["mode"] != "trusted-host-local"
+            or not isinstance(value["stageZero"], Mapping)
+            or value["stageZero"].get("interfaceSchema") != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA):
+        raise ArtifactContractError("local measured provenance cannot establish native production assurance")
     _require_ascii(
         provenance["mediaType"],
         name="provenance media type",
@@ -3437,7 +3522,7 @@ def verify_signed_artifact_package(
         (
             bundle["closureReceipt"],
             "closure-verifier",
-            "serverware.authorityCompleteClosureReceiptSignature/v1",
+            closure_signature_domain(bundle["closureReceipt"]),
             closure_receipt_digest(bundle["closureReceipt"]),
             "complete closure",
         ),
@@ -4084,6 +4169,18 @@ CLOSURE_RECEIPT_JSON_SCHEMA = _closed_object_schema(
         **SIGNED_EVIDENCE_ENVELOPE_FIELDS,
     }
 )
+LOCAL_CLOSURE_RECEIPT_JSON_SCHEMA = _closed_object_schema({
+    "schema": {"const": LOCAL_CLOSURE_RECEIPT_SCHEMA},
+    "payload": _closed_object_schema({
+        **{name: CLOSURE_RECEIPT_JSON_SCHEMA["properties"]["payload"]["properties"][name]
+           for name in ("receiptId", "snapshotReceiptDigest", "treeDigest", "treeEntryCount", "totalBytes",
+                        "pythonImportClosure", "nativeClosure", "createdAt", "expiresAt")},
+        "schema": {"const": "serverware.authorityTrustedHostLocalMeasuredRosterPayload/v1"},
+        "stageZero": LOCAL_STAGE_ZERO_REFERENCE_JSON_SCHEMA,
+        "assurance": _closed_object_schema({name: {"const": value} for name, value in LOCAL_CLOSURE_CLAIMS.items()}),
+    }),
+    **SIGNED_EVIDENCE_ENVELOPE_FIELDS,
+})
 SCHEMA_REFERENCE_JSON_SCHEMA = _closed_object_schema(
     {
         "path": RELATIVE_PATH_JSON_SCHEMA,
@@ -4383,7 +4480,7 @@ ARTIFACT_BUNDLE_JSON_SCHEMA = _closed_object_schema(
             }
         ),
         "stableSnapshotReceipt": SNAPSHOT_RECEIPT_JSON_SCHEMA,
-        "closureReceipt": CLOSURE_RECEIPT_JSON_SCHEMA,
+        "closureReceipt": {"oneOf": [CLOSURE_RECEIPT_JSON_SCHEMA, LOCAL_CLOSURE_RECEIPT_JSON_SCHEMA]},
         "files": {
             "type": "array",
             "minItems": 1,
@@ -4450,6 +4547,18 @@ ARTIFACT_BUNDLE_JSON_SCHEMA["allOf"] = [{
     "else": {"properties": {"roleManifests": {"items": {"properties": {
         "argv": STRING_ARRAY_JSON_SCHEMA,
     }}}}},
+}, {
+    "if": {"properties": {"closureReceipt": {"properties": {"schema": {"const": LOCAL_CLOSURE_RECEIPT_SCHEMA}}}}},
+    "then": {"properties": {
+        "trustMode": {"properties": {"mode": {"const": "trusted-host-local"}}},
+        "stageZero": LOCAL_STAGE_ZERO_REFERENCE_JSON_SCHEMA,
+    }},
+}, {
+    "if": {"properties": {"provenance": {"properties": {"predicateType": {"enum": sorted(LOCAL_PROVENANCE_PREDICATES)}}}}},
+    "then": {"properties": {
+        "trustMode": {"properties": {"mode": {"const": "trusted-host-local"}}},
+        "stageZero": LOCAL_STAGE_ZERO_REFERENCE_JSON_SCHEMA,
+    }},
 }]
 TRUST_MODE_JSON_SCHEMA = _closed_object_schema(
     {
@@ -4708,6 +4817,10 @@ __all__ = [
     "TRUST_STATE_SCHEMA",
     "SNAPSHOT_RECEIPT_SCHEMA",
     "CLOSURE_RECEIPT_SCHEMA",
+    "LOCAL_CLOSURE_RECEIPT_SCHEMA",
+    "LOCAL_CLOSURE_SIGNATURE_DOMAIN",
+    "LOCAL_CLOSURE_ASSURANCE",
+    "LOCAL_CLOSURE_RECEIPT_JSON_SCHEMA",
     "AUTHORITY_SCHEMA_VERSION",
     "TRUST_MODES",
     "ALLOWED_MUTABLE_STATE_PROTOCOLS",
@@ -4729,6 +4842,7 @@ __all__ = [
     "assemble_signed_artifact_package",
     "canonical_json_bytes",
     "closure_receipt_digest",
+    "closure_signature_domain",
     "configuration_generation_binding",
     "configuration_generation_binding_digest",
     "configuration_payload_bindings",
@@ -4749,6 +4863,8 @@ __all__ = [
     "validate_configuration_payload_bindings",
     "validate_role_reference",
     "validate_closure_receipt",
+    "validate_local_closure_receipt",
+    "validate_selected_closure_receipt",
     "validate_snapshot_receipt",
     "validate_signed_artifact_package",
     "validate_trust_state",

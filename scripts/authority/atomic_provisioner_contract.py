@@ -464,6 +464,8 @@ def validate_verification_receipt(
         )
     _digest(stage_zero["verifierDigest"], name="stage-zero verifier digest")
 
+    local_roster = (isinstance(value["closureVerification"], Mapping)
+        and "assurance" in value["closureVerification"])
     closure = _closed(
         value["closureVerification"],
         name="closure verification",
@@ -475,7 +477,7 @@ def validate_verification_receipt(
             "snapshotIdentityDigest",
             "complete",
             "verifierDigest",
-        },
+        } | ({"assurance"} if local_roster else set()),
     )
     for field in (
         "fileCount",
@@ -489,7 +491,11 @@ def validate_verification_receipt(
             minimum=0,
             maximum=MAX_FILES,
         )
-    if closure["complete"] is not True:
+    if local_roster:
+        from serverware.authority_artifact_spec import LOCAL_CLOSURE_ASSURANCE
+        if not local_bootstrap or value["trustMode"] != "trusted-host-local" or closure["complete"] is not False or closure["assurance"] != LOCAL_CLOSURE_ASSURANCE:
+            raise ProvisioningContractError("measured roster verification cannot claim complete/native closure")
+    elif closure["complete"] is not True:
         raise ProvisioningContractError("artifact closure is incomplete")
     _digest(
         closure["snapshotIdentityDigest"],
@@ -578,6 +584,9 @@ def validate_verification_receipt(
         validate_signed_artifact_package(package)
         bundle = package["bundle"]
         generation = package["generation"]
+        from serverware.authority_artifact_spec import LOCAL_CLOSURE_RECEIPT_SCHEMA
+        if local_roster != (bundle["closureReceipt"]["schema"] == LOCAL_CLOSURE_RECEIPT_SCHEMA):
+            raise ProvisioningContractError("verification assurance differs from the exact signed closure receipt")
         if local_bootstrap and (bundle["stageZero"]["interfaceSchema"] != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA
                 or stage_zero["interpreterDigest"] != bundle["stageZero"]["interpreter"]["sha256"]
                 or stage_zero["interpreterRuntimePath"] != bundle["stageZero"]["interpreter"]["runtimePath"]):

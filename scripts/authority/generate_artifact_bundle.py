@@ -53,6 +53,7 @@ from serverware.authority_artifact_spec import (
     artifact_bundle_digest,
     canonical_json_bytes,
     closure_receipt_digest,
+    closure_signature_domain,
     configuration_generation_binding,
     configuration_generation_binding_digest,
     configuration_payload_bindings,
@@ -65,6 +66,7 @@ from serverware.authority_artifact_spec import (
     strict_base64url_encode,
     trust_document_digest,
     validate_closure_receipt,
+    validate_selected_closure_receipt,
     validate_snapshot_receipt,
     validate_trust_state,
     validate_unsigned_artifact_package,
@@ -563,9 +565,11 @@ def _verify_snapshot_and_closure(
     *,
     trust: Mapping[str, Any],
     validation_time: str,
+    trust_mode: str | None = None,
 ) -> tuple[str, str]:
     validate_snapshot_receipt(snapshot)
-    validate_closure_receipt(closure)
+    validate_selected_closure_receipt(closure, trust_mode=trust_mode,
+                                     stage_zero=closure.get("payload", {}).get("stageZero", {}))
     snapshot_key = _verification_key(
         trust,
         key_id=snapshot["signerKeyId"],
@@ -590,7 +594,7 @@ def _verify_snapshot_and_closure(
         closure_key.public_key,
         closure["signatureBase64Url"],
         _receipt_signature_message(
-            CLOSURE_SIGNATURE_DOMAIN, closure["payload"]
+            closure_signature_domain(closure), closure["payload"]
         ),
         name="complete closure",
     )
@@ -1052,6 +1056,7 @@ def _build_bundle(
             closure,
             trust=trust,
             validation_time=validation_time,
+            trust_mode=spec["trustMode"]["mode"],
         )
         root_identity = snapshot["payload"]["rootIdentity"]
         if (

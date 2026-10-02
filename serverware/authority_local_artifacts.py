@@ -1,7 +1,7 @@
 """Fixed trusted-host-local package signatures and verification receipt.
 
 The protected approval delegates only the exact unsigned package and trust
-originals. Existing snapshot, complete closure, provenance, migration, key and
+originals. Existing snapshot, selected closure/roster, provenance, migration, key and
 witness originals remain independently authenticated prerequisites. This module
 does not issue those originals, commit trust high-water, or install anything.
 Python-held signing keys are ordinary colocated custody, not hardware custody.
@@ -109,7 +109,7 @@ def authenticate_upstream(unsigned, trust, instant):
         generation=generation, trust_state=state, validation_time=instant)
     for field, purpose, domain in (
             ("stableSnapshotReceipt", "stable-snapshot-verifier", "serverware.authorityStableSnapshotReceiptSignature/v1"),
-            ("closureReceipt", "closure-verifier", "serverware.authorityCompleteClosureReceiptSignature/v1")):
+            ("closureReceipt", "closure-verifier", spec.closure_signature_domain(bundle["closureReceipt"]))):
         row = bundle[field]
         _require(row["payload"]["createdAt"] <= instant <= row["payload"]["expiresAt"])
         key = _key(keys, revoked, row["signerKeyId"], purpose, instant)
@@ -154,6 +154,7 @@ def _receipt(verified, selected, *, policy_digest, instant, signer):
             revocationCheckpointDigest=verified.key_revocations_digest))
     checkpoint = generation["witnessCheckpoint"]
     key = verified.require_key(selected["signingKeys"]["artifact-verifier"], "artifact-verifier", at=instant)
+    local_roster = bundle["closureReceipt"]["schema"] == spec.LOCAL_CLOSURE_RECEIPT_SCHEMA
     receipt = dict(schema=contract.VERIFICATION_RECEIPT_SCHEMA,
         packageDigest=verified.package_digest, artifactBundleDigest=verified.artifact_bundle_digest,
         generationDigest=verified.generation_digest, generationSequence=verified.generation_sequence,
@@ -167,8 +168,9 @@ def _receipt(verified, selected, *, policy_digest, instant, signer):
         closureVerification=dict(fileCount=len(bundle["files"]), pythonImportCount=len(bundle["pythonImportClosure"]),
             nativeExecutableCount=len(bundle["nativeClosure"]["executables"]),
             nativeObjectCount=len(bundle["nativeClosure"]["objects"]),
-            snapshotIdentityDigest=bundle["sourceTree"]["snapshotIdentityDigest"], complete=True,
-            verifierDigest=selected["verifierSourceSha256"]),
+            snapshotIdentityDigest=bundle["sourceTree"]["snapshotIdentityDigest"], complete=not local_roster,
+            verifierDigest=selected["verifierSourceSha256"],
+            **({"assurance": spec.LOCAL_CLOSURE_ASSURANCE} if local_roster else {})),
         rollbackWitness=dict(identity=checkpoint["payload"]["identity"], sequence=verified.generation_sequence,
             generationDigest=verified.generation_digest, checkpointDigest=verified.witness_checkpoint_digest,
             coLocated=True, hardwareBacked=False,

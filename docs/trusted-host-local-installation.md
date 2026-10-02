@@ -17,6 +17,10 @@ across `fee6a0ee` and a single test-only correction; see the exact result record
 
 | Command | Actual effect | Still required beforehand |
 | --- | --- | --- |
+| [`local_keys.py`](../scripts/authority/local_keys.py) | Creates the fixed 20 distinct local Ed25519 key pairs and public inventory without replacement | Exact empty root0700 destination and protected bounded approval; local key creation is not a trust grant |
+| [`local_database_credentials.py`](../scripts/authority/local_database_credentials.py) | Issues actual CA/server/client TLS staging originals and unapplied PostgreSQL fragments | Exact existing role selection, owners, DNS/network, empty private output and original validity; no DB connection or installed-credential claim |
+| [`local_trust.py`](../scripts/authority/local_trust.py) | Signs initial artifact key authorization/revocation documents under the explicitly pinned local root | Actual13-purpose public roster, exact initial trust, actual empty witness directory and protected root signing key |
+| [`local_configuration.py`](../scripts/authority/local_configuration.py) | Signs exact Service6 or ReplayWitness4 configuration payloads | Actual role manifests, TLS issuance originals, generation intent and distinct configuration root; witness binds the already signed service payload |
 | [`local_snapshot.py`](../scripts/authority/local_snapshot.py) | Measures an exact frozen CAS tree and signs the existing snapshot receipt | Already frozen root-owned tree named by its digest, protected approval/trust, authorized snapshot-verifier key |
 | [`local_provenance.py`](../scripts/authority/local_provenance.py) | Verifies actual clean Git/archive/report/OCI associations and signs a detached local observation | Exact compatible clean build report, retained source/OCI objects, frozen tree and authorized provenance key; this is not build-execution or SLSA proof |
 | [`local_composition.py`](../scripts/authority/local_composition.py) | Observes separately selected clean source and retained runtime OCI inputs | Exact source/archive/commit, OCI objects and canonical composition declaration; no source-to-image build claim |
@@ -28,9 +32,10 @@ across `fee6a0ee` and a single test-only correction; see the exact result record
 | [`commission_development_policy.py`](../scripts/commission_development_policy.py) | Calls genuine policy preparation, retains its actual result, then calls finalization after independently supplied audit and WebAuthn evidence | Admitted authority runtime, exact signed demo policy, real enrolled operator and independently produced/registered evidence |
 | [`local_audit_inclusion.py`](../scripts/authority/local_audit_inclusion.py) | Reads actual committed metadata/audit snapshots and signs first-genesis inclusion under its scoped key | Genuine audited preparation, current signer and separately provisioned fixed reader grants/authentication; first inclusion only |
 
-Use each command's `--help` for its closed FD/hash interface. There is no arbitrary
-command, key creation, SQL authority insertion, activation shortcut or synthetic
-success result. The snapshot issuer does **not** freeze a mutable checkout or
+Use each command's `--help` for its closed FD/hash interface. Key creation is
+limited to its fixed roster; there is no arbitrary command, SQL authority
+insertion, activation shortcut or synthetic success result. The snapshot issuer
+does **not** freeze a mutable checkout or
 claim complete import/native closure. The artifact signer does **not** originate
 missing upstream evidence. The installer does **not** advance the external
 witness/high-water or activate the generation.
@@ -81,10 +86,13 @@ The runtime replay witness is a separate protocol. Remaining integration:
   absent-role-only provisioner; it is not applied to the live database yet.
   The existing Merkle audit-anchor receipt is not the policy-authority inclusion
   receipt, and co-location is not independent administration.
-- Signed service/replay-witness configurations, trust authorization/revocation
-  documents, role keys and actual DB/TLS credential originals still need genuine
-  provisioning. The [assembly order](trusted-host-local-package-assembly.md)
-  identifies these exact inputs; they are not inferred from image bytes.
+- Fixed service/replay-witness configuration, initial-trust, key and TLS producers
+  are now implemented. A real isolated guest run generated 20 signing keys,
+  13 database client identities and signed initial trust; its read-only reboot
+  confirmed persistence. These are private staging originals, not installed
+  credentials or observed database sessions. The
+  [assembly order](trusted-host-local-package-assembly.md) still requires actual
+  role/configuration inputs and complete package installation.
 
 Genesis v2 verifies the actual current policy signature and records verification
 inside the real transaction. It avoids the legacy circular evidence/request

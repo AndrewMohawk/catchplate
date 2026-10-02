@@ -108,7 +108,8 @@ def _recheck(application, request, binding, session_scope, credential, count):
     return identity
 
 
-def _assertion(application, payload, binding, credential, payload_digest):
+def _assertion(application, payload, binding, credential, payload_digest, owner):
+    from serverware import control_plane_registration_finalization_permission as possession
     if payload.get("bootstrapToken") is not None:
         _deny("bootstrap cannot replace existing-credential authorization", 400)
     mfa = payload.get("mfa")
@@ -124,30 +125,30 @@ def _assertion(application, payload, binding, credential, payload_digest):
     if not selectors or any(value != binding["credentialId"] for value in selectors):
         _deny("finalization completion assertion target differs", 403)
     try:
-        verified = application.verify_control_plane_mutation_assertion(
-            user_id=binding["userId"], action=binding["action"],
-            resource_id=binding["challengeId"], payload_digest=payload_digest,
-            authn_policy=application._control_plane_mutation_authn_policy(), assertion=assertion)
-    except application.WebAuthnError:
+        verified = possession.consume(owner, binding,
+            application._control_plane_mutation_authn_policy(), assertion)
+    except (application.WebAuthnError, possession.FinalizationPermissionError):
         _deny("finalization completion MFA denied", 403)
     if (type(verified) is not dict or verified.get("user_id") != binding["userId"]
             or verified.get("credential_id") != binding["credentialId"]
             or verified.get("credential_record_id") != credential[0]
-            or type(verified.get("sign_count")) is not int
-            or not 0 <= verified["sign_count"] <= 0xffffffff
-            or not (verified["sign_count"] == credential[2] == 0
-                or verified["sign_count"] > credential[2])):
+            or verified.get("stored_sign_count") != credential[2]
+            or verified.get("persisted_counter_advanced") is not False
+            or type(verified.get("observed_sign_count")) is not int
+            or not 0 <= verified["observed_sign_count"] <= 0xffffffff
+            or not (verified["observed_sign_count"] == credential[2] == 0
+                or verified["observed_sign_count"] > credential[2])):
         _deny("finalization completion verified assertion scope differs", 403)
-    return verified["sign_count"]
+    # The signed observation is completion-bound, NOT an advanced DB counter.
+    # Recheck the same stored baseline and full pending metadata root below.
+    return credential[2]
 
 
-def _options(application, binding, payload_digest):
+def _options(application, binding, payload_digest, owner):
+    from serverware import control_plane_registration_finalization_permission as possession
     try:
-        issued = application.control_plane_mutation_options(
-            user_id=binding["userId"], action=binding["action"],
-            resource_id=binding["challengeId"], payload_digest=payload_digest,
-            authn_policy=application._control_plane_mutation_authn_policy(), approval_context=None)
-    except application.WebAuthnError:
+        issued = possession.issue(owner, binding, application._control_plane_mutation_authn_policy())
+    except (application.WebAuthnError, possession.FinalizationPermissionError):
         _deny("finalization completion target has no eligible WebAuthn credential", 403)
     public_key = issued["publicKey"]
     if (type(public_key) is not dict or set(public_key) != {
@@ -163,7 +164,8 @@ def _options(application, binding, payload_digest):
     return {"schema": OPTIONS_SCHEMA, "purpose": binding["purpose"],
         "localDigest": binding["localDigest"], "action": binding["action"],
         "resourceId": binding["challengeId"], "payloadDigest": payload_digest,
-        "publicKey": public_key, "automaticRetryAllowed": False}
+        "publicKey": public_key, "expiresAtEpochNs": issued["expiresAtEpochNs"],
+        "automaticRetryAllowed": False}
 
 
 def _handle(request, *, recovery, options=False):
@@ -185,6 +187,7 @@ def _handle(request, *, recovery, options=False):
             if binding["mode"] != "oidc-session-first-enrollment":
                 _deny("finalization completion pending ownership differs", 403)
             digest = binding["localDigest"]
+            routes._approval_policy(application, binding)
             credential = _history(application, binding["userId"], binding["credentialId"])
             count = None if credential is None else credential[2]
             _recheck(application, request, binding, session_scope, credential, count)
@@ -192,7 +195,7 @@ def _handle(request, *, recovery, options=False):
             if options:
                 if credential is None:
                     _deny("empty credential history requires fresh bootstrap, not MFA options")
-                result = _options(application, binding, payload_digest)
+                result = _options(application, binding, payload_digest, owner)
                 _recheck(application, request, binding, session_scope, credential, count)
                 if routes._owner() is not owner:
                     _deny("finalization completion owner changed", 503)
@@ -200,8 +203,9 @@ def _handle(request, *, recovery, options=False):
             if credential is None:
                 permission._bootstrap(application, payload)
             else:
-                count = _assertion(application, payload, binding, credential, payload_digest)
+                count = _assertion(application, payload, binding, credential, payload_digest, owner)
                 identity = _recheck(application, request, binding, session_scope, credential, count)
+                routes._approval_policy(application, binding)
                 application._require_control_plane_two_person(action=binding["action"],
                     resource_id=binding["challengeId"], payload_digest=payload_digest,
                     mfa=payload.get("mfa"), identity=identity, request=binding)

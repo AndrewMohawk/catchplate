@@ -201,7 +201,7 @@ class _EnrollmentOwner:
         "_intent_key", "_intent_key_fd", "_intent_key_identity",
         "_revocation_key", "_revocation_key_fd", "_revocation_key_identity",
         "_registration_contexts", "_registration_context_handles", "_registration_context_uncertain",
-        "_registration_context_reservations")
+        "_registration_context_reservations", "_finalization_permission")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -1487,6 +1487,7 @@ def initialize_from_environment():
             owner._registration_contexts, owner._registration_context_handles = {}, []
             owner._registration_context_uncertain = False
             owner._registration_context_reservations = set()
+            owner._finalization_permission = None
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
             return owner
@@ -1541,3 +1542,4 @@ def close():
             owner._intent_key = None
             owner._revocation_key = None
             owner._registration_contexts.clear()
+            owner._finalization_permission = None

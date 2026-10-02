@@ -2,8 +2,10 @@
 
 Original eight-field ownership inspection precedes permission; the facade
 repeats genuine replay under its cold owner lock before dispatch. The operator
-branch uses current role/identity and fresh MFA/two-person, or a fresh bootstrap
-only when credential history is genuinely empty. Pending permission has its
+branch uses current role/identity and fresh completion-bound possession, or a
+fresh bootstrap only when credential history is genuinely empty. A selected
+two-person policy refuses before writes until it has an integrated transition;
+it is never bypassed. Pending permission has its
 own fixed helper; no incoming successful subject can replace either path.
 """
 from __future__ import annotations
@@ -16,6 +18,7 @@ from serverware import control_plane_registration_handoff_routes as permission
 from serverware import control_plane_registration_finalization_completion as handoff
 from serverware import control_plane_registration_finalization_completion_subject as subjects
 from serverware import control_plane_registration_finalization_completion_http as contract
+from serverware import control_plane_registration_finalization_permission as possession
 
 
 router = APIRouter()
@@ -23,10 +26,13 @@ COMPLETE_PATHS = frozenset({"/api/webauthn/register/complete-finalization",
     "/api/auth/session/webauthn/register/complete-finalization"})
 RECOVER_PATHS = frozenset({"/api/webauthn/register/recover-finalization-completion",
     "/api/auth/session/webauthn/register/recover-finalization-completion"})
-OPTIONS_PATHS = frozenset({"/api/auth/session/webauthn/register/complete-finalization/options",
+OPTIONS_PATHS = frozenset({"/api/webauthn/register/complete-finalization/options",
+    "/api/webauthn/register/recover-finalization-completion/options",
+    "/api/auth/session/webauthn/register/complete-finalization/options",
     "/api/auth/session/webauthn/register/recover-finalization-completion/options"})
 PATHS = COMPLETE_PATHS | RECOVER_PATHS | OPTIONS_PATHS
 RECOVERY_PATHS = RECOVER_PATHS | frozenset({
+    "/api/webauthn/register/recover-finalization-completion/options",
     "/api/auth/session/webauthn/register/recover-finalization-completion/options"})
 HEADERS = permission.HEADERS
 
@@ -98,7 +104,37 @@ def _dispatch(owner, digest, user_id, session_id, *, recovery):
         content=contract.accepted(returned_digest, raw4, recovery=recovery))
 
 
-def _operator(request, *, recovery):
+def _approval_policy(application, binding):
+    # Generic approval consume/ensure changes a member of the complete pending
+    # metadata vector. Do not mutate it or pretend that requirement is disabled.
+    # A selected two-person completion policy needs its own integrated protocol.
+    if application._control_plane_two_person_required(binding["action"]):
+        raise HTTPException(status_code=503,
+            detail="two-person finalization completion is not available without a metadata transition")
+
+
+def _permission(application, payload, binding, identity, owner):
+    _approval_policy(application, binding)
+    if payload.get("bootstrapToken") is not None:
+        raise HTTPException(status_code=400, detail="bootstrap cannot replace existing-credential authorization")
+    mfa = payload.get("mfa")
+    assertion = None if mfa is None else mfa.get("assertion")
+    digest = application._control_plane_payload_digest(binding)
+    if not assertion:
+        raise HTTPException(status_code=412, detail={"error": "control_plane_webauthn_required",
+            "message": "Fresh target-key completion possession assertion required",
+            "action": binding["action"], "resourceId": binding["challengeId"], "payloadDigest": digest})
+    try:
+        possession.consume(owner, binding, application._control_plane_mutation_authn_policy(), assertion)
+    except (possession.FinalizationPermissionError, application.WebAuthnError):
+        raise HTTPException(status_code=403, detail="finalization completion possession denied") from None
+    _approval_policy(application, binding)
+    application._require_control_plane_two_person(action=binding["action"],
+        resource_id=binding["challengeId"], payload_digest=digest,
+        mfa=mfa, identity=identity, request=binding)
+
+
+def _operator(request, *, recovery, options=False):
     from serverware import app as application
 
     digest = None
@@ -106,14 +142,23 @@ def _operator(request, *, recovery):
         identity = application.require_role("admin", "approver")(
             application.require_admin(request,
                 x_serverware_admin_token=request.headers.get("X-Serverware-Admin-Token")))
-        payload, owner = _payload(request, recovery=recovery), _owner()
+        payload, owner = _payload(request, recovery=recovery, options=options), _owner()
         with application.trust_bundle_lock(exclusive=False):
             current = application._registration_execution_current_operator(request, identity)
             binding = _subject(payload["localDigest"], current.user_id, None, recovery=recovery)
             digest = binding["localDigest"]
             had_history = bool(application.db.list_webauthn_credentials(current.user_id, include_revoked=True))
+            _approval_policy(application, binding)
+            if options:
+                if not had_history:
+                    raise HTTPException(status_code=409, detail="empty history requires fresh bootstrap, not possession options")
+                result = possession.issue(owner, binding, application._control_plane_mutation_authn_policy())
+                application._registration_execution_current_operator(request, current)
+                if _owner() is not owner:
+                    raise HTTPException(status_code=503, detail="finalization completion owner changed")
+                return JSONResponse(status_code=200, headers=HEADERS, content=result)
             if had_history:
-                permission._permission(application, payload, binding, current)
+                _permission(application, payload, binding, current, owner)
             else:
                 permission._bootstrap(application, payload)
             current = application._registration_execution_current_operator(request, current)
@@ -134,6 +179,16 @@ def complete_operator(request: Request):
 @router.post("/api/webauthn/register/recover-finalization-completion", status_code=202)
 def recover_operator(request: Request):
     return _operator(request, recovery=True)
+
+
+@router.post("/api/webauthn/register/complete-finalization/options")
+def complete_operator_options(request: Request):
+    return _operator(request, recovery=False, options=True)
+
+
+@router.post("/api/webauthn/register/recover-finalization-completion/options")
+def recover_operator_options(request: Request):
+    return _operator(request, recovery=True, options=True)
 
 
 @router.post("/api/auth/session/webauthn/register/complete-finalization", status_code=202)

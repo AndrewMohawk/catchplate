@@ -626,6 +626,10 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_startup.py \
 	scripts/test_authority_local_artifacts.py \
 	scripts/test_authority_local_artifact_witness.py \
+	scripts/test_authority_local_trust.py \
+	scripts/test_authority_local_configuration.py \
+	scripts/test_authority_local_database_credentials.py \
+	scripts/test_authority_local_keys.py \
 	scripts/test_authority_local_provenance.py \
 	scripts/test_authority_local_closure.py \
 	scripts/test_authority_local_composition.py \
@@ -866,6 +870,10 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_artifact_witness.py \
+	serverware/authority_local_trust.py \
+	serverware/authority_local_configuration.py \
+	serverware/authority_local_database_credentials.py \
+	serverware/authority_local_keys.py \
 	serverware/authority_local_provenance.py \
 	serverware/authority_local_closure.py \
 	serverware/authority_local_composition.py \
@@ -873,6 +881,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_audit_reader.py \
 	serverware/authority_transition_policy_genesis.py \
 	scripts/authority/local_artifact_witness.py \
+	scripts/authority/local_trust.py \
+	scripts/authority/local_configuration.py \
+	scripts/authority/local_database_credentials.py \
+	scripts/authority/local_keys.py \
 	scripts/authority/local_provenance.py \
 	scripts/authority/local_closure.py \
 	scripts/authority/local_composition.py \
@@ -3933,6 +3945,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 			for required_source_file in \
 				Makefile \
 				serverware/authority_local_artifact_witness.py \
+				serverware/authority_local_trust.py \
+				serverware/authority_local_configuration.py \
+				serverware/authority_local_database_credentials.py \
+				serverware/authority_local_keys.py \
 				serverware/authority_local_provenance.py \
 				serverware/authority_local_closure.py \
 				serverware/authority_local_composition.py \
@@ -3940,6 +3956,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_audit_reader.py \
 				serverware/authority_transition_policy_genesis.py \
 				scripts/authority/local_artifact_witness.py \
+				scripts/authority/local_trust.py \
+				scripts/authority/local_configuration.py \
+				scripts/authority/local_database_credentials.py \
+				scripts/authority/local_keys.py \
 				scripts/authority/local_provenance.py \
 				scripts/authority/local_closure.py \
 				scripts/authority/local_composition.py \

@@ -30,7 +30,8 @@ def selected(directory):
         issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+60_000_000_000)
 
 
-def open_owner(directory, *, genesis_inventory=None, enrollment_audit_inventory=None, chain_enrollment_inventory=None):
+def open_owner(directory, *, genesis_inventory=None, enrollment_audit_inventory=None, chain_enrollment_inventory=None,
+        startup_chain_inventory=None):
     value = selected(directory)
     if genesis_inventory is not None:
         value.update(schema=local.GENESIS_AUDIT_APPROVAL_SCHEMA, purpose=local.GENESIS_AUDIT_PURPOSE,
@@ -41,6 +42,9 @@ def open_owner(directory, *, genesis_inventory=None, enrollment_audit_inventory=
     if chain_enrollment_inventory is not None:
         value.update(schema=local.CHAIN_APPROVAL_SCHEMA, purpose=local.CHAIN_PURPOSE,
             enrollmentKeyInventoryOriginal=chain_enrollment_inventory.decode("ascii"))
+    if startup_chain_inventory is not None:
+        value.update(schema=local.STARTUP_APPROVAL_SCHEMA, purpose=local.STARTUP_PURPOSE,
+            registrationChainKeyInventoryOriginal=startup_chain_inventory.decode("ascii"))
     raw = local.trust.spec.canonical_json_bytes(value)
     fd = os.memfd_create("synthetic-local-key-approval", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
     if os.write(fd, raw) != len(raw): raise RuntimeError("fixture short write")
@@ -92,7 +96,48 @@ def synthetic_enrollment_inventory_original(pilot_original, audit_original):
         pilotKeyInventorySha256=local.trust.sha(pilot_original), genesisAuditKeyInventorySha256=local.trust.sha(audit_original)))
 
 
+def synthetic_chain_inventory_original(pilot_original, audit_original, enrollment_original):
+    rows, roster = [], {}
+    for index, row in enumerate(local.chain_roster(), 24):
+        public = Ed25519PrivateKey.from_private_bytes(bytes([index]) * 32).public_key()
+        raw = public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        encoded = local.trust.spec.strict_base64url_encode(raw)
+        rows.append(dict(row, publicKeyBase64Url=encoded, publicKeySha256=local.trust.sha(raw),
+            publicKeySpkiSha256=local.trust.sha(public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
+        roster[row["purpose"]] = encoded
+    return local.trust.spec.canonical_json_bytes(dict(schema=local.CHAIN_INVENTORY_SCHEMA,
+        approvalSha256=DIGEST, directory=dict(device=1, inode=5), keys=rows, claims=local.CLAIMS,
+        publicRosterSha256=local.trust.sha(local.trust.spec.canonical_json_bytes(roster)),
+        pilotKeyInventorySha256=local.trust.sha(pilot_original), genesisAuditKeyInventorySha256=local.trust.sha(audit_original),
+        enrollmentKeyInventorySha256=local.trust.sha(enrollment_original)))
+
+
 class KeyContractTests(unittest.TestCase):
+    def test_startup_profile_requires_all_prior_originals_and_exact_eight_purposes(self):
+        pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
+        enrollment = synthetic_enrollment_inventory_original(pilot, audit)
+        chain = synthetic_chain_inventory_original(pilot, audit, enrollment)
+        value = dict(schema=local.STARTUP_APPROVAL_SCHEMA, purpose=local.STARTUP_PURPOSE,
+            directory=dict(device=1, inode=6), bootIdDigest=DIGEST, issuedAtBoottimeNs=100,
+            deadlineBoottimeNs=200, issuedAtUnixNanos=100, expiresAtUnixNanos=200,
+            pilotKeyInventoryOriginal=pilot.decode("ascii"), genesisAuditKeyInventoryOriginal=audit.decode("ascii"),
+            enrollmentKeyInventoryOriginal=enrollment.decode("ascii"), registrationChainKeyInventoryOriginal=chain.decode("ascii"))
+        self.assertEqual(local.approval(local.trust.spec.canonical_json_bytes(value)), value)
+        self.assertEqual(local._selected_roster(value), local.startup_roster())
+        self.assertEqual([row["purpose"] for row in local.startup_roster()],
+            ["launch-runtime", "launch-verifier", "launch-planner", "launch-planner-writer",
+             "launch-issuer", "launch-executor", "launch-witness", "rbac-enrollment-root"])
+        self.assertEqual(tuple(len(factory()) for factory in (local.roster, local.genesis_audit_roster,
+            local.enrollment_roster, local.chain_roster)), (20, 1, 2, 6))
+        for changed in (dict(value, purpose=local.CHAIN_PURPOSE), dict(value, directory=dict(device=1, inode=5)),
+                {key:item for key,item in value.items() if key != "registrationChainKeyInventoryOriginal"}):
+            with self.assertRaises(ValueError): local.approval(local.trust.spec.canonical_json_bytes(changed))
+        changed_chain = local.trust.document(chain, local.MAX_PUBLIC)
+        changed_chain["enrollmentKeyInventorySha256"] = DIGEST
+        with self.assertRaises(ValueError):
+            local.approval(local.trust.spec.canonical_json_bytes(dict(value,
+                registrationChainKeyInventoryOriginal=local.trust.spec.canonical_json_bytes(changed_chain).decode("ascii"))))
+
     def test_first_registration_chain_is_fixed_six_and_prior_three_profiles_unchanged(self):
         self.assertEqual(tuple(len(factory()) for factory in (local.roster, local.genesis_audit_roster,
             local.enrollment_roster, local.chain_roster)), (20, 1, 2, 6))
@@ -226,6 +271,40 @@ class KeyContractTests(unittest.TestCase):
 @unittest.skipUnless(os.getresuid() == os.getresgid() == (0,0,0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
     "real protected key-file controls require isolated root -I -B")
 class KeyStorageTests(unittest.TestCase):
+    def test_actual_startup_eight_keys_are_distinct_and_cannot_reuse_prior_keys(self):
+        pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
+        enrollment = synthetic_enrollment_inventory_original(pilot, audit)
+        chain = synthetic_chain_inventory_original(pilot, audit, enrollment)
+        inputs = dict(genesis_inventory=pilot, enrollment_audit_inventory=audit,
+            chain_enrollment_inventory=enrollment, startup_chain_inventory=chain)
+        with tempfile.TemporaryDirectory(prefix="local-startup-keys-") as directory:
+            owner = open_owner(directory, **inputs)
+            try:
+                original = owner.run()
+                inventory, seen = local.startup_inventory(original.decode("ascii"), pilot.decode("ascii"),
+                    audit.decode("ascii"), enrollment.decode("ascii"), chain.decode("ascii"))
+                self.assertEqual(len(seen), 37)
+                self.assertEqual(len(inventory["keys"]), 8)
+                for row in inventory["keys"]:
+                    path = Path(directory) / row["privatePath"]
+                    key = Ed25519PrivateKey.from_private_bytes(path.read_bytes())
+                    self.assertEqual(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw),
+                        (Path(directory) / row["publicPath"]).read_bytes())
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o400)
+                self.assertEqual((Path(directory) / "inventory.json").read_bytes(), original)
+                self.assertFalse(inventory["claims"]["trustGranted"])
+                owner.check()
+                with self.assertRaises(local.LocalKeyProvisionerError): owner.run()
+            finally: owner.close()
+        with tempfile.TemporaryDirectory(prefix="local-startup-collision-") as directory:
+            owner = open_owner(directory, **inputs)
+            try:
+                collision = Ed25519PrivateKey.from_private_bytes(bytes([29]) * 32)
+                with patch.object(local.Ed25519PrivateKey, "generate", return_value=collision):
+                    with self.assertRaises(local.LocalKeyProvisionerError): owner.run()
+                self.assertFalse(any(path.is_file() for path in Path(directory).rglob("*")))
+            finally: owner.close()
+
     def test_actual_chain_profile_creates_six_new_keys_and_retains_all_prior_originals(self):
         pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
         enrollment = synthetic_enrollment_inventory_original(pilot, audit)

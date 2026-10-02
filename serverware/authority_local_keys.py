@@ -33,6 +33,9 @@ ENROLLMENT_PURPOSE = "create-fixed-local-registration-enrollment-keys"
 CHAIN_APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalRegistrationChainKeyProvisioningApproval/v1"
 CHAIN_INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalRegistrationChainKeyInventory/v1"
 CHAIN_PURPOSE = "create-fixed-local-first-registration-chain-keys"
+STARTUP_APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalStartupKeyProvisioningApproval/v1"
+STARTUP_INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalStartupKeyInventory/v1"
+STARTUP_PURPOSE = "create-fixed-local-launch-and-rbac-enrollment-keys"
 SERVICE_ROLES = ("verifier", "planner", "planner-writer", "issuer", "executor", "witness")
 MAX_APPROVAL = 8192
 MAX_GENESIS_AUDIT_APPROVAL = 65536
@@ -78,6 +81,13 @@ def chain_roster():
         for name in ("execution-caller", "finalization-caller", "computation", "completion", "state", "grant-authorizer"))
 
 
+def startup_roster():
+    purposes = tuple("launch-" + role for role in ("runtime", *SERVICE_ROLES)) + ("rbac-enrollment-root",)
+    return tuple(dict(family="startup", purpose=name, keyId="local-startup-" + name + "-v1",
+        publicPath="keys/startup/" + name + ".pub", privatePath="private/startup/" + name + ".seed")
+        for name in purposes)
+
+
 def _selected_roster(value):
     if (value["schema"], value["purpose"]) == (APPROVAL_SCHEMA, PURPOSE):
         return roster()
@@ -85,6 +95,8 @@ def _selected_roster(value):
         return enrollment_roster()
     if (value["schema"], value["purpose"]) == (CHAIN_APPROVAL_SCHEMA, CHAIN_PURPOSE):
         return chain_roster()
+    if (value["schema"], value["purpose"]) == (STARTUP_APPROVAL_SCHEMA, STARTUP_PURPOSE):
+        return startup_roster()
     require((value["schema"], value["purpose"]) == (GENESIS_AUDIT_APPROVAL_SCHEMA, GENESIS_AUDIT_PURPOSE))
     return genesis_audit_roster()
 
@@ -178,11 +190,41 @@ def chain_inventory(original, pilot_original, audit_original, enrollment_origina
     return value, seen
 
 
+def startup_inventory(original, pilot_original, audit_original, enrollment_original, chain_original):
+    prior_inventories = (
+        _pilot_inventory(pilot_original)[0],
+        genesis_audit_inventory(audit_original, pilot_original)[0],
+        enrollment_inventory(enrollment_original, pilot_original, audit_original)[0],
+    )
+    chain, prior = chain_inventory(chain_original, pilot_original, audit_original, enrollment_original)
+    pins = dict(pilotKeyInventorySha256=trust.sha(pilot_original.encode("ascii")),
+        genesisAuditKeyInventorySha256=trust.sha(audit_original.encode("ascii")),
+        enrollmentKeyInventorySha256=trust.sha(enrollment_original.encode("ascii")),
+        registrationChainKeyInventorySha256=trust.sha(chain_original.encode("ascii")))
+    value, seen = _extra_inventory(original, schema=STARTUP_INVENTORY_SCHEMA,
+        expected_rows=startup_roster(), pins=pins, prior_keys=prior)
+    require(all(value["directory"] != old["directory"] for old in (*prior_inventories, chain)))
+    return value, seen
+
+
 def approval(raw):
     value = trust.document(raw, MAX_GENESIS_AUDIT_APPROVAL)
     fields = {"schema", "purpose", "directory", "bootIdDigest", "issuedAtBoottimeNs",
         "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
-    if value.get("schema") == CHAIN_APPROVAL_SCHEMA:
+    if value.get("schema") == STARTUP_APPROVAL_SCHEMA:
+        require(set(value) == fields | {"pilotKeyInventoryOriginal", "genesisAuditKeyInventoryOriginal",
+            "enrollmentKeyInventoryOriginal", "registrationChainKeyInventoryOriginal"}
+            and value["purpose"] == STARTUP_PURPOSE)
+        prior = (
+            _pilot_inventory(value["pilotKeyInventoryOriginal"])[0],
+            genesis_audit_inventory(value["genesisAuditKeyInventoryOriginal"], value["pilotKeyInventoryOriginal"])[0],
+            enrollment_inventory(value["enrollmentKeyInventoryOriginal"], value["pilotKeyInventoryOriginal"],
+                value["genesisAuditKeyInventoryOriginal"])[0],
+            chain_inventory(value["registrationChainKeyInventoryOriginal"], value["pilotKeyInventoryOriginal"],
+                value["genesisAuditKeyInventoryOriginal"], value["enrollmentKeyInventoryOriginal"])[0],
+        )
+        require(all(value["directory"] != old["directory"] for old in prior))
+    elif value.get("schema") == CHAIN_APPROVAL_SCHEMA:
         require(set(value) == fields | {"pilotKeyInventoryOriginal", "genesisAuditKeyInventoryOriginal", "enrollmentKeyInventoryOriginal"}
             and value["purpose"] == CHAIN_PURPOSE)
         pilot, _ = _pilot_inventory(value["pilotKeyInventoryOriginal"])
@@ -353,14 +395,18 @@ class LocalKeyProvisioner:
             genesis_audit = self.selected["schema"] == GENESIS_AUDIT_APPROVAL_SCHEMA
             enrollment = self.selected["schema"] == ENROLLMENT_APPROVAL_SCHEMA
             chain = self.selected["schema"] == CHAIN_APPROVAL_SCHEMA
-            paths = (("keys", "private", "keys/registration-chain", "private/registration-chain") if chain else
+            startup = self.selected["schema"] == STARTUP_APPROVAL_SCHEMA
+            paths = (("keys", "private", "keys/startup", "private/startup") if startup else
+                ("keys", "private", "keys/registration-chain", "private/registration-chain") if chain else
                 ("keys", "private", "keys/enrollment", "private/enrollment") if enrollment else
                 ("keys", "private", "keys/genesis", "private/genesis") if genesis_audit else
                 ("keys", "private", "keys/artifact", "private/artifact", "keys/configuration",
                  "private/configuration", "keys/service", "private/service"))
             for path in paths:
                 self._mkdir(path)
-            seen = (enrollment_inventory(self.selected["enrollmentKeyInventoryOriginal"], self.selected["pilotKeyInventoryOriginal"],
+            seen = (chain_inventory(self.selected["registrationChainKeyInventoryOriginal"], self.selected["pilotKeyInventoryOriginal"],
+                self.selected["genesisAuditKeyInventoryOriginal"], self.selected["enrollmentKeyInventoryOriginal"])[1] if startup else
+                enrollment_inventory(self.selected["enrollmentKeyInventoryOriginal"], self.selected["pilotKeyInventoryOriginal"],
                 self.selected["genesisAuditKeyInventoryOriginal"])[1] if chain else
                 genesis_audit_inventory(self.selected["genesisAuditKeyInventoryOriginal"],
                 self.selected["pilotKeyInventoryOriginal"])[1] if enrollment else
@@ -380,11 +426,13 @@ class LocalKeyProvisioner:
                     rows.append(dict(selected, publicKeyBase64Url=encoded, publicKeySha256=trust.sha(public),
                         publicKeySpkiSha256=trust.sha(private.public_key().public_bytes(
                             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
-                    if selected["family"] == "artifact" or genesis_audit or enrollment or chain:
+                    if selected["family"] == "artifact" or genesis_audit or enrollment or chain or startup:
                         public_roster[selected["purpose"]] = encoded
                 finally: del private, seed
             public_raw = trust.spec.canonical_json_bytes(public_roster)
-            if chain:
+            if startup:
+                require(set(public_roster) == {row["purpose"] for row in startup_roster()} and len(rows) == 8)
+            elif chain:
                 require(set(public_roster) == {row["purpose"] for row in chain_roster()} and len(rows) == 6)
             elif enrollment:
                 require(set(public_roster) == {"authorization", "registration-evidence"} and len(rows) == 2)
@@ -393,15 +441,17 @@ class LocalKeyProvisioner:
             else:
                 trust.public_roster(public_raw)
             self._publish("public-roster.json", public_raw)
-            inventory = dict(schema=CHAIN_INVENTORY_SCHEMA if chain else ENROLLMENT_INVENTORY_SCHEMA if enrollment else GENESIS_AUDIT_INVENTORY_SCHEMA if genesis_audit else INVENTORY_SCHEMA,
+            inventory = dict(schema=STARTUP_INVENTORY_SCHEMA if startup else CHAIN_INVENTORY_SCHEMA if chain else ENROLLMENT_INVENTORY_SCHEMA if enrollment else GENESIS_AUDIT_INVENTORY_SCHEMA if genesis_audit else INVENTORY_SCHEMA,
                 approvalSha256=self.pin, directory=self.selected["directory"],
                 publicRosterSha256=trust.sha(public_raw), keys=rows, claims=CLAIMS)
-            if genesis_audit or enrollment or chain:
+            if genesis_audit or enrollment or chain or startup:
                 inventory["pilotKeyInventorySha256"] = trust.sha(self.selected["pilotKeyInventoryOriginal"].encode("ascii"))
-            if enrollment or chain:
+            if enrollment or chain or startup:
                 inventory["genesisAuditKeyInventorySha256"] = trust.sha(self.selected["genesisAuditKeyInventoryOriginal"].encode("ascii"))
-            if chain:
+            if chain or startup:
                 inventory["enrollmentKeyInventorySha256"] = trust.sha(self.selected["enrollmentKeyInventoryOriginal"].encode("ascii"))
+            if startup:
+                inventory["registrationChainKeyInventorySha256"] = trust.sha(self.selected["registrationChainKeyInventoryOriginal"].encode("ascii"))
             raw = trust.spec.canonical_json_bytes(inventory)
             self._publish("inventory.json", raw)  # Last durable completion marker.
             self.check()

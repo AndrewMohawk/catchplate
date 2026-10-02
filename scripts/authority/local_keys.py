@@ -40,6 +40,15 @@ initialize a vector, authorize a request, or add any OIDC/activation purpose.
 The two caller private copies belong in separately admitted FD203 and FD204;
 they are never aliases of enrollment authorization or evidence signing keys.
 
+The separately selected StartupKeyProvisioningApproval/v1 creates eight keys
+in a fifth empty root0700 directory: launch-runtime, launch-verifier,
+launch-planner, launch-planner-writer, launch-issuer, launch-executor,
+launch-witness, and rbac-enrollment-root. It embeds all four preceding public
+inventories; all37 keys must differ. Fixed paths are keys/startup/ and
+private/startup/. Launch identity keys are not service response keys. The RBAC
+root is not the configuration or artifact root. Creation does not issue launch
+certificates, sign witness enrollment, provision a database or admit a service.
+
 Private raw32 seeds are root0400 under private/; public raw32 files are under
 keys/. Public-only public-roster.json and inventory.json contain no secret bytes
 or private-key hashes. Files publish no-replace, fsync and read back; inventory

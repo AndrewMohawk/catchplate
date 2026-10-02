@@ -11,6 +11,7 @@ import stat
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -6405,14 +6406,11 @@ class AuthorityProcess:
         )
         runtime_input = dict(request["input"])
         authority_planner.reject_authoritative_input(runtime_input)
-        if (
-            operation == "webauthn.challenge.create"
-            and set(runtime_input)
-            == {"operation", "input", "userId", "credentialId"}
-        ):
-            runtime_input = self._prepare_webauthn_challenge_writer(
-                runtime_input
-            )
+        if operation == "webauthn.challenge.create":
+            if set(runtime_input) == {"operation", "input", "userId", "credentialId"}:
+                runtime_input = self._prepare_webauthn_challenge_writer(runtime_input)
+            else:
+                runtime_input = self._prepare_registration_challenge_writer(runtime_input)
         execution = self._execute_v9_operation(
             operation=operation,
             handler_name=handler_name,
@@ -7423,6 +7421,42 @@ class AuthorityProcess:
             "revoked": False,
         }
         return challenge, credential, authorization["assertion"]
+
+    def _prepare_registration_challenge_writer(
+        self,
+        input_value: dict[str, Any],
+    ) -> dict[str, Any]:
+        # The authenticated application supplies its unchanged principal,
+        # history-based authorization, nonce/challenge and scope. Only this
+        # admitted verifier generates the row identity and original timestamps;
+        # accepting the planner's expanded arguments here would permit overrides.
+        arguments = input_value.get("arguments")
+        if (
+            set(input_value) != {"schema", "handler", "operationManifestDigest", "arguments"}
+            or input_value.get("schema") != "serverware.policyAuthorityControlledWriterInput/v1"
+            or input_value.get("handler") != "create_webauthn_challenge"
+            or input_value.get("operationManifestDigest") != authority_contract.OPERATION_MANIFEST_DIGEST
+            or type(arguments) is not dict
+            or set(arguments) != {"challenge", "challenge_type", "user_id", "payload",
+                "approval_request_id", "scope_key", "ttl_seconds"}
+            or arguments.get("challenge_type") != "registration"
+            or arguments.get("approval_request_id") is not None
+            or type(arguments.get("payload")) is not dict
+            or set(arguments["payload"]) != {"type", "user_id", "label", "nonce", "authorization"}
+            or arguments["payload"].get("type") != "registration"
+            or arguments["payload"].get("user_id") != arguments.get("user_id")
+            or type(arguments.get("ttl_seconds")) is not int
+            or not 30 <= arguments["ttl_seconds"] <= 300
+        ):
+            raise AuthorityServiceError("registration challenge input is not the closed application branch")
+        issued_at_ns = time.time_ns() // 1_000_000 * 1_000_000
+        expires_at_ns = issued_at_ns + arguments["ttl_seconds"] * 1_000_000_000
+        created_at = datetime.fromtimestamp(issued_at_ns // 1_000_000_000,
+            tz=timezone.utc).replace(microsecond=(issued_at_ns // 1_000) % 1_000_000).isoformat()
+        expires_at = datetime.fromtimestamp(expires_at_ns // 1_000_000_000,
+            tz=timezone.utc).replace(microsecond=(expires_at_ns // 1_000) % 1_000_000).isoformat()
+        return {**input_value, "arguments": {**arguments, "challenge_id": str(uuid.uuid4()),
+            "created_at": created_at, "expires_at": expires_at}}
 
     def _prepare_webauthn_challenge_writer(
         self,

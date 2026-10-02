@@ -21,6 +21,8 @@ from serverware import authority_local_launch_authorization as pair
 io, spec, launch, stage = pair.io, pair.spec, pair.launch, pair.stage
 canonical, document, sha = spec.canonical_json_bytes, configuration.document, pair.sha
 SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v2"
+RUNTIME_SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v3"
+MAX_RUNTIME_NS = 1_800_000_000_000
 PURPOSE = "issue-observed-five-role-local-cohort"
 DELEGATION = "configuration-root-signs-five-local-role-receipts-cohort-and-initial-history-v1"
 INITIAL_HISTORY = "explicit-empty-first-generation-history"
@@ -39,9 +41,25 @@ def require(value):
         raise ValueError("local five-role cohort refused")
 
 
+def runtime_interval(value):
+    """Prospective local runtime authority, never a renewed issuing window."""
+    if value["schema"] == SCHEMA:
+        return value["issuedAtUnixNanos"], value["expiresAtUnixNanos"]
+    require(value["schema"] == RUNTIME_SCHEMA)
+    interval = value["runtimeValidity"]
+    require(type(interval) is dict and set(interval) == {"issuedAtEpochNs", "expiresAtEpochNs"})
+    start, end = interval["issuedAtEpochNs"], interval["expiresAtEpochNs"]
+    require(type(start) is type(end) is int and 0 < start < end < 2**63
+        and start == value["issuedAtUnixNanos"] and value["expiresAtUnixNanos"] <= end
+        and end - start <= MAX_RUNTIME_NS)
+    return start, end
+
+
 def approval(raw, *, boot, now_boottime_ns, now_unix_ns):
     value = document(raw, io.MAX_PUBLIC)
-    require(set(value) == FIELDS and value["schema"] == SCHEMA and value["purpose"] == PURPOSE
+    require(value.get("schema") in (SCHEMA, RUNTIME_SCHEMA)
+        and set(value) == FIELDS | ({"runtimeValidity"} if value["schema"] == RUNTIME_SCHEMA else set())
+        and value["purpose"] == PURPOSE
         and value["rootDelegation"] == DELEGATION and value["bootIdDigest"] == boot
         and value["historicalArchiveSelection"] == INITIAL_HISTORY)
     spec._require_digest(boot, name="cohort boot")
@@ -53,6 +71,7 @@ def approval(raw, *, boot, now_boottime_ns, now_unix_ns):
         and value["issuedAtUnixNanos"] <= now_unix_ns < value["expiresAtUnixNanos"]
         and value["deadlineBoottimeNs"] - value["issuedAtBoottimeNs"] <= 300_000_000_000
         and value["expiresAtUnixNanos"] - value["issuedAtUnixNanos"] <= 300_000_000_000)
+    runtime_interval(value)
     require(type(value["serviceConfigurationOriginal"]) is str and value["serviceConfigurationOriginal"].isascii()
         and sha(value["serviceConfigurationOriginal"].encode("ascii")) == value["serviceConfigurationSha256"])
     document(value["serviceConfigurationOriginal"].encode("ascii"), configuration.MAX_CONFIGURATION)
@@ -111,6 +130,11 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
         stage.validate_signed_launch_identity(certificate, request=payload["stageZeroRequest"], **context["kwargs"])
         require(certificate["payload"] == pair.certificate_payload(payload["stageZeroRequest"],
             declared["launchPublicKeyBase64Url"], context["kwargs"]))
+        runtime_start, runtime_end = runtime_interval(selected)
+        request = payload["stageZeroRequest"]
+        require(pair._epoch(request["launch"]["validFrom"]) <= runtime_start < runtime_end
+            <= pair._epoch(request["launch"]["validUntil"])
+            and runtime_end <= pair._epoch(context["issuer"].not_after))
         identities[role] = (launch._domain_digest(launch.LAUNCH_PAYLOAD_SCHEMA, canonical(payload)),
             stage.stage_zero_request_digest(payload["stageZeroRequest"], **context["kwargs"]))
         contexts[role] = context
@@ -132,10 +156,11 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
     require(dict(fileDigest=sha(service_raw), payloadDigest=config_digest, payloadSchema=payload_schema,
         role="authority-service") in spec.configuration_payload_bindings(bundle["configurations"]))
     static = cohort._static_configuration(service)
-    require(selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= static[3])
+    runtime_start, runtime_end = runtime_interval(selected)
+    require(runtime_end - runtime_start <= static[3])
     generation = verified.package["generation"]
     generation_interval = (history._epoch_ns(generation["validFrom"]), history._epoch_ns(generation["validUntil"]))
-    require(generation_interval[0] <= selected["issuedAtUnixNanos"] < selected["expiresAtUnixNanos"] <= generation_interval[1])
+    require(generation_interval[0] <= runtime_start < runtime_end <= generation_interval[1])
     for context in contexts.values():
         require(context["payload"]["packageVersions"] == service["packageVersions"])
         credentials = {row["name"]: row for row in context["observed"]["credentials"]}
@@ -151,10 +176,11 @@ def _signed_cohort(context, key, *, now_unix_ns):
     """Existing exact domains; called only after complete original/live admission."""
     require(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) == context["rootPublic"])
     selected = context["selected"]
+    runtime_start, runtime_end = runtime_interval(selected)
     common = dict(sourceRevision=cohort.authority.SOURCE_REVISION,
         configurationDigest=context["configurationDigest"], generationDigest=context["generationDigest"],
         operationManifestDigest=cohort.authority.OPERATION_MANIFEST_DIGEST, artifactPackageDigest=context["packageDigest"],
-        issuedAtEpochNs=selected["issuedAtUnixNanos"], expiresAtEpochNs=selected["expiresAtUnixNanos"])
+        issuedAtEpochNs=runtime_start, expiresAtEpochNs=runtime_end)
     def sign(payload):
         return dict(schema=payload["schema"], payload=payload,
             signature=spec.strict_base64url_encode(key.sign(cohort._domain_digest(payload["schema"], canonical(payload)).encode("ascii"))))
@@ -184,6 +210,7 @@ def _signed_runtime_evidence(context, key, *, now_unix_ns):
     signed codec results alone are not evidence of a live process or database.
     """
     selected, generation = context["selected"], context["generationContext"]
+    runtime_start, runtime_end = runtime_interval(selected)
     require(selected["historicalArchiveSelection"] == INITIAL_HISTORY
         and context["generationSequence"] == generation["sequence"] == 0
         and generation["predecessorDigest"] is None and generation["minimumRollbackSequence"] == 0
@@ -208,7 +235,7 @@ def _signed_runtime_evidence(context, key, *, now_unix_ns):
         valid_until_epoch_ns=min(context["generationInterval"][1], admitted.valid_until_epoch_ns))
     payload = dict(schema=history.SCHEMA, purpose=history.PURPOSE, sourceRevision=cohort.authority.SOURCE_REVISION,
         configurationDigest=context["configurationDigest"], generationDigest=context["generationDigest"],
-        issuedAtEpochNs=selected["issuedAtUnixNanos"], expiresAtEpochNs=selected["expiresAtUnixNanos"], entries=[])
+        issuedAtEpochNs=runtime_start, expiresAtEpochNs=runtime_end, entries=[])
     archive = dict(schema=history.SCHEMA, payload=payload, signature=spec.strict_base64url_encode(
         key.sign(cohort._domain_digest(history.SCHEMA, canonical(payload)).encode("ascii"))))
     checked = history._admit_on_startup(original_bytes=canonical(archive), current_snapshot=snapshot,

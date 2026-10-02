@@ -34,6 +34,7 @@ INTERPRETER = "/runtime/python/bin/python3"
 ENTRYPOINT = "/runtime/authority-bootstrap/authority_fd_entrypoint.py"
 BOOTSTRAP = "/runtime/authority-bootstrap/authority_launcher.py"
 OBSERVATION_NAME = "observation.json"
+ADMITTED_NAME = "admitted.json"
 LATE_NAMES = {"manifest": "manifest.json", "certificate": "certificate.json", "evidence": "evidence.json"}
 LIMITS = {"manifest": launcher.MAX_MANIFEST_BYTES,
           "certificate": launcher.MAX_LAUNCH_IDENTITY_CERTIFICATE_BYTES,
@@ -221,13 +222,14 @@ def _read(fd, maximum, *, allow_empty=False):
     return bytes(raw)
 
 
-def _publish_effect(directory, raw, *, hold, refresh, check):
+def _publish_effect(directory, raw, *, hold, refresh, check, name=OBSERVATION_NAME):
     """One fixed atomic public-file effect; callbacks retain real FD custody.
 
     This primitive supplies no authority or child evidence.  Failure retains
     its acquired descriptor and any published name with its caller.
     """
-    _require(type(raw) is bytes and 0 < len(raw) <= launcher.MAX_LOCAL_OBSERVATION)
+    _require(name in (OBSERVATION_NAME, ADMITTED_NAME)
+        and type(raw) is bytes and 0 < len(raw) <= launcher.MAX_LOCAL_OBSERVATION)
     with _owning():
         fd = hold(os.open(".", os.O_TMPFILE | os.O_RDWR | os.O_CLOEXEC, 0o600, dir_fd=directory))
         offset = 0
@@ -253,10 +255,10 @@ def _publish_effect(directory, raw, *, hold, refresh, check):
         _require(_identity(os.stat(source, dir_fd=descriptors, follow_symlinks=True)) == _identity(os.fstat(fd)))
         check()
         _require(libc.linkat(descriptors, ctypes.c_char_p(source), directory,
-            ctypes.c_char_p(OBSERVATION_NAME.encode("ascii")), 0x400) == 0)
+            ctypes.c_char_p(name.encode("ascii")), 0x400) == 0)
         refresh(fd)
         os.fsync(directory)
-        _require(_identity(os.stat(OBSERVATION_NAME, dir_fd=directory, follow_symlinks=False))
+        _require(_identity(os.stat(name, dir_fd=directory, follow_symlinks=False))
             == _identity(os.fstat(fd)) and _read(fd, launcher.MAX_LOCAL_OBSERVATION) == raw)
         check()
         return fd
@@ -624,6 +626,13 @@ class LocalAuthorityStartup:
                                     uid=uid, gid=gid, startTimeTicks=self.child_start))
             self.check(full=True, child_live=True)
             self.admitted = True
+            # Surface only this actual authenticated post-guard/UID-drop
+            # notice. An observation or published signature is not admission.
+            with _owning():
+                directory = self.directory_fds["exchangeDirectory"]
+                fd = _publish_effect(directory, encode(notice), hold=self._hold, refresh=self._refresh,
+                    check=lambda: self.check(child_live=True), name=ADMITTED_NAME)
+                self.names.append((directory, ADMITTED_NAME, fd, _identity(os.fstat(fd)), False))
             # Admission is not service readiness. The signed service lifetime is
             # now enforced by the actual admitted child, not a renewed timer here.
             while not select.select([self.child_pidfd], [], [], 0.5)[0]:

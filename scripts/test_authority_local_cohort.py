@@ -61,6 +61,49 @@ def verify(raw, context, key, now=150):
 
 
 class LocalCohortTests(unittest.TestCase):
+    def test_runtime_v3_is_prospective_not_extended_issuance(self):
+        _, value, _ = fixture()
+        value.update(schema=subject.RUNTIME_SCHEMA,
+            runtimeValidity=dict(issuedAtEpochNs=100, expiresAtEpochNs=250))
+        self.assertEqual(subject.approval(subject.canonical(value), boot=digest("boot"),
+            now_boottime_ns=150, now_unix_ns=150), value)
+        self.assertEqual(subject.runtime_interval(value), (100, 250))
+        for boot, epoch in ((200, 150), (150, 200), (225, 225)):
+            with self.assertRaises(ValueError):
+                subject.approval(subject.canonical(value), boot=digest("boot"),
+                    now_boottime_ns=boot, now_unix_ns=epoch)
+        value["schema"] = subject.SCHEMA
+        with self.assertRaises(ValueError):
+            subject.approval(subject.canonical(value), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)
+
+    def test_runtime_v3_existing_signatures_remain_valid_after_setup(self):
+        key, _, context = fixture()
+        context["selected"].update(schema=subject.RUNTIME_SCHEMA,
+            runtimeValidity=dict(issuedAtEpochNs=100, expiresAtEpochNs=250))
+        raw, _, delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+        _, _, receipts = verify(raw, context, key, now=225)
+        self.assertTrue(all((row["issuedAtEpochNs"], row["expiresAtEpochNs"]) == (100, 250) for row in receipts))
+        self.assertTrue(all(row["coLocated"] and not row["nativeStageZero"] for row in receipts))
+        archive = subject.document(delivery_raw, subject.pair.LATE_LIMITS["evidence.json"])["historicalArchive"]
+        self.assertEqual(archive["payload"]["expiresAtEpochNs"], 250)
+        with self.assertRaises(ValueError):
+            verify(raw, context, key, now=250)
+
+    def test_runtime_v3_closed_bounds_and_short_issuance_cap(self):
+        _, original, _ = fixture()
+        original.update(schema=subject.RUNTIME_SCHEMA,
+            runtimeValidity=dict(issuedAtEpochNs=100, expiresAtEpochNs=250))
+        for mutate in (lambda v: v["runtimeValidity"].update(issuedAtEpochNs=101),
+                       lambda v: v["runtimeValidity"].update(issuedAtEpochNs=True),
+                       lambda v: v["runtimeValidity"].update(expiresAtEpochNs=199),
+                       lambda v: v["runtimeValidity"].update(expiresAtEpochNs=101 + subject.MAX_RUNTIME_NS),
+                       lambda v: v["runtimeValidity"].update(renew=True),
+                       lambda v: v.update(deadlineBoottimeNs=300_000_000_101),
+                       lambda v: v.update(expiresAtUnixNanos=300_000_000_101)):
+            value = deepcopy(original); mutate(value)
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                subject.approval(subject.canonical(value), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)
+
     def test_closed_five_role_approval(self):
         _, value, _ = fixture()
         result = subject.approval(subject.canonical(value), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)

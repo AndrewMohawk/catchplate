@@ -139,7 +139,7 @@ class LocalStartupTests(unittest.TestCase):
             with self.subTest(args=bad), self.assertRaises(ValueError):
                 cli.arguments(bad)
 
-    def _effect(self, directory, raw, *, existing=False, process_churn=False):
+    def _effect(self, directory, raw, *, existing=False, process_churn=False, name=startup.OBSERVATION_NAME):
         # Actual FD custody for the filesystem primitive only. No fake launcher,
         # process, signature, installation receipt or successful owner is used.
         handles, refreshes, checkpoints = [], [], []
@@ -170,7 +170,7 @@ class LocalStartupTests(unittest.TestCase):
             for fd, identity in handles:
                 startup._check_handle(fd, identity)
             checkpoints.append(len(handles))
-        target = Path(directory) / startup.OBSERVATION_NAME
+        target = Path(directory) / name
         if existing:
             target.write_bytes(b"unchanged"); target.chmod(0o400)
             before = startup._identity(target.stat())
@@ -178,12 +178,12 @@ class LocalStartupTests(unittest.TestCase):
         try:
             if existing:
                 with self.assertRaises(startup.LocalStartupError):
-                    startup._publish_effect(root_fd, raw, hold=hold, refresh=refresh, check=check)
+                    startup._publish_effect(root_fd, raw, hold=hold, refresh=refresh, check=check, name=name)
                 self.assertEqual(target.read_bytes(), b"unchanged")
                 self.assertEqual(startup._identity(target.stat()), before)
                 self.assertEqual(refreshes, [(0o400, 0)])
             else:
-                fd = startup._publish_effect(root_fd, raw, hold=hold, refresh=refresh, check=check)
+                fd = startup._publish_effect(root_fd, raw, hold=hold, refresh=refresh, check=check, name=name)
                 self.assertEqual(target.read_bytes(), raw)
                 self.assertEqual(startup._identity(target.stat()), startup._identity(os.fstat(fd)))
                 self.assertEqual(refreshes, [(0o400, 0), (0o400, 1)])
@@ -229,6 +229,23 @@ class LocalStartupTests(unittest.TestCase):
         self.assertEqual(os.geteuid(), 0, "this focused storage control requires the root test container")
         with tempfile.TemporaryDirectory(prefix="serverware-local-observation-") as directory:
             self._effect(directory, b"{}", existing=True)
+
+    def test_real_admission_notice_publication_is_no_replace_and_after_authenticated_receive(self):
+        # Real storage primitive plus source ordering, not a successful role
+        # admission fixture or a caller-supplied readiness acknowledgement.
+        self.assertEqual(os.geteuid(), 0, "this focused storage control requires the root test container")
+        for existing in (False, True):
+            with tempfile.TemporaryDirectory(prefix="serverware-local-admitted-") as directory:
+                self._effect(directory, b'{"syntheticNotice":true}', existing=existing, name=startup.ADMITTED_NAME)
+        source = Path(startup.__file__).read_text()
+        receive = source.index("notice, _ = self._receive(admitted=True)")
+        admitted = source.index("self.admitted = True", receive)
+        published = source.index("name=ADMITTED_NAME", admitted)
+        self.assertLess(receive, admitted)
+        self.assertLess(admitted, published)
+        self.assertIn("self.check(full=True, child_live=True)", source[receive:admitted])
+        self.assertIn("_require(notice ==", source[receive:admitted])
+        self.assertIn("name in (OBSERVATION_NAME, ADMITTED_NAME)", source)
 
     def test_boot_pin_uses_existing_request_domain_not_plain_boot_hash(self):
         self.assertEqual(startup._boot(), startup.launcher._boot_identity_digest())

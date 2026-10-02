@@ -137,9 +137,10 @@ The unsigned `33140e27` package builds successfully with all seven authority
 roles. The retained Rust proxy, measured guest runtime, 41 signing keys and six
 distinct scoped proxy credentials are prepared. PostgreSQL TLS transport is
 verified; the local witness and synthetic upstream are provisioned. The current
-work joins these into one [isolated guest launcher](docs/pilot-commissioning.md),
-with real hardware approvals, the normal app and credential-bearing proxy.
-Earlier candidates remain preserved. These are build/input results, not signed
+consolidated [isolated guest launcher](docs/pilot-commissioning.md) is assembled
+for real hardware approvals, the normal app and credential-bearing proxy.
+It awaits browser/YubiKey readiness for its first live attempt. Earlier
+candidates remain preserved. These are build/input results, not signed
 installation, running authorities, schema commissioning or an end-to-end pilot.
 
 **There is not yet a working pilot.** All four slots focus on the remaining

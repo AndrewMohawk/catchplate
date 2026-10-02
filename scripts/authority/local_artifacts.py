@@ -16,7 +16,8 @@ Run as root with protected root:root0400 canonical public originals and sealed
 32-byte private-key FDs. The independently pinned local approval selects exact
 unsigned package/trust bytes, authorized key IDs and original clock limits.
 The source tree must already be genuinely immutable/read-only and match its
-independently signed snapshot and complete-closure originals. No key material
+independently signed snapshot and selected-profile closure originals. The local
+measured roster does not claim production complete closure. No key material
 is accepted in argv, environment, output, or logs. Shared purpose-authorized
 key FDs are allowed; none may alias a public or directory FD.
 

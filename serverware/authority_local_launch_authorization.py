@@ -84,6 +84,19 @@ def _epoch(value):
     return (delta.days * 86400 + delta.seconds) * 1_000_000_000
 
 
+def _effective_environment(initial, request, observed):
+    """Join validated descriptor argv additions after exact live argv readback."""
+    assignments = {row["name"]: str(row["fd"]) for row in request["credentials"]}
+    assignments[stage.BOOTSTRAP_CONTROL_NAME] = str(request["bootstrapControl"]["fd"])
+    if request["runtimeEvidence"] is not None:
+        assignments[stage.RUNTIME_EVIDENCE_NAME] = str(request["runtimeEvidence"]["fd"])
+    require(not set(initial) & set(assignments))
+    environment = dict(initial, **assignments)
+    require(not set(environment) - launch.LOCAL_EXEC_ENVIRONMENT - {row["name"] for row in request["credentials"]}
+        and {name: value for name, value in environment.items() if name in launch.LOCAL_EXEC_ENVIRONMENT} == observed)
+    return environment
+
+
 def bind_observation(payload, observed):
     """Literal binding only; live measurements are mandatory in the owner below."""
     require(type(observed) is dict and set(observed) == OBSERVATION_FIELDS
@@ -531,8 +544,7 @@ class LocalLaunchAuthorizationIssuer:
             if entry:
                 name, value = entry.decode("ascii").split("=", 1)
                 require(name not in environment); environment[name] = value
-        require(not set(environment) - launch.LOCAL_EXEC_ENVIRONMENT - {row["name"] for row in request["credentials"]}
-            and {name: value for name, value in environment.items() if name in launch.LOCAL_EXEC_ENVIRONMENT} == observed["environment"])
+        environment = _effective_environment(environment, request, observed["environment"])
         for row in request["retainedFiles"]:
             self._row(row, regular=True)
         for row in request["retainedDirectories"]:

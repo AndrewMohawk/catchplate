@@ -34,7 +34,84 @@ def binding():
     return dict(role="witness", stageZeroRequest=request), observed
 
 
+def environment_binding(*, evidence):
+    # Synthetic public mappings only, not an authenticated launch request.
+    role = "verifier" if evidence else "witness"
+    credentials = [{"name": subject.ROOT_NAME, "fd": 77}]
+    request = dict(credentials=credentials, bootstrapControl={"fd": 256},
+        runtimeEvidence={"fd": 258} if evidence else None)
+    assignments = {row["name"]: row["fd"] for row in credentials}
+    assignments[subject.stage.BOOTSTRAP_CONTROL_NAME] = 256
+    if evidence:
+        assignments[subject.stage.RUNTIME_EVIDENCE_NAME] = 258
+    startup = dict(setup=dict(fd=50, sha256="sha256:" + "a" * 64), channel=dict(fd=51))
+    argv = ["/runtime/python/bin/python3", *subject.stage.REQUIRED_PYTHON_ISOLATION_FLAGS,
+        "/proc/self/fd/41", "--bootstrap-fd", "41", "--trusted-host-local",
+        "--local-admission-fd", "50", "--local-admission-sha256", startup["setup"]["sha256"],
+        "--local-admission-channel-fd", "51"]
+    for name, fd in assignments.items():
+        argv.extend(("--descriptor", f"{name}={fd}"))
+    argv.append(role)
+    arguments = dict(role=role, entrypoint=argv[0], bootstrap_fd=41,
+        startup=startup, descriptor_bindings=assignments)
+    subject.stage.validate_local_argument_vector(argv, **arguments)
+    initial = dict(LANG="C.UTF-8", PATH="/runtime/python/bin:/usr/bin",
+        SERVERWARE_AUTHORITY_ROLE=role)
+    effective = dict(initial, **{name: str(fd) for name, fd in assignments.items()})
+    observed = {name: value for name, value in effective.items() if name in subject.launch.LOCAL_EXEC_ENVIRONMENT}
+    return request, initial, observed, effective, argv, arguments
+
+
 class LocalLaunchAuthorizationTests(unittest.TestCase):
+    def test_effective_environment_joins_validated_descriptor_arguments(self):
+        for evidence in (False, True):
+            with self.subTest(evidence=evidence):
+                request, initial, observed, effective, _argv, _arguments = environment_binding(evidence=evidence)
+                original = deepcopy((request, initial, observed))
+                self.assertEqual(subject._effective_environment(initial, request, observed), effective)
+                self.assertEqual((request, initial, observed), original)
+                self.assertNotIn(subject.ROOT_NAME, initial)
+                self.assertEqual(effective[subject.ROOT_NAME], "77")
+
+    def test_effective_environment_refuses_inherited_and_unapproved_values(self):
+        request, initial, observed, _effective, _argv, arguments = environment_binding(evidence=True)
+        for name in arguments["descriptor_bindings"]:
+            for value in ("", str(arguments["descriptor_bindings"][name]), "999"):
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    subject._effective_environment(dict(initial, **{name: value}), request, observed)
+        for changed in (dict(initial, LD_PRELOAD="/unapproved.so"), dict(initial, UNAPPROVED="1"),
+                        dict(initial, LANG="different")):
+            with self.subTest(initial=changed), self.assertRaises(ValueError):
+                subject._effective_environment(changed, request, observed)
+        for changed in (dict(observed, **{subject.stage.BOOTSTRAP_CONTROL_NAME: "999"}),
+                        dict(observed, **{subject.stage.RUNTIME_EVIDENCE_NAME: "999"}),
+                        dict(observed, UNAPPROVED="1")):
+            with self.subTest(observed=changed), self.assertRaises(ValueError):
+                subject._effective_environment(initial, request, changed)
+
+    def test_descriptor_environment_join_requires_exact_argument_contract(self):
+        _request, _initial, _observed, _effective, argv, arguments = environment_binding(evidence=True)
+        changed_fd = list(argv)
+        index = changed_fd.index(subject.ROOT_NAME + "=77")
+        changed_fd[index] = subject.ROOT_NAME + "=78"
+        for changed in (changed_fd, argv[:-1] + ["--descriptor", subject.ROOT_NAME + "=77", argv[-1]],
+                        argv[:-1] + ["--descriptor", "UNAPPROVED=79", argv[-1]]):
+            with self.subTest(argv=changed), self.assertRaises(subject.stage.StageZeroContractError):
+                subject.stage.validate_local_argument_vector(changed, **arguments)
+
+    def test_environment_reconstruction_follows_live_argv_check_and_precedes_fd_checks(self):
+        tree = ast.parse(Path(subject.__file__).read_text())
+        owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalLaunchAuthorizationIssuer")
+        verify = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "verify_live")
+        calls = [node for node in ast.walk(verify) if isinstance(node, ast.Call)]
+        argv_check = next(node for node in calls if ast.unparse(node.func) == "require"
+                         and 'self._proc(\'cmdline\'' in ast.unparse(node))
+        reconstruction = next(node for node in calls if ast.unparse(node.func) == "_effective_environment")
+        self.assertLess(argv_check.lineno, reconstruction.lineno)
+        self.assertTrue(all(node.lineno > reconstruction.lineno for node in calls
+                            if ast.unparse(node.func) == "self._row"))
+        self.assertIn("environment[row['name']] == str(row['fd'])", ast.unparse(verify))
+
     def test_real_high_pidfd_pending_and_invalid_refusal(self):
         # Actual kernel PIDFD, not a synthetic issuer/admission carrier.
         before = resource.getrlimit(resource.RLIMIT_NOFILE)

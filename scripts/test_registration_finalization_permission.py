@@ -228,6 +228,24 @@ class FinalizationPermissionControls(unittest.TestCase):
         other = {**grant, "localDigest": "sha256:" + "2" * 64}
         self.assertNotEqual(first, permission._original(permission.contract.request_binding(other, recovery=False)))
 
+    def test_wider_local_setup_does_not_change_ceremony_or_action_caps(self):
+        from serverware import authority_contract, authority_local_limits
+        self.assertEqual(authority_local_limits.LOCAL_SETUP_MAX_NS, 3_600_000_000_000)
+        self.assertEqual(authority_contract.VERIFIER_RESPONSE_MAX_AGE_NS, 30_000_000_000)
+        self.assertEqual(permission.MAX_LIFETIME_NS, 120_000_000_000)
+        for name, seconds in (("registration_options", 300), ("approval_options", 120),
+                              ("control_plane_mutation_options", 120)):
+            body = function(webauthn, name)
+            creation = calls(body, "db.create_webauthn_challenge")
+            self.assertEqual(len(creation), 1)
+            ttl = next(keyword.value for keyword in creation[0].keywords if keyword.arg == "ttl_seconds")
+            with self.subTest(ceremony=name):
+                self.assertEqual(ast.literal_eval(ttl), seconds)
+                timeouts = [ast.literal_eval(value) for node in ast.walk(body) if isinstance(node, ast.Dict)
+                    for key, value in zip(node.keys, node.values)
+                    if isinstance(key, ast.Constant) and key.value == "timeout"]
+                self.assertEqual(timeouts, [seconds * 1000])
+
     def test_source_reads_only_target_row_and_preserves_complete_pending_vector(self):
         # The actual root vector includes credential, challenge and approval
         # tables. Prove this module has no DB call other than target SELECT;

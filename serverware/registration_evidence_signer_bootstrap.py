@@ -29,6 +29,7 @@ from serverware import control_plane_enrollment_bootstrap as codec
 from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_evidence_plan_clock as clock
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
 
 
 authority, configuration = codec.authority, codec.configuration
@@ -42,7 +43,7 @@ INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, REPLAY_FD)
 LISTENER_PATH = "/run/serverware/registration-evidence/signer.sock"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_ATTESTATION_BYTES = 16 * 1024
-MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
+MAX_RECEIPT_AGE_NS = LOCAL_SESSION_MAX_NS
 SCHEMA = "serverware.signedRegistrationEvidenceSignerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.registrationEvidenceSignerBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.registrationEvidenceSignerLaunch/v1"

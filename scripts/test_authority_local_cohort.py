@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from serverware import authority_local_cohort as subject
+from serverware import authority_local_limits as limits
 from scripts.authority import local_cohort as cli
 
 
@@ -98,11 +99,38 @@ class LocalCohortTests(unittest.TestCase):
                        lambda v: v["runtimeValidity"].update(expiresAtEpochNs=199),
                        lambda v: v["runtimeValidity"].update(expiresAtEpochNs=101 + subject.MAX_RUNTIME_NS),
                        lambda v: v["runtimeValidity"].update(renew=True),
-                       lambda v: v.update(deadlineBoottimeNs=300_000_000_101),
-                       lambda v: v.update(expiresAtUnixNanos=300_000_000_101)):
+                       lambda v: v.update(deadlineBoottimeNs=100 + limits.LOCAL_SETUP_MAX_NS + 1),
+                       lambda v: v.update(expiresAtUnixNanos=100 + limits.LOCAL_SETUP_MAX_NS + 1)):
             value = deepcopy(original); mutate(value)
             with self.subTest(value=value), self.assertRaises(ValueError):
                 subject.approval(subject.canonical(value), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)
+
+    def test_new_local_setup_and_session_bounds_remain_original_and_expire_exactly(self):
+        _, value, _ = fixture()
+        self.assertEqual(subject.MAX_RUNTIME_NS, limits.LOCAL_SESSION_MAX_NS)
+        value.update(schema=subject.RUNTIME_SCHEMA,
+            deadlineBoottimeNs=100 + limits.LOCAL_SETUP_MAX_NS,
+            expiresAtUnixNanos=100 + limits.LOCAL_SETUP_MAX_NS,
+            runtimeValidity=dict(issuedAtEpochNs=100, expiresAtEpochNs=100 + limits.LOCAL_SESSION_MAX_NS))
+        raw = subject.canonical(value)
+        for now in (300_000_000_101, value["expiresAtUnixNanos"] - 1):
+            with self.subTest(now=now):
+                self.assertEqual(subject.approval(raw, boot=digest("boot"),
+                    now_boottime_ns=now, now_unix_ns=now), value)
+        for boot, monotonic, epoch in ((digest("foreign"), 150, 150),
+                (digest("boot"), value["deadlineBoottimeNs"], 150),
+                (digest("boot"), 150, value["expiresAtUnixNanos"]),
+                (digest("boot"), True, 150), (digest("boot"), 150, True)):
+            with self.subTest(boot=boot, monotonic=monotonic, epoch=epoch), self.assertRaises(ValueError):
+                subject.approval(raw, boot=boot, now_boottime_ns=monotonic, now_unix_ns=epoch)
+        for change in (lambda v: v.update(deadlineBoottimeNs=v["deadlineBoottimeNs"] + 1),
+                lambda v: v.update(expiresAtUnixNanos=v["expiresAtUnixNanos"] + 1),
+                lambda v: v["runtimeValidity"].update(expiresAtEpochNs=101 + limits.LOCAL_SESSION_MAX_NS),
+                lambda v: v["runtimeValidity"].update(issuedAtEpochNs=101),
+                lambda v: v["runtimeValidity"].update(expiresAtEpochNs=True)):
+            bad = deepcopy(value); change(bad)
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                subject.approval(subject.canonical(bad), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)
 
     def test_closed_five_role_approval(self):
         _, value, _ = fixture()

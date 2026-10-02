@@ -34,6 +34,7 @@ from serverware import authority_registration_execution_authorization as caller
 from serverware import authority_successor_execution_attempts as attempts
 from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_webauthn_evidence_policy as evidence_policy
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
 
 
 authority, configuration = codec.authority, codec.configuration
@@ -56,7 +57,7 @@ TLS_LIMITS = {name: (16 * 1024 if name in ("issuerKey", "executorKey") else 64 *
     for name in TLS_PATHS}
 MIN_TLS_BYTES = 2
 MAX_BYTES = 4 * 1024 * 1024
-MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
+MAX_RECEIPT_AGE_NS = LOCAL_SESSION_MAX_NS
 SCHEMA = "serverware.signedRegistrationExecutionSqlBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.registrationExecutionSqlBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.registrationExecutionSqlLaunch/v1"

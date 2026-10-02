@@ -27,6 +27,7 @@ import time
 from serverware import authority_fd_entrypoint as entrypoint
 from serverware import authority_launcher as launcher
 from serverware import authority_stage_zero_contract as contract
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 PLAN_SCHEMA = "serverware.authorityTrustedHostLocalStartup/v1"
 ADMITTED_SCHEMA = "serverware.authorityTrustedHostLocalAdmitted/v1"
@@ -41,7 +42,7 @@ LIMITS = {"manifest": launcher.MAX_MANIFEST_BYTES,
           "evidence": launcher.MAX_RUNTIME_EVIDENCE_BYTES}
 MAX_PLAN = launcher.MAX_LOCAL_OBSERVATION
 STATIC_FD_MIN = 1024
-MAX_STARTUP_NS = 300_000_000_000
+MAX_STARTUP_NS = LOCAL_SETUP_MAX_NS
 ENVIRONMENT = ("SERVERWARE_ARTIFACT_BUNDLE_DIGEST", "SERVERWARE_AUTHORITY_GENERATION_DIGEST",
                "SERVERWARE_OPERATION_MANIFEST_DIGEST")
 _CANCEL = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}

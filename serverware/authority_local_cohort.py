@@ -17,12 +17,13 @@ from serverware import authority_attestation_cohort as cohort
 from serverware import authority_historical_archive as history
 from serverware import authority_local_configuration as configuration
 from serverware import authority_local_launch_authorization as pair
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS, LOCAL_SETUP_MAX_NS
 
 io, spec, launch, stage = pair.io, pair.spec, pair.launch, pair.stage
 canonical, document, sha = spec.canonical_json_bytes, configuration.document, pair.sha
 SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v2"
 RUNTIME_SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v3"
-MAX_RUNTIME_NS = 1_800_000_000_000
+MAX_RUNTIME_NS = LOCAL_SESSION_MAX_NS
 PURPOSE = "issue-observed-five-role-local-cohort"
 DELEGATION = "configuration-root-signs-five-local-role-receipts-cohort-and-initial-history-v1"
 INITIAL_HISTORY = "explicit-empty-first-generation-history"
@@ -69,8 +70,8 @@ def approval(raw, *, boot, now_boottime_ns, now_unix_ns):
     require(type(now_boottime_ns) is type(now_unix_ns) is int
         and value["issuedAtBoottimeNs"] <= now_boottime_ns < value["deadlineBoottimeNs"]
         and value["issuedAtUnixNanos"] <= now_unix_ns < value["expiresAtUnixNanos"]
-        and value["deadlineBoottimeNs"] - value["issuedAtBoottimeNs"] <= 300_000_000_000
-        and value["expiresAtUnixNanos"] - value["issuedAtUnixNanos"] <= 300_000_000_000)
+        and value["deadlineBoottimeNs"] - value["issuedAtBoottimeNs"] <= LOCAL_SETUP_MAX_NS
+        and value["expiresAtUnixNanos"] - value["issuedAtUnixNanos"] <= LOCAL_SETUP_MAX_NS)
     runtime_interval(value)
     require(type(value["serviceConfigurationOriginal"]) is str and value["serviceConfigurationOriginal"].isascii()
         and sha(value["serviceConfigurationOriginal"].encode("ascii")) == value["serviceConfigurationSha256"])

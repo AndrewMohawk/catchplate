@@ -32,6 +32,7 @@ from serverware import authority_webauthn_transition_custody_configuration as cu
 from serverware import authority_webauthn_transition_plan_admission as transition_admission
 from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_webauthn_evidence_policy as evidence_policy
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
 # Only the closed scalar grammar is shared, not another purpose's admission,
 # roles, TLS paths, received material or successful verifier result.
 from serverware.registration_execution_sql_bootstrap import _database_shape
@@ -61,7 +62,7 @@ TLS_LIMITS = {name: (16 * 1024 if name in ("custodyKey", "commitKey") else 64 * 
     for name in TLS_PATHS}
 MIN_TLS_BYTES = 2
 MAX_BYTES = 4 * 1024 * 1024
-MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
+MAX_RECEIPT_AGE_NS = LOCAL_SESSION_MAX_NS
 SCHEMA = "serverware.signedRegistrationFinalizationCompletionBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.registrationFinalizationCompletionBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.registrationFinalizationCompletionLaunch/v1"

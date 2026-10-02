@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_local_configuration as configuration
 from serverware import authority_service as service
 from serverware import authority_fd_entrypoint as entrypoint
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 io, spec, launcher = configuration.io, configuration.spec, configuration.launcher
 canonical, document, sha = spec.canonical_json_bytes, configuration.document, configuration.sha
@@ -65,8 +66,8 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
     require(type(now_boottime_ns) is type(now_unix_ns) is int
         and selected["issuedAtBoottimeNs"] <= now_boottime_ns < selected["deadlineBoottimeNs"]
         and selected["issuedAtUnixNanos"] <= now_unix_ns < selected["expiresAtUnixNanos"]
-        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= 300_000_000_000
-        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= 300_000_000_000)
+        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= LOCAL_SETUP_MAX_NS
+        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= LOCAL_SETUP_MAX_NS)
     public = configuration._public(selected["configurationRootPublicKeyBase64Url"])
     root = Ed25519PublicKey.from_public_bytes(public)
     root_digest = configuration._spki(selected["configurationRootPublicKeyBase64Url"])

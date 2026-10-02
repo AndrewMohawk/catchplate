@@ -33,6 +33,7 @@ from serverware import authority_stage_zero_contract as stage
 from serverware.authority_local_configuration import document
 from serverware.authority_local_install import _generation, _frozen, _owning
 from serverware.authority_local_artifacts import sha
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 SCHEMA = "serverware.authorityTrustedHostLocalLaunchAuthorizationApproval/v1"
 PURPOSE = "authorize-exact-observed-local-launch-pair"
@@ -199,8 +200,8 @@ def prepare(approval_raw, observation_raw, *, boot, now_boottime_ns, now_unix_ns
         require(type(selected[name]) is int and 0 < selected[name] < 2**63)
     require(selected["issuedAtBoottimeNs"] <= now_boottime_ns < selected["deadlineBoottimeNs"]
         and selected["issuedAtUnixNanos"] <= now_unix_ns < selected["expiresAtUnixNanos"]
-        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= 300_000_000_000
-        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= 300_000_000_000
+        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= LOCAL_SETUP_MAX_NS
+        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= LOCAL_SETUP_MAX_NS
         and sha(observation_raw) == selected["observationSha256"])
     require(type(selected["payloadOriginal"]) is str and selected["payloadOriginal"].isascii())
     raw = selected["payloadOriginal"].encode("ascii")

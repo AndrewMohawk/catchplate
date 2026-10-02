@@ -58,6 +58,7 @@ def scenario(name):
         except Exception: return
         raise AssertionError("expected source refusal")
     if name == "approval":
+        assert local.MAX_WINDOW_NS == 30_000_000_000
         raw = f["db"].dumps(selected).encode("ascii")
         assert local.approval(raw) == selected
         for field, value in (("purpose", "continue-audit"), ("deadlineBoottimeNs", 100 + local.MAX_WINDOW_NS + 1),

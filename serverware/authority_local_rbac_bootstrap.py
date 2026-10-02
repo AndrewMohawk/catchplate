@@ -10,9 +10,10 @@ import os
 import time
 
 from serverware import config
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 FIELDS = frozenset({"initialRbacTimestamp", "issuedAtUnixNanos", "expiresAtUnixNanos"})
-WINDOW_NS = 300_000_000_000
+WINDOW_NS = LOCAL_SETUP_MAX_NS
 
 
 def selected_timestamp(selection: dict) -> str:

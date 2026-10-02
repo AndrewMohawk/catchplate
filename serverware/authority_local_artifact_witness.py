@@ -23,13 +23,14 @@ from cryptography.hazmat.primitives import serialization
 from scripts.authority import native_pilot_authority_io as io
 from scripts.authority.generate_artifact_bundle import _verification_key
 from serverware import authority_artifact_spec as spec
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalArtifactWitnessApproval/v1"
 APPROVAL_SCHEMA_V2 = "serverware.authorityTrustedHostLocalArtifactWitnessApproval/v2"
 HEAD_SCHEMA = "serverware.authorityTrustedHostLocalArtifactWitnessHead/v1"
 LOCK_NAME, BASE_NAME, HEAD_NAME = "lock", "base-trust.json", "head.json"
 MAX_RECORDS, MAX_TOTAL = 4096, 128 * 1024 * 1024
-MAX_OPERATION_NS = 300_000_000_000
+MAX_OPERATION_NS = LOCAL_SETUP_MAX_NS
 _READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _LIBC.renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int,

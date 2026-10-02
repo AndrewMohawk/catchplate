@@ -29,6 +29,7 @@ from serverware import control_plane_registration_execution_bootstrap as executi
 from serverware import control_plane_registration_finalization_bootstrap as finalization_profile
 from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from serverware import authority_query_read_work as accounting
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 io, spec = local.io, local.spec
 canonical, document, sha = spec.canonical_json_bytes, local.document, local.sha
@@ -119,7 +120,7 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns, work):
                              ("issuedAtUnixNanos", "expiresAtUnixNanos", now_unix_ns)):
         require(type(now) is int and type(value[first]) is type(value[last]) is int
             and 0 < value[first] <= now < value[last] < 2**63
-            and value[last] - value[first] <= 300_000_000_000)
+            and value[last] - value[first] <= LOCAL_SETUP_MAX_NS)
     pilot, _ = keys._pilot_inventory(value["pilotKeyInventoryOriginal"])
     audit, _ = keys.genesis_audit_inventory(value["genesisAuditKeyInventoryOriginal"], value["pilotKeyInventoryOriginal"])
     enrolled, _ = keys.enrollment_inventory(value["enrollmentKeyInventoryOriginal"],

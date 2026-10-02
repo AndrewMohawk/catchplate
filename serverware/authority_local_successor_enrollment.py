@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_local_configuration as config
 from serverware import authority_local_database_credentials as credentials
 from serverware import authority_local_artifact_measure as measure
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 io, spec, launch = config.io, config.spec, config.launcher
 canonical, sha = spec.canonical_json_bytes, config.sha
@@ -71,7 +72,7 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
                              ("issuedAtUnixNanos", "expiresAtUnixNanos", now_unix_ns)):
         require(type(now) is int and type(value[first]) is type(value[last]) is int
             and 0 < value[first] <= now < value[last] < 2**63
-            and value[last] - value[first] <= 300_000_000_000)
+            and value[last] - value[first] <= LOCAL_SETUP_MAX_NS)
     directory = value["sourceRoot"]
     require(type(directory) is dict and set(directory) == {"device", "inode"}
         and type(directory["device"]) is type(directory["inode"]) is int

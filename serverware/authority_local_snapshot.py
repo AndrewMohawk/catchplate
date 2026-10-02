@@ -20,10 +20,11 @@ from scripts.authority import native_pilot_authority_io as io
 from scripts.authority.generate_artifact_bundle import _verification_key
 from serverware import authority_artifact_spec as spec
 from serverware import authority_local_artifact_measure as measure
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalSnapshotApproval/v1"
 SIGNATURE_DOMAIN = "serverware.authorityStableSnapshotReceiptSignature/v1"
-MAX_OPERATION_NS = 300_000_000_000
+MAX_OPERATION_NS = LOCAL_SETUP_MAX_NS
 MAX_VALIDITY_NS = 86_400_000_000_000
 
 

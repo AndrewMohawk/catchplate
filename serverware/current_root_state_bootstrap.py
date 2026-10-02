@@ -22,6 +22,7 @@ from cryptography.exceptions import InvalidSignature
 
 from serverware import authority_current_root_authorization as authorization
 from serverware import authority_webauthn_evidence_plan_clock as clock
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
 
 
 authority, shape, capture, wire = (
@@ -48,7 +49,7 @@ INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD)
 LISTENER_PATH = "/run/serverware/current-root/state.sock"
 MAX_BYTES = 256 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
-MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
+MAX_RECEIPT_AGE_NS = LOCAL_SESSION_MAX_NS
 SCHEMA = "serverware.signedCurrentRootStateBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.currentRootStateBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.currentRootStateLaunch/v1"

@@ -17,6 +17,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from serverware import authority_local_startup as startup
+from serverware import authority_local_limits as limits
 from scripts.authority import local_startup as cli
 
 
@@ -112,12 +113,28 @@ class LocalStartupTests(unittest.TestCase):
     def test_closed_plan_preserves_original_windows_and_fixed_role(self):
         value = fixture()
         self.assertEqual(startup.plan(startup.encode(value)), value)
-        self.assertEqual(startup.MAX_STARTUP_NS, 300_000_000_000)
+        self.assertEqual(startup.MAX_STARTUP_NS, limits.LOCAL_SETUP_MAX_NS)
         for key, wrong in (("deadlineBoottimeNs", 100 + startup.MAX_STARTUP_NS + 1),
                            ("issuedAtBoottimeNs", True), ("role", "control-plane")):
             changed = copy.deepcopy(value); changed[key] = wrong
             with self.subTest(key=key), self.assertRaises(startup.LocalStartupError):
                 startup.plan(startup.encode(changed))
+
+    def test_prospective_local_setup_accepts_new_bound_without_normalizing_inputs(self):
+        self.assertEqual(limits.LOCAL_SETUP_MAX_NS, 3_600_000_000_000)
+        self.assertEqual(limits.LOCAL_SESSION_MAX_NS, 7_200_000_000_000)
+        for duration in (300_000_000_001, limits.LOCAL_SETUP_MAX_NS):
+            value = fixture()
+            value["deadlineBoottimeNs"] = value["issuedAtBoottimeNs"] + duration
+            value["expiresAtUnixNanos"] = value["issuedAtUnixNanos"] + duration
+            with self.subTest(duration=duration):
+                self.assertEqual(startup.plan(startup.encode(value)), value)
+        for first, last in (("issuedAtBoottimeNs", "deadlineBoottimeNs"),
+                            ("issuedAtUnixNanos", "expiresAtUnixNanos")):
+            for wrong in (True, fixture()[first], fixture()[first] + limits.LOCAL_SETUP_MAX_NS + 1):
+                value = fixture(); value[last] = wrong
+                with self.subTest(field=last, value=wrong), self.assertRaises(startup.LocalStartupError):
+                    startup.plan(startup.encode(value))
 
     def test_plan_cannot_select_command_keys_environment_or_missing_runtime(self):
         value = fixture()

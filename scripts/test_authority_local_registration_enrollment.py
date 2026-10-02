@@ -86,6 +86,40 @@ def prepare(selected, ledger=None):
 
 
 class RegistrationEnrollmentControls(unittest.TestCase):
+    def test_signer_session_cap_real_signature_and_expired_original_refusal(self):
+        from serverware import registration_evidence_signer_bootstrap as signer
+        from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
+        self.assertEqual(LOCAL_SESSION_MAX_NS, 7_200_000_000_000)
+        self.assertEqual(signer.MAX_RECEIPT_AGE_NS, LOCAL_SESSION_MAX_NS)
+        # Synthetic component claims and a real test-key signature; this is not
+        # a running signer, measured closure, hardware assertion, or admission.
+        root = Ed25519PrivateKey.from_private_bytes(b"\x35" * 32)
+        claims = dict(schema=signer.ATTESTATION_PAYLOAD_SCHEMA,
+            sourceRevision=signer.authority.SOURCE_REVISION, role=signer.ROLE,
+            processMode=signer.PROCESS_MODE, trustMode="trusted-host-local",
+            sessionIdentityDigest=PIN, measurementDigest=PIN, runtimeClosureDigest=PIN,
+            signingSpkiDigest=PIN, issuedAtEpochNs=100,
+            expiresAtEpochNs=100 + LOCAL_SESSION_MAX_NS, coLocated=True,
+            hardwareBacked=False, nativeStageZero=False, hsmBackedKeys=False,
+            teeVerified=False, externalWitnessVerified=False)
+        with patch.object(signer.clock.time, "time_ns", return_value=200), \
+                patch.object(signer.clock.time, "monotonic_ns", return_value=100):
+            raw = signer._produce_attestation_on_work(claims=claims,
+                root_private_key=root, root_public_key=root.public_key(), work=work())
+            _, admitted, interval, _, _ = signer._read_attestation(
+                raw, root.public_key(), LOCAL_SESSION_MAX_NS, work())
+            self.assertEqual(admitted, claims)
+            self.assertEqual(interval, (100, 100 + LOCAL_SESSION_MAX_NS))
+            for changes in ({"expiresAtEpochNs": 101 + LOCAL_SESSION_MAX_NS},
+                            {"expiresAtEpochNs": True}, {"trustMode": "external-production"}):
+                with self.subTest(changes=changes), self.assertRaises(ValueError):
+                    signer._produce_attestation_on_work(claims={**claims, **changes},
+                        root_private_key=root, root_public_key=root.public_key(), work=work())
+        with patch.object(signer.clock.time, "time_ns", return_value=claims["expiresAtEpochNs"]), \
+                patch.object(signer.clock.time, "monotonic_ns", return_value=100):
+            with self.assertRaises(signer.RegistrationEvidenceSignerBootstrapError):
+                signer._read_attestation(raw, root.public_key(), LOCAL_SESSION_MAX_NS, work())
+
     @patch.dict(os.environ, {"SERVERWARE_RELEASE_CHANNEL": "dev"})
     def test_five_existing_producers_join_signed_outer_bootstrap(self):
         selected, root = fixture()

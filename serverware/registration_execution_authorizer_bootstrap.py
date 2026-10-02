@@ -25,6 +25,7 @@ from serverware import registration_evidence_signer_bootstrap as signing
 from serverware import authority_registration_execution_authorization as caller
 from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_webauthn_evidence_policy as evidence_policy
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
 
 
 authority, configuration = codec.authority, codec.configuration
@@ -37,7 +38,7 @@ ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD = 198, 199, 200, 201
 INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD)
 LISTENER_PATH = "/run/serverware/registration-execution/authorizer.sock"
 MAX_BYTES = 4 * 1024 * 1024
-MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
+MAX_RECEIPT_AGE_NS = LOCAL_SESSION_MAX_NS
 SCHEMA = "serverware.signedRegistrationExecutionAuthorizerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.registrationExecutionAuthorizerBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.registrationExecutionAuthorizerLaunch/v1"

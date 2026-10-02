@@ -22,12 +22,13 @@ from scripts.authority import native_pilot_authority_io as io
 from serverware import authority_artifact_spec as spec
 from serverware import authority_local_artifact_witness as witness
 from serverware import authority_local_install as install
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 SCHEMA = "serverware.authorityTrustedHostLocalTrustCommitApproval/v1"
 PURPOSE = "commit-installed-first-generation"
 PENDING_NAME = ".trust-state-commit.pending"
 MAX_APPROVAL, MAX_RETAINED = 8192, 128 * 1024 * 1024
-MAX_OPERATION_NS = 300_000_000_000
+MAX_OPERATION_NS = LOCAL_SETUP_MAX_NS
 _READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _TOKEN = object()
 sha, document = install.sha, install._document

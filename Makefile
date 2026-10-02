@@ -889,6 +889,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_artifact_witness.py \
 	serverware/authority_local_trust.py \
 	serverware/authority_local_configuration.py \
+	serverware/authority_local_limits.py \
 	serverware/authority_local_runtime_trust.py \
 	serverware/authority_local_rbac_bootstrap.py \
 	serverware/authority_local_launch_authorization.py \
@@ -3984,6 +3985,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_artifact_witness.py \
 				serverware/authority_local_trust.py \
 				serverware/authority_local_configuration.py \
+				serverware/authority_local_limits.py \
 				serverware/authority_local_runtime_trust.py \
 				serverware/authority_local_rbac_bootstrap.py \
 				serverware/authority_local_launch_authorization.py \

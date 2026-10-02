@@ -21,6 +21,7 @@ from serverware import authority_artifact_spec as spec
 from serverware import authority_primary_contract as primary
 from serverware import authority_launcher as launcher
 from serverware.authority_local_artifacts import sha
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 SCHEMA = "serverware.authorityTrustedHostLocalConfigurationApproval/v1"
 PURPOSES = {"authority-service": "sign-exact-local-authority-service-configuration",
@@ -178,8 +179,8 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
         _require(type(selected[name]) is int and 0 < selected[name] < 2**64)
     _require(selected["issuedAtBoottimeNs"] <= now_boottime_ns < selected["deadlineBoottimeNs"]
         and selected["issuedAtUnixNanos"] <= now_unix_ns < selected["expiresAtUnixNanos"]
-        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= 300_000_000_000
-        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= 300_000_000_000)
+        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= LOCAL_SETUP_MAX_NS
+        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= LOCAL_SETUP_MAX_NS)
     root_public = _public(selected["configurationRootPublicKeyBase64Url"])
     generation = selected["generation"]
     _require(type(generation) is dict and set(generation) == GENERATION_FIELDS

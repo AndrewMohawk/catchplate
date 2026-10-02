@@ -26,12 +26,13 @@ from serverware import authority_artifact_spec as spec
 from serverware import authority_local_artifact_measure as measure
 from serverware.authority_contract import SOURCE_REVISION
 from serverware.authority_local_snapshot import _boot
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalProvenanceApproval/v1"
 PURPOSE = "observe-exact-clean-source-report-and-oci-objects"
 PREDICATE = "serverware.authorityTrustedHostLocalMeasuredArtifacts/v1"
 BUILDER = "serverware-trusted-host-local-observer"
-MAX_OPERATION_NS = 300_000_000_000
+MAX_OPERATION_NS = LOCAL_SETUP_MAX_NS
 MAX_DOCUMENT = 16 * 1024 * 1024
 OBJECT_NAMES = frozenset({"report", "sourceManifest", "sourceArchive", "gitCommit",
                           "ociManifest", "ociConfig", "layers"})

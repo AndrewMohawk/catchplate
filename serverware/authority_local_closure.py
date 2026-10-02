@@ -21,9 +21,10 @@ from serverware import authority_artifact_spec as spec
 from serverware import authority_local_artifact_measure as measure
 from serverware.authority_local_artifact_witness import document, sha
 from serverware.authority_local_snapshot import _boot
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalMeasuredRosterApproval/v1"
-MAX_OPERATION_NS = 300_000_000_000
+MAX_OPERATION_NS = LOCAL_SETUP_MAX_NS
 
 
 def _require(value):

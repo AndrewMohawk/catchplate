@@ -145,6 +145,7 @@ from serverware.config import (
     DECISION_GATE_BASE,
     DECISION_GATE_TIMEOUT_SECONDS,
     DEV_AUTHENTICATOR_ENABLED,
+    DEV_DEMO_SEED_ENABLED,
     DIRECT_CA_DOWNLOAD_ENABLED,
     EXPECTED_DATA_PLANE_BINARY_DIGEST,
     MITMPROXY_CONF_DIR,
@@ -152,6 +153,7 @@ from serverware.config import (
     OIDC_LOGIN_STATE_TTL_SECONDS,
     OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS,
     POLICY_BUNDLE_PATH,
+    PRODUCTION_IMAGE,
     POLICY_CANARY_BUNDLE_PATH,
     POLICY_CANARY_MAX_DENIALS,
     POLICY_CANARY_MIN_AUDIT_EVENTS,
@@ -3426,9 +3428,12 @@ def index() -> str:
 
 def _portal_document() -> str:
     marker = "__SERVERWARE_ENROLLED_OAUTH_PROFILE__"
-    if UI_HTML.count(marker) != 1:
+    seed_marker = "__SERVERWARE_DEMO_SEED_BUTTON__"
+    if UI_HTML.count(marker) != 1 or UI_HTML.count(seed_marker) != 1:
         raise RuntimeError("portal OAuth profile placeholder is missing or duplicated")
-    return UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile()))
+    seed_button = ('<button type="button" onclick="runUiAction(\'Seed demo\', seedDemo)">Seed demo</button>'
+        if _development_demo_seed_enabled() else "")
+    return UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
 
 
 @app.get("/approvals/{approval_id}", response_class=HTMLResponse)
@@ -21930,14 +21935,18 @@ def _upsert_policy_route(route_id: str, payload: dict[str, Any]) -> dict[str, An
     return db.upsert_route_with_id(route_id, payload)
 
 
-@app.post("/api/demo/seed")
-def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, Any]:
-    if not DEV_AUTHENTICATOR_ENABLED or RELEASE_CHANNEL.strip().lower() not in {
+def _development_demo_seed_enabled() -> bool:
+    return DEV_DEMO_SEED_ENABLED and not PRODUCTION_IMAGE and RELEASE_CHANNEL.strip().lower() in {
         "dev",
         "development",
         "local",
         "test",
-    }:
+    }
+
+
+@app.post("/api/demo/seed")
+def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, Any]:
+    if not _development_demo_seed_enabled():
         raise HTTPException(status_code=404, detail="not found")
     try:
         policy_snapshot = require_commissioned_demo_policy()
@@ -22777,7 +22786,7 @@ UI_HTML = r"""
       <button id="operator-session-verify" type="button" onclick="runUiAction('Verify passkey', verifyOIDCSessionPasskey)" hidden>Verify passkey</button>
       <button id="operator-sign-out" class="secondary" type="button" onclick="runUiAction('Sign out', signOutOperator)" hidden>Sign out</button>
       <button class="secondary" type="button" onclick="runUiAction('Refresh', refresh)">Refresh</button>
-      <button type="button" onclick="runUiAction('Seed demo', seedDemo)">Seed demo</button>
+      __SERVERWARE_DEMO_SEED_BUTTON__
     </div>
   </header>
   <nav class="workspace-nav" aria-label="Portal workspaces">
@@ -26558,7 +26567,7 @@ UI_HTML = r"""
       return {pending: true, cancelled: true};
     }
     async function seedDemo() {
-      if (!window.confirm('Replace the local development demo data and advance its policy sequence?')) return cancelledAction('Demo seed');
+      if (!window.confirm('Seed local development demo data using the already commissioned policy? This does not publish or advance policy authority.')) return cancelledAction('Demo seed');
       await api('/api/demo/seed', {method: 'POST'});
       await refresh();
     }

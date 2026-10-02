@@ -655,6 +655,9 @@ WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY_PATH = Path(
     os.getenv("SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY", str(DATA_DIR / "webauthn-trust-signing-ed25519.pub.pem"))
 )
 DEV_AUTHENTICATOR_ENABLED = os.getenv("SERVERWARE_DEV_AUTHENTICATOR", "0") == "1"
+# Demo data provisioning does not enable software authenticators, development
+# assertion signing or development credential trust classification.
+DEV_DEMO_SEED_ENABLED = os.getenv("SERVERWARE_DEV_DEMO_SEED", "0") == "1"
 CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED = os.getenv("SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED", "0") == "1"
 CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION = (
     os.getenv("SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION", "0") == "1"

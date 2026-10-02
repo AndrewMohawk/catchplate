@@ -26,25 +26,71 @@ def candidate():
     return value
 
 
-def endpoint(admit, database, *, development=True, channel="dev"):
+def endpoint(admit, database, *, development=True, channel="dev", production_image=False, authenticator=False):
     # Exercise the exact route body without importing the entire application
     # or initializing a database. Authentication remains on the real route.
     module = ast.parse((ROOT / "serverware/app.py").read_text())
     function = next(item for item in module.body
                     if isinstance(item, ast.FunctionDef) and item.name == "seed_demo")
+    guard = next(item for item in module.body
+                 if isinstance(item, ast.FunctionDef) and item.name == "_development_demo_seed_enabled")
     function.decorator_list = []
     function.args.defaults = []
     function.args.args[0].annotation = None
     function.returns = None
-    namespace = dict(DEV_AUTHENTICATOR_ENABLED=development, RELEASE_CHANNEL=channel,
+    namespace = dict(DEV_DEMO_SEED_ENABLED=development, DEV_AUTHENTICATOR_ENABLED=authenticator,
+                     PRODUCTION_IMAGE=production_image, RELEASE_CHANNEL=channel,
                      HTTPException=HTTPException, DemoSeedPolicyError=policy.DemoSeedPolicyError,
                      require_commissioned_demo_policy=admit, db=database)
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])),
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[guard, function], type_ignores=[])),
                  str(ROOT / "serverware/app.py"), "exec"), namespace)
     return namespace["seed_demo"]
 
 
 class DemoSeedPolicyTests(unittest.TestCase):
+    def test_seed_permission_is_default_off_and_not_authenticator_permission(self):
+        module = ast.parse((ROOT / "serverware/config.py").read_text())
+        assignment = next(item for item in module.body if isinstance(item, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "DEV_DEMO_SEED_ENABLED" for target in item.targets))
+        import os
+        for environment, expected in (({}, False), ({"SERVERWARE_DEV_AUTHENTICATOR": "1"}, False),
+                ({"SERVERWARE_DEV_DEMO_SEED": "1"}, True), ({"SERVERWARE_DEV_DEMO_SEED": "true"}, False)):
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True):
+                value = eval(compile(ast.Expression(assignment.value), "config.py", "eval"), {"os": os})
+                self.assertIs(value, expected)
+        database, admit = Mock(), Mock()
+        with self.assertRaises(HTTPException) as caught:
+            endpoint(admit, database, development=False, authenticator=True)(None)
+        self.assertEqual(caught.exception.status_code, 404)
+        admit.assert_not_called(); self.assertEqual(database.mock_calls, [])
+
+    def test_demo_permission_never_opens_production_image_or_release(self):
+        for channel, image in (("production", False), ("dev", True), ("production", True)):
+            database, admit = Mock(), Mock()
+            with self.subTest(channel=channel, image=image), self.assertRaises(HTTPException) as caught:
+                endpoint(admit, database, channel=channel, production_image=image)(None)
+            self.assertEqual(caught.exception.status_code, 404)
+            admit.assert_not_called(); self.assertEqual(database.mock_calls, [])
+
+    def test_seed_ui_uses_same_permission_and_cannot_enable_software_authenticator(self):
+        source = (ROOT / "serverware/app.py").read_text()
+        module = ast.parse(source)
+        selected = [item for item in module.body if isinstance(item, ast.FunctionDef)
+            and item.name in {"_development_demo_seed_enabled", "_portal_document"}]
+        import json
+        for enabled, image, channel, visible in ((False, False, "dev", False),
+                (True, False, "dev", True), (True, True, "dev", False), (True, False, "production", False)):
+            namespace = dict(DEV_DEMO_SEED_ENABLED=enabled, PRODUCTION_IMAGE=image, RELEASE_CHANNEL=channel,
+                UI_HTML="__SERVERWARE_ENROLLED_OAUTH_PROFILE__ __SERVERWARE_DEMO_SEED_BUTTON__",
+                json=json, enrolled_oauth_profile=lambda: {"syntheticTestOnly": True})
+            exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])), "app.py", "exec"), namespace)
+            self.assertEqual("Seed demo</button>" in namespace["_portal_document"](), visible)
+        self.assertNotIn("advance its policy sequence", source)
+        # No software-authenticator consumer receives the new permission.
+        webauthn = (ROOT / "serverware/webauthn.py").read_text()
+        self.assertNotIn("DEV_DEMO_SEED", webauthn)
+        self.assertIn("if not DEV_AUTHENTICATOR_ENABLED:", webauthn)
+
     def test_demo_npm_allowlist_compiles_and_preserves_denials(self):
         from serverware.constraints import _enforce_operation_policy
 

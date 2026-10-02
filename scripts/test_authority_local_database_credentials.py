@@ -74,6 +74,7 @@ def filesystem_scenario():
             finally: owner.close()
             names = os.listdir(directory)
             assert len(names) == 55 and "inventory.json" in names and not any(name.startswith(".") for name in names)
+            assert "pg_hba.fragment" in names and (Path(path)/"pg_hba.fragment").read_bytes().startswith(b"hostssl ")
             inventory = local.document((Path(path)/"inventory.json").read_bytes(), local.MAX_DOCUMENT)
             for name, row in inventory["files"].items():
                 original = (Path(path)/name).read_bytes()

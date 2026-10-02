@@ -285,7 +285,7 @@ class LocalDatabaseCredentialIssuer:
                 and sha(os.pread(fd, MAX_DOCUMENT + 1, 0)) == digest)
 
     def _publish(self, name, raw):
-        require(re.fullmatch(r"[a-z][a-z0-9.-]{0,80}", name) is not None and 0 < len(raw) <= MAX_DOCUMENT)
+        require(re.fullmatch(r"[a-z][a-z0-9._-]{0,80}", name) is not None and 0 < len(raw) <= MAX_DOCUMENT)
         self.check()
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, CANCEL)
         try:

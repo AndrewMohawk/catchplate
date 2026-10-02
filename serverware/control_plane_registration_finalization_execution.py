@@ -296,10 +296,26 @@ def _reserve_on_owner(owner, *, originals, live_window, transport_deadline_ns, w
     common, _private, window, bound, current = _scope(owner, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work)
     finalization = owner._material.finalization
-    if finalization.reservation_endpoint is None or finalization.reservation_predecessor is None:
+    if finalization.reservation_endpoint is None or (finalization.reservation_predecessor is None
+            and finalization.context_directory is None):
         raise startup.EnrollmentStartupError("dedicated finalization reservation permission is disabled")
     endpoint = transport._endpoint(finalization.reservation_endpoint)
-    sequence, head, fence = response.records._predecessor_scope(*finalization.reservation_predecessor)
+    predecessor = finalization.reservation_predecessor
+    if finalization.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        from serverware import control_plane_registration_finalization_reservation as subjects
+        digest = contexts._record("finalization", held)
+        subject, stored, window, bound, subject_live, _ = subjects._inspect_on_owner(owner, digest,
+            live_window=window, transport_deadline_ns=bound, work=work)
+        if stored != held:
+            raise startup.EnrollmentStartupError("local context differs from actual retained finalization")
+        selected = contexts._admit_on_owner(owner, purpose="finalization", local_digest=digest, stage="reserve",
+            common=common, originals=held, reserved=None, subject=subject,
+            deadline_epoch_ns=window[3], deadline_ns=bound, work=work)
+        predecessor = tuple(selected["scope"][name] for name in ("sequence", "headDigest", "nextFence"))
+        window, bound = contexts._narrow(selected, window, bound)
+        subject_live()
+    sequence, head, fence = response.records._predecessor_scope(*predecessor)
     # The per-request endpoint cap starts at the original opening bracket,
     # not after admission and never after a previous send attempt.
     bound = min(bound, window[1] + endpoint[1] * 1_000_000_000)
@@ -315,6 +331,8 @@ def _reserve_on_owner(owner, *, originals, live_window, transport_deadline_ns, w
     admitted.live()
     callback = evidence.production._callback
     callback(work, lambda: transport._check_deadline(bound))
+    if finalization.context_directory is not None:
+        contexts._claim_reservation_on_owner(owner, "finalization", digest)
     returned = callback(work,
         lambda: transport._socket_request(endpoint, originals=held, deadline_ns=bound))
     current()

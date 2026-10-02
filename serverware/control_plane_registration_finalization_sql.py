@@ -57,10 +57,9 @@ def _request_on_owner(owner, *, local_digest, originals, live_window, transport_
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     material = owner._material.finalization
     endpoint, pending = material.sql_endpoint, material.current_pending
-    if endpoint is None or pending is None:
+    if endpoint is None or pending is None and material.context_directory is None:
         raise startup.EnrollmentStartupError("finalization SQL requires explicit nested v3 cold scope")
     endpoint = transport._endpoint(endpoint)
-    sequence, head, fence = pending
     # Start the endpoint cap at the inherited invocation opening, not after
     # original verification. Actual admission can only narrow it again.
     bound = min(bound, window[1] + int(endpoint[1] * 1_000_000_000))
@@ -70,6 +69,20 @@ def _request_on_owner(owner, *, local_digest, originals, live_window, transport_
     work.charge(input_bytes=sum(len(raw) for raw in (*held, *retained)))
     if held != retained:
         raise startup.EnrollmentStartupError("finalization SQL originals differ from the claimed local association")
+    if material.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        from serverware import control_plane_registration_finalization_reservation as subjects
+        subject, grant, window, bound, subject_live, _ = subjects._inspect_on_owner(owner, digest,
+            live_window=window, transport_deadline_ns=bound, work=work)
+        if grant != held[:10]:
+            raise startup.EnrollmentStartupError("local finalization context differs from retained grant")
+        selected = contexts._admit_on_owner(owner, purpose="finalization", local_digest=digest, stage="execute",
+            common=common, originals=grant, reserved=held[10:], subject=subject,
+            deadline_epoch_ns=window[3], deadline_ns=bound, work=work)
+        pending = contexts._selected_scope(owner, "finalization", digest).current_pending
+        window, bound = contexts._narrow(selected, window, bound)
+        subject_live()
+    sequence, head, fence = pending
     custody = owner._custody
     admitted = admission._admit_on_configuration(**common, originals=held[:10],
         reservation_originals=held[10:], expected_pending_sequence=sequence,

@@ -103,6 +103,15 @@ def _execute_on_owner(owner, *, local_digest, expected_user_id, expected_session
         work=work, _endpoint_kind="sql")
     pending = owner._material.execution.current_pending
     custody, held, reserved, observed, current = _retained(owner, digest, work, live)
+    if owner._material.execution.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        from serverware import control_plane_registration_handoff_subject as subjects
+        subject = subjects._inspect_on_owner(owner, digest, deadline, bound, work)
+        selected = contexts._admit_on_owner(owner, purpose="execution", local_digest=digest, stage="execute",
+            common=common, originals=held, reserved=reserved, subject=subject,
+            deadline_epoch_ns=deadline, deadline_ns=bound, work=work)
+        pending = contexts._selected_scope(owner, "execution", digest).current_pending
+        deadline, bound = min(deadline, selected["expiresAtUnixNanos"]), min(bound, selected["deadlineMonotonicNs"])
     if observed.sql_attempt is not None:
         raise RegistrationHandoffOutcomeError(digest)
     checked = admission._admit_sql_on_configuration(
@@ -142,6 +151,11 @@ def _complete_on_owner(owner, *, local_digest, expected_user_id, expected_sessio
         deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns,
         work=work, _endpoint_kind="completion")
     configured = owner._material.execution
+    if configured.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        configured = contexts._selected_scope(owner, "execution", digest)
+        selected = owner._registration_contexts[("execution", digest, "execute")][1]
+        deadline, bound = min(deadline, selected["expiresAtUnixNanos"]), min(bound, selected["deadlineMonotonicNs"])
     pending, packet = configured.current_pending, configured.completion_packet_digest
     custody, held, reserved, observed, current = _retained(owner, digest, work, live)
     if observed.sql_attempt is None:

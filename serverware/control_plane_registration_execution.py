@@ -52,12 +52,14 @@ def _scope(owner, *, deadline_epoch_ns, deadline_ns, work, _endpoint_kind="autho
         raise startup.EnrollmentStartupError("registration execution purpose is not source-selected")
     endpoint = execution.authorizer_endpoint
     if _endpoint_kind == "reserver":
-        if execution.reservation_endpoint is None or execution.reservation_predecessor is None:
+        if execution.reservation_endpoint is None or (execution.reservation_predecessor is None
+                and execution.context_directory is None):
             raise startup.EnrollmentStartupError("registration reservation is not independently cold-enabled")
         endpoint = execution.reservation_endpoint
     elif _endpoint_kind in ("sql", "completion"):
         if (execution.sql_endpoint is None or execution.completion_endpoint is None
-                or execution.current_pending is None or execution.completion_packet_digest is None):
+                or execution.context_directory is None and (execution.current_pending is None
+                    or execution.completion_packet_digest is None)):
             raise startup.EnrollmentStartupError("registration handoff is not independently cold-enabled")
         endpoint = execution.sql_endpoint if _endpoint_kind == "sql" else execution.completion_endpoint
     ledger = evidence.capture._SharedLedger(work)
@@ -163,6 +165,16 @@ def _reserve_on_owner(owner, *, originals, deadline_epoch_ns, deadline_ns, work)
     common, endpoint, _private, deadline, bound, live = _scope(owner,
         deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work, _endpoint_kind="reserver")
     predecessor = owner._material.execution.reservation_predecessor
+    if owner._material.execution.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        from serverware import control_plane_registration_handoff_subject as subjects
+        digest = contexts._record("execution", held)
+        subject = subjects._inspect_on_owner(owner, digest, deadline, bound, work)
+        selected = contexts._admit_on_owner(owner, purpose="execution", local_digest=digest, stage="reserve",
+            common=common, originals=held, reserved=None, subject=subject,
+            deadline_epoch_ns=deadline, deadline_ns=bound, work=work)
+        predecessor = tuple(selected["scope"][name] for name in ("sequence", "headDigest", "nextFence"))
+        deadline, bound = min(deadline, selected["expiresAtUnixNanos"]), min(bound, selected["deadlineMonotonicNs"])
     # Authenticate the original permission/grant before any side-effecting
     # reserve request. Received signatures will be independently checked again
     # with the actual returned computation and state acknowledgment afterward.
@@ -171,6 +183,8 @@ def _reserve_on_owner(owner, *, originals, deadline_epoch_ns, deadline_ns, work)
         before_vector_bytes=held[8], grant_bytes=held[9], deadline_epoch_ns=deadline,
         transport_deadline_ns=bound, work=work)
     live()
+    if owner._material.execution.context_directory is not None:
+        contexts._claim_reservation_on_owner(owner, "execution", digest)
     returned = evidence.production._callback(work,
         lambda: reserve_wire._socket_request(endpoint, originals=held, deadline_ns=bound))
     live()

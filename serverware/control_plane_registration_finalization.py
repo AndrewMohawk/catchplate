@@ -46,6 +46,11 @@ def _retained_on_owner(owner, digest, *, expected_user_id, expected_session_id,
     bound = min(bound, window[4])
     custody, binding, material = owner._custody, owner._binding, owner._material
     pending = material.execution.current_pending
+    if material.execution.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        pending = contexts._selected_scope(owner, "execution", digest).current_pending
+        selected = owner._registration_contexts[("execution", digest, "execute")][1]
+        window, bound = contexts._narrow(selected, window, bound)
     callback = evidence.production._callback
 
     def current():

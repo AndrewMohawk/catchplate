@@ -28,6 +28,7 @@ SCHEMA = "serverware.controlPlaneRegistrationFinalization/v1"
 V2_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v2"
 V3_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v3"
 V4_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v4"
+LOCAL_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v5"
 CALLER_KEY_FD = 204
 AUTHORIZER_SOCKET_PATH = "/run/serverware/registration-finalization-authorizer.sock"
 RESERVER_SOCKET_PATH = "/run/serverware/registration-finalization/reserver.sock"
@@ -39,6 +40,7 @@ _V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "statePredecessor"})
 _V3_FIELDS = _V2_FIELDS | frozenset({"sqlEndpoint", "currentPending"})
 _V4_FIELDS = _V3_FIELDS | frozenset({"completionEndpoint", "completionPacketDigest",
     "completionAuthorizationDigest"})
+_LOCAL_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "sqlEndpoint", "completionEndpoint", "contextDirectory"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -66,6 +68,7 @@ class _FinalizationMaterial:
     completion_endpoint: tuple | None = None
     completion_packet_digest: str | None = None
     completion_authorization_digest: str | None = None
+    context_directory: tuple | None = None
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
@@ -99,9 +102,9 @@ def _shape(value):
     if value is None:
         return
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA)):
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, LOCAL_SCHEMA)):
         raise RegistrationFinalizationBootstrapError("registration finalization scope version differs")
-    shape._object(value, _V4_FIELDS if value["schema"] == V4_SCHEMA else
+    shape._object(value, _LOCAL_FIELDS if value["schema"] == LOCAL_SCHEMA else _V4_FIELDS if value["schema"] == V4_SCHEMA else
         _V3_FIELDS if value["schema"] == V3_SCHEMA else
         _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
         "control-plane registration finalization scope")
@@ -114,6 +117,12 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
+    if value["schema"] == LOCAL_SCHEMA:
+        from serverware import authority_local_registration_context as contexts
+        contexts.directory(value["contextDirectory"])
+        _reserver_endpoint(value["reserverEndpoint"])
+        _sql_endpoint(value["sqlEndpoint"])
+        _completion_endpoint(value["completionEndpoint"])
     if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
         _reserver_endpoint(value["reserverEndpoint"])
         predecessor = value["statePredecessor"]
@@ -252,10 +261,18 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
                     completion_endpoint = _completion_endpoint(value["completionEndpoint"])
                     completion_packet_digest = value["completionPacketDigest"]
                     completion_authorization_digest = value["completionAuthorizationDigest"]
+        context_directory = None
+        if value["schema"] == LOCAL_SCHEMA:
+            from serverware import authority_local_registration_context as contexts
+            contexts._development()
+            context_directory = contexts.directory(value["contextDirectory"])
+            reservation_endpoint = _reserver_endpoint(value["reserverEndpoint"])
+            sql_endpoint = _sql_endpoint(value["sqlEndpoint"])
+            completion_endpoint = _completion_endpoint(value["completionEndpoint"])
         return _FinalizationMaterial(CALLER_KEY_FD, admitted.caller_public_key,
             current_raw, grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]),
             reservation_endpoint, reservation_predecessor, sql_endpoint, current_pending,
-            completion_endpoint, completion_packet_digest, completion_authorization_digest)
+            completion_endpoint, completion_packet_digest, completion_authorization_digest, context_directory)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RegistrationFinalizationBootstrapError):
             raise

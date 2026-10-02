@@ -227,6 +227,16 @@ def _inspect_material_on_owner(owner, local_digest, *, live_window, transport_de
         raise FinalizationCompletionSubjectError("finalization completion retained inventory exceeds its aggregate bound")
     final_snapshot = registration_snapshot = None
     final_scope, registration_scope = configured, material.execution
+    if configured.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        final_scope = contexts._selected_scope(owner, "finalization", digest)
+        selected_context = owner._registration_contexts[("finalization", digest, "execute")][1]
+        window, bound = contexts._narrow(selected_context, window, bound)
+    if material.execution.context_directory is not None:
+        from serverware import authority_local_registration_context as contexts
+        registration_scope = contexts._selected_scope(owner, "execution", evidence_digest)
+        selected_context = owner._registration_contexts[("execution", evidence_digest, "execute")][1]
+        window, bound = contexts._narrow(selected_context, window, bound)
     if material.finalization_history is not None:
         common, final_scope, final_snapshot = resolved_history._select_finalization_on_owner(owner, held,
             window=window, bound=bound, work=work, current=current)

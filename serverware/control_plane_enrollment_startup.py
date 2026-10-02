@@ -180,6 +180,9 @@ def _live(owner, *, work=None):
     if (response_pin is not None
             and _response_spki(path, binding.caller_uid, work) != response_pin):
         raise EnrollmentStartupError("HTTP response signing key changed; enrollment requires fresh cold admission")
+    if owner._registration_contexts or owner._registration_context_handles or owner._registration_context_uncertain:
+        from serverware import authority_local_registration_context as contexts
+        contexts._check_on_owner(owner)
     # File/key work cannot extend the original receipt's validity.
     if work is None:
         _continuity(owner)
@@ -196,7 +199,9 @@ class _EnrollmentOwner:
         "_activation_key_identity", "_activation_permission",
         "_consume_key", "_consume_key_fd", "_consume_key_identity",
         "_intent_key", "_intent_key_fd", "_intent_key_identity",
-        "_revocation_key", "_revocation_key_fd", "_revocation_key_identity")
+        "_revocation_key", "_revocation_key_fd", "_revocation_key_identity",
+        "_registration_contexts", "_registration_context_handles", "_registration_context_uncertain",
+        "_registration_context_reservations")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -611,7 +616,7 @@ class _EnrollmentOwner:
         finalization = None if self._material is None else self._material.finalization
         return (self._finalization_key is not None and finalization is not None
             and finalization.reservation_endpoint is not None
-            and finalization.reservation_predecessor is not None)
+            and (finalization.reservation_predecessor is not None or finalization.context_directory is not None))
 
     @property
     def finalization_sql_enabled(self):
@@ -620,7 +625,7 @@ class _EnrollmentOwner:
         finalization = None if self._material is None else self._material.finalization
         return (self._finalization_key is not None and finalization is not None
             and finalization.sql_endpoint is not None
-            and finalization.current_pending is not None)
+            and (finalization.current_pending is not None or finalization.context_directory is not None))
 
     @property
     def finalization_completion_enabled(self):
@@ -629,9 +634,8 @@ class _EnrollmentOwner:
         finalization = None if self._material is None else self._material.finalization
         return (self._finalization_key is not None and finalization is not None
             and finalization.completion_endpoint is not None
-            and finalization.completion_packet_digest is not None
-            and finalization.completion_authorization_digest is not None
-            and finalization.current_pending is not None)
+            and (finalization.context_directory is not None or finalization.completion_packet_digest is not None
+                and finalization.completion_authorization_digest is not None and finalization.current_pending is not None))
 
     @property
     def release_client_enabled(self):
@@ -748,7 +752,8 @@ class _EnrollmentOwner:
         _live(self)
         execution = None if self._material is None else self._material.execution
         return (self._execution_key is not None and execution is not None
-            and execution.reservation_endpoint is not None and execution.reservation_predecessor is not None)
+            and execution.reservation_endpoint is not None
+            and (execution.reservation_predecessor is not None or execution.context_directory is not None))
 
     @property
     def sql_handoff_enabled(self):
@@ -756,7 +761,8 @@ class _EnrollmentOwner:
         execution = None if self._material is None else self._material.execution
         return (self._execution_key is not None and execution is not None
             and execution.sql_endpoint is not None and execution.completion_endpoint is not None
-            and execution.current_pending is not None and execution.completion_packet_digest is not None)
+            and (execution.context_directory is not None or execution.current_pending is not None
+                and execution.completion_packet_digest is not None))
 
     def _execute_retained_registration(self, *, local_digest, expected_user_id, expected_session_id,
             deadline_epoch_ns, deadline_ns, work):
@@ -1113,6 +1119,10 @@ def initialize_from_environment():
                 _history_now_epoch_ns=client._receipt_now(binding),
                 _history_live_window=history_window,
                 _history_transport_deadline_ns=history_window[4])
+            if (material.execution is not None and material.execution.context_directory is not None
+                    or material.finalization is not None and material.finalization.context_directory is not None):
+                from serverware import authority_local_registration_context as contexts
+                contexts._cold_profile(material, original)
             # Cold public history admission may do substantial original replay.
             # Recheck the same live owner and archive before touching private keys;
             # the control-plane receipt is not an authority cohort replacement.
@@ -1474,6 +1484,9 @@ def initialize_from_environment():
             owner._revocation_key, owner._revocation_key_fd = revocation_key, revocation_fd
             owner._revocation_key_identity = revocation_identity
             owner._release_spent = False
+            owner._registration_contexts, owner._registration_context_handles = {}, []
+            owner._registration_context_uncertain = False
+            owner._registration_context_reservations = set()
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
             return owner
@@ -1513,6 +1526,9 @@ def close():
         if _state == "initializing":
             raise EnrollmentStartupError("enrollment cannot close during admission")
         owner = _owner
+        if owner is not None and (owner._registration_context_handles or owner._registration_context_uncertain):
+            from serverware import authority_local_registration_context as contexts
+            contexts._close_on_owner(owner)
         _owner, _state = None, "closed"
         if owner is not None:
             owner._closed = True
@@ -1524,3 +1540,4 @@ def close():
             owner._consume_key = None
             owner._intent_key = None
             owner._revocation_key = None
+            owner._registration_contexts.clear()

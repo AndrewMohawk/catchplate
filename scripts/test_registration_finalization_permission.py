@@ -184,8 +184,11 @@ class FinalizationPermissionControls(unittest.TestCase):
                 self.assertLess(pid[0].lineno, locked.lineno)
         self.assertTrue(contains(issue, "owner._finalization_permission is not None"))
         self.assertTrue(contains(consume, "type(challenge) is not _Challenge"))
+        target = ast.dump(ast.parse("owner._finalization_permission = None").body[0].targets[0],
+            include_attributes=False)
         burn = next(node for node in ast.walk(consume) if isinstance(node, ast.Assign)
-            and contains(node, "owner._finalization_permission") and contains(node.value, "_SPENT"))
+            and any(ast.dump(item, include_attributes=False) == target for item in node.targets)
+            and contains(node.value, "_SPENT"))
         self.assertLess(burn.lineno, min(node.lineno for node in calls(consume, "_scope")))
         self.assertLess(burn.lineno, calls(consume, "_verify")[0].lineno)
         self.assertFalse(any(isinstance(node, (ast.Try, ast.While, ast.For)) for node in ast.walk(consume)))
@@ -193,7 +196,8 @@ class FinalizationPermissionControls(unittest.TestCase):
         self.assertEqual(len(calls(consume, "_current")), 3)
         self.assertIn("_finalization_permission", permission.startup._EnrollmentOwner.__slots__)
         close = function(permission.startup, "close")
-        self.assertTrue(any(isinstance(node, ast.Assign) and contains(node, "owner._finalization_permission")
+        self.assertTrue(any(isinstance(node, ast.Assign)
+            and any(ast.dump(item, include_attributes=False) == target for item in node.targets)
             and isinstance(node.value, ast.Constant) and node.value.value is None for node in ast.walk(close)))
 
     def test_source_foreign_grant_row_policy_and_original_expiry_cannot_be_rebased(self):

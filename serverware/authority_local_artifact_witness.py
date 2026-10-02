@@ -25,6 +25,7 @@ from scripts.authority.generate_artifact_bundle import _verification_key
 from serverware import authority_artifact_spec as spec
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalArtifactWitnessApproval/v1"
+APPROVAL_SCHEMA_V2 = "serverware.authorityTrustedHostLocalArtifactWitnessApproval/v2"
 HEAD_SCHEMA = "serverware.authorityTrustedHostLocalArtifactWitnessHead/v1"
 LOCK_NAME, BASE_NAME, HEAD_NAME = "lock", "base-trust.json", "head.json"
 MAX_RECORDS, MAX_TOTAL = 4096, 128 * 1024 * 1024
@@ -67,11 +68,18 @@ def document(raw, maximum=io.MAX_PUBLIC):
 
 def approval(raw):
     value = document(raw, 8192)
-    _require(set(value) == {"schema", "action", "directory", "trustSha256", "coreSha256",
+    fields = {"schema", "action", "directory", "trustSha256", "coreSha256",
         "expectedHeadSha256", "signerKeyId", "bootIdDigest", "issuedAtBoottimeNs",
         "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
-        and value["schema"] == APPROVAL_SCHEMA
+    selected_v2 = value.get("schema") == APPROVAL_SCHEMA_V2
+    if selected_v2:
+        fields.add("emptyWitnessConvention")
+    _require(set(value) == fields and value["schema"] in {APPROVAL_SCHEMA, APPROVAL_SCHEMA_V2}
         and value["action"] in {"initialize-and-append", "append"})
+    if selected_v2:
+        from serverware.authority_local_trust import EMPTY_WITNESS_CONVENTION
+        _require(value["action"] == "initialize-and-append"
+            and value["emptyWitnessConvention"] == EMPTY_WITNESS_CONVENTION)
     for field in ("trustSha256", "coreSha256", "bootIdDigest"):
         spec._require_digest(value[field], name=field)
     spec._require_identifier(value["signerKeyId"], name="witness signer")
@@ -358,11 +366,27 @@ class LocalArtifactWitness:
     def _timestamp(self):
         return datetime.fromtimestamp(self._previous_unix // 10**9, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    def _check_empty_genesis(self):
+        """Selected v2 only, before acquiring/creating any persistent object."""
+        from serverware.authority_local_trust import empty_directory, empty_witness_anchors
+        self.check()
+        directory = empty_directory(self._directory_fd)
+        _require(directory == self._selected["directory"])
+        trust, witness = self._trust, self._trust["witness"]
+        _require(trust["currentSequence"] == -1 and witness["currentSequence"] == -1
+            and witness["currentTreeSize"] == 0)
+        anchors = empty_witness_anchors(directory, identity=witness["identity"], key_id=witness["keyId"],
+            key_file_sha256=witness["keyFileSha256"])
+        _require(all(witness[name] == value for name, value in anchors.items()))
+        self.check()
+
     def run(self):
         try:
             _require(not self._used and not self._closed)
             self._used = True
             initialize = self._selected["action"] == "initialize-and-append"
+            if self._selected["schema"] == APPROVAL_SCHEMA_V2:
+                self._check_empty_genesis()
             self._lock(initialize)
             self.stage = "auditing"
             base_raw, previous = self._audit(initialize)

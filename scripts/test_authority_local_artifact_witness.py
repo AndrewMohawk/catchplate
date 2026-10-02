@@ -84,7 +84,7 @@ def _sealed(raw):
         raise
 
 
-def open_owner(directory, core, trust, *, action="initialize-and-append", expected=None, seed=SEED):
+def open_owner(directory, core, trust, *, action="initialize-and-append", expected=None, seed=SEED, v2=False):
     rootfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     info = os.fstat(rootfd)
     core_raw, trust_raw = map(local.spec.canonical_json_bytes, (core, trust))
@@ -93,6 +93,9 @@ def open_owner(directory, core, trust, *, action="initialize-and-append", expect
         trustSha256=local.sha(trust_raw), coreSha256=local.sha(core_raw), expectedHeadSha256=expected,
         signerKeyId=trust["witness"]["keyId"], bootIdDigest=local._boot(), issuedAtBoottimeNs=boot,
         deadlineBoottimeNs=boot+30_000_000_000, issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+30_000_000_000)
+    if v2:
+        from serverware.authority_local_trust import EMPTY_WITNESS_CONVENTION
+        approved.update(schema=local.APPROVAL_SCHEMA_V2, emptyWitnessConvention=EMPTY_WITNESS_CONVENTION)
     raw = local.spec.canonical_json_bytes(approved)
     return local.LocalArtifactWitness.open(approval_fd=_sealed(raw), approval_sha256=local.sha(raw),
         trust_fd=_sealed(trust_raw), trust_sha256=local.sha(trust_raw), core_fd=_sealed(core_raw),
@@ -117,6 +120,21 @@ def successor(directory, trust):
 
 
 class WitnessContractTests(unittest.TestCase):
+    def test_v2_convention_is_explicit_and_initial_only(self):
+        from serverware.authority_local_trust import EMPTY_WITNESS_CONVENTION
+        boot, unix = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+        value = dict(schema=local.APPROVAL_SCHEMA_V2, action="initialize-and-append", directory=dict(device=1,inode=2),
+            trustSha256=DIGEST, coreSha256=DIGEST, expectedHeadSha256=None, signerKeyId="synthetic-witness",
+            bootIdDigest=DIGEST, issuedAtBoottimeNs=boot, deadlineBoottimeNs=boot+10**9,
+            issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+10**9, emptyWitnessConvention=EMPTY_WITNESS_CONVENTION)
+        self.assertEqual(local.approval(local.spec.canonical_json_bytes(value)), value)
+        for changed in (dict(value, action="append", expectedHeadSha256=DIGEST),
+                        dict(value, emptyWitnessConvention="caller-chosen"), dict(value, schema=local.APPROVAL_SCHEMA)):
+            with self.assertRaises(ValueError): local.approval(local.spec.canonical_json_bytes(changed))
+        legacy = dict(value); del legacy["emptyWitnessConvention"]
+        legacy.update(schema=local.APPROVAL_SCHEMA, action="append", expectedHeadSha256=DIGEST)
+        self.assertEqual(local.approval(local.spec.canonical_json_bytes(legacy)), legacy)
+
     def test_core_extraction_preserves_full_checkpoint_requirement(self):
         core, trust, private = fixture()
         local.spec.validate_generation_core(core)
@@ -158,6 +176,42 @@ class WitnessContractTests(unittest.TestCase):
 @unittest.skipUnless(os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
     and sys.flags.isolated and sys.flags.dont_write_bytecode, "real protected IO requires isolated root -I -B")
 class WitnessStorageTests(unittest.TestCase):
+    def test_real_v2_empty_anchors_initialize_then_legacy_append(self):
+        from serverware.authority_local_trust import empty_witness_anchors
+        core, trust, _ = fixture()
+        with tempfile.TemporaryDirectory(prefix="artifact-witness-v2-") as directory:
+            info = os.stat(directory)
+            witness = trust["witness"]
+            anchors = empty_witness_anchors(dict(device=info.st_dev,inode=info.st_ino), identity=witness["identity"],
+                key_id=witness["keyId"], key_file_sha256=witness["keyFileSha256"])
+            witness.update(anchors)
+            owner = open_owner(directory, core, trust, v2=True)
+            first = local.document(owner.run())
+            self.assertTrue(owner.committed and owner._closed)
+            self.assertEqual(first["payload"]["previousCheckpointDigest"], anchors["currentCheckpointDigest"])
+            self.assertEqual(first["payload"]["previousRootDigest"], anchors["currentRootDigest"])
+            self.assertEqual(first["payload"]["previousTreeSize"], 0)
+            core, trust, expected = successor(directory, trust)
+            last = local.document(open_owner(directory, core, trust, action="append", expected=expected).run())
+            self.assertEqual(last["payload"]["previousCheckpointDigest"], local.spec.witness_checkpoint_digest(first))
+
+    def test_real_v2_mismatch_or_nonempty_refuses_before_lock_creation(self):
+        from serverware.authority_local_trust import empty_witness_anchors
+        for nonempty in (False, True):
+            with self.subTest(nonempty=nonempty), tempfile.TemporaryDirectory(prefix="artifact-witness-v2-") as directory:
+                core, trust, _ = fixture()
+                info = os.stat(directory); witness = trust["witness"]
+                witness.update(empty_witness_anchors(dict(device=info.st_dev,inode=info.st_ino), identity=witness["identity"],
+                    key_id=witness["keyId"], key_file_sha256=witness["keyFileSha256"]))
+                if nonempty: (Path(directory) / "preserved").write_bytes(b"actual preexisting bytes")
+                else: witness["currentRootDigest"] = DIGEST
+                before = set(os.listdir(directory))
+                owner = open_owner(directory, core, trust, v2=True)
+                with self.assertRaises(local.LocalArtifactWitnessError): owner.run()
+                owner.close()
+                self.assertEqual(set(os.listdir(directory)), before)
+                self.assertFalse((Path(directory) / local.LOCK_NAME).exists())
+
     def test_real_initialize_then_append_persists_existing_signed_chain(self):
         core, trust, _ = fixture()
         with tempfile.TemporaryDirectory(prefix="artifact-witness-") as directory:

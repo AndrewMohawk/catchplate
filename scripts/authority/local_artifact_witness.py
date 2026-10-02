@@ -14,7 +14,12 @@ Supply independently approved root0400 public originals, a pinned root0700 store
 FD, and a sealed32-byte purpose-authorized witness key. Initialization requires
 an actually empty store and independently supplied genesis trust; append requires
 the exact prior durable head SHA and current artifact trust high-water. No keys,
-empty roots, history, package evidence or trust advancement are generated here.
+history, package evidence or trust advancement are generated here. Explicit
+Approval/v2 initialize-and-append requires emptyWitnessConvention
+serverware.authorityTrustedHostLocalEmptyWitness/v1 and verifies the supplied
+genesis anchors against the actual held empty directory and witness public key
+before creating a lock or file. These anchors are not prior signed checkpoints.
+Approval/v1 and established append behavior are unchanged; v2 cannot append.
 
 Requires Linux flock/renameat2 and durable regular-file/directory fsync. The local
 bounded store supports 4096 generations / 128MiB total. Partial state persists;

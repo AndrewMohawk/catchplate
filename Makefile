@@ -628,6 +628,9 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_artifact_witness.py \
 	scripts/test_authority_local_trust.py \
 	scripts/test_authority_local_configuration.py \
+	scripts/test_authority_local_runtime_trust.py \
+	scripts/test_authority_local_launch_authorization.py \
+	scripts/test_authority_local_runtime_aliases.py \
 	scripts/test_authority_local_database_credentials.py \
 	scripts/test_authority_local_keys.py \
 	scripts/test_authority_local_provenance.py \
@@ -872,6 +875,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_artifact_witness.py \
 	serverware/authority_local_trust.py \
 	serverware/authority_local_configuration.py \
+	serverware/authority_local_runtime_trust.py \
+	serverware/authority_local_launch_authorization.py \
 	serverware/authority_local_database_credentials.py \
 	serverware/authority_local_keys.py \
 	serverware/authority_local_provenance.py \
@@ -883,6 +888,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/local_artifact_witness.py \
 	scripts/authority/local_trust.py \
 	scripts/authority/local_configuration.py \
+	scripts/authority/local_runtime_trust.py \
+	scripts/authority/local_launch_authorization.py \
 	scripts/authority/local_database_credentials.py \
 	scripts/authority/local_keys.py \
 	scripts/authority/local_provenance.py \
@@ -3947,6 +3954,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_artifact_witness.py \
 				serverware/authority_local_trust.py \
 				serverware/authority_local_configuration.py \
+				serverware/authority_local_runtime_trust.py \
+				serverware/authority_local_launch_authorization.py \
 				serverware/authority_local_database_credentials.py \
 				serverware/authority_local_keys.py \
 				serverware/authority_local_provenance.py \
@@ -3958,6 +3967,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/local_artifact_witness.py \
 				scripts/authority/local_trust.py \
 				scripts/authority/local_configuration.py \
+				scripts/authority/local_runtime_trust.py \
+				scripts/authority/local_launch_authorization.py \
 				scripts/authority/local_database_credentials.py \
 				scripts/authority/local_keys.py \
 				scripts/authority/local_provenance.py \

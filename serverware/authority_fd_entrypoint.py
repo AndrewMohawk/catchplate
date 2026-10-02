@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import signal
 import socket
 import stat
 import sys
@@ -161,6 +162,14 @@ LOCAL_RETAINED_FD_MAX = 2**31 - 1
 LOCAL_LATE_DESCRIPTORS = {
     "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD": 256,
     "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD": 258,
+}
+# Nested RBAC startup originals bind these actual local delivery slots. They
+# are neither late manifest/evidence slots 256..258 nor witness state slot259.
+LOCAL_RBAC_DESCRIPTORS = {
+    "SERVERWARE_RBAC_WITNESS_ROOT_FD": 240,
+    "SERVERWARE_RBAC_WITNESS_TLS_ROOT_FD": 241,
+    "SERVERWARE_RBAC_WITNESS_CLIENT_CERTIFICATE_FD": 242,
+    "SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD": 243,
 }
 # Kept equal to the stage-zero interface without importing application code
 # before the isolated launcher admits its measured import closure.
@@ -2740,6 +2749,116 @@ def _control_plane_health() -> int:
     return 1
 
 
+class _LocalRbacSlotsError(RuntimeError):
+    def __init__(self, owner):
+        super().__init__("local RBAC descriptor delivery failed; retain partial owner")
+        self.owner = owner
+
+
+class _LocalRbacSlots:
+    """Four exact owned reservations; never overwrite a caller descriptor."""
+    @staticmethod
+    def _identity(fd):
+        return _material_identity(os.fstat(fd)), fcntl.fcntl(fd, fcntl.F_GET_SEALS)
+
+    @classmethod
+    def open(cls, role, occupied):
+        self = cls()
+        self.pid, self.held, self.installed = os.getpid(), {}, set()
+        self.closed = self.closing = False
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        try:
+            if (role not in {"verifier", "planner", "executor"}
+                    or os.geteuid() != 0 or os.getegid() != 0 or len(os.listdir("/proc/self/task")) != 1
+                    or set(LOCAL_RBAC_DESCRIPTORS.values()) & set(occupied)):
+                raise RuntimeError("local RBAC slots overlap inherited custody")
+            self.paths = {name: path for name, path in ROLE_SOURCES[role] if name in LOCAL_RBAC_DESCRIPTORS}
+            for target in LOCAL_RBAC_DESCRIPTORS.values():
+                try:
+                    os.fstat(target)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+                else:
+                    raise RuntimeError("local RBAC slot is already occupied")
+            seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+            for target in LOCAL_RBAC_DESCRIPTORS.values():
+                temporary = os.memfd_create("local-rbac-reservation", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+                self.held[temporary] = self._identity(temporary)
+                os.fchmod(temporary, 0o400)
+                fcntl.fcntl(temporary, fcntl.F_ADD_SEALS, seals)
+                self.held[temporary] = self._identity(temporary)
+                actual = temporary if temporary == target else fcntl.fcntl(temporary, fcntl.F_DUPFD_CLOEXEC, target)
+                self.held[actual] = self._identity(actual)
+                if actual != target:
+                    raise RuntimeError("local RBAC slot changed during acquisition")
+                if temporary != target:
+                    os.close(temporary); del self.held[temporary]
+            return self
+        except BaseException as error:
+            raise _LocalRbacSlotsError(self) from error
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, before)
+
+    def install(self, name):
+        """Open the fixed original, then transfer only our exact reservation."""
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        try:
+            if (self.closed or self.closing or os.getpid() != self.pid
+                    or name not in LOCAL_RBAC_DESCRIPTORS or name in self.installed):
+                raise RuntimeError("local RBAC slot cannot be reused")
+            target = LOCAL_RBAC_DESCRIPTORS[name]
+            if self._identity(target) != self.held[target] or os.fstat(target).st_size != 0:
+                raise RuntimeError("local RBAC reservation changed")
+            # ROLE_SOURCES determines the filename; the caller cannot choose it.
+            paths = {path for role in ("verifier", "planner", "executor")
+                for environment_name, path in ROLE_SOURCES[role] if environment_name == name}
+            # Certificate/key names vary by role and are selected at open time.
+            path = self.paths[name]
+            if path not in paths:
+                raise RuntimeError("local RBAC source differs from its fixed role")
+            source = _open_systemd_credential(os.path.basename(path))
+            self.held[source] = self._identity(source)
+            if self._identity(target) != self.held[target]:
+                raise RuntimeError("local RBAC reservation changed before transfer")
+            os.dup2(source, target, inheritable=True)
+            self.held[target] = self._identity(target)
+            if self.held[target] != self.held[source]:
+                raise RuntimeError("local RBAC retained original transfer differs")
+            self.installed.add(name)
+            os.close(source); del self.held[source]
+            return target
+        except BaseException as error:
+            raise _LocalRbacSlotsError(self) from error
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, before)
+
+    def require_complete(self):
+        if (self.closed or self.closing or os.getpid() != self.pid
+                or self.installed != set(LOCAL_RBAC_DESCRIPTORS)
+                or set(self.held) != set(LOCAL_RBAC_DESCRIPTORS.values())):
+            raise RuntimeError("local RBAC material delivery is incomplete")
+        for fd, identity in self.held.items():
+            if self._identity(fd) != identity:
+                raise RuntimeError("local RBAC delivered descriptor changed")
+
+    def close(self):
+        if self.closed:
+            return
+        if self.closing or os.getpid() != self.pid:
+            raise RuntimeError("local RBAC close ownership is uncertain")
+        self.closing = True
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        try:
+            for fd in list(self.held):
+                if self._identity(fd) != self.held[fd]:
+                    raise RuntimeError("local RBAC close descriptor changed")
+                os.close(fd); del self.held[fd]
+            self.closed = True
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, before)
+
+
 def _local_admission_sources(role: str, selection: tuple[int, str, int]) -> tuple[int, ...]:
     """Preserve a parent's explicit empty slots, not provisional authority.
 
@@ -2872,6 +2991,9 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         )
     inherited_descriptors: list[int] = ([] if local_admission is None else
                                        list(_local_admission_sources(role, local_admission)))
+    rbac_slots = None
+    if local_admission is not None and role in {"verifier", "planner", "executor"}:
+        rbac_slots = _LocalRbacSlots.open(role, inherited_descriptors)
     if role != "control-plane":
         listener_descriptor = _consume_socket_activation(role)
         inherited_descriptors.append(listener_descriptor)
@@ -2945,6 +3067,10 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         for environment_name, path in ROLE_SOURCES[role]:
             if local_admission is not None and environment_name in LOCAL_LATE_DESCRIPTORS:
                 descriptor_assignments.append((environment_name, LOCAL_LATE_DESCRIPTORS[environment_name]))
+                continue
+            if rbac_slots is not None and environment_name in LOCAL_RBAC_DESCRIPTORS:
+                descriptor = rbac_slots.install(environment_name)
+                descriptor_assignments.append((environment_name, descriptor))
                 continue
             descriptor = (
                 _open_source(path, expected_owner_uid=0,
@@ -3097,6 +3223,8 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
                 ],
                 environment,
             )
+        if rbac_slots is not None:
+            rbac_slots.require_complete()
         launcher_descriptor = _open_source(
             BOOTSTRAP_LAUNCHER_PATH,
             expected_owner_uid=0,
@@ -3137,6 +3265,8 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
     finally:
         for descriptor in descriptors:
             os.close(descriptor)
+        if rbac_slots is not None:
+            rbac_slots.close()
     return 1
 
 

@@ -1,14 +1,19 @@
 """Synthetic signed-original and source-boundary controls; no DB/owner admission."""
 import ast
+import fcntl
 from copy import deepcopy
+import os
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from serverware import authority_primary_contract as primary
 from serverware import authority_rbac_currentness as subject
+from serverware import authority_fd_entrypoint as entry
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,6 +50,60 @@ def function(tree, name):
 
 
 class LocalRbacWitnessTests(unittest.TestCase):
+    def test_actual_fixed_descriptor_delivery_preserves_originals(self):
+        self.assertEqual((os.geteuid(), os.getegid()), (0, 0), "isolated root descriptor control required")
+        self.assertEqual(list(entry.LOCAL_RBAC_DESCRIPTORS.values()), [240, 241, 242, 243])
+        owner = entry._LocalRbacSlots.open("verifier", ())
+        try:
+            before = {fd: os.fstat(fd).st_ino for fd in entry.LOCAL_RBAC_DESCRIPTORS.values()}
+            with tempfile.TemporaryDirectory() as directory:
+                raw = {}
+                for name, path in entry.ROLE_SOURCES["verifier"]:
+                    if name in entry.LOCAL_RBAC_DESCRIPTORS:
+                        raw[name] = ("synthetic-delivery-only:" + name).encode("ascii")
+                        target = Path(directory) / Path(path).name
+                        target.write_bytes(raw[name]); target.chmod(0o400)
+                with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": directory}):
+                    for name, fd in entry.LOCAL_RBAC_DESCRIPTORS.items():
+                        self.assertEqual(owner.install(name), fd)
+                        self.assertEqual(os.pread(fd, 4096, 0), raw[name])
+                        self.assertNotEqual(os.fstat(fd).st_ino, before[fd])
+                        self.assertTrue(os.get_inheritable(fd))
+                    owner.require_complete()
+                    with self.assertRaises(entry._LocalRbacSlotsError): owner.install(next(iter(raw)))
+        finally:
+            owner.close()
+
+    def test_existing_or_inherited_descriptor_is_not_adopted(self):
+        original = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+        occupied = None
+        try:
+            occupied = fcntl.fcntl(original, fcntl.F_DUPFD_CLOEXEC, 240)
+            self.assertEqual(occupied, 240, "do not overwrite an existing test-runner descriptor")
+            identity = os.fstat(occupied)
+            with self.assertRaises(entry._LocalRbacSlotsError) as caught:
+                entry._LocalRbacSlots.open("verifier", ())
+            self.assertFalse(caught.exception.owner.held)
+            caught.exception.owner.close()
+            self.assertEqual(os.fstat(occupied), identity)
+        finally:
+            if occupied is not None: os.close(occupied)
+            os.close(original)
+        with self.assertRaises(entry._LocalRbacSlotsError) as caught:
+            entry._LocalRbacSlots.open("verifier", (241,))
+        self.assertFalse(caught.exception.owner.held)
+        caught.exception.owner.close()
+
+    def test_fixed_delivery_selected_only_after_local_setup_before_credentials(self):
+        tree = source("serverware/authority_fd_entrypoint.py")
+        main = ast.unparse(function(tree, "_normal_main"))
+        self.assertIn("local_admission is not None and role in {'verifier', 'planner', 'executor'}", main)
+        self.assertLess(main.index("_local_admission_sources(role, local_admission)"), main.index("_LocalRbacSlots.open("))
+        self.assertLess(main.index("_LocalRbacSlots.open("), main.index("_open_systemd_credential("))
+        self.assertIn("rbac_slots.install(environment_name)", main)
+        self.assertIn("rbac_slots.require_complete()", main)
+        self.assertIn("rbac_slots.close()", main)
+
     def test_signed_local_original_and_existing_head_chain(self):
         payload, key = fixture()
         raw = subject.sign_enrollment(payload, key)

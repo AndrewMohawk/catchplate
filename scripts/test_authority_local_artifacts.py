@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT))
 from serverware import authority_local_artifacts as local
 from serverware import authority_local_artifact_measure as measure
 from scripts.authority import local_artifacts as cli
+from scripts.authority import generate_artifact_bundle as generator
+from serverware import authority_launcher as launcher
 
 
 def selection():
@@ -27,6 +29,39 @@ def selection():
 
 
 class LocalArtifactControls(unittest.TestCase):
+    @staticmethod
+    def launcher_roles():
+        return [dict(role=name, runtimeUid=launcher.ROLE_IDENTITIES[name][0],
+            runtimeGid=launcher.ROLE_IDENTITIES[name][1], processMode=launcher.PROCESS_MODES[name],
+            listenerName=launcher.ROLE_LISTENER_NAMES[name],
+            credentialNames=sorted(launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[name]))
+            for name in sorted(launcher.PROCESS_MODES)]
+
+    def test_generator_accepts_actual_launcher_credential_rosters(self):
+        roles = self.launcher_roles()
+        planner = next(row for row in roles if row["role"] == "planner")
+        self.assertIn("SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD", planner["credentialNames"])
+        generator._validate_required_role_manifests(roles)
+
+    def test_generator_refuses_missing_witness_or_extra_credentials(self):
+        for mutation in ("missing-witness", "extra"):
+            roles = self.launcher_roles()
+            planner = next(row for row in roles if row["role"] == "planner")
+            if mutation == "missing-witness":
+                planner["credentialNames"].remove("SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD")
+            else:
+                planner["credentialNames"].append("UNAPPROVED_KEY_FD")
+                planner["credentialNames"].sort()
+            with self.subTest(mutation=mutation), self.assertRaises(generator.GeneratorError):
+                generator._validate_required_role_manifests(roles)
+
+    def test_generator_preserves_exact_launcher_role_identity(self):
+        for name in ("planner", "planner-writer"):
+            roles = self.launcher_roles()
+            next(row for row in roles if row["role"] == name)["runtimeUid"] += 1
+            with self.subTest(role=name), self.assertRaises(generator.GeneratorError):
+                generator._validate_required_role_manifests(roles)
+
     def test_canonical_public_originals_only(self):
         self.assertEqual(local.document(b'{"public":1}', 32), {"public": 1})
         for raw in (b'{ "public":1}', b'{"public":1,"public":2}', b'{"public":1.0}', b'[]'):

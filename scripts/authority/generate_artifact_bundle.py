@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware import authority_launcher
 from serverware import authority_transition_registry
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_transition_policy as transition_policy
@@ -220,39 +221,17 @@ WITNESS_CONFIGURATION_FIELDS = frozenset(
     }
 )
 ROLE_REQUIREMENTS = {
-    "planner": {
-        "runtimeUid": 65518,
-        "runtimeGid": 65518,
-        "processMode": "policy-authority-planner",
-        "listenerName": "serverware-authority-planner",
-        "credentialNames": sorted(
-            {
-                "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-                "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
-                "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-                "SERVERWARE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY_FD",
-                "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD",
-            }
-        ),
-    },
-    "planner-writer": {
-        "runtimeUid": 65519,
-        "runtimeGid": 65519,
-        "processMode": "policy-authority-planner-writer",
-        "listenerName": "serverware-authority-planner-writer",
-        "credentialNames": sorted(
-            {
-                "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-                "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
-                "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-                "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
-                (
-                    "SERVERWARE_POLICY_AUTHORITY_"
-                    "PLANNER_WRITER_POSTGRES_DSN_FD"
-                ),
-            }
-        ),
-    },
+    # The package and launcher require the same exact roster, including the
+    # planner's RBAC witness credentials. A stale parallel five-FD list refused
+    # genuine current role manifests before package assembly could proceed.
+    role: {
+        "runtimeUid": authority_launcher.ROLE_IDENTITIES[role][0],
+        "runtimeGid": authority_launcher.ROLE_IDENTITIES[role][1],
+        "processMode": authority_launcher.PROCESS_MODES[role],
+        "listenerName": authority_launcher.ROLE_LISTENER_NAMES[role],
+        "credentialNames": sorted(authority_launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[role]),
+    }
+    for role in ("planner", "planner-writer")
 }
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_TARGET_DOCUMENT_BYTES = 16 * 1024 * 1024

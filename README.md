@@ -152,7 +152,8 @@ check are corrected. An isolated guest passed all pre-application checks.
 The host task-limit and OCI input fixes passed actual startup. The fifth launch
 completed package signing, then hit a file-open error during installation.
 Its signed checkpoint and partial installation are preserved; recovery must
-retain that history before another live attempt.
+retain that history. A separately keyed local pilot is being prepared; the
+failed pilot's ledger and approvals will not be reset or reused.
 No hardware enrollment or database bootstrap has run.
 Earlier candidates remain preserved. These are build/input results, not signed
 installation, running authorities, schema commissioning or an end-to-end pilot.

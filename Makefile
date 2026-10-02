@@ -639,6 +639,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_postgres_bootstrap_grants.py \
 	scripts/test_authority_local_registration_context.py \
 	scripts/test_authority_local_registration_enrollment.py \
+	scripts/test_authority_registration_challenge.py \
 	scripts/test_authority_local_runtime_aliases.py \
 	scripts/test_authority_local_database_credentials.py \
 	scripts/test_authority_local_keys.py \

@@ -134,29 +134,22 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 **Development pilot — current focus:** a local control UI, Rust proxy and
 synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).
 Python and Rust images are built, supporting services are healthy, and the
-isolated database has its 13 restricted role identities. The
-[local authority launcher](docs/trusted-host-local-startup.md),
-[signing/installation commands](docs/trusted-host-local-installation.md) and
-foreground policy caller are source-connected. Genuine upstream evidence,
-actual installation, authentication, schema bootstrap and
-[policy commissioning](docs/pilot-commissioning.md) remain. **There is not yet a working pilot.** The planned
-walkthrough is non-TEE, non-production and uses no real provider credentials.
-Its current authority requirements cannot be replaced by a SQLite shortcut.
-An [isolated VM](docs/trusted-host-local-storage.md) now supplies the verified
-filesystem route. Persistent artifact-witness issuance, measured provenance
-and the corrected first-policy transaction are implemented; their focused
-31-check batch passes. Local-only [roster/composition and package assembly](docs/trusted-host-local-package-assembly.md)
-plus first-policy audit-inclusion issuance are now source-connected. The base
-Python guest runtime boots. Actual isolated runs created 21 distinct signing
-keys, 13 database client certificates, signed initial trust and seven static
-role inputs, then verified persistence read-only. Local launch authorization
-and RuntimeTrust signing are source-connected; their frozen focused batch
-passes 33 controls. These are staging materials, not installed authority.
-All four slots focus on installation/trust advancement, five-service startup,
-first developer enrollment and end-to-end integration. Actual configuration and
-package installation, authenticated database bootstrap and policy commissioning
-still precede the live walkthrough; broad testing and production-only work are
-deferred until that core flow is assembled.
+isolated PostgreSQL now has TLS and a verified certificate-authenticated,
+read-only login using a restricted role. Its existing database identity and
+volume were preserved. An [isolated VM](docs/trusted-host-local-storage.md)
+supplies the verified immutable-filesystem route and Python runtime. Actual
+provisioning created 23 distinct signing keys, 13 database client certificates,
+initial trust and seven static role inputs; read-only reboots verified persistence.
+These are real dependencies and staging materials, not installed authority.
+
+**There is not yet a working pilot.** All four slots focus on the remaining
+critical path: [signed package installation](docs/trusted-host-local-package-assembly.md),
+[service admission](docs/trusted-host-local-admission.md) and schema setup,
+first hardware-key registration and [policy commissioning](docs/pilot-commissioning.md),
+then the UI/Rust credential replacement, denial and redaction walkthrough.
+The local walkthrough is non-TEE, non-production and uses no real provider
+credentials. Broad testing and production-only work are deferred until that
+core flow is assembled; focused results are in [progress](docs/production-status.md).
 
 **Protected native production:** the [full goal](goal.md) remains unchanged.
 The [native lifecycle](docs/native-pilot-lifecycle.md) still requires approved

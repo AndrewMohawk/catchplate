@@ -146,8 +146,11 @@ distinct scoped proxy credentials are prepared. PostgreSQL TLS transport is
 verified; the local witness and synthetic upstream are provisioned. The current
 consolidated [isolated guest launcher](docs/pilot-commissioning.md) is assembled
 for real hardware approvals, the normal app and credential-bearing proxy.
-It awaits browser/YubiKey readiness for its first live attempt. Earlier
-candidates remain preserved. These are build/input results, not signed
+Its first operator-approved startup stopped before guest boot because two
+bootstrap scripts had group-writable permissions. A corrected candidate is
+being prepared with a host lock-call fix and same-origin homelab login cookies
+for the enrollment forms. No hardware enrollment or database bootstrap ran.
+Earlier candidates remain preserved. These are build/input results, not signed
 installation, running authorities, schema commissioning or an end-to-end pilot.
 
 **There is not yet a working pilot.** All four slots focus on the remaining

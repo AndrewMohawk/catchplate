@@ -6,8 +6,9 @@ Private keys arrive as protected sealed descriptors, never command-line values.
 Original approvals and deadlines remain in force; failure preserves partial
 effects and does not authorize an automatic retry.
 
-The [focused results](production-status.md) resolve 46 controls across the
-initial and three-case correction snapshots. No full suite, image rebuild,
+The [focused results](production-status.md) resolve 46 setup controls across the
+initial and three-case correction snapshots, then31 witness/provenance/genesis
+controls on frozen `96f70c6c`. No full suite, image rebuild,
 successful signed install or live policy transition is claimed.
 
 ## Connected components
@@ -15,6 +16,8 @@ successful signed install or live policy transition is claimed.
 | Command | Actual effect | Still required beforehand |
 | --- | --- | --- |
 | [`local_snapshot.py`](../scripts/authority/local_snapshot.py) | Measures an exact frozen CAS tree and signs the existing snapshot receipt | Already frozen root-owned tree named by its digest, protected approval/trust, authorized snapshot-verifier key |
+| [`local_provenance.py`](../scripts/authority/local_provenance.py) | Verifies actual clean Git/archive/report/OCI associations and signs a detached local observation | Exact compatible clean build report, retained source/OCI objects, frozen tree and authorized provenance key; this is not build-execution or SLSA proof |
+| [`local_artifact_witness.py`](../scripts/authority/local_artifact_witness.py) | Verifies persistent signed history and appends the actual generation/checkpoint under an exclusive lock | Pinned root0700 store, external high-water, authorized witness key and exact expected prior head; no external trust advance |
 | [`local_artifacts.py`](../scripts/authority/local_artifacts.py) | Remeasures source, authenticates upstream evidence, signs package/generation and artifact-verification originals | Unsigned package, genuine snapshot/closure/provenance/witness originals, independently selected trust and purpose-specific keys |
 | [`local_install.py`](../scripts/authority/local_install.py) | Copies and verifies files, applies fs-verity/immutability, publishes an absent generation and its signed receipt | Genuine signed package and verification receipt, protected current trust/high-water, authorized provisioner key, capable destination |
 | [`commission_development_policy.py`](../scripts/commission_development_policy.py) | Calls genuine policy preparation, retains its actual result, then calls finalization after independently supplied audit and WebAuthn evidence | Admitted authority runtime, exact signed demo policy, real enrolled operator and independently produced/registered evidence |
@@ -46,27 +49,34 @@ The [kernel documentation](https://docs.kernel.org/filesystems/fsverity.html)
 describes the filesystem support requirement and the read-only-FD enable API.
 No shared filesystem feature, mount option or immutable flag was changed.
 
-Deployment needs a **task-dedicated, fs-verity-capable filesystem** and its scoped
-root installer privileges, including immutable-flag capability. Do not enable
+The subsequent [isolated KVM guest](trusted-host-local-storage.md) successfully
+provides a task-dedicated fs-verity/immutable-capable filesystem without host-root
+access. Its read-only second boot also verifies persistence. No Serverware
+authority has been installed there yet. Deployment needs that separate guest
+integration and its scoped installer identities. Do not enable
 features on a shared homelab filesystem or grant a general privileged container
-just to pass commissioning. There is no successful immutable install yet.
+just to pass commissioning. There is no successful signed-package install yet.
 
-## Evidence producers still missing
+## Evidence integration still pending
 
-The new snapshot issuer removes one source gap, but source review did not find
-executable producers for all of these existing contracts:
+Snapshot, measured provenance and persistent artifact-witness producers are now
+implemented. They require genuine compatible inputs and do not turn existing
+dirty engineering reports or raw rootfs exports into clean OCI provenance.
+The runtime replay witness is a separate protocol. Remaining integration:
 
-- Complete Python/native closure analysis and its required actual rootfs
-  verity/pivot enforcement evidence.
-- Genuine artifact provenance and persistent artifact-witness checkpoint
-  issuance. Runtime replay witness service is a different protocol.
-- Policy-signature verification and audit-inclusion evidence issuance and
-  registration. The PostgreSQL outbox and Merkle audit-anchor sink do not
-  produce the required policy-authority inclusion receipt.
+- Original production complete-closure analysis and rootfs/pivot enforcement
+  have no actual producer. A separate local-only measured-roster profile is
+  being implemented; it must not claim exhaustive future dynamic loading or
+  rootfs isolation, and cannot satisfy production complete-closure admission.
+- Genuine audit-inclusion issuance is being connected to independently read
+  committed audit and metadata state. The existing Merkle audit-anchor receipt
+  is not the policy-authority inclusion receipt.
 
-These are implementation/provisioning gaps, not permission to sign invented
-claims. The current closure contract still requires real rootfs enforcement even
-when the package selects `trusted-host-local`.
+Genesis v2 verifies the actual current policy signature and records verification
+inside the real transaction. It avoids the legacy circular evidence/request
+hash dependency and uses signed configuration pins for the audit store/signer.
+Legacy operations remain unchanged. Real WebAuthn and independent inclusion
+originals remain mandatory; no direct SQL authority insertion is added.
 
 Commissioning now keeps one foreground owner from preparation to finalization.
 Its four input/output descriptors must already be in the runtime trust inventory.

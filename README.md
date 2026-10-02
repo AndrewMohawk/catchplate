@@ -138,10 +138,15 @@ isolated database has its 13 restricted role identities. The
 [local authority launcher](docs/trusted-host-local-startup.md),
 [signing/installation commands](docs/trusted-host-local-installation.md) and
 foreground policy caller are source-connected. Genuine upstream evidence,
-a capable dedicated filesystem, actual installation, authentication, schema bootstrap and
+actual installation, authentication, schema bootstrap and
 [policy commissioning](docs/pilot-commissioning.md) remain. **There is not yet a working pilot.** The planned
 walkthrough is non-TEE, non-production and uses no real provider credentials.
 Its current authority requirements cannot be replaced by a SQLite shortcut.
+An [isolated VM](docs/trusted-host-local-storage.md) now supplies the verified
+filesystem route. Persistent artifact-witness issuance, measured provenance
+and the corrected first-policy transaction are implemented; their focused
+31-check batch passes. Local closure and audit-inclusion producers are the
+current implementation priorities, followed by installation and the live walkthrough.
 
 **Protected native production:** the [full goal](goal.md) remains unchanged.
 The [native lifecycle](docs/native-pilot-lifecycle.md) still requires approved

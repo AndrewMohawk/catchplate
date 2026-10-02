@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real bounded primitives and refusals, not a complete package/installation."""
 import ast
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -15,6 +16,70 @@ from serverware import authority_local_artifact_measure as measure
 from scripts.authority import local_artifacts as cli
 from scripts.authority import generate_artifact_bundle as generator
 from serverware import authority_launcher as launcher
+
+
+class OCIOriginalControls(unittest.TestCase):
+    @contextmanager
+    def original(self, raw):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oci.json"
+            path.write_bytes(raw)
+            path.chmod(0o400)
+            row = dict(path=path.name, size=len(raw),
+                sha256="sha256:" + hashlib.sha256(raw).hexdigest())
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                yield fd, row
+            finally:
+                os.close(fd)
+
+    def test_preserves_original_oci_encoding_and_digest(self):
+        originals = (
+            b'{"schemaVersion":2, "annotations":{"z":"\\u003c\\u0026\\u003e", "a":"x"}}\n',
+            b'{"a":1,"z":2}',
+        )
+        for raw in originals:
+            with self.subTest(raw=raw), self.original(raw) as (fd, row):
+                path, observed, document = generator._oci_document(
+                    fd, {row["path"]: row}, row["path"], name="OCI manifest")
+                self.assertEqual(path, row["path"])
+                self.assertIs(observed, row)
+                self.assertEqual(document, raw)
+                self.assertEqual("sha256:" + hashlib.sha256(document).hexdigest(), row["sha256"])
+
+    def test_rejects_ambiguous_or_invalid_oci_json(self):
+        originals = (
+            b'{"a":1,"a":2}', b'{"config":{"a":1,"a":2}}',
+            b'{"a":NaN}', b'{"a":Infinity}', b'{"a":-Infinity}',
+            b'[]', b'null', b'{', b'{"a":"\xff"}',
+        )
+        for raw in originals:
+            with self.subTest(raw=raw), self.original(raw) as (fd, row):
+                with self.assertRaises(generator.GeneratorError):
+                    generator._oci_document(fd, {row["path"]: row}, row["path"], name="OCI manifest")
+
+    def test_original_digest_and_size_remain_enforced(self):
+        with self.original(b'{"a":1}') as (fd, row):
+            for changes in ({"sha256": "sha256:" + "0" * 64}, {"size": row["size"] + 1}):
+                changed = dict(row, **changes)
+                with self.subTest(changes=changes), self.assertRaises(generator.GeneratorError):
+                    generator._oci_document(fd, {row["path"]: changed}, row["path"], name="OCI manifest")
+
+    def test_oci_document_requires_measured_tree_membership(self):
+        with self.original(b'{}') as (fd, row):
+            with self.assertRaises(generator.GeneratorError):
+                generator._oci_document(fd, {}, row["path"], name="OCI manifest")
+
+    def test_oci_document_keeps_existing_size_bound(self):
+        with self.original(b'{}') as (fd, row):
+            changed = dict(row, size=generator.MAX_TARGET_DOCUMENT_BYTES + 1)
+            with self.assertRaises(generator.GeneratorError):
+                generator._oci_document(fd, {row["path"]: changed}, row["path"], name="OCI manifest")
+
+    def test_serverware_canonical_document_contract_is_unchanged(self):
+        with self.original(b'{ "a": 1 }\n') as (fd, row):
+            with self.assertRaises(generator.GeneratorError):
+                generator._canonical_json_document(fd, row["path"], row, name="Serverware document")
 
 
 def selection():

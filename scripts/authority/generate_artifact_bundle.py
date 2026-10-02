@@ -75,6 +75,7 @@ from serverware.authority_artifact_spec import (
     verify_ed25519_signature,
     _verify_key_documents,
     _require_timestamp,
+    _strict_json_document,
 )
 
 
@@ -1014,12 +1015,23 @@ def _oci_document(
         raise GeneratorError(
             f"{name} is outside the measured tree"
         ) from exc
-    document_bytes, document = _canonical_json_document(
+    # OCI digests identify the original external encoding, not Serverware's
+    # canonical JSON encoding. Match the artifact verifier's strict parser
+    # without rewriting key order, whitespace or escaped string characters.
+    document_bytes = _read_exact_bundle_file(
         root_fd,
         path,
         measured,
-        name=name,
+        maximum=MAX_TARGET_DOCUMENT_BYTES,
     )
+    try:
+        _strict_json_document(
+            strict_base64url_encode(document_bytes),
+            name=name,
+            maximum_bytes=MAX_TARGET_DOCUMENT_BYTES,
+        )
+    except ArtifactContractError as exc:
+        raise GeneratorError(f"{name} is not strict JSON") from exc
     return path, measured, document_bytes
 
 

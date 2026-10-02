@@ -194,6 +194,7 @@ class LocalProvenanceTests(unittest.TestCase):
 
     def test_source_order_keeps_measurement_archive_and_trust_before_key(self):
         # Static ordering only, not a fabricated successful retained owner.
+        self.assertIs(local.LocalProvenanceIssuer.associate, local.association)
         tree = ast.parse(Path(local.__file__).read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalProvenanceIssuer")
         issue = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "issue")
@@ -203,7 +204,7 @@ class LocalProvenanceTests(unittest.TestCase):
                 name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else ""
                 lines.setdefault(name, []).append(node.lineno)
         key_line = min(lines["signing_key"])
-        for name in ("measure_tree", "association", "verify_archive", "_verification_key"):
+        for name in ("measure_tree", "associate", "verify_archive", "_verification_key"):
             self.assertLess(max(lines[name]), key_line)
         self.assertGreater(max(lines["check_originals"]), key_line)
 

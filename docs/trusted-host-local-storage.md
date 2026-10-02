@@ -64,9 +64,26 @@ image, volume or other user's data was removed.
 
 The shared host ext4 probes still refuse fs-verity; nothing enabled it there.
 The successful guest resolves the **dedicated-filesystem feasibility** issue,
-not the entire deployment. Serverware/Python authority runtimes, protected
-identities, networking and database authentication have not been installed into
-this guest. Genuine complete-closure/rootfs-enforcement evidence and actual
-signed installation remain necessary. Continue with
+not the entire deployment. A separate guest runtime asset is now restored from
+the retained `ec14a558` Python image and passed actual dependency imports plus a
+read-only reboot with unchanged disk hashes. Its initial QEMU I/O-pool failure
+is retained; the bounded four-worker retry used a fresh disk and succeeded.
+The runtime image contains older `d863e3d7` source, not the current source.
+Its files have not all been sealed immutable or enabled for per-file verity.
+
+The private sibling directory `python-ec14a558-431/` retains that runtime and
+its exact evidence. `runtime-oci-ec14a558-431/` separately retains the actual
+Docker OCI export: manifest/config and17 uncompressed layers passed hash/size
+and ordered diff-ID checks. No rebuild, pull or registry publication occurred.
+The [local composition profile](trusted-host-local-composition.md) can describe
+those runtime inputs alongside a separately authenticated clean source archive;
+it does not assert that the older image was built from that source.
+
+Current authority code, signed package installation, protected identities,
+networking and database authentication have not been commissioned in the guest.
+The local-only [measured roster](trusted-host-local-measured-roster.md) is
+explicitly narrower than production complete-closure/rootfs enforcement.
+Actual selected-profile verification and signed installation remain necessary.
+Continue with
 [local installation](trusted-host-local-installation.md) and
 [policy commissioning](pilot-commissioning.md); no pilot URL is ready yet.

@@ -17,6 +17,8 @@ successful signed install or live policy transition is claimed.
 | --- | --- | --- |
 | [`local_snapshot.py`](../scripts/authority/local_snapshot.py) | Measures an exact frozen CAS tree and signs the existing snapshot receipt | Already frozen root-owned tree named by its digest, protected approval/trust, authorized snapshot-verifier key |
 | [`local_provenance.py`](../scripts/authority/local_provenance.py) | Verifies actual clean Git/archive/report/OCI associations and signs a detached local observation | Exact compatible clean build report, retained source/OCI objects, frozen tree and authorized provenance key; this is not build-execution or SLSA proof |
+| [`local_composition.py`](../scripts/authority/local_composition.py) | Observes separately selected clean source and retained runtime OCI inputs | Exact source/archive/commit, OCI objects and canonical composition declaration; no source-to-image build claim |
+| [`local_closure.py`](../scripts/authority/local_closure.py) | Measures the selected Python/native roster and actual bounded ELF metadata | Genuine snapshot and frozen tree; local-only assurance, not production complete closure |
 | [`local_artifact_witness.py`](../scripts/authority/local_artifact_witness.py) | Verifies persistent signed history and appends the actual generation/checkpoint under an exclusive lock | Pinned root0700 store, external high-water, authorized witness key and exact expected prior head; no external trust advance |
 | [`local_artifacts.py`](../scripts/authority/local_artifacts.py) | Remeasures source, authenticates upstream evidence, signs package/generation and artifact-verification originals | Unsigned package, genuine snapshot/closure/provenance/witness originals, independently selected trust and purpose-specific keys |
 | [`local_install.py`](../scripts/authority/local_install.py) | Copies and verifies files, applies fs-verity/immutability, publishes an absent generation and its signed receipt | Genuine signed package and verification receipt, protected current trust/high-water, authorized provisioner key, capable destination |
@@ -59,15 +61,17 @@ just to pass commissioning. There is no successful signed-package install yet.
 
 ## Evidence integration still pending
 
-Snapshot, measured provenance and persistent artifact-witness producers are now
-implemented. They require genuine compatible inputs and do not turn existing
-dirty engineering reports or raw rootfs exports into clean OCI provenance.
+Snapshot, measured provenance/composition, local roster and persistent
+artifact-witness producers are now implemented. They require genuine compatible
+inputs and do not turn existing dirty engineering reports or raw rootfs exports
+into clean OCI provenance. The separate [composition profile](trusted-host-local-composition.md)
+describes clean source plus a retained runtime without a source-to-image claim.
 The runtime replay witness is a separate protocol. Remaining integration:
 
 - Original production complete-closure analysis and rootfs/pivot enforcement
-  have no actual producer. A separate local-only measured-roster profile is
-  being implemented; it must not claim exhaustive future dynamic loading or
-  rootfs isolation, and cannot satisfy production complete-closure admission.
+  have no actual producer. The implemented local-only measured-roster profile
+  claims neither exhaustive future dynamic loading nor rootfs isolation, and
+  cannot satisfy production complete-closure admission.
 - Genuine audit-inclusion issuance is being connected to independently read
   committed audit and metadata state. The existing Merkle audit-anchor receipt
   is not the policy-authority inclusion receipt.

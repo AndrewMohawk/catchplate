@@ -75,10 +75,13 @@ to adopt a different PID, retry with a fresh deadline or regenerate authority.
 ## Still required before the pilot can run
 
 1. Build and genuinely install the signed local authority package, including
-   its complete closure and real immutable-installation evidence. The new
+   its explicit [local measured roster](trusted-host-local-measured-roster.md)
+   and real immutable-installation evidence. The new
    [local signing/installation commands](trusted-host-local-installation.md)
    connect these effects; they have not performed a complete signed install.
-   Genuine upstream evidence and a capable dedicated filesystem remain missing.
+   A [dedicated VM filesystem and base Python runtime](trusted-host-local-storage.md)
+   now exist; genuine assembled/signed inputs and actual authority installation
+   remain missing. Native production complete-closure admission is unchanged.
 2. Provision actual scoped keys, database authentication, TLS and trust pins,
    then run the existing offline metadata bootstrap and local authority roles.
 3. Invoke genuine policy-genesis preparation, obtain actual audit inclusion and

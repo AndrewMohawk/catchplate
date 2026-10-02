@@ -630,6 +630,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_configuration.py \
 	scripts/test_authority_local_runtime_trust.py \
 	scripts/test_authority_local_rbac_witness.py \
+	scripts/test_authority_local_rbac_bootstrap.py \
 	scripts/test_authority_local_launch_authorization.py \
 	scripts/test_authority_local_cohort.py \
 	scripts/test_authority_local_trust_commit.py \
@@ -887,6 +888,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_trust.py \
 	serverware/authority_local_configuration.py \
 	serverware/authority_local_runtime_trust.py \
+	serverware/authority_local_rbac_bootstrap.py \
 	serverware/authority_local_launch_authorization.py \
 	serverware/authority_local_cohort.py \
 	serverware/authority_local_trust_commit.py \
@@ -3980,6 +3982,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_trust.py \
 				serverware/authority_local_configuration.py \
 				serverware/authority_local_runtime_trust.py \
+				serverware/authority_local_rbac_bootstrap.py \
 				serverware/authority_local_launch_authorization.py \
 				serverware/authority_local_cohort.py \
 				serverware/authority_local_trust_commit.py \

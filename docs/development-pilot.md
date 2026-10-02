@@ -25,10 +25,12 @@ process memory; development authentication, keys and attestation are not
 production trust. Use no real provider credentials or personal data. This
 does not replace or satisfy the [full production goal](../goal.md).
 
-## 1. Open the local UI
+## 1. Connect and complete first enrollment
 
-Open `http://localhost:13000/` on the deployment host. Keep this exact hostname
-for the selected hardware-key origin. All published pilot ports
+The browser and physical FIDO2 YubiKey belong on your own computer, not in the
+AWS console or an unattended server browser. The selected browser origin is
+`http://localhost:13000/`; keep this exact hostname, not `127.0.0.1` or the
+server's IP address. All published pilot ports
 are loopback-only; this is not a public URL or authorization to expose them.
 
 For access from your own computer, use an authorized SSH account on the actual
@@ -44,20 +46,47 @@ ssh -N -o ExitOnForwardFailure=yes \
   YOUR_SSH_USER@YOUR_PILOT_HOST
 ```
 
+Establish the tunnel before launch and leave its terminal open. Have your
+YubiKey inserted and its PIN available, then tell the operator you are ready.
+The page does not run until the operator starts enrollment and announces that
+the registration browser is ready. Do not start the launch just to probe it:
+its original approval windows are short and are not renewed automatically.
+
+Open the exact localhost URL when instructed and complete these four prompts:
+
+1. **Create registration credential** using the external YubiKey.
+2. On that same page, **Confirm final completion with your key**.
+3. Wait for the operator to announce the policy browser, then reload the same
+   URL and choose **Approve exact policy preparation**.
+4. On that page, **Approve exact policy finalization**.
+
+No manually entered admin or bootstrap token is needed for these four prompts.
+Enter the PIN only in the browser/system prompt, never in chat. Respond promptly;
+completion and final policy approval have particularly short remaining windows.
+If an operation expires, is cancelled or fails, stop and let the operator inspect
+the retained outcome. Do not refresh mid-ceremony or repeat the action.
+
+### Normal application after commissioning
+
+Wait for the operator's application-ready announcement before continuing. The
+same URL changes from enrollment pages to the normal application; the enrollment
+pages alone do not prove application startup or proxy readiness.
+
 1. Enter the scoped operator token provided through the private runtime handoff
    in **Admin token or OIDC JWT**, then click **Refresh**. There is no fixed
    published admin password or token. Do not paste it into chat. The optional
    **Sign in** button is for separately configured OIDC.
-2. The operator must first commission the policy through the supported authority
-   path, then seed this isolated pilot once. Do not click **Seed demo** during
-   the walkthrough or attempt to manufacture policy-authority records. If demo
-   data is missing, stop and ask the operator.
+2. The selected launcher's continuation calls the existing authenticated demo
+   seed endpoint once, after genuine policy commissioning and before CA/proxy
+   startup. Wait for its actual success announcement. Do not click **Seed demo**
+   again or attempt to manufacture policy-authority records. If demo data is
+   missing, stop and ask the operator; an uncertain seed request is not retried.
 3. Inspect **Credentials** for **Demo bearer token** and **Policies** for the
    demo policy/`demo.echo` route. Do not enter an upstream token yourself.
    After the requests below, **Audit** can show the resulting traffic.
 
-The larger **Setup** workflow, OAuth provider connection and hardware assurance
-are outside this first demonstration. A loaded page, a health check or an
+The larger **Setup** workflow, OAuth provider connection and production hardware
+assurance are outside this first demonstration. A loaded page, a health check or an
 attestation panel alone does not establish a working credential-replacement flow.
 Do not edit credentials, publish policy or approve requests in this walkthrough.
 

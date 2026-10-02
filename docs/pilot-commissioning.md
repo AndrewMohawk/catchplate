@@ -119,6 +119,14 @@ condition, not permission to invent receipts or enable a fallback.
    neither publishes policy nor advances its sequence. A
    `409 demo_policy_commissioning_required` means stop and correct commissioning;
    do not switch to SQLite/non-atomic mode or retry with manufactured state.
+   The selected `live-rust-seeded` guest continuation performs this one request
+   itself before waiting for CA publication. It uses the retained operator
+   credential, validates the response's actual policy hash/sequence and demo
+   credential ID, and does not print the response. Only empty TCP readiness
+   probes may repeat; the POST is never replayed after timeout or failure.
+   This removes a manual seed-click race without changing the endpoint's
+   administrator, development-mode or committed-policy requirements. It is
+   implemented startup behavior, not evidence that seeding has run.
 5. **Complete the CA and gate startup.** The selected launcher runs the exact
    retained Rust executable in the same guest and trusted UID as the normal
    control plane, using the guest's separately measured loader/libraries. This

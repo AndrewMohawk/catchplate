@@ -139,15 +139,18 @@ read-only connections from the pilot VM using a restricted role. Two concurrent
 sessions passed; an unforwarded host connection was blocked. No database host
 port was opened, and its identity and volume were preserved. An [isolated VM](docs/trusted-host-local-storage.md)
 supplies the verified immutable-filesystem route and Python runtime. Actual
-provisioning created 37 distinct signing keys, 13 metadata database client certificates,
-initial trust and seven static role inputs; read-only reboots verified persistence.
-Unsigned package staging now also passes in the guest: source, Python/native
-runtime, public keys and all seven roles are assembled. This is not a signed
+provisioning created 37 distinct authority signing keys, 13 metadata database client
+certificates, initial trust and seven static role inputs; read-only reboots verified
+persistence. A separate HTTP-response key has now been created and verified distinct
+from those keys. Fresh unsigned staging of `b111f0e1` passes in the guest, including
+all seven roles and the registration launchers. This is not a signed
 installation or running authority. The current integration work connects that
 installation to actual service startup and first-device registration. A separate
 local witness database and its TLS material are now provisioned; witness enrollment
-and the first metadata schema bootstrap remain pending. The latest focused startup
-batch passes 34/34; it is not an end-to-end pilot result.
+and the first metadata schema bootstrap remain pending. The browser/registration
+integration now targets the actual reservation, execution and completion routes,
+including the required second hardware-key assertion. Focused checks pass; none
+is an end-to-end pilot result.
 
 **There is not yet a working pilot.** All four slots focus on the remaining
 critical path: [signed package installation](docs/trusted-host-local-package-assembly.md),

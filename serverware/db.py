@@ -26431,7 +26431,21 @@ def init_db(
             "bootstrap contract"
         )
     if borrowed_offline_connection is None:
-        grants.init_grant_store()
+        # The exact shared PostgreSQL bootstrap installs grant tables through
+        # metadata_schema_source below, in its admitted admin transaction and
+        # metadata namespace. The legacy standalone initializer instead uses
+        # the runtime DSN/default namespace and must not precede that install.
+        shared_metadata_bootstrap = (
+            metadata_backend == "postgres"
+            and bootstrap_contract_id == _METADATA_STORE_BOOTSTRAP_CONTRACT_ID
+            and os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
+            == "metadata-bootstrap"
+            and grants.uses_postgres()
+            and bool(METADATA_STORE_POSTGRES_DSN.strip())
+            and grants.GRANT_STORE_POSTGRES_DSN == METADATA_STORE_POSTGRES_DSN
+        )
+        if not shared_metadata_bootstrap:
+            grants.init_grant_store()
         init_audit_store(
             bootstrap_contract_id=bootstrap_contract_id
         )

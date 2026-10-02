@@ -625,9 +625,12 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_admission.py \
 	scripts/test_authority_local_startup.py \
 	scripts/test_authority_local_artifacts.py \
+	scripts/test_authority_local_artifact_witness.py \
+	scripts/test_authority_local_provenance.py \
 	scripts/test_authority_local_install.py \
 	scripts/test_authority_local_snapshot.py \
 	scripts/test_development_policy_commissioning.py \
+	scripts/test_authority_genesis_successor.py \
 	scripts/test_control_plane_optional_startup.py \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \
@@ -858,6 +861,11 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 # Include package imports, imported independent oracles, and db.py, which the
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
+	serverware/authority_local_artifact_witness.py \
+	serverware/authority_local_provenance.py \
+	serverware/authority_transition_policy_genesis.py \
+	scripts/authority/local_artifact_witness.py \
+	scripts/authority/local_provenance.py \
 	scripts/test_oauth_retirement_values.py \
 	scripts/authority_revocation_observation_fixture.py \
 	scripts/authority_revocation_semantics_fixture.py \
@@ -3911,6 +3919,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 		frozen_source_digest="$$(source_tree_digest)"; \
 			for required_source_file in \
 				Makefile \
+				serverware/authority_local_artifact_witness.py \
+				serverware/authority_local_provenance.py \
+				serverware/authority_transition_policy_genesis.py \
+				scripts/authority/local_artifact_witness.py \
+				scripts/authority/local_provenance.py \
 				docker-compose.yml \
 				Dockerfile \
 				Dockerfile.production \

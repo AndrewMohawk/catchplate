@@ -138,7 +138,7 @@ isolated PostgreSQL now has TLS and a verified certificate-authenticated,
 read-only login using a restricted role. Its existing database identity and
 volume were preserved. An [isolated VM](docs/trusted-host-local-storage.md)
 supplies the verified immutable-filesystem route and Python runtime. Actual
-provisioning created 23 distinct signing keys, 13 database client certificates,
+provisioning created 29 distinct signing keys, 13 database client certificates,
 initial trust and seven static role inputs; read-only reboots verified persistence.
 These are real dependencies and staging materials, not installed authority.
 

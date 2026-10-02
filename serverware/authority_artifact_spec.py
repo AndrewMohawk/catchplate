@@ -1815,6 +1815,94 @@ def validate_stage_zero_reference(value: object, *, native_executables: Sequence
     return True
 
 
+def retained_installation_paths(*, bundle: Mapping[str, Any], generation_root: str,
+        retained_files: object, launch_closure: object) -> dict[str, str]:
+    """Resolve retained paths after package and signed-launch authentication.
+
+    This pure projection grants no installation or launch authority. Callers
+    must still compare every physical receipt field and inspect actual retained
+    and named files. Native profiles retain strict lexical generation paths.
+    Only the explicit local Python profile can use signed runtime aliases:
+    native members, bootstrap/interpreter, or an exact signed Python module
+    joined to its sealed launch-closure entry. Data/role files get no implicit
+    alias and remain under the actual generation root.
+    """
+    root = PurePosixPath(_require_runtime_path(generation_root, name="installed generation root"))
+    retained = _require_list(retained_files, name="retained installation files", maximum=MAX_BUNDLE_FILES)
+    stage_zero = bundle["stageZero"]
+    local = stage_zero["interfaceSchema"] == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA
+    if local and bundle["trustMode"]["mode"] != "trusted-host-local":
+        raise ArtifactContractError("local runtime aliases cannot select another trust mode")
+    aliases: dict[str, tuple[str, str]] = {}
+    files: dict[str, Mapping[str, Any]] = {}
+    if local:
+        for row in _require_list(bundle["files"], name="authenticated installation files", maximum=MAX_BUNDLE_FILES):
+            _validate_file_entry(row)
+            if row["path"] in files:
+                raise ArtifactContractError("authenticated installation path is ambiguous")
+            files[row["path"]] = row
+
+        def bind(runtime_path: str, path: str, digest: str) -> None:
+            _require_runtime_path(runtime_path, name="signed runtime alias")
+            _require_relative_path(path, name="signed artifact alias target")
+            _require_digest(digest, name="signed runtime alias digest")
+            if path not in files or files[path]["sha256"] != digest:
+                raise ArtifactContractError("runtime alias is outside the authenticated file roster")
+            pair = (path, digest)
+            if runtime_path in aliases and aliases[runtime_path] != pair:
+                raise ArtifactContractError("runtime alias has conflicting authenticated targets")
+            aliases[runtime_path] = pair
+
+        native = bundle["nativeClosure"]
+        for field, validator in (("executables", _validate_native_executable), ("objects", _validate_native_object)):
+            for row in _require_list(native[field], name="signed native aliases", maximum=MAX_NATIVE_OBJECTS):
+                validator(row)
+                bind(row["runtimePath"], row["path"], row["sha256"])
+        validate_stage_zero_reference(stage_zero, native_executables=native["executables"],
+            trust_mode="trusted-host-local")
+        for row in (stage_zero, stage_zero["interpreter"]):
+            bind(row["runtimePath"], row["path"], row["sha256"])
+        imports: dict[str, Mapping[str, Any]] = {}
+        for row in _require_list(bundle["pythonImportClosure"], name="signed Python aliases", maximum=MAX_IMPORTS):
+            _validate_python_import(row)
+            if row["module"] in imports:
+                raise ArtifactContractError("signed Python module alias is ambiguous")
+            imports[row["module"]] = row
+        seen = set()
+        for row in _require_list(launch_closure, name="sealed launch aliases", maximum=MAX_BUNDLE_FILES):
+            if row["kind"] not in {"source", "extension"}:
+                continue
+            original = imports.get(row["module"])
+            if (original is None or row["module"] in seen or any(
+                    type(row[name]) is not type(original[name]) or row[name] != original[name]
+                    for name in ("kind", "isPackage", "sha256"))):
+                raise ArtifactContractError("sealed Python alias differs from its authenticated module")
+            seen.add(row["module"])
+            bind(row["path"], original["path"], original["sha256"])
+        if seen != set(imports):
+            raise ArtifactContractError("sealed Python alias roster is incomplete")
+    result = {}
+    for row in retained:
+        runtime_path = _require_runtime_path(row["runtimePath"], name="retained runtime path")
+        if runtime_path in result:
+            raise ArtifactContractError("retained runtime path is repeated")
+        try:
+            relative = PurePosixPath(runtime_path).relative_to(root).as_posix()
+            _require_relative_path(relative, name="retained generation path")
+        except ValueError as error:
+            if not local or runtime_path not in aliases:
+                raise ArtifactContractError("retained file has no authenticated installed path") from error
+            relative = aliases[runtime_path][0]
+        if local:
+            if runtime_path in aliases and aliases[runtime_path][0] != relative:
+                raise ArtifactContractError("runtime alias conflicts with its literal generation path")
+            original = files.get(relative)
+            if original is None or (row["sha256"], row["size"]) != (original["sha256"], original["size"]):
+                raise ArtifactContractError("retained alias bytes differ from the authenticated file")
+        result[runtime_path] = relative
+    return result
+
+
 def _configuration_payload_binding_key(value: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(
         value[field]

@@ -1447,16 +1447,18 @@ def _validate_canonical_launch_evidence(
         raise LaunchError(
             "role manifest bytes are outside the measured launch closure"
         )
+    installation_paths = _require_contract_callable(
+        artifact_contract,
+        "retained_installation_paths",
+    )(
+        bundle=bundle,
+        generation_root=generation_root.as_posix(),
+        retained_files=request["retainedFiles"],
+        launch_closure=launch_payload["closure"],
+    )
     saw_role_manifest = False
     for retained in request["retainedFiles"]:
-        try:
-            relative = PurePosixPath(
-                retained["runtimePath"]
-            ).relative_to(generation_root).as_posix()
-        except ValueError as exc:
-            raise LaunchError(
-                "retained authority file is outside the provisioned generation"
-            ) from exc
+        relative = installation_paths[retained["runtimePath"]]
         installed_entry = installed.get(relative)
         if (
             installed_entry is None

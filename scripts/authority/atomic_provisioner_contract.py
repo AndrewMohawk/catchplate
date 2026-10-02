@@ -268,7 +268,9 @@ def _document_digest(domain: str, value: Mapping[str, Any]) -> str:
 
 
 def signed_package_digest(package: Mapping[str, Any]) -> str:
-    return signed_artifact_package_digest(package)
+    # VerifiedArtifactPackage exposes its outer mapping as read-only. Preserve
+    # all existing validation while passing an ordinary JSON object to hashing.
+    return signed_artifact_package_digest(dict(package))
 
 
 def verification_receipt_digest(receipt: Mapping[str, Any]) -> str:

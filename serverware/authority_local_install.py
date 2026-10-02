@@ -494,7 +494,7 @@ class LocalAuthorityInstaller:
             self.check()
             # Recheck current package/key/receipt validity immediately before signing.
             _require(protected.read_public(self.sources["trust"][0], contract.MAX_DOCUMENT_BYTES) == self.sources["trust"][2])
-            artifact.verify_signed_artifact_package(self.verified.package, trust_state=_document(self.sources["trust"][2]), validation_time=_timestamp())
+            artifact.verify_signed_artifact_package(dict(self.verified.package), trust_state=_document(self.sources["trust"][2]), validation_time=_timestamp())
             contract.verify_verification_receipt(self.verification, verified_package=self.verified, validation_time=_timestamp(), accepted_receipt_digests=())
             self.verified.require_key(self.value["keyId"], "artifact-provisioner", at=_timestamp())
             receipt = dict(schema=contract.LOCAL_PROVISIONING_RECEIPT_SCHEMA,

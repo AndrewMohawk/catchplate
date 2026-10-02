@@ -44,17 +44,25 @@ them in arguments, logs or chat. Native and production profiles are unchanged.
    The existing parent seals those
    literal originals; the child independently validates them before admission.
 4. The five service roles—verifier, planner, planner-writer, issuer and executor—
-   additionally require genuine `evidence.json`: the existing signed five-role
-   attestation cohort. The [cohort issuer](../scripts/authority/local_cohort.py)
-   accepts one protected CohortApproval/v1, the separately sealed configuration
+   additionally require genuine `evidence.json`: the existing runtime-evidence
+   delivery containing a signed five-role cohort and signed historical archive.
+   The [cohort issuer](../scripts/authority/local_cohort.py)
+   accepts one protected CohortApproval/v2, the separately sealed configuration
    root key, and five fixed original launch-approval/exchange-directory FD pairs.
    Its approval explicitly delegates
-   `configuration-root-signs-five-observed-local-role-receipts-and-cohort-v1`.
+   `configuration-root-signs-five-local-role-receipts-cohort-and-initial-history-v1`
+   and selects `explicit-empty-first-generation-history`. Only generation zero,
+   no predecessor and zero rollback floor are supported by this initial issuer;
+   there is no empty-history fallback for a later generation or recovery.
    It authenticates each issued pair and installed package, joins the signed
    Service6 to every child's actual configuration descriptor, and remeasures all
    five parked launches using retained PIDFD/proc originals. No service signing
    key is borrowed; selected role measurements are not native PCR claims.
-   The same signed cohort is published to all five `evidence.json` names. Each
+   The separately signed empty archive binds the actual current configuration,
+   generation and unchanged cohort interval. Both existing consumers validate
+   the originals before the full `authorityRuntimeEvidence/v1` wrapper is
+   published to all five `evidence.json` names. A bare cohort is not accepted by
+   the service's outer delivery parser. Each
    delivery can immediately release that child; subsequent checks require only
    unreleased roles to stay parked and retain the released roles' originals.
    Runtime and replay-witness launches have no cohort evidence slot.

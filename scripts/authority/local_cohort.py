@@ -12,10 +12,11 @@ USAGE = """Usage: python -I -B scripts/authority/local_cohort.py --approval-fd N
   --planner-writer-approval-fd N --planner-writer-exchange-directory-fd N
   --verifier-approval-fd N --verifier-exchange-directory-fd N
 
-Root-only, one-shot, same-kernel trusted-host-local issuance. CohortApproval/v1
+Root-only, one-shot, same-kernel trusted-host-local issuance. CohortApproval/v2
 pins the genuine signed Service6 original, the exact five original launch
 approvals/observations/issued manifest/certificate hashes and root0700 exchange
-identities, explicit configuration-root delegation, boot and original <=300s
+identities, explicit configuration-root delegation and empty-first-generation
+history selection, boot and original <=300s
 dual limits. All actual processes remain parked pending evidence.json. Existing
 PIDFD/proc/descriptor/installed-source/mapping checks are mandatory; access to
 pidfd_getfd, map_files and process memory is required. No predicted processes,
@@ -27,8 +28,13 @@ Existing package-authorized launch certificates and root-signed manifests must
 already exist in each exchange. The exact signed Service6 must also match every
 actual child's retained configuration descriptor and installed package binding.
 
-Publishes the same existing signedTrustedHostLocalAttestationCohort/v1 to all
-five evidence.json files, complete root0400/no-replace. Each publication may
+Publishes the actual authorityRuntimeEvidence/v1 delivery to all five
+evidence.json files: currentCohort is the existing signed five-role cohort;
+historicalArchive is a separately root-signed exact current-scope empty archive.
+Only generation zero with no predecessor and zero rollback floor is supported;
+this never discards historical entries for a later generation or recovery.
+Both signatures and unchanged intervals pass their genuine consumers before
+publication. Complete root0400/no-replace publication may
 immediately release that child. Later checks retain its originals but require
 only unreleased children to remain parked. Partial release is irreversible:
 preserve files and owners, no reset/retry/deletion. No service readiness claim.

@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import ast
 import unittest
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -21,7 +22,8 @@ def fixture():
     # is created, and this is never passed off as a positive producer run.
     key = Ed25519PrivateKey.from_private_bytes(b"\x21" * 32)
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    service = dict(sourceRevision=subject.cohort.authority.SOURCE_REVISION,
+    service = dict(schema=subject.history.configuration.CONFIG_SCHEMA,
+        sourceRevision=subject.cohort.authority.SOURCE_REVISION,
         roles={role: dict(processMode="policy-authority-" + role,
             measurementDigest=digest(role + "-measurement"), responseSigningSpkiDigest=digest(role + "-response"))
             for role in subject.cohort.ROLES},
@@ -31,6 +33,7 @@ def fixture():
             trustMode="trusted-host-local", maximumReceiptAgeNs=200),
         issuerCredentialIssuanceDigest=digest("issuer-issuance"), executorCredentialIssuanceDigest=digest("executor-issuance"))
     selected = dict(schema=subject.SCHEMA, purpose=subject.PURPOSE, rootDelegation=subject.DELEGATION,
+        historicalArchiveSelection=subject.INITIAL_HISTORY,
         configurationRootPublicKeyBase64Url=subject.spec.strict_base64url_encode(public),
         serviceConfigurationOriginal="{}", serviceConfigurationSha256=subject.sha(b"{}"),
         bootIdDigest=digest("boot"), issuedAtBoottimeNs=100, deadlineBoottimeNs=200,
@@ -40,6 +43,12 @@ def fixture():
     context = dict(selected=selected, rootPublic=public, service=service,
         static=subject.cohort._static_configuration(service), configurationDigest=digest("config"),
         packageDigest=digest("package"), generationDigest=digest("generation"), generationSequence=0,
+        generationInterval=(1, 300),
+        generationContext=dict(schema=subject.history.configuration.GENERATION_SCHEMA,
+            sequence=0, digest=digest("generation"), predecessorDigest=None, minimumRollbackSequence=0,
+            operationManifestDigest=subject.cohort.authority.OPERATION_MANIFEST_DIGEST,
+            configurationPayloadBindings=[], configurationBindingDigest=digest("binding"),
+            roleBindingDigests=service["roleBindingDigests"]),
         identities={role: (digest(role + "-manifest"), digest(role + "-request")) for role in subject.cohort.ROLES})
     return key, selected, context
 
@@ -59,6 +68,9 @@ class LocalCohortTests(unittest.TestCase):
         for mutate in (lambda v: v["roles"].pop("verifier"),
                        lambda v: v["roles"].update(runtime=deepcopy(v["roles"]["issuer"])),
                        lambda v: v.update(rootDelegation="*"),
+                       lambda v: v.update(schema="serverware.authorityTrustedHostLocalCohortApproval/v1"),
+                       lambda v: v.pop("historicalArchiveSelection"),
+                       lambda v: v.update(historicalArchiveSelection="discard-prior-history"),
                        lambda v: v["roles"]["verifier"].update(exchangeDirectory=v["roles"]["issuer"]["exchangeDirectory"])):
             bad = deepcopy(value); mutate(bad)
             with self.assertRaises(ValueError):
@@ -120,6 +132,51 @@ class LocalCohortTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify(subject.canonical(envelope), context, key)
 
+    def test_existing_runtime_delivery_contains_real_signed_empty_initial_archive(self):
+        key, _, context = fixture()
+        raw, verifier, delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+        delivery = subject.document(delivery_raw, subject.pair.LATE_LIMITS["evidence.json"])
+        self.assertEqual(set(delivery), {"schema", "currentCohort", "historicalArchive"})
+        self.assertEqual(delivery["schema"], "serverware.authorityRuntimeEvidence/v1")
+        self.assertEqual(subject.canonical(delivery["currentCohort"]), raw)
+        self.assertEqual(verifier, next(row[1] for row in verify(raw, context, key)[0].receipts if row[0] == "verifier"))
+        archive = delivery["historicalArchive"]
+        subject.cohort._verify_signature(archive, key.public_key())
+        self.assertEqual(archive["payload"]["entries"], [])
+        self.assertEqual(archive["payload"]["configurationDigest"], context["configurationDigest"])
+        self.assertEqual(archive["payload"]["generationDigest"], context["generationDigest"])
+        self.assertEqual((archive["payload"]["issuedAtEpochNs"], archive["payload"]["expiresAtEpochNs"]), (100, 200))
+
+    def test_empty_history_cannot_discard_later_generation_or_extend_interval(self):
+        key, _, original = fixture()
+        for mutate in (lambda c: c.update(generationSequence=1),
+                       lambda c: c["generationContext"].update(sequence=1),
+                       lambda c: c["generationContext"].update(predecessorDigest=digest("prior")),
+                       lambda c: c["generationContext"].update(minimumRollbackSequence=1),
+                       lambda c: c.update(generationInterval=(110, 190)),
+                       lambda c: c["selected"].update(historicalArchiveSelection="implicit-empty")):
+            context = deepcopy(original); mutate(context)
+            with self.assertRaises(ValueError):
+                subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+        with self.assertRaises(ValueError):
+            subject._signed_runtime_evidence(original, key, now_unix_ns=200)
+
+    def test_actual_service_delivery_parser_reaches_refusing_guard_only_for_wrapper(self):
+        # Exercise the real outer consumer, but deliberately refuse at the
+        # first live guard. This is not a mocked successful process admission.
+        from serverware.authority_service import MeasuredConfiguration, AuthorityServiceError
+        key, _, context = fixture()
+        cohort_raw, _, delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+        with patch.object(subject.cohort.guard, "require_active", side_effect=ValueError("deliberate guard refusal")) as guard:
+            with self.assertRaises(AuthorityServiceError):
+                MeasuredConfiguration._verify_trusted_host_local_attestation(
+                    None, role="verifier", attestation_value=cohort_raw)
+            guard.assert_not_called()
+            with self.assertRaises(AuthorityServiceError):
+                MeasuredConfiguration._verify_trusted_host_local_attestation(
+                    None, role="verifier", attestation_value=delivery_raw)
+            guard.assert_called_once_with("verifier")
+
     def test_cli_exact_roster_and_no_alias(self):
         argv = ["--approval-fd", "3", "--approval-sha256", digest("approval"), "--signing-key-fd", "4"]
         for index, role in enumerate(cli.ROLES):
@@ -134,7 +191,7 @@ class LocalCohortTests(unittest.TestCase):
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalCohortIssuer")
         publish = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "publish")
         calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(publish) if isinstance(node, ast.Call)]
-        signed = next(line for line, name in calls if name == "_signed_cohort")
+        signed = next(line for line, name in calls if name == "_signed_runtime_evidence")
         live = sorted(line for line, name in calls if name == "self.verify_live")
         self.assertLess(live[0], signed)
         self.assertGreater(live[1], signed)
@@ -143,6 +200,7 @@ class LocalCohortTests(unittest.TestCase):
         self.assertIn("open_observer", source)
         self.assertIn("observer.check_sources() if role in self.released else observer.check()", source)
         self.assertIn("if role in self.released:", source)
+        self.assertIn("'evidence.json', self.delivery_raw", source)
         self.assertNotIn("os.kill", source)
         cli_source = Path(cli.__file__).read_text()
         self.assertLess(cli_source.index("owner.publish()"), cli_source.index("io.write_public(owner.verifier_original()"))

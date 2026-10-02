@@ -14,16 +14,19 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_attestation_cohort as cohort
+from serverware import authority_historical_archive as history
 from serverware import authority_local_configuration as configuration
 from serverware import authority_local_launch_authorization as pair
 
 io, spec, launch, stage = pair.io, pair.spec, pair.launch, pair.stage
 canonical, document, sha = spec.canonical_json_bytes, configuration.document, pair.sha
-SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v1"
+SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v2"
 PURPOSE = "issue-observed-five-role-local-cohort"
-DELEGATION = "configuration-root-signs-five-observed-local-role-receipts-and-cohort-v1"
+DELEGATION = "configuration-root-signs-five-local-role-receipts-cohort-and-initial-history-v1"
+INITIAL_HISTORY = "explicit-empty-first-generation-history"
+RUNTIME_EVIDENCE_SCHEMA = "serverware.authorityRuntimeEvidence/v1"
 FIELDS = frozenset({"schema", "purpose", "rootDelegation", "configurationRootPublicKeyBase64Url",
-    "serviceConfigurationOriginal", "serviceConfigurationSha256", "roles", "bootIdDigest",
+    "serviceConfigurationOriginal", "serviceConfigurationSha256", "roles", "historicalArchiveSelection", "bootIdDigest",
     "issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"})
 ROLE_FIELDS = frozenset({"launchApprovalSha256", "observationSha256", "manifestSha256",
     "certificateSha256", "exchangeDirectory"})
@@ -39,7 +42,8 @@ def require(value):
 def approval(raw, *, boot, now_boottime_ns, now_unix_ns):
     value = document(raw, io.MAX_PUBLIC)
     require(set(value) == FIELDS and value["schema"] == SCHEMA and value["purpose"] == PURPOSE
-        and value["rootDelegation"] == DELEGATION and value["bootIdDigest"] == boot)
+        and value["rootDelegation"] == DELEGATION and value["bootIdDigest"] == boot
+        and value["historicalArchiveSelection"] == INITIAL_HISTORY)
     spec._require_digest(boot, name="cohort boot")
     configuration._public(value["configurationRootPublicKeyBase64Url"])
     for name in ("issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"):
@@ -89,6 +93,10 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
         process = context["observed"]["process"]
         require(process["pid"] not in processes); processes.add(process["pid"])
         verified = context["verified"]
+        # An empty historical archive is an explicit first-generation choice,
+        # never an automatic fallback for a later generation or lost history.
+        require(verified.generation_sequence == 0 and verified.predecessor_digest is None
+            and verified.minimum_rollback_sequence == 0)
         scope = (verified.package_digest, verified.generation_digest, verified.generation_sequence)
         if common is None:
             common = scope
@@ -125,6 +133,9 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
         role="authority-service") in spec.configuration_payload_bindings(bundle["configurations"]))
     static = cohort._static_configuration(service)
     require(selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= static[3])
+    generation = verified.package["generation"]
+    generation_interval = (history._epoch_ns(generation["validFrom"]), history._epoch_ns(generation["validUntil"]))
+    require(generation_interval[0] <= selected["issuedAtUnixNanos"] < selected["expiresAtUnixNanos"] <= generation_interval[1])
     for context in contexts.values():
         require(context["payload"]["packageVersions"] == service["packageVersions"])
         credentials = {row["name"]: row for row in context["observed"]["credentials"]}
@@ -132,7 +143,8 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
             and credentials[CONFIG_NAME]["size"] == len(service_raw))
     return dict(selected=selected, rootPublic=root_raw, contexts=contexts, identities=identities,
         service=service, serviceOriginal=service_raw, configurationDigest=config_digest,
-        static=static, packageDigest=common[0], generationDigest=common[1], generationSequence=common[2])
+        static=static, packageDigest=common[0], generationDigest=common[1], generationSequence=common[2],
+        generationContext=history._generation(verified.package, verified), generationInterval=generation_interval)
 
 
 def _signed_cohort(context, key, *, now_unix_ns):
@@ -165,6 +177,49 @@ def _signed_cohort(context, key, *, now_unix_ns):
     return raw, canonical(receipts[cohort.ROLES.index("verifier")])
 
 
+def _signed_runtime_evidence(context, key, *, now_unix_ns):
+    """Produce the real service delivery, including explicitly empty history.
+
+    The owner supplies actual admitted package/launch context. These pure
+    signed codec results alone are not evidence of a live process or database.
+    """
+    selected, generation = context["selected"], context["generationContext"]
+    require(selected["historicalArchiveSelection"] == INITIAL_HISTORY
+        and context["generationSequence"] == generation["sequence"] == 0
+        and generation["predecessorDigest"] is None and generation["minimumRollbackSequence"] == 0
+        and generation["digest"] == context["generationDigest"])
+    cohort_raw, verifier_raw = _signed_cohort(context, key, now_unix_ns=now_unix_ns)
+    admitted, _, _ = cohort._verify_cohort_against_scope(held_bytes=cohort_raw,
+        held_digest=context["configurationDigest"], held_key=key.public_key(),
+        static_configuration=context["static"], generation_sequence=context["generationSequence"],
+        generation_digest=context["generationDigest"], package_digest=context["packageDigest"],
+        local_binding=(cohort.ROLES[0], *context["identities"][cohort.ROLES[0]]), evaluation_epoch_ns=now_unix_ns)
+    identities = {}
+    for role, raw, digest in admitted.receipts:
+        payload = document(raw, cohort.MAX_BYTES)["payload"]
+        identities[role] = dict(measurementDigest=payload["measurementDigest"],
+            responseSigningSpkiDigest=payload["responseSigningSpkiDigest"], attestationReceiptDigest=digest)
+    runtime = dict(schema=history.configuration.RUNTIME_ROLE_IDENTITIES_SCHEMA,
+        configurationDigest=context["configurationDigest"], generationSequence=0,
+        generationDigest=context["generationDigest"], cohortDigest=admitted.cohort_digest, roles=identities)
+    snapshot = history._HistoricalSnapshot(payload=context["service"], configuration_digest=context["configurationDigest"],
+        generation=generation, runtime_role_identities=runtime,
+        valid_from_epoch_ns=max(context["generationInterval"][0], admitted.valid_from_epoch_ns),
+        valid_until_epoch_ns=min(context["generationInterval"][1], admitted.valid_until_epoch_ns))
+    payload = dict(schema=history.SCHEMA, purpose=history.PURPOSE, sourceRevision=cohort.authority.SOURCE_REVISION,
+        configurationDigest=context["configurationDigest"], generationDigest=context["generationDigest"],
+        issuedAtEpochNs=selected["issuedAtUnixNanos"], expiresAtEpochNs=selected["expiresAtUnixNanos"], entries=[])
+    archive = dict(schema=history.SCHEMA, payload=payload, signature=spec.strict_base64url_encode(
+        key.sign(cohort._domain_digest(history.SCHEMA, canonical(payload)).encode("ascii"))))
+    checked = history._admit_on_startup(original_bytes=canonical(archive), current_snapshot=snapshot,
+        current_root_public_key=key.public_key(), now_epoch_ns=now_unix_ns)
+    require(len(checked.records) == 1)  # Current snapshot only; no invented historical record.
+    delivery = canonical(dict(schema=RUNTIME_EVIDENCE_SCHEMA,
+        currentCohort=document(cohort_raw, cohort.MAX_BYTES), historicalArchive=archive))
+    require(len(delivery) <= pair.LATE_LIMITS["evidence.json"])
+    return cohort_raw, verifier_raw, delivery
+
+
 class LocalCohortError(RuntimeError):
     def __init__(self, owner):
         super().__init__("local cohort refused; partial publication and owner retained")
@@ -177,7 +232,7 @@ class LocalCohortIssuer:
         self = cls()
         self.observers, self.named, self.originals, self.released = {}, [], {}, set()
         self.used = self.closed = self.closing = False
-        self.context = self.raw = self.value = self.cohort_raw = self.verifier_raw = None
+        self.context = self.raw = self.value = self.cohort_raw = self.verifier_raw = self.delivery_raw = None
         self.pid, self.start = os.getpid(), launch._process_identity(os.getpid())[0]
         try:
             io._process()
@@ -267,7 +322,8 @@ class LocalCohortIssuer:
             self.context = prepare(self.raw, self.originals, boot=self.boot,
                 now_boottime_ns=io._clock(), now_unix_ns=time.time_ns())
             key = io.signing_key(self.key_fd)
-            self.cohort_raw, self.verifier_raw = _signed_cohort(self.context, key, now_unix_ns=time.time_ns())
+            self.cohort_raw, self.verifier_raw, self.delivery_raw = _signed_runtime_evidence(
+                self.context, key, now_unix_ns=time.time_ns())
             del key
             self.verify_live()
             for role in cohort.ROLES:
@@ -275,11 +331,11 @@ class LocalCohortIssuer:
                 # parked state again, nor retract an already delivered cohort.
                 self.verify_live()
                 observer = self.observers[role]
-                fd = pair.publish_late_original(observer.directory, "evidence.json", self.cohort_raw,
+                fd = pair.publish_late_original(observer.directory, "evidence.json", self.delivery_raw,
                     hold=observer._hold, check=self.check, linked=lambda role=role: self.released.add(role))
                 self.named.append((observer.directory, "evidence.json", fd, io._identity(os.fstat(fd))))
             self.check()
-            return {role: sha(self.cohort_raw) for role in cohort.ROLES}
+            return {role: sha(self.delivery_raw) for role in cohort.ROLES}
         except BaseException as error:
             raise LocalCohortError(self) from error
 

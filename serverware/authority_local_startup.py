@@ -15,6 +15,7 @@ import fcntl
 import hashlib
 import json
 import os
+import resource
 import select
 import signal
 import socket
@@ -37,7 +38,8 @@ LATE_NAMES = {"manifest": "manifest.json", "certificate": "certificate.json", "e
 LIMITS = {"manifest": launcher.MAX_MANIFEST_BYTES,
           "certificate": launcher.MAX_LAUNCH_IDENTITY_CERTIFICATE_BYTES,
           "evidence": launcher.MAX_RUNTIME_EVIDENCE_BYTES}
-MAX_PLAN = 1024 * 1024
+MAX_PLAN = launcher.MAX_LOCAL_OBSERVATION
+STATIC_FD_MIN = 1024
 MAX_STARTUP_NS = 300_000_000_000
 ENVIRONMENT = ("SERVERWARE_ARTIFACT_BUNDLE_DIGEST", "SERVERWARE_AUTHORITY_GENERATION_DIGEST",
                "SERVERWARE_OPERATION_MANIFEST_DIGEST")
@@ -117,7 +119,7 @@ def plan(raw):
         _require(type(item) is dict and set(item) == {"path", "device", "inode"})
         _path(item["path"]); _integer(item["device"]); _integer(item["inode"], 1)
     _require(value["credentialDirectory"]["path"] != value["exchangeDirectory"]["path"])
-    for key, fields, maximum in (("retainedFiles", {"path", "sha256"}, 128),
+    for key, fields, maximum in (("retainedFiles", {"path", "sha256"}, launcher.MAX_CLOSURE_FILES),
                                   ("retainedDirectories", {"path", "device", "inode"}, 64)):
         rows = value[key]
         _require(type(rows) is list and 1 <= len(rows) <= maximum)
@@ -141,6 +143,36 @@ def plan(raw):
             and states[0]["fd"] == 259 and states[0]["singletonLeaseRequired"] is True
             and states[0]["leaseHeld"] is True)
     return value
+
+
+def _descriptor_requirement(value, existing):
+    """Exact selected path roster plus bounded non-static acquisition space.
+
+    Repeated ancestors share a retained FD. Static FDs never occupy the fixed
+    late slots or the select()-compatible control/credential namespace.
+    """
+    directories = {"/"}
+    paths = [(row["path"], False) for row in value["retainedFiles"]]
+    paths += [(row["path"], True) for row in value["retainedDirectories"]]
+    paths += [(value[name]["path"], True) for name in ("credentialDirectory", "exchangeDirectory")]
+    paths += [(row["runtimePath"], True) for row in value["mutableStateDescriptors"]]
+    for path, directory in paths:
+        parts = path[1:].split("/")
+        for end in range(1, len(parts) + int(directory)):
+            directories.add("/" + "/".join(parts[:end]))
+    base = max(STATIC_FD_MIN, max(existing, default=3) + 1)
+    required = base + len(directories) + len(value["retainedFiles"]) + 64
+    _require(required <= 2**31 - 1)
+    return required
+
+
+def _prepare_descriptor_limit(value):
+    required = _descriptor_requirement(value, [int(name) for name in os.listdir("/proc/self/fd")])
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    _require(hard == resource.RLIM_INFINITY or required <= hard)
+    if soft != resource.RLIM_INFINITY and soft < required:
+        # Raise only this local parent's soft ceiling, never its hard limit.
+        resource.setrlimit(resource.RLIMIT_NOFILE, (required, hard))
 
 
 def _identity(info):
@@ -235,6 +267,7 @@ class LocalAuthorityStartup:
         _require(token is _TOKEN)
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.handles, self.names, self.sockets = [], [], []
+        self.path_directories = {}
         self.child_pid = self.child_pidfd = self.child_start = None
         self.child_status = None
         self.closed = self.uncertain = self.failed = self.admitted = False
@@ -251,7 +284,7 @@ class LocalAuthorityStartup:
         next(row for row in self.handles if row[0] == fd)[1] = _identity(os.fstat(fd))
 
     def _close_fd(self, fd):
-        row = next(row for row in self.handles if row[0] == fd)
+        row = next(row for row in reversed(self.handles) if row[0] == fd)
         _require(_identity(os.fstat(fd))[:2] == row[1][:2])
         row[0] = None
         try:
@@ -268,17 +301,38 @@ class LocalAuthorityStartup:
         self.sockets.remove(channel)
         self.uncertain = False
 
+    def _hold_static(self, fd):
+        self._hold(fd)  # Retain even when the following duplication fails.
+        if fd < STATIC_FD_MIN:
+            retained = self._hold(fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, STATIC_FD_MIN))
+            self._close_fd(fd)
+            fd = retained
+        _require(STATIC_FD_MIN <= fd <= 2**31 - 1)
+        return fd
+
     def _open(self, path, *, directory=False, owner=0):
         parts = _path(path)[1:].split("/")
-        parent = self._hold(os.open("/", _READ | os.O_DIRECTORY))
+        if "/" not in self.path_directories:
+            self.path_directories["/"] = self._hold_static(os.open("/", _READ | os.O_DIRECTORY))
+        parent = self.path_directories["/"]
         for index, name in enumerate(parts):
             info = os.fstat(parent)
             _require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022)
             final = index == len(parts) - 1
-            child = self._hold(os.open(name, _READ | (os.O_DIRECTORY if directory or not final else 0), dir_fd=parent))
+            is_directory = directory or not final
+            absolute = "/" + "/".join(parts[:index + 1])
+            cached = self.path_directories.get(absolute) if is_directory else None
+            child = cached if cached is not None else self._hold_static(os.open(
+                name, _READ | (os.O_DIRECTORY if is_directory else 0), dir_fd=parent))
             info = os.fstat(child)
-            _require(info.st_uid == (owner if final else 0) and not info.st_mode & 0o022)
-            self.names.append((parent, name, child, _identity(info), directory or not final))
+            _require(info.st_uid == (owner if final else 0) and not info.st_mode & 0o022
+                and (stat.S_ISDIR(info.st_mode) if is_directory else stat.S_ISREG(info.st_mode)))
+            if cached is None:
+                self.names.append((parent, name, child, _identity(info), is_directory))
+                if is_directory:
+                    self.path_directories[absolute] = child
+            else:
+                _require(_identity(os.stat(name, dir_fd=parent, follow_symlinks=False))[:5] == _identity(info)[:5])
             parent = child
         return parent
 
@@ -320,6 +374,7 @@ class LocalAuthorityStartup:
                 owner.raw = _read(owner.plan_fd, MAX_PLAN)
                 _require(sha(owner.raw) == _digest(plan_sha256) and _read(plan_fd, MAX_PLAN) == owner.raw)
                 owner.value = plan(owner.raw); owner.check()
+                _prepare_descriptor_limit(owner.value)
                 _require(entrypoint._consume_socket_activation(owner.value["role"]) == listener_fd)
                 os.set_inheritable(listener_fd, False)
                 owner.listener = owner._hold(fcntl.fcntl(listener_fd, fcntl.F_DUPFD_CLOEXEC, 4))
@@ -335,11 +390,11 @@ class LocalAuthorityStartup:
                 owner.resource_files, owner.resource_directories = [], []
                 for item in owner.value["retainedFiles"]:
                     fd = owner._open(item["path"])
-                    _require(4 <= fd <= 1023 and sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES)) == item["sha256"])
+                    _require(STATIC_FD_MIN <= fd <= 2**31 - 1 and sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES)) == item["sha256"])
                     owner.resource_files.append(fd)
                 for item in owner.value["retainedDirectories"]:
                     fd = owner._open(item["path"], directory=True)
-                    _require(4 <= fd <= 1023 and (os.fstat(fd).st_dev, os.fstat(fd).st_ino) == (item["device"], item["inode"]))
+                    _require(STATIC_FD_MIN <= fd <= 2**31 - 1 and (os.fstat(fd).st_dev, os.fstat(fd).st_ino) == (item["device"], item["inode"]))
                     owner.resource_directories.append(fd)
                 owner.directory_fds = {}
                 for key in ("credentialDirectory", "exchangeDirectory"):
@@ -448,7 +503,7 @@ class LocalAuthorityStartup:
             setup = {name: self.value[name] for name in ("role", "bootIdDigest", "issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos", "mutableStateDescriptors")}
             setup.update(schema=launcher.LOCAL_SETUP_SCHEMA,
                 producer=dict(pid=self.pid, uid=0, gid=0, startTimeTicks=_start(self.pid)[0]),
-                retainedFiles=self.resource_files, retainedDirectories=self.resource_directories, reservations=self.reservations)
+                retainedFiles=sorted(self.resource_files), retainedDirectories=sorted(self.resource_directories), reservations=self.reservations)
             self.setup_raw = encode(setup)
             self.setup_fd = self._sealed(self.setup_raw, "local-admission")
             _require(4 <= self.setup_fd <= 1023 and 4 <= child_channel.fileno() <= 1023)

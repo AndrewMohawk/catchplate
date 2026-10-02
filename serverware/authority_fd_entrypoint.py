@@ -152,6 +152,12 @@ BOOTSTRAP_LAUNCHER_PATH = (
 )
 LOCAL_ADMISSION_SCHEMA = "serverware.authorityTrustedHostLocalAdmission/v1"
 LOCAL_ADMISSION_MAX_BYTES = 1024 * 1024
+# Local retained resources match the existing signed stage-zero roster bounds.
+# Only their actual parent-assigned descriptors may use the high namespace;
+# control, late credentials and mutable witness slots keep their old limits.
+LOCAL_RETAINED_FILES_MAX = 32768
+LOCAL_RETAINED_DIRECTORIES_MAX = 64
+LOCAL_RETAINED_FD_MAX = 2**31 - 1
 LOCAL_LATE_DESCRIPTORS = {
     "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD": 256,
     "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD": 258,
@@ -2785,10 +2791,11 @@ def _local_admission_sources(role: str, selection: tuple[int, str, int]) -> tupl
                 or fcntl.fcntl(target, fcntl.F_GET_SEALS) & seals != seals):
             raise RuntimeError("local admission reservation is not the original empty slot")
         inherited.append(target)
-    for name, regular in (("retainedFiles", True), ("retainedDirectories", False)):
+    for name, regular, maximum in (("retainedFiles", True, LOCAL_RETAINED_FILES_MAX),
+            ("retainedDirectories", False, LOCAL_RETAINED_DIRECTORIES_MAX)):
         entries = setup.get(name)
-        if (type(entries) is not list or len(entries) > 1020
-                or any(type(fd) is not int or not 4 <= fd <= 1023 for fd in entries)
+        if (type(entries) is not list or not 1 <= len(entries) <= maximum
+                or any(type(fd) is not int or not 4 <= fd <= LOCAL_RETAINED_FD_MAX for fd in entries)
                 or entries != sorted(set(entries))):
             raise RuntimeError("local admission retained inventory differs")
         for descriptor in entries:

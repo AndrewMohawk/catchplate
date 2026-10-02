@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
+import resource
 from pathlib import Path
 import select
 import signal
@@ -33,6 +34,57 @@ def fixture():
 
 
 class LocalStartupTests(unittest.TestCase):
+    def test_plan_accepts_existing_full_closure_bound_not_an_arbitrary_128(self):
+        value = fixture()
+        value["retainedFiles"] += [dict(path=f"/runtime/source/selected-{index:05d}.py", sha256="sha256:" + "2" * 64)
+            for index in range(startup.launcher.MAX_CLOSURE_FILES - len(value["retainedFiles"]))]
+        value["retainedFiles"].sort(key=lambda row: row["path"])
+        raw = startup.encode(value)
+        self.assertGreater(len(raw), 1024 * 1024)
+        self.assertEqual(len(startup.plan(raw)["retainedFiles"]), startup.launcher.MAX_CLOSURE_FILES)
+        self.assertEqual(startup.MAX_PLAN, startup.launcher.MAX_LOCAL_OBSERVATION)
+        value["retainedFiles"].append(dict(path="/runtime/zzz-over-limit.py", sha256="sha256:" + "2" * 64))
+        with self.assertRaises(startup.LocalStartupError):
+            startup.plan(startup.encode(value))
+
+    def test_descriptor_budget_counts_shared_ancestors_once(self):
+        value = fixture()
+        before = startup._descriptor_requirement(value, [0, 1, 2, 3, 4])
+        value["retainedFiles"] += [dict(path=f"/runtime/python/bin/sibling-{index}", sha256="sha256:" + "2" * 64)
+            for index in range(3653)]
+        self.assertEqual(startup._descriptor_requirement(value, [0, 1, 2, 3, 4]), before + 3653)
+        self.assertEqual(startup._descriptor_requirement(value, [4095]), before + 3653 + 4096 - startup.STATIC_FD_MIN)
+
+    def test_actual_path_walker_retains_shared_high_fds_and_refuses_rebound_ancestor(self):
+        # Real pathname/FD custody primitive only; no installed package, startup
+        # admission, signature, or serving result is fabricated by this control.
+        self.assertEqual(os.geteuid(), 0)
+        soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        self.assertTrue(soft == resource.RLIM_INFINITY or soft > startup.STATIC_FD_MIN + 128)
+        with tempfile.TemporaryDirectory(prefix="local-retained-paths-", dir="/run") as temporary:
+            root = Path(temporary)
+            selected = root / "selected"
+            selected.mkdir(mode=0o700)
+            owner = startup.LocalAuthorityStartup(startup._TOKEN)
+            try:
+                descriptors = []
+                for index in range(64):
+                    path = selected / f"{index:03d}.py"
+                    path.write_bytes(b"public roster bytes\n")
+                    path.chmod(0o400)
+                    descriptors.append(owner._open(str(path)))
+                self.assertEqual(len(owner.handles), 64 + len(owner.path_directories))
+                self.assertTrue(all(fd >= startup.STATIC_FD_MIN for fd in descriptors))
+                before = len(owner.handles)
+                self.assertEqual(owner._open(str(selected), directory=True), owner.path_directories[str(selected)])
+                self.assertEqual(len(owner.handles), before)
+                selected.rename(root / "original")
+                selected.mkdir(mode=0o700)
+                with self.assertRaises(startup.LocalStartupError):
+                    owner._open(str(selected), directory=True)
+            finally:
+                owner.close()
+
     def test_closed_plan_preserves_original_windows_and_fixed_role(self):
         value = fixture()
         self.assertEqual(startup.plan(startup.encode(value)), value)

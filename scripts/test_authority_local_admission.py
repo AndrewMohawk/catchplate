@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,64 @@ from serverware import authority_stage_zero_contract as contract
 
 
 class LocalAdmissionControls(unittest.TestCase):
+    def test_local_retained_limits_match_signed_contract_without_widening_control_slots(self):
+        self.assertEqual(entrypoint.LOCAL_RETAINED_FILES_MAX, launcher.MAX_CLOSURE_FILES)
+        self.assertEqual(entrypoint.LOCAL_RETAINED_FILES_MAX, contract.MAX_RETAINED_FILES)
+        self.assertEqual(entrypoint.LOCAL_RETAINED_DIRECTORIES_MAX, contract.MAX_RETAINED_DIRECTORIES)
+        source = (ROOT / "serverware" / "authority_fd_entrypoint.py").read_text()
+        tree = ast.parse(source)
+        method = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_local_admission_sources")
+        text = ast.get_source_segment(source, method)
+        self.assertIn("4 <= fd <= 1023 for fd in (setup_fd, channel_fd)", text)
+        self.assertIn("32 <= descriptor <= 1023", text)
+
+    def test_actual_local_entry_accepts_high_retained_roster_with_low_original_slots(self):
+        # This exercises descriptor framing/type custody, not signed admission.
+        self.assertEqual(os.geteuid(), 0)
+        handles, channels = [], []
+        def hold(fd):
+            handles.append(fd)
+            return fd
+        def sealed(raw, target=None):
+            fd = hold(os.memfd_create("local-high-roster-control", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING))
+            if raw:
+                self.assertEqual(os.write(fd, raw), len(raw))
+            os.fchmod(fd, 0o400)
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS, launcher.REQUIRED_MEMFD_SEALS)
+            if target is not None:
+                retained = hold(fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, target))
+                self.assertEqual(retained, target)  # Never overwrite another FD.
+                os.close(fd); handles.remove(fd)
+                fd = retained
+            return fd
+        try:
+            hold(os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC))
+            channels.extend(socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC))
+            self.assertTrue(all(4 <= channel.fileno() <= 1023 for channel in channels))
+            reservations = {}
+            for purpose in ("manifest", "certificate"):
+                fd = sealed(b"", launcher.LOCAL_SLOTS[purpose])
+                info = os.fstat(fd)
+                reservations[purpose] = dict(fd=fd, device=info.st_dev, inode=info.st_ino)
+            original = sealed(b"genuine retained public bytes")
+            files = [hold(fcntl.fcntl(original, fcntl.F_DUPFD_CLOEXEC, 1024)) for _ in range(137)]
+            directory = hold(os.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC))
+            retained_directory = hold(fcntl.fcntl(directory, fcntl.F_DUPFD_CLOEXEC, 1024))
+            raw = launcher._canonical(dict(schema=launcher.LOCAL_SETUP_SCHEMA, role="runtime",
+                reservations=reservations, retainedFiles=files, retainedDirectories=[retained_directory],
+                mutableStateDescriptors=[]))
+            setup = sealed(raw)
+            selection = setup, "sha256:" + hashlib.sha256(raw).hexdigest(), channels[0].fileno()
+            inherited = entrypoint._local_admission_sources("runtime", selection)
+            self.assertTrue(set(files) <= set(inherited))
+            self.assertIn(retained_directory, inherited)
+            self.assertEqual(len(inherited), 2 + 2 + 137 + 1)
+        finally:
+            for channel in reversed(channels):
+                channel.close()
+            for fd in reversed(handles):
+                os.close(fd)
+
     def test_canonical_original_is_literal_and_closed_to_lossy_decoding(self):
         raw = b'{"a":1,"b":"public"}'
         self.assertEqual(launcher._local_document(raw, 64), {"a": 1, "b": "public"})

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded pure joins/source-order controls; no live process admission claim."""
 from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
 import ast
 import fcntl
@@ -8,6 +9,7 @@ import os
 import resource
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 from serverware import authority_local_launch_authorization as subject
 from scripts.authority import local_launch_authorization as cli
@@ -62,7 +64,132 @@ def environment_binding(*, evidence):
     return request, initial, observed, effective, argv, arguments
 
 
+@contextmanager
+def read_owner(raw):
+    # Public memfds and this test process only; no authentic issuer or child.
+    owner = subject.LocalLaunchAuthorizationIssuer.__new__(subject.LocalLaunchAuthorizationIssuer)
+    owner.handles, owner.owned, owner.links, owner.child_handles = [], {}, [], {}
+    owner.link_by_fd, owner.mapping_fds = {}, set()
+    owner._check_live = Mock()
+    originals = []
+    try:
+        for value in (raw, b"unrelated public fixture"):
+            original = os.memfd_create("local-read-control", os.MFD_CLOEXEC)
+            originals.append(original)
+            os.write(original, value)
+            held = os.dup(original)
+            owner._hold(held)
+            path = f"/proc/self/fd/{original}"
+            identity = subject.io._identity(os.fstat(held))
+            owner.links.append((held, path, identity))
+            owner.link_by_fd[held] = (path, identity)
+            owner.child_handles[original] = held
+        yield owner, originals, owner.handles
+    finally:
+        for fd in reversed(owner.handles + originals):
+            os.close(fd)
+
+
 class LocalLaunchAuthorizationTests(unittest.TestCase):
+    def test_active_reads_check_each_chunk_and_empty_eof_without_global_sweeps(self):
+        for raw in (b"", b"x", b"x" * 65537):
+            with self.subTest(size=len(raw)), read_owner(raw) as (owner, _originals, held):
+                owner.check = Mock(side_effect=AssertionError("unexpected global sweep"))
+                owner._check_link = Mock(wraps=owner._check_link)
+                self.assertEqual(owner._read(held[0], 65537), raw)
+                calls = 2 * ((len(raw) + 65535) // 65536 + 1)
+                self.assertEqual(owner._check_live.call_count, calls)
+                self.assertEqual(owner._check_link.call_count, calls)
+                self.assertTrue(all(call.args == (held[0],) for call in owner._check_link.call_args_list))
+                owner.check.assert_not_called()
+
+    def test_active_reads_refuse_held_or_child_replacement_before_and_after_read(self):
+        for raw in (b"", b"payload"):
+            for target in ("held", "child"):
+                for after in (False, True):
+                    with self.subTest(size=len(raw), target=target, after=after), read_owner(raw) as (owner, originals, held):
+                        destination = held[0] if target == "held" else originals[0]
+                        original_pread = os.pread
+                        def changed(fd, size, offset):
+                            value = original_pread(fd, size, offset)
+                            os.dup2(originals[1], destination)
+                            return value
+                        if not after:
+                            os.dup2(originals[1], destination)
+                        with patch.object(subject.os, "pread", side_effect=changed if after else original_pread):
+                            with self.assertRaises(ValueError):
+                                owner._read(held[0], 65536)
+
+    def test_reads_require_explicit_child_index_or_owned_mapping_registration(self):
+        with read_owner(b"mapping") as (owner, _originals, held):
+            fd = held[0]
+            del owner.link_by_fd[fd]
+            with self.assertRaises(ValueError):
+                owner._read(fd, 64)
+            with self.assertRaises(ValueError):
+                owner._read(fd, 64, mapping=True)
+            owner.mapping_fds.add(fd)
+            self.assertEqual(owner._read(fd, 64, mapping=True), b"mapping")
+            with self.assertRaises(ValueError):
+                owner._read(fd, 64)
+            with self.assertRaises(ValueError):
+                owner._read(fd, 64, mapping=1)
+            del owner.owned[fd]
+            with self.assertRaises(ValueError):
+                owner._read(fd, 64, mapping=True)
+
+    def test_active_guard_refusals_and_cached_links_keep_full_boundary_check(self):
+        for rejected_call in (1, 2):
+            with self.subTest(rejected_call=rejected_call), read_owner(b"") as (owner, _originals, held):
+                owner._check_live.side_effect = [None] * (rejected_call - 1) + [ValueError("live guard")]
+                with self.assertRaises(ValueError):
+                    owner._read(held[0], 64)
+                self.assertEqual(owner._check_live.call_count, rejected_call)
+        with read_owner(b"active") as (owner, originals, held):
+            owner.check = Mock(side_effect=AssertionError("unexpected global sweep"))
+            self.assertEqual(owner._child_fd(originals[0]), held[0])
+            owner.check.assert_not_called()
+            # Unrelated transient sampling is not claimed; full boundary checks
+            # must still reject a changed retained link before acceptance.
+            os.dup2(originals[0], originals[1])
+            self.assertEqual(owner._read(held[0], 64), b"active")
+            with self.assertRaises(ValueError):
+                subject.LocalLaunchAuthorizationIssuer.check(owner)
+            del owner.link_by_fd[held[0]]
+            with self.assertRaises(ValueError):
+                owner._child_fd(originals[0])
+
+    def test_proc_reads_use_live_guards_and_keep_actual_size_bound(self):
+        with read_owner(b"public proc fixture") as (owner, _originals, held):
+            owner.child_pid = os.getpid()
+            owner._open = Mock(return_value=held[0])
+            owner.check = Mock(side_effect=AssertionError("unexpected global sweep"))
+            os.lseek(held[0], 0, os.SEEK_SET)
+            self.assertEqual(owner._proc("fixture", 64), b"public proc fixture")
+            self.assertEqual(owner._check_live.call_count, 4)
+            owner.check.assert_not_called()
+            os.lseek(held[0], 0, os.SEEK_SET)
+            with self.assertRaises(ValueError):
+                owner._proc("fixture", 3)
+
+    def test_full_sweeps_and_explicit_mapping_mode_stay_at_security_boundaries(self):
+        tree = ast.parse(Path(subject.__file__).read_text())
+        owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalLaunchAuthorizationIssuer")
+        methods = {node.name: node for node in owner.body if isinstance(node, ast.FunctionDef)}
+        self.assertEqual(ast.unparse(methods["verify_live"].body[0]), "self.check()")
+        self.assertEqual(ast.unparse(methods["verify_live"].body[-1]), "self.check()")
+        self.assertIn("self.check_sources()", ast.unparse(methods["_check_live"]))
+        self.assertIn("_pidfd_pending(self.pidfd)", ast.unparse(methods["_check_live"]))
+        self.assertIn("launch._process_identity(self.child_pid)", ast.unparse(methods["_check_live"]))
+        self.assertIn("for fd, path, identity in self.links", ast.unparse(methods["check"]))
+        self.assertIn("self.check_sources() if released else self.check()", ast.unparse(methods["publish"]))
+        self.assertIn("linked=linked_last if name == OUTPUT_NAMES[-1]", ast.unparse(methods["publish"]))
+        mappings = [node for node in ast.walk(owner) if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "self._read" and any(keyword.arg == "mapping" for keyword in node.keywords)]
+        self.assertEqual(len(mappings), 1)
+        self.assertIn(mappings[0], list(ast.walk(methods["_mappings"])))
+        self.assertIn("self.mapping_fds.add(fd)", ast.unparse(methods["_mappings"]))
+
     def test_effective_environment_joins_validated_descriptor_arguments(self):
         for evidence in (False, True):
             with self.subTest(evidence=evidence):

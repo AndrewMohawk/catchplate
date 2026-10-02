@@ -344,6 +344,7 @@ class LocalLaunchAuthorizationIssuer:
     def _acquire(cls, *, approval_fd, approval_sha256, exchange_directory_fd, key_fds):
         self = cls()
         self.handles, self.links, self.child_handles, self.owned = [], [], {}, {}
+        self.link_by_fd, self.mapping_fds = {}, set()
         self.closed = self.closing = self.used = False
         self.pid, self.start = os.getpid(), launch._process_identity(os.getpid())[0]
         self.pidfd = None
@@ -420,31 +421,53 @@ class LocalLaunchAuthorizationIssuer:
             and io._identity(os.stat("observation.json", dir_fd=self.directory, follow_symlinks=False))
                 == io._identity(os.fstat(self.observation_fd)))
 
-    def check(self):
+    def _check_live(self):
         self.check_sources()
         require(_pidfd_pending(self.pidfd)
             and launch._process_identity(self.child_pid)[:2] == (self.child_start, self.context["observed"]["process"]["pidNamespaceInode"]))
+
+    def _check_link(self, fd):
+        require(fd in self.link_by_fd)
+        path, identity = self.link_by_fd[fd]
+        require(io._identity(os.fstat(fd)) == identity and io._identity(os.stat(path)) == identity)
+
+    def check(self):
+        self._check_live()
         for fd, path, identity in self.links:
             require(io._identity(os.fstat(fd)) == identity and io._identity(os.stat(path)) == identity)
 
-    def _read(self, fd, maximum):
+    def _read(self, fd, maximum, *, mapping=False):
+        require(type(mapping) is bool and fd in self.owned)
+        require(fd in self.mapping_fds and fd not in self.link_by_fd if mapping
+            else fd in self.link_by_fd and fd not in self.mapping_fds)
         before = io._identity(os.fstat(fd))
         require(stat.S_ISREG(before[2]) and before[6] <= maximum)
+        def check_active():
+            self._check_live()
+            require(self._owned_identity(fd) == self.owned[fd])
+            if not mapping:
+                self._check_link(fd)
+            require(io._identity(os.fstat(fd)) == before)
         raw = bytearray()
-        while len(raw) < before[6]:
-            self.check()
-            part = os.pread(fd, min(65536, before[6] - len(raw)), len(raw))
+        # Full-roster sweeps remain at admission/signing/publication boundaries;
+        # each read retains original live guards and the exact active FD link.
+        while True:
+            check_active()
+            part = os.pread(fd, min(65536, before[6] - len(raw)) if len(raw) < before[6] else 1, len(raw))
+            check_active()
+            if len(raw) == before[6]:
+                require(not part)
+                return bytes(raw)
             require(bool(part)); raw.extend(part)
-        require(io._identity(os.fstat(fd)) == before and not os.pread(fd, 1, len(raw)))
-        return bytes(raw)
 
     def _proc(self, suffix, maximum):
         # Proc pseudo-files have zero st_size; always bound the actual read.
         fd = self._open(f"/proc/{self.child_pid}/{suffix}")
         value = bytearray()
         while True:
-            self.check()
+            self._check_live()
             part = os.read(fd, min(65536, maximum + 1 - len(value)))
+            self._check_live()
             if not part:
                 return bytes(value)
             value.extend(part)
@@ -452,15 +475,20 @@ class LocalLaunchAuthorizationIssuer:
 
     def _child_fd(self, number):
         require(type(number) is int and number >= 3)
+        self._check_live()
         if number in self.child_handles:
-            self.check()
-            return self.child_handles[number]
+            fd = self.child_handles[number]
+            self._check_link(fd)
+            return fd
         path = f"/proc/{self.child_pid}/fd/{number}"
         fd = self._open(path)
         identity = io._identity(os.fstat(fd))
-        require(io._identity(os.stat(path)) == identity)
+        require(io._identity(os.stat(path)) == identity and fd not in self.link_by_fd and fd not in self.mapping_fds)
         self.links.append((fd, path, identity))
+        self.link_by_fd[fd] = (path, identity)
         self.child_handles[number] = fd
+        self._check_live()
+        self._check_link(fd)
         return fd
 
     def _duplicate(self, number):
@@ -521,7 +549,8 @@ class LocalLaunchAuthorizationIssuer:
                 info = os.fstat(fd)
                 major, minor = (int(value, 16) for value in device.split(":"))
                 require((os.major(info.st_dev), os.minor(info.st_dev), info.st_ino) == (major, minor, int(inode)))
-                digest, identity = sha(self._read(fd, launch.MAX_NATIVE_MAPPING_BYTES)), (device, inode)
+                self.mapping_fds.add(fd)
+                digest, identity = sha(self._read(fd, launch.MAX_NATIVE_MAPPING_BYTES, mapping=True)), (device, inode)
             require(path not in mappings or (mappings[path], inodes[path]) == (digest, identity))
             mappings[path], inodes[path] = digest, identity
         require("[vdso]" in mappings and self._proc("maps", 1024 * 1024) == raw)

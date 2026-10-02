@@ -233,8 +233,8 @@ def verify_archive(fd, source, *, check):
     check()
 
 
-def association(selected, measured, originals):
-    """Pure measured-byte joins; runtime separately verifies the archive stream."""
+def measured_originals(selected, measured, originals):
+    """Join literal selected originals to the independently measured tree."""
     objects = selected["objects"]
     _require(set(originals) == OBJECT_NAMES - {"sourceArchive", "layers"})
     rows = {row["path"]: row for row in measured["files"]}
@@ -245,6 +245,38 @@ def association(selected, measured, originals):
     source, commit_digest = source_manifest(originals["sourceManifest"], originals["gitCommit"])
     archive_row = rows[objects["sourceArchive"]]
     _require((archive_row["size"], archive_row["sha256"]) == (source["archive"]["bytes"], source["archive"]["sha256"]))
+    return rows, source, commit_digest, archive_row
+
+
+def oci_objects(objects, rows, originals):
+    """Verify selected OCI object hashes, not execution or source derivation."""
+    manifest, config = document(originals["ociManifest"]), document(originals["ociConfig"])
+    _require(type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] == 2
+        and manifest.get("mediaType") == OCI_MANIFEST
+        and type(manifest.get("config")) is dict and type(manifest["config"].get("size")) is int
+        and manifest.get("config") == dict(mediaType=OCI_CONFIG, digest=sha(originals["ociConfig"]), size=len(originals["ociConfig"])))
+    layers = manifest.get("layers")
+    _require(type(layers) is list and len(layers) == len(objects["layers"]))
+    for descriptor, path in zip(layers, objects["layers"]):
+        row = rows[path]
+        _require(type(descriptor) is dict and set(descriptor) == {"mediaType", "digest", "size"}
+            and descriptor["mediaType"] in OCI_LAYERS
+            and type(descriptor["size"]) is int
+            and (descriptor["digest"], descriptor["size"]) == (row["sha256"], row["size"]))
+    _require(config.get("os") == "linux" and config.get("architecture") == "amd64"
+        and config.get("variant") is None and type(config.get("rootfs")) is dict
+        and config["rootfs"].get("type") == "layers"
+        and type(config["rootfs"].get("diff_ids")) is list
+        and len(config["rootfs"]["diff_ids"]) == len(layers))
+    for digest in config["rootfs"]["diff_ids"]:
+        spec._require_digest(digest, name="OCI diff ID")
+    return config
+
+
+def association(selected, measured, originals):
+    """Pure measured-byte joins; runtime separately verifies the archive stream."""
+    objects = selected["objects"]
+    rows, source, commit_digest, archive_row = measured_originals(selected, measured, originals)
     report = document(originals["report"])
     _require(set(report) == {"apiVersion", "kind", "ok", "identity_mode", "production_release_eligible",
         "generated_at_unix", "metadata", "images", "no_shell", "publish_requirement"}
@@ -271,26 +303,7 @@ def association(selected, measured, originals):
     matches = [row for row in images if row["service"] == selected["imageService"]]
     _require(len(matches) == 1 and matches[0]["dockerfile"] == SERVICES[selected["imageService"]]
         and matches[0]["image_id"] == sha(originals["ociConfig"]))
-    manifest, config = document(originals["ociManifest"]), document(originals["ociConfig"])
-    _require(type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] == 2
-        and manifest.get("mediaType") == OCI_MANIFEST
-        and type(manifest.get("config")) is dict and type(manifest["config"].get("size")) is int
-        and manifest.get("config") == dict(mediaType=OCI_CONFIG, digest=sha(originals["ociConfig"]), size=len(originals["ociConfig"])))
-    layers = manifest.get("layers")
-    _require(type(layers) is list and len(layers) == len(objects["layers"]))
-    for descriptor, path in zip(layers, objects["layers"]):
-        row = rows[path]
-        _require(type(descriptor) is dict and set(descriptor) == {"mediaType", "digest", "size"}
-            and descriptor["mediaType"] in OCI_LAYERS
-            and type(descriptor["size"]) is int
-            and (descriptor["digest"], descriptor["size"]) == (row["sha256"], row["size"]))
-    _require(config.get("os") == "linux" and config.get("architecture") == "amd64"
-        and config.get("variant") is None and type(config.get("rootfs")) is dict
-        and config["rootfs"].get("type") == "layers"
-        and type(config["rootfs"].get("diff_ids")) is list
-        and len(config["rootfs"]["diff_ids"]) == len(layers))
-    for digest in config["rootfs"]["diff_ids"]:
-        spec._require_digest(digest, name="OCI diff ID")
+    config = oci_objects(objects, rows, originals)
     labels = config.get("config", {}).get("Labels", {})
     expected_labels = {"org.opencontainers.image.revision": source["commit"],
         "dev.serverware.source_tree_digest": source["sourceTreeDigest"],
@@ -321,6 +334,9 @@ def _open_file(root_fd, path):
 class LocalProvenanceIssuer:
     """Borrow retained approved descriptors; no signing retry or state mutation."""
 
+    validate_approval = staticmethod(approval)
+    associate = staticmethod(association)
+
     def __init__(self, *, approval_fd, approval_sha256, trust_fd, trust_sha256,
                  source_root_fd, signing_key_fd):
         io._process()
@@ -333,7 +349,7 @@ class LocalProvenanceIssuer:
         self.approval_raw = io.read_public(approval_fd, MAX_DOCUMENT)
         self.trust_raw = io.read_public(trust_fd, MAX_DOCUMENT)
         _require(sha(self.approval_raw) == approval_sha256 and sha(self.trust_raw) == trust_sha256)
-        self.selected = approval(self.approval_raw)
+        self.selected = self.validate_approval(self.approval_raw)
         _require(self.selected["trustSha256"] == trust_sha256)
         self.trust = spec.validate_trust_state(document(self.trust_raw, canonical=True))
         self.previous_boot_ns = self.selected["issuedAtBoottimeNs"]
@@ -388,7 +404,7 @@ class LocalProvenanceIssuer:
         rows = {row["path"]: row for row in measured["files"]}
         originals = {name: self._read(rows[self.selected["objects"][name]])
                      for name in OBJECT_NAMES - {"sourceArchive", "layers"}}
-        payload, source = association(self.selected, measured, originals)
+        payload, source = self.associate(self.selected, measured, originals)
         fd = _open_file(self.source_root_fd, self.selected["objects"]["sourceArchive"])
         try:
             before = io._identity(os.fstat(fd))

@@ -164,7 +164,10 @@ class LocalCohortTests(unittest.TestCase):
     def test_actual_service_delivery_parser_reaches_refusing_guard_only_for_wrapper(self):
         # Exercise the real outer consumer, but deliberately refuse at the
         # first live guard. This is not a mocked successful process admission.
-        from serverware.authority_service import MeasuredConfiguration, AuthorityServiceError
+        # Import through the existing non-authority control-plane mode; do not
+        # pretend a measured role has an active launch guard.
+        with patch.dict("os.environ", {"SERVERWARE_PROCESS_MODE": "serverware-control-plane"}):
+            from serverware.authority_service import MeasuredConfiguration, AuthorityServiceError
         key, _, context = fixture()
         cohort_raw, _, delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
         with patch.object(subject.cohort.guard, "require_active", side_effect=ValueError("deliberate guard refusal")) as guard:

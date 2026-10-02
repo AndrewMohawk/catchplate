@@ -88,8 +88,10 @@ class TrustCommitTests(unittest.TestCase):
         states, plan, raw = chain()
         kwargs = dict(plan=plan, receipt_raw=raw, request_id="install-0", transition_id="first-generation", validation_time=NOW)
         local.terminal_chain(states, **kwargs)
-        for changed in (states[:2], list(reversed(states)), [states[0], states[1], dict(states[2], requestId="other")]):
+        for changed in (states[:2], list(reversed(states))):
             with self.assertRaises(ValueError): local.terminal_chain(changed, **kwargs)
+        with self.assertRaises(local.contract.ProvisioningContractError):
+            local.terminal_chain([states[0], states[1], dict(states[2], requestId="other")], **kwargs)
         with self.assertRaises(ValueError): local.terminal_chain(states, **dict(kwargs, receipt_raw=raw + b"\n"))
         with self.assertRaises(ValueError): local.terminal_chain(states, **dict(kwargs, validation_time="2026-10-01T00:00:02Z"))
 

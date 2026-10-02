@@ -92,7 +92,17 @@ class LocalLaunchAuthorizationTests(unittest.TestCase):
         observer = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "open_observer")
         self.assertIn("key_fds=()", ast.unparse(observer))
         issue = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "issue")
-        self.assertIn("self.root_key is not None and self.certificate_key is not None", ast.unparse(issue))
+        condition = next(node.args[0] for node in ast.walk(issue)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "require")
+        self.assertIsInstance(condition, ast.BoolOp)
+        self.assertIsInstance(condition.op, ast.And)
+        comparisons = {node.left.attr for node in condition.values
+            if isinstance(node, ast.Compare) and isinstance(node.left, ast.Attribute)
+            and isinstance(node.left.value, ast.Name) and node.left.value.id == "self"
+            and len(node.ops) == 1 and isinstance(node.ops[0], ast.IsNot)
+            and len(node.comparators) == 1 and isinstance(node.comparators[0], ast.Constant)
+            and node.comparators[0].value is None}
+        self.assertEqual(comparisons, {"root_key", "certificate_key"})
 
     def test_actual_anonymous_publication_and_no_overwrite(self):
         # Genuine local kernel file publication only; no fake child/issuer owner.

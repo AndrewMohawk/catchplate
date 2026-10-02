@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Callable
 
 import cbor2
 from cryptography.exceptions import InvalidSignature
@@ -3359,7 +3359,12 @@ def _pinned_auxiliary_pg_connect(
     label: str,
     error_type: type[Exception],
     bootstrap_contract_id: str | None = None,
+    retain_connection: Callable[[Any], None] | None = None,
 ) -> Any:
+    # Ownership hook only: the caller may retain the actual connection before
+    # admission can fail. It cannot return a replacement or skip any guard.
+    if retain_connection is not None and not callable(retain_connection):
+        raise error_type("auxiliary connection retention callback is invalid")
     bootstrap = bootstrap_contract_id is not None
     if bootstrap and (
         bootstrap_contract_id != _METADATA_STORE_BOOTSTRAP_CONTRACT_ID
@@ -3386,6 +3391,8 @@ def _pinned_auxiliary_pg_connect(
             row_factory=dict_row,
             options="-c search_path=pg_catalog",
         )
+        if retain_connection is not None:
+            retain_connection(conn)
         with conn.cursor() as cur:
             cur.execute("SET search_path TO pg_catalog")
             namespace = cur.execute(

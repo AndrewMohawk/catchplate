@@ -810,7 +810,8 @@ def _open_rbac_witness_material(config_fd, *, occupied_descriptors):
     """CP delivery only; authority roles use their signed descriptor inventory."""
     from serverware import authority_rbac_currentness as profile
     config = profile.document(os.pread(config_fd, RBAC_WITNESS_CONFIG_MAX_BYTES + 1, 0), RBAC_WITNESS_CONFIG_MAX_BYTES)
-    profile.require(type(config) is dict and config.get("schema") in {profile.STARTUP_SCHEMA, profile.STARTUP_V2_SCHEMA})
+    profile.require(type(config) is dict and config.get("schema") in {
+        profile.STARTUP_SCHEMA, profile.STARTUP_V2_SCHEMA, profile.LOCAL_STARTUP_SCHEMA})
     second = config["schema"] == profile.STARTUP_V2_SCHEMA
     profile.require(set(config) == {"schema", "sourceRevision", "configurationDigest",
         "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"} | ({"recoveryAuthorization"} if second else set())

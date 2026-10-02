@@ -2,8 +2,9 @@
 
 No caller chooses a root, endpoint, database role or observed head. Importing
 this module performs no admission. Missing production material is a refusal.
-The witness deployment and its storage must be independently administered;
-these checks do not make two databases on one rollback domain independent.
+Legacy profiles require independently administered witness storage. The
+explicit local successor is separately signed and makes no such claim; it
+still requires distinct real clusters and the same currentness checks.
 """
 import contextlib
 import os
@@ -45,6 +46,8 @@ class _Owner:
             profile.require(launch.require_active(self.process.role_name) == self.launch
                 and self.process.configuration is self.configuration and self.configuration.digest == self.configuration_digest)
             profile.require(time.time_ns() < self.attestation_expires)
+        if self.local:
+            _require_local_owner(self)
 
     def require_writer(self):
         self.check()
@@ -69,6 +72,43 @@ class _Owner:
             selected = min(selected, deadline)
         profile.require(time.monotonic_ns() < selected)
         return selected
+
+
+def _require_local_owner(owner):
+    """Only the already admitted owner may select the co-located profile."""
+    profile.require_local_development()
+    from serverware import authority_service as service
+    claims = {"trustMode": "trusted-host-local", "coLocated": True,
+        "hardwareBacked": False, "nativeStageZero": False, "hsmBackedKeys": False,
+        "teeVerified": False, "externalWitnessVerified": False}
+    if owner.process is None:
+        # This binding is captured only after genuine custody/runtime-FD
+        # admission; a directly constructed runtime client is not accepted.
+        from serverware import control_plane_custody_client as client
+        from serverware import control_plane_custody_startup as startup
+        profile.require(startup.require_started() is owner.custody
+            and client._snapshot(owner.custody) is owner.binding)
+        client._receipt_now(owner.binding)
+        runtime = owner.binding.runtime_client
+        profile.require(type(runtime) is service.AuthorityRuntimeClient
+            and runtime.configuration_digest == owner.configuration_digest)
+        evidence, policy = runtime.attestation_evidence, runtime.attestation_verification_policy
+        profile.require(type(evidence) is dict and evidence.get("schema") == service.TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA
+            and type(evidence.get("payload")) is dict and type(policy) is dict)
+        actual = evidence["payload"]
+        profile.require(all(type(value.get(name)) is type(expected) and value[name] == expected
+            for value in (actual, policy) for name, expected in claims.items()))
+    else:
+        from serverware import authority_launch_guard as launch
+        profile.require(type(owner.process) is service.AuthorityProcess
+            and owner.process.configuration is owner.configuration
+            and launch.require_active(owner.process.role_name) == owner.launch)
+        assurance = dict(launch.launch_assurance())
+        profile.require(assurance == dict(schema="serverware.authorityLaunchAssurance/v1", **claims))
+        selected = owner.configuration.payload.get("credentialReleaseTrust")
+        profile.require(type(selected) is dict and set(selected) == {"schema", "trustMode", "maximumReceiptAgeNs"}
+            and selected["schema"] == "serverware.trustedHostLocalCredentialReleaseTrust/v1"
+            and selected["trustMode"] == "trusted-host-local")
 
 
 def _initialize(process=None):
@@ -125,8 +165,10 @@ def _initialize(process=None):
             profile.require(descriptor in inherited)
             config_original = _Original(descriptor, 96 * 1024)
             config = profile.document(config_original.raw, 96 * 1024)
-            profile.require(type(config) is dict and config.get("schema") in {profile.STARTUP_SCHEMA, profile.STARTUP_V2_SCHEMA})
+            profile.require(type(config) is dict and config.get("schema") in {
+                profile.STARTUP_SCHEMA, profile.STARTUP_V2_SCHEMA, profile.LOCAL_STARTUP_SCHEMA})
             second = config["schema"] == profile.STARTUP_V2_SCHEMA
+            value.local = config["schema"] == profile.LOCAL_STARTUP_SCHEMA
             profile.require(set(config) == {"schema", "sourceRevision", "configurationDigest",
                 "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"} | ({"recoveryAuthorization"} if second else set())
                 and config["sourceRevision"] == authority_contract.SOURCE_REVISION
@@ -154,7 +196,8 @@ def _initialize(process=None):
             value.enrollment_original = profile.canonical(config["enrollment"])
             value.policy = profile.enrollment(value.enrollment_original, root)
             value.enrollment_sha256 = profile.sha256(value.enrollment_original)
-            profile.require(value.policy["schema"] == (profile.ENROLLMENT_V2_SCHEMA if second else profile.ENROLLMENT_SCHEMA))
+            profile.require(value.policy["schema"] == (profile.ENROLLMENT_V2_SCHEMA if second else
+                profile.LOCAL_ENROLLMENT_SCHEMA if value.local else profile.ENROLLMENT_SCHEMA))
             value.recovery, value.recovery_original = None, None
             if second:
                 from serverware import authority_rbac_recovery as recovery
@@ -183,6 +226,8 @@ def _initialize(process=None):
             profile.require(certificate.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
                 == key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))
             value.originals, value.configuration_digest = tuple(originals), current_digest
+            if value.local:
+                _require_local_owner(value)
             value.opening_epoch, value.opening_mono = current_epoch, opening_mono
             value.expires_epoch = min(maximum_expiry,
                 value.policy["expiresAtEpochNs"] if value.recovery is None else value.recovery["expiresAtEpochNs"])

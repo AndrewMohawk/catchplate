@@ -15,6 +15,15 @@ STARTUP_SCHEMA = "serverware.rbacWitnessStartup/v1"
 ENROLLMENT_V2_SCHEMA = "serverware.rbacWitnessEnrollment/v2"
 SIGNED_ENROLLMENT_V2_SCHEMA = "serverware.signedRbacWitnessEnrollment/v2"
 STARTUP_V2_SCHEMA = "serverware.rbacWitnessStartup/v2"
+LOCAL_ENROLLMENT_SCHEMA = "serverware.trustedHostLocalRbacWitnessEnrollment/v1"
+LOCAL_SIGNED_ENROLLMENT_SCHEMA = "serverware.signedTrustedHostLocalRbacWitnessEnrollment/v1"
+LOCAL_STARTUP_SCHEMA = "serverware.trustedHostLocalRbacWitnessStartup/v1"
+LOCAL_ASSURANCE = {
+    "schema": "serverware.trustedHostLocalRbacWitnessAssurance/v1",
+    "trustMode": "trusted-host-local", "coLocated": True,
+    "hardwareBacked": False, "independentlyAdministered": False,
+    "jointRollbackResistant": False, "faultDomainScope": "separate-local-cluster-storage",
+}
 INTENT_SCHEMA = "serverware.rbacWitnessIntent/v1"
 COMPLETION_SCHEMA = "serverware.rbacWitnessCompletion/v1"
 TABLES = ("rbac_authority_state", "rbac_role_bindings")
@@ -54,6 +63,18 @@ def document(raw, maximum=MAX_BYTES):
     value = json.loads(raw, object_pairs_hook=pairs, parse_float=refuse, parse_constant=refuse)
     require(canonical(value) == raw)
     return value
+
+
+def require_local_development():
+    """Additional refusal, never an environment-only authorization path."""
+    import os
+    from serverware import config
+    development = {"dev", "development", "local", "test"}
+    require(not config.PRODUCTION_IMAGE
+        and os.environ.get("SERVERWARE_PRODUCTION_IMAGE", "0") != "1"
+        and config.RELEASE_CHANNEL.strip().lower() in development
+        and os.environ.get("SERVERWARE_RELEASE_CHANNEL", "dev").strip().lower() in development,
+        "co-located RBAC witness profile is forbidden in production")
 
 
 def state_material(generation, root, manifest_digest):
@@ -98,14 +119,19 @@ def enrollment(raw, root):
     require(isinstance(root, Ed25519PublicKey))
     value = document(raw, 65536)
     require(type(value) is dict and set(value) == {"schema", "payload", "signatureBase64Url"}
-        and value["schema"] in {SIGNED_ENROLLMENT_SCHEMA, SIGNED_ENROLLMENT_V2_SCHEMA})
+        and value["schema"] in {SIGNED_ENROLLMENT_SCHEMA, SIGNED_ENROLLMENT_V2_SCHEMA, LOCAL_SIGNED_ENROLLMENT_SCHEMA})
     payload = value["payload"]
     fields = {"schema", "sourceRevision", "enrollmentId", "databaseId", "deploymentId", "configurationDigests",
         "metadataClusterId", "witnessClusterId", "metadataFaultDomain", "witnessFaultDomain", "reader", "writer",
         "initialState", "issuedAtEpochNs", "expiresAtEpochNs", "maximumRecords", "endpoint", "tlsRootSha256", "metadataDatabase"}
     second = value["schema"] == SIGNED_ENROLLMENT_V2_SCHEMA
-    require(type(payload) is dict and set(payload) == fields | ({"recoveryPublicKeyBase64Url"} if second else set())
-        and payload["schema"] == (ENROLLMENT_V2_SCHEMA if second else ENROLLMENT_SCHEMA))
+    local = value["schema"] == LOCAL_SIGNED_ENROLLMENT_SCHEMA
+    require(type(payload) is dict and set(payload) == fields | (
+        {"recoveryPublicKeyBase64Url"} if second else {"assurance"} if local else set())
+        and payload["schema"] == (ENROLLMENT_V2_SCHEMA if second else LOCAL_ENROLLMENT_SCHEMA if local else ENROLLMENT_SCHEMA))
+    if local:
+        require(type(payload["assurance"]) is dict and canonical(payload["assurance"]) == canonical(LOCAL_ASSURANCE),
+            "local RBAC assurance cannot claim independent administration or joint rollback resistance")
     if second:
         raw_key = payload["recoveryPublicKeyBase64Url"]
         require(type(raw_key) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", raw_key) is not None)
@@ -158,12 +184,17 @@ def enrollment(raw, root):
 
 
 def sign_enrollment(payload, key):
-    """Independent offline operator only; no runtime owns this signing key."""
+    """Offline enrollment root only; no runtime owns this signing key.
+
+    Local enrollment has its own signature domain and makes no independent
+    administration claim. Its runtime still requires genuine local admission.
+    """
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     require(isinstance(key, Ed25519PrivateKey))
-    require(type(payload) is dict and payload.get("schema") in {ENROLLMENT_SCHEMA, ENROLLMENT_V2_SCHEMA})
+    require(type(payload) is dict and payload.get("schema") in {ENROLLMENT_SCHEMA, ENROLLMENT_V2_SCHEMA, LOCAL_ENROLLMENT_SCHEMA})
     signature = key.sign(payload["schema"].encode("ascii") + b"\0" + canonical(payload))
-    original = canonical({"schema": SIGNED_ENROLLMENT_V2_SCHEMA if payload["schema"] == ENROLLMENT_V2_SCHEMA else SIGNED_ENROLLMENT_SCHEMA, "payload": payload,
+    original = canonical({"schema": SIGNED_ENROLLMENT_V2_SCHEMA if payload["schema"] == ENROLLMENT_V2_SCHEMA else
+        LOCAL_SIGNED_ENROLLMENT_SCHEMA if payload["schema"] == LOCAL_ENROLLMENT_SCHEMA else SIGNED_ENROLLMENT_SCHEMA, "payload": payload,
         "signatureBase64Url": base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")})
     enrollment(original, key.public_key())
     return original

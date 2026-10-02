@@ -629,6 +629,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_trust.py \
 	scripts/test_authority_local_configuration.py \
 	scripts/test_authority_local_runtime_trust.py \
+	scripts/test_authority_local_rbac_witness.py \
 	scripts/test_authority_local_launch_authorization.py \
 	scripts/test_authority_local_cohort.py \
 	scripts/test_authority_local_trust_commit.py \

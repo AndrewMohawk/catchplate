@@ -1,9 +1,11 @@
-"""Actual purpose-fixed independent PostgreSQL witness connection owner.
+"""Actual purpose-fixed separately enrolled PostgreSQL witness connection owner.
 
 This module does not accept a caller verdict or arbitrary SQL callback. The
 writer handle is separately admitted only inside the actual authority verifier;
 all other admitted consumers retain a read-only handle. No implicit enrollment,
 absence-as-genesis, pending expiry, reset, repair or automatic retry exists.
+Legacy enrollment claims independent administration; the separately signed
+local profile explicitly does not. Both use the same actual cluster checks.
 """
 import os
 import time
@@ -155,13 +157,17 @@ class Connection:
 def provision(connection, enrollment_original, root_original):
     """Offline owner connection only; no runtime/HTTP caller uses this function.
 
-    Both initial state and stable database identity are independently signed.
+    Both initial state and stable database identity are offline root-signed.
+    Legacy profiles require independent provisioning; the explicit local
+    profile is development-only and makes no independent-administration claim.
     This is initial provisioning only. Any existing namespace refuses; it never
     updates a head, adopts observed DB state or repairs a rolled-back store.
     """
     from cryptography.hazmat.primitives import serialization
     root = serialization.load_pem_public_key(root_original)
     policy = wire.enrollment(enrollment_original, root)
+    if policy["schema"] == wire.LOCAL_ENROLLMENT_SCHEMA:
+        wire.require_local_development()
     import psycopg
     from psycopg.rows import dict_row
     wire.require(type(connection) is psycopg.Connection and not connection.closed and connection.info.transaction_status == 0

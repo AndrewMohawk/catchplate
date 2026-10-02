@@ -16,7 +16,7 @@ role, provisioned explicitly by provision_local_audit_reader.py. Existing verifi
 grants are not widened. The matching grants and authentication must actually exist.
 Audit uses its already bootstrapped restricted role. The existing independently
 provisioned audit-inclusion key must be a sealed32-byte FD and actual current key.
-No schema, grants, keys, event, outbox completion or authority state is created.
+No schema, grants, keys, metadata outbox completion or authority state is created.
 
 Only first genesis: all policy publication/finalization/inclusion history must be
 absent in the actual snapshot. An actual signed preparation, terminal audited
@@ -26,7 +26,20 @@ Writes one existing PolicyAuthorityAuditInclusion/v1 record to a root-owned pipe
 Require complete output AND exit0; never retry partial output. Existing genesis
 v2 finalize/current-signature/WebAuthn admission remains mandatory. These are
 historical snapshots, not a continuing absence/currentness claim; continuation
-requires a persistent inclusion ledger. Co-location is NOT independent
+requires a persistent inclusion ledger.
+
+Explicit approval/v2 with purpose append-and-sign-observed-first-genesis-audit-inclusion
+instead requires the untouched pending original. It authenticates its real
+preparation/signature/current key rows before appending that one exact event via
+the existing audit transaction/chain lock/idempotency path. The audit role is the
+fixed existing audit runtime role. A fresh read-only audit snapshot must verify
+the committed full prefix before signing. GenesisFinalize/v3 independently checks
+the signature and atomically CASes pending to audited with finalization; the local
+producer has no metadata DML. Original approval/v1 remains read-only and requires
+the terminal audited outbox. A failed or incomplete v2 run may have committed its
+audit event: preserve originals and do not automatically retry or claim rollback.
+
+Co-location is NOT independent
 administration, hardware custody, external transparency or production approval.
 An external supervisor must bound PostgreSQL/kernel stalls under original limits.
 """

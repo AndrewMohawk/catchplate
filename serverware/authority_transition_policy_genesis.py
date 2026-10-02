@@ -1,4 +1,4 @@
-"""Explicit genesis v2: original signatures verified in the actual transaction.
+"""Explicit genesis successors: original signatures verified in the transaction.
 
 The caller's key/head values only address expected prestate. Complete populations
 are proved against current roots by the planner; this module never registers an
@@ -14,6 +14,7 @@ PREPARE = "policy.genesis.prepare"
 FINALIZE = "policy.genesis.finalize"
 PREPARE_SCHEMA = "serverware.policyAuthorityGenesisPrepare/v2"
 FINALIZE_SCHEMA = "serverware.policyAuthorityGenesisFinalize/v2"
+FINALIZE_DELIVERY_SCHEMA = "serverware.policyAuthorityGenesisFinalize/v3"
 FIELD = "policyGenesis"
 MAX_ROWS = 16
 TABLES = ("policy_authority_trusted_keys", "policy_authority_trusted_key_revocations",
@@ -26,8 +27,15 @@ def require(value, message="policy genesis v2 original is not exact"):
 
 
 def selected(operation, arguments):
-    return operation in (PREPARE, FINALIZE) and arguments.get("schema") == (
-        PREPARE_SCHEMA if operation == PREPARE else FINALIZE_SCHEMA)
+    return (operation == PREPARE and arguments.get("schema") == PREPARE_SCHEMA
+        or operation == FINALIZE and arguments.get("schema") in (FINALIZE_SCHEMA, FINALIZE_DELIVERY_SCHEMA))
+
+
+def pending_outbox(outbox, expected):
+    """The one untouched preparation event; no claimed/failed/adopted work."""
+    require(set(outbox) == set(expected) and all(outbox[name] == expected[name]
+        for name in expected if name != "created_at"), "genesis delivery requires the exact pending original outbox")
+    core.require_text(outbox["created_at"], "genesis outbox timestamp", maximum_bytes=64)
 
 
 def configuration(value, *, root_digest=None):
@@ -205,18 +213,23 @@ def _finalize(context, row, verified, changes):
         and row["signing_key_id"] == row["audit_signer_public_key_digest"] == signer
         and row["transition_digest"] == preparation["genesis_transition_digest"], "genesis inclusion purpose differs")
     audit = legacy._row(context.exact("policy_authority_transition_audits", {"transition_digest": row["transition_digest"]}))
-    outbox = legacy._row(context.exact("metadata_audit_outbox", {"id": row["outbox_id"]}))
-    require(audit == stage(base, context.database_now)["transition"]
+    outbox_selected = context.exact("metadata_audit_outbox", {"id": row["outbox_id"]})
+    outbox = legacy._row(outbox_selected)
+    original_stage = stage(base, context.database_now)
+    existing = context.exact("policy_authority_genesis_finalizations", {"genesis_preparation_digest": digest})
+    delivery = context.arguments["schema"] == FINALIZE_DELIVERY_SCHEMA and not existing["present"]
+    require(audit == original_stage["transition"]
         and audit["outbox_id"] == row["outbox_id"] and audit["outbox_event_digest"] == row["outbox_event_digest"]
         and audit["event_type"] == "policy.authority.genesis.prepared" and audit["entity_kind"] == "activation_genesis"
         and audit["entity_id"] == preparation["policy_hash"] and audit["state_digest"] == digest
         and outbox["event_digest"] == row["outbox_event_digest"]
-        and outbox["status"] == "audited" and outbox["audit_event_hash"] == row["audit_event_hash"],
+        and (delivery or outbox["status"] == "audited" and outbox["audit_event_hash"] == row["audit_event_hash"]),
         "genesis requires the actual terminal audited outbox")
+    if delivery:
+        pending_outbox(outbox, original_stage["outbox"])
     receipt = {**row, "evidence_kind": verified["evidence_kind"], "record_binding_digest": verified["record_binding_digest"],
         "verification_receipt_digest": verified["verification_receipt_digest"],
         **{key: verified[key] for key in ("issued_at_epoch_ns", "expires_at_epoch_ns", "verified_at_epoch_ns")}}
-    existing = context.exact("policy_authority_genesis_finalizations", {"genesis_preparation_digest": digest})
     receipt_selected = context.exact("policy_authority_audit_inclusion_receipts",
         {"inclusion_receipt_envelope_digest": row["inclusion_receipt_envelope_digest"]})
     if existing["present"]:
@@ -244,6 +257,13 @@ def _finalize(context, row, verified, changes):
     final.update(inclusion_receipt_envelope_digest=row["inclusion_receipt_envelope_digest"], finalized_at_epoch_ns=now,
         finalization_digest=db._policy_authority_domain_digest(b"serverware.policyAuthorityGenesisFinalization/v1", db.dumps(material).encode("ascii")))
     now_iso = legacy._database_iso(context.database_now)
+    if delivery:
+        # Full-row CAS in the same v9 transaction as the inclusion, high-water
+        # and finalization. The signature above binds the independent audit
+        # event; neither an input status nor an append response is authority.
+        changes = (*changes, core.mutation(operation=FINALIZE, selected=outbox_selected,
+            row={**outbox, "status": "audited", "audited_at": now_iso,
+                "audit_event_hash": row["audit_event_hash"]}))
     high = {"scope": "active", "policy_id": preparation["policy_id"], "sequence": preparation["policy_sequence"],
         "rollback_epoch": preparation["rollback_epoch"], "policy_hash": preparation["policy_hash"], "updated_at": now_iso}
     publication = {**high, "status": "committed", "previous_policy_hash": None, "created_at": now_iso, "committed_at": now_iso}

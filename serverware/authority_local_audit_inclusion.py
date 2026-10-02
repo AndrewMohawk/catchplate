@@ -1,8 +1,10 @@
 """One genuinely observed, first-genesis audit inclusion on a trusted host.
 
-This separate signer reads existing restricted PostgreSQL metadata and audit
-connections. It never inserts an event, completes an outbox, initializes state,
-or writes authority SQL. Empty inclusion state is an observed snapshot, not an
+The original profile reads existing restricted PostgreSQL metadata and audit
+connections. Explicit v2 additionally appends only the genuine pending genesis
+event through the existing audit owner, then reads the committed audit prefix.
+Neither profile completes a metadata outbox, initializes state or writes authority
+SQL. Empty inclusion state is an observed snapshot, not an
 ongoing authority claim: the existing genesis-finalize transaction must still
 verify its current rows, signatures and CAS. Co-location is not independently
 administered or hardware-isolated custody. Continuations are unsupported.
@@ -26,6 +28,8 @@ from serverware import authority_local_audit_reader as reader
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalFirstAuditInclusionApproval/v1"
 PURPOSE = "sign-observed-first-genesis-audit-inclusion"
+DELIVERY_APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalFirstAuditInclusionApproval/v2"
+DELIVERY_PURPOSE = "append-and-sign-observed-first-genesis-audit-inclusion"
 MAX_APPROVAL = 8192
 MAX_DSN = 16384
 MAX_WINDOW_NS = 30_000_000_000
@@ -53,7 +57,8 @@ def approval(raw):
     require(set(value) == {"schema", "purpose", "metadata", "audit", "genesisPreparationDigest", "policyHash",
         "auditStoreIdentityDigest", "auditSignerPublicKeyDigest", "rootKeySpkiDigest", "bootIdDigest",
         "issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
-        and value["schema"] == APPROVAL_SCHEMA and value["purpose"] == PURPOSE)
+        and (value["schema"], value["purpose"]) in {
+            (APPROVAL_SCHEMA, PURPOSE), (DELIVERY_APPROVAL_SCHEMA, DELIVERY_PURPOSE)})
     for name in ("genesisPreparationDigest", "policyHash", "auditStoreIdentityDigest",
                  "auditSignerPublicKeyDigest", "rootKeySpkiDigest", "bootIdDigest"):
         digest(value[name])
@@ -71,6 +76,9 @@ def approval(raw):
             and (selected["transport"] == "unix") == selected["host"].startswith("/"))
     require(value["metadata"]["role"] != value["audit"]["role"])
     require(value["metadata"]["role"] == reader.ROLE)
+    if value["schema"] == DELIVERY_APPROVAL_SCHEMA:
+        from serverware import db
+        require(value["audit"]["role"] == db._AUDIT_STORE_RUNTIME_ROLE)
     for start, end in (("issuedAtBoottimeNs", "deadlineBoottimeNs"), ("issuedAtUnixNanos", "expiresAtUnixNanos")):
         require(type(value[start]) is type(value[end]) is int
             and 0 < value[start] < value[end] < 2**63 and value[end] - value[start] <= MAX_WINDOW_NS)
@@ -100,9 +108,9 @@ def current_key(kind, keys, heads, revocations, runtime_keys, selected):
     return key, head
 
 
-def original_binding(selected, *, preparation, verification, transition, outbox, keys, heads,
-                     revocations, runtime_keys, audit_rows, now_unix_ns):
-    """Validate source rows; callers cannot use this function to claim SQL IO."""
+def preparation_binding(selected, *, preparation, verification, transition, outbox, keys, heads,
+                        revocations, runtime_keys, now_unix_ns):
+    """Authenticate the exact preparation before any optional audit effect."""
     from serverware import db
     from serverware import authority_transition_policy as legacy
     from serverware import authority_transition_policy_genesis as genesis
@@ -129,9 +137,23 @@ def original_binding(selected, *, preparation, verification, transition, outbox,
     actual_stage = genesis.stage(base, datetime.fromtimestamp(now_unix_ns // 1_000_000_000, timezone.utc))
     require(transition == actual_stage["transition"])
     expected = actual_stage["outbox"]
-    require(all(outbox[name] == expected[name] for name in ("id", "event_type", "actor_type", "actor_id", "event_json", "event_digest"))
-        and outbox["status"] == "audited" and outbox["claim_id"] is None
-        and outbox["audit_event_hash"] is not None)
+    if selected["schema"] == DELIVERY_APPROVAL_SCHEMA:
+        genesis.pending_outbox(outbox, expected)
+    else:
+        require(selected["schema"] == APPROVAL_SCHEMA
+            and all(outbox[name] == expected[name] for name in ("id", "event_type", "actor_type", "actor_id", "event_json", "event_digest"))
+            and outbox["status"] == "audited" and outbox["claim_id"] is None
+            and outbox["audit_event_hash"] is not None)
+    return current_key("audit_inclusion_receipt", keys, heads, revocations, runtime_keys, selected)
+
+
+def original_binding(selected, *, preparation, verification, transition, outbox, keys, heads,
+                     revocations, runtime_keys, audit_rows, now_unix_ns):
+    """Validate source rows; callers cannot use this function to claim SQL IO."""
+    from serverware import db
+    audit_key, audit_head = preparation_binding(selected, preparation=preparation, verification=verification,
+        transition=transition, outbox=outbox, keys=keys, heads=heads, revocations=revocations,
+        runtime_keys=runtime_keys, now_unix_ns=now_unix_ns)
     require(type(audit_rows) is list and 0 < len(audit_rows) <= MAX_AUDIT_ROWS)
     previous, total, last_sequence = None, 0, 0
     for row in audit_rows:
@@ -141,10 +163,10 @@ def original_binding(selected, *, preparation, verification, transition, outbox,
         previous = db._validated_audit_row_hash(row, previous, keyring=None)
         last_sequence = row["sequence"]
     actual = audit_rows[-1]
-    require(actual["id"] == outbox["id"] and actual["event_hash"] == outbox["audit_event_hash"]
+    require(actual["id"] == outbox["id"]
+        and (selected["schema"] == DELIVERY_APPROVAL_SCHEMA or actual["event_hash"] == outbox["audit_event_hash"])
         and all(actual[name] == outbox[name] for name in ("event_type", "actor_type", "actor_id", "event_json"))
         and db._metadata_outbox_event_digest(actual["event_json"]) == transition["outbox_event_digest"])
-    audit_key, audit_head = current_key("audit_inclusion_receipt", keys, heads, revocations, runtime_keys, selected)
     row = dict(transition_digest=transition["transition_digest"], outbox_id=outbox["id"],
         outbox_event_digest=outbox["event_digest"], audit_store_identity_digest=selected["auditStoreIdentityDigest"],
         audit_ledger_namespace=db._POLICY_AUTHORITY_AUDIT_LEDGER_NAMESPACE,
@@ -294,8 +316,10 @@ class LocalAuditInclusionIssuer:
             # Any acquired connection is already retained before cancellation.
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         connection.rollback()
+        writable = name == "audit" and self.selected["schema"] == DELIVERY_APPROVAL_SCHEMA
         with connection.cursor() as cursor:
-            cursor.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            cursor.execute("BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE" if writable
+                else "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             cursor.execute("SELECT pg_catalog.set_config('search_path',%s,true), "
                 "pg_catalog.set_config('statement_timeout',%s,true), "
                 "pg_catalog.set_config('lock_timeout',%s,true), "
@@ -306,13 +330,50 @@ class LocalAuditInclusionIssuer:
                 "pg_catalog.current_setting('transaction_isolation') AS isolation, ssl.ssl "
                 "FROM pg_catalog.pg_stat_ssl ssl WHERE ssl.pid=pg_catalog.pg_backend_pid()").fetchone()
             require(identity is not None and identity["role"] == identity["session_role"] == selected["role"]
-                and identity["database"] == selected["database"] and identity["read_only"] == "on"
-                and identity["isolation"] == "repeatable read"
+                and identity["database"] == selected["database"] and identity["read_only"] == ("off" if writable else "on")
+                and identity["isolation"] == ("read committed" if writable else "repeatable read")
                 and (selected["transport"] != "tls-verify-full" or identity["ssl"] is True))
             if name == "metadata":
                 require(cursor.execute(*reader.privilege_check()).fetchone() is None)
         self.check()
         return connection
+
+    def _append_pending(self, audit, *, preparation, verification, transition, outbox, populations):
+        """One actual audit-store effect; the metadata connection stays read-only."""
+        from serverware import db
+        require(self.selected["schema"] == DELIVERY_APPROVAL_SCHEMA)
+        self.check()
+        key, _ = preparation_binding(self.selected, preparation=preparation, verification=verification,
+            transition=transition, outbox=outbox, now_unix_ns=self.unix_ns, **populations)
+        expires = min(self.effective_expiry, preparation["expires_at_epoch_ns"])
+        admit_signing_key(key, issued=self.selected["issuedAtUnixNanos"], expires=expires, now=self.unix_ns)
+        private = io.signing_key(self.signing_key_fd)
+        try:
+            require(sha(private.public_key().public_bytes(serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo)) == key["public_key_digest"])
+        finally:
+            del private
+        self._configure(audit)
+        self.check()
+        # Connection, transaction, role and statement timeout were admitted by
+        # _connect. Do not open a second environment-selected audit connection.
+        result = db._append_postgres_audit_event_on_connection(audit,
+            event_type=outbox["event_type"], actor_type=outbox["actor_type"], actor_id=outbox["actor_id"],
+            event=db.loads(outbox["event_json"], None), idempotency_key=outbox["id"])
+        self.check()
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, _CANCEL)
+        try:
+            audit.commit()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        self.check()
+        require(result["id"] == outbox["id"] and db.dumps(result["event"]) == outbox["event_json"])
+        # A fresh read-only snapshot observes the actual committed ledger. The
+        # append return value never substitutes for this bounded prefix proof.
+        with audit.cursor() as cursor:
+            cursor.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            self._configure(audit)
+        return result
 
     def issue(self):
         from serverware import db
@@ -342,6 +403,9 @@ class LocalAuditInclusionIssuer:
                         ("revocations", "policy_authority_trusted_key_revocations"), ("runtime_keys", "policy_runtime_role_keys")):
                     self.check()
                     populations[name] = _bounded_rows(self._execute(cursor, "SELECT * FROM serverware_metadata." + table + " LIMIT %s", (MAX_KEYS + 1,)).fetchall())
+            if self.selected["schema"] == DELIVERY_APPROVAL_SCHEMA:
+                self._append_pending(audit, preparation=preparation, verification=verification,
+                    transition=transition, outbox=outbox, populations=populations)
             with audit.cursor() as cursor:
                 target = self._execute(cursor, "SELECT sequence FROM serverware_audit.serverware_audit_events WHERE id=%s", (outbox["id"],)).fetchone()
                 require(target is not None and type(target["sequence"]) is int and target["sequence"] > 0)

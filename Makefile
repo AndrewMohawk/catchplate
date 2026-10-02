@@ -655,6 +655,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_snapshot.py \
 	scripts/test_development_policy_commissioning.py \
 	scripts/test_authority_genesis_successor.py \
+	scripts/test_authority_genesis_audit_delivery.py \
 	scripts/test_control_plane_optional_startup.py \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \

@@ -1966,9 +1966,11 @@ _OPERATIONS = {
             "policy_authority_genesis_finalizations",
             "policy_publications",
             "policy_high_water",
+            "metadata_audit_outbox",
         )
         + _PHASE2_AGGREGATE
         + _PHASE2_EVIDENCE,
+        mutation_kinds={"metadata_audit_outbox": ("UPDATE",)},
         webauthn="bound-verified-assertion-receipt",
         proof_primitives=_PHASE2_EXACT_AGGREGATE_PROOF_SET
             + ("external-evidence-receipt", "bounded-limit-plus-one"),

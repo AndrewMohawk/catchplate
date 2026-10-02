@@ -25204,72 +25204,98 @@ def _append_postgres_audit_event(
     event_json = dumps(event)
     _validate_audit_event_json(event_json)
     with _audit_pg_connect() as conn:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                _lock_postgres_audit(conn, "chain")
-                if idempotency_key is not None:
-                    existing = cur.execute(
-                        "SELECT * FROM serverware_audit_events WHERE id = %(id)s",
-                        {"id": event_id},
-                    ).fetchone()
-                    if existing is not None:
-                        if (
-                            existing["event_type"] != event_type
-                            or existing["actor_type"] != actor_type
-                            or existing["actor_id"] != actor_id
-                            or existing["event_json"] != event_json
-                        ):
-                            raise AuditStoreError(
-                                "audit idempotency key was reused with different event data"
-                            )
-                        return {
-                            "id": existing["id"],
-                            "event_type": existing["event_type"],
-                            "actor_type": existing["actor_type"],
-                            "actor_id": existing["actor_id"],
-                            "event": loads(existing["event_json"], {}),
-                            "prev_event_hash": existing["prev_event_hash"],
-                            "event_hash": existing["event_hash"],
-                            "created_at": existing["created_at"],
-                        }
-                previous = cur.execute(
-                    "SELECT event_hash FROM serverware_audit_events ORDER BY sequence DESC LIMIT 1"
+        return _append_postgres_audit_event_on_connection(
+            conn, event_type=event_type, actor_type=actor_type, actor_id=actor_id,
+            event=event, idempotency_key=event_id if idempotency_key is not None else None,
+            _event_id=event_id)
+
+
+def _append_postgres_audit_event_on_connection(
+    conn: Any,
+    *,
+    event_type: str,
+    actor_type: str,
+    actor_id: str | None,
+    event: dict[str, Any],
+    idempotency_key: str | None = None,
+    _event_id: str | None = None,
+) -> dict[str, Any]:
+    """Existing append transaction on an already authenticated, retained connection.
+
+    The caller owns its connection/role, namespace, original deadline and close.
+    No metadata or outbox state is written here. The ordinary wrapper still
+    obtains its own pinned audit connection and closes it exactly as before.
+    """
+    event_id = _event_id or idempotency_key or str(uuid.uuid4())
+    event = _audit_event_for_storage(event_type, event)
+    event_json = dumps(event)
+    _validate_audit_event_json(event_json)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            _lock_postgres_audit(conn, "chain")
+            if idempotency_key is not None:
+                existing = cur.execute(
+                    "SELECT * FROM serverware_audit_events WHERE id = %(id)s",
+                    {"id": event_id},
                 ).fetchone()
-                prev_hash = previous["event_hash"] if previous else None
-                created_at = iso_now()
-                event_hash = _audit_hash(
-                    event_id=event_id,
-                    event_type=event_type,
-                    actor_type=actor_type,
-                    actor_id=actor_id,
-                    event_json=event_json,
-                    prev_event_hash=prev_hash,
-                    created_at=created_at,
+                if existing is not None:
+                    if (
+                        existing["event_type"] != event_type
+                        or existing["actor_type"] != actor_type
+                        or existing["actor_id"] != actor_id
+                        or existing["event_json"] != event_json
+                    ):
+                        raise AuditStoreError(
+                            "audit idempotency key was reused with different event data"
+                        )
+                    return {
+                        "id": existing["id"],
+                        "event_type": existing["event_type"],
+                        "actor_type": existing["actor_type"],
+                        "actor_id": existing["actor_id"],
+                        "event": loads(existing["event_json"], {}),
+                        "prev_event_hash": existing["prev_event_hash"],
+                        "event_hash": existing["event_hash"],
+                        "created_at": existing["created_at"],
+                    }
+            previous = cur.execute(
+                "SELECT event_hash FROM serverware_audit_events ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = previous["event_hash"] if previous else None
+            created_at = iso_now()
+            event_hash = _audit_hash(
+                event_id=event_id,
+                event_type=event_type,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                event_json=event_json,
+                prev_event_hash=prev_hash,
+                created_at=created_at,
+            )
+            cur.execute(
+                """
+                INSERT INTO serverware_audit_events (
+                    id, event_type, actor_type, actor_id, event_json,
+                    storage_format_version, prev_event_hash, event_hash, created_at
                 )
-                cur.execute(
-                    """
-                    INSERT INTO serverware_audit_events (
-                        id, event_type, actor_type, actor_id, event_json,
-                        storage_format_version, prev_event_hash, event_hash, created_at
-                    )
-                    VALUES (
-                        %(id)s, %(event_type)s, %(actor_type)s, %(actor_id)s, %(event_json)s,
-                        %(storage_format_version)s, %(prev_event_hash)s,
-                        %(event_hash)s, %(created_at)s
-                    )
-                    """,
-                    {
-                        "id": event_id,
-                        "event_type": event_type,
-                        "actor_type": actor_type,
-                        "actor_id": actor_id,
-                        "event_json": event_json,
-                        "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
-                        "prev_event_hash": prev_hash,
-                        "event_hash": event_hash,
-                        "created_at": created_at,
-                    },
+                VALUES (
+                    %(id)s, %(event_type)s, %(actor_type)s, %(actor_id)s, %(event_json)s,
+                    %(storage_format_version)s, %(prev_event_hash)s,
+                    %(event_hash)s, %(created_at)s
                 )
+                """,
+                {
+                    "id": event_id,
+                    "event_type": event_type,
+                    "actor_type": actor_type,
+                    "actor_id": actor_id,
+                    "event_json": event_json,
+                    "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
+                    "prev_event_hash": prev_hash,
+                    "event_hash": event_hash,
+                    "created_at": created_at,
+                },
+            )
     return {
         "id": event_id,
         "event_type": event_type,

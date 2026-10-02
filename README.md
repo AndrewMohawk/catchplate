@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -130,6 +132,11 @@ Checkpoint: **2026-10-02 — pre-production, pilot assembly.**
 **Production acceptance: 0/6 verified.** Focused checks and engineering builds are recorded in [production progress](docs/production-status.md) and [build results](docs/native-pilot-build.md#current-engineering-assembly). Those builds use an unpublished dependency candidate; they are not approved release packages or a deployed pilot.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+
+**Homelab browser address:** [serverware.example.com](https://serverware.example.com/),
+behind the usual homelab login. [Deployment details](docs/homelab-deployment.md)
+separate HTTPS ingress from application readiness. No browser SSH tunnel is needed;
+first commissioning still needs your physical YubiKey.
 
 **Development pilot — current focus:** a local control UI, Rust proxy and
 synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).

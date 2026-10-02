@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Local development pilot
 
 Status: **not yet a working pilot; walkthrough pending commissioning**. The
@@ -29,30 +31,22 @@ does not replace or satisfy the [full production goal](../goal.md).
 
 The browser and physical FIDO2 YubiKey belong on your own computer, not in the
 AWS console or an unattended server browser. The selected browser origin is
-`http://localhost:13000/`; keep this exact hostname, not `127.0.0.1` or the
-server's IP address. All published pilot ports
-are loopback-only; this is not a public URL or authorization to expose them.
+**https://serverware.example.com/**. Use this exact HTTPS hostname, not
+localhost, the lab alias or the server's IP address. Sign in through the usual
+homelab Authelia login with the `operator` account. The pilot ingress permits
+only that operator; Authelia login does not itself enroll a Serverware key or
+grant an application administrator session.
 
-For access from your own computer, use an authorized SSH account on the actual
-pilot host. Replace the two uppercase placeholders below; keep the tunnel open,
-then use the same localhost URL. The second forward also permits the request
-check from your computer after obtaining the public CA and checker from the
-operator. Do not change Compose to bind publicly.
-
-```bash
-ssh -N -o ExitOnForwardFailure=yes \
-  -L 127.0.0.1:13000:127.0.0.1:13000 \
-  -L 127.0.0.1:18080:127.0.0.1:18080 \
-  YOUR_SSH_USER@YOUR_PILOT_HOST
-```
-
-Establish the tunnel before launch and leave its terminal open. Have your
-YubiKey inserted and its PIN available, then tell the operator you are ready.
+No SSH tunnel is needed for the browser. The [homelab ingress](homelab-deployment.md)
+keeps the internal listeners private and preserves the browser's exact origin.
+An authentication redirect or a commissioning-unavailable response is not a
+working pilot. Have your YubiKey inserted and its PIN available, then tell the
+operator you are ready.
 The page does not run until the operator starts enrollment and announces that
 the registration browser is ready. Do not start the launch just to probe it:
 its original approval windows are short and are not renewed automatically.
 
-Open the exact localhost URL when instructed and complete these four prompts:
+Open the exact HTTPS URL when instructed and complete these four prompts:
 
 1. **Create registration credential** using the external YubiKey.
 2. On that same page, **Confirm final completion with your key**.
@@ -92,6 +86,15 @@ Do not edit credentials, publish policy or approve requests in this walkthrough.
 
 ## 2. Check credential replacement and denial
 
+Run this on the pilot host, or forward only the private proxy port over your
+existing authorized SSH access:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:18080:127.0.0.1:18080 YOUR_SSH_USER@YOUR_PILOT_HOST
+```
+
+This optional tunnel is for the command-line proxy check, not browser enrollment.
 From the provided checkout, use Bash, Python 3 and curl. Replace the example
 path with the absolute path to the public CA supplied in the runtime handoff:
 

@@ -2,8 +2,9 @@
 
 This is the remaining operator sequence, **not a working-pilot claim**. The
 isolated development stack has not completed policy commissioning, demo seeding,
-verified CA handoff or the two proxy requests. Keep it loopback-only and use only
-synthetic credentials. Source checks, images, healthy dependencies and a loaded
+verified CA handoff or the two proxy requests. The browser uses the protected
+[homelab HTTPS ingress](homelab-deployment.md); raw proxy and management listeners
+remain private. Use only synthetic credentials. Source checks, images, healthy dependencies and a loaded
 UI do not establish an accepted application flow.
 
 ## Required inputs and services
@@ -119,7 +120,7 @@ condition, not permission to invent receipts or enable a fallback.
    neither publishes policy nor advances its sequence. A
    `409 demo_policy_commissioning_required` means stop and correct commissioning;
    do not switch to SQLite/non-atomic mode or retry with manufactured state.
-   The selected `live-rust-seeded` guest continuation performs this one request
+   The selected `live-homelab` guest continuation performs this one request
    itself before waiting for CA publication. It uses the retained operator
    credential, validates the response's actual policy hash/sequence and demo
    credential ID, and does not print the response. Only empty TCP readiness

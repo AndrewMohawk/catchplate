@@ -2077,8 +2077,10 @@ class _LocalAdmission:
         self.check(peer=True)
         remaining = min(self.setup["deadlineBoottimeNs"] - self.last_boot,
             self.setup["expiresAtUnixNanos"] - self.last_epoch) / 1_000_000_000
+        # Avoid rescanning the full retained roster every 50ms while idle.
+        # Channel/PIDFD readiness still wakes immediately; original clocks bind.
         select.select([self.peer_fd] + ([] if writing else [self.channel]),
-            [self.channel] if writing else [], [], min(0.05, remaining))
+            [self.channel] if writing else [], [], min(1.0, remaining))
         self.check(peer=True)
 
     def exchange(self):

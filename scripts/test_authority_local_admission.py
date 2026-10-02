@@ -11,7 +11,9 @@ import resource
 import socket
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -22,6 +24,40 @@ from serverware import authority_local_startup as startup
 
 
 class LocalAdmissionControls(unittest.TestCase):
+    def test_parked_wait_preserves_checks_fd_sets_and_original_deadline_clipping(self):
+        for writing in (False, True):
+            for boot_remaining, epoch_remaining, timeout in ((5.0, 5.0, 1.0), (0.25, 5.0, 0.25), (5.0, 0.125, 0.125)):
+                with self.subTest(writing=writing, boot=boot_remaining, epoch=epoch_remaining):
+                    calls = []
+                    channel = object()
+                    owner = SimpleNamespace(peer_fd=41, channel=channel, last_boot=1_000_000_000,
+                        last_epoch=2_000_000_000,
+                        setup=dict(deadlineBoottimeNs=1_000_000_000 + int(boot_remaining * 1e9),
+                            expiresAtUnixNanos=2_000_000_000 + int(epoch_remaining * 1e9)),
+                        check=lambda *, peer: calls.append(("check", peer)))
+                    def selected(readable, writable, exceptional, seconds):
+                        calls.append(("select", readable, writable, exceptional, seconds))
+                        return readable, writable, []
+                    with patch.object(launcher, "select", SimpleNamespace(select=selected), create=True):
+                        launcher._LocalAdmission._wait(owner, writing=writing)
+                    self.assertEqual(calls, [("check", True),
+                        ("select", [41] if writing else [41, channel], [channel] if writing else [], [], timeout),
+                        ("check", True)])
+
+    def test_parked_wait_propagates_precheck_and_postcheck_refusal(self):
+        for effects, selected_count in (([ValueError("precheck")], 0), ([None, ValueError("postcheck")], 1)):
+            with self.subTest(selected_count=selected_count):
+                owner = SimpleNamespace(peer_fd=41, channel=object(), last_boot=0, last_epoch=0,
+                    setup=dict(deadlineBoottimeNs=5_000_000_000, expiresAtUnixNanos=5_000_000_000),
+                    check=Mock(side_effect=effects))
+                selected = Mock(return_value=([], [], []))
+                with patch.object(launcher, "select", SimpleNamespace(select=selected), create=True):
+                    with self.assertRaises(ValueError):
+                        launcher._LocalAdmission._wait(owner)
+                self.assertEqual(selected.call_count, selected_count)
+                self.assertEqual(owner.check.call_count, selected_count + 1)
+                self.assertTrue(all(call.kwargs == {"peer": True} for call in owner.check.call_args_list))
+
     def test_local_retained_limits_match_signed_contract_without_widening_control_slots(self):
         self.assertEqual(entrypoint.LOCAL_RETAINED_FILES_MAX, launcher.MAX_CLOSURE_FILES)
         self.assertEqual(entrypoint.LOCAL_RETAINED_FILES_MAX, contract.MAX_RETAINED_FILES)

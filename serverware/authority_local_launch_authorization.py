@@ -51,6 +51,8 @@ OBSERVATION_FIELDS = frozenset({"schema", "role", "setupSha256", "process", "lis
     "argv", "environment", "execution", "startupDescriptors", "deadlineBoottimeNs", "expiresAtUnixNanos"})
 ROOT_NAME = "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD"
 OUTPUT_NAMES = ("certificate.json", "manifest.json")
+LATE_LIMITS = {"certificate.json": 1024 * 1024, "manifest.json": io.MAX_PUBLIC,
+    "evidence.json": 4 * 1024 * 1024}
 
 
 def require(value):
@@ -248,6 +250,54 @@ def certificate_payload(request, public, kwargs):
     return result
 
 
+def publish_late_original(directory, name, raw, *, hold, check, linked):
+    """Fixed late names only; anonymous complete bytes, no replace or retry.
+
+    ``linked`` records the irreversible release before cancellation is unmasked.
+    Subsequent checks must retain sources/clocks, not demand a released child
+    still occupy its parked boundary. The caller retains every acquired FD.
+    """
+    require(name in LATE_LIMITS and type(raw) is bytes and 0 < len(raw) <= LATE_LIMITS[name])
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    def acquire(path, open_flags, *, parent=None, mode=0o600):
+        fd = os.open(path, open_flags, mode, dir_fd=parent)
+        hold(fd)
+        return fd
+    def readback(fd):
+        parts = []
+        for offset in range(0, len(raw), 65536):
+            check()
+            parts.append(os.pread(fd, min(65536, len(raw) - offset), offset))
+        require(b"".join(parts) == raw and not os.pread(fd, 1, len(raw)))
+    with _owning():
+        check()
+        fd = acquire(".", os.O_TMPFILE | os.O_RDWR | os.O_CLOEXEC, parent=directory)
+        offset = 0
+        while offset < len(raw):
+            check()
+            count = os.write(fd, memoryview(raw)[offset:offset + 65536])
+            require(count > 0); offset += count
+        os.fchmod(fd, 0o400); os.fsync(fd); readback(fd)
+        libc = ctypes.CDLL(None, use_errno=True)
+        proc = acquire("/proc", flags)
+        buffer = ctypes.create_string_buffer(256)
+        require(libc.fstatfs(proc, ctypes.byref(buffer)) == 0
+            and ctypes.c_long.from_buffer(buffer).value & 0xffffffff == 0x9fa0
+            and os.readlink("self", dir_fd=proc) == str(os.getpid()))
+        process = acquire(str(os.getpid()), flags, parent=proc)
+        descriptors = acquire("fd", flags, parent=process)
+        source = str(fd).encode("ascii")
+        require(io._identity(os.stat(source, dir_fd=descriptors, follow_symlinks=True)) == io._identity(os.fstat(fd)))
+        check()
+        require(libc.linkat(descriptors, ctypes.c_char_p(source), directory,
+            ctypes.c_char_p(name.encode("ascii")), 0x400) == 0)
+        linked()
+        os.fsync(directory)
+        require(io._identity(os.stat(name, dir_fd=directory, follow_symlinks=False)) == io._identity(os.fstat(fd)))
+        readback(fd); check()
+        return fd
+
+
 class LocalLaunchAuthorizationError(RuntimeError):
     def __init__(self, owner):
         super().__init__("local launch authorization refused; owner retained")
@@ -257,6 +307,17 @@ class LocalLaunchAuthorizationError(RuntimeError):
 class LocalLaunchAuthorizationIssuer:
     @classmethod
     def open(cls, *, approval_fd, approval_sha256, exchange_directory_fd, root_key_fd, certificate_key_fd):
+        return cls._acquire(approval_fd=approval_fd, approval_sha256=approval_sha256,
+            exchange_directory_fd=exchange_directory_fd, key_fds=(root_key_fd, certificate_key_fd))
+
+    @classmethod
+    def open_observer(cls, *, approval_fd, approval_sha256, exchange_directory_fd):
+        """Same real observation custody, with no pair-signing key authority."""
+        return cls._acquire(approval_fd=approval_fd, approval_sha256=approval_sha256,
+            exchange_directory_fd=exchange_directory_fd, key_fds=())
+
+    @classmethod
+    def _acquire(cls, *, approval_fd, approval_sha256, exchange_directory_fd, key_fds):
         self = cls()
         self.handles, self.links, self.child_handles, self.owned = [], [], {}, {}
         self.closed = self.closing = self.used = False
@@ -266,11 +327,13 @@ class LocalLaunchAuthorizationIssuer:
         self.source = self.directory = self.root_key = self.certificate_key = None
         try:
             io._process()
-            fds = (approval_fd, exchange_directory_fd, root_key_fd, certificate_key_fd)
+            fds = (approval_fd, exchange_directory_fd, *key_fds)
             require(all(type(fd) is int and fd >= 3 for fd in fds) and len(set(fds)) == len(fds))
-            self.source, self.directory, self.root_key, self.certificate_key = fds
+            self.source, self.directory = fds[:2]
+            if key_fds:
+                self.root_key, self.certificate_key = key_fds
             self.borrowed = {fd: io._identity(os.fstat(fd)) for fd in fds}
-            require(len({value[:2] for value in self.borrowed.values()}) == 4)
+            require(len({value[:2] for value in self.borrowed.values()}) == len(fds))
             self.raw = io.read_public(approval_fd, io.MAX_PUBLIC)
             require(sha(self.raw) == approval_sha256)
             self.directory_identity = self._directory()
@@ -287,8 +350,8 @@ class LocalLaunchAuthorizationIssuer:
                 self.pidfd = os.pidfd_open(self.child_pid, 0)
                 self._hold(self.pidfd)
             self.check()
-            io._input(root_key_fd, 32, private=True)
-            io._input(certificate_key_fd, 32, private=True)
+            for fd in key_fds:
+                io._input(fd, 32, private=True)
             self.verify_live()
             return self
         except BaseException as error:
@@ -315,7 +378,8 @@ class LocalLaunchAuthorizationIssuer:
         require(stat.S_ISDIR(info.st_mode) and (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (0, 0, 0o700))
         return dict(device=info.st_dev, inode=info.st_ino)
 
-    def check(self):
+    def check_sources(self):
+        """Original sources/clocks remain held even after the child is released."""
         io._process()
         require(not self.closed and not self.closing and os.getpid() == self.pid
             and launch._process_identity(self.pid)[0] == self.start and launch._boot_identity_digest() == self.boot)
@@ -330,8 +394,11 @@ class LocalLaunchAuthorizationIssuer:
             require(current[:6] == identity[:6] if fd == self.directory else current == identity)
         require(self._directory() == self.directory_identity
             and io._identity(os.stat("observation.json", dir_fd=self.directory, follow_symlinks=False))
-                == io._identity(os.fstat(self.observation_fd))
-            and not select.select([self.pidfd], [], [], 0)[0]
+                == io._identity(os.fstat(self.observation_fd)))
+
+    def check(self):
+        self.check_sources()
+        require(not select.select([self.pidfd], [], [], 0)[0]
             and launch._process_identity(self.child_pid)[:2] == (self.child_start, self.context["observed"]["process"]["pidNamespaceInode"]))
         for fd, path, identity in self.links:
             require(io._identity(os.fstat(fd)) == identity and io._identity(os.stat(path)) == identity)
@@ -544,7 +611,7 @@ class LocalLaunchAuthorizationIssuer:
 
     def issue(self):
         try:
-            require(not self.used)
+            require(not self.used and self.root_key is not None and self.certificate_key is not None)
             self.used = True
             self.verify_live()
             context, request = self.context, self.context["payload"]["stageZeroRequest"]
@@ -577,24 +644,15 @@ class LocalLaunchAuthorizationIssuer:
                     continue
                 raise ValueError("local launch output already exists")
             originals = self.issue()
-            # Named temporary files are never visible as accepted inputs. They
-            # remain on partial failure; no retry, overwrite or rollback occurs.
+            released = False
+            def check():
+                self.check_sources() if released else self.check()
+            def linked_last():
+                nonlocal released
+                released = True
             for name, raw in zip(OUTPUT_NAMES, originals):
-                temporary = "." + name + ".issuing"
-                with _owning():
-                    fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=self.directory)
-                    self._hold(fd)
-                offset = 0
-                while offset < len(raw):
-                    self.check()
-                    count = os.write(fd, memoryview(raw)[offset:offset + 65536])
-                    require(count > 0); offset += count
-                os.fchmod(fd, 0o400); os.fsync(fd)
-                require(self._read(fd, io.MAX_PUBLIC) == raw)
-                self.check()
-                os.link(temporary, name, src_dir_fd=self.directory, dst_dir_fd=self.directory, follow_symlinks=False)
-                os.fsync(self.directory)
-                os.unlink(temporary, dir_fd=self.directory); os.fsync(self.directory)
+                publish_late_original(self.directory, name, raw, hold=self._hold, check=check,
+                    linked=linked_last if name == OUTPUT_NAMES[-1] else lambda: None)
             # The parent may immediately deliver/replace reservations after the
             # last publication. Do not incorrectly require the parked phase now.
             return {name: sha(raw) for name, raw in zip(OUTPUT_NAMES, originals)}

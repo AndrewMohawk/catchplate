@@ -3,6 +3,8 @@
 from copy import deepcopy
 from pathlib import Path
 import ast
+import os
+import tempfile
 import unittest
 
 from serverware import authority_local_launch_authorization as subject
@@ -83,6 +85,38 @@ class LocalLaunchAuthorizationTests(unittest.TestCase):
         source = ast.unparse(owner)
         for actual in ("os.pidfd_open", "libc.syscall(438", "fcntl.ioctl", "io.signing_key", "_generation", "_frozen"):
             self.assertIn(actual, source)
+
+    def test_keyless_observer_cannot_issue_pair(self):
+        tree = ast.parse(Path(subject.__file__).read_text())
+        owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalLaunchAuthorizationIssuer")
+        observer = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "open_observer")
+        self.assertIn("key_fds=()", ast.unparse(observer))
+        issue = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "issue")
+        self.assertIn("self.root_key is not None and self.certificate_key is not None", ast.unparse(issue))
+
+    def test_actual_anonymous_publication_and_no_overwrite(self):
+        # Genuine local kernel file publication only; no fake child/issuer owner.
+        with tempfile.TemporaryDirectory(prefix="local-late-publication-") as path:
+            directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            held, linked = [], []
+            try:
+                def check():
+                    self.assertLessEqual(set(os.listdir(directory)), {"evidence.json"})
+                raw = b'{"complete":true}'
+                fd = subject.publish_late_original(directory, "evidence.json", raw,
+                    hold=held.append, check=check, linked=lambda: linked.append(True))
+                self.assertEqual(linked, [True])
+                self.assertEqual(os.pread(fd, len(raw) + 1, 0), raw)
+                self.assertEqual(os.stat("evidence.json", dir_fd=directory).st_ino, os.fstat(fd).st_ino)
+                with self.assertRaises(ValueError):
+                    subject.publish_late_original(directory, "evidence.json", raw,
+                        hold=held.append, check=check, linked=lambda: linked.append(False))
+                self.assertEqual(linked, [True])
+                self.assertEqual(set(os.listdir(directory)), {"evidence.json"})
+            finally:
+                for fd in reversed(held):
+                    os.close(fd)
+                os.close(directory)
 
 
 if __name__ == "__main__":

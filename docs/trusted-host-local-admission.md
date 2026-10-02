@@ -1,7 +1,8 @@
 # Trusted-host-local late admission
 
-This connects existing local startup to real manifest/certificate issuance and
-RuntimeTrust signing. It does not establish a launched authority, working pilot,
+This connects existing local startup to manifest/certificate issuance,
+five-service cohort issuance and RuntimeTrust signing. Source connection does
+not establish a launched authority, working pilot,
 independent administration, native stage zero, hardware custody or production
 acceptance. Test and deployment results are recorded separately.
 
@@ -38,18 +39,31 @@ them in arguments, logs or chat. Native and production profiles are unchanged.
    inode generations, hashes and fs-verity, actual root credentials, listener and
    parent-control peer. Approved assertions alone cannot supply these observations.
    It atomically publishes root0400 `certificate.json` first and `manifest.json`
-   last, without replacing an existing file. The existing parent seals those
+   last, without replacing an existing file. Complete anonymous files acquire
+   only the fixed final names; no temporary name enters the closed exchange.
+   The existing parent seals those
    literal originals; the child independently validates them before admission.
 4. The five service roles—verifier, planner, planner-writer, issuer and executor—
    additionally require genuine `evidence.json`: the existing signed five-role
-   attestation cohort. **Its connected producer remains missing.** It must bind
-   all five actual observed launches and their signed manifests to the selected
-   configuration; a launch certificate or caller-provided success JSON is not a
-   substitute. Runtime and replay-witness launches have no cohort evidence slot.
+   attestation cohort. The [cohort issuer](../scripts/authority/local_cohort.py)
+   accepts one protected CohortApproval/v1, the separately sealed configuration
+   root key, and five fixed original launch-approval/exchange-directory FD pairs.
+   Its approval explicitly delegates
+   `configuration-root-signs-five-observed-local-role-receipts-and-cohort-v1`.
+   It authenticates each issued pair and installed package, joins the signed
+   Service6 to every child's actual configuration descriptor, and remeasures all
+   five parked launches using retained PIDFD/proc originals. No service signing
+   key is borrowed; selected role measurements are not native PCR claims.
+   The same signed cohort is published to all five `evidence.json` names. Each
+   delivery can immediately release that child; subsequent checks require only
+   unreleased roles to stay parked and retain the released roles' originals.
+   Runtime and replay-witness launches have no cohort evidence slot.
 5. The [RuntimeTrust issuer](../scripts/authority/local_runtime_trust.py) signs the
    existing `signedPolicyAuthorityRuntimeTrust/v1` only from an independently
    approved payload, authentic signed Service6 configuration and supplied signed
-   verifier local-attestation original. It does not generate that attestation.
+   verifier local-attestation original. The cohort issuer emits that exact signed
+   inner original through its bounded protected stdout pipe only after all five
+   publications; the RuntimeTrust issuer does not generate it.
    Its configuration-root signature uses the existing RuntimeTrust domain.
    Complete pipe output **and exit0** are required before retaining the original.
 6. Install that original into the app/relay's exact protected inherited FD roster.

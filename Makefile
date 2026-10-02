@@ -642,6 +642,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_registration_context.py \
 	scripts/test_authority_local_registration_enrollment.py \
 	scripts/test_authority_registration_challenge.py \
+	scripts/test_registration_finalization_permission.py \
 	scripts/test_authority_local_runtime_aliases.py \
 	scripts/test_authority_local_database_credentials.py \
 	scripts/test_authority_local_keys.py \
@@ -1296,6 +1297,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_registration_history.py \
 	serverware/control_plane_registration_finalization_history_bootstrap.py \
 	serverware/control_plane_registration_finalization_history.py \
+	serverware/control_plane_registration_finalization_permission.py \
 	serverware/control_plane_oidc_session_activation_history_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_history.py \
 	serverware/control_plane_oidc_session_activation_consume_history.py \
@@ -4376,6 +4378,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_registration_history.py \
 				serverware/control_plane_registration_finalization_history_bootstrap.py \
 				serverware/control_plane_registration_finalization_history.py \
+				serverware/control_plane_registration_finalization_permission.py \
 				serverware/control_plane_oidc_session_activation_history_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_history.py \
 				serverware/control_plane_oidc_session_activation_consume_history.py \

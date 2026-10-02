@@ -67,14 +67,23 @@ from serverware.authority_artifact_spec import (
     trust_document_digest,
     validate_closure_receipt,
     validate_selected_closure_receipt,
+    validate_generation_core,
     validate_snapshot_receipt,
     validate_trust_state,
     validate_unsigned_artifact_package,
     verify_ed25519_signature,
+    _verify_key_documents,
+    _require_timestamp,
 )
 
 
 INPUT_SCHEMA = "serverware.authorityArtifactBundleGeneratorInput/v3"
+INPUT_FIELDS = frozenset({
+    "schema", "artifactRoot", "sourceRevision", "sourceCommitDigest", "authoritySchemaVersion",
+    "trustMode", "files", "stableSnapshotReceipt", "closureReceipt", "schemas", "migrations",
+    "configurations", "roleManifests", "sbom", "provenance", "ociImage", "operationManifest",
+    "trustMaterial", "generation", "signingKeys",
+})
 SOURCE_TREE_DIGEST_DOMAIN = "serverware.authoritySourceTree/v1"
 ENUMERATED_TREE_DIGEST_DOMAIN = "serverware.authorityEnumeratedTree/v1"
 SNAPSHOT_SIGNATURE_DOMAIN = (
@@ -1019,6 +1028,7 @@ def _build_bundle(
     *,
     trust: Mapping[str, Any],
     validation_time: str,
+    before_checkpoint: bool = False,
 ) -> tuple[dict[str, Any], int]:
     generation_input = _closed(
         spec["generation"],
@@ -1026,8 +1036,7 @@ def _build_bundle(
         keys={
             "sequence", "generationId", "predecessorDigest",
             "minimumRollbackSequence", "validFrom", "validUntil",
-            "witnessCheckpoint",
-        },
+        } | (set() if before_checkpoint else {"witnessCheckpoint"}),
     )
     generation_metadata = {
         field: generation_input[field]
@@ -1646,6 +1655,88 @@ def _build_bundle(
         raise
 
 
+def _generation_core(value: Mapping[str, Any], bundle: Mapping[str, Any]) -> dict[str, Any]:
+    """One derivation shared by pre-checkpoint preparation and final assembly."""
+    intent = value["generation"]
+    material = value["trustMaterial"]
+    core = {
+        "schema": GENERATION_STATEMENT_SCHEMA,
+        "sequence": intent["sequence"],
+        "generationId": intent["generationId"],
+        "predecessorDigest": intent["predecessorDigest"],
+        "minimumRollbackSequence": intent["minimumRollbackSequence"],
+        "validFrom": intent["validFrom"],
+        "validUntil": intent["validUntil"],
+        "artifactBundleDigest": artifact_bundle_digest(bundle),
+        "operationManifestDigest": bundle["operationManifest"]["contractDigest"],
+        "stageZeroDigest": bundle["stageZero"]["sha256"],
+        "stageZeroContract": bundle["stageZero"]["interfaceSchema"],
+        "roleSetDigest": domain_digest(ROLE_SET_DIGEST_DOMAIN, canonical_json_bytes(bundle["roleManifests"])),
+        "snapshotReceiptDigest": snapshot_receipt_digest(bundle["stableSnapshotReceipt"]),
+        "closureReceiptDigest": closure_receipt_digest(bundle["closureReceipt"]),
+        "provenanceStatementDigest": bundle["provenance"]["statementDigest"],
+        "sourceTreeDigest": bundle["sourceTree"]["digest"],
+        "ociManifestDigest": bundle["ociImage"]["rootDigest"],
+        "migrationReceiptDigests": sorted(row["receiptDigest"] for row in bundle["migrations"]),
+        "roleManifestDigests": sorted(row["sha256"] for row in bundle["roleManifests"]),
+        "configurationDigests": sorted(row["sha256"] for row in bundle["configurations"]),
+        "configurationPayloadBindings": configuration_payload_bindings(bundle["configurations"]),
+        "keyAuthorizationsDigest": trust_document_digest(material["keyAuthorizations"]),
+        "keyRevocationsDigest": trust_document_digest(material["keyRevocations"]),
+        "trustMode": value["trustMode"],
+    }
+    validate_generation_core(core)
+    return core
+
+
+def prepare_local_generation_core(
+    spec: Mapping[str, Any], *, trust_state: Mapping[str, Any], validation_time: str,
+) -> dict[str, Any]:
+    """Measure/authenticate the existing local input before a real witness append.
+
+    The input is the existing generator selection with the checkpoint field
+    absent, not null or replaced by a fabricated envelope. This produces public
+    data, not a package, approval, checkpoint or trust-state advance.
+    """
+    value = _closed(spec, name="generator input", keys=INPUT_FIELDS)
+    if (value["schema"] != INPUT_SCHEMA
+            or value["authoritySchemaVersion"] != AUTHORITY_SCHEMA_VERSION
+            or value["sourceRevision"] != authority_contract.SOURCE_REVISION):
+        raise GeneratorError("generator source contract changed")
+    if value["trustMode"] != {
+        "mode": "trusted-host-local", "hardwareBacked": False,
+        "externalWitnessRequired": False, "teeQuoteRequired": False,
+        "imaAppraisalRequired": False,
+    }:
+        raise GeneratorError("core preparation is only for explicit trusted-host-local")
+    _digest(value["sourceCommitDigest"], name="source commit digest")
+    _require_timestamp(validation_time, name="core preparation time")
+    intent = _closed(value["generation"], name="pre-checkpoint generation input", keys={
+        "sequence", "generationId", "predecessorDigest", "minimumRollbackSequence", "validFrom", "validUntil",
+    })
+    trust = validate_trust_state(trust_state)
+    if (type(intent["sequence"]) is not int
+            or intent["sequence"] != trust["currentSequence"] + 1
+            or intent["predecessorDigest"] != trust["currentGenerationDigest"]
+            or type(intent["minimumRollbackSequence"]) is not int
+            or intent["minimumRollbackSequence"] < trust["minimumRollbackSequence"]):
+        raise GeneratorError("core is not the next admitted trust-state generation")
+    _require_timestamp(intent["validFrom"], name="generation validFrom")
+    _require_timestamp(intent["validUntil"], name="generation validUntil")
+    if not intent["validFrom"] <= validation_time < intent["validUntil"]:
+        raise GeneratorError("core preparation is outside the original generation interval")
+    bundle, retained_root_fd = _build_bundle(value, trust=trust, validation_time=validation_time, before_checkpoint=True)
+    try:
+        if bundle["stageZero"]["interfaceSchema"] != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA:
+            raise GeneratorError("core preparation requires the local Python bootstrap")
+        core = _generation_core(value, bundle)
+        _verify_key_documents(value["trustMaterial"], bundle=bundle, generation=core,
+                              trust_state=trust, validation_time=validation_time)
+        return core
+    finally:
+        os.close(retained_root_fd)
+
+
 def _build_package(
     spec: Mapping[str, Any],
     *,
@@ -1655,28 +1746,7 @@ def _build_package(
     value = _closed(
         spec,
         name="generator input",
-        keys={
-            "schema",
-            "artifactRoot",
-            "sourceRevision",
-            "sourceCommitDigest",
-            "authoritySchemaVersion",
-            "trustMode",
-            "files",
-            "stableSnapshotReceipt",
-            "closureReceipt",
-            "schemas",
-            "migrations",
-            "configurations",
-            "roleManifests",
-            "sbom",
-            "provenance",
-            "ociImage",
-            "operationManifest",
-            "trustMaterial",
-            "generation",
-            "signingKeys",
-        },
+        keys=INPUT_FIELDS,
     )
     if value["schema"] != INPUT_SCHEMA:
         raise GeneratorError("generator input schema changed")
@@ -1759,58 +1829,8 @@ def _build_package(
             )
             if document["schema"] != expected_schema:
                 raise GeneratorError(f"{name} schema changed")
-        generation = {
-            "schema": GENERATION_STATEMENT_SCHEMA,
-            "sequence": generation_input["sequence"],
-            "generationId": generation_input["generationId"],
-            "predecessorDigest": generation_input["predecessorDigest"],
-            "minimumRollbackSequence": generation_input[
-                "minimumRollbackSequence"
-            ],
-            "validFrom": generation_input["validFrom"],
-            "validUntil": generation_input["validUntil"],
-            "artifactBundleDigest": artifact_bundle_digest(bundle),
-            "operationManifestDigest": bundle["operationManifest"]["contractDigest"],
-            "stageZeroDigest": bundle["stageZero"]["sha256"],
-            "stageZeroContract": bundle["stageZero"]["interfaceSchema"],
-            "roleSetDigest": domain_digest(
-                ROLE_SET_DIGEST_DOMAIN,
-                canonical_json_bytes(bundle["roleManifests"]),
-            ),
-            "snapshotReceiptDigest": snapshot_receipt_digest(
-                bundle["stableSnapshotReceipt"]
-            ),
-            "closureReceiptDigest": closure_receipt_digest(
-                bundle["closureReceipt"]
-            ),
-            "provenanceStatementDigest": bundle["provenance"][
-                "statementDigest"
-            ],
-            "sourceTreeDigest": bundle["sourceTree"]["digest"],
-            "ociManifestDigest": bundle["ociImage"]["rootDigest"],
-            "migrationReceiptDigests": sorted(
-                migration["receiptDigest"]
-                for migration in bundle["migrations"]
-            ),
-            "roleManifestDigests": sorted(
-                role["sha256"] for role in bundle["roleManifests"]
-            ),
-            "configurationDigests": sorted(
-                configuration["sha256"]
-                for configuration in bundle["configurations"]
-            ),
-            "configurationPayloadBindings": configuration_payload_bindings(
-                bundle["configurations"]
-            ),
-            "keyAuthorizationsDigest": trust_document_digest(
-                material["keyAuthorizations"]
-            ),
-            "keyRevocationsDigest": trust_document_digest(
-                material["keyRevocations"]
-            ),
-            "witnessCheckpoint": generation_input["witnessCheckpoint"],
-            "trustMode": value["trustMode"],
-        }
+        generation = dict(_generation_core(value, bundle),
+                          witnessCheckpoint=generation_input["witnessCheckpoint"])
         signing_keys = _closed(
             value["signingKeys"],
             name="signing keys",

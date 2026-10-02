@@ -17,15 +17,19 @@ import stat
 import time
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from scripts.authority import native_pilot_authority_io as io
 from serverware import authority_local_trust as trust
 
 APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalKeyProvisioningApproval/v1"
 INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalKeyInventory/v1"
 PURPOSE = "create-fixed-local-artifact-configuration-service-keys"
+GENESIS_AUDIT_APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalGenesisAuditKeyProvisioningApproval/v1"
+GENESIS_AUDIT_INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalGenesisAuditKeyInventory/v1"
+GENESIS_AUDIT_PURPOSE = "create-fixed-local-genesis-audit-key"
 SERVICE_ROLES = ("verifier", "planner", "planner-writer", "issuer", "executor", "witness")
 MAX_APPROVAL = 8192
+MAX_GENESIS_AUDIT_APPROVAL = 65536
 MAX_PUBLIC = 65536
 CANCEL = frozenset({signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
 CLAIMS = dict(keyCreationOnly=True, hardwareBacked=False, independentAdministration=False,
@@ -51,11 +55,61 @@ def roster():
     return tuple(rows)
 
 
+def genesis_audit_roster():
+    return (dict(family="genesis", purpose="audit-inclusion", keyId="local-genesis-audit-inclusion-v1",
+        publicPath="keys/genesis/audit-inclusion.pub", privatePath="private/genesis/audit-inclusion.seed"),)
+
+
+def _selected_roster(value):
+    if (value["schema"], value["purpose"]) == (APPROVAL_SCHEMA, PURPOSE):
+        return roster()
+    require((value["schema"], value["purpose"]) == (GENESIS_AUDIT_APPROVAL_SCHEMA, GENESIS_AUDIT_PURPOSE))
+    return genesis_audit_roster()
+
+
+def _pilot_inventory(original):
+    """Validate the literal public fixed20 inventory; confer no trust grant."""
+    require(type(original) is str and original.isascii())
+    value = trust.document(original.encode("ascii"), MAX_PUBLIC)
+    require(set(value) == {"schema", "approvalSha256", "directory", "publicRosterSha256", "keys", "claims"}
+        and value["schema"] == INVENTORY_SCHEMA and value["claims"] == CLAIMS
+        and type(value["keys"]) is list and len(value["keys"]) == 20)
+    for name in ("approvalSha256", "publicRosterSha256"):
+        trust.spec._require_digest(value[name], name="existing key inventory pin")
+    directory = value["directory"]
+    require(type(directory) is dict and set(directory) == {"device", "inode"})
+    for name, minimum in (("device", 0), ("inode", 1)):
+        require(type(directory[name]) is int and minimum <= directory[name] < 2**64)
+    seen, public_roster = set(), {}
+    for row, expected in zip(value["keys"], roster(), strict=True):
+        require(type(row) is dict and set(row) == set(expected) | {
+            "publicKeyBase64Url", "publicKeySha256", "publicKeySpkiSha256"}
+            and all(row[name] == item for name, item in expected.items()))
+        raw = trust.spec.strict_base64url_decode(row["publicKeyBase64Url"], name="existing public key", decoded_size=32)
+        public = Ed25519PublicKey.from_public_bytes(raw)
+        require(raw not in seen and trust.sha(raw) == row["publicKeySha256"]
+            and trust.sha(public.public_bytes(serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo)) == row["publicKeySpkiSha256"])
+        seen.add(raw)
+        if row["family"] == "artifact":
+            public_roster[row["purpose"]] = row["publicKeyBase64Url"]
+    public_raw = trust.spec.canonical_json_bytes(public_roster)
+    trust.public_roster(public_raw)
+    require(trust.sha(public_raw) == value["publicRosterSha256"])
+    return value, seen
+
+
 def approval(raw):
-    value = trust.document(raw, MAX_APPROVAL)
-    require(set(value) == {"schema", "purpose", "directory", "bootIdDigest", "issuedAtBoottimeNs",
+    value = trust.document(raw, MAX_GENESIS_AUDIT_APPROVAL)
+    fields = {"schema", "purpose", "directory", "bootIdDigest", "issuedAtBoottimeNs",
         "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
-        and value["schema"] == APPROVAL_SCHEMA and value["purpose"] == PURPOSE)
+    if value.get("schema") == GENESIS_AUDIT_APPROVAL_SCHEMA:
+        require(set(value) == fields | {"pilotKeyInventoryOriginal"} and value["purpose"] == GENESIS_AUDIT_PURPOSE)
+        pilot, _ = _pilot_inventory(value["pilotKeyInventoryOriginal"])
+        require(value["directory"] != pilot["directory"])
+    else:
+        require(len(raw) <= MAX_APPROVAL and set(value) == fields
+            and value["schema"] == APPROVAL_SCHEMA and value["purpose"] == PURPOSE)
     trust.spec._require_digest(value["bootIdDigest"], name="key provisioning boot")
     directory = value["directory"]
     require(type(directory) is dict and set(directory) == {"device", "inode"})
@@ -104,7 +158,7 @@ class LocalKeyProvisioner:
                     self.identities[fd] = (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
                     os.set_inheritable(fd, False)
             self.approval_fd, self.directory_fd = approval_fd, directory_fd
-            self.raw = io.read_public(approval_fd, MAX_APPROVAL)
+            self.raw = io.read_public(approval_fd, MAX_GENESIS_AUDIT_APPROVAL)
             trust.spec._require_digest(approval_sha256, name="key approval pin")
             require(trust.sha(self.raw) == approval_sha256)
             self.pin, self.selected = approval_sha256, approval(self.raw)
@@ -128,7 +182,7 @@ class LocalKeyProvisioner:
 
     def check(self):
         self.check_clock(); require(not self.closed)
-        require(io.read_public(self.approval_fd, MAX_APPROVAL) == self.raw)
+        require(io.read_public(self.approval_fd, MAX_GENESIS_AUDIT_APPROVAL) == self.raw)
         for fd, identity in self.identities.items():
             info = os.fstat(fd); require((info.st_dev, info.st_ino) == identity)
         for path, (fd, identity) in self.directories.items():
@@ -168,7 +222,7 @@ class LocalKeyProvisioner:
         self.check()
 
     def _publish(self, path, raw, *, public=None):
-        allowed = {name for row in roster() for name in (row["publicPath"], row["privatePath"])} | {"public-roster.json", "inventory.json"}
+        allowed = {name for row in _selected_roster(self.selected) for name in (row["publicPath"], row["privatePath"])} | {"public-roster.json", "inventory.json"}
         require(path in allowed and type(raw) is bytes and 0 < len(raw) <= MAX_PUBLIC)
         require((public is not None) == path.startswith("private/"))
         self.check()
@@ -203,11 +257,15 @@ class LocalKeyProvisioner:
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
             require(_LIBC.prctl(4, 0, 0, 0, 0) == 0 and _LIBC.prctl(3, 0, 0, 0, 0) == 0)
             # No key exists before core files and process dumpability are off.
-            for path in ("keys", "private", "keys/artifact", "private/artifact", "keys/configuration",
-                         "private/configuration", "keys/service", "private/service"):
+            genesis_audit = self.selected["schema"] == GENESIS_AUDIT_APPROVAL_SCHEMA
+            paths = (("keys", "private", "keys/genesis", "private/genesis") if genesis_audit else
+                ("keys", "private", "keys/artifact", "private/artifact", "keys/configuration",
+                 "private/configuration", "keys/service", "private/service"))
+            for path in paths:
                 self._mkdir(path)
-            seen, rows, public_roster = set(), [], {}
-            for selected in roster():
+            seen = (_pilot_inventory(self.selected["pilotKeyInventoryOriginal"])[1] if genesis_audit else set())
+            rows, public_roster = [], {}
+            for selected in _selected_roster(self.selected):
                 self.check()
                 private = Ed25519PrivateKey.generate()
                 seed = None
@@ -221,13 +279,21 @@ class LocalKeyProvisioner:
                     rows.append(dict(selected, publicKeyBase64Url=encoded, publicKeySha256=trust.sha(public),
                         publicKeySpkiSha256=trust.sha(private.public_key().public_bytes(
                             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
-                    if selected["family"] == "artifact": public_roster[selected["purpose"]] = encoded
+                    if selected["family"] == "artifact" or genesis_audit:
+                        public_roster[selected["purpose"]] = encoded
                 finally: del private, seed
             public_raw = trust.spec.canonical_json_bytes(public_roster)
-            trust.public_roster(public_raw)
+            if genesis_audit:
+                require(set(public_roster) == {"audit-inclusion"} and len(rows) == 1)
+            else:
+                trust.public_roster(public_raw)
             self._publish("public-roster.json", public_raw)
-            raw = trust.spec.canonical_json_bytes(dict(schema=INVENTORY_SCHEMA, approvalSha256=self.pin,
-                directory=self.selected["directory"], publicRosterSha256=trust.sha(public_raw), keys=rows, claims=CLAIMS))
+            inventory = dict(schema=GENESIS_AUDIT_INVENTORY_SCHEMA if genesis_audit else INVENTORY_SCHEMA,
+                approvalSha256=self.pin, directory=self.selected["directory"],
+                publicRosterSha256=trust.sha(public_raw), keys=rows, claims=CLAIMS)
+            if genesis_audit:
+                inventory["pilotKeyInventorySha256"] = trust.sha(self.selected["pilotKeyInventoryOriginal"].encode("ascii"))
+            raw = trust.spec.canonical_json_bytes(inventory)
             self._publish("inventory.json", raw)  # Last durable completion marker.
             self.check()
             return raw

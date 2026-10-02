@@ -30,13 +30,33 @@ def selected(directory):
         issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+60_000_000_000)
 
 
-def open_owner(directory):
-    raw = local.trust.spec.canonical_json_bytes(selected(directory))
+def open_owner(directory, *, genesis_inventory=None):
+    value = selected(directory)
+    if genesis_inventory is not None:
+        value.update(schema=local.GENESIS_AUDIT_APPROVAL_SCHEMA, purpose=local.GENESIS_AUDIT_PURPOSE,
+            pilotKeyInventoryOriginal=genesis_inventory.decode("ascii"))
+    raw = local.trust.spec.canonical_json_bytes(value)
     fd = os.memfd_create("synthetic-local-key-approval", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
     if os.write(fd, raw) != len(raw): raise RuntimeError("fixture short write")
     os.fchmod(fd, 0o400); fcntl.fcntl(fd, fcntl.F_ADD_SEALS, local.io.SEALS)
     directory_fd = os.open(directory, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
     return local.LocalKeyProvisioner(approval_fd=fd, approval_sha256=local.trust.sha(raw), directory_fd=directory_fd)
+
+
+def synthetic_inventory_original():
+    """Real public-key calculations, explicitly not an observed file owner."""
+    rows, roster = [], {}
+    for index, row in enumerate(local.roster(), 1):
+        key = Ed25519PrivateKey.from_private_bytes(bytes([index]) * 32)
+        public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        encoded = local.trust.spec.strict_base64url_encode(public)
+        rows.append(dict(row, publicKeyBase64Url=encoded, publicKeySha256=local.trust.sha(public),
+            publicKeySpkiSha256=local.trust.sha(key.public_key().public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
+        if row["family"] == "artifact": roster[row["purpose"]] = encoded
+    return local.trust.spec.canonical_json_bytes(dict(schema=local.INVENTORY_SCHEMA,
+        approvalSha256=DIGEST, directory=dict(device=1, inode=2),
+        publicRosterSha256=local.trust.sha(local.trust.spec.canonical_json_bytes(roster)), keys=rows, claims=local.CLAIMS))
 
 
 class KeyContractTests(unittest.TestCase):
@@ -59,6 +79,41 @@ class KeyContractTests(unittest.TestCase):
         self.assertTrue(all(row["privatePath"].startswith("private/") and row["privatePath"].endswith(".seed") for row in rows))
         self.assertFalse(local.CLAIMS["trustGranted"] or local.CLAIMS["hardwareBacked"] or local.CLAIMS["installationAccepted"])
 
+    def test_explicit_genesis_profile_preserves_default_twenty_and_closed_fields(self):
+        value = dict(schema=local.GENESIS_AUDIT_APPROVAL_SCHEMA, purpose=local.GENESIS_AUDIT_PURPOSE,
+            directory=dict(device=1, inode=3), bootIdDigest=DIGEST,
+            issuedAtBoottimeNs=100, deadlineBoottimeNs=200, issuedAtUnixNanos=100, expiresAtUnixNanos=200,
+            pilotKeyInventoryOriginal=synthetic_inventory_original().decode("ascii"))
+        self.assertEqual(local.approval(local.trust.spec.canonical_json_bytes(value)), value)
+        self.assertEqual(local._selected_roster(value), (dict(family="genesis", purpose="audit-inclusion",
+            keyId="local-genesis-audit-inclusion-v1", publicPath="keys/genesis/audit-inclusion.pub",
+            privatePath="private/genesis/audit-inclusion.seed"),))
+        self.assertEqual(local.MAX_APPROVAL, 8192)
+        self.assertEqual(len(local.roster()), 20)
+        self.assertEqual(local.INVENTORY_SCHEMA, "serverware.authorityTrustedHostLocalKeyInventory/v1")
+        for changed in (dict(value, schema=local.APPROVAL_SCHEMA), dict(value, purpose=local.PURPOSE),
+                dict(value, directory=dict(device=1, inode=2)), dict(value, keyCount=2),
+                {name: item for name, item in value.items() if name != "pilotKeyInventoryOriginal"}):
+            with self.assertRaises(ValueError): local.approval(local.trust.spec.canonical_json_bytes(changed))
+
+    def test_genesis_rejects_rebound_or_incomplete_existing_public_inventory(self):
+        original = synthetic_inventory_original()
+        inventory, seen = local._pilot_inventory(original.decode("ascii"))
+        self.assertEqual(len(seen), 20)
+        self.assertEqual(local.trust.spec.canonical_json_bytes(inventory), original)
+        for change in ("raw-pin", "spki-pin", "roster-pin", "count", "row-purpose", "duplicate"):
+            value = local.trust.document(original, local.MAX_PUBLIC)
+            if change == "raw-pin": value["keys"][0]["publicKeySha256"] = DIGEST
+            elif change == "spki-pin": value["keys"][0]["publicKeySpkiSha256"] = DIGEST
+            elif change == "roster-pin": value["publicRosterSha256"] = DIGEST
+            elif change == "count": value["keys"].pop()
+            elif change == "row-purpose": value["keys"][0]["purpose"] = "audit-inclusion"
+            else:
+                for name in ("publicKeyBase64Url", "publicKeySha256", "publicKeySpkiSha256"):
+                    value["keys"][1][name] = value["keys"][0][name]
+            with self.assertRaises(ValueError):
+                local._pilot_inventory(local.trust.spec.canonical_json_bytes(value).decode("ascii"))
+
     def test_fixed_cli_and_dump_guard_precedes_generation(self):
         args = ["--approval-fd","3","--approval-sha256",DIGEST,"--directory-fd","4"]
         self.assertEqual(cli.arguments(args)["directory_fd"], 4)
@@ -79,6 +134,59 @@ class KeyContractTests(unittest.TestCase):
 @unittest.skipUnless(os.getresuid() == os.getresgid() == (0,0,0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
     "real protected key-file controls require isolated root -I -B")
 class KeyStorageTests(unittest.TestCase):
+    def test_actual_genesis_profile_creates_only_one_distinct_key_and_new_inventory(self):
+        original = synthetic_inventory_original()
+        with tempfile.TemporaryDirectory(prefix="local-genesis-audit-key-") as directory:
+            owner = open_owner(directory, genesis_inventory=original)
+            try:
+                raw = owner.run()
+                inventory = local.trust.document(raw, local.MAX_PUBLIC)
+                self.assertEqual(inventory["schema"], local.GENESIS_AUDIT_INVENTORY_SCHEMA)
+                self.assertEqual(set(inventory), {"schema", "approvalSha256", "directory", "publicRosterSha256",
+                    "keys", "claims", "pilotKeyInventorySha256"})
+                self.assertEqual(inventory["pilotKeyInventorySha256"], local.trust.sha(original))
+                self.assertEqual(inventory["claims"], local.CLAIMS)
+                self.assertEqual(len(inventory["keys"]), 1)
+                row = inventory["keys"][0]
+                self.assertTrue(all(row[name] == item for name, item in local.genesis_audit_roster()[0].items()))
+                private = Path(directory) / row["privatePath"]
+                public_path = Path(directory) / row["publicPath"]
+                key = Ed25519PrivateKey.from_private_bytes(private.read_bytes())
+                public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                self.assertEqual(public_path.read_bytes(), public)
+                self.assertNotIn(public, local._pilot_inventory(original.decode("ascii"))[1])
+                self.assertEqual(row["publicKeySha256"], local.trust.sha(public))
+                self.assertEqual(row["publicKeySpkiSha256"], local.trust.sha(key.public_key().public_bytes(
+                    serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)))
+                roster_raw = (Path(directory) / "public-roster.json").read_bytes()
+                self.assertEqual(local.trust.document(roster_raw, local.MAX_PUBLIC), {"audit-inclusion": row["publicKeyBase64Url"]})
+                self.assertEqual(inventory["publicRosterSha256"], local.trust.sha(roster_raw))
+                self.assertEqual({str(path.relative_to(directory)) for path in Path(directory).rglob("*") if path.is_file()},
+                    {row["publicPath"], row["privatePath"], "public-roster.json", "inventory.json"})
+                self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o400)
+                self.assertEqual(stat.S_IMODE(public_path.stat().st_mode), 0o400)
+                owner.check()
+                with self.assertRaises(local.LocalKeyProvisionerError): owner.run()
+                self.assertEqual((Path(directory) / "inventory.json").read_bytes(), raw)
+            finally: owner.close()
+            with self.assertRaises(local.LocalKeyProvisionerError) as caught:
+                open_owner(directory, genesis_inventory=original)
+            caught.exception.owner.close()
+
+    def test_genesis_collision_with_existing_public_key_refuses_before_private_write(self):
+        original = synthetic_inventory_original()
+        collision = Ed25519PrivateKey.from_private_bytes(bytes([1]) * 32)
+        with tempfile.TemporaryDirectory(prefix="local-genesis-collision-") as directory:
+            owner = open_owner(directory, genesis_inventory=original)
+            try:
+                with patch.object(local.Ed25519PrivateKey, "generate", return_value=collision):
+                    with self.assertRaises(local.LocalKeyProvisionerError) as caught: owner.run()
+                self.assertIs(caught.exception.owner, owner)
+                self.assertIsInstance(caught.exception.__cause__, ValueError)
+                self.assertFalse(any(path.is_file() for path in Path(directory).rglob("*")))
+                self.assertTrue((Path(directory) / "private/genesis").is_dir())
+            finally: owner.close()
+
     def test_actual_distinct_generation_private_readback_and_public_inventory(self):
         with tempfile.TemporaryDirectory(prefix="local-keys-") as directory:
             owner = open_owner(directory)

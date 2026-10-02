@@ -13,6 +13,15 @@ keys. Canonical protected approval pins actual directory dev/inode, boot and
 original BOOTTIME/UNIX caps (maximum300seconds). No arbitrary names or paths.
 Supplied FDs transfer to the actual provisioner and close on known cleanup.
 
+The separately selected GenesisAuditKeyProvisioningApproval/v1 profile creates
+only one dedicated audit-inclusion Ed25519 key in another empty root0700
+directory. Its protected approval embeds the exact existing fixed20 public
+inventory; all public digests are checked and the new key must differ from all
+20. Fixed paths are keys/genesis/audit-inclusion.pub and
+private/genesis/audit-inclusion.seed, with a separate genesis-audit inventory.
+This does not modify the original20, register the new key or grant audit trust.
+The old approval/schema/8192-byte limit still select exactly the original20.
+
 Private raw32 seeds are root0400 under private/; public raw32 files are under
 keys/. Public-only public-roster.json and inventory.json contain no secret bytes
 or private-key hashes. Files publish no-replace, fsync and read back; inventory

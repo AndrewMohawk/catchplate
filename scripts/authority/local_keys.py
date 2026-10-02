@@ -22,6 +22,13 @@ private/genesis/audit-inclusion.seed, with a separate genesis-audit inventory.
 This does not modify the original20, register the new key or grant audit trust.
 The old approval/schema/8192-byte limit still select exactly the original20.
 
+The separate EnrollmentKeyProvisioningApproval/v1 profile embeds both prior
+public inventories and creates only authorization + registration-evidence keys
+under keys/enrollment/ and private/enrollment/ in a third empty root0700
+directory. Both must differ from all21 and each other. Neither prior profile
+changes. Inventory creation grants no enrollment or registration authority;
+the existing signed purpose policies and actual hardware ceremony remain.
+
 Private raw32 seeds are root0400 under private/; public raw32 files are under
 keys/. Public-only public-roster.json and inventory.json contain no secret bytes
 or private-key hashes. Files publish no-replace, fsync and read back; inventory

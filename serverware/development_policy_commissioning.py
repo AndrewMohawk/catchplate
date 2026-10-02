@@ -202,6 +202,27 @@ def _finalized_result(value, prepared, request):
     return value
 
 
+def _finalize_deadline(request, deadline, expiry, *, now_monotonic_ns, now_unix_ns):
+    """Explicit v3 may only narrow the live call to its literal inclusion expiry.
+
+    This is not signature admission. A false expiry can only refuse/narrow;
+    the actual current-signature verifier remains mandatory in the authority.
+    """
+    from serverware import authority_transition_policy_genesis as successor
+    if request["input"].get("schema") != successor.FINALIZE_DELIVERY_SCHEMA:
+        return deadline, expiry
+    original = request["input"]["inclusionReceipt"]["inclusion_receipt_envelope_json"]
+    _require(type(original) is str)
+    envelope = _document(original.encode("ascii"))
+    _require(type(envelope.get("payload")) is dict)
+    bound = envelope["payload"].get("expiresAtEpochNs")
+    _require(type(bound) is int and 0 < bound < 2**63
+        and type(now_monotonic_ns) is type(now_unix_ns) is int)
+    narrowed = min(expiry, bound)
+    _require(now_unix_ns < narrowed and now_monotonic_ns < deadline)
+    return min(deadline, now_monotonic_ns + narrowed - now_unix_ns), narrowed
+
+
 class DevelopmentPolicyCommissioning:
     """One-shot actual client; takes ownership of the four explicit CLI FDs."""
     def __init__(self, token, descriptors, deadline, expiry):
@@ -338,6 +359,8 @@ class DevelopmentPolicyCommissioning:
                 select.poll().poll(min(100, max(1, (self._until() - time.monotonic_ns()) // 1_000_000)))
             self.late_raw, _ = _read(self.late_fd, MAX_INPUT)
             final_request = finalize_input(self.late_raw, self.prepared, prepare_schema=self.request["input"].get("schema"))
+            self.deadline, self.expiry = _finalize_deadline(final_request, self.deadline, self.expiry,
+                now_monotonic_ns=time.monotonic_ns(), now_unix_ns=time.time_ns())
             self.check()
             self.finalized = _finalized_result(self.client.request(operation="policy.genesis.finalize",
                 input_value=final_request, deadline_ns=self._until(full=True)), self.prepared, final_request)

@@ -136,6 +136,25 @@ def scenario(name):
         assert {item["mutation"] for item in spec["mutationTemplates"] if item["table"]=="metadata_audit_outbox"}=={"UPDATE"}
         from serverware.authority_store import audit_capacity_sql
         assert g.FINALIZE in audit_capacity_sql._source_contract()
+    elif name == "final-deadline":
+        from serverware import development_policy_commissioning as caller
+        request={"input":dict(context.arguments)}
+        original=copy.deepcopy(request)
+        now=f["ns"];deadline=50_000_000_000;expiry=now+40_000_000_000
+        actual=db.loads(receipt["inclusion_receipt_envelope_json"],None)["payload"]["expiresAtEpochNs"]
+        assert caller._finalize_deadline(request,deadline,expiry,now_monotonic_ns=1_000_000_000,now_unix_ns=now)==(
+            1_000_000_000+actual-now,actual)
+        assert request==original
+        assert caller._finalize_deadline(request,1_100_000_000,now+100_000_000,
+            now_monotonic_ns=1_000_000_000,now_unix_ns=now)==(1_100_000_000,now+100_000_000)
+        for value in (now,True,1.5,2**63):
+            changed=copy.deepcopy(request)
+            envelope=db.loads(changed["input"]["inclusionReceipt"]["inclusion_receipt_envelope_json"],None)
+            envelope["payload"]["expiresAtEpochNs"]=value
+            changed["input"]["inclusionReceipt"]["inclusion_receipt_envelope_json"]=db.dumps(envelope)
+            refuses(lambda:caller._finalize_deadline(changed,deadline,expiry,now_monotonic_ns=1_000_000_000,now_unix_ns=now))
+        old={"input":{"schema":g.FINALIZE_SCHEMA}}
+        assert caller._finalize_deadline(old,deadline,expiry,now_monotonic_ns=1_000_000_000,now_unix_ns=now)==(deadline,expiry)
     elif name == "owner-order":
         tree=ast.parse(Path(local.__file__).read_text())
         owner=next(item for item in tree.body if isinstance(item,ast.ClassDef) and item.name=="LocalAuditInclusionIssuer")
@@ -178,6 +197,7 @@ class GenesisAuditDeliveryControls(unittest.TestCase):
     def test_independent_prefix_signature_and_clock_refusals(self):self.check("prefix")
     def test_real_shared_capacity_finalizer_decrements_once(self):self.check("capacity")
     def test_foreground_admission_and_update_only_contract(self):self.check("foreground")
+    def test_final_v3_call_is_clipped_to_original_inclusion_expiry(self):self.check("final-deadline")
     def test_actual_owner_append_commit_readback_sign_order(self):self.check("owner-order")
 
 

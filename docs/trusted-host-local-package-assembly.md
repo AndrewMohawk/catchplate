@@ -36,6 +36,46 @@ existing signed key-authorization/revocation documents. These configurations bin
 final generation digest; the witness configuration can then bind the service
 configuration's actual payload digest. This ordering has no generation-hash cycle.
 
+## Provision the local signing and configuration originals
+
+These fixed producers now exist under `scripts/authority/`. Run them before
+freezing the complete selected tree, using separately approved protected inputs;
+creating keys does not authorize their use or initialize trust implicitly.
+
+1. `local_keys.py --approval-fd N --approval-sha256 sha256:HEX --directory-fd N`
+   creates the fixed 20 distinct Ed25519 keys in the approved empty directory:
+   13 artifact purposes, a separate configuration root and six role-response
+   keys. Retain the actual `public-roster.json` and `inventory.json`; later
+   signers require separately sealed copies of the selected private seeds.
+2. `local_database_credentials.py --approval-fd N --approval-sha256 sha256:HEX
+   --output-directory-fd N` stages real CA/server/client certificates, private
+   keys, verify-full DSNs, scoped PostgreSQL fragments and public issuance
+   originals. It requires explicit `metadata-bootstrap` process mode and `dev`
+   release channel. It does not create roles, install credentials or connect to
+   PostgreSQL. Configuration signing verifies the five service roles' literal
+   issuance originals through `authority_local_database_credentials.issuance`;
+   their digests are not backend-session observations.
+3. `local_trust.py --approval-fd N --approval-sha256 sha256:HEX --trust-fd N
+   --trust-sha256 sha256:HEX --public-keys-fd N --public-keys-sha256 sha256:HEX
+   --witness-directory-fd N --signing-key-fd N` issues the existing first-generation
+   key-authorization/revocation documents. Supply the actual public roster,
+   independently pinned initial trust and genuinely empty witness directory;
+   only the dedicated trust-document root signs these documents. This does not
+   advance external trust/high-water state or append a witness checkpoint.
+4. Run `local_configuration.py --approval-fd N --approval-sha256 sha256:HEX
+   --signing-key-fd N` first for Service6, then for Witness4. Each approval fixes
+   one exact payload, local generation intent, seven literal role originals,
+   actual issuance originals, runtime public keys and original clocks. Use the
+   distinct configuration root, not the artifact trust root or a response key.
+   Witness4 requires the actual signed Service6 original and binds its payload
+   digest. Outputs are the existing signed envelopes, canonical without newline.
+
+Use `python -I -B` as root for these entrypoints. All directory publications are
+no-overwrite; partial material remains on failure and must not be reset or
+silently retried. Actual role names, intended credential owners and public pins
+remain explicit selections. Static expectations are not measured process or
+database identities, and local root custody is not independent administration.
+
 ## Real command order
 
 Each fixed command's `--help` lists its exact FD/hash roster. Public originals
@@ -80,14 +120,14 @@ partial operation, invent its receipt, or silently advance external trust state.
 
 ## Remaining concrete provisioning work
 
-The source has real snapshot, measured-roster, composition, persistent artifact
-witness, package-signing and immutable-installation producers. It does not yet
-provide a connected producer for the exact signed service/replay-witness
-configurations and artifact key-authorization/revocation documents. Actual local
-role-scoped key provisioning, DB/TLS identities and credential-issuance originals
-must be supplied through the existing contracts before this sequence can run.
-These may be separate roles under one trusted local administrator; no off-host
-or independent-organizational custody claim follows. Empty migration selections
-are permissible only when no migration receipt is required; never synthesize a
-successful DB migration. Real guest package installation, actual role startup
-and application allow/deny behavior remain to be observed.
+The signing/configuration producers above connect to the existing snapshot,
+measured-roster, composition, persistent artifact witness, package-signing and
+immutable-installation producers. Their presence does not establish that any
+selected inputs have been issued, installed or admitted. The operator must
+approve the real directory identities, initial trust, generation intent and
+original windows, install the selected DB/TLS material with its intended owners,
+and satisfy the existing live database and role-admission checks. Empty migration
+selections are permissible only when no migration receipt is required; never
+synthesize a successful DB migration. Real guest package installation, actual
+role startup and application allow/deny behavior remain separate observed
+milestones, not consequences of successful material generation.

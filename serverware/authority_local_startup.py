@@ -208,9 +208,10 @@ def _owning():
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
-def _read(fd, maximum):
+def _read(fd, maximum, *, allow_empty=False):
     before = _identity(os.fstat(fd))
-    _require(stat.S_ISREG(before[2]) and 0 < before[6] <= maximum)
+    _require(type(allow_empty) is bool and stat.S_ISREG(before[2])
+        and (0 if allow_empty else 1) <= before[6] <= maximum)
     raw = bytearray()
     while len(raw) < before[6]:
         chunk = os.pread(fd, min(65536, before[6] - len(raw)), len(raw))
@@ -390,7 +391,8 @@ class LocalAuthorityStartup:
                 owner.resource_files, owner.resource_directories = [], []
                 for item in owner.value["retainedFiles"]:
                     fd = owner._open(item["path"])
-                    _require(STATIC_FD_MIN <= fd <= 2**31 - 1 and sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES)) == item["sha256"])
+                    _require(STATIC_FD_MIN <= fd <= 2**31 - 1
+                        and sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES, allow_empty=True)) == item["sha256"])
                     owner.resource_files.append(fd)
                 for item in owner.value["retainedDirectories"]:
                     fd = owner._open(item["path"], directory=True)
@@ -447,7 +449,7 @@ class LocalAuthorityStartup:
             _require(_read(self.plan_fd, MAX_PLAN) == self.raw)
         if full and hasattr(self, "resource_files"):
             for row, fd in zip(self.value["retainedFiles"], self.resource_files):
-                _require(sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES)) == row["sha256"])
+                _require(sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES, allow_empty=True)) == row["sha256"])
         if self.child_pid is not None and self.child_status is None:
             _require(_start(self.child_pid) == (self.child_start, self.pid))
             if child_live:

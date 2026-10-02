@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import os
 from pathlib import Path
+import resource
 import socket
 import sys
 import tempfile
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 from serverware import authority_launcher as launcher
 from serverware import authority_fd_entrypoint as entrypoint
 from serverware import authority_stage_zero_contract as contract
+from serverware import authority_local_startup as startup
 
 
 class LocalAdmissionControls(unittest.TestCase):
@@ -35,6 +37,7 @@ class LocalAdmissionControls(unittest.TestCase):
         # This exercises descriptor framing/type custody, not signed admission.
         self.assertEqual(os.geteuid(), 0)
         handles, channels = [], []
+        limits = resource.getrlimit(resource.RLIMIT_NOFILE)
         def hold(fd):
             handles.append(fd)
             return fd
@@ -51,6 +54,13 @@ class LocalAdmissionControls(unittest.TestCase):
                 fd = retained
             return fd
         try:
+            from scripts.test_authority_local_startup import fixture
+            value = fixture()
+            value["retainedFiles"] += [dict(path=f"/runtime/selected/{index:03d}.py", sha256="sha256:" + "2" * 64)
+                for index in range(137)]
+            value["retainedFiles"].sort(key=lambda row: row["path"])
+            startup._prepare_descriptor_limit(startup.plan(startup.encode(value)))
+            self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE)[1], limits[1])
             hold(os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC))
             channels.extend(socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC))
             self.assertTrue(all(4 <= channel.fileno() <= 1023 for channel in channels))
@@ -77,6 +87,7 @@ class LocalAdmissionControls(unittest.TestCase):
                 channel.close()
             for fd in reversed(handles):
                 os.close(fd)
+            resource.setrlimit(resource.RLIMIT_NOFILE, limits)
 
     def test_canonical_original_is_literal_and_closed_to_lossy_decoding(self):
         raw = b'{"a":1,"b":"public"}'

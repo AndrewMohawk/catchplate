@@ -2,6 +2,7 @@
 """Closed inputs and real atomic-file mechanics, not admitted service evidence."""
 from __future__ import annotations
 
+import ast
 import copy
 import os
 import resource
@@ -59,14 +60,19 @@ class LocalStartupTests(unittest.TestCase):
         # Real pathname/FD custody primitive only; no installed package, startup
         # admission, signature, or serving result is fabricated by this control.
         self.assertEqual(os.geteuid(), 0)
-        soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
-        self.assertTrue(soft == resource.RLIM_INFINITY or soft > startup.STATIC_FD_MIN + 128)
+        limits = resource.getrlimit(resource.RLIMIT_NOFILE)
         with tempfile.TemporaryDirectory(prefix="local-retained-paths-", dir="/run") as temporary:
             root = Path(temporary)
             selected = root / "selected"
             selected.mkdir(mode=0o700)
             owner = startup.LocalAuthorityStartup(startup._TOKEN)
             try:
+                value = fixture()
+                value["retainedFiles"] += [dict(path=str(selected / f"{index:03d}.py"), sha256="sha256:" + "2" * 64)
+                    for index in range(64)]
+                value["retainedFiles"].sort(key=lambda row: row["path"])
+                startup._prepare_descriptor_limit(startup.plan(startup.encode(value)))
+                self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE)[1], limits[1])
                 descriptors = []
                 for index in range(64):
                     path = selected / f"{index:03d}.py"
@@ -84,6 +90,24 @@ class LocalStartupTests(unittest.TestCase):
                     owner._open(str(selected), directory=True)
             finally:
                 owner.close()
+                resource.setrlimit(resource.RLIMIT_NOFILE, limits)
+
+    def test_empty_retained_module_hash_is_allowed_but_documents_stay_nonempty(self):
+        with tempfile.TemporaryFile() as source:
+            with self.assertRaises(startup.LocalStartupError):
+                startup._read(source.fileno(), 64)
+            self.assertEqual(startup._read(source.fileno(), 64, allow_empty=True), b"")
+            self.assertEqual(startup.sha(startup._read(source.fileno(), 64, allow_empty=True)),
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+            source.write(b"nonempty public original"); source.flush()
+            self.assertEqual(startup._read(source.fileno(), 64), b"nonempty public original")
+        tree = ast.parse((ROOT / "serverware" / "authority_local_startup.py").read_text())
+        opted_in = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "_read"
+            and any(keyword.arg == "allow_empty" for keyword in node.keywords)]
+        self.assertEqual(len(opted_in), 2)
+        self.assertTrue(all(isinstance(node.args[1], ast.Attribute)
+            and node.args[1].attr == "MAX_CLOSURE_FILE_BYTES" for node in opted_in))
 
     def test_closed_plan_preserves_original_windows_and_fixed_role(self):
         value = fixture()

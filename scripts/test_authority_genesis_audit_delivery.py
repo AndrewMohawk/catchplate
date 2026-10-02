@@ -62,6 +62,7 @@ def scenario(name):
         raise AssertionError("expected exact source refusal")
 
     if name == "versions":
+        assert db._AUDIT_STORE_RUNTIME_ROLE == "synthetic_audit_runtime"
         assert local.approval(db.dumps(selected).encode("ascii")) == selected
         for schema,purpose in ((local.APPROVAL_SCHEMA,local.DELIVERY_PURPOSE),
                 (local.DELIVERY_APPROVAL_SCHEMA,local.PURPOSE)):
@@ -184,7 +185,8 @@ class GenesisAuditDeliveryControls(unittest.TestCase):
     def check(self,name):
         environment={key:value for key,value in os.environ.items() if not key.startswith("SERVERWARE_")}
         with tempfile.TemporaryDirectory(prefix="serverware-genesis-delivery-") as directory:
-            environment.update(SERVERWARE_DATA_DIR=directory,SERVERWARE_RELEASE_CHANNEL="dev",SERVERWARE_PROCESS_MODE="serverware-control-plane")
+            environment.update(SERVERWARE_DATA_DIR=directory,SERVERWARE_RELEASE_CHANNEL="dev",SERVERWARE_PROCESS_MODE="serverware-control-plane",
+                SERVERWARE_AUDIT_STORE_RUNTIME_ROLE="synthetic_audit_runtime")
             command="import sys;sys.path.insert(0,sys.argv[1]);from scripts.test_authority_genesis_audit_delivery import scenario;scenario(sys.argv[2])"
             result=subprocess.run([sys.executable,"-I","-B","-c",command,str(ROOT),name],cwd=ROOT,
                 env=environment,capture_output=True,text=True,timeout=90)

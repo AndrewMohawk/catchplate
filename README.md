@@ -134,9 +134,10 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 **Development pilot — current focus:** a local control UI, Rust proxy and
 synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).
 Python and Rust images are built, supporting services are healthy, and the
-isolated PostgreSQL now has TLS and a verified certificate-authenticated,
-read-only login using a restricted role. Its existing database identity and
-volume were preserved. An [isolated VM](docs/trusted-host-local-storage.md)
+isolated PostgreSQL now has TLS and verified certificate-authenticated,
+read-only connections from the pilot VM using a restricted role. Two concurrent
+sessions passed; an unforwarded host connection was blocked. No database host
+port was opened, and its identity and volume were preserved. An [isolated VM](docs/trusted-host-local-storage.md)
 supplies the verified immutable-filesystem route and Python runtime. Actual
 provisioning created 29 distinct signing keys, 13 database client certificates,
 initial trust and seven static role inputs; read-only reboots verified persistence.

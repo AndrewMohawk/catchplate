@@ -2,6 +2,7 @@
 """Pure local/native contract controls; no installed package or live launch claim."""
 from __future__ import annotations
 
+import ast
 import copy
 from pathlib import Path
 import sys
@@ -29,6 +30,34 @@ def fixture():
 
 
 class TrustedHostLocalContractTests(unittest.TestCase):
+    def test_request_role_manifest_path_call_preserves_path_validation(self):
+        tree = ast.parse(Path(stage.__file__).read_text())
+        validator = next(node for node in tree.body
+                         if isinstance(node, ast.FunctionDef) and node.name == "validate_stage_zero_request")
+        calls = [node for node in ast.walk(validator)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                 and node.func.id == "_runtime_path"
+                 and any(isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)
+                         and value.value.id == "role" and isinstance(value.slice, ast.Constant)
+                         and value.slice.value == "path" for value in ast.walk(node))]
+        self.assertEqual(len(calls), 1)
+        expression = compile(ast.Expression(calls[0]), str(stage.__file__), "eval")
+
+        def validate(path):
+            return eval(expression, {"_runtime_path": stage._runtime_path, "_ascii": stage._ascii,
+                                     "role": {"path": path}})
+
+        # Execute the shared request validator's real call, not a replacement
+        # expression. This catches a missing required keyword before launch.
+        for path in ("roles/issuer.json", "roles/policy-finalizer.json"):
+            with self.subTest(path=path):
+                self.assertEqual(validate(path), "/" + path)
+        for path in ("", None, True, "../roles/issuer.json", "roles/../issuer.json",
+                     "roles/./issuer.json", "roles//issuer.json", "roles/issuer.json/",
+                     "roles/\N{SNOWMAN}.json", "roles/" + "x" * 4096):
+            with self.subTest(path=path), self.assertRaises(stage.StageZeroContractError):
+                validate(path)
+
     def test_local_reference_binds_dynamic_interpreter_without_static_claim(self):
         source, native = fixture()
         self.assertTrue(artifact.validate_stage_zero_reference(source,

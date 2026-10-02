@@ -1059,7 +1059,10 @@ def validate_stage_zero_request(
     role_name = _identifier(role["role"], name="role")
     runtime_evidence = _validate_runtime_evidence(value["runtimeEvidence"], role=role_name)
     runtime_evidence_fds = [] if runtime_evidence is None else [runtime_evidence["fd"]]
-    _runtime_path("/" + _ascii(role["path"], name="role manifest path"))
+    _runtime_path(
+        "/" + _ascii(role["path"], name="role manifest path"),
+        name="role manifest path",
+    )
     _digest(role["sha256"], name="role manifest digest")
     _identifier(role["processMode"], name="process mode")
     _integer(

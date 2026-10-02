@@ -30,6 +30,9 @@ GENESIS_AUDIT_PURPOSE = "create-fixed-local-genesis-audit-key"
 ENROLLMENT_APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalEnrollmentKeyProvisioningApproval/v1"
 ENROLLMENT_INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalEnrollmentKeyInventory/v1"
 ENROLLMENT_PURPOSE = "create-fixed-local-registration-enrollment-keys"
+CHAIN_APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalRegistrationChainKeyProvisioningApproval/v1"
+CHAIN_INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalRegistrationChainKeyInventory/v1"
+CHAIN_PURPOSE = "create-fixed-local-first-registration-chain-keys"
 SERVICE_ROLES = ("verifier", "planner", "planner-writer", "issuer", "executor", "witness")
 MAX_APPROVAL = 8192
 MAX_GENESIS_AUDIT_APPROVAL = 65536
@@ -69,11 +72,19 @@ def enrollment_roster():
         for name in ("authorization", "registration-evidence"))
 
 
+def chain_roster():
+    return tuple(dict(family="registration-chain", purpose=name, keyId="local-registration-chain-" + name + "-v1",
+        publicPath="keys/registration-chain/" + name + ".pub", privatePath="private/registration-chain/" + name + ".seed")
+        for name in ("execution-caller", "finalization-caller", "computation", "completion", "state", "grant-authorizer"))
+
+
 def _selected_roster(value):
     if (value["schema"], value["purpose"]) == (APPROVAL_SCHEMA, PURPOSE):
         return roster()
     if (value["schema"], value["purpose"]) == (ENROLLMENT_APPROVAL_SCHEMA, ENROLLMENT_PURPOSE):
         return enrollment_roster()
+    if (value["schema"], value["purpose"]) == (CHAIN_APPROVAL_SCHEMA, CHAIN_PURPOSE):
+        return chain_roster()
     require((value["schema"], value["purpose"]) == (GENESIS_AUDIT_APPROVAL_SCHEMA, GENESIS_AUDIT_PURPOSE))
     return genesis_audit_roster()
 
@@ -155,11 +166,31 @@ def enrollment_inventory(original, pilot_original, audit_original):
     return value, seen
 
 
+def chain_inventory(original, pilot_original, audit_original, enrollment_original):
+    pilot, _ = _pilot_inventory(pilot_original)
+    audit, _ = genesis_audit_inventory(audit_original, pilot_original)
+    enrollment, prior = enrollment_inventory(enrollment_original, pilot_original, audit_original)
+    value, seen = _extra_inventory(original, schema=CHAIN_INVENTORY_SCHEMA,
+        expected_rows=chain_roster(), pins={"pilotKeyInventorySha256": trust.sha(pilot_original.encode("ascii")),
+            "genesisAuditKeyInventorySha256": trust.sha(audit_original.encode("ascii")),
+            "enrollmentKeyInventorySha256": trust.sha(enrollment_original.encode("ascii"))}, prior_keys=prior)
+    require(value["directory"] not in (pilot["directory"], audit["directory"], enrollment["directory"]))
+    return value, seen
+
+
 def approval(raw):
     value = trust.document(raw, MAX_GENESIS_AUDIT_APPROVAL)
     fields = {"schema", "purpose", "directory", "bootIdDigest", "issuedAtBoottimeNs",
         "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
-    if value.get("schema") == ENROLLMENT_APPROVAL_SCHEMA:
+    if value.get("schema") == CHAIN_APPROVAL_SCHEMA:
+        require(set(value) == fields | {"pilotKeyInventoryOriginal", "genesisAuditKeyInventoryOriginal", "enrollmentKeyInventoryOriginal"}
+            and value["purpose"] == CHAIN_PURPOSE)
+        pilot, _ = _pilot_inventory(value["pilotKeyInventoryOriginal"])
+        audit, _ = genesis_audit_inventory(value["genesisAuditKeyInventoryOriginal"], value["pilotKeyInventoryOriginal"])
+        enrollment, _ = enrollment_inventory(value["enrollmentKeyInventoryOriginal"],
+            value["pilotKeyInventoryOriginal"], value["genesisAuditKeyInventoryOriginal"])
+        require(value["directory"] not in (pilot["directory"], audit["directory"], enrollment["directory"]))
+    elif value.get("schema") == ENROLLMENT_APPROVAL_SCHEMA:
         require(set(value) == fields | {"pilotKeyInventoryOriginal", "genesisAuditKeyInventoryOriginal"}
             and value["purpose"] == ENROLLMENT_PURPOSE)
         pilot, _ = _pilot_inventory(value["pilotKeyInventoryOriginal"])
@@ -321,13 +352,17 @@ class LocalKeyProvisioner:
             # No key exists before core files and process dumpability are off.
             genesis_audit = self.selected["schema"] == GENESIS_AUDIT_APPROVAL_SCHEMA
             enrollment = self.selected["schema"] == ENROLLMENT_APPROVAL_SCHEMA
-            paths = (("keys", "private", "keys/enrollment", "private/enrollment") if enrollment else
+            chain = self.selected["schema"] == CHAIN_APPROVAL_SCHEMA
+            paths = (("keys", "private", "keys/registration-chain", "private/registration-chain") if chain else
+                ("keys", "private", "keys/enrollment", "private/enrollment") if enrollment else
                 ("keys", "private", "keys/genesis", "private/genesis") if genesis_audit else
                 ("keys", "private", "keys/artifact", "private/artifact", "keys/configuration",
                  "private/configuration", "keys/service", "private/service"))
             for path in paths:
                 self._mkdir(path)
-            seen = (genesis_audit_inventory(self.selected["genesisAuditKeyInventoryOriginal"],
+            seen = (enrollment_inventory(self.selected["enrollmentKeyInventoryOriginal"], self.selected["pilotKeyInventoryOriginal"],
+                self.selected["genesisAuditKeyInventoryOriginal"])[1] if chain else
+                genesis_audit_inventory(self.selected["genesisAuditKeyInventoryOriginal"],
                 self.selected["pilotKeyInventoryOriginal"])[1] if enrollment else
                 _pilot_inventory(self.selected["pilotKeyInventoryOriginal"])[1] if genesis_audit else set())
             rows, public_roster = [], {}
@@ -345,24 +380,28 @@ class LocalKeyProvisioner:
                     rows.append(dict(selected, publicKeyBase64Url=encoded, publicKeySha256=trust.sha(public),
                         publicKeySpkiSha256=trust.sha(private.public_key().public_bytes(
                             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
-                    if selected["family"] == "artifact" or genesis_audit or enrollment:
+                    if selected["family"] == "artifact" or genesis_audit or enrollment or chain:
                         public_roster[selected["purpose"]] = encoded
                 finally: del private, seed
             public_raw = trust.spec.canonical_json_bytes(public_roster)
-            if enrollment:
+            if chain:
+                require(set(public_roster) == {row["purpose"] for row in chain_roster()} and len(rows) == 6)
+            elif enrollment:
                 require(set(public_roster) == {"authorization", "registration-evidence"} and len(rows) == 2)
             elif genesis_audit:
                 require(set(public_roster) == {"audit-inclusion"} and len(rows) == 1)
             else:
                 trust.public_roster(public_raw)
             self._publish("public-roster.json", public_raw)
-            inventory = dict(schema=ENROLLMENT_INVENTORY_SCHEMA if enrollment else GENESIS_AUDIT_INVENTORY_SCHEMA if genesis_audit else INVENTORY_SCHEMA,
+            inventory = dict(schema=CHAIN_INVENTORY_SCHEMA if chain else ENROLLMENT_INVENTORY_SCHEMA if enrollment else GENESIS_AUDIT_INVENTORY_SCHEMA if genesis_audit else INVENTORY_SCHEMA,
                 approvalSha256=self.pin, directory=self.selected["directory"],
                 publicRosterSha256=trust.sha(public_raw), keys=rows, claims=CLAIMS)
-            if genesis_audit or enrollment:
+            if genesis_audit or enrollment or chain:
                 inventory["pilotKeyInventorySha256"] = trust.sha(self.selected["pilotKeyInventoryOriginal"].encode("ascii"))
-            if enrollment:
+            if enrollment or chain:
                 inventory["genesisAuditKeyInventorySha256"] = trust.sha(self.selected["genesisAuditKeyInventoryOriginal"].encode("ascii"))
+            if chain:
+                inventory["enrollmentKeyInventorySha256"] = trust.sha(self.selected["enrollmentKeyInventoryOriginal"].encode("ascii"))
             raw = trust.spec.canonical_json_bytes(inventory)
             self._publish("inventory.json", raw)  # Last durable completion marker.
             self.check()

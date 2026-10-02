@@ -30,7 +30,7 @@ def selected(directory):
         issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+60_000_000_000)
 
 
-def open_owner(directory, *, genesis_inventory=None, enrollment_audit_inventory=None):
+def open_owner(directory, *, genesis_inventory=None, enrollment_audit_inventory=None, chain_enrollment_inventory=None):
     value = selected(directory)
     if genesis_inventory is not None:
         value.update(schema=local.GENESIS_AUDIT_APPROVAL_SCHEMA, purpose=local.GENESIS_AUDIT_PURPOSE,
@@ -38,6 +38,9 @@ def open_owner(directory, *, genesis_inventory=None, enrollment_audit_inventory=
     if enrollment_audit_inventory is not None:
         value.update(schema=local.ENROLLMENT_APPROVAL_SCHEMA, purpose=local.ENROLLMENT_PURPOSE,
             genesisAuditKeyInventoryOriginal=enrollment_audit_inventory.decode("ascii"))
+    if chain_enrollment_inventory is not None:
+        value.update(schema=local.CHAIN_APPROVAL_SCHEMA, purpose=local.CHAIN_PURPOSE,
+            enrollmentKeyInventoryOriginal=chain_enrollment_inventory.decode("ascii"))
     raw = local.trust.spec.canonical_json_bytes(value)
     fd = os.memfd_create("synthetic-local-key-approval", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
     if os.write(fd, raw) != len(raw): raise RuntimeError("fixture short write")
@@ -74,7 +77,53 @@ def synthetic_audit_inventory_original(pilot_original):
         keys=[row], claims=local.CLAIMS, pilotKeyInventorySha256=local.trust.sha(pilot_original)))
 
 
+def synthetic_enrollment_inventory_original(pilot_original, audit_original):
+    rows, roster = [], {}
+    for index, row in enumerate(local.enrollment_roster(), 22):
+        public = Ed25519PrivateKey.from_private_bytes(bytes([index]) * 32).public_key()
+        raw = public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        encoded = local.trust.spec.strict_base64url_encode(raw)
+        rows.append(dict(row, publicKeyBase64Url=encoded, publicKeySha256=local.trust.sha(raw),
+            publicKeySpkiSha256=local.trust.sha(public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
+        roster[row["purpose"]] = encoded
+    return local.trust.spec.canonical_json_bytes(dict(schema=local.ENROLLMENT_INVENTORY_SCHEMA,
+        approvalSha256=DIGEST, directory=dict(device=1, inode=4), keys=rows, claims=local.CLAIMS,
+        publicRosterSha256=local.trust.sha(local.trust.spec.canonical_json_bytes(roster)),
+        pilotKeyInventorySha256=local.trust.sha(pilot_original), genesisAuditKeyInventorySha256=local.trust.sha(audit_original)))
+
+
 class KeyContractTests(unittest.TestCase):
+    def test_first_registration_chain_is_fixed_six_and_prior_three_profiles_unchanged(self):
+        self.assertEqual(tuple(len(factory()) for factory in (local.roster, local.genesis_audit_roster,
+            local.enrollment_roster, local.chain_roster)), (20, 1, 2, 6))
+        self.assertEqual([row["purpose"] for row in local.chain_roster()],
+            ["execution-caller", "finalization-caller", "computation", "completion", "state", "grant-authorizer"])
+        pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
+        enrollment = synthetic_enrollment_inventory_original(pilot, audit)
+        value = dict(schema=local.CHAIN_APPROVAL_SCHEMA, purpose=local.CHAIN_PURPOSE,
+            directory=dict(device=1, inode=5), bootIdDigest=DIGEST, issuedAtBoottimeNs=100,
+            deadlineBoottimeNs=200, issuedAtUnixNanos=100, expiresAtUnixNanos=200,
+            pilotKeyInventoryOriginal=pilot.decode("ascii"), genesisAuditKeyInventoryOriginal=audit.decode("ascii"),
+            enrollmentKeyInventoryOriginal=enrollment.decode("ascii"))
+        self.assertEqual(local.approval(local.trust.spec.canonical_json_bytes(value)), value)
+        for changed in (dict(value, purpose=local.ENROLLMENT_PURPOSE), dict(value, keyCount=6),
+                dict(value, directory=dict(device=1, inode=4)), {k:v for k,v in value.items() if k != "enrollmentKeyInventoryOriginal"}):
+            with self.assertRaises(ValueError): local.approval(local.trust.spec.canonical_json_bytes(changed))
+        self.assertEqual(local.MAX_APPROVAL, 8192)
+
+    def test_chain_rejects_rebound_prior_enrollment_or_a_shared_prior_key(self):
+        pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
+        original = synthetic_enrollment_inventory_original(pilot, audit)
+        value = local.trust.document(original, local.MAX_PUBLIC)
+        value["pilotKeyInventorySha256"] = "sha256:" + "2" * 64
+        with self.assertRaises(ValueError): local.enrollment_inventory(local.trust.spec.canonical_json_bytes(value).decode("ascii"),
+            pilot.decode("ascii"), audit.decode("ascii"))
+        value = local.trust.document(original, local.MAX_PUBLIC)
+        prior = local.trust.document(audit, local.MAX_PUBLIC)["keys"][0]
+        value["keys"][0].update({field:prior[field] for field in ("publicKeyBase64Url", "publicKeySha256", "publicKeySpkiSha256")})
+        with self.assertRaises(ValueError): local.enrollment_inventory(local.trust.spec.canonical_json_bytes(value).decode("ascii"),
+            pilot.decode("ascii"), audit.decode("ascii"))
+
     def test_enrollment_profile_is_exactly_two_new_purposes_and_preserves_both_prior_profiles(self):
         pilot = synthetic_inventory_original()
         audit = synthetic_audit_inventory_original(pilot)
@@ -177,6 +226,47 @@ class KeyContractTests(unittest.TestCase):
 @unittest.skipUnless(os.getresuid() == os.getresgid() == (0,0,0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
     "real protected key-file controls require isolated root -I -B")
 class KeyStorageTests(unittest.TestCase):
+    def test_actual_chain_profile_creates_six_new_keys_and_retains_all_prior_originals(self):
+        pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
+        enrollment = synthetic_enrollment_inventory_original(pilot, audit)
+        with tempfile.TemporaryDirectory(prefix="local-registration-chain-") as directory:
+            owner = open_owner(directory, genesis_inventory=pilot, enrollment_audit_inventory=audit,
+                chain_enrollment_inventory=enrollment)
+            try:
+                raw = owner.run()
+                inventory, public_keys = local.chain_inventory(raw.decode("ascii"), pilot.decode("ascii"),
+                    audit.decode("ascii"), enrollment.decode("ascii"))
+                self.assertEqual(len(public_keys), 29)
+                self.assertEqual(len(inventory["keys"]), 6)
+                expected = {"public-roster.json", "inventory.json"}
+                for row in inventory["keys"]:
+                    expected.update((row["publicPath"], row["privatePath"]))
+                    path = Path(directory) / row["privatePath"]
+                    key = Ed25519PrivateKey.from_private_bytes(path.read_bytes())
+                    self.assertEqual(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw),
+                        (Path(directory) / row["publicPath"]).read_bytes())
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o400)
+                self.assertEqual({str(path.relative_to(directory)) for path in Path(directory).rglob("*") if path.is_file()}, expected)
+                self.assertEqual(inventory["enrollmentKeyInventorySha256"], local.trust.sha(enrollment))
+                self.assertFalse(inventory["claims"]["trustGranted"])
+                owner.check()
+            finally: owner.close()
+
+    def test_chain_collision_with_existing_evidence_key_refuses_before_private_publication(self):
+        pilot = synthetic_inventory_original(); audit = synthetic_audit_inventory_original(pilot)
+        enrollment = synthetic_enrollment_inventory_original(pilot, audit)
+        with tempfile.TemporaryDirectory(prefix="local-registration-chain-collision-") as directory:
+            owner = open_owner(directory, genesis_inventory=pilot, enrollment_audit_inventory=audit,
+                chain_enrollment_inventory=enrollment)
+            try:
+                collision = Ed25519PrivateKey.from_private_bytes(bytes([23]) * 32)
+                with patch.object(local.Ed25519PrivateKey, "generate", return_value=collision):
+                    with self.assertRaises(local.LocalKeyProvisionerError) as caught: owner.run()
+                self.assertIsInstance(caught.exception.__cause__, ValueError)
+                self.assertTrue((Path(directory) / "private/registration-chain").is_dir())
+                self.assertFalse(any(path.is_file() for path in Path(directory).rglob("*")))
+            finally: owner.close()
+
     def test_actual_enrollment_profile_creates_only_two_new_private_keys(self):
         pilot = synthetic_inventory_original()
         audit = synthetic_audit_inventory_original(pilot)

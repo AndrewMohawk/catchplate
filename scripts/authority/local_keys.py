@@ -29,6 +29,17 @@ directory. Both must differ from all21 and each other. Neither prior profile
 changes. Inventory creation grants no enrollment or registration authority;
 the existing signed purpose policies and actual hardware ceremony remain.
 
+The separately selected RegistrationChainKeyProvisioningApproval/v1 creates
+exactly six NEW keys in a fourth empty root0700 directory: execution-caller,
+finalization-caller, computation, completion, state, and grant-authorizer. It
+embeds all three preceding public inventories; all29 keys must differ. Fixed
+paths are keys/registration-chain/ and private/registration-chain/. The shared
+current-root and grant keys serve the explicitly delegated first-registration
+execution/finalization chain only; inventory creation does not enroll them,
+initialize a vector, authorize a request, or add any OIDC/activation purpose.
+The two caller private copies belong in separately admitted FD203 and FD204;
+they are never aliases of enrollment authorization or evidence signing keys.
+
 Private raw32 seeds are root0400 under private/; public raw32 files are under
 keys/. Public-only public-roster.json and inventory.json contain no secret bytes
 or private-key hashes. Files publish no-replace, fsync and read back; inventory

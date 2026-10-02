@@ -720,26 +720,47 @@ def _validate_configuration_document(
         name=f"{reference['role']} configuration signature",
         decoded_size=64,
     )
+    expected_schema = (WITNESS_CONFIGURATION_SCHEMA if role == "witness"
+                       else SERVICE_CONFIGURATION_SCHEMA)
+    if envelope["schema"] != expected_schema:
+        raise GeneratorError(f"{role} configuration schema changed")
+    return validate_configuration_payload(envelope["payload"], role=role,
+        source_revision=source_revision,
+        expected_generation_binding=expected_generation_binding,
+        expected_generation_binding_digest=expected_generation_binding_digest,
+        expected_role_bindings=expected_role_bindings)
+
+
+def validate_configuration_payload(
+    value: Mapping[str, Any], *, role: str, source_revision: str,
+    expected_generation_binding: Mapping[str, Any], expected_generation_binding_digest: str,
+    expected_role_bindings: Mapping[str, str],
+) -> tuple[str, str]:
+    """Existing static configuration checks, without inventing a signature/owner.
+
+    The immutable file reader delegates here. A separately authorized local
+    producer can validate its actual unsigned selection before private-key use;
+    launch, installed-package and live attestation admission remain downstream.
+    """
+    if role not in {AUTHORITY_SERVICE_CONFIGURATION_ROLE, "witness"}:
+        raise GeneratorError("configuration role is not closed")
     if role == "witness":
-        expected_envelope_schema = WITNESS_CONFIGURATION_SCHEMA
         expected_payload_schema = WITNESS_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = WITNESS_CONFIGURATION_FIELDS
     else:
-        expected_envelope_schema = SERVICE_CONFIGURATION_SCHEMA
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
-        if isinstance(envelope["payload"], Mapping):
+        if isinstance(value, Mapping):
             for optional_field in (genesis_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD):
-                if optional_field in envelope["payload"]:
+                if optional_field in value:
                     expected_fields = expected_fields | {optional_field}
     payload = _closed(
-        envelope["payload"],
+        value,
         name=f"{role} configuration payload",
         keys=set(expected_fields),
     )
     if (
-        envelope["schema"] != expected_envelope_schema
-        or payload["schema"] != expected_payload_schema
+        payload["schema"] != expected_payload_schema
         or payload["sourceRevision"] != source_revision
     ):
         raise GeneratorError(f"{role} configuration schema changed")

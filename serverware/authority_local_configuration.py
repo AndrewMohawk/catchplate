@@ -1,0 +1,305 @@
+"""Purpose-fixed local configuration signatures, not launch/DB attestations.
+
+All public policy, role, credential and generation inputs are independently
+selected in one protected approval. Actual credential certificate originals are
+authenticated before key access. Local root custody is not independent/off-host
+or hardware-backed custody; Python key copies are not claimed to be erased.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from scripts.authority import generate_artifact_bundle as generator
+from scripts.authority import native_pilot_authority_io as io
+from serverware import authority_artifact_spec as spec
+from serverware import authority_primary_contract as primary
+from serverware import authority_launcher as launcher
+from serverware.authority_local_artifacts import sha
+
+SCHEMA = "serverware.authorityTrustedHostLocalConfigurationApproval/v1"
+PURPOSES = {"authority-service": "sign-exact-local-authority-service-configuration",
+            "witness": "sign-exact-local-replay-witness-configuration"}
+LOCAL = dict(mode="trusted-host-local", hardwareBacked=False, externalWitnessRequired=False,
+             teeQuoteRequired=False, imaAppraisalRequired=False)
+SERVICE_ROLES = generator.SERVICE_CONFIGURATION_ROLES
+RUNTIME_KEY_ROLES = SERVICE_ROLES | {"witness"}
+FIELDS = frozenset({"schema", "purpose", "role", "configurationRootPublicKeyBase64Url",
+    "payloadOriginal", "payloadSha256", "generation", "roleManifests", "roleOriginals",
+    "runtimePublicKeys", "databaseIssuanceOriginals", "serviceConfigurationOriginal",
+    "bootIdDigest", "issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"})
+GENERATION_FIELDS = frozenset({"generationId", "sequence", "predecessorDigest", "minimumRollbackSequence",
+    "validFrom", "validUntil", "operationManifestDigest", "trustMode"})
+MAX_CONFIGURATION = generator.authority_contract.MAX_REQUEST_BYTES
+
+
+def _require(value):
+    if not value:
+        raise ValueError("local configuration signing refused")
+
+
+def document(raw, maximum):
+    """Canonical configuration JSON, including existing finite timeout numbers."""
+    _require(type(raw) is bytes and 0 < len(raw) <= maximum)
+    def pairs(rows):
+        result = {}
+        for name, value in rows:
+            _require(name not in result)
+            result[name] = value
+        return result
+    def invalid(_value):
+        raise ValueError("nonfinite configuration value")
+    value = json.loads(raw.decode("ascii"), object_pairs_hook=pairs, parse_constant=invalid)
+    _require(type(value) is dict and spec.canonical_json_bytes(value) == raw)
+    return value
+
+
+def _public(value):
+    return spec.strict_base64url_decode(value, name="configuration public key", decoded_size=32)
+
+
+def _spki(value):
+    return sha(Ed25519PublicKey.from_public_bytes(_public(value)).public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))
+
+
+def signature_message(role, payload):
+    """The two existing consumer domains deliberately have different framing."""
+    raw = spec.canonical_json_bytes(payload)
+    if role == "authority-service":
+        digest = hashlib.sha256(generator.SERVICE_CONFIGURATION_SCHEMA.encode("ascii") + b"\0"
+                                + len(raw).to_bytes(8, "big") + raw)
+        return ("sha256:" + digest.hexdigest()).encode("ascii")
+    if role == "witness":
+        return spec.domain_digest(generator.WITNESS_CONFIGURATION_SCHEMA, raw).encode("ascii")
+    raise ValueError("configuration purpose refused")
+
+
+def _validate_payload(payload, role, generation, bindings):
+    return generator.validate_configuration_payload(payload, role=role,
+        source_revision=generator.authority_contract.SOURCE_REVISION,
+        expected_generation_binding=spec.configuration_generation_binding(generation),
+        expected_generation_binding_digest=spec.configuration_generation_binding_digest(generation),
+        expected_role_bindings=bindings)
+
+
+def _service(payload, selected, *, now_unix):
+    """Join real credential originals and static source topology; no live owner."""
+    from serverware.authority_local_database_credentials import issuance
+
+    originals = selected["databaseIssuanceOriginals"]
+    _require(type(originals) is dict and set(originals) == SERVICE_ROLES)
+    identities = {}
+    targets = set()
+    expiry = selected["expiresAtUnixNanos"]
+    for role in sorted(SERVICE_ROLES):
+        _require(type(originals[role]) is str and originals[role].isascii())
+        raw = originals[role].encode("ascii")
+        identity = issuance(raw, purpose=role)
+        original = document(raw, io.MAX_PUBLIC)
+        _require(identity["notBeforeEpochNs"] <= now_unix < identity["expiresAtEpochNs"]
+            and original["issuedAtUnixNanos"] <= now_unix
+            and original["intendedOwner"] == dict(uid=launcher.ROLE_IDENTITIES[role][0],
+                                                  gid=launcher.ROLE_IDENTITIES[role][1]))
+        targets.add((original["database"], original["host"], original["port"], original["approvalSha256"]))
+        expiry = min(expiry, identity["expiresAtEpochNs"])
+        identities[role] = identity
+        row = payload["roles"][role]
+        _require(all(row[name] == identity[name]
+            for name in ("databaseRole", "tlsClientDn", "tlsClientSerial", "tlsIssuerDn")))
+        _require((row["serviceUid"], row["serviceGid"]) == launcher.ROLE_IDENTITIES[role]
+            and row["socketPath"] == launcher.ROLE_SOCKET_PATHS[role]
+            and row["responseSigningSpkiDigest"] == _spki(selected["runtimePublicKeys"][role]))
+        peer = {"verifier": "runtime", "planner": "verifier", "planner-writer": "planner",
+                "issuer": "verifier", "executor": "verifier"}[role]
+        _require((row["peerUid"], row["peerGid"]) == launcher.ROLE_IDENTITIES[peer])
+        for field in ("requestTimeoutSeconds", "databaseConnectTimeoutSeconds"):
+            _require(type(row[field]) in (int, float) and 0 < row[field] < 2**63)
+        for field in ("maximumInternalAgeNs", "capabilityLifetimeNs", "workers", "maximumInFlight", "listenBacklog"):
+            _require(type(row[field]) is int and 0 < row[field] < 2**63)
+        _require(row["maximumInFlight"] >= row["workers"])
+    _require(len({row["databaseRole"] for row in identities.values()}) == 5
+        and len({row["certificateSha256"] for row in identities.values()}) == 5
+        and len({row["caCertificateSha256"] for row in identities.values()}) == 1 and len(targets) == 1)
+    generator.genesis_policy.configuration(payload.get(generator.genesis_policy.FIELD),
+        root_digest=_spki(selected["configurationRootPublicKeyBase64Url"]))
+    for role in ("issuer", "executor"):
+        _require(payload[role + "CredentialIssuanceDigest"] == identities[role]["credentialIssuanceDigest"])
+    executor = identities["executor"]
+    _require(all(payload[outer] == executor[inner] for outer, inner in (
+        ("executorRole", "databaseRole"), ("executorTlsClientDn", "tlsClientDn"),
+        ("executorTlsClientSerial", "tlsClientSerial"), ("executorTlsIssuerDn", "tlsIssuerDn"))))
+    _require((payload["runtimeUid"], payload["runtimeGid"]) == launcher.ROLE_IDENTITIES["runtime"]
+        and payload["queryManifestDigest"] == primary.source_query_manifest_digest())
+    for role in ("verifier", "planner"):
+        row = payload["roles"][role]
+        _require(row["signingPublicKeyBase64Url"] == selected["runtimePublicKeys"][role]
+                 and row["signingSpkiDigest"] == _spki(selected["runtimePublicKeys"][role]))
+    writer = payload["roles"]["planner-writer"]
+    _require(writer["responseSigningPublicKeyBase64Url"] == selected["runtimePublicKeys"]["planner-writer"]
+        and writer["plannerSigningPublicKeyBase64Url"] == selected["runtimePublicKeys"]["planner"]
+        and payload["roles"]["verifier"]["runtimeSocketPath"] == launcher.ROLE_SOCKET_PATHS["verifier"])
+    _require(type(payload["roles"]["verifier"]["maximumEndToEndDeadlineNs"]) is int
+             and payload["roles"]["verifier"]["maximumEndToEndDeadlineNs"] > 0)
+    trust = payload["credentialReleaseTrust"]
+    _require(type(trust) is dict and set(trust) == {"schema", "trustMode", "maximumReceiptAgeNs"}
+        and trust["schema"] == "serverware.trustedHostLocalCredentialReleaseTrust/v1"
+        and trust["trustMode"] == "trusted-host-local"
+        and type(trust["maximumReceiptAgeNs"]) is int and trust["maximumReceiptAgeNs"] > 0)
+    replay = payload["replayWitness"]
+    _require(type(replay) is dict and set(replay) == {"socketPath", "serviceUid", "serviceGid",
+        "requestTimeoutSeconds", "identityDigest", "signingPublicKeyBase64Url"}
+        and replay["socketPath"] == launcher.ROLE_SOCKET_PATHS["witness"]
+        and (replay["serviceUid"], replay["serviceGid"]) == launcher.ROLE_IDENTITIES["witness"]
+        and replay["signingPublicKeyBase64Url"] == selected["runtimePublicKeys"]["witness"]
+        and type(replay["requestTimeoutSeconds"]) in (int, float) and replay["requestTimeoutSeconds"] > 0)
+    spec._require_digest(replay["identityDigest"], name="selected replay witness identity")
+    webauthn = payload["webauthn"]
+    _require(type(webauthn) is dict and set(webauthn) == {"rpId", "origin", "challengeLifetimeNs",
+        "maximumChallengeAgeNs", "allowedAuthenticatorClasses", "requireAttestationTrusted"}
+        and all(type(webauthn[name]) is int and webauthn[name] > 0
+                for name in ("challengeLifetimeNs", "maximumChallengeAgeNs")))
+    return expiry
+
+
+def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
+    """Validate exact independently supplied originals before any signing effect."""
+    selected = document(raw, io.MAX_PUBLIC)
+    _require(set(selected) == FIELDS and selected["schema"] == SCHEMA
+        and selected["role"] in PURPOSES and selected["purpose"] == PURPOSES[selected["role"]]
+        and selected["bootIdDigest"] == boot)
+    spec._require_digest(boot, name="original boot")
+    for name in ("issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"):
+        _require(type(selected[name]) is int and 0 < selected[name] < 2**64)
+    _require(selected["issuedAtBoottimeNs"] <= now_boottime_ns < selected["deadlineBoottimeNs"]
+        and selected["issuedAtUnixNanos"] <= now_unix_ns < selected["expiresAtUnixNanos"]
+        and selected["deadlineBoottimeNs"] - selected["issuedAtBoottimeNs"] <= 300_000_000_000
+        and selected["expiresAtUnixNanos"] - selected["issuedAtUnixNanos"] <= 300_000_000_000)
+    root_public = _public(selected["configurationRootPublicKeyBase64Url"])
+    generation = selected["generation"]
+    _require(type(generation) is dict and set(generation) == GENERATION_FIELDS
+        and generation["trustMode"] == LOCAL
+        and generation["operationManifestDigest"] == generator.authority_contract.OPERATION_MANIFEST_DIGEST)
+    spec.configuration_generation_binding(generation)
+    begin = int(spec._require_timestamp(generation["validFrom"], name="generation start").timestamp()) * 1_000_000_000
+    expiry = int(spec._require_timestamp(generation["validUntil"], name="generation expiry").timestamp()) * 1_000_000_000
+    _require(begin <= selected["issuedAtUnixNanos"] <= now_unix_ns < selected["expiresAtUnixNanos"] <= expiry)
+    roles, originals = selected["roleManifests"], selected["roleOriginals"]
+    bindings = spec.role_binding_digests(roles)
+    _require(set(bindings) == set(launcher.PROCESS_MODES) and type(originals) is dict and set(originals) == set(bindings))
+    for row in roles:
+        name = row["role"]
+        _require(type(originals[name]) is str and originals[name].isascii()
+            and row["sha256"] == sha(originals[name].encode("ascii"))
+            and (row["runtimeUid"], row["runtimeGid"]) == launcher.ROLE_IDENTITIES[name]
+            and row["processMode"] == launcher.PROCESS_MODES[name]
+            and row["listenerName"] == launcher.ROLE_LISTENER_NAMES[name]
+            and row["argv"] == {"schema": spec.LOCAL_ARGUMENTS_SCHEMA}
+            and row["credentialNames"] == sorted(launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[name]))
+    keys = selected["runtimePublicKeys"]
+    _require(type(keys) is dict and set(keys) == RUNTIME_KEY_ROLES)
+    key_bytes = [_public(keys[name]) for name in sorted(keys)]
+    _require(len(set(key_bytes + [root_public])) == len(key_bytes) + 1)
+    _require(type(selected["payloadOriginal"]) is str and selected["payloadOriginal"].isascii())
+    payload_raw = selected["payloadOriginal"].encode("ascii")
+    _require(sha(payload_raw) == selected["payloadSha256"])
+    payload = document(payload_raw, MAX_CONFIGURATION)
+    role = selected["role"]
+    payload_schema, payload_digest = _validate_payload(payload, role, generation, bindings)
+    envelope_schema = (generator.SERVICE_CONFIGURATION_SCHEMA if role == "authority-service"
+                       else generator.WITNESS_CONFIGURATION_SCHEMA)
+    # A raw64 Ed25519 signature has exactly 86 canonical base64url characters.
+    # Bound the final existing envelope before reading any private-key bytes.
+    _require(len(spec.canonical_json_bytes(dict(schema=envelope_schema, payload=payload, signature=""))) + 86
+             <= MAX_CONFIGURATION)
+    if role == "authority-service":
+        _require(selected["serviceConfigurationOriginal"] is None)
+        expiry = min(expiry, _service(payload, selected, now_unix=now_unix_ns))
+    else:
+        _require(type(selected["serviceConfigurationOriginal"]) is str
+                 and selected["serviceConfigurationOriginal"].isascii())
+        service = document(selected["serviceConfigurationOriginal"].encode("ascii"), MAX_CONFIGURATION)
+        _require(set(service) == {"schema", "payload", "signature"}
+                 and service["schema"] == generator.SERVICE_CONFIGURATION_SCHEMA)
+        Ed25519PublicKey.from_public_bytes(root_public).verify(
+            spec.strict_base64url_decode(service["signature"], name="service signature", decoded_size=64),
+            signature_message("authority-service", service["payload"]))
+        _, service_digest = _validate_payload(service["payload"], "authority-service", generation, bindings)
+        expiry = min(expiry, _service(service["payload"], selected, now_unix=now_unix_ns))
+        _require(payload["authorityConfigurationDigests"] == [service_digest]
+            and payload["signingSpkiDigest"] == _spki(keys["witness"])
+            and payload["verifierSigningPublicKeyBase64Url"] == keys["verifier"]
+            and payload["identityDigest"] == service["payload"]["replayWitness"]["identityDigest"]
+            and (payload["serviceUid"], payload["serviceGid"]) == launcher.ROLE_IDENTITIES["witness"]
+            and (payload["peerUid"], payload["peerGid"]) == launcher.ROLE_IDENTITIES["verifier"]
+            and payload["releaseConsumerPeers"] == {name: dict(uid=launcher.ROLE_IDENTITIES[name][0],
+                gid=launcher.ROLE_IDENTITIES[name][1]) for name in SERVICE_ROLES})
+        _require(type(payload["requestTimeoutSeconds"]) in (int, float) and payload["requestTimeoutSeconds"] > 0)
+        for name in ("listenBacklog", "workers", "maximumInFlight", "maximumRequestAgeNs"):
+            _require(type(payload[name]) is int and 0 < payload[name] < 2**63)
+        _require(payload["maximumInFlight"] >= payload["workers"] and type(payload["minimumSequence"]) is int
+            and payload["minimumSequence"] >= 0)
+        if payload["minimumSequence"] == 0:
+            _require(payload["minimumReceiptDigest"] is None)
+        else:
+            spec._require_digest(payload["minimumReceiptDigest"], name="actual prior replay receipt")
+    _require(selected["expiresAtUnixNanos"] <= expiry)
+    return dict(selected=selected, payload=payload, rootPublic=root_public, payloadSchema=payload_schema,
+                payloadDigest=payload_digest, deadline=selected["deadlineBoottimeNs"], epochLimit=selected["expiresAtUnixNanos"])
+
+
+class LocalConfigurationIssuer:
+    def __init__(self, *, approval_fd, approval_sha256, signing_key_fd):
+        io._process()
+        _require(type(approval_fd) is int and type(signing_key_fd) is int
+                 and approval_fd >= 3 and signing_key_fd >= 3 and approval_fd != signing_key_fd)
+        self._fd, self._key_fd = approval_fd, signing_key_fd
+        self._identity = io._input(approval_fd, io.MAX_PUBLIC)
+        self._raw = io.read_public(approval_fd, io.MAX_PUBLIC)
+        _require(sha(self._raw) == approval_sha256)
+        self._boot = launcher._boot_identity_digest()
+        self._previous_boot, self._previous_unix = io._clock(), time.time_ns()
+        self._prepared = prepare(self._raw, boot=self._boot,
+            now_boottime_ns=self._previous_boot, now_unix_ns=self._previous_unix)
+        key_identity = io._input(signing_key_fd, 32, private=True)
+        _require(key_identity[:2] != self._identity[:2])
+        self._key_identity = key_identity
+        self._used = False
+        self.check()
+
+    def check(self):
+        now_boot, now_unix = io._clock(), time.time_ns()
+        _require(self._previous_boot <= now_boot < self._prepared["deadline"]
+            and self._previous_unix <= now_unix < self._prepared["epochLimit"]
+            and launcher._boot_identity_digest() == self._boot
+            and io._input(self._fd, io.MAX_PUBLIC) == self._identity
+            and io._input(self._key_fd, 32, private=True) == self._key_identity)
+        self._previous_boot, self._previous_unix = now_boot, now_unix
+
+    def issue(self):
+        self.check()
+        _require(not self._used and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
+        self._used = True  # No second signature/output attempt after uncertain work.
+        signer = io.signing_key(self._key_fd)
+        _require(signer.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                 == self._prepared["rootPublic"])
+        selected, payload = self._prepared["selected"], self._prepared["payload"]
+        role = selected["role"]
+        message = signature_message(role, payload)
+        signature = signer.sign(message)
+        signer.public_key().verify(signature, message)
+        envelope = dict(schema=generator.SERVICE_CONFIGURATION_SCHEMA if role == "authority-service"
+            else generator.WITNESS_CONFIGURATION_SCHEMA, payload=payload, signature=spec.strict_base64url_encode(signature))
+        self.check()
+        raw = spec.canonical_json_bytes(envelope)
+        _require(len(raw) <= MAX_CONFIGURATION)
+        return raw
+
+    def publish(self):
+        raw = self.issue()
+        io.write_public(raw, deadline_boottime_ns=self._prepared["deadline"], check=self.check)

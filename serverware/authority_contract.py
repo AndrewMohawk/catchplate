@@ -1920,6 +1920,9 @@ _OPERATIONS = {
             "policy_authority_genesis_preparations",
             "policy_authority_genesis_finalizations",
             "policy_authority_trusted_keys",
+            "policy_authority_trusted_key_heads",
+            "policy_authority_trusted_key_revocations",
+            "policy_runtime_role_keys",
             "policy_high_water",
             "policy_publications",
         )
@@ -1934,7 +1937,7 @@ _OPERATIONS = {
         + _PHASE2_EVIDENCE,
         webauthn="bound-verified-assertion-receipt",
         proof_primitives=_PHASE2_EXACT_AGGREGATE_PROOF_SET
-            + ("external-evidence-receipt",),
+            + ("external-evidence-receipt", "bounded-limit-plus-one"),
         external_evidence_types=(
             "policy-signature-verification/v1",
         ),
@@ -1945,6 +1948,12 @@ _OPERATIONS = {
             "policy_authority_genesis_preparations",
             "policy_authority_genesis_finalizations",
             "policy_authority_audit_inclusion_receipts",
+            "policy_authority_trusted_keys",
+            "policy_authority_trusted_key_heads",
+            "policy_authority_trusted_key_revocations",
+            "policy_runtime_role_keys",
+            "policy_authority_transition_audits",
+            "metadata_audit_outbox",
             "policy_high_water",
             "policy_publications",
         )
@@ -1962,7 +1971,7 @@ _OPERATIONS = {
         + _PHASE2_EVIDENCE,
         webauthn="bound-verified-assertion-receipt",
         proof_primitives=_PHASE2_EXACT_AGGREGATE_PROOF_SET
-            + ("external-evidence-receipt",),
+            + ("external-evidence-receipt", "bounded-limit-plus-one"),
         external_evidence_types=("audit-inclusion/v1",),
     ),
     "policy.export.freeze": _spec(

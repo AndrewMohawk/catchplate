@@ -503,6 +503,8 @@ class PlanningState:
     rbac_primary_inputs: tuple | None = None
     retirement_succession_primary_roots: tuple | None = None
     canary_delivery_admission: Any = None
+    genesis_root_digest: str | None = None
+    genesis_policy: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1367,6 +1369,8 @@ class TypedTransitionPlanningProgram:
                 rbac_primary_inputs=state.rbac_primary_inputs,
                 retirement_succession_primary_roots=state.retirement_succession_primary_roots,
                 canary_delivery_admission=state.canary_delivery_admission,
+                genesis_root_digest=state.genesis_root_digest,
+                genesis_policy=state.genesis_policy,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -4055,6 +4059,8 @@ class MeasuredPlanner:
         verifier_identity: Mapping[str, str] | None = None,
         maximum_assertion_age_ns: int | None = None,
         canary_delivery_admission=None,
+        genesis_root_digest=None,
+        genesis_policy=None,
     ) -> None:
         if (
             not read_dsn
@@ -4100,6 +4106,11 @@ class MeasuredPlanner:
         elif canary_delivery_admission is not None:
             raise AuthorityPlannerError("canary delivery configuration cannot be supplied to another planner")
         self.canary_delivery_admission = canary_delivery_admission
+        if genesis_root_digest is not None:
+            _require_digest(genesis_root_digest, "admitted genesis root")
+        self.genesis_root_digest = genesis_root_digest
+        from serverware import authority_transition_policy_genesis as genesis
+        self.genesis_policy = genesis.configuration(genesis_policy, root_digest=genesis_root_digest)
 
     def verify_assertion_evidence(
         self, request: Mapping[str, Any]
@@ -4258,10 +4269,17 @@ class MeasuredPlanner:
                         )
                         selected = verified_inputs.selected_rows
                         multiproofs = verified_inputs.before_proofs
-                        if operation in policy_candidate.OPERATIONS:
+                        from serverware import authority_transition_policy_genesis as genesis
+                        genesis_v2 = genesis.selected(operation, request["typedRequest"]["arguments"])
+                        if operation in policy_candidate.OPERATIONS or genesis_v2:
                             authority_policy_candidate_inventory.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"], operation=operation)
+                        if genesis_v2:
+                            _require_digest(self.genesis_root_digest, "admitted genesis root")
+                            genesis.require(self.genesis_policy is not None, "genesis v2 audit pins are absent")
+                            planning_state = replace(planning_state, genesis_root_digest=self.genesis_root_digest,
+                                genesis_policy=self.genesis_policy)
                         if operation in setup_policy.OPERATIONS:
                             authority_transition_setup_policy.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),

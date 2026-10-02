@@ -4260,15 +4260,21 @@ def _genesis_prepare_arguments(
     arguments: Mapping[str, Any],
 ) -> tuple[dict[str, Any], str, str]:
     core.require_exact_arguments(arguments, _GENESIS_PREPARE_FIELDS)
-    record = _mapping(
-        arguments["record"],
-        "policy genesis record",
-        fields=_GENESIS_RECORD_FIELDS,
-    )
     evidence_digest = core.require_digest(
         arguments["policySignatureEvidenceDigest"],
         "policy genesis signature evidence",
     )
+    record = _genesis_record(arguments["record"])
+    input_digest = core.framed_digest(
+        "serverware.policyAuthorityGenesisPreparationInput/v2",
+        core.canonical_bytes(record),
+    )
+    return record, evidence_digest, input_digest
+
+
+def _genesis_record(value):
+    """Shared original-only grammar; neither branch gains evidence authority."""
+    record = _mapping(value, "policy genesis record", fields=_GENESIS_RECORD_FIELDS)
     for field in (
         "genesis_preparation_digest",
         "policy_hash",
@@ -4345,11 +4351,7 @@ def _genesis_prepare_arguments(
         raise core.TransitionKernelError(
             "policy genesis canonical digest changed"
         )
-    input_digest = core.framed_digest(
-        "serverware.policyAuthorityGenesisPreparationInput/v2",
-        core.canonical_bytes(record),
-    )
-    return record, evidence_digest, input_digest
+    return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -4369,6 +4371,10 @@ class _PolicyGenesisPrepareKernel:
         database_now: datetime,
         request_digest: str,
     ) -> tuple[core.BoundedQuery, ...]:
+        from serverware import authority_transition_policy_genesis as successor
+        if successor.selected(self.operation, arguments):
+            return successor.queries(self.operation, arguments=arguments,
+                database_now=database_now, request_digest=request_digest)
         core.require_digest(
             request_digest,
             "policy genesis preparation request",
@@ -4450,6 +4456,9 @@ class _PolicyGenesisPrepareKernel:
         self,
         context: core.KernelContext,
     ) -> core.KernelTransition:
+        from serverware import authority_transition_policy_genesis as successor
+        if successor.selected(self.operation, context.arguments):
+            return successor.transition(context)
         record, evidence_digest, input_digest = (
             _genesis_prepare_arguments(context.arguments)
         )
@@ -4649,6 +4658,10 @@ class _PolicyGenesisFinalizeKernel:
         database_now: datetime,
         request_digest: str,
     ) -> tuple[core.BoundedQuery, ...]:
+        from serverware import authority_transition_policy_genesis as successor
+        if successor.selected(self.operation, arguments):
+            return successor.queries(self.operation, arguments=arguments,
+                database_now=database_now, request_digest=request_digest)
         del database_now
         core.require_digest(
             request_digest,
@@ -4743,6 +4756,9 @@ class _PolicyGenesisFinalizeKernel:
         self,
         context: core.KernelContext,
     ) -> core.KernelTransition:
+        from serverware import authority_transition_policy_genesis as successor
+        if successor.selected(self.operation, context.arguments):
+            return successor.transition(context)
         (
             preparation_digest,
             supplied_inclusion,

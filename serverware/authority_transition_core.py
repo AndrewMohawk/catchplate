@@ -642,6 +642,9 @@ class KernelContext:
     retirement_succession_primary_roots: tuple | None = None
     # Actual independently admitted planner configuration, never request data.
     canary_delivery_admission: Any = None
+    # Actual admitted configuration root, supplied only by the measured planner.
+    genesis_root_digest: str | None = None
+    genesis_policy: Mapping[str, str] | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

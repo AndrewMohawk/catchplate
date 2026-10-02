@@ -18,14 +18,21 @@ USAGE = """Usage: python -I -B scripts/commission_development_policy.py \\
 Development image/channel only, SERVERWARE_PROCESS_MODE=serverware-control-plane.
 The actual UID/GID and complete inherited FD set must already match independently
 signed AuthorityRuntimeClient trust. No privileged database/signing credentials.
-The policy is an existing signed exact demo; prepare is canonical existing runtime
-input {input:{record,policySignatureEvidenceDigest},webauthnAuthorization}.
+The policy is an existing signed exact demo. The selected current-signature input
+is {input:{schema:"serverware.policyAuthorityGenesisPrepare/v2",record,
+verificationInputs:{key,head,revocationSequence}},webauthnAuthorization}.
+The admitted signed service configuration must include policyGenesis exact
+{auditStoreIdentityDigest,auditSignerPublicKeyDigest}. Supplied key/head originals
+only select prestate; actual current transaction rows and signatures are checked.
 Both are root:root0400 protected originals, pinned by their literal SHA256.
 
 Finalize is an initially empty root:root0400 unsealed memfd. Independent automation
-writes the existing final runtime input {input:{genesisPreparationDigest,
-inclusionReceipt,inclusionEvidenceDigest,auditStoreIdentityDigest},
+writes {input:{schema:"serverware.policyAuthorityGenesisFinalize/v2",
+genesisPreparationDigest,inclusionReceipt,auditStoreIdentityDigest,
+verificationInputs:{key,head,revocationSequence}},
 webauthnAuthorization}, then applies SEAL_SEAL|SHRINK|GROW|WRITE together.
+Legacy unversioned evidence-digest inputs remain separately supported, unchanged;
+they are not upgraded or given a new registrar by this command.
 Result is a nonblocking anonymous writable pipe. It receives two canonical JSON
 lines: the actual committed prepare result (including audit_submission), then
 the actual committed finalization. The same foreground owner retains the first
@@ -34,10 +41,11 @@ All four distinct descriptors must be inherited before runtime admission; this
 command takes their ownership. Original total bounds must be within 300 seconds;
 each existing runtime call also retains its own maximum 30-second bound.
 
-This is NOT automatic full commissioning: a genuine policy-signature evidence
-registration, independently signed audit inclusion/evidence registration, and
-fresh bound WebAuthn assertions remain required. No inclusion signer/registration
-producer is supplied here. Existing app /api/authority/webauthn/challenges can
+This is NOT automatic full commissioning: independent signed genesis and actual
+audit-inclusion originals, admitted current trust, and fresh bound WebAuthn
+assertions remain required. V2 creates signature-verification rows in the actual
+transaction, not an external verified-input receipt. No inclusion signer is
+supplied here. Existing app /api/authority/webauthn/challenges can
 serve an already enrolled authenticated operator when the app itself is admitted.
 No keys, assertions, trust, authority results, schema or genesis are fabricated.
 The separate materialize_development_policy_genesis.py installs finalized bytes.

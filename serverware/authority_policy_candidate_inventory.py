@@ -14,11 +14,16 @@ TABLES = ("policy_authority_trusted_key_revocations", "policy_runtime_role_key_r
 
 
 def tables_for(operation):
+    from serverware import authority_transition_policy_genesis as genesis
+    if operation in (genesis.PREPARE, genesis.FINALIZE):
+        return genesis.TABLES
     profile.require(operation in profile.OPERATIONS)
     return TABLES
 
 
 def require_complete_populations(*, selected_rows, before_roots, work, deadline_ns, operation):
+    from serverware import authority_transition_policy_genesis as genesis
+    maximum = genesis.MAX_ROWS if operation in (genesis.PREPARE, genesis.FINALIZE) else MAX_ROWS
     profile.require(type(deadline_ns) is int)
     work.prepare_copy(before_roots)
     roots = {entry["table"]: entry for entry in before_roots}
@@ -26,7 +31,7 @@ def require_complete_populations(*, selected_rows, before_roots, work, deadline_
         profile.require(time.monotonic_ns() < deadline_ns)
         work.prepare_scan(selected_rows)
         rows = [entry for entry in selected_rows if entry["table"] == table and entry["present"]]
-        profile.require(table in roots and len(rows) <= MAX_ROWS, "candidate complete population exceeds32")
+        profile.require(table in roots and len(rows) <= maximum, "signature complete population exceeds source bound")
         nodes = {}
         work.charge(hashes=65 * 66 // 2)
         for entry in rows:

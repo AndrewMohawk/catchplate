@@ -67,6 +67,7 @@ from serverware import authority_oauth_measured_setup as oauth_measured_setup
 from serverware import authority_oauth_setup as oauth_setup
 from serverware import authority_policy_candidate as policy_candidate
 from serverware import authority_policy_candidate_policy as policy_candidate_policy
+from serverware import authority_transition_policy_genesis as genesis_policy
 from serverware import authority_setup_policy as setup_policy
 from serverware import authority_setup_policy_admission as setup_policy_admission
 from serverware import authority_setup_native_enrollment as setup_native_enrollment
@@ -1212,7 +1213,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
+            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1306,6 +1307,8 @@ class MeasuredConfiguration:
             raise AuthorityServiceError("authority OAuth exchange policy is invalid") from exc
         try:
             policy_candidate_policy.validate_policy(payload.get(policy_candidate_policy.FIELD), payload=payload, root_key=root_key)
+            genesis_policy.configuration(payload.get(genesis_policy.FIELD), root_digest=_sha256(root_key.public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)))
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority candidate intake policy is invalid") from exc
         try:
@@ -9426,6 +9429,9 @@ class AuthorityProcess:
             ),
             canary_delivery_admission=(canary_delivery_policy._Admission(self.configuration)
                 if set(self.role_config["enabledOperations"]) & canary_delivery.OPERATIONS else None),
+            genesis_root_digest=_sha256(self.configuration.root_key.public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)),
+            genesis_policy=self.configuration.payload.get(genesis_policy.FIELD),
         )
         # Check the pinned embedded receipt even on a durable-plan replay, and
         # before asking another process for stored planning data.

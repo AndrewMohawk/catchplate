@@ -143,13 +143,18 @@ def _authorization(value):
 def prepare_input(policy_raw, request_raw, *, now_unix_ns):
     from serverware.development_policy_genesis import signed_demo
     from serverware import authority_contract, authority_transition_policy as kernel
+    from serverware import authority_transition_policy_genesis as successor
     trust, bound = signed_demo(policy_raw)
     request = _authorization(_document(request_raw))
     # The kernel consumes internally normalized arguments, not the caller's
     # runtime envelope. Reuse the genuine normalization solely for preflight;
     # preserve the original caller-free request for the actual runtime owner.
     intent = authority_contract.synthesize_business_intent("policy.genesis.prepare", request["input"])
-    record, _, _ = kernel._genesis_prepare_arguments({**request["input"], "businessIntent": intent})
+    arguments = {**request["input"], "businessIntent": intent}
+    if successor.selected(successor.PREPARE, arguments):
+        record, _ = successor.parse_arguments(successor.PREPARE, arguments)
+    else:
+        record, _, _ = kernel._genesis_prepare_arguments(arguments)
     _require(type(now_unix_ns) is int and record["prepared_at_epoch_ns"] <= now_unix_ns < record["expires_at_epoch_ns"]
         and all(record[key] == bound[source] for key, source in (
             ("policy_id", "policyId"), ("policy_sequence", "sequence"),
@@ -157,12 +162,21 @@ def prepare_input(policy_raw, request_raw, *, now_unix_ns):
     return request, record, trust
 
 
-def finalize_input(raw, prepared):
+def finalize_input(raw, prepared, *, prepare_schema=None):
     """Only the live owner's actual prepare result reaches this data checker."""
     from serverware import authority_contract, authority_transition_policy as kernel
+    from serverware import authority_transition_policy_genesis as successor
     value = _authorization(_document(raw))
     intent = authority_contract.synthesize_business_intent("policy.genesis.finalize", value["input"])
-    preparation, inclusion, _, store = kernel._genesis_finalize_arguments({**value["input"], "businessIntent": intent})
+    arguments = {**value["input"], "businessIntent": intent}
+    if prepare_schema is not None:
+        _require(prepare_schema == successor.PREPARE_SCHEMA
+            and successor.selected(successor.FINALIZE, arguments))
+    if successor.selected(successor.FINALIZE, arguments):
+        inclusion, _ = successor.parse_arguments(successor.FINALIZE, arguments)
+        preparation, store = arguments["genesisPreparationDigest"], arguments["auditStoreIdentityDigest"]
+    else:
+        preparation, inclusion, _, store = kernel._genesis_finalize_arguments(arguments)
     _require(preparation == prepared["genesis_preparation_digest"]
         and inclusion.get("transition_digest") == prepared["genesis_transition_digest"]
         and inclusion.get("audit_store_identity_digest") == store)
@@ -323,7 +337,7 @@ class DevelopmentPolicyCommissioning:
                 self.check(full=False)
                 select.poll().poll(min(100, max(1, (self._until() - time.monotonic_ns()) // 1_000_000)))
             self.late_raw, _ = _read(self.late_fd, MAX_INPUT)
-            final_request = finalize_input(self.late_raw, self.prepared)
+            final_request = finalize_input(self.late_raw, self.prepared, prepare_schema=self.request["input"].get("schema"))
             self.check()
             self.finalized = _finalized_result(self.client.request(operation="policy.genesis.finalize",
                 input_value=final_request, deadline_ns=self._until(full=True)), self.prepared, final_request)

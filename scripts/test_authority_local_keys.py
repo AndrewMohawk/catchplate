@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Real disposable key-file controls; no authority/custody acceptance claims."""
+from __future__ import annotations
+
+import ast
+import fcntl
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from scripts.authority import local_keys as cli
+from serverware import authority_local_keys as local
+
+DIGEST = "sha256:" + "1" * 64
+
+
+def selected(directory):
+    info = os.stat(directory)
+    boot, unix = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+    return dict(schema=local.APPROVAL_SCHEMA, purpose=local.PURPOSE, directory=dict(device=info.st_dev,inode=info.st_ino),
+        bootIdDigest=local.trust._boot(), issuedAtBoottimeNs=boot, deadlineBoottimeNs=boot+60_000_000_000,
+        issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+60_000_000_000)
+
+
+def open_owner(directory):
+    raw = local.trust.spec.canonical_json_bytes(selected(directory))
+    fd = os.memfd_create("synthetic-local-key-approval", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    if os.write(fd, raw) != len(raw): raise RuntimeError("fixture short write")
+    os.fchmod(fd, 0o400); fcntl.fcntl(fd, fcntl.F_ADD_SEALS, local.io.SEALS)
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+    return local.LocalKeyProvisioner(approval_fd=fd, approval_sha256=local.trust.sha(raw), directory_fd=directory_fd)
+
+
+class KeyContractTests(unittest.TestCase):
+    def test_closed_approval_and_original_window(self):
+        value = dict(schema=local.APPROVAL_SCHEMA, purpose=local.PURPOSE, directory=dict(device=1,inode=2),
+            bootIdDigest=DIGEST, issuedAtBoottimeNs=100, deadlineBoottimeNs=200,
+            issuedAtUnixNanos=100, expiresAtUnixNanos=200)
+        self.assertEqual(local.approval(local.trust.spec.canonical_json_bytes(value)), value)
+        for changed in (dict(value, reset=True), dict(value, deadlineBoottimeNs=101+local.trust.MAX_OPERATION_NS),
+                        dict(value, issuedAtUnixNanos=True), dict(value, purpose="grant-authority")):
+            with self.assertRaises(ValueError): local.approval(local.trust.spec.canonical_json_bytes(changed))
+
+    def test_fixed_twenty_separate_public_and_private_paths(self):
+        rows = local.roster()
+        self.assertEqual(len(rows), 20)
+        self.assertEqual({row["purpose"] for row in rows if row["family"] == "artifact"}, set(local.trust.PURPOSES))
+        self.assertEqual(len({row["keyId"] for row in rows}), 20)
+        self.assertEqual(len({row["publicPath"] for row in rows}), 20)
+        self.assertEqual(len({row["privatePath"] for row in rows}), 20)
+        self.assertTrue(all(row["privatePath"].startswith("private/") and row["privatePath"].endswith(".seed") for row in rows))
+        self.assertFalse(local.CLAIMS["trustGranted"] or local.CLAIMS["hardwareBacked"] or local.CLAIMS["installationAccepted"])
+
+    def test_fixed_cli_and_dump_guard_precedes_generation(self):
+        args = ["--approval-fd","3","--approval-sha256",DIGEST,"--directory-fd","4"]
+        self.assertEqual(cli.arguments(args)["directory_fd"], 4)
+        for wrong in (args+["--key","secret"], args[:-1]+["3"], [args[0],"03",*args[2:]]):
+            with self.assertRaises(ValueError): cli.arguments(wrong)
+        tree = ast.parse(Path(local.__file__).read_text())
+        owner = next(row for row in tree.body if isinstance(row,ast.ClassDef) and row.name == "LocalKeyProvisioner")
+        run = next(row for row in owner.body if isinstance(row,ast.FunctionDef) and row.name == "run")
+        calls = [(row.lineno,row.func.attr) for row in ast.walk(run) if isinstance(row,ast.Call) and isinstance(row.func,ast.Attribute)]
+        generation = min(line for line,name in calls if name == "generate")
+        self.assertLess(max(line for line,name in calls if name == "setrlimit"), generation)
+        self.assertLess(max(line for line,name in calls if name == "prctl"), generation)
+        publishes = [row for row in ast.walk(run) if isinstance(row,ast.Call) and isinstance(row.func,ast.Attribute) and row.func.attr == "_publish"]
+        last = max(publishes,key=lambda row: row.lineno)
+        self.assertEqual(last.args[0].value, "inventory.json")
+
+
+@unittest.skipUnless(os.getresuid() == os.getresgid() == (0,0,0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
+    "real protected key-file controls require isolated root -I -B")
+class KeyStorageTests(unittest.TestCase):
+    def test_actual_distinct_generation_private_readback_and_public_inventory(self):
+        with tempfile.TemporaryDirectory(prefix="local-keys-") as directory:
+            owner = open_owner(directory)
+            try:
+                raw = owner.run()
+                inventory = local.trust.document(raw, local.MAX_PUBLIC)
+                self.assertEqual(raw, (Path(directory)/"inventory.json").read_bytes())
+                self.assertEqual(set(inventory), {"schema","approvalSha256","directory","publicRosterSha256","keys","claims"})
+                self.assertEqual(inventory["claims"], local.CLAIMS)
+                public_roster = local.trust.public_roster((Path(directory)/"public-roster.json").read_bytes())
+                self.assertEqual(local.trust.sha((Path(directory)/"public-roster.json").read_bytes()), inventory["publicRosterSha256"])
+                observed = set()
+                for row in inventory["keys"]:
+                    self.assertEqual(set(row), {"family","purpose","keyId","publicPath","privatePath",
+                        "publicKeyBase64Url","publicKeySha256","publicKeySpkiSha256"})
+                    private_path, public_path = (Path(directory)/row[name] for name in ("privatePath","publicPath"))
+                    self.assertEqual(stat.S_IMODE(private_path.stat().st_mode), 0o400)
+                    self.assertEqual(stat.S_IMODE(public_path.stat().st_mode), 0o400)
+                    key = Ed25519PrivateKey.from_private_bytes(private_path.read_bytes())
+                    public = key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+                    self.assertTrue(public == public_path.read_bytes())
+                    self.assertEqual(row["publicKeySha256"], local.trust.sha(public))
+                    self.assertEqual(row["publicKeySpkiSha256"], local.trust.sha(key.public_key().public_bytes(
+                        serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)))
+                    observed.add(public)
+                    if row["family"] == "artifact": self.assertEqual(public_roster[row["purpose"]], row["publicKeyBase64Url"])
+                self.assertEqual(len(observed), 20)
+                owner.check()
+            finally: owner.close()
+            self.assertEqual(owner.handles, [])
+
+    def test_actual_nonempty_input_is_preserved_without_generation(self):
+        with tempfile.TemporaryDirectory(prefix="local-keys-") as directory:
+            path = Path(directory)/"preserved"; path.write_bytes(b"actual original")
+            with self.assertRaises(local.LocalKeyProvisionerError) as caught: open_owner(directory)
+            caught.exception.owner.close()
+            self.assertEqual(path.read_bytes(), b"actual original")
+            self.assertEqual(set(os.listdir(directory)), {"preserved"})
+
+    def test_actual_successful_owner_cannot_regenerate_or_overwrite(self):
+        with tempfile.TemporaryDirectory(prefix="local-keys-") as directory:
+            owner = open_owner(directory)
+            try:
+                original = owner.run()
+                with self.assertRaises(local.LocalKeyProvisionerError): owner.run()
+                self.assertEqual((Path(directory)/"inventory.json").read_bytes(), original)
+            finally: owner.close()
+            with self.assertRaises(local.LocalKeyProvisionerError) as caught: open_owner(directory)
+            caught.exception.owner.close()
+
+    def test_actual_named_public_mutation_refuses_retained_readback(self):
+        with tempfile.TemporaryDirectory(prefix="local-keys-") as directory:
+            owner = open_owner(directory)
+            try:
+                owner.run()
+                path = Path(directory)/local.roster()[0]["publicPath"]
+                os.chmod(path, 0o600)
+                with self.assertRaises(ValueError): owner.check()
+            finally: owner.close()
+
+    def test_injected_inventory_failure_retains_actual_keys_and_owner(self):
+        with tempfile.TemporaryDirectory(prefix="local-keys-") as directory:
+            owner = open_owner(directory)
+            original = owner._publish
+            def failure(path, raw, **kwargs):
+                if path == "inventory.json": raise OSError("injected final publication failure")
+                return original(path,raw,**kwargs)
+            try:
+                with patch.object(owner, "_publish", side_effect=failure):
+                    with self.assertRaises(local.LocalKeyProvisionerError) as caught: owner.run()
+                self.assertIs(caught.exception.owner, owner)
+                self.assertGreater(len(owner.handles), 2)
+                self.assertTrue(all((Path(directory)/row["privatePath"]).is_file() for row in local.roster()))
+                self.assertFalse((Path(directory)/"inventory.json").exists())
+                with self.assertRaises(local.LocalKeyProvisionerError): owner.run()
+            finally: owner.close()
+            self.assertTrue((Path(directory)/"public-roster.json").is_file())
+
+
+if __name__ == "__main__": unittest.main()

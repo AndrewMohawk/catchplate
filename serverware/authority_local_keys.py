@@ -1,0 +1,254 @@
+"""Create the fixed local pilot key files; never grant authority to those keys.
+
+Private seeds remain on the explicitly selected private directory. Inventory and
+stdout contain public material only. Local root can access these keys: neither
+hardware custody nor independent administration or reliable memory erasure is
+claimed. Partial files persist on every failure; there is no reset or retry.
+"""
+from __future__ import annotations
+
+import contextlib
+import ctypes
+import fcntl
+import os
+import resource
+import signal
+import stat
+import time
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from scripts.authority import native_pilot_authority_io as io
+from serverware import authority_local_trust as trust
+
+APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalKeyProvisioningApproval/v1"
+INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalKeyInventory/v1"
+PURPOSE = "create-fixed-local-artifact-configuration-service-keys"
+SERVICE_ROLES = ("verifier", "planner", "planner-writer", "issuer", "executor", "witness")
+MAX_APPROVAL = 8192
+MAX_PUBLIC = 65536
+CANCEL = frozenset({signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+CLAIMS = dict(keyCreationOnly=True, hardwareBacked=False, independentAdministration=False,
+    trustGranted=False, installationAccepted=False)
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_LIBC.renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+_LIBC.renameat2.restype = ctypes.c_int
+
+
+def require(value):
+    if not value: raise ValueError("local key provisioning refused")
+
+
+def roster():
+    rows = [dict(family="artifact", purpose=purpose, keyId=trust.key_id(purpose),
+        publicPath="keys/artifact/"+purpose+".pub", privatePath="private/artifact/"+purpose+".seed")
+        for purpose in trust.PURPOSES]
+    rows.append(dict(family="configuration", purpose="configuration-root", keyId="local-configuration-root-v1",
+        publicPath="keys/configuration/root.pub", privatePath="private/configuration/root.seed"))
+    rows.extend(dict(family="service", purpose=role, keyId="local-service-"+role+"-v1",
+        publicPath="keys/service/"+role+".pub", privatePath="private/service/"+role+".seed") for role in SERVICE_ROLES)
+    require(len(rows) == 20)
+    return tuple(rows)
+
+
+def approval(raw):
+    value = trust.document(raw, MAX_APPROVAL)
+    require(set(value) == {"schema", "purpose", "directory", "bootIdDigest", "issuedAtBoottimeNs",
+        "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
+        and value["schema"] == APPROVAL_SCHEMA and value["purpose"] == PURPOSE)
+    trust.spec._require_digest(value["bootIdDigest"], name="key provisioning boot")
+    directory = value["directory"]
+    require(type(directory) is dict and set(directory) == {"device", "inode"})
+    for name, minimum in (("device", 0), ("inode", 1)):
+        require(type(directory[name]) is int and minimum <= directory[name] < 2**64)
+    for start, end in (("issuedAtBoottimeNs", "deadlineBoottimeNs"), ("issuedAtUnixNanos", "expiresAtUnixNanos")):
+        require(type(value[start]) is type(value[end]) is int and 0 < value[start] < value[end] < 2**63
+            and value[end]-value[start] <= trust.MAX_OPERATION_NS)
+    return value
+
+
+def _directory(info):
+    require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+        and info.st_uid == info.st_gid == 0 and info.st_nlink > 0)
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
+
+
+@contextlib.contextmanager
+def _owning():
+    old = signal.pthread_sigmask(signal.SIG_BLOCK, CANCEL)
+    try: yield
+    finally: signal.pthread_sigmask(signal.SIG_SETMASK, old)
+
+
+class LocalKeyProvisionerError(RuntimeError):
+    def __init__(self, owner):
+        super().__init__("local key provisioning failed; partial state and actual owner retained; no retry")
+        self.owner = owner
+
+
+class LocalKeyProvisioner:
+    """Takes custody of the two supplied FDs and every actual created handle."""
+
+    def __init__(self, *, approval_fd, approval_sha256, directory_fd):
+        self.handles, self.identities, self.directories, self.completed = [], {}, {}, []
+        self.closed = self.uncertain = self.used = False
+        self.pid, self.environment = os.getpid(), tuple(sorted(os.environ.items()))
+        self.selected = None
+        try:
+            io._process()
+            require(type(approval_fd) is type(directory_fd) is int and 3 <= approval_fd < 2**31
+                and 3 <= directory_fd < 2**31 and approval_fd != directory_fd)
+            with _owning():
+                self.handles.extend((approval_fd, directory_fd))
+                for fd in self.handles:
+                    self.identities[fd] = (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+                    os.set_inheritable(fd, False)
+            self.approval_fd, self.directory_fd = approval_fd, directory_fd
+            self.raw = io.read_public(approval_fd, MAX_APPROVAL)
+            trust.spec._require_digest(approval_sha256, name="key approval pin")
+            require(trust.sha(self.raw) == approval_sha256)
+            self.pin, self.selected = approval_sha256, approval(self.raw)
+            require(trust.empty_directory(directory_fd) == self.selected["directory"])
+            self.directories[""] = (directory_fd, _directory(os.fstat(directory_fd)))
+            self.previous_boot, self.previous_unix = self.selected["issuedAtBoottimeNs"], self.selected["issuedAtUnixNanos"]
+            self.check()
+        except BaseException as error: raise LocalKeyProvisionerError(self) from error
+
+    def _origin(self):
+        io._process()
+        require(os.getpid() == self.pid and tuple(sorted(os.environ.items())) == self.environment and not self.uncertain)
+
+    def check_clock(self):
+        self._origin()
+        require(self.selected is not None and trust._boot() == self.selected["bootIdDigest"])
+        boot, unix = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+        require(self.previous_boot <= boot < self.selected["deadlineBoottimeNs"]
+            and self.previous_unix <= unix < self.selected["expiresAtUnixNanos"])
+        self.previous_boot, self.previous_unix = boot, unix
+
+    def check(self):
+        self.check_clock(); require(not self.closed)
+        require(io.read_public(self.approval_fd, MAX_APPROVAL) == self.raw)
+        for fd, identity in self.identities.items():
+            info = os.fstat(fd); require((info.st_dev, info.st_ino) == identity)
+        for path, (fd, identity) in self.directories.items():
+            require(_directory(os.fstat(fd)) == identity)
+            if path:
+                parent, leaf = path.rsplit("/", 1) if "/" in path else ("", path)
+                require(_directory(os.stat(leaf, dir_fd=self.directories[parent][0], follow_symlinks=False)) == identity)
+        for row in self.completed:
+            parent, name, fd, identity, expected, private = row
+            require(io._identity(os.fstat(fd)) == identity
+                and io._identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) == identity)
+            if private:
+                seed = os.pread(fd, 33, 0)
+                require(len(seed) == 32)
+                key = Ed25519PrivateKey.from_private_bytes(seed)
+                try:
+                    require(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) == expected)
+                finally: del seed, key
+            else: require(os.pread(fd, len(expected)+1, 0) == expected)
+
+    def _hold(self, fd):
+        self.handles.append(fd)
+        info = os.fstat(fd)
+        self.identities[fd] = info.st_dev, info.st_ino
+        return fd
+
+    def _mkdir(self, path):
+        self.check()
+        parent, name = path.rsplit("/", 1) if "/" in path else ("", path)
+        parent_fd = self.directories[parent][0]
+        with _owning():
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+            fd = self._hold(os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd))
+            os.fchmod(fd, 0o700)
+            self.directories[path] = fd, _directory(os.fstat(fd))
+        os.fsync(fd); os.fsync(parent_fd)
+        self.check()
+
+    def _publish(self, path, raw, *, public=None):
+        allowed = {name for row in roster() for name in (row["publicPath"], row["privatePath"])} | {"public-roster.json", "inventory.json"}
+        require(path in allowed and type(raw) is bytes and 0 < len(raw) <= MAX_PUBLIC)
+        require((public is not None) == path.startswith("private/"))
+        self.check()
+        parent, name = path.rsplit("/", 1) if "/" in path else ("", path)
+        parent_fd, _ = self.directories[parent]
+        pending = "." + name + ".pending"
+        with _owning():
+            fd = self._hold(os.open(pending, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600, dir_fd=parent_fd))
+        offset = 0
+        while offset < len(raw):
+            self.check()
+            count = os.write(fd, memoryview(raw)[offset:offset+65536]); require(count > 0); offset += count
+        os.fchmod(fd, 0o400); os.fsync(fd)
+        require(os.pread(fd, len(raw)+1, 0) == raw)
+        self.check()
+        if _LIBC.renameat2(parent_fd, os.fsencode(pending), parent_fd, os.fsencode(name), 1) != 0:
+            raise OSError(ctypes.get_errno(), "fixed no-replace key publication refused")
+        os.fsync(parent_fd)
+        identity = io._identity(os.fstat(fd))
+        require(stat.S_ISREG(identity[2]) and stat.S_IMODE(identity[2]) == 0o400
+            and identity[3] == identity[4] == 0 and identity[5] == 1)
+        self.completed.append((parent_fd, name, fd, identity, public if public is not None else raw, public is not None))
+        self.check()
+
+    def run(self):
+        try:
+            require(not self.used and not self.closed)
+            self.used = True
+            self.check()
+            require(trust.empty_directory(self.directory_fd) == self.selected["directory"])
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            require(_LIBC.prctl(4, 0, 0, 0, 0) == 0 and _LIBC.prctl(3, 0, 0, 0, 0) == 0)
+            # No key exists before core files and process dumpability are off.
+            for path in ("keys", "private", "keys/artifact", "private/artifact", "keys/configuration",
+                         "private/configuration", "keys/service", "private/service"):
+                self._mkdir(path)
+            seen, rows, public_roster = set(), [], {}
+            for selected in roster():
+                self.check()
+                private = Ed25519PrivateKey.generate()
+                seed = None
+                try:
+                    public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                    require(public not in seen); seen.add(public)
+                    seed = private.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+                    self._publish(selected["privatePath"], seed, public=public)
+                    self._publish(selected["publicPath"], public)
+                    encoded = trust.spec.strict_base64url_encode(public)
+                    rows.append(dict(selected, publicKeyBase64Url=encoded, publicKeySha256=trust.sha(public),
+                        publicKeySpkiSha256=trust.sha(private.public_key().public_bytes(
+                            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))))
+                    if selected["family"] == "artifact": public_roster[selected["purpose"]] = encoded
+                finally: del private, seed
+            public_raw = trust.spec.canonical_json_bytes(public_roster)
+            trust.public_roster(public_raw)
+            self._publish("public-roster.json", public_raw)
+            raw = trust.spec.canonical_json_bytes(dict(schema=INVENTORY_SCHEMA, approvalSha256=self.pin,
+                directory=self.selected["directory"], publicRosterSha256=trust.sha(public_raw), keys=rows, claims=CLAIMS))
+            self._publish("inventory.json", raw)  # Last durable completion marker.
+            self.check()
+            return raw
+        except BaseException as error: raise LocalKeyProvisionerError(self) from error
+
+    def close(self):
+        if self.closed: return
+        if not self.handles and not self.uncertain:
+            require(os.getpid() == self.pid)
+            self.closed = True
+            return
+        self._origin()
+        try:
+            with _owning():
+                while self.handles:
+                    fd = self.handles[-1]
+                    if fd in self.identities:
+                        info = os.fstat(fd); require((info.st_dev, info.st_ino) == self.identities[fd])
+                    self.uncertain = True
+                    os.close(fd)
+                    self.handles.pop(); self.identities.pop(fd, None)
+                    self.uncertain = False
+                self.closed = True
+        except BaseException as error: raise LocalKeyProvisionerError(self) from error

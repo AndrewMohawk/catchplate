@@ -634,6 +634,11 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_trust_commit.py \
 	scripts/test_authority_local_enrollment_configuration.py \
 	scripts/test_authority_local_enrollment_attestation.py \
+	scripts/test_authority_local_successor_enrollment.py \
+	scripts/test_authority_local_initial_generation.py \
+	scripts/test_postgres_bootstrap_grants.py \
+	scripts/test_authority_local_registration_context.py \
+	scripts/test_authority_local_registration_enrollment.py \
 	scripts/test_authority_local_runtime_aliases.py \
 	scripts/test_authority_local_database_credentials.py \
 	scripts/test_authority_local_keys.py \
@@ -885,6 +890,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_trust_commit.py \
 	serverware/authority_local_enrollment_configuration.py \
 	serverware/authority_local_enrollment_attestation.py \
+	serverware/authority_local_successor_enrollment.py \
+	serverware/authority_local_registration_context.py \
+	serverware/authority_local_registration_enrollment.py \
 	serverware/authority_local_database_credentials.py \
 	serverware/authority_local_keys.py \
 	serverware/authority_local_provenance.py \
@@ -902,6 +910,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/local_trust_commit.py \
 	scripts/authority/local_enrollment_configuration.py \
 	scripts/authority/local_enrollment_attestation.py \
+	scripts/authority/local_successor_enrollment.py \
+	scripts/authority/local_registration_context.py \
+	scripts/authority/local_registration_enrollment.py \
 	scripts/authority/local_database_credentials.py \
 	scripts/authority/local_keys.py \
 	scripts/authority/local_provenance.py \
@@ -3972,6 +3983,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_trust_commit.py \
 				serverware/authority_local_enrollment_configuration.py \
 				serverware/authority_local_enrollment_attestation.py \
+				serverware/authority_local_successor_enrollment.py \
+				serverware/authority_local_registration_context.py \
+				serverware/authority_local_registration_enrollment.py \
 				serverware/authority_local_database_credentials.py \
 				serverware/authority_local_keys.py \
 				serverware/authority_local_provenance.py \
@@ -3989,6 +4003,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/local_trust_commit.py \
 				scripts/authority/local_enrollment_configuration.py \
 				scripts/authority/local_enrollment_attestation.py \
+				scripts/authority/local_successor_enrollment.py \
+				scripts/authority/local_registration_context.py \
+				scripts/authority/local_registration_enrollment.py \
 				scripts/authority/local_database_credentials.py \
 				scripts/authority/local_keys.py \
 				scripts/authority/local_provenance.py \

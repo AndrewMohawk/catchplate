@@ -103,7 +103,7 @@ class EnrollmentAttestationTests(unittest.TestCase):
                 row.update(bytes=len(raw), sha256="sha256:" + hashlib.sha256(raw).hexdigest())
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             listener.setblocking(False); listener.bind(local.entrypoint.LISTENER_PATH); listener.listen(1)
-            os.chown(local.entrypoint.LISTENER_PATH, 65517, 65532); os.chmod(local.entrypoint.LISTENER_PATH, 0o660)
+            os.chmod(local.entrypoint.LISTENER_PATH, 0o660); os.chown(local.entrypoint.LISTENER_PATH, 65517, 65532)
             fd_stat, path_stat = os.fstat(listener.fileno()), os.stat(local.entrypoint.LISTENER_PATH, follow_symlinks=False)
             value["listener"] = dict(descriptor=dict(device=fd_stat.st_dev, inode=fd_stat.st_ino),
                 path=dict(device=path_stat.st_dev, inode=path_stat.st_ino))

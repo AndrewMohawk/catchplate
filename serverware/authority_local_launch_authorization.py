@@ -60,6 +60,16 @@ def require(value):
         raise ValueError("local launch authorization refused")
 
 
+def _pidfd_pending(fd):
+    """Descriptor-safe liveness; readiness or invalid custody is not live."""
+    require(type(fd) is int and fd >= 3)
+    pending = select.poll()
+    pending.register(fd, select.POLLIN)
+    events = pending.poll(0)
+    require(not any(flags & select.POLLNVAL for _descriptor, flags in events))
+    return not events
+
+
 def _public(value):
     return spec.strict_base64url_decode(value, name="local launch public key", decoded_size=32)
 
@@ -398,7 +408,7 @@ class LocalLaunchAuthorizationIssuer:
 
     def check(self):
         self.check_sources()
-        require(not select.select([self.pidfd], [], [], 0)[0]
+        require(_pidfd_pending(self.pidfd)
             and launch._process_identity(self.child_pid)[:2] == (self.child_start, self.context["observed"]["process"]["pidNamespaceInode"]))
         for fd, path, identity in self.links:
             require(io._identity(os.fstat(fd)) == identity and io._identity(os.stat(path)) == identity)

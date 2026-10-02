@@ -3,7 +3,9 @@
 from copy import deepcopy
 from pathlib import Path
 import ast
+import fcntl
 import os
+import resource
 import tempfile
 import unittest
 
@@ -33,6 +35,30 @@ def binding():
 
 
 class LocalLaunchAuthorizationTests(unittest.TestCase):
+    def test_real_high_pidfd_pending_and_invalid_refusal(self):
+        # Actual kernel PIDFD, not a synthetic issuer/admission carrier.
+        before = resource.getrlimit(resource.RLIMIT_NOFILE)
+        original = high = None
+        try:
+            self.assertGreaterEqual(before[1], 1025)
+            if before[0] < 1025:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (1025, before[1]))
+            original = os.pidfd_open(os.getpid(), 0)
+            high = fcntl.fcntl(original, fcntl.F_DUPFD_CLOEXEC, 1024)
+            self.assertGreaterEqual(high, 1024)
+            self.assertTrue(subject._pidfd_pending(high))
+            closed = high
+            os.close(high)
+            high = None
+            with self.assertRaises(ValueError):
+                subject._pidfd_pending(closed)
+        finally:
+            if high is not None:
+                os.close(high)
+            if original is not None:
+                os.close(original)
+            resource.setrlimit(resource.RLIMIT_NOFILE, before)
+
     def test_literal_binding_only(self):
         payload, observed = binding()
         subject.bind_observation(payload, observed)

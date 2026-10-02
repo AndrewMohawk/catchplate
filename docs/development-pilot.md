@@ -27,6 +27,11 @@ process memory; development authentication, keys and attestation are not
 production trust. Use no real provider credentials or personal data. This
 does not replace or satisfy the [full production goal](../goal.md).
 
+The selected first-run session lasts at most **30 minutes from setup**, including
+commissioning time. It is not an always-on deployment. The operator will report
+the actual remaining expiry after successful startup; neither a page reload
+nor the outer process timeout extends it.
+
 ## 1. Connect and complete first enrollment
 
 The browser and physical FIDO2 YubiKey belong on your own computer, not in the
@@ -40,8 +45,9 @@ grant an application administrator session.
 No SSH tunnel is needed for the browser. The [homelab ingress](homelab-deployment.md)
 keeps the internal listeners private and preserves the browser's exact origin.
 An authentication redirect or a commissioning-unavailable response is not a
-working pilot. Have your YubiKey inserted and its PIN available, then tell the
-operator you are ready.
+working pilot. Have your YubiKey inserted and its PIN available. Continuing
+availability is already confirmed for this commissioning run; the agent should
+not repeatedly ask for it.
 The page does not run until the operator starts enrollment and announces that
 the registration browser is ready. Do not start the launch just to probe it:
 its original approval windows are short and are not renewed automatically.

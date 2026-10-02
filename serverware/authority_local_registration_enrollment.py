@@ -28,6 +28,7 @@ from serverware import control_plane_enrollment_bootstrap as bootstrap
 from serverware import control_plane_registration_execution_bootstrap as execution_profile
 from serverware import control_plane_registration_finalization_bootstrap as finalization_profile
 from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from serverware import authority_query_read_work as accounting
 
 io, spec = local.io, local.spec
 canonical, document, sha = spec.canonical_json_bytes, local.document, local.sha
@@ -40,6 +41,14 @@ INVENTORIES = ("pilotKeyInventory", "genesisAuditKeyInventory", "enrollmentKeyIn
 ORIGINALS = ("serviceConfiguration", "cohort", "initialVector")
 OUTPUTS = ("currentRootEnrollment", "grantEnrollment", "executionAuthorizationEnrollment",
            "finalizationAuthorizationEnrollment", "controlPlaneBootstrap")
+WORK_STAGES = ("acquire-public-inputs", "recheck-public-inputs", *OUTPUTS)
+# Seven source-fixed, separately bounded operations: two public admissions and
+# five distinct signed originals (the last includes its full consumer check).
+# Never refill a producer's allowance or retry a failed stage. Aggregate maxima
+# are 56M hashes, 448MiB metered bytes and 7M JSON nodes; all seven operations
+# retain the SAME original approval/receipt clocks. Generic caps stay unchanged.
+MAX_AGGREGATE_WORK = (len(WORK_STAGES) * accounting.MAX_HASHES,
+    len(WORK_STAGES) * accounting.MAX_INPUT_BYTES, len(WORK_STAGES) * accounting.MAX_JSON_NODES)
 FIELDS = frozenset({"schema", "purpose", "rootDelegation", "configurationRootPublicKeyBase64Url",
     "generation", "artifactPackageDigest", "databaseId", "measurements", "callerIds", "contextDirectory",
     "issuerPrivateKeyFd", "requestTimeoutSeconds", "maximumControlAgeNs", "maximumGrantAgeNs",
@@ -52,6 +61,19 @@ FIELDS = frozenset({"schema", "purpose", "rootDelegation", "configurationRootPub
 def require(value):
     if not value:
         raise ValueError("local registration enrollment refused")
+
+
+class _WorkPlan:
+    """Fixed composition schedule; issuing a ledger consumes that stage once."""
+
+    def __init__(self):
+        self.next_stage = 0
+
+    def take(self, name):
+        require(type(name) is str and self.next_stage < len(WORK_STAGES)
+            and name == WORK_STAGES[self.next_stage])
+        self.next_stage += 1
+        return _ValidationWork(QueryReadValidationLimits())
 
 
 def _original(value, name, maximum=io.MAX_PUBLIC):
@@ -173,8 +195,8 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns, work):
         deadline=value["deadlineBoottimeNs"], epochLimit=value["expiresAtUnixNanos"])
 
 
-def _compose(context, key, work, check):
-    """Five existing producers on one cumulative allowance, in dependency order."""
+def _compose(context, key, work_plan, check):
+    """Five distinct outputs on fixed one-use ledgers, in dependency order."""
     value, rows, root = context["selected"], context["chain"], context["root"]
     require(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         == root.public_bytes(Encoding.Raw, PublicFormat.Raw))
@@ -187,12 +209,13 @@ def _compose(context, key, work, check):
             spkiDigest=rows[role]["publicKeySpkiSha256"], measurementDigest=value["measurements"][role])
     check()
     current_raw = current._produce_enrollment_on_work(payload=current_payload,
-        root_private_key=key, root_public_key=root, work=work)
+        root_private_key=key, root_public_key=root, work=work_plan.take("currentRootEnrollment"))
     check()
     grant_raw = grant._produce_on_work(current_root_enrollment_bytes=current_raw,
         root_private_key=key, root_public_key=root, authorizer_public_key=_key(rows["grant-authorizer"]),
         authorizer_measurement_digest=value["measurements"]["grant-authorizer"],
-        maximum_grant_age_ns=value["maximumGrantAgeNs"], maximum_clock_skew_ns=value["maximumClockSkewNs"], work=work)
+        maximum_grant_age_ns=value["maximumGrantAgeNs"], maximum_clock_skew_ns=value["maximumClockSkewNs"],
+        work=work_plan.take("grantEnrollment"))
     authorizations = {}
     for purpose, module in (("execution", execution), ("finalization", finalization)):
         check()
@@ -202,7 +225,8 @@ def _compose(context, key, work, check):
             configuration_digest=context["configurationDigest"], caller_public_key=_key(rows[role]),
             caller_measurement_digest=value["measurements"][role], caller_id=value["callerIds"][purpose],
             planner_public_key=context["planner"], evidence_public_key=context["evidence"],
-            maximum_age_ns=value["maximumAuthorizationAgeNs"], maximum_clock_skew_ns=value["maximumClockSkewNs"], work=work)
+            maximum_age_ns=value["maximumAuthorizationAgeNs"], maximum_clock_skew_ns=value["maximumClockSkewNs"],
+            work=work_plan.take(purpose + "AuthorizationEnrollment"))
     execution_input = _nested(execution_profile, "executionCallerPrivateKeyFd", current_raw, grant_raw, authorizations["execution"], value)
     finalization_input = _nested(finalization_profile, "finalizationCallerPrivateKeyFd", current_raw, grant_raw, authorizations["finalization"], value)
     check()
@@ -210,7 +234,7 @@ def _compose(context, key, work, check):
         runtime_role_identities=context["runtime"], configuration_digest=context["configurationDigest"],
         issuer_private_key_fd=value["issuerPrivateKeyFd"], signer_endpoint=_endpoint(bootstrap.SIGNER_SOCKET_PATH, value["requestTimeoutSeconds"]),
         registration_execution=execution_input, registration_finalization=finalization_input,
-        runtime_root_private_key=key, runtime_root_public_key=root, work=work)
+        runtime_root_private_key=key, runtime_root_public_key=root, work=work_plan.take("controlPlaneBootstrap"))
     check()
     return dict(zip(OUTPUTS, (current_raw, grant_raw, authorizations["execution"], authorizations["finalization"], bootstrap_raw)))
 
@@ -234,8 +258,9 @@ class LocalRegistrationEnrollment:
         require(sha(self.raw) == approval_sha256)
         self.boot = local.launcher._boot_identity_digest()
         self.last_boot, self.last_unix = io._clock(), time.time_ns()
-        self.work = _ValidationWork(QueryReadValidationLimits())
-        self.context = prepare(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_unix, work=self.work)
+        self.work_plan = _WorkPlan()
+        self.context = prepare(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_unix,
+            work=self.work_plan.take("acquire-public-inputs"))
         self.used, self.closed = False, False
         self.check()
 
@@ -261,8 +286,9 @@ class LocalRegistrationEnrollment:
     def issue(self):
         self.check(); require(not self.used); self.used = True
         # Re-authenticate the same originals/current cohort before private access.
-        context = prepare(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_unix, work=self.work)
-        outputs = _compose(context, io.signing_key(self.key_fd), self.work, self.check)
+        context = prepare(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_unix,
+            work=self.work_plan.take("recheck-public-inputs"))
+        outputs = _compose(context, io.signing_key(self.key_fd), self.work_plan, self.check)
         raw = canonical(dict(schema=BUNDLE_SCHEMA, approvalSha256=sha(self.raw),
             configurationDigest=context["configurationDigest"], generationDigest=context["generation"]["digest"],
             cohortDigest=context["runtime"]["cohortDigest"],

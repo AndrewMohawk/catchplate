@@ -79,17 +79,21 @@ def fixture():
     return selected, root
 
 
-def prepare(selected):
+def prepare(selected, ledger=None):
     return local.prepare(local.canonical(selected), boot=selected["bootIdDigest"],
-        now_boottime_ns=selected["issuedAtBoottimeNs"], now_unix_ns=selected["issuedAtUnixNanos"], work=work())
+        now_boottime_ns=selected["issuedAtBoottimeNs"], now_unix_ns=selected["issuedAtUnixNanos"],
+        work=work() if ledger is None else ledger)
 
 
 class RegistrationEnrollmentControls(unittest.TestCase):
     @patch.dict(os.environ, {"SERVERWARE_RELEASE_CHANNEL": "dev"})
     def test_five_existing_producers_join_signed_outer_bootstrap(self):
         selected, root = fixture()
-        context = prepare(selected)
-        outputs = local._compose(context, root, work(), lambda: None)
+        plan = local._WorkPlan()
+        prepare(selected, plan.take("acquire-public-inputs"))
+        context = prepare(selected, plan.take("recheck-public-inputs"))
+        outputs = local._compose(context, root, plan, lambda: None)
+        self.assertEqual(plan.next_stage, len(local.WORK_STAGES))
         self.assertEqual(set(outputs), set(local.OUTPUTS))
         result = local.bootstrap._admit_on_work(bootstrap_bytes=outputs["controlPlaneBootstrap"],
             runtime_root_public_key=root.public_key(), expected_configuration_digest=context["configurationDigest"], work=work())
@@ -131,7 +135,7 @@ class RegistrationEnrollmentControls(unittest.TestCase):
                 dict(expiresAtUnixNanos=selected["expiresAtUnixNanos"]+1), dict(newGrant=True)):
             with self.assertRaises(ERRORS): prepare(dict(selected, **changes))
 
-    def test_source_only_borrowed_owner_uses_one_work_and_no_sql_or_generation(self):
+    def test_source_only_borrowed_owner_uses_fixed_work_and_no_sql_or_generation(self):
         tree = ast.parse(inspect.getsource(local))
         names = [node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
         self.assertNotIn("generate", names)
@@ -141,8 +145,23 @@ class RegistrationEnrollmentControls(unittest.TestCase):
         self.assertIn("_produce_v4_on_work", names)
         budgets = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name) and node.func.id == "_ValidationWork"]
-        self.assertEqual(len(budgets), 1)  # One owner allowance, no per-producer refresh.
+        self.assertEqual(len(budgets), 1)  # Only the fixed one-use phase allocator constructs ledgers.
         self.assertIn("config.PRODUCTION_IMAGE", inspect.getsource(local.LocalRegistrationEnrollment.__init__))
+
+    def test_work_schedule_is_exactly_seven_once_only_bounded_ledgers(self):
+        plan = local._WorkPlan()
+        with self.assertRaises(ValueError): plan.take(local.WORK_STAGES[1])
+        ledgers = []
+        for name in local.WORK_STAGES:
+            ledgers.append(plan.take(name))
+            with self.assertRaises(ValueError): plan.take(name)
+        self.assertEqual(len(ledgers), 7)
+        self.assertEqual(len({id(ledger) for ledger in ledgers}), 7)
+        self.assertEqual(local.WORK_STAGES[2:], local.OUTPUTS)
+        self.assertTrue(all(ledger.limits == local.QueryReadValidationLimits() for ledger in ledgers))
+        self.assertEqual(local.MAX_AGGREGATE_WORK, tuple(7 * value for value in (
+            local.accounting.MAX_HASHES, local.accounting.MAX_INPUT_BYTES, local.accounting.MAX_JSON_NODES)))
+        with self.assertRaises(ValueError): plan.take(local.WORK_STAGES[0])
 
     def test_cli_has_only_fixed_public_approval_key_and_directory_slots(self):
         args = ["--approval-fd", "10", "--approval-sha256", PIN, "--signing-key-fd", "11", "--context-directory-fd", "12"]

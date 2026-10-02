@@ -26545,13 +26545,16 @@ def init_db(
             conn,
             metadata_schema_source,
         )
+        _finalize_policy_candidate_authority_outbox_contract(conn)
+        _install_policy_candidate_authority_guards(conn)
+        # RBAC's initial digest reads the authenticated binding root. Install
+        # its empty root and real row triggers before the first authority row;
+        # otherwise a fresh database has no root to read or authenticate.
         if isinstance(conn, PostgresMetadataConnection):
             if local_initial_rbac is None:
                 initialize_rbac_authority(_connection=conn)
             else:
                 initialize_rbac_authority(_connection=conn, _local_initial_rbac=local_initial_rbac)
-        _finalize_policy_candidate_authority_outbox_contract(conn)
-        _install_policy_candidate_authority_guards(conn)
         if not isinstance(conn, PostgresMetadataConnection):
             _lock_policy_high_water(conn)
         _lock_postgres_metadata_migration_tables(conn)

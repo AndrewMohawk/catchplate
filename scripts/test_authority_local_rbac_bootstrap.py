@@ -86,6 +86,11 @@ class LocalRbacBootstrapControls(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         tree = ast.parse((root / "serverware/db.py").read_text())
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        initialization = ast.unparse(functions["init_db"])
+        self.assertLess(initialization.index("_install_policy_candidate_authority_guards(conn)"),
+            initialization.index("initialize_rbac_authority(_connection=conn)"))
+        self.assertLess(initialization.index("_install_policy_candidate_authority_guards(conn)"),
+            initialization.index("initialize_rbac_authority(_connection=conn, _local_initial_rbac=local_initial_rbac)"))
         for name, parameter in (("init_db", "local_initial_rbac"),
                 ("initialize_rbac_authority", "_local_initial_rbac")):
             function = functions[name]

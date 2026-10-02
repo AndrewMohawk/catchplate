@@ -5,6 +5,7 @@ Signed fixtures exercise the actual root signature codec only. Their labelled
 synthetic pins are not passed off as admitted grants, custody owners or a live
 enrollment. The full producer continues to require the real original replay.
 """
+import ast
 import copy
 import inspect
 import os
@@ -147,24 +148,31 @@ class LocalRegistrationContextTests(unittest.TestCase):
         with self.assertRaises(ValueError): context.prepare(context.canonical(value), root_public_key=key.public_key(), work=work())
 
     def test_actual_source_connects_packet_replay_and_original_consumers_not_unsigned_response_pins(self):
-        from serverware import control_plane_registration_execution as reserve
-        from serverware import control_plane_registration_handoff as handoff
-        from serverware import control_plane_registration_finalization_sql as final_sql
-        from serverware import control_plane_registration_finalization_completion_subject as final_completion
+        # This is a structural order control, not runtime-client admission.
+        # Read the real source without importing a separately gated app role.
+        def function_source(module, name):
+            raw = Path(context.__file__).with_name(module + ".py").read_text()
+            tree = ast.parse(raw)
+            functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+            self.assertEqual(len(functions), 1)
+            return ast.get_source_segment(raw, functions[0])
+
         replay = inspect.getsource(context._replay)
         self.assertIn("receiving._verify_on_configuration", replay)
         self.assertIn("packets._prepare_on_work", replay)
         self.assertIn("live_window=checked.live_window", replay)
         self.assertIn("work=work, transport_deadline_ns=checked.deadline_ns", replay)
-        reserve_source = inspect.getsource(reserve._reserve_on_owner)
+        reserve_source = function_source("control_plane_registration_execution", "_reserve_on_owner")
         self.assertLess(reserve_source.index("_admit_on_owner"), reserve_source.index("_claim_reservation_on_owner"))
         self.assertLess(reserve_source.index("_claim_reservation_on_owner"), reserve_source.index("_socket_request"))
-        for function in (handoff._execute_on_owner, final_sql._request_on_owner):
-            source = inspect.getsource(function)
+        for module, function in (("control_plane_registration_handoff", "_execute_on_owner"),
+                ("control_plane_registration_finalization_sql", "_request_on_owner")):
+            source = function_source(module, function)
             self.assertLess(source.index("contexts._admit_on_owner"), source.index("claim_registration"))
             self.assertLess(source.index("claim_registration"), source.index("_socket_request"))
-        self.assertIn('contexts._selected_scope(owner, "finalization", digest)', inspect.getsource(final_completion._inspect_material_on_owner))
-        self.assertIn('contexts._selected_scope(owner, "execution", evidence_digest)', inspect.getsource(final_completion._inspect_material_on_owner))
+        completion_source = function_source("control_plane_registration_finalization_completion_subject", "_inspect_material_on_owner")
+        self.assertIn('contexts._selected_scope(owner, "finalization", digest)', completion_source)
+        self.assertIn('contexts._selected_scope(owner, "execution", evidence_digest)', completion_source)
 
     def test_fixed_cli_and_closed_independent_scope_selection(self):
         valid = ["--approval-fd", "3", "--approval-sha256", PIN, "--signing-key-fd", "4"]

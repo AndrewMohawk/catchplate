@@ -391,7 +391,9 @@ def prepare_directory():
         with keys._owning():
             requests = os.open("requests", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
             handles.append(requests)
-        os.fchown(requests, 65532, 65532); os.fchmod(requests, 0o700); os.fsync(requests); os.fsync(fd)
+        # Set the exact mode while still the owner; CAP_CHOWN alone is enough
+        # for the subsequent deliberate transfer to the application account.
+        os.fchmod(requests, 0o700); os.fchown(requests, 65532, 65532); os.fsync(requests); os.fsync(fd)
         info = os.fstat(fd)
         result = dict(path=DIRECTORY, device=info.st_dev, inode=info.st_ino)
         directory(result)

@@ -147,12 +147,16 @@ filesystem route. Persistent artifact-witness issuance, measured provenance
 and the corrected first-policy transaction are implemented; their focused
 31-check batch passes. Local-only [roster/composition and package assembly](docs/trusted-host-local-package-assembly.md)
 plus first-policy audit-inclusion issuance are now source-connected. The base
-Python guest runtime boots. Local configuration/key/TLS/trust producers are
-implemented; an actual isolated run created 20 signing keys, 13 database client
-certificates and signed initial trust, then verified persistence read-only.
-These are staging materials, not installed authority. Actual configuration and
+Python guest runtime boots. Actual isolated runs created 21 distinct signing
+keys, 13 database client certificates, signed initial trust and seven static
+role inputs, then verified persistence read-only. Local launch authorization
+and RuntimeTrust signing are source-connected; their frozen focused batch
+passes 33 controls. These are staging materials, not installed authority.
+All four slots focus on installation/trust advancement, five-service startup,
+first developer enrollment and end-to-end integration. Actual configuration and
 package installation, authenticated database bootstrap and policy commissioning
-still precede the live walkthrough.
+still precede the live walkthrough; broad testing and production-only work are
+deferred until that core flow is assembled.
 
 **Protected native production:** the [full goal](goal.md) remains unchanged.
 The [native lifecycle](docs/native-pilot-lifecycle.md) still requires approved

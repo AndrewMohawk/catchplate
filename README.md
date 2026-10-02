@@ -133,24 +133,14 @@ Checkpoint: **2026-10-02 — pre-production, pilot assembly.**
 
 **Development pilot — current focus:** a local control UI, Rust proxy and
 synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).
-Python and Rust images are built, supporting services are healthy, and the
-isolated PostgreSQL now has TLS and verified certificate-authenticated,
-read-only connections from the pilot VM using a restricted role. Two concurrent
-sessions passed; an unforwarded host connection was blocked. No database host
-port was opened, and its identity and volume were preserved. An [isolated VM](docs/trusted-host-local-storage.md)
-supplies the verified immutable-filesystem route and Python runtime. Actual
-provisioning created 37 distinct authority signing keys, 13 metadata database client
-certificates, initial trust and seven static role inputs; read-only reboots verified
-persistence. A separate HTTP-response key has now been created and verified distinct
-from those keys. Fresh unsigned staging of `b111f0e1` passes in the guest, including
-all seven roles and the registration launchers. This is not a signed
-installation or running authority. The current integration work connects that
-installation to actual service startup and first-device registration. A separate
-local witness database and its TLS material are now provisioned; witness enrollment
-and the first metadata schema bootstrap remain pending. The browser/registration
-integration now targets the actual reservation, execution and completion routes,
-including the required second hardware-key assertion. Focused checks pass; none
-is an end-to-end pilot result.
+The unsigned `33140e27` package builds successfully with all seven authority
+roles. The retained Rust proxy, measured guest runtime, 41 signing keys and six
+distinct scoped proxy credentials are prepared. PostgreSQL TLS transport is
+verified; the local witness and synthetic upstream are provisioned. The current
+work joins these into one [isolated guest launcher](docs/pilot-commissioning.md),
+with real hardware approvals, the normal app and credential-bearing proxy.
+Earlier candidates remain preserved. These are build/input results, not signed
+installation, running authorities, schema commissioning or an end-to-end pilot.
 
 **There is not yet a working pilot.** All four slots focus on the remaining
 critical path: [signed package installation](docs/trusted-host-local-package-assembly.md),

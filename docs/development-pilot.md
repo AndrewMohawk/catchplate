@@ -1,17 +1,15 @@
 # Local development pilot
 
 Status: **not yet a working pilot; walkthrough pending commissioning**. The
-Rust image is built from `17ab194b`; the last attempted Python app is `9efad924`.
-The newer `d863e3d7` Python image includes the offline policy installer and demo
-schema repair but has not replaced that app. The isolated Compose project is
-`serverware-pilot-17ab194b`. Database, audit sink and synthetic upstream run,
-but the control plane has not started successfully. No demo seed, verified CA
-handoff, browser acceptance or proxy request has completed.
+current launcher targets the unsigned `33140e27` package in an isolated guest,
+with the exact retained `17ab194b` Rust executable and measured guest libraries.
+The Rust build inputs match the selected source; this is not a rebuilt image.
+Six distinct proxy service credentials and read-only runtime disks are prepared.
+The existing `serverware-pilot-17ab194b` database, witness and synthetic upstream
+support that guest; its normal app and proxy have not run. No demo seed,
+verified CA handoff, browser acceptance or proxy request has completed.
 
-The last startup reached the missing PostgreSQL runtime-role configuration gate.
-The 13 restricted role identities have since been created and verified, without
-passwords or schema grants; the app has not been reconfigured or restarted.
-The required [commissioning sequence](pilot-commissioning.md) also includes
+The required [commissioning sequence](pilot-commissioning.md) includes
 [local-authority startup](trusted-host-local-startup.md), actual signed-package
 installation and authentication/schema bootstrap, genuine policy genesis and
 its offline development file install. The
@@ -29,7 +27,8 @@ does not replace or satisfy the [full production goal](../goal.md).
 
 ## 1. Open the local UI
 
-Open `http://127.0.0.1:13000/` on the deployment host. All published pilot ports
+Open `http://localhost:13000/` on the deployment host. Keep this exact hostname
+for the selected hardware-key origin. All published pilot ports
 are loopback-only; this is not a public URL or authorization to expose them.
 
 For access from your own computer, use an authorized SSH account on the actual
@@ -45,9 +44,10 @@ ssh -N -o ExitOnForwardFailure=yes \
   YOUR_SSH_USER@YOUR_PILOT_HOST
 ```
 
-1. Enter `dev-admin-token` in **Admin token or OIDC JWT**, then click **Refresh**.
-   This is the explicit development operator token, not a username/password
-   login. The optional **Sign in** button is for separately configured OIDC.
+1. Enter the scoped operator token provided through the private runtime handoff
+   in **Admin token or OIDC JWT**, then click **Refresh**. There is no fixed
+   published admin password or token. Do not paste it into chat. The optional
+   **Sign in** button is for separately configured OIDC.
 2. The operator must first commission the policy through the supported authority
    path, then seed this isolated pilot once. Do not click **Seed demo** during
    the walkthrough or attempt to manufacture policy-authority records. If demo
@@ -87,7 +87,9 @@ proxy identity fields must be absent. The same valid identity requesting
 
 The upstream credential is not supplied by the client or printed by the checker.
 TLS verification remains enabled; do not install the CA system-wide or add a
-hosts-file entry. The proxy resolves `demo-upstream` inside its Compose network.
+hosts-file entry on your computer. In the selected guest, `demo-upstream`
+resolves to a fixed virtual endpoint that forwards only to the existing
+synthetic TLS upstream. The signed destination policy and TLS checks remain.
 The check makes no credential/policy changes and does not seed data; requests
 can create normal traffic/audit records. It does not prove enclave custody.
 

@@ -119,13 +119,17 @@ condition, not permission to invent receipts or enable a fallback.
    neither publishes policy nor advances its sequence. A
    `409 demo_policy_commissioning_required` means stop and correct commissioning;
    do not switch to SQLite/non-atomic mode or retry with manufactured state.
-5. **Complete the CA and gate startup.** Keep the frozen Rust executable SHA
-   pinned. Wait for the synthetic HTTPS upstream and CA, then use the existing
-   [verifier-mediated CA installer](../scripts/install_verified_ca.sh) under the
-   isolated project's environment. Its container verification URL uses port
-   3000; the host UI uses 13000. Require actual verification success before
-   starting the exact gate image with `--no-build --pull never`. Preserve TLS,
-   workload authentication, policy denial and credential redaction.
+5. **Complete the CA and gate startup.** The selected launcher runs the exact
+   retained Rust executable in the same guest and trusted UID as the normal
+   control plane, using the guest's separately measured loader/libraries. This
+   explicit local trust boundary keeps the CA private key in the guest; it is
+   not production process or enclave isolation. Six separately scoped service
+   credentials replace the former shared-token assumption. The existing
+   [CA verifier](../scripts/verify_attestation.py) must accept the actual normal
+   app at guest port 3000 before the gate starts. Do not launch the older Compose
+   gate against unrelated CA or policy files. The host proxy is loopback 18080;
+   the management listener stays inside the guest. Require genuine CA
+   verification, workload authentication and signed policy enforcement.
 6. **Verify the user flow.** Follow the [pilot walkthrough](development-pilot.md):
    inspect the seeded UI, then run its public-CA-bound checker. Require both a
    real `/echo` response showing the synthetic upstream credential marker with

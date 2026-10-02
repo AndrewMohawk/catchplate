@@ -149,9 +149,10 @@ for real hardware approvals, the normal app and credential-bearing proxy.
 Live startup is still being repaired. Script permissions, the host lock call,
 enrollment login cookies, virtual-device ordering and a BusyBox route-filter
 check are corrected. An isolated guest passed all pre-application checks.
-The host task-limit fix also passed actual startup. The fourth launch reached
-measured-package generation, exposing an OCI JSON-formatting bug. That bug is
-fixed in source; the frozen pilot's corrected input is being prepared separately.
+The host task-limit and OCI input fixes passed actual startup. The fifth launch
+completed package signing, then hit a file-open error during installation.
+Its signed checkpoint and partial installation are preserved; recovery must
+retain that history before another live attempt.
 No hardware enrollment or database bootstrap has run.
 Earlier candidates remain preserved. These are build/input results, not signed
 installation, running authorities, schema commissioning or an end-to-end pilot.

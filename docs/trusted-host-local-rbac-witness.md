@@ -1,7 +1,9 @@
 # Co-located local RBAC witness
 
-The explicit local enrollment and startup profiles are source-connected, not a
-provisioned witness or a completed pilot. Existing independent v1/v2 profiles
+The explicit local enrollment and startup profiles are source-connected. A
+separate local PostgreSQL cluster and TLS material are prepared, but its witness
+schema and signed enrollment are not provisioned. This is not a completed pilot.
+Existing independent v1/v2 profiles
 and their production guarantees are unchanged.
 
 `serverware.trustedHostLocalRbacWitnessEnrollment/v1` is signed by the existing
@@ -52,3 +54,12 @@ The trusted host administrator can access both sides and may roll them back
 together. This profile makes no claim against that threat. Production
 [independent RBAC currentness](rbac-independent-currentness.md) still requires
 an independently administered witness and its separate deployment evidence.
+
+For initial local bootstrap only, the caller selects a microsecond-aligned UTC
+timestamp inside the unchanged original approval window. The source-owned
+initial RBAC recipe includes that exact timestamp so the separately signed
+witness expectation can precede metadata creation without inventing an observed
+head. This is a programmatic development-only input, not a CLI/environment
+override; existing authority rows or legacy bindings refuse it. The default
+bootstrap retains its database-clock behavior. After bootstrap, actual metadata
+roots and state must match the witness expectation before cohort publication.

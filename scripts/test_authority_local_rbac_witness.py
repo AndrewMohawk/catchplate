@@ -71,6 +71,8 @@ class LocalRbacWitnessTests(unittest.TestCase):
                         self.assertTrue(os.get_inheritable(fd))
                     owner.require_complete()
                     with self.assertRaises(entry._LocalRbacSlotsError): owner.install(next(iter(raw)))
+                    self.assertTrue(owner.failed)
+                    with self.assertRaises(RuntimeError): owner.require_complete()
         finally:
             owner.close()
 

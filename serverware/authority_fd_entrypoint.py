@@ -2765,7 +2765,7 @@ class _LocalRbacSlots:
     def open(cls, role, occupied):
         self = cls()
         self.pid, self.held, self.installed = os.getpid(), {}, set()
-        self.closed = self.closing = False
+        self.closed = self.closing = self.failed = False
         before = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         try:
             if (role not in {"verifier", "planner", "executor"}
@@ -2796,6 +2796,7 @@ class _LocalRbacSlots:
                     os.close(temporary); del self.held[temporary]
             return self
         except BaseException as error:
+            self.failed = True
             raise _LocalRbacSlotsError(self) from error
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, before)
@@ -2804,7 +2805,7 @@ class _LocalRbacSlots:
         """Open the fixed original, then transfer only our exact reservation."""
         before = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         try:
-            if (self.closed or self.closing or os.getpid() != self.pid
+            if (self.closed or self.closing or self.failed or os.getpid() != self.pid
                     or name not in LOCAL_RBAC_DESCRIPTORS or name in self.installed):
                 raise RuntimeError("local RBAC slot cannot be reused")
             target = LOCAL_RBAC_DESCRIPTORS[name]
@@ -2829,12 +2830,13 @@ class _LocalRbacSlots:
             os.close(source); del self.held[source]
             return target
         except BaseException as error:
+            self.failed = True
             raise _LocalRbacSlotsError(self) from error
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, before)
 
     def require_complete(self):
-        if (self.closed or self.closing or os.getpid() != self.pid
+        if (self.closed or self.closing or self.failed or os.getpid() != self.pid
                 or self.installed != set(LOCAL_RBAC_DESCRIPTORS)
                 or set(self.held) != set(LOCAL_RBAC_DESCRIPTORS.values())):
             raise RuntimeError("local RBAC material delivery is incomplete")

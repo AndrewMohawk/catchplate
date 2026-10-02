@@ -21,6 +21,19 @@ from typing import Any, Mapping
 
 from serverware import authority_launch_guard
 
+_import_mode = os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
+_local_offline_import = False
+if _import_mode == "metadata-bootstrap":
+    # Local offline issuers need the canonical wire validators, not a running
+    # authority. Runtime entrypoints and measured owners still reject this
+    # process mode; importing validators never activates their launch guard.
+    from serverware import config as _import_config
+    _local_offline_import = (
+        not _import_config.PRODUCTION_IMAGE and not _import_config._production_release()
+        and os.environ.get("SERVERWARE_PRODUCTION_IMAGE", "0") != "1"
+        and os.environ.get("SERVERWARE_RELEASE_CHANNEL", "dev").strip().lower()
+            in {"dev", "development", "local", "test"}
+    )
 _launch_role = {
     "policy-authority-runtime": "runtime",
     "policy-authority-verifier": "verifier",
@@ -28,11 +41,11 @@ _launch_role = {
     "policy-authority-planner-writer": "planner-writer",
     "policy-authority-issuer": "issuer",
     "policy-authority-executor": "executor",
-}.get(os.environ.get("SERVERWARE_PROCESS_MODE", "").strip())
+}.get(_import_mode)
 if (
     _launch_role is None
-    and os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
-    != "serverware-control-plane"
+    and _import_mode != "serverware-control-plane"
+    and not _local_offline_import
 ):
     raise RuntimeError("authority service process mode is not closed")
 if _launch_role is not None:

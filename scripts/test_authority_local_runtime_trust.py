@@ -6,6 +6,7 @@ import inspect
 import os
 from pathlib import Path
 import sys
+import subprocess
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -93,6 +94,41 @@ def prepare(selected):
 
 
 class LocalRuntimeTrustControls(unittest.TestCase):
+    def test_local_offline_import_does_not_admit_runtime_or_production(self):
+        code = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from serverware import authority_local_runtime_trust as local
+service = local.service
+assert service._launch_role is None and service._local_offline_import
+for action in (
+    lambda: service.AuthorityRuntimeClient.from_environment(),
+    lambda: service.AuthorityRuntimeClient.from_environment(hot_runtime=True),
+    service.runtime_relay_main,
+    lambda: service.main(["verifier"]),
+):
+    try:
+        action()
+    except service.AuthorityServiceError:
+        pass
+    else:
+        raise AssertionError("offline import admitted a running authority")
+try:
+    service.authority_launch_guard.require_active("runtime")
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("offline import activated the measured guard")
+'''
+        env = dict(os.environ, SERVERWARE_PROCESS_MODE="metadata-bootstrap",
+            SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_PRODUCTION_IMAGE="0")
+        command = [sys.executable, "-I", "-B", "-c", code, str(Path(__file__).resolve().parents[1])]
+        result = subprocess.run(command, env=env, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        for values in ({"SERVERWARE_PRODUCTION_IMAGE": "1"}, {"SERVERWARE_RELEASE_CHANNEL": "production"}):
+            result = subprocess.run(command, env=dict(env, **values), capture_output=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+
     def test_signed_service_and_existing_public_attestation_join(self):
         selected, source, _ = fixture()
         result = prepare(selected)

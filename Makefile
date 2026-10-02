@@ -627,6 +627,10 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_artifacts.py \
 	scripts/test_authority_local_artifact_witness.py \
 	scripts/test_authority_local_provenance.py \
+	scripts/test_authority_local_closure.py \
+	scripts/test_authority_local_composition.py \
+	scripts/test_authority_local_assembly.py \
+	scripts/test_authority_local_audit_inclusion.py \
 	scripts/test_authority_local_install.py \
 	scripts/test_authority_local_snapshot.py \
 	scripts/test_development_policy_commissioning.py \
@@ -863,9 +867,18 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_artifact_witness.py \
 	serverware/authority_local_provenance.py \
+	serverware/authority_local_closure.py \
+	serverware/authority_local_composition.py \
+	serverware/authority_local_audit_inclusion.py \
+	serverware/authority_local_audit_reader.py \
 	serverware/authority_transition_policy_genesis.py \
 	scripts/authority/local_artifact_witness.py \
 	scripts/authority/local_provenance.py \
+	scripts/authority/local_closure.py \
+	scripts/authority/local_composition.py \
+	scripts/authority/assemble_local_package.py \
+	scripts/authority/local_audit_inclusion.py \
+	scripts/authority/provision_local_audit_reader.py \
 	scripts/test_oauth_retirement_values.py \
 	scripts/authority_revocation_observation_fixture.py \
 	scripts/authority_revocation_semantics_fixture.py \
@@ -3921,9 +3934,18 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				Makefile \
 				serverware/authority_local_artifact_witness.py \
 				serverware/authority_local_provenance.py \
+				serverware/authority_local_closure.py \
+				serverware/authority_local_composition.py \
+				serverware/authority_local_audit_inclusion.py \
+				serverware/authority_local_audit_reader.py \
 				serverware/authority_transition_policy_genesis.py \
 				scripts/authority/local_artifact_witness.py \
 				scripts/authority/local_provenance.py \
+				scripts/authority/local_closure.py \
+				scripts/authority/local_composition.py \
+				scripts/authority/assemble_local_package.py \
+				scripts/authority/local_audit_inclusion.py \
+				scripts/authority/provision_local_audit_reader.py \
 				docker-compose.yml \
 				Dockerfile \
 				Dockerfile.production \

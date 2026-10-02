@@ -1,7 +1,8 @@
 """Issue the existing local runtime trust, never observe or launch its owners.
 
-FD rosters and identities are independently selected admission expectations.
-The real app/relay still check their actual inherited handles and credentials.
+V1 FD rosters are independently selected admission expectations. Explicit local
+v2 delegates the relay's post-seal roster to its genuine measured launcher, with
+signed role/configuration/generation pins; app exact-list admission is unchanged.
 Existing signed verifier evidence is required; this issuer cannot create it.
 Local configuration-root delegation implies neither hardware nor off-host trust.
 """
@@ -21,6 +22,7 @@ from serverware import authority_fd_entrypoint as entrypoint
 io, spec, launcher = configuration.io, configuration.spec, configuration.launcher
 canonical, document, sha = spec.canonical_json_bytes, configuration.document, configuration.sha
 SCHEMA = "serverware.authorityTrustedHostLocalRuntimeTrustApproval/v1"
+POST_SEAL_SCHEMA = "serverware.authorityTrustedHostLocalRuntimeTrustApproval/v2"
 PURPOSE = "sign-exact-local-runtime-trust"
 FIELDS = frozenset({"schema", "purpose", "configurationRootPublicKeyBase64Url",
     "serviceConfigurationOriginal", "serviceConfigurationSha256", "verifierAttestationOriginal",
@@ -31,6 +33,7 @@ PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "configurationDigest", "
     "verifierServiceGid", "controlPlaneUid", "controlPlaneGid", "verifierSigningPublicKeyBase64Url",
     "maximumDeadlineNs", "attestationReceiptDigest", "attestationEvidence", "attestationVerificationPolicy",
     "trustMode", "controlPlaneInheritedFileDescriptors", "relayInheritedFileDescriptors"})
+POST_SEAL_PAYLOAD_FIELDS = (PAYLOAD_FIELDS - {"relayInheritedFileDescriptors"}) | {"relayDescriptorPolicy"}
 
 
 def require(condition):
@@ -53,8 +56,9 @@ def _original(selected, name, maximum):
 def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
     """Authenticate public originals; selected FD numbers are not observed FDs."""
     selected = document(raw, io.MAX_PUBLIC)
-    require(set(selected) == FIELDS and selected["schema"] == SCHEMA and selected["purpose"] == PURPOSE
+    require(set(selected) == FIELDS and selected["schema"] in {SCHEMA, POST_SEAL_SCHEMA} and selected["purpose"] == PURPOSE
         and selected["bootIdDigest"] == boot)
+    post_seal = selected["schema"] == POST_SEAL_SCHEMA
     spec._require_digest(boot, name="runtime trust boot")
     for name in ("issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"):
         require(type(selected[name]) is int and 0 < selected[name] < 2**64)
@@ -101,7 +105,8 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
             and row["socketPath"] == launcher.ROLE_SOCKET_PATHS[role]
             and row["responseSigningSpkiDigest"] != root_digest)
     payload_raw, payload = _original(selected, "payload", service.MAX_RUNTIME_TRUST_BYTES)
-    require(set(payload) == PAYLOAD_FIELDS and payload["schema"] == service.RUNTIME_TRUST_SCHEMA
+    require(set(payload) == (POST_SEAL_PAYLOAD_FIELDS if post_seal else PAYLOAD_FIELDS)
+        and payload["schema"] == (service.RUNTIME_TRUST_POST_SEAL_SCHEMA if post_seal else service.RUNTIME_TRUST_SCHEMA)
         and payload["sourceRevision"] == service.SOURCE_REVISION and payload["trustMode"] == "trusted-host-local"
         and payload["configurationDigest"] == source_digest
         and payload["operationManifestDigest"] == service.authority_contract.OPERATION_MANIFEST_DIGEST)
@@ -117,12 +122,19 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
         and type(payload["maximumDeadlineNs"]) is int
         and type(verifier["maximumEndToEndDeadlineNs"]) is int
         and 1_000_000 <= payload["maximumDeadlineNs"] <= min(30_000_000_000, verifier["maximumEndToEndDeadlineNs"]))
-    for field in ("controlPlaneInheritedFileDescriptors", "relayInheritedFileDescriptors"):
+    descriptor_fields = (("controlPlaneInheritedFileDescriptors",) if post_seal
+        else ("controlPlaneInheritedFileDescriptors", "relayInheritedFileDescriptors"))
+    for field in descriptor_fields:
         descriptors = payload[field]
         require(type(descriptors) is list and 2 <= len(descriptors) <= 4096
             and all(type(fd) is int and 3 <= fd < 2**31 for fd in descriptors)
             and descriptors == sorted(set(descriptors)))
-    require(3 in payload["relayInheritedFileDescriptors"])
+    if post_seal:
+        service._require_local_post_seal_descriptor_policy(payload["relayDescriptorPolicy"])
+        require(payload["relayDescriptorPolicy"]["roleBindingDigest"] == bindings["runtime"]
+            and payload["relayDescriptorPolicy"]["generationBindingDigest"] == source["generationBindingDigest"])
+    else:
+        require(3 in payload["relayInheritedFileDescriptors"])
     evidence_raw, evidence = _original(selected, "verifierAttestation", configuration.MAX_CONFIGURATION)
     policy = payload["attestationVerificationPolicy"]
     require(type(policy) is dict and type(payload["attestationEvidence"]) is dict
@@ -147,6 +159,9 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
     for field in ("launchManifestDigest", "runtimeClosureDigest", "generationDigest",
                   "stageZeroRequestDigest", "artifactPackageDigest", "measurementDigest"):
         spec._require_digest(attested[field], name="signed verifier " + field)
+    if post_seal:
+        require(all(payload["relayDescriptorPolicy"][field] == attested[field]
+            for field in ("generationDigest", "artifactPackageDigest")))
     require(type(attested["issuedAtEpochNs"]) is type(attested["expiresAtEpochNs"]) is int
         and attested["issuedAtEpochNs"] <= selected["issuedAtUnixNanos"] <= now_unix_ns
         and selected["expiresAtUnixNanos"] <= attested["expiresAtEpochNs"]

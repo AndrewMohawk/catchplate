@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
 import stat
@@ -29,6 +30,11 @@ _verified_artifact_package: Any | None = None
 _artifact_package: Mapping[str, Any] = MappingProxyType({})
 _artifact_trust_state: Mapping[str, Any] = MappingProxyType({})
 _launch_assurance: Mapping[str, Any] = MappingProxyType({})
+LOCAL_RUNTIME_DESCRIPTOR_POLICY_SCHEMA = "serverware.trustedHostLocalPostSealDescriptorPolicy/v1"
+# Existing launcher bounds: originals + one sealed copy per closure entry,
+# retained directories, and fixed runtime listener/control/credential handles.
+MAX_LOCAL_RUNTIME_DESCRIPTORS = 2 * 32768 + 64 + 16
+_local_runtime_observation: tuple | None = None
 
 
 def _require_bootstrap_control_identity(identity: tuple) -> None:
@@ -342,6 +348,88 @@ def runtime_evidence_identity(role: str) -> tuple:
 def retained_descriptors() -> frozenset[int]:
     if _active_role is None:
         raise RuntimeError("authority measured launch is inactive")
+    return _retained_descriptors
+
+
+def _local_open_descriptors() -> frozenset[int]:
+    result = set()
+    for name in os.listdir("/proc/self/fd"):
+        if not name.isdecimal() or int(name) < 3:
+            continue
+        descriptor = int(name)
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            if error.errno != errno.EBADF:
+                raise
+            continue  # The listdir handle itself has already closed.
+        result.add(descriptor)
+    return frozenset(result)
+
+
+def _local_descriptor_identities(descriptors: frozenset[int]) -> tuple:
+    if (type(descriptors) is not frozenset or not 1 <= len(descriptors) <= MAX_LOCAL_RUNTIME_DESCRIPTORS
+            or any(type(fd) is not int or not 3 <= fd < 2**31 for fd in descriptors)):
+        raise RuntimeError("local runtime descriptor roster is invalid")
+    identities = []
+    for descriptor in sorted(descriptors):
+        info = os.fstat(descriptor)
+        try:
+            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        except OSError as error:
+            if error.errno not in {errno.EINVAL, errno.ENOTTY}:
+                raise
+            seals = None
+        stable = (descriptor, info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+        # Directory nlink/timestamps are not identities (e.g. procfs churn).
+        content = () if stat.S_ISDIR(info.st_mode) else (
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        identities.append((*stable, content, seals, fcntl.fcntl(descriptor, fcntl.F_GETFD),
+                           fcntl.fcntl(descriptor, fcntl.F_GETFL)))
+    return tuple(identities)
+
+
+def observe_local_runtime_descriptors() -> None:
+    """Called once by the measured launcher after sealing and transport close.
+
+    There is no caller-supplied roster or admission DTO. Native launches do not
+    select this path. The root-signed v2 trust chooses whether its consumer may
+    use this exact same-process observation instead of prospective FD numbers.
+    """
+    global _local_runtime_observation
+    manifest = require_active("runtime")
+    if (_local_runtime_observation is not None
+            or _launch_assurance.get("trustMode") != "trusted-host-local"
+            or _launch_assurance.get("nativeStageZero") is not False
+            or _stage_zero_request.get("schema") != "serverware.authorityTrustedHostLocalBootstrapRequest/v1"
+            or _stage_zero_request.get("process", {}).get("processId") != os.getpid()
+            or _local_open_descriptors() != _retained_descriptors):
+        raise RuntimeError("local post-seal runtime observation refused")
+    identities = _local_descriptor_identities(_retained_descriptors)
+    if _local_open_descriptors() != _retained_descriptors:
+        raise RuntimeError("local runtime descriptors changed during observation")
+    _local_runtime_observation = (os.getpid(), manifest, identities)
+
+
+def local_runtime_descriptors(policy: Mapping[str, Any], *, configuration_digest: str) -> frozenset[int]:
+    """Join root-signed policy to the actual admitted post-seal owner only."""
+    manifest = require_active("runtime")
+    fields = {"schema", "role", "roleBindingDigest", "generationBindingDigest", "generationDigest", "artifactPackageDigest"}
+    if (not isinstance(policy, Mapping) or set(policy) != fields
+            or policy.get("schema") != LOCAL_RUNTIME_DESCRIPTOR_POLICY_SCHEMA or policy.get("role") != "runtime"
+            or _local_runtime_observation is None or _local_runtime_observation[:2] != (os.getpid(), manifest)
+            or _launch_assurance.get("trustMode") != "trusted-host-local" or _launch_assurance.get("nativeStageZero") is not False
+            or _generation.get("schema") != "serverware.authorityGenerationLaunchContext/v4"
+            or policy.get("roleBindingDigest") != _generation.get("roleBindingDigests", {}).get("runtime")
+            or policy.get("generationBindingDigest") != _generation.get("configurationBindingDigest")
+            or policy.get("generationDigest") != _generation.get("digest")
+            or policy.get("artifactPackageDigest") != _generation.get("packageDigest")
+            or not any(row.get("role") == "authority-service" and row.get("payloadDigest") == configuration_digest
+                and row.get("fileDigest") in _generation.get("configurationDigests", ())
+                for row in _generation.get("configurationPayloadBindings", ()))
+            or _local_open_descriptors() != _retained_descriptors
+            or _local_descriptor_identities(_retained_descriptors) != _local_runtime_observation[2]):
+        raise RuntimeError("local runtime post-seal descriptor admission changed")
     return _retained_descriptors
 
 

@@ -153,6 +153,7 @@ MEASURED_RECONNECT_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredReconnec
 RETIRED_SCOPE_SUCCESSION_RESPONSE_SCHEMA = oauth_succession.RUNTIME_RESPONSE
 INTERNAL_ENVELOPE_SCHEMA = authority_contract.INTERNAL_ENVELOPE_SCHEMA
 RUNTIME_TRUST_SCHEMA = "serverware.policyAuthorityRuntimeTrust/v1"
+RUNTIME_TRUST_POST_SEAL_SCHEMA = "serverware.policyAuthorityRuntimeTrust/v2"
 SIGNED_RUNTIME_TRUST_SCHEMA = (
     "serverware.signedPolicyAuthorityRuntimeTrust/v1"
 )
@@ -539,6 +540,22 @@ def _open_inherited_descriptors() -> set[int]:
             continue
         descriptors.add(descriptor)
     return descriptors
+
+
+def _require_local_post_seal_descriptor_policy(value: object) -> None:
+    # This is an additive local development profile, never a native or
+    # production relaxation and never a caller-supplied descriptor roster.
+    from serverware import config
+
+    fields = {"schema", "role", "roleBindingDigest", "generationBindingDigest",
+              "generationDigest", "artifactPackageDigest"}
+    if (config.PRODUCTION_IMAGE or config._production_release()
+            or not isinstance(value, dict) or set(value) != fields
+            or value.get("schema") != authority_launch_guard.LOCAL_RUNTIME_DESCRIPTOR_POLICY_SCHEMA
+            or value.get("role") != "runtime"):
+        raise AuthorityServiceError("local post-seal descriptor policy refused")
+    for field in fields - {"schema", "role"}:
+        _require_digest(value[field], "local descriptor policy " + field)
 
 
 def _load_ed25519_private_key(value: bytes) -> Ed25519PrivateKey:
@@ -2960,6 +2977,13 @@ class AuthorityRuntimeClient:
             "controlPlaneInheritedFileDescriptors",
             "relayInheritedFileDescriptors",
         }
+        post_seal = payload.get("schema") == RUNTIME_TRUST_POST_SEAL_SCHEMA
+        descriptor_fields = ("controlPlaneInheritedFileDescriptors", "relayInheritedFileDescriptors")
+        if post_seal:
+            required_payload_fields.remove("relayInheritedFileDescriptors")
+            required_payload_fields.add("relayDescriptorPolicy")
+            descriptor_fields = ("controlPlaneInheritedFileDescriptors",)
+            _require_local_post_seal_descriptor_policy(payload.get("relayDescriptorPolicy"))
         allowed_descriptors = payload.get(
             (
                 "relayInheritedFileDescriptors"
@@ -2967,9 +2991,12 @@ class AuthorityRuntimeClient:
                 else "controlPlaneInheritedFileDescriptors"
             )
         )
+        if post_seal and hot_runtime:
+            allowed_descriptors = sorted(authority_launch_guard.local_runtime_descriptors(
+                payload["relayDescriptorPolicy"], configuration_digest=payload.get("configurationDigest")))
         if (
             set(payload) != required_payload_fields
-            or payload.get("schema") != RUNTIME_TRUST_SCHEMA
+            or payload.get("schema") != (RUNTIME_TRUST_POST_SEAL_SCHEMA if post_seal else RUNTIME_TRUST_SCHEMA)
             or payload.get("sourceRevision") != SOURCE_REVISION
             or payload.get("operationManifestDigest")
             != authority_contract.OPERATION_MANIFEST_DIGEST
@@ -3046,16 +3073,7 @@ class AuthorityRuntimeClient:
                     != TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA
             )
             or not isinstance(allowed_descriptors, list)
-            or not isinstance(
-                payload.get(
-                    "controlPlaneInheritedFileDescriptors"
-                ),
-                list,
-            )
-            or not isinstance(
-                payload.get("relayInheritedFileDescriptors"),
-                list,
-            )
+            or any(not isinstance(payload.get(field), list) for field in descriptor_fields)
             or any(
                 any(
                     not isinstance(descriptor, int)
@@ -3065,10 +3083,7 @@ class AuthorityRuntimeClient:
                 )
                 or len(set(payload[field]))
                     != len(payload[field])
-                for field in (
-                    "controlPlaneInheritedFileDescriptors",
-                    "relayInheritedFileDescriptors",
-                )
+                for field in descriptor_fields
             )
             or any(
                 not isinstance(descriptor, int)
@@ -3098,6 +3113,14 @@ class AuthorityRuntimeClient:
             expected_response_spki_digest=
                 _public_spki_digest(response_key),
         )
+        if post_seal:
+            attested = payload["attestationEvidence"]["payload"]
+            if any(payload["relayDescriptorPolicy"][field] != attested.get(field)
+                   for field in ("generationDigest", "artifactPackageDigest")):
+                raise AuthorityServiceError("local runtime generation differs from verifier evidence")
+            if hot_runtime and set(allowed_descriptors) != authority_launch_guard.local_runtime_descriptors(
+                    payload["relayDescriptorPolicy"], configuration_digest=payload["configurationDigest"]):
+                raise AuthorityServiceError("local runtime descriptor custody changed")
         return cls(
             socket_path=payload["relaySocketPath"],
             timeout_seconds=(

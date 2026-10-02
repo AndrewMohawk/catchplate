@@ -186,5 +186,61 @@ class LocalRuntimeTrustControls(unittest.TestCase):
         self.assertLess(issue.index("self._used = True"), issue.index("io.signing_key"))
         self.assertNotIn("io.signing_key", inspect.getsource(local.LocalRuntimeTrustIssuer.__init__))
 
+    def test_explicit_post_seal_policy_preserves_v1_and_actual_fd_identity(self):
+        # Signed synthetic public inputs, real kernel FDs and source ordering;
+        # this does not simulate activate() or claim a measured runtime launch.
+        selected, source, _ = fixture()
+        old = prepare(selected)["payload"]
+        payload = copy.deepcopy(old)
+        payload["schema"] = local.service.RUNTIME_TRUST_POST_SEAL_SCHEMA
+        del payload["relayInheritedFileDescriptors"]
+        guard = local.service.authority_launch_guard
+        payload["relayDescriptorPolicy"] = dict(
+            schema=guard.LOCAL_RUNTIME_DESCRIPTOR_POLICY_SCHEMA, role="runtime",
+            roleBindingDigest=local.spec.role_binding_digests(selected["roleManifests"])["runtime"],
+            generationBindingDigest=source["generationBindingDigest"],
+            generationDigest=payload["attestationEvidence"]["payload"]["generationDigest"],
+            artifactPackageDigest=payload["attestationEvidence"]["payload"]["artifactPackageDigest"])
+        changed = replace_payload(selected, payload)
+        with self.assertRaises(ERRORS): prepare(changed)  # Old approval never selects v2.
+        changed["schema"] = local.POST_SEAL_SCHEMA
+        result = prepare(changed)
+        self.assertEqual(result["payload"], payload)
+        self.assertEqual(result["deadline"], selected["deadlineBoottimeNs"])
+        self.assertEqual(result["payload"]["controlPlaneInheritedFileDescriptors"], old["controlPlaneInheritedFileDescriptors"])
+        with self.assertRaises(ERRORS): prepare(replace_payload(changed, old))
+        for field in ("roleBindingDigest", "generationBindingDigest", "generationDigest", "artifactPackageDigest"):
+            wrong = copy.deepcopy(payload); wrong["relayDescriptorPolicy"][field] = "sha256:" + "9" * 64
+            with self.subTest(field=field), self.assertRaises(ERRORS): prepare(replace_payload(changed, wrong))
+        for field, value in (("relayInheritedFileDescriptors", [3]), ("controlPlaneInheritedFileDescriptors", [32, 32])):
+            wrong = copy.deepcopy(payload); wrong[field] = value
+            with self.subTest(field=field), self.assertRaises(ERRORS): prepare(replace_payload(changed, wrong))
+        oversized = copy.deepcopy(old); oversized["relayInheritedFileDescriptors"] = list(range(3, 4100))
+        with self.assertRaises(ERRORS): prepare(replace_payload(selected, oversized))
+
+        descriptors = []
+        try:
+            descriptors.append(sealed(b"synthetic post-seal identity A"))
+            descriptors.append(sealed(b"synthetic post-seal identity B"))
+            for _ in range(4097): descriptors.append(os.dup(descriptors[0]))
+            roster = frozenset(descriptors[2:])
+            before = guard._local_descriptor_identities(roster)
+            self.assertEqual(len(before), 4097)
+            self.assertEqual(before, guard._local_descriptor_identities(roster))
+            os.dup2(descriptors[1], descriptors[-1], inheritable=False)
+            self.assertNotEqual(before, guard._local_descriptor_identities(roster))
+            self.assertTrue(roster <= guard._local_open_descriptors())
+            with self.assertRaisesRegex(RuntimeError, "measured launcher"):
+                guard.observe_local_runtime_descriptors()
+        finally:
+            for descriptor in reversed(descriptors): os.close(descriptor)
+        enter = inspect.getsource(local.launcher._enter)
+        self.assertGreater(enter.index("observe_local_runtime_descriptors()"), enter.rindex("_seal_bytes("))
+        self.assertGreater(enter.index("observe_local_runtime_descriptors()"), enter.index("parking.finish_after_identity_drop()"))
+        self.assertLess(enter.index("observe_local_runtime_descriptors()"), enter.index("authority_service.runtime_relay_main()"))
+        consumer = inspect.getsource(local.service.AuthorityRuntimeClient.from_environment)
+        self.assertIn("_open_inherited_descriptors()", consumer)
+        self.assertIn("authority_launch_guard.local_runtime_descriptors(", consumer)
+
 
 if __name__ == "__main__": unittest.main()

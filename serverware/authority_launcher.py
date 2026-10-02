@@ -2833,6 +2833,17 @@ def _enter(
         require_exact=True,
     )
     if role == "runtime":
+        if trusted_host_local:
+            # Version selection only; the consumer independently verifies the
+            # existing root signature and all trust fields. V1 is unchanged.
+            trust_fd = int(os.environ["SERVERWARE_POLICY_AUTHORITY_RUNTIME_TRUST_FD"])
+            trust_size = os.fstat(trust_fd).st_size
+            if not 1 <= trust_size <= authority_service.MAX_RUNTIME_TRUST_BYTES:
+                raise LaunchError("runtime trust size is invalid")
+            trust = json.loads(_read_file(trust_fd, trust_size))
+            if (isinstance(trust, dict) and isinstance(trust.get("payload"), dict)
+                    and trust["payload"].get("schema") == authority_service.RUNTIME_TRUST_POST_SEAL_SCHEMA):
+                authority_launch_guard.observe_local_runtime_descriptors()
         return authority_service.runtime_relay_main()
     return authority_service.main([role])
 

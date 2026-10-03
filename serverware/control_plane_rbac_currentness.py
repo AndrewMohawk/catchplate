@@ -156,9 +156,9 @@ def _initialize(process=None):
                 current_epoch = time.time_ns()
                 opening_mono = time.monotonic_ns()
                 evidence = process.configuration.attestation_evidence
-                maximum_expiry = (evidence["expiresAtEpochNs"]
-                    if evidence["schema"] == authority_service.TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA
-                    else evidence["payload"]["expiresAtEpochNs"])
+                # The already admitted receipt retains its signed envelope;
+                # local and provider expiry both belong to its payload.
+                maximum_expiry = evidence["payload"]["expiresAtEpochNs"]
                 maximum_expiry = min(maximum_expiry, process.configuration.history_archive.valid_until_epoch_ns)
                 value.attestation_expires = maximum_expiry
                 value.writer = process.role_name == "verifier"

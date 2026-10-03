@@ -5,6 +5,7 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -169,6 +170,47 @@ class LocalRbacWitnessTests(unittest.TestCase):
         self.assertIn("not config.PRODUCTION_IMAGE", production)
         self.assertIn("config.RELEASE_CHANNEL", production)
         self.assertIn("SERVERWARE_PRODUCTION_IMAGE", production)
+
+    def test_authority_expiry_uses_receipt_payload_and_original_bounds(self):
+        # Execute only the genuine calculation nodes on synthetic contract
+        # data. This neither fabricates an admitted owner nor contacts a DB.
+        initialize = function(source("serverware/control_plane_rbac_currentness.py"), "_initialize")
+        branch = next(node for node in ast.walk(initialize)
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "process is None")
+        selected = [node for node in branch.orelse if isinstance(node, ast.Assign)
+            and ast.unparse(node.targets[0]) in {"evidence", "maximum_expiry", "value.attestation_expires"}]
+        selected += [node for node in ast.walk(initialize) if isinstance(node, ast.Assign)
+            and ast.unparse(node.targets[0]) in {"value.expires_epoch", "value.deadline"}]
+        self.assertEqual(len(selected), 6)
+        code = compile(ast.Module(body=selected, type_ignores=[]), "<actual-rbac-expiry-calculation>", "exec")
+        receipt_schema = ast.literal_eval(next(node.value
+            for node in source("serverware/authority_service.py").body
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                and target.id == "TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA" for target in node.targets)))
+
+        def calculate(evidence, archive_end, policy_end):
+            value = SimpleNamespace(policy={"expiresAtEpochNs": policy_end}, recovery=None)
+            configuration = SimpleNamespace(attestation_evidence=evidence,
+                history_archive=SimpleNamespace(valid_until_epoch_ns=archive_end))
+            namespace = dict(process=SimpleNamespace(configuration=configuration), value=value,
+                opening_mono=2000, current_epoch=100,
+                authority_service=SimpleNamespace(TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA=receipt_schema))
+            exec(code, namespace)
+            return value
+
+        receipt = dict(schema=receipt_schema,
+            payload=dict(expiresAtEpochNs=900), signature="synthetic-not-admitted")
+        self.assertNotIn("expiresAtEpochNs", receipt)
+        for archive_end, policy_end, expected_end in ((500, 700, 500), (1000, 700, 700), (1000, 1200, 900),
+                (90, 1200, 90)):
+            with self.subTest(archive_end=archive_end, policy_end=policy_end):
+                value = calculate(receipt, archive_end, policy_end)
+                self.assertEqual(value.attestation_expires, min(900, archive_end))
+                self.assertEqual(value.expires_epoch, expected_end)
+                self.assertEqual(value.deadline, 2000 + expected_end - 100)
+        for changed in ({"schema": receipt["schema"], "expiresAtEpochNs": 900},
+                {"schema": receipt["schema"], "payload": {}, "expiresAtEpochNs": 900}):
+            with self.assertRaises(KeyError): calculate(changed, 1000, 1200)
 
     def test_provision_and_delivery_keep_local_schema_explicit(self):
         provision = ast.unparse(function(source("serverware/authority_rbac_witness.py"), "provision"))

@@ -557,9 +557,45 @@ class _SealedSourceLoader(importlib.abc.SourceLoader):
         del path, data
 
 
+class _MeasuredExtensionLoader(importlib.machinery.ExtensionFileLoader):
+    def __init__(self, fullname, binding, loaded):
+        self._fullname = fullname
+        self._binding = binding
+        self._loaded = loaded
+        self._origin = f"/proc/self/fd/{binding['fd']}"
+        self._mapping_path = f"/memfd:{fullname} (deleted)"
+        super().__init__(fullname, self._origin)
+
+    def _check(self, spec):
+        if (self.name != self._fullname or self.path != self._origin
+                or spec.name != self._fullname or spec.origin != self._origin
+                or spec.loader is not self):
+            raise LaunchError("sealed extension loader identity changed")
+        if _retained_native_digest(self._binding) != self._binding["sha256"]:
+            raise LaunchError("sealed extension content changed")
+
+    def create_module(self, spec):
+        self._check(spec)
+        module = super().create_module(spec)
+        self._check(spec)
+        return module
+
+    def exec_module(self, module):
+        self._check(module.__spec__)
+        super().exec_module(module)
+        self._check(module.__spec__)
+        # The signed closure is an available import inventory. Only completed
+        # measured loads add mandatory mappings; cached/unloaded modules do not.
+        digest = self._binding["sha256"]
+        if self._loaded.get(self._mapping_path, digest) != digest:
+            raise LaunchError("sealed extension mapping identity is ambiguous")
+        self._loaded[self._mapping_path] = digest
+
+
 class _SealedClosureFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, entries: dict[str, dict[str, Any]]) -> None:
+    def __init__(self, entries: dict[str, dict[str, Any]], loaded) -> None:
         self.entries = entries
+        self.loaded = loaded
 
     def find_spec(
         self,
@@ -601,9 +637,8 @@ class _SealedClosureFinder(importlib.abc.MetaPathFinder):
                 entry["path"],
             )
         elif kind == "extension":
-            loader = importlib.machinery.ExtensionFileLoader(
-                fullname,
-                f"/proc/self/fd/{descriptor}",
+            loader = _MeasuredExtensionLoader(
+                fullname, entry["nativeBinding"], self.loaded,
             )
         else:
             return None
@@ -614,19 +649,34 @@ class _SealedClosureFinder(importlib.abc.MetaPathFinder):
         )
 
 
-def _read_process_mapping(start: int, end: int) -> bytes:
+def _native_identity(metadata):
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+            metadata.st_uid, metadata.st_gid, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+@contextlib.contextmanager
+def _retained_process_memory():
+    # Open only our own memory, before permanent UID drop. This temporary
+    # descriptor is never part of the signed/service retained-descriptor set.
+    descriptor = os.open("/proc/self/mem", os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        yield (descriptor, _native_identity(os.fstat(descriptor)))
+    finally:
+        os.close(descriptor)
+
+
+def _read_process_mapping(memory, start: int, end: int) -> bytes:
     size = end - start
     if not 0 < size <= MAX_NATIVE_MAPPING_BYTES:
         raise LaunchError("executable memory mapping is outside its bound")
     try:
-        descriptor = os.open(
-            "/proc/self/mem",
-            os.O_RDONLY | os.O_CLOEXEC,
-        )
-        try:
-            value = os.pread(descriptor, size, start)
-        finally:
-            os.close(descriptor)
+        descriptor, identity = memory
+        if _native_identity(os.fstat(descriptor)) != identity:
+            raise LaunchError("retained own-memory descriptor changed")
+        value = os.pread(descriptor, size, start)
+        if _native_identity(os.fstat(descriptor)) != identity:
+            raise LaunchError("retained own-memory descriptor changed")
     except OSError as exc:
         raise LaunchError(
             "executable memory mapping cannot be measured"
@@ -636,12 +686,92 @@ def _read_process_mapping(start: int, end: int) -> bytes:
     return value
 
 
-def _mapped_file_digest(
-    *,
-    address_range: str,
-    device: str,
-    inode: str,
-) -> str:
+def _native_file_binding(descriptor, digest, *, sealed=False):
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise LaunchError("retained native descriptor is not regular")
+    if sealed:
+        _require_sealed_descriptor(descriptor, "native extension")
+    return dict(fd=descriptor, identity=_native_identity(metadata),
+                sha256=digest, sealed=sealed)
+
+
+def _native_file_index(retained_files):
+    result = {}
+    for row in retained_files:
+        if type(row.get("surviveExec")) is not bool:
+            raise LaunchError("retained native survival declaration is malformed")
+        if not row["surviveExec"]:
+            continue
+        metadata = os.fstat(row["fd"])
+        if (not stat.S_ISREG(metadata.st_mode)
+                or (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                    stat.S_IMODE(metadata.st_mode), metadata.st_uid, metadata.st_gid)
+                != (row["device"], row["inode"], row["size"],
+                    row["mode"], row["uid"], row["gid"])):
+            raise LaunchError("retained native source identity changed")
+        key = row["runtimePath"]
+        binding = _native_file_binding(row["fd"], row["sha256"])
+        if key in result:
+            raise LaunchError("retained native source identity is ambiguous")
+        result[key] = binding
+    return result
+
+
+def _retain_native_mapped_sources(retained_files, expected, files, owner):
+    # Native stage zero may deliberately close a declared source at exec.
+    # Acquire that *actual mapped inode*, never its ordinary pathname, while
+    # still privileged; the private owner closes it before service entry.
+    sources = {row["runtimePath"]: row for row in retained_files}
+    if len(sources) != len(retained_files):
+        raise LaunchError("retained native source paths are duplicated")
+    rows = _executable_mapping_rows()
+    for address, _permissions, _offset, device, inode, path in rows:
+        if not path.startswith("/"):
+            continue  # The full verifier separately handles/rejects kernel rows.
+        if path not in expected:
+            raise LaunchError("native mapping is outside the signed baseline")
+        if path not in files:
+            row = sources.get(path)
+            if (row is None or row.get("surviveExec") is not False
+                    or os.geteuid() != 0):
+                raise LaunchError("mapped native source has no approved original")
+            descriptor = os.open(
+                f"/proc/self/map_files/{address}", os.O_RDONLY | os.O_CLOEXEC,
+            )
+            owner.callback(os.close, descriptor)
+            binding = _native_file_index([
+                dict(row, fd=descriptor, surviveExec=True),
+            ])[path]
+            files[path] = binding
+        digest = _mapped_file_digest(files=files, path=path, device=device, inode=inode)
+        if digest != expected[path]:
+            raise LaunchError("mapped native source differs from signed baseline")
+    if rows != _executable_mapping_rows():
+        raise LaunchError("executable mappings changed while retaining originals")
+
+
+def _retained_native_digest(binding):
+    descriptor, identity = binding["fd"], binding["identity"]
+    metadata = os.fstat(descriptor)
+    if (_native_identity(metadata) != identity
+            or not stat.S_ISREG(metadata.st_mode)
+            or not 0 <= metadata.st_size <= MAX_NATIVE_MAPPING_BYTES):
+        raise LaunchError("retained native inode identity changed")
+    if binding["sealed"]:
+        _require_sealed_descriptor(descriptor, "native extension")
+    value = _read_file(descriptor, metadata.st_size)
+    if _native_identity(os.fstat(descriptor)) != identity:
+        raise LaunchError("retained native inode changed while read")
+    if binding["sealed"]:
+        _require_sealed_descriptor(descriptor, "native extension")
+    digest = "sha256:" + hashlib.sha256(value).hexdigest()
+    if digest != binding["sha256"]:
+        raise LaunchError("retained native content changed")
+    return digest
+
+
+def _mapped_file_digest(*, files, path: str, device: str, inode: str) -> str:
     try:
         expected_major_text, expected_minor_text = device.split(":", 1)
         expected_major = int(expected_major_text, 16)
@@ -651,46 +781,38 @@ def _mapped_file_digest(
         raise LaunchError("native mapping identity is malformed") from exc
     if expected_inode <= 0:
         raise LaunchError("file-backed executable mapping has no inode")
+    key = os.makedev(expected_major, expected_minor), expected_inode
+    binding = files.get(path)
+    if binding is None or binding["identity"][:2] != key:
+        raise LaunchError("mapped executable inode was not retained")
+    return _retained_native_digest(binding)
+
+
+def _executable_mapping_rows():
     try:
-        descriptor = os.open(
-            f"/proc/self/map_files/{address_range}",
-            os.O_RDONLY | os.O_CLOEXEC,
-        )
+        with open("/proc/self/maps", "r", encoding="ascii") as handle:
+            lines = handle.readlines()
     except OSError as exc:
-        raise LaunchError(
-            "mapped executable inode cannot be opened"
-        ) from exc
-    try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_ino != expected_inode
-            or os.major(metadata.st_dev) != expected_major
-            or os.minor(metadata.st_dev) != expected_minor
-            or not 0 <= metadata.st_size <= MAX_NATIVE_MAPPING_BYTES
-        ):
-            raise LaunchError("mapped executable inode identity changed")
-        value = _read_file(descriptor, metadata.st_size)
-        metadata_after = os.fstat(descriptor)
-        if (
-            metadata.st_dev,
-            metadata.st_ino,
-            metadata.st_size,
-        ) != (
-            metadata_after.st_dev,
-            metadata_after.st_ino,
-            metadata_after.st_size,
-        ):
-            raise LaunchError("mapped executable inode changed while read")
-    finally:
-        os.close(descriptor)
-    return "sha256:" + hashlib.sha256(value).hexdigest()
+        raise LaunchError("Linux native mapping inventory is unavailable") from exc
+    rows = []
+    for line in lines:
+        fields = line.rstrip("\n").split(maxsplit=5)
+        if len(fields) < 5:
+            raise LaunchError("native mapping inventory is malformed")
+        if "x" not in fields[1]:
+            continue
+        if "w" in fields[1] or len(fields) != 6:
+            raise LaunchError("anonymous or writable executable mapping is forbidden")
+        rows.append(tuple(fields))
+    return tuple(rows)
 
 
 def _verify_native_mappings(
     expected: dict[str, str],
     *,
     require_exact: bool,
+    files,
+    memory,
 ) -> None:
     if (
         "[vsyscall]" in expected
@@ -709,26 +831,10 @@ def _verify_native_mappings(
         or len(expected) != len(set(expected))
     ):
         raise LaunchError("native mapping manifest is not canonical")
-    try:
-        with open("/proc/self/maps", "r", encoding="ascii") as handle:
-            lines = handle.readlines()
-    except OSError as exc:
-        raise LaunchError(
-            "Linux native mapping inventory is unavailable"
-        ) from exc
+    rows = _executable_mapping_rows()
     observed: dict[str, str] = {}
     observed_inodes: dict[str, tuple[str, str]] = {}
-    for line in lines:
-        fields = line.rstrip("\n").split(maxsplit=5)
-        if len(fields) < 5:
-            raise LaunchError("native mapping inventory is malformed")
-        permissions = fields[1]
-        if "x" not in permissions:
-            continue
-        if "w" in permissions or len(fields) != 6:
-            raise LaunchError(
-                "anonymous or writable executable mapping is forbidden"
-            )
+    for fields in rows:
         address_range, _offset, device, inode, path = (
             fields[0],
             fields[2],
@@ -750,12 +856,13 @@ def _verify_native_mappings(
                     "kernel executable mapping range is malformed"
                 ) from exc
             digest = "sha256:" + hashlib.sha256(
-                _read_process_mapping(start, end)
+                _read_process_mapping(memory, start, end)
             ).hexdigest()
             inode_identity = ("kernel", address_range)
         elif path.startswith("/"):
             digest = _mapped_file_digest(
-                address_range=address_range,
+                files=files,
+                path=path,
                 device=device,
                 inode=inode,
             )
@@ -775,6 +882,8 @@ def _verify_native_mappings(
             raise LaunchError("native mapping path identity is ambiguous")
         observed[path] = digest
         observed_inodes[path] = inode_identity
+    if rows != _executable_mapping_rows():
+        raise LaunchError("executable mapping inventory changed while measured")
     if (
         any(
             expected.get(path) != digest
@@ -2272,6 +2381,7 @@ def _enter(
     runtime_evidence_descriptor: int | None,
     handoff_descriptor: int | None,
     trusted_host_local: bool,
+    native_readers: contextlib.ExitStack,
     public_revocation: bool = False,
     local_admission: tuple[int, str, int] | None = None,
 ) -> int:
@@ -2407,7 +2517,7 @@ def _enter(
         "SERVERWARE_AUTHORITY_LAUNCH_CERTIFICATE"
     )
     sealed_entries: dict[str, dict[str, Any]] = {}
-    sealed_native_mappings: dict[str, str] = {}
+    loaded_native_mappings: dict[str, str] = {}
     retained: set[int] = {
         3,
         private_descriptor,
@@ -2528,11 +2638,16 @@ def _enter(
                 raise LaunchError("runtime evidence inode aliases another descriptor")
     retained.update(
         {
-            stage_zero_value["fd"],
-            *(entry["fd"] for entry in retained_file_values),
-            *(entry["fd"] for entry in retained_directory_values),
+            *(entry["fd"] for entry in retained_file_values if entry["surviveExec"]),
+            *(entry["fd"] for entry in retained_directory_values if entry["surviveExec"]),
             *(entry["fd"] for entry in mutable_state_values),
         }
+    )
+    if stage_zero_value["fd"] in request["execution"]["preserveFds"]:
+        retained.add(stage_zero_value["fd"])
+    native_files = _native_file_index(retained_file_values)
+    _retain_native_mapped_sources(
+        retained_file_values, native_mappings, native_files, native_readers,
     )
     observed_paths: set[str] = set()
     for entry_value in entries:
@@ -2597,31 +2712,34 @@ def _enter(
         sealed = _seal_bytes(
             str(entry_value["module"] or "authority-data"),
             value,
+            # dlopen reopens the proc-FD path after permanent UID drop. These
+            # are public immutable code bytes, never sources or credentials.
+            mode=0o444 if entry_value["kind"] == "extension" else 0o400,
         )
         retained.add(sealed)
+        native_binding = None
         if entry_value["kind"] == "extension":
-            sealed_native_mappings[
-                f"/memfd:{entry_value['module']} (deleted)"
-            ] = entry_value["sha256"]
+            native_binding = _native_file_binding(
+                sealed, entry_value["sha256"], sealed=True,
+            )
+            native_path = f"/memfd:{entry_value['module']} (deleted)"
+            if native_path in native_files:
+                raise LaunchError("sealed native mapping identity is ambiguous")
+            native_files[native_path] = native_binding
         if entry_value["module"]:
             if entry_value["module"] in sealed_entries:
                 raise LaunchError("launch module identity is duplicated")
             sealed_entries[entry_value["module"]] = {
                 **entry_value,
                 "descriptor": sealed,
+                "nativeBinding": native_binding,
             }
     expected_native = dict(native_mappings)
-    if any(
-        path in expected_native
-        and expected_native[path] != digest
-        for path, digest in sealed_native_mappings.items()
-    ):
-        raise LaunchError("sealed native mapping identity is ambiguous")
-    expected_native.update(sealed_native_mappings)
-    _verify_native_mappings(
-        expected_native,
-        require_exact=False,
-    )
+    with _retained_process_memory() as memory:
+        _verify_native_mappings(
+            expected_native, require_exact=False,
+            files=native_files, memory=memory,
+        )
     for binding in credential_descriptors:
         descriptor = binding["descriptor"]
         if os.environ.get(binding["environmentName"]) != str(descriptor):
@@ -2690,7 +2808,7 @@ def _enter(
         raise LaunchError(
             "canonical authority contracts are outside the measured closure"
         )
-    sys.meta_path.insert(0, _SealedClosureFinder(sealed_entries))
+    sys.meta_path.insert(0, _SealedClosureFinder(sealed_entries, loaded_native_mappings))
     artifact_contract = importlib.import_module(
         "serverware.authority_artifact_spec"
     )
@@ -2789,51 +2907,55 @@ def _enter(
     if parking is not None:
         parking.check(peer=True)
     os.environ["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
-    _drop_role_identity(role)
-    if parking is not None:
-        parking.rearm_after_identity_drop()
-    from serverware import authority_launch_guard
+    with _retained_process_memory() as memory:
+        _drop_role_identity(role)
+        if parking is not None:
+            parking.rearm_after_identity_drop()
+        from serverware import authority_launch_guard
 
-    _require_bootstrap_control_identity(bootstrap_control_identity)
-    if runtime_evidence_identity is not None:
-        _require_runtime_evidence_identity(runtime_evidence_identity)
-    authority_launch_guard.activate(
-        role=role,
-        manifest_digest=manifest_digest,
-        retained_descriptors=frozenset(retained),
-        bootstrap_control_identity=bootstrap_control_identity,
-        runtime_evidence_identity=runtime_evidence_identity,
-        package_versions={
-            str(name): str(version)
-            for name, version in package_versions.items()
-        },
-        generation=generation_context,
-        native_stage_zero_handoff=native_stage_zero_handoff,
-        listener_descriptor=listener_descriptor,
-        launch_identity_descriptors=launch_identity_descriptors,
-        mutable_state_descriptors=mutable_state_descriptors,
-        stage_zero_request=request,
-        verified_artifact_package=verified_package,
-        artifact_package=payload["artifactPackage"],
-        artifact_trust_state=payload["artifactTrustState"],
-        launch_assurance=launch_assurance,
-    )
-    if parking is not None:
-        parking.finish_after_identity_drop()
-    if role == "witness":
-        from serverware import authority_witness
-
-        _verify_native_mappings(
-            expected_native,
-            require_exact=True,
+        _require_bootstrap_control_identity(bootstrap_control_identity)
+        if runtime_evidence_identity is not None:
+            _require_runtime_evidence_identity(runtime_evidence_identity)
+        authority_launch_guard.activate(
+            role=role,
+            manifest_digest=manifest_digest,
+            retained_descriptors=frozenset(retained),
+            bootstrap_control_identity=bootstrap_control_identity,
+            runtime_evidence_identity=runtime_evidence_identity,
+            package_versions={
+                str(name): str(version)
+                for name, version in package_versions.items()
+            },
+            generation=generation_context,
+            native_stage_zero_handoff=native_stage_zero_handoff,
+            listener_descriptor=listener_descriptor,
+            launch_identity_descriptors=launch_identity_descriptors,
+            mutable_state_descriptors=mutable_state_descriptors,
+            stage_zero_request=request,
+            verified_artifact_package=verified_package,
+            artifact_package=payload["artifactPackage"],
+            artifact_trust_state=payload["artifactTrustState"],
+            launch_assurance=launch_assurance,
         )
-        return authority_witness.main()
-    from serverware import authority_service
+        if parking is not None:
+            parking.finish_after_identity_drop()
+        if role == "witness":
+            from serverware import authority_witness
+        else:
+            from serverware import authority_service
 
-    _verify_native_mappings(
-        expected_native,
-        require_exact=True,
-    )
+        if any(path in expected_native and expected_native[path] != digest
+               for path, digest in loaded_native_mappings.items()):
+            raise LaunchError("sealed native mapping identity is ambiguous")
+        expected_native.update(loaded_native_mappings)
+        _verify_native_mappings(
+            expected_native, require_exact=True,
+            files=native_files, memory=memory,
+        )
+    # No own-memory descriptor reaches authority code or runtime FD observation.
+    native_readers.close()
+    if role == "witness":
+        return authority_witness.main()
     if role == "runtime":
         if trusted_host_local:
             # Version selection only; the consumer independently verifies the
@@ -2969,16 +3091,18 @@ def main(argv: list[str] | None = None) -> int:
         raise LaunchError("measured launch descriptor set is invalid")
     for name, descriptor in assignments.items():
         os.environ[name] = str(descriptor)
-    return _enter(
-        args.role,
-        bootstrap_descriptor=args.bootstrap_fd,
-        manifest_descriptor=assignments[BOOTSTRAP_CONTROL_NAME],
-        runtime_evidence_descriptor=assignments.get(RUNTIME_EVIDENCE_NAME),
-        handoff_descriptor=args.stage_zero_handoff_fd,
-        trusted_host_local=args.trusted_host_local,
-        public_revocation=args.public_webauthn_revocation,
-        local_admission=local_admission,
-    )
+    with contextlib.ExitStack() as native_readers:
+        return _enter(
+            args.role,
+            bootstrap_descriptor=args.bootstrap_fd,
+            manifest_descriptor=assignments[BOOTSTRAP_CONTROL_NAME],
+            runtime_evidence_descriptor=assignments.get(RUNTIME_EVIDENCE_NAME),
+            handoff_descriptor=args.stage_zero_handoff_fd,
+            trusted_host_local=args.trusted_host_local,
+            native_readers=native_readers,
+            public_revocation=args.public_webauthn_revocation,
+            local_admission=local_admission,
+        )
 
 
 if __name__ == "__main__":

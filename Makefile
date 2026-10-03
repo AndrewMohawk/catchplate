@@ -624,6 +624,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_entrypoint.py \
 	scripts/test_authority_local_admission.py \
 	scripts/test_authority_local_startup.py \
+	scripts/test_authority_local_startup_failure_diagnostics.py \
 	scripts/test_authority_local_artifacts.py \
 	scripts/test_authority_local_artifact_witness.py \
 	scripts/test_authority_local_trust.py \
@@ -632,6 +633,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_rbac_witness.py \
 	scripts/test_authority_local_rbac_bootstrap.py \
 	scripts/test_authority_local_launch_authorization.py \
+	scripts/test_authority_launcher_native_mappings.py \
 	scripts/test_authority_local_cohort.py \
 	scripts/test_authority_local_trust_commit.py \
 	scripts/test_authority_local_enrollment_configuration.py \

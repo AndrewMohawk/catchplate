@@ -92,6 +92,40 @@ class LocalRbacWitnessTests(unittest.TestCase):
         for fd in descriptors:
             with self.assertRaises(OSError): os.fstat(fd)
 
+    def test_connection_parameters_omit_service_and_keep_explicit_identity(self):
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+        with patch.dict(os.environ, {}, clear=True), tls_projection_control() as owner:
+            with owner.connection_parameters() as parameters:
+                self.assertNotIn("service", parameters)
+                parsed = conninfo_to_dict(make_conninfo(**parameters))
+                self.assertNotIn("service", parsed)
+                for name, expected in {
+                    "host": "synthetic.invalid", "hostaddr": "127.0.0.1",
+                    "port": "5432", "dbname": "synthetic", "user": "synthetic_reader",
+                    "sslmode": "verify-full", "ssl_min_protocol_version": "TLSv1.3",
+                    "ssl_max_protocol_version": "TLSv1.3", "passfile": "/dev/null",
+                    "password": "", "gssencmode": "disable",
+                    "application_name": "serverware-rbac-witness-v1",
+                }.items():
+                    self.assertEqual(parsed[name], expected)
+                descriptors = [int(parameters[name].rsplit("/", 1)[1])
+                    for name in ("sslrootcert", "sslcert", "sslkey")]
+            self.assert_descriptors_closed(descriptors)
+            owner.check()
+
+    def test_ambient_postgres_options_refused_before_tls_projection(self):
+        for name in ("PGSERVICE", "PGSERVICEFILE", "PGSYSCONFDIR", "PGPASSWORD",
+                "PGPASSFILE", "PGSSLMODE", "PGOPTIONS", "PGHOST", "PGUSER"):
+            for value in ("", "synthetic-override"):
+                with self.subTest(name=name, empty=not value), tls_projection_control() as owner:
+                    with patch.dict(os.environ, {name: value}, clear=True), \
+                            patch.object(os, "memfd_create") as create:
+                        with self.assertRaisesRegex(ValueError, "ambient PostgreSQL"):
+                            with owner.connection_parameters():
+                                self.fail("ambient settings reached connection parameters")
+                        create.assert_not_called()
+                    owner.check()
+
     def test_role_can_reopen_only_scoped_sealed_tls_projections(self):
         self.assertEqual((os.geteuid(), os.getegid()), (0, 0), "isolated root/drop control required")
         with tls_projection_control() as owner:

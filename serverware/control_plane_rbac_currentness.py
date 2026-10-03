@@ -61,11 +61,15 @@ class _Owner:
     def connection_parameters(self):
         """Role-readable sealed TLS copies, scoped to synchronous connect only."""
         self.check()
+        # libpq treats service="" as a named-service lookup, not an opt-out.
+        # Omit it and refuse ambient overrides instead of mutating global env.
+        profile.require(not any(name.startswith("PG") for name in os.environ),
+            "ambient PostgreSQL configuration is forbidden")
         endpoint = self.policy["endpoint"]
         parameters = {"host": endpoint["host"], "hostaddr": endpoint["address"], "port": endpoint["port"],
             "dbname": endpoint["database"], "user": self.policy["writer" if self.writer else "reader"]["role"],
             "sslmode": "verify-full", "ssl_min_protocol_version": "TLSv1.3", "ssl_max_protocol_version": "TLSv1.3",
-            "passfile": "/dev/null", "password": "", "service": "", "gssencmode": "disable", "application_name": "serverware-rbac-witness-v1"}
+            "passfile": "/dev/null", "password": "", "gssencmode": "disable", "application_name": "serverware-rbac-witness-v1"}
         held, projected = [], []
         seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
         cancellation = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}

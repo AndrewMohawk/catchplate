@@ -515,6 +515,7 @@ class LocalAuthorityStartup:
             self.setup_fd = self._sealed(self.setup_raw, "local-admission")
             _require(4 <= self.setup_fd <= 1023 and 4 <= child_channel.fileno() <= 1023)
             null = self._hold(os.open("/dev/null", os.O_RDWR | os.O_CLOEXEC))
+            private_stderr = launcher._private_startup_stderr()
             environment = dict(self.value["environment"], LANG="C.UTF-8", LC_ALL="C.UTF-8", TZ="UTC",
                 PATH="/runtime/python/bin:/usr/bin", PYTHONDONTWRITEBYTECODE="1", PYTHONHASHSEED="0",
                 SERVERWARE_AUTHORITY_TRUST_MODE="trusted-host-local", CREDENTIALS_DIRECTORY=self.value["credentialDirectory"]["path"],
@@ -532,8 +533,12 @@ class LocalAuthorityStartup:
                     for signo in _CANCEL:
                         signal.signal(signo, signal.SIG_DFL)
                     os.dup2(self.listener, 3, inheritable=True)
-                    for fd in (0, 1, 2):
+                    for fd in (0, 1):
                         os.dup2(null, fd, inheritable=True)
+                    if private_stderr is None or launcher._private_startup_stderr() != private_stderr:
+                        os.dup2(null, 2, inheritable=True)
+                    else:
+                        os.set_inheritable(2, True)
                     for fd in keep:
                         os.set_inheritable(fd, True)
                     for name in os.listdir("/proc/self/fd"):
@@ -548,7 +553,8 @@ class LocalAuthorityStartup:
                     os.chdir("/runtime")
                     signal.pthread_sigmask(signal.SIG_SETMASK, mask)
                     os.execve(INTERPRETER, argv, environment)
-                except BaseException:
+                except BaseException as error:
+                    launcher._startup_failure(error)
                     os._exit(127)
             self.child_pid = child
             self.child_pidfd = self._hold(os.pidfd_open(child, 0))

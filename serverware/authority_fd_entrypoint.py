@@ -3314,5 +3314,74 @@ def main() -> int:
     return _normal_main(sys.argv[1])
 
 
+
+# Duplicated in the measured launcher: bootstrap diagnostics must not import
+# a new, not-yet-measured formatter module across the exec boundary.
+def _private_startup_stderr():
+    """Only an already-open private supervisor file is a diagnostic sink."""
+    try:
+        info = os.fstat(2)
+        access = fcntl.fcntl(2, fcntl.F_GETFL) & os.O_ACCMODE
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or access not in (os.O_WRONLY, os.O_RDWR)):
+            return None
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid,
+                info.st_gid, info.st_nlink, access)
+    except BaseException:
+        return None
+
+
+def _startup_failure(error):
+    """Bounded metadata only; never format exception messages or frame values."""
+    try:
+        sink = _private_startup_stderr()
+        if sink is None:
+            return
+        def name(value):
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.<>-"
+            return value if (type(value) is str and 1 <= len(value) <= 96
+                and all(character in allowed for character in value)) else "unknown"
+        lines, seen, current = [], set(), error
+        for index in range(5):
+            if not isinstance(current, BaseException) or id(current) in seen:
+                break
+            seen.add(id(current))
+            lines.append(f"AUTHORITY_CHILD_STARTUP_FAILURE_CAUSE={index}:{name(type(current).__name__)}")
+            trace = current.__traceback__
+            for _ in range(8):
+                if trace is None:
+                    break
+                code, line = trace.tb_frame.f_code, trace.tb_lineno
+                filename = code.co_filename
+                basename = filename.rsplit("/", 1)[-1] if type(filename) is str and len(filename) <= 4096 else "unknown"
+                if basename.isdecimal():
+                    basename = "bootstrap"
+                line = line if type(line) is int and 0 < line < 2**31 else 0
+                lines.append(f"AUTHORITY_CHILD_STARTUP_FAILURE_FRAME={index}:{name(basename)}:{name(code.co_name)}:{line}")
+                trace = trace.tb_next
+            current = current.__cause__ if current.__cause__ is not None else current.__context__
+        raw = ("\n".join(lines) + "\n").encode("ascii")
+        if len(raw) <= 16384 and _private_startup_stderr() == sink:
+            os.write(2, raw)
+    except BaseException:
+        pass  # A broken diagnostic path must not replace the original failure.
+
+
+def _startup_main():
+    try:
+        return main()
+    except SystemExit as error:
+        if error.code is None or isinstance(error.code, int):
+            raise
+        _startup_failure(error)
+        return 1
+    except KeyboardInterrupt as error:
+        _startup_failure(error)
+        return 130
+    except BaseException as error:
+        _startup_failure(error)
+        return 1
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_startup_main())

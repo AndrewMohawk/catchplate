@@ -24,8 +24,6 @@ from serverware import authority_artifact_spec as artifact
 from serverware import authority_attestation_cohort as cohort
 from serverware import authority_contract as authority
 from serverware import authority_revocation_configuration as configuration
-from serverware import authority_webauthn_evidence_policy as evidence_policy
-from serverware import authority_webauthn_transition_policy as transition_policy
 
 
 SCHEMA = "serverware.signedAuthorityHistoricalArchive/v1"
@@ -38,14 +36,6 @@ _PAYLOAD_FIELDS = {"schema", "purpose", "sourceRevision", "configurationDigest",
 _ENTRY_FIELDS = {"configurationEnvelope", "artifactPackage", "artifactTrustState",
     "configurationRootPublicKeyBase64Url", "attestationCohort", "validFromEpochNs",
     "validUntilEpochNs", "configurationDigest"}
-_CONFIG_FIELDS = {"schema", "sourceRevision", "roles", "runtimeUid", "runtimeGid",
-    "roleBindingDigests", "roleRuntimeClosureDigests", "packageVersions", "launchNonceDigest",
-    "queryManifestDigest", "generationSequence", "generationBindingDigest",
-    "generationPredecessorDigest", "generationMinimumRollbackSequence", "credentialReleaseTrust",
-    "replayWitness", "webauthn", "executorSessionIdentityDigest", "executorRole",
-    "executorTlsClientDn", "executorTlsClientSerial", "executorTlsIssuerDn",
-    "issuerCredentialIssuanceDigest", "executorCredentialIssuanceDigest"}
-_OPTIONAL_FIELDS = {evidence_policy.FIELD, transition_policy.FIELD}
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 capture = configuration.capability.capture
 
@@ -223,32 +213,36 @@ def _configuration(entry, generation, root_key):
         "historical configuration envelope")
     payload = envelope["payload"]
     if (envelope["schema"] != SIGNED_CONFIG_SCHEMA or type(payload) is not dict
-            or not _CONFIG_FIELDS <= set(payload) or not set(payload) - _CONFIG_FIELDS <= _OPTIONAL_FIELDS
             or payload.get("schema") != configuration.CONFIG_SCHEMA
             or payload.get("sourceRevision") != authority.SOURCE_REVISION):
         raise HistoricalArchiveError("historical configuration shape or supported source changed")
     # Root verification uses the existing service NUL-domain protocol, not
     # the separately framed artifact-package digest protocol.
     cohort._verify_signature(envelope, root_key)
-    payload_bytes = artifact.canonical_json_bytes(payload)
-    digest = cohort._domain_digest(configuration.CONFIG_SCHEMA, payload_bytes)
+    # Use the same closed payload and purpose-policy semantics as issuance;
+    # an authenticated historical configuration may carry policyGenesis too.
+    # Lazy import avoids adding a module-initialization cycle through the CLI.
+    from scripts.authority.generate_artifact_bundle import validate_configuration_payload
+    payload_schema, digest = validate_configuration_payload(payload, role="authority-service",
+        source_revision=authority.SOURCE_REVISION,
+        expected_generation_binding=artifact.configuration_generation_binding(entry["artifactPackage"]["generation"]),
+        expected_generation_binding_digest=generation["configurationBindingDigest"],
+        expected_role_bindings=generation["roleBindingDigests"], root_key=root_key)
     raw = artifact.canonical_json_bytes(envelope)
     file_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
     expected = {"fileDigest": file_digest, "payloadDigest": digest,
-        "payloadSchema": configuration.CONFIG_SCHEMA, "role": "authority-service"}
+        "payloadSchema": payload_schema, "role": "authority-service"}
     if (digest != entry["configurationDigest"] or expected not in generation["configurationPayloadBindings"]
             or payload["generationSequence"] != generation["sequence"]
             or payload["generationBindingDigest"] != generation["configurationBindingDigest"]
             or payload["generationPredecessorDigest"] != generation["predecessorDigest"]
             or payload["generationMinimumRollbackSequence"] != generation["minimumRollbackSequence"]):
         raise HistoricalArchiveError("historical configuration differs from its exact admitted generation")
-    for policy in (evidence_policy, transition_policy):
-        if policy.FIELD in payload:
-            policy.validate_policy(payload[policy.FIELD], webauthn=payload["webauthn"])
     return payload, digest
 
 
-def _entry(entry):
+def _entry_snapshot(entry):
+    """Validate genuine historical originals; not a live admission owner."""
     _object(entry, _ENTRY_FIELDS, "historical archive entry")
     start, end = _interval(entry["validFromEpochNs"], entry["validUntilEpochNs"])
     cohort._digest(entry["configurationDigest"], "archived configuration")
@@ -293,7 +287,11 @@ def _entry(entry):
         "configurationDigest": digest, "generationSequence": admitted.generation_sequence,
         "generationDigest": admitted.generation_digest, "cohortDigest": admitted.cohort_digest,
         "roles": runtime_roles}
-    return _FrozenSnapshot(_HistoricalSnapshot(payload, digest, generation, runtime, start, end))
+    return _HistoricalSnapshot(payload, digest, generation, runtime, start, end)
+
+
+def _entry(entry):
+    return _FrozenSnapshot(_entry_snapshot(entry))
 
 
 def _admit_on_startup(*, original_bytes, current_snapshot, current_root_public_key, now_epoch_ns):

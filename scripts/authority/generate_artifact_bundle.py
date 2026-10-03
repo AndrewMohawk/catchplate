@@ -715,6 +715,7 @@ def validate_configuration_payload(
     value: Mapping[str, Any], *, role: str, source_revision: str,
     expected_generation_binding: Mapping[str, Any], expected_generation_binding_digest: str,
     expected_role_bindings: Mapping[str, str],
+    root_key: Ed25519PublicKey | None = None,
 ) -> tuple[str, str]:
     """Existing static configuration checks, without inventing a signature/owner.
 
@@ -722,6 +723,8 @@ def validate_configuration_payload(
     producer can validate its actual unsigned selection before private-key use;
     launch, installed-package and live attestation admission remain downstream.
     """
+    if root_key is not None and not isinstance(root_key, Ed25519PublicKey):
+        raise GeneratorError("configuration root is not authenticated Ed25519")
     if role not in {AUTHORITY_SERVICE_CONFIGURATION_ROLE, "witness"}:
         raise GeneratorError("configuration role is not closed")
     if role == "witness":
@@ -948,29 +951,31 @@ def validate_configuration_payload(
                     "authority WebAuthn enrollment authorization policy is invalid"
                 ) from exc
         try:
-            oauth_activation_policy.validate_policy(payload.get(oauth_activation_policy.FIELD), payload=payload)
-            oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload)
-            policy_candidate_policy.validate_policy(payload.get(policy_candidate_policy.FIELD), payload=payload)
-            genesis_policy.configuration(payload.get(genesis_policy.FIELD))
-            setup_policy_admission.validate_policy(payload.get(setup_policy_admission.FIELD), payload=payload)
-            policy_canary_policy.validate_policy(payload.get(policy_canary_policy.FIELD), payload=payload)
-            heartbeat_policy.validate_policy(payload.get(heartbeat_policy.FIELD), payload=payload)
-            finalization_policy.validate_policy(payload.get(finalization_policy.FIELD), payload=payload)
-            native_readiness_policy.validate_policy(payload.get(native_readiness_policy.FIELD), payload=payload)
-            native_activation.validate_policy(payload.get(native_activation.FIELD), payload=payload)
-            canary_delivery_policy.validate_policy(payload.get(canary_delivery_policy.FIELD), payload=payload)
-            oauth_measured_exchange_policy.validate_policy(payload.get(oauth_measured_exchange_policy.FIELD), payload=payload)
-            oauth_measured_setup_policy.validate_policy(payload.get(oauth_measured_setup_policy.FIELD), payload=payload)
-            oauth_reconnect_policy.validate_policy(payload.get(oauth_reconnect_policy.FIELD), payload=payload)
-            oauth_succession_policy.validate_policy(payload.get(oauth_succession_policy.FIELD), payload=payload)
-            oauth_refresh_policy.validate_policy(payload.get(oauth_refresh_policy.FIELD), payload=payload)
-            oauth_refresh_cleanup_policy.validate_policy(payload.get(oauth_refresh_cleanup_policy.FIELD), payload=payload)
-            oauth_measured_refresh_policy.validate_policy(payload.get(oauth_measured_refresh_policy.FIELD), payload=payload)
-            oauth_measured_cleanup_policy.validate_policy(payload.get(oauth_measured_cleanup_policy.FIELD), payload=payload)
-            oauth_pending_retirement_policy.validate_policy(payload.get(oauth_pending_retirement_policy.FIELD), payload=payload)
-            oauth_capture_retirement_policy.validate_policy(payload.get(oauth_capture_retirement_policy.FIELD), payload=payload)
-            credential_currentness_policy.validate_policy(payload.get(credential_currentness_policy.FIELD), payload=payload)
-            oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload)
+            oauth_activation_policy.validate_policy(payload.get(oauth_activation_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload, root_key=root_key)
+            policy_candidate_policy.validate_policy(payload.get(policy_candidate_policy.FIELD), payload=payload, root_key=root_key)
+            root_digest = None if root_key is None else "sha256:" + hashlib.sha256(root_key.public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
+            genesis_policy.configuration(payload.get(genesis_policy.FIELD), root_digest=root_digest)
+            setup_policy_admission.validate_policy(payload.get(setup_policy_admission.FIELD), payload=payload, root_key=root_key)
+            policy_canary_policy.validate_policy(payload.get(policy_canary_policy.FIELD), payload=payload, root_key=root_key)
+            heartbeat_policy.validate_policy(payload.get(heartbeat_policy.FIELD), payload=payload, root_key=root_key)
+            finalization_policy.validate_policy(payload.get(finalization_policy.FIELD), payload=payload, root_key=root_key)
+            native_readiness_policy.validate_policy(payload.get(native_readiness_policy.FIELD), payload=payload, root_key=root_key)
+            native_activation.validate_policy(payload.get(native_activation.FIELD), payload=payload, root_key=root_key)
+            canary_delivery_policy.validate_policy(payload.get(canary_delivery_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_measured_exchange_policy.validate_policy(payload.get(oauth_measured_exchange_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_measured_setup_policy.validate_policy(payload.get(oauth_measured_setup_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_reconnect_policy.validate_policy(payload.get(oauth_reconnect_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_succession_policy.validate_policy(payload.get(oauth_succession_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_refresh_policy.validate_policy(payload.get(oauth_refresh_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_refresh_cleanup_policy.validate_policy(payload.get(oauth_refresh_cleanup_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_measured_refresh_policy.validate_policy(payload.get(oauth_measured_refresh_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_measured_cleanup_policy.validate_policy(payload.get(oauth_measured_cleanup_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_pending_retirement_policy.validate_policy(payload.get(oauth_pending_retirement_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_capture_retirement_policy.validate_policy(payload.get(oauth_capture_retirement_policy.FIELD), payload=payload, root_key=root_key)
+            credential_currentness_policy.validate_policy(payload.get(credential_currentness_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise GeneratorError("authority OAuth purpose policy is invalid") from exc
     payload_bytes = canonical_json_bytes(payload)

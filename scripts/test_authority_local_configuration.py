@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_configuration as cli
 from serverware import authority_local_configuration as local
+from serverware import authority_historical_archive as history
 from scripts.test_authority_local_database_credentials import fixture as certificate_fixture
 from serverware.authority_local_database_credentials import issuance
 
@@ -147,7 +148,73 @@ def sealed(raw):
     return fd
 
 
+def historical_configuration(selected, payload, root):
+    # Real configuration signatures and exact binding projections only. The
+    # partial package below is never represented as an admitted artifact package.
+    bindings = local.spec.role_binding_digests(selected["roleManifests"])
+    schema, digest = local._validate_payload(payload, "authority-service", selected["generation"], bindings)
+    envelope = dict(schema=local.generator.SERVICE_CONFIGURATION_SCHEMA, payload=payload,
+        signature=local.spec.strict_base64url_encode(root.sign(local.signature_message("authority-service", payload))))
+    binding = dict(fileDigest=local.sha(local.spec.canonical_json_bytes(envelope)),
+        payloadDigest=digest, payloadSchema=schema, role="authority-service")
+    generation = dict(sequence=selected["generation"]["sequence"],
+        predecessorDigest=selected["generation"]["predecessorDigest"],
+        minimumRollbackSequence=selected["generation"]["minimumRollbackSequence"],
+        configurationBindingDigest=local.spec.configuration_generation_binding_digest(selected["generation"]),
+        roleBindingDigests=bindings, configurationPayloadBindings=[binding])
+    entry = dict(configurationEnvelope=envelope, configurationDigest=digest,
+        artifactPackage=dict(generation=selected["generation"]))
+    return entry, generation
+
+
 class LocalConfigurationControls(unittest.TestCase):
+    def test_historical_policy_genesis_preserves_exact_configuration_binding(self):
+        selected, payload, root = fixture()
+        payload[local.generator.genesis_policy.FIELD] = dict(
+            auditStoreIdentityDigest=PIN, auditSignerPublicKeyDigest=local.sha(b"synthetic-audit-signer"))
+        self.assertEqual(prepare(replace_payload(selected, payload))["payload"], payload)
+        entry, generation = historical_configuration(selected, payload, root)
+        self.assertEqual(history._configuration(entry, generation, root.public_key()),
+            (payload, entry["configurationDigest"]))
+        for field in (None, "fileDigest", "payloadDigest"):
+            changed = copy.deepcopy(generation)
+            if field is None:
+                changed["configurationPayloadBindings"] = []
+            else:
+                changed["configurationPayloadBindings"][0][field] = local.sha(b"wrong-binding")
+            with self.subTest(field=field), self.assertRaises(history.HistoricalArchiveError):
+                history._configuration(entry, changed, root.public_key())
+
+    def test_historical_policy_genesis_rejects_authenticated_root_as_audit_signer(self):
+        selected, payload, root = fixture()
+        payload[local.generator.genesis_policy.FIELD] = dict(auditStoreIdentityDigest=PIN,
+            auditSignerPublicKeyDigest=local._spki(selected["configurationRootPublicKeyBase64Url"]))
+        # The ordinary static validator has no root argument here. The actual
+        # historical verifier must supply its authenticated root independently.
+        entry, generation = historical_configuration(selected, payload, root)
+        with self.assertRaises(local.generator.genesis_policy.core.TransitionKernelError):
+            history._configuration(entry, generation, root.public_key())
+
+    def test_historical_oauth_purpose_key_must_differ_from_authenticated_root(self):
+        selected, original, root = fixture()
+        policy = local.generator.oauth_activation_policy
+        separate = Ed25519PrivateKey.from_private_bytes(b"O" * 32).public_key()
+        for purpose_key, accepted in ((separate, True), (root.public_key(), False)):
+            payload = copy.deepcopy(original)
+            encoded = local.spec.strict_base64url_encode(purpose_key.public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+            payload[policy.FIELD] = dict(schema=policy.SCHEMA, deploymentId="synthetic-history",
+                controlPlaneConfigurationDigest=PIN, enrollmentRootPublicKeyBase64Url=encoded,
+                enrollmentRootSpkiSha256=local._spki(encoded))
+            entry, generation = historical_configuration(selected, payload, root)
+            with self.subTest(accepted=accepted):
+                if accepted:
+                    self.assertEqual(history._configuration(entry, generation, root.public_key()),
+                        (payload, entry["configurationDigest"]))
+                else:
+                    with self.assertRaises((history.HistoricalArchiveError, local.generator.GeneratorError)):
+                        history._configuration(entry, generation, root.public_key())
+
     def test_real_certificate_source_service_and_signed_witness_joins(self):
         selected, payload, root = fixture()
         self.assertEqual(prepare(selected)["payload"], payload)

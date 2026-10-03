@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 
@@ -463,12 +464,20 @@ def _policy_candidate_authority_canonicalize_namespace(
     normalized = _policy_candidate_authority_normalize_sql(definition)
     if actual_namespace == canonical_namespace:
         return normalized
-    return normalized.replace(
+    qualified = normalized.replace(
         f'"{actual_namespace}".',
         f'"{canonical_namespace}".',
     ).replace(
         actual_namespace + ".",
         canonical_namespace + ".",
+    )
+    # pg_get_functiondef also retains standalone namespace literals in
+    # search_path, catalog predicates and format(%I) arguments. Preserve the
+    # complete definition, translating only an exact, unescaped SQL literal.
+    return re.sub(
+        r"(?<!')'" + re.escape(actual_namespace) + r"'(?!')",
+        lambda _match: "'" + canonical_namespace + "'",
+        qualified,
     )
 
 

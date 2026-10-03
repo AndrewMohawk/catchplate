@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
+from serverware.authority_store import schema as schema_module
 from serverware.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE,
     completed_v9_schema_programs,
@@ -145,6 +146,67 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             require_metadata_schema_program(value)
         with self.assertRaises(ValueError):
             require_metadata_schema_program(value, legacy_completed_v9_receipt=True)
+
+    def test_postgres_namespace_canonicalization_preserves_complete_definition(self):
+        scratch = "serverware_candidate_authority_expected_v9"
+        canonical = "serverware_metadata"
+        definition = (
+            f"CREATE FUNCTION {scratch}.guard() RETURNS void LANGUAGE plpgsql "
+            f"SET search_path TO 'pg_catalog', '{scratch}', 'pg_temp' "
+            "AS $function$ BEGIN "
+            f"PERFORM 1 FROM pg_catalog.pg_namespace WHERE nspname = '{scratch}'; "
+            "EXECUTE pg_catalog.format('SELECT * FROM %I.%I', "
+            f"'{scratch}', 'credentials'); "
+            f'PERFORM * FROM "{scratch}".credentials; '
+            "END $function$"
+        )
+        expected = definition.replace(scratch, canonical)
+        actual = schema_module._policy_candidate_authority_canonicalize_namespace(
+            definition, actual_namespace=scratch, canonical_namespace=canonical,
+        )
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            schema_module._policy_candidate_authority_object_definition(
+                name="guard", definition=actual,
+            ),
+            schema_module._policy_candidate_authority_object_definition(
+                name="guard", definition=expected,
+            ),
+        )
+
+    def test_postgres_namespace_canonicalization_preserves_unauthorized_differences(self):
+        scratch = "serverware_candidate_authority_expected_v9"
+        canonical = "serverware_metadata"
+
+        def normalize(value, namespace=scratch):
+            return schema_module._policy_candidate_authority_canonicalize_namespace(
+                value, actual_namespace=namespace, canonical_namespace=canonical,
+            )
+
+        original = f"SET search_path TO 'pg_catalog', '{scratch}', 'pg_temp' BEGIN RETURN 1; END"
+        expected = normalize(original)
+        for changed in (
+            original.replace("'pg_catalog', ", ""),
+            original.replace("'pg_catalog', ", "'public', 'pg_catalog', "),
+            original.replace(f"'pg_catalog', '{scratch}'", f"'{scratch}', 'pg_catalog'"),
+            original.replace(scratch, "foreign_namespace"),
+            original.replace(scratch, "prefix_" + scratch),
+            original.replace(scratch, scratch + "_suffix"),
+            original.replace("RETURN 1", "RETURN 2"),
+        ):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(normalize(changed), expected)
+        for literal in (
+            "'prefix''" + scratch + "'",
+            "'" + scratch + "''suffix'",
+            "'''" + scratch + "'''",
+            "'prefix_" + scratch + "'",
+            "'" + scratch + "_suffix'",
+        ):
+            with self.subTest(literal=literal):
+                self.assertEqual(normalize(literal), literal)
+        # Actual target definitions are never translated into a reference view.
+        self.assertEqual(normalize(original, canonical), original)
 
     def test_postgres_required_guards_include_complete_schema_inventory(self):
         # Source-linkage control only. The disposable full-schema fixture proves

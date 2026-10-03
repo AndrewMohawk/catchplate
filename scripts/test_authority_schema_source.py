@@ -12,6 +12,7 @@ locking, signed receipts, or successful production startup.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import sys
 import unittest
@@ -196,6 +197,42 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             r"'(serverware\.policyCandidateAuthoritySource/[^']*)'", active)
         self.assertTrue(revisions, "active authority source revision literals are absent")
         self.assertEqual(set(revisions), {authority_contract.SOURCE_REVISION})
+
+    def test_current_root_operation_inventories_cover_oidc_execution(self):
+        # Source rendering only: no database, signature, custody or execution
+        # admission is supplied by matching these inventories.
+        from serverware.authority_store import current_root_execution_sql as effects
+
+        expected = ("oidc.session.activate", "oidc.session.activation-delivery.consume",
+            "webauthn.credential.revoke", "webauthn.registration.evidence.admit",
+            "webauthn.registration.finalize", "webauthn.trust.complete",
+            "webauthn.trust.installation.admit", "webauthn.trust.stage")
+        planned = tuple(sorted(operation for operation, spec in authority_contract.OPERATIONS.items()
+            if spec["planningMode"] == "typed-successor-planning"))
+        self.assertEqual(planned, expected)
+        self.assertEqual(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT["operations"], expected)
+        active = re.sub(r"/\*.*?\*/|--[^\n]*", "", self.complete, flags=re.DOTALL)
+        tables = re.findall(r"\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+"
+            r"policy_authority_current_root_commit_markers\s*\((.*?)\)\s*;", active, re.DOTALL)
+        self.assertEqual(len(tables), 1)
+        checks = re.findall(r"\bCHECK\s*\(\s*operation\s+IN\s*\(([^)]*)\)\s*\)", tables[0])
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(tuple(re.findall(r"'([^']*)'", checks[0])), expected)
+        rendered = effects.current_root_execution_apply_body_sql('"serverware_metadata"')
+        sources = re.findall(r"crx_source\s*:=\s*'((?:[^']|'')*)'::jsonb->crx_operation;", rendered)
+        self.assertEqual(len(sources), 1)
+        operations = json.loads(sources[0].replace("''", "'"))
+        self.assertEqual(tuple(sorted(operations)), expected)
+        for operation, writes in (
+            ("oidc.session.activate", {"oidc_browser_sessions", "oidc_session_activation_deliveries",
+                "webauthn_credentials", "webauthn_challenges", "metadata_audit_outbox",
+                "policy_authority_bounded_aggregate_states"}),
+            ("oidc.session.activation-delivery.consume", {"oidc_session_activation_deliveries",
+                "metadata_audit_outbox", "policy_authority_bounded_aggregate_states"}),
+        ):
+            with self.subTest(operation=operation):
+                self.assertEqual(set(operations[operation]["writes"]), writes)
+                self.assertTrue(writes <= set(operations[operation]["keys"]))
 
     def test_bootstrap_crypto_reads_only_the_supplied_transaction(self):
         _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)

@@ -7,6 +7,7 @@ them. Publication releases actual parked children, not proof of service success.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import time
 
@@ -23,10 +24,13 @@ io, spec, launch, stage = pair.io, pair.spec, pair.launch, pair.stage
 canonical, document, sha = spec.canonical_json_bytes, configuration.document, pair.sha
 SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v2"
 RUNTIME_SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v3"
+RETAINED_SCHEMA = "serverware.authorityTrustedHostLocalCohortApproval/v4"
 MAX_RUNTIME_NS = LOCAL_SESSION_MAX_NS
 PURPOSE = "issue-observed-five-role-local-cohort"
 DELEGATION = "configuration-root-signs-five-local-role-receipts-cohort-and-initial-history-v1"
 INITIAL_HISTORY = "explicit-empty-first-generation-history"
+RETAINED_HISTORY = "explicit-current-root-signed-retained-history-v1"
+RETAINED_DELEGATION = "configuration-root-signs-five-local-role-receipts-consumes-retained-history-v1"
 RUNTIME_EVIDENCE_SCHEMA = "serverware.authorityRuntimeEvidence/v1"
 FIELDS = frozenset({"schema", "purpose", "rootDelegation", "configurationRootPublicKeyBase64Url",
     "serviceConfigurationOriginal", "serviceConfigurationSha256", "roles", "historicalArchiveSelection", "bootIdDigest",
@@ -46,7 +50,7 @@ def runtime_interval(value):
     """Prospective local runtime authority, never a renewed issuing window."""
     if value["schema"] == SCHEMA:
         return value["issuedAtUnixNanos"], value["expiresAtUnixNanos"]
-    require(value["schema"] == RUNTIME_SCHEMA)
+    require(value["schema"] in (RUNTIME_SCHEMA, RETAINED_SCHEMA))
     interval = value["runtimeValidity"]
     require(type(interval) is dict and set(interval) == {"issuedAtEpochNs", "expiresAtEpochNs"})
     start, end = interval["issuedAtEpochNs"], interval["expiresAtEpochNs"]
@@ -58,11 +62,16 @@ def runtime_interval(value):
 
 def approval(raw, *, boot, now_boottime_ns, now_unix_ns):
     value = document(raw, io.MAX_PUBLIC)
-    require(value.get("schema") in (SCHEMA, RUNTIME_SCHEMA)
-        and set(value) == FIELDS | ({"runtimeValidity"} if value["schema"] == RUNTIME_SCHEMA else set())
+    retained = value.get("schema") == RETAINED_SCHEMA
+    require(value.get("schema") in (SCHEMA, RUNTIME_SCHEMA, RETAINED_SCHEMA)
+        and set(value) == FIELDS | ({"runtimeValidity"} if value["schema"] != SCHEMA else set())
+            | ({"historicalArchiveSha256"} if retained else set())
         and value["purpose"] == PURPOSE
-        and value["rootDelegation"] == DELEGATION and value["bootIdDigest"] == boot
-        and value["historicalArchiveSelection"] == INITIAL_HISTORY)
+        and value["rootDelegation"] == (RETAINED_DELEGATION if retained else DELEGATION)
+        and value["bootIdDigest"] == boot
+        and value["historicalArchiveSelection"] == (RETAINED_HISTORY if retained else INITIAL_HISTORY))
+    if retained:
+        spec._require_digest(value["historicalArchiveSha256"], name="retained historical archive")
     spec._require_digest(boot, name="cohort boot")
     configuration._public(value["configurationRootPublicKeyBase64Url"])
     for name in ("issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"):
@@ -91,9 +100,37 @@ def approval(raw, *, boot, now_boottime_ns, now_unix_ns):
     return value
 
 
-def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
+def _archive_original(selected, original):
+    """Pin bounded canonical bytes only; this is not historical admission."""
+    if selected["schema"] != RETAINED_SCHEMA:
+        require(original is None)
+        return None
+    require(type(original) is bytes and 2 <= len(original) <= history.MAX_BYTES
+        and sha(original) == selected["historicalArchiveSha256"])
+    return history._canonical_document(original)
+
+
+def _archive_precheck(context, *, now_unix_ns):
+    """Authenticate the outer scope before signing, never invent a snapshot."""
+    archive = _archive_original(context["selected"], context.get("archiveOriginal"))
+    require(archive is not None)
+    payload = cohort._envelope(archive, history.SCHEMA, history._PAYLOAD_FIELDS)
+    cohort._verify_signature(archive, Ed25519PublicKey.from_public_bytes(context["rootPublic"]))
+    start, end = history._interval(payload["issuedAtEpochNs"], payload["expiresAtEpochNs"])
+    runtime_start, runtime_end = runtime_interval(context["selected"])
+    require(payload["purpose"] == history.PURPOSE and payload["sourceRevision"] == cohort.authority.SOURCE_REVISION
+        and payload["configurationDigest"] == context["configurationDigest"]
+        and payload["generationDigest"] == context["generationDigest"]
+        and max(runtime_start, context["generationInterval"][0]) <= start <= now_unix_ns < end
+        <= min(runtime_end, context["generationInterval"][1])
+        and type(payload["entries"]) is list and len(payload["entries"]) <= history.MAX_ENTRIES)
+    return archive
+
+
+def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns, archive_original=None):
     """Authenticate originals; only the owner below supplies live observations."""
     selected = approval(raw, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    _archive_original(selected, archive_original)
     require(type(originals) is dict and set(originals) == set(cohort.ROLES))
     root_raw = configuration._public(selected["configurationRootPublicKeyBase64Url"])
     root = Ed25519PublicKey.from_public_bytes(root_raw)
@@ -115,8 +152,9 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
         verified = context["verified"]
         # An empty historical archive is an explicit first-generation choice,
         # never an automatic fallback for a later generation or lost history.
-        require(verified.generation_sequence == 0 and verified.predecessor_digest is None
-            and verified.minimum_rollback_sequence == 0)
+        if selected["schema"] != RETAINED_SCHEMA:
+            require(verified.generation_sequence == 0 and verified.predecessor_digest is None
+                and verified.minimum_rollback_sequence == 0)
         scope = (verified.package_digest, verified.generation_digest, verified.generation_sequence)
         if common is None:
             common = scope
@@ -167,10 +205,14 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns):
         credentials = {row["name"]: row for row in context["observed"]["credentials"]}
         require(CONFIG_NAME in credentials and credentials[CONFIG_NAME]["sha256"] == sha(service_raw)
             and credentials[CONFIG_NAME]["size"] == len(service_raw))
-    return dict(selected=selected, rootPublic=root_raw, contexts=contexts, identities=identities,
+    context = dict(selected=selected, rootPublic=root_raw, contexts=contexts, identities=identities,
         service=service, serviceOriginal=service_raw, configurationDigest=config_digest,
         static=static, packageDigest=common[0], generationDigest=common[1], generationSequence=common[2],
-        generationContext=history._generation(verified.package, verified), generationInterval=generation_interval)
+        generationContext=history._generation(verified.package, verified), generationInterval=generation_interval,
+        archiveOriginal=archive_original)
+    if selected["schema"] == RETAINED_SCHEMA:
+        _archive_precheck(context, now_unix_ns=now_unix_ns)
+    return context
 
 
 def _signed_cohort(context, key, *, now_unix_ns):
@@ -205,16 +247,21 @@ def _signed_cohort(context, key, *, now_unix_ns):
 
 
 def _signed_runtime_evidence(context, key, *, now_unix_ns):
-    """Produce the real service delivery, including explicitly empty history.
+    """Produce service delivery with initial history or an exact retained archive.
 
     The owner supplies actual admitted package/launch context. These pure
     signed codec results alone are not evidence of a live process or database.
     """
     selected, generation = context["selected"], context["generationContext"]
     runtime_start, runtime_end = runtime_interval(selected)
-    require(selected["historicalArchiveSelection"] == INITIAL_HISTORY
-        and context["generationSequence"] == generation["sequence"] == 0
-        and generation["predecessorDigest"] is None and generation["minimumRollbackSequence"] == 0
+    retained = selected["schema"] == RETAINED_SCHEMA
+    archive = _archive_precheck(context, now_unix_ns=now_unix_ns) if retained else None
+    if not retained:
+        _archive_original(selected, context.get("archiveOriginal"))
+        require(selected["historicalArchiveSelection"] == INITIAL_HISTORY
+            and context["generationSequence"] == generation["sequence"] == 0
+            and generation["predecessorDigest"] is None and generation["minimumRollbackSequence"] == 0)
+    require(context["generationSequence"] == generation["sequence"]
         and generation["digest"] == context["generationDigest"])
     cohort_raw, verifier_raw = _signed_cohort(context, key, now_unix_ns=now_unix_ns)
     admitted, _, _ = cohort._verify_cohort_against_scope(held_bytes=cohort_raw,
@@ -228,20 +275,24 @@ def _signed_runtime_evidence(context, key, *, now_unix_ns):
         identities[role] = dict(measurementDigest=payload["measurementDigest"],
             responseSigningSpkiDigest=payload["responseSigningSpkiDigest"], attestationReceiptDigest=digest)
     runtime = dict(schema=history.configuration.RUNTIME_ROLE_IDENTITIES_SCHEMA,
-        configurationDigest=context["configurationDigest"], generationSequence=0,
+        configurationDigest=context["configurationDigest"], generationSequence=context["generationSequence"],
         generationDigest=context["generationDigest"], cohortDigest=admitted.cohort_digest, roles=identities)
     snapshot = history._HistoricalSnapshot(payload=context["service"], configuration_digest=context["configurationDigest"],
         generation=generation, runtime_role_identities=runtime,
         valid_from_epoch_ns=max(context["generationInterval"][0], admitted.valid_from_epoch_ns),
         valid_until_epoch_ns=min(context["generationInterval"][1], admitted.valid_until_epoch_ns))
-    payload = dict(schema=history.SCHEMA, purpose=history.PURPOSE, sourceRevision=cohort.authority.SOURCE_REVISION,
-        configurationDigest=context["configurationDigest"], generationDigest=context["generationDigest"],
-        issuedAtEpochNs=runtime_start, expiresAtEpochNs=runtime_end, entries=[])
-    archive = dict(schema=history.SCHEMA, payload=payload, signature=spec.strict_base64url_encode(
-        key.sign(cohort._domain_digest(history.SCHEMA, canonical(payload)).encode("ascii"))))
-    checked = history._admit_on_startup(original_bytes=canonical(archive), current_snapshot=snapshot,
+    if not retained:
+        payload = dict(schema=history.SCHEMA, purpose=history.PURPOSE, sourceRevision=cohort.authority.SOURCE_REVISION,
+            configurationDigest=context["configurationDigest"], generationDigest=context["generationDigest"],
+            issuedAtEpochNs=runtime_start, expiresAtEpochNs=runtime_end, entries=[])
+        archive = dict(schema=history.SCHEMA, payload=payload, signature=spec.strict_base64url_encode(
+            key.sign(cohort._domain_digest(history.SCHEMA, canonical(payload)).encode("ascii"))))
+    archive_raw = context["archiveOriginal"] if retained else canonical(archive)
+    require(canonical(archive) == archive_raw)
+    checked = history._admit_on_startup(original_bytes=archive_raw, current_snapshot=snapshot,
         current_root_public_key=key.public_key(), now_epoch_ns=now_unix_ns)
-    require(len(checked.records) == 1)  # Current snapshot only; no invented historical record.
+    if not retained:
+        require(len(checked.records) == 1)  # Current snapshot only; no invented historical record.
     delivery = canonical(dict(schema=RUNTIME_EVIDENCE_SCHEMA,
         currentCohort=document(cohort_raw, cohort.MAX_BYTES), historicalArchive=archive))
     require(len(delivery) <= pair.LATE_LIMITS["evidence.json"])
@@ -256,17 +307,19 @@ class LocalCohortError(RuntimeError):
 
 class LocalCohortIssuer:
     @classmethod
-    def open(cls, *, approval_fd, approval_sha256, signing_key_fd, role_inputs):
+    def open(cls, *, approval_fd, approval_sha256, signing_key_fd, role_inputs, archive_fd=None):
         self = cls()
         self.observers, self.named, self.originals, self.released = {}, [], {}, set()
         self.used = self.issued = self.publication_started = self.closed = self.closing = False
         self.context = self.raw = self.value = self.cohort_raw = self.verifier_raw = self.delivery_raw = None
+        self.archive_fd, self.archive_identity, self.archive_raw, self.archive_interval = archive_fd, None, None, None
         self.pid, self.start = os.getpid(), launch._process_identity(os.getpid())[0]
         try:
             io._process()
             require(type(role_inputs) is dict and set(role_inputs) == set(cohort.ROLES))
             require(all(type(row) is dict and set(row) == {"approval_fd", "exchange_directory_fd"} for row in role_inputs.values()))
-            fds = [approval_fd, signing_key_fd, *(fd for row in role_inputs.values() for fd in row.values())]
+            fds = [approval_fd, signing_key_fd, *(fd for row in role_inputs.values() for fd in row.values()),
+                *([] if archive_fd is None else [archive_fd])]
             require(all(type(fd) is int and 3 <= fd < 2**31 for fd in fds) and len(set(fds)) == len(fds)
                 and len({(os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds}) == len(fds))
             self.fd, self.key_fd = approval_fd, signing_key_fd
@@ -277,6 +330,13 @@ class LocalCohortIssuer:
             self.boot = launch._boot_identity_digest()
             self.last_boot, self.last_epoch = io._clock(), time.time_ns()
             self.value = approval(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_epoch)
+            require((self.value["schema"] == RETAINED_SCHEMA) == (archive_fd is not None))
+            if archive_fd is not None:
+                require(fcntl.fcntl(archive_fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
+                self.archive_identity = io._input(archive_fd, history.MAX_BYTES)
+                self.archive_raw = io.read_public(archive_fd, history.MAX_BYTES)
+                payload = _archive_original(self.value, self.archive_raw)["payload"]
+                self.archive_interval = history._interval(payload["issuedAtEpochNs"], payload["expiresAtEpochNs"])
             for role in cohort.ROLES:
                 # The acquisition return/assignment is one ownership transfer;
                 # an interrupt cannot strand the observer's real acquired FDs.
@@ -299,7 +359,7 @@ class LocalCohortIssuer:
                 self._absent(observer.directory)
                 self.check()
             self.context = prepare(self.raw, self.originals, boot=self.boot,
-                now_boottime_ns=io._clock(), now_unix_ns=time.time_ns())
+                now_boottime_ns=io._clock(), now_unix_ns=time.time_ns(), archive_original=self.archive_raw)
             self.verify_live()
             return self
         except BaseException as error:
@@ -323,11 +383,22 @@ class LocalCohortIssuer:
             and io._input(self.fd, io.MAX_PUBLIC) == self.source_identity
             and io._input(self.key_fd, 32, private=True) == self.key_identity)
         self.last_boot, self.last_epoch = now_boot, now_epoch
+        self._check_archive()
         for role, observer in self.observers.items():
             observer.check_sources() if role in self.released else observer.check()
         for directory, name, fd, identity in self.named:
             require(io._identity(os.fstat(fd)) == identity
                 and io._identity(os.stat(name, dir_fd=directory, follow_symlinks=False)) == identity)
+
+    def _check_archive(self):
+        if self.value["schema"] != RETAINED_SCHEMA:
+            require(self.archive_fd is self.archive_identity is self.archive_raw is self.archive_interval is None)
+            return
+        require(fcntl.fcntl(self.archive_fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY
+            and io._input(self.archive_fd, history.MAX_BYTES) == self.archive_identity
+            and io.read_public(self.archive_fd, history.MAX_BYTES) == self.archive_raw
+            and sha(self.archive_raw) == self.value["historicalArchiveSha256"])
+        require(self.archive_interval[0] <= time.time_ns() < self.archive_interval[1])
 
     def verify_live(self):
         self.check()
@@ -354,7 +425,7 @@ class LocalCohortIssuer:
             self.used = True
             self.verify_live()
             self.context = prepare(self.raw, self.originals, boot=self.boot,
-                now_boottime_ns=io._clock(), now_unix_ns=time.time_ns())
+                now_boottime_ns=io._clock(), now_unix_ns=time.time_ns(), archive_original=self.archive_raw)
             key = io.signing_key(self.key_fd)
             self.cohort_raw, self.verifier_raw, self.delivery_raw = _signed_runtime_evidence(
                 self.context, key, now_unix_ns=time.time_ns())

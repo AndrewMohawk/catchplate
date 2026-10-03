@@ -3,6 +3,8 @@
 from copy import deepcopy
 from pathlib import Path
 import ast
+import fcntl
+import os
 import unittest
 from unittest.mock import patch
 
@@ -61,7 +63,131 @@ def verify(raw, context, key, now=150):
         local_binding=("verifier", *context["identities"]["verifier"]), evaluation_epoch_ns=now)
 
 
+def retained_fixture():
+    # Public synthetic codec context, not a VerifiedArtifactPackage/live owner.
+    key, selected, context = fixture()
+    selected.update(schema=subject.RETAINED_SCHEMA, rootDelegation=subject.RETAINED_DELEGATION,
+        historicalArchiveSelection=subject.RETAINED_HISTORY,
+        runtimeValidity=dict(issuedAtEpochNs=100, expiresAtEpochNs=200))
+    context["generationSequence"] = 1
+    context["generationContext"].update(sequence=1, predecessorDigest=digest("prior"))
+    payload = dict(schema=subject.history.SCHEMA, purpose=subject.history.PURPOSE,
+        sourceRevision=subject.cohort.authority.SOURCE_REVISION,
+        configurationDigest=context["configurationDigest"], generationDigest=context["generationDigest"],
+        issuedAtEpochNs=120, expiresAtEpochNs=180, entries=[])
+    select_archive(context, key, payload)
+    return key, selected, context
+
+
+def select_archive(context, key, payload):
+    envelope = dict(schema=subject.history.SCHEMA, payload=payload,
+        signature=subject.spec.strict_base64url_encode(key.sign(subject.cohort._domain_digest(
+            subject.history.SCHEMA, subject.canonical(payload)).encode("ascii"))))
+    context["archiveOriginal"] = subject.canonical(envelope)
+    context["selected"]["historicalArchiveSha256"] = subject.sha(context["archiveOriginal"])
+
+
 class LocalCohortTests(unittest.TestCase):
+    def test_retained_v4_requires_exact_selection_pin_and_original(self):
+        _, selected, context = retained_fixture()
+        self.assertEqual(subject.approval(subject.canonical(selected), boot=digest("boot"),
+            now_boottime_ns=150, now_unix_ns=150), selected)
+        for mutate in (lambda value: value.pop("historicalArchiveSha256"),
+                       lambda value: value.update(historicalArchiveSha256="unselected"),
+                       lambda value: value.update(rootDelegation=subject.DELEGATION),
+                       lambda value: value.update(historicalArchiveSelection=subject.INITIAL_HISTORY),
+                       lambda value: value.update(extra=True)):
+            bad = deepcopy(selected); mutate(bad)
+            with self.assertRaises(ValueError):
+                subject.approval(subject.canonical(bad), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)
+        for schema in (subject.SCHEMA, subject.RUNTIME_SCHEMA):
+            _, legacy, _ = fixture()
+            legacy["schema"] = schema
+            if schema == subject.RUNTIME_SCHEMA:
+                legacy["runtimeValidity"] = dict(issuedAtEpochNs=100, expiresAtEpochNs=200)
+            with self.assertRaises(ValueError): subject._archive_original(legacy, context["archiveOriginal"])
+            legacy["historicalArchiveSha256"] = selected["historicalArchiveSha256"]
+            with self.assertRaises(ValueError):
+                subject.approval(subject.canonical(legacy), boot=digest("boot"), now_boottime_ns=150, now_unix_ns=150)
+        for original in (None, b"", context["archiveOriginal"] + b" ", b"x" * (subject.history.MAX_BYTES + 1)):
+            with self.assertRaises(ValueError): subject._archive_original(selected, original)
+
+    def test_retained_archive_is_consumed_unchanged_and_not_resigned(self):
+        key, _, context = retained_fixture()
+        signed_messages = []
+        class CountingKey:
+            def public_key(self): return key.public_key()
+            def sign(self, raw):
+                signed_messages.append(raw)
+                return key.sign(raw)
+        with patch.object(subject.history, "_admit_on_startup", wraps=subject.history._admit_on_startup) as admit:
+            _, _, delivery = subject._signed_runtime_evidence(context, CountingKey(), now_unix_ns=150)
+        self.assertEqual(len(signed_messages), 6)  # Five receipts and cohort; never the archive.
+        self.assertEqual(subject.canonical(subject.document(delivery, subject.io.MAX_PUBLIC)["historicalArchive"]),
+            context["archiveOriginal"])
+        admit.assert_called_once()
+        self.assertEqual(admit.call_args.kwargs["original_bytes"], context["archiveOriginal"])
+        snapshot = admit.call_args.kwargs["current_snapshot"]
+        self.assertEqual(snapshot.generation["sequence"], 1)
+        self.assertEqual(snapshot.runtime_role_identities["generationSequence"], 1)
+        self.assertEqual((snapshot.valid_from_epoch_ns, snapshot.valid_until_epoch_ns), (100, 200))
+
+    def test_retained_wrong_root_scope_or_interval_refuses_before_signing(self):
+        for change in (dict(configurationDigest=digest("wrong-config")), dict(generationDigest=digest("wrong-generation")),
+                       dict(issuedAtEpochNs=99), dict(issuedAtEpochNs=151), dict(expiresAtEpochNs=150),
+                       dict(expiresAtEpochNs=201), dict(purpose="other"), dict(sourceRevision="other")):
+            key, _, context = retained_fixture()
+            payload = subject.document(context["archiveOriginal"], subject.history.MAX_BYTES)["payload"]
+            payload.update(change); select_archive(context, key, payload)
+            with self.subTest(change=change), patch.object(subject, "_signed_cohort") as signed:
+                with self.assertRaises(ValueError): subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+                signed.assert_not_called()
+        key, _, context = retained_fixture()
+        payload = subject.document(context["archiveOriginal"], subject.history.MAX_BYTES)["payload"]
+        select_archive(context, Ed25519PrivateKey.from_private_bytes(b"\x23" * 32), payload)
+        with patch.object(subject, "_signed_cohort") as signed:
+            with self.assertRaises(ValueError): subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+            signed.assert_not_called()
+
+    def test_retained_invalid_entries_reach_real_admission_and_never_become_empty(self):
+        key, _, context = retained_fixture()
+        payload = subject.document(context["archiveOriginal"], subject.history.MAX_BYTES)["payload"]
+        payload["entries"] = [{"not": "an admitted historical entry"}]
+        select_archive(context, key, payload)
+        with patch.object(subject.history, "_admit_on_startup", wraps=subject.history._admit_on_startup) as admit:
+            with self.assertRaises(ValueError): subject._signed_runtime_evidence(context, key, now_unix_ns=150)
+            admit.assert_called_once()
+            self.assertEqual(admit.call_args.kwargs["original_bytes"], context["archiveOriginal"])
+
+    def test_retained_readonly_fd_identity_bytes_expiry_and_extra_input_controls(self):
+        # Actual sealed public memfd custody only, not a live cohort owner.
+        _, selected, context = retained_fixture()
+        writer = os.memfd_create("public-history-unit", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+        reader = None
+        try:
+            raw = context["archiveOriginal"]
+            self.assertEqual(os.write(writer, raw), len(raw))
+            os.fchmod(writer, 0o400)
+            fcntl.fcntl(writer, fcntl.F_ADD_SEALS, subject.io.SEALS)
+            reader = os.open("/proc/self/fd/" + str(writer), os.O_RDONLY | os.O_CLOEXEC)
+            owner = object.__new__(subject.LocalCohortIssuer)
+            owner.value, owner.archive_fd, owner.archive_raw = selected, reader, raw
+            owner.archive_identity = subject.io._input(reader, subject.history.MAX_BYTES)
+            owner.archive_interval = (120, 180)
+            with patch.object(subject.time, "time_ns", return_value=150):
+                owner._check_archive()
+                for changes in (dict(archive_fd=writer), dict(archive_raw=raw + b" "),
+                                dict(archive_identity=()), dict(value=dict(schema=subject.SCHEMA))):
+                    previous = {name: getattr(owner, name) for name in changes}
+                    for name, value in changes.items(): setattr(owner, name, value)
+                    with self.assertRaises(ValueError): owner._check_archive()
+                    for name, value in previous.items(): setattr(owner, name, value)
+            with patch.object(subject.time, "time_ns", return_value=180):
+                with self.assertRaises(ValueError): owner._check_archive()
+        finally:
+            if reader is not None: os.close(reader)
+            os.close(writer)
+
     def test_runtime_v3_is_prospective_not_extended_issuance(self):
         _, value, _ = fixture()
         value.update(schema=subject.RUNTIME_SCHEMA,
@@ -260,6 +386,21 @@ class LocalCohortTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cli.arguments(bad)
 
+    def test_cli_retained_archive_is_optional_final_canonical_and_distinct(self):
+        argv = ["--approval-fd", "3", "--approval-sha256", digest("approval"), "--signing-key-fd", "4"]
+        for index, role in enumerate(cli.ROLES):
+            argv += [f"--{role}-approval-fd", str(5 + index * 2), f"--{role}-exchange-directory-fd", str(6 + index * 2)]
+        legacy = cli.arguments(argv)
+        self.assertNotIn("archive_fd", legacy)
+        option = ["--historical-archive-fd", "20"]
+        self.assertEqual(cli.arguments(argv + option), dict(legacy, archive_fd=20))
+        for bad in (option + argv, argv + option + option, argv + option[:1],
+                    argv + ["--archive-fd", "20"],
+                    *(argv + [option[0], value] for value in
+                      [*(str(fd) for fd in range(3, 15)), "2", "020", "+20", "20 ", str(2**31)])):
+            with self.subTest(argv=bad), self.assertRaises(ValueError):
+                cli.arguments(bad)
+
     def test_source_live_check_sign_release_and_output_order(self):
         tree = ast.parse(Path(subject.__file__).read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalCohortIssuer")
@@ -335,6 +476,7 @@ class LocalCohortTests(unittest.TestCase):
         owner.used = owner.issued = False
         owner.cohort_raw = owner.verifier_raw = owner.delivery_raw = None
         owner.raw, owner.originals, owner.boot, owner.key_fd = b"synthetic approval", {}, digest("boot"), -1
+        owner.archive_raw = None
         return owner, key, context
 
     def test_synthetic_issue_two_checks_public_bootstrap_rechecks_and_single_use(self):

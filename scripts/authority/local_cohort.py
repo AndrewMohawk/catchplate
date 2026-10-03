@@ -11,13 +11,14 @@ USAGE = """Usage: python -I -B scripts/authority/local_cohort.py --approval-fd N
   --planner-approval-fd N --planner-exchange-directory-fd N
   --planner-writer-approval-fd N --planner-writer-exchange-directory-fd N
   --verifier-approval-fd N --verifier-exchange-directory-fd N
+  [--historical-archive-fd N]  (optional final pair, v4 only)
 
-Root-only, one-shot, same-kernel trusted-host-local issuance. CohortApproval/v2
+Root-only, one-shot, same-kernel trusted-host-local issuance. CohortApproval/v2/v3
 pins the genuine signed Service6 original, the exact five original launch
 approvals/observations/issued manifest/certificate hashes and root0700 exchange
 identities, explicit configuration-root delegation and empty-first-generation
-history selection, boot and original <=300s
-dual limits. All actual processes remain parked pending evidence.json. Existing
+history selection, boot and original bounded dual limits.
+All actual processes remain parked pending evidence.json. Existing
 PIDFD/proc/descriptor/installed-source/mapping checks are mandatory; access to
 pidfd_getfd, map_files and process memory is required. No predicted processes,
 arbitrary commands, native/TEE/HSM or independent-administrator claim.
@@ -30,9 +31,15 @@ actual child's retained configuration descriptor and installed package binding.
 
 Publishes the actual authorityRuntimeEvidence/v1 delivery to all five
 evidence.json files: currentCohort is the existing signed five-role cohort;
-historicalArchive is a separately root-signed exact current-scope empty archive.
-Only generation zero with no predecessor and zero rollback floor is supported;
-this never discards historical entries for a later generation or recovery.
+V2/v3 historicalArchive is a separately root-signed exact current-scope empty
+archive. Those profiles support only generation zero with no predecessor and
+zero rollback floor; they never discard historical entries for recovery.
+V4 requires the optional final descriptor and an explicit retained-history
+approval independently pinning its exact original bytes. The read-only FD must
+hold a genuine current-root-signed archive already within the admitted current
+configuration, generation and runtime interval. It is consumed unchanged, never
+re-signed or renewed; an ordinary old startup archive is not automatically
+reusable. This is not an archive producer, restart orchestrator or DB admission.
 Both signatures and unchanged intervals pass their genuine consumers before
 publication. Complete root0400/no-replace publication may
 immediately release that child. Later checks retain its originals but require
@@ -53,6 +60,9 @@ def arguments(argv):
     names = ["--approval-fd", "--approval-sha256", "--signing-key-fd"]
     for role in ROLES:
         names += [f"--{role}-approval-fd", f"--{role}-exchange-directory-fd"]
+    retained = len(argv) == 2 * (len(names) + 1)
+    if retained:
+        names.append("--historical-archive-fd")
     if len(argv) != 2 * len(names) or argv[::2] != names:
         raise ValueError("fixed cohort arguments required")
     values = {}
@@ -69,10 +79,13 @@ def arguments(argv):
     descriptors = [value for name, value in values.items() if name.endswith("-fd")]
     if len(set(descriptors)) != len(descriptors):
         raise ValueError("descriptor aliases refused")
-    return dict(approval_fd=values["--approval-fd"], approval_sha256=values["--approval-sha256"],
+    selected = dict(approval_fd=values["--approval-fd"], approval_sha256=values["--approval-sha256"],
         signing_key_fd=values["--signing-key-fd"], role_inputs={role: dict(
             approval_fd=values[f"--{role}-approval-fd"],
             exchange_directory_fd=values[f"--{role}-exchange-directory-fd"]) for role in ROLES})
+    if retained:
+        selected["archive_fd"] = values["--historical-archive-fd"]
+    return selected
 
 
 def main(argv=None):

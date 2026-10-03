@@ -4,6 +4,8 @@
 The explicit --public-drop-fixture mode belongs only in a disposable container
 with SETUID/SETGID initially available and no other capabilities or network.
 """
+import ast
+import ctypes
 import errno
 import fcntl
 import hashlib
@@ -17,7 +19,7 @@ from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -79,7 +81,167 @@ def dependency_bundle():
                 pythonImportClosure=imports)
 
 
+@contextmanager
+def preload_fixture():
+    """Real public sealed bytes; synthetic graph, not loadable ELF or admission."""
+    edges = {"first.so": ("direct.so", "shared.so"), "second.so": ("shared.so",),
+             "direct.so": ("shared.so", "system.so"), "shared.so": ("system.so",),
+             "system.so": (), "unrelated.so": ()}
+    objects, files = [], {}
+    with ExitStack() as owner:
+        for name, needed in edges.items():
+            raw = ("public preload fixture " + name).encode("ascii")
+            fd = subject._seal_bytes(name, raw, mode=0o444)
+            owner.callback(os.close, fd)
+            path = "/native/" + name
+            files[path] = subject._native_file_binding(fd, sha(raw), sealed=True)
+            objects.append(dict(path="native/" + name, runtimePath=path,
+                sha256=sha(raw), needed=["/native/" + value for value in needed],
+                soname=name, elfClass="ELF64", machine=62))
+        imports = [dict(module=name, path="native/" + name + ".so", kind="extension",
+            isPackage=False, sha256=files["/native/" + name + ".so"]["sha256"])
+            for name in ("first", "second")]
+        bundle = dict(nativeClosure=dict(objects=objects, executables=[]),
+                      pythonImportClosure=imports)
+        yield bundle, files, {"/native/system.so": files["/native/system.so"]["sha256"]}
+
+
 class NativeMappingsTests(unittest.TestCase):
+    def test_preload_dependency_first_shared_and_retained_handles(self):
+        with preload_fixture() as (bundle, files, baseline):
+            handles = [object(), object()]
+            with patch.object(ctypes, "CDLL", side_effect=handles) as load:
+                held = subject._preload_native_dependencies(bundle, files, baseline,
+                    modules=("first", "second"))
+            self.assertIs(type(held), tuple)
+            self.assertEqual(len(held), 2)
+            self.assertTrue(all(actual is expected for actual, expected in zip(held, handles)))
+            self.assertEqual(load.call_args_list, [call(
+                "/proc/self/fd/" + str(files[path]["fd"]), mode=os.RTLD_NOW | os.RTLD_LOCAL)
+                for path in ("/native/shared.so", "/native/direct.so")])
+            # No extension root, already-verified baseline or unrelated object
+            # was loaded. The caller's originals remain open and unchanged.
+            for binding in files.values():
+                self.assertEqual(subject._retained_native_digest(binding), binding["sha256"])
+
+    def test_preload_invalid_graph_or_original_refuses_before_any_load(self):
+        failures = ("unknown-module", "root-digest", "missing-edge", "runtime-path",
+                    "missing-retained", "signed-digest", "retained-digest",
+                    "retained-inode", "baseline-digest", "cycle")
+        with preload_fixture() as (original, originals, baseline):
+            for failure in failures:
+                bundle, files, observed = deepcopy(original), deepcopy(originals), dict(baseline)
+                modules = ("first", "second")
+                objects = {row["runtimePath"]: row for row in bundle["nativeClosure"]["objects"]}
+                if failure == "unknown-module":
+                    modules = ("unselected",)
+                elif failure == "root-digest":
+                    bundle["pythonImportClosure"][0]["sha256"] = sha(b"changed")
+                elif failure == "missing-edge":
+                    objects["/native/direct.so"]["needed"] = ["/native/missing.so"]
+                elif failure == "runtime-path":
+                    objects["/native/direct.so"]["runtimePath"] = "/unselected/alias.so"
+                elif failure == "missing-retained":
+                    del files["/native/direct.so"]
+                elif failure == "signed-digest":
+                    objects["/native/direct.so"]["sha256"] = sha(b"changed")
+                elif failure == "retained-digest":
+                    files["/native/direct.so"]["sha256"] = sha(b"changed")
+                elif failure == "retained-inode":
+                    files["/native/direct.so"]["fd"] = files["/native/unrelated.so"]["fd"]
+                elif failure == "baseline-digest":
+                    observed["/native/system.so"] = sha(b"changed")
+                else:
+                    objects["/native/shared.so"]["needed"] = ["/native/direct.so"]
+                with self.subTest(failure=failure), patch.object(ctypes, "CDLL") as load:
+                    with self.assertRaises(subject.LaunchError):
+                        subject._preload_native_dependencies(bundle, files, observed, modules=modules)
+                    load.assert_not_called()
+
+    def test_preload_rechecks_original_immediately_before_and_after_load(self):
+        for timing in ("before", "after"):
+            with self.subTest(timing=timing), preload_fixture() as (bundle, files, baseline):
+                selected = files["/native/shared.so"]
+                original_digest = subject._retained_native_digest
+                checked = []
+
+                def digest(binding):
+                    if binding is selected:
+                        checked.append(True)
+                        if timing == "before" and len(checked) == 2:
+                            # Substitute a different real FD after full graph
+                            # preflight but before the first attempted load.
+                            binding["fd"] = files["/native/unrelated.so"]["fd"]
+                    return original_digest(binding)
+
+                def load(path, *, mode):
+                    self.assertEqual(path, "/proc/self/fd/" + str(selected["fd"]))
+                    self.assertEqual(mode, os.RTLD_NOW | os.RTLD_LOCAL)
+                    os.fchmod(selected["fd"], 0o400)
+                    return object()
+
+                with patch.object(subject, "_retained_native_digest", side_effect=digest), \
+                        patch.object(ctypes, "CDLL", side_effect=load) as loader:
+                    with self.assertRaises(subject.LaunchError):
+                        subject._preload_native_dependencies(bundle, files, baseline,
+                            modules=("first", "second"))
+                    self.assertEqual(loader.call_count, 0 if timing == "before" else 1)
+                    self.assertEqual(len(checked), 2 if timing == "before" else 3)
+
+    def test_partial_native_measurement_returns_observed_not_available(self):
+        with public_file() as (fd, raw, binding):
+            mapped = row(fd)
+            observed = {mapped[5]: sha(raw)}
+            available = dict(observed, **{"/available/not-loaded.so": sha(b"unloaded")})
+            with patch.object(subject, "_executable_mapping_rows", return_value=(mapped,)):
+                actual = subject._verify_native_mappings(available, require_exact=False,
+                    files={mapped[5]: binding}, memory=None)
+            self.assertEqual(actual, observed)
+            self.assertEqual(available, dict(observed, **{"/available/not-loaded.so": sha(b"unloaded")}))
+
+    def test_required_driver_import_precedes_final_native_measurement_and_close(self):
+        tree = ast.parse(Path(subject.__file__).read_text("utf-8"))
+        enter = next(node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_enter")
+        calls = [node for node in ast.walk(enter) if isinstance(node, ast.Call)]
+
+        def only(name, predicate=lambda node: True):
+            selected = [node for node in calls if ast.unparse(node.func) == name and predicate(node)]
+            self.assertEqual(len(selected), 1, name)
+            return selected[0]
+
+        preload = only("_preload_native_dependencies")
+        self.assertEqual(ast.unparse(preload.args[0]), "verified_package.package['bundle']")
+        self.assertEqual([ast.unparse(arg) for arg in preload.args[1:]],
+                         ["native_files", "verified_native"])
+        baseline = only("_verify_native_mappings", lambda node: any(keyword.arg == "require_exact"
+            and isinstance(keyword.value, ast.Constant) and keyword.value.value is False
+            for keyword in node.keywords))
+        baseline_assignment = next(node for node in ast.walk(enter)
+            if isinstance(node, ast.Assign) and node.value is baseline)
+        self.assertEqual([ast.unparse(node) for node in baseline_assignment.targets], ["verified_native"])
+        self.assertLess(baseline.lineno, preload.lineno)
+        self.assertEqual(ast.literal_eval(next(keyword.value for keyword in preload.keywords
+            if keyword.arg == "modules")), ("psycopg_binary.pq", "psycopg_binary._psycopg"))
+        assignment = next(node for node in ast.walk(enter)
+            if isinstance(node, ast.Assign) and node.value is preload)
+        self.assertEqual([ast.unparse(node) for node in assignment.targets], ["native_dependency_handles"])
+        imported = only("importlib.import_module", lambda node: len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant) and node.args[0].value == "psycopg")
+        graph = only("_loaded_native_dependency_mappings")
+        measured = only("_verify_native_mappings", lambda node: any(keyword.arg == "require_exact"
+            and isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+            for keyword in node.keywords))
+        closed = only("native_readers.close")
+        service = only("authority_service.main")
+        ordered = (preload, imported, graph, measured, closed, service)
+        self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
+        memory_scope = next(node for node in ast.walk(enter) if isinstance(node, ast.With)
+            and preload in tuple(ast.walk(node)))
+        self.assertTrue(any(ast.unparse(item.context_expr) == "_retained_process_memory()"
+                            for item in memory_scope.items))
+        self.assertTrue(all(node in tuple(ast.walk(memory_scope)) for node in (imported, graph, measured)))
+
     def test_loaded_dependency_graph_direct_transitive_shared_and_cycle(self):
         bundle = dependency_bundle()
         loaded = {"/memfd:" + name + " (deleted)": sha((name + ".so").encode())

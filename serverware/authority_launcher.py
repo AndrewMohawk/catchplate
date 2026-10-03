@@ -689,6 +689,84 @@ def _loaded_native_dependency_mappings(bundle, loaded):
     return dependencies
 
 
+def _preload_native_dependencies(bundle, files, already_loaded, *, modules):
+    """Resolve selected sealed extensions using only signed retained originals."""
+    objects = bundle["nativeClosure"]["objects"]
+    native = [*bundle["nativeClosure"]["executables"], *objects]
+    by_path = {row["path"]: row for row in objects}
+    by_runtime = {row["runtimePath"]: row for row in native}
+    imports = [row for row in bundle["pythonImportClosure"]
+               if row["kind"] == "extension"]
+    by_module = {row["module"]: row for row in imports}
+    if (len(by_path) != len(objects) or len(by_runtime) != len(native)
+            or len(by_module) != len(imports) or not modules
+            or len(set(modules)) != len(modules)
+            or len(native) > MAX_CLOSURE_FILES):
+        raise LaunchError("native preload graph identity is ambiguous")
+
+    roots = []
+    for module in modules:
+        imported = by_module.get(module)
+        root = None if imported is None else by_path.get(imported["path"])
+        if root is None or root["sha256"] != imported["sha256"]:
+            raise LaunchError("required extension differs from signed native graph")
+        roots.append(root["runtimePath"])
+
+    # Validate the whole selected graph, including already-loaded leaves, before
+    # any dlopen. The caller supplies only its verified baseline mapping set.
+    required = {}
+    pending = list(roots)
+    while pending:
+        path = pending.pop()
+        if path in required:
+            continue
+        row = by_runtime.get(path)
+        binding = files.get(path)
+        if (row is None or binding is None
+                or binding["sha256"] != row["sha256"]
+                or _retained_native_digest(binding) != row["sha256"]
+                or path in already_loaded and already_loaded[path] != row["sha256"]):
+            raise LaunchError("native preload source differs from signed original")
+        edges = list(row["needed"])
+        if row.get("ptInterp") is not None:
+            edges.append(row["ptInterp"])
+        required[path] = (row, binding, edges)
+        pending.extend(edges)
+
+    order = []
+    state = {}
+    pending = [(path, False) for root in reversed(roots)
+               for path in reversed(required[root][2])]
+    while pending:
+        path, completed = pending.pop()
+        if path in already_loaded or state.get(path) == 2:
+            continue
+        if completed:
+            state[path] = 2
+            order.append(path)
+            continue
+        if state.get(path) == 1:
+            raise LaunchError("native preload has an unresolved dependency cycle")
+        state[path] = 1
+        pending.append((path, True))
+        pending.extend((child, False) for child in reversed(required[path][2]))
+
+    import ctypes
+
+    handles = []
+    for path in order:
+        row, binding, _edges = required[path]
+        if _retained_native_digest(binding) != row["sha256"]:
+            raise LaunchError("native preload source changed before load")
+        handles.append(ctypes.CDLL(
+            f"/proc/self/fd/{binding['fd']}",
+            mode=os.RTLD_NOW | os.RTLD_LOCAL,
+        ))
+        if _retained_native_digest(binding) != row["sha256"]:
+            raise LaunchError("native preload source changed during load")
+    return tuple(handles)
+
+
 def _native_identity(metadata):
     return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
             metadata.st_uid, metadata.st_gid, metadata.st_size,
@@ -853,7 +931,7 @@ def _verify_native_mappings(
     require_exact: bool,
     files,
     memory,
-) -> None:
+) -> dict[str, str]:
     if (
         "[vsyscall]" in expected
         or any(
@@ -933,6 +1011,7 @@ def _verify_native_mappings(
         and observed != expected
     ):
         raise LaunchError("loaded native mapping closure changed")
+    return observed
 
 
 def _require_sealed_descriptor(descriptor: int, label: str) -> None:
@@ -2776,7 +2855,7 @@ def _enter(
             }
     expected_native = dict(native_mappings)
     with _retained_process_memory() as memory:
-        _verify_native_mappings(
+        verified_native = _verify_native_mappings(
             expected_native, require_exact=False,
             files=native_files, memory=memory,
         )
@@ -2947,6 +3026,8 @@ def _enter(
     if parking is not None:
         parking.check(peer=True)
     os.environ["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
+    # Keep these dlopen handles alive in this frame until service main returns.
+    native_dependency_handles = ()
     with _retained_process_memory() as memory:
         _drop_role_identity(role)
         if parking is not None:
@@ -2984,6 +3065,12 @@ def _enter(
         else:
             from serverware import authority_service
 
+        if role != "witness":
+            native_dependency_handles = _preload_native_dependencies(
+                verified_package.package["bundle"], native_files, verified_native,
+                modules=("psycopg_binary.pq", "psycopg_binary._psycopg"),
+            )
+            importlib.import_module("psycopg")
         dependencies = _loaded_native_dependency_mappings(
             verified_package.package["bundle"], loaded_native_mappings,
         )

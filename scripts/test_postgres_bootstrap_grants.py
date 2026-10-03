@@ -57,7 +57,56 @@ def route(*, metadata="postgres", audit="postgres", grant="postgres",
     return calls
 
 
+def initialization_locks(timeout_ms):
+    tree = ast.parse((ROOT / "serverware/db.py").read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_lock_postgres_metadata_initialization_authorities")
+    calls = []
+
+    class Connection:
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+            return SimpleNamespace(fetchone=lambda: {"timeout_ms": timeout_ms})
+
+    namespace = {
+        "Any": object, "PostgresMetadataConnection": Connection,
+        "MetadataStoreError": BootstrapError,
+        "_lock_policy_candidate_authority": lambda conn: calls.append("candidate-lock"),
+        "_lock_policy_high_water": lambda conn: calls.append("high-water-lock"),
+    }
+    exec(compile(ast.Module(body=[function], type_ignores=[]),
+                 "bootstrap-lock-budget", "exec"), namespace)
+    namespace[function.name](Connection())
+    return calls
+
+
 class PostgresBootstrapGrantTests(unittest.TestCase):
+    def test_initialization_restores_selected_finite_statement_budget_after_locks(self):
+        # Source routing only; the PostgreSQL DDL control runs independently.
+        for timeout_ms in (1000, 30000):
+            with self.subTest(timeout_ms=timeout_ms):
+                calls = initialization_locks(timeout_ms)
+                self.assertEqual(calls[1:3], ["candidate-lock", "high-water-lock"])
+                self.assertEqual(calls[3:], [(
+                    "SELECT pg_catalog.set_config('statement_timeout', ?, true)",
+                    (str(timeout_ms) + "ms",),
+                )])
+        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        initialize = next(node for node in tree.body
+                          if isinstance(node, ast.FunctionDef) and node.name == "init_db")
+        calls = [node.func.id for node in ast.walk(initialize)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        self.assertEqual(calls.count("_lock_postgres_metadata_initialization_authorities"), 1)
+        self.assertNotIn("_lock_policy_candidate_authority", calls)
+
+    def test_unbounded_initialization_retains_finite_runtime_fallback(self):
+        self.assertEqual(initialization_locks(0)[1:], ["candidate-lock", "high-water-lock"])
+
+    def test_invalid_initialization_timeout_is_refused(self):
+        for value in (None, True, -1, "30000"):
+            with self.subTest(value=value), self.assertRaises(BootstrapError):
+                initialization_locks(value)
+
     def test_exact_shared_offline_bootstrap_skips_only_standalone_grants(self):
         self.assertEqual(route(), ["directories", ("audit", {"bootstrap_contract_id": CONTRACT})])
 

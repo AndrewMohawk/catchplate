@@ -19676,6 +19676,29 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
     )
 
 
+def _lock_postgres_metadata_initialization_authorities(conn: Any) -> None:
+    """Acquire runtime-ordered locks without replacing the installer's budget."""
+    if not isinstance(conn, PostgresMetadataConnection):
+        raise MetadataStoreError("metadata initialization locks require PostgreSQL")
+    row = conn.execute(
+        "SELECT setting::bigint AS timeout_ms FROM pg_catalog.pg_settings "
+        "WHERE name = 'statement_timeout'"
+    ).fetchone()
+    if row is None or type(row["timeout_ms"]) is not int or row["timeout_ms"] < 0:
+        raise MetadataStoreError("metadata initialization timeout is unavailable")
+    timeout_ms = row["timeout_ms"]
+    _lock_policy_candidate_authority(conn)
+    _lock_policy_high_water(conn)
+    # The runtime helpers deliberately install a short query limit. Schema
+    # creation must retain the offline connection's explicitly selected limit.
+    # An unbounded connection keeps the helpers' finite fallback, never zero.
+    if timeout_ms:
+        conn.execute(
+            "SELECT pg_catalog.set_config('statement_timeout', ?, true)",
+            (str(timeout_ms) + "ms",),
+        )
+
+
 def _lock_postgres_metadata_migration_tables(conn: Any) -> None:
     if not isinstance(conn, PostgresMetadataConnection):
         return
@@ -26528,8 +26551,7 @@ def init_db(
             )
             # Migration first excludes concurrent installers. Candidate then
             # high-water matches the normal authority writer order.
-            _lock_policy_candidate_authority(conn)
-            _lock_policy_high_water(conn)
+            _lock_postgres_metadata_initialization_authorities(conn)
             if _postgres_metadata_crypto_required(conn):
                 keyring = load_bound_secret_keyring()
         elif not conn.in_transaction:

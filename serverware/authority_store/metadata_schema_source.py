@@ -4876,6 +4876,22 @@ def metadata_base_schema_source() -> str:
                     REFERENCES policy_authority_transition_audits(transition_digest)
                     ON DELETE RESTRICT,
                 UNIQUE (
+                    assignment_envelope_digest, assignment_payload_digest
+                ),
+                UNIQUE (
+                    canary_id, assignment_envelope_digest,
+                    assignment_payload_digest
+                ),
+                UNIQUE (
+                    canary_id, assignment_envelope_digest,
+                    assignment_payload_digest, artifact_envelope_digest,
+                    artifact_payload_digest, candidate_policy_hash,
+                    compiler_digest, compiler_config_digest,
+                    policy_schema_digest, semantic_model_digest,
+                    evaluator_abi_digest, policy_bundle_digest,
+                    runtime_digest
+                ),
+                UNIQUE (
                     canary_id, assignment_envelope_digest,
                     assignment_payload_digest, artifact_envelope_digest,
                     artifact_payload_digest, candidate_policy_hash,
@@ -5675,6 +5691,16 @@ def metadata_base_schema_source() -> str:
                     candidate_policy_hash, runtime_digest,
                     boot_public_key_digest, boot_signing_key_id
                 ),
+                UNIQUE (
+                    canary_id, instance_id, boot_id,
+                    assignment_envelope_digest, assignment_payload_digest,
+                    artifact_envelope_digest, artifact_payload_digest,
+                    candidate_policy_hash, compiler_digest,
+                    compiler_config_digest, policy_schema_digest,
+                    semantic_model_digest, evaluator_abi_digest,
+                    policy_bundle_digest, runtime_digest,
+                    boot_public_key_digest, boot_signing_key_id
+                ),
                 FOREIGN KEY (
                     canary_id, assignment_envelope_digest,
                     assignment_payload_digest, artifact_envelope_digest,
@@ -6371,6 +6397,10 @@ def metadata_base_schema_source() -> str:
                     REFERENCES policy_authority_transition_audits(
                         transition_digest
                     ) ON DELETE RESTRICT,
+                UNIQUE (
+                    custody_evidence_envelope_digest,
+                    verification_receipt_digest
+                ),
                 UNIQUE (
                     canary_id, instance_id, boot_id, ingress_sequence
                 ),
@@ -8825,6 +8855,7 @@ def metadata_base_schema_source() -> str:
                 source_revision TEXT NOT NULL,
                 prepared_at_epoch_ns BIGINT NOT NULL,
                 expires_at_epoch_ns BIGINT NOT NULL,
+                UNIQUE (export_id, export_revision),
                 UNIQUE (
                     export_id, export_revision, activation_attempt_id,
                     assignment_envelope_digest, identity_digest,

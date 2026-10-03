@@ -145,6 +145,49 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             require_metadata_schema_program(value, legacy_completed_v9_receipt=True)
 
+    def test_composite_foreign_keys_have_exact_active_unique_targets(self):
+        # Six confirmed PostgreSQL target-key regressions, not a SQL parser or
+        # execution proof. Retired commented DDL must not satisfy the controls.
+        active = re.sub(r"/\*.*?\*/|--[^\n]*", "", self.complete, flags=re.DOTALL)
+
+        def table(name):
+            bodies = re.findall(r"\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+"
+                + re.escape(name) + r"\s*\((.*?)\)\s*;", active, re.DOTALL)
+            self.assertEqual(len(bodies), 1, name)
+            return bodies[0]
+
+        def columns(names):
+            return r"\s*,\s*".join(re.escape(name) for name in names)
+
+        assignment = ("assignment_envelope_digest", "assignment_payload_digest")
+        artifact = ("artifact_envelope_digest", "artifact_payload_digest", "candidate_policy_hash",
+            "compiler_digest", "compiler_config_digest", "policy_schema_digest", "semantic_model_digest",
+            "evaluator_abi_digest", "policy_bundle_digest", "runtime_digest")
+        assignment_identity = ("canary_id",) + assignment + artifact
+        instance_identity = ("canary_id", "instance_id", "boot_id") + assignment + artifact + (
+            "boot_public_key_digest", "boot_signing_key_id")
+        custody = ("custody_evidence_envelope_digest", "verification_receipt_digest")
+        cases = (
+            ("policy_canary_assignments", assignment,
+                ("policy_runtime_attestations", "policy_canary_assignment_members", "policy_compiler_authority_analyses")),
+            ("policy_canary_assignments", ("canary_id",) + assignment, ("policy_canary_revisions",)),
+            ("policy_canary_assignments", assignment_identity, ("policy_canary_instances", "policy_canary_readiness")),
+            ("policy_canary_instances", instance_identity, ("policy_canary_load_receipts",)),
+            ("policy_canary_custody_evidence", custody,
+                ("policy_canary_active_decisions", "policy_canary_shadow_observations")),
+            ("policy_activation_export_issuances", ("export_id", "export_revision"), ("policy_activation_export_pages",)),
+        )
+        for parent, target, children in cases:
+            with self.subTest(parent=parent, target=target):
+                self.assertRegex(table(parent), r"\bUNIQUE\s*\(\s*" + columns(target) + r"\s*\)")
+                local = ("custody_evidence_envelope_digest", "custody_verification_receipt_digest") \
+                    if target == custody else target
+                for child in children:
+                    with self.subTest(child=child):
+                        self.assertRegex(table(child), r"\bFOREIGN\s+KEY\s*\(\s*" + columns(local)
+                            + r"\s*\)\s*REFERENCES\s+" + re.escape(parent) + r"\s*\(\s*"
+                            + columns(target) + r"\s*\)\s*ON\s+DELETE\s+RESTRICT\b")
+
     def test_bootstrap_crypto_reads_only_the_supplied_transaction(self):
         _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
         reader = function(tree, "_postgres_metadata_crypto_required")

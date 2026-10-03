@@ -8951,7 +8951,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 else:
                     preserved_row = conn.execute(
                         "SELECT 1 AS present FROM "
-                        + _policy_candidate_authority_quote_identifier(
+                        + _policy_candidate_authority_identifier(
                             table_name
                         )
                         + " LIMIT 1"
@@ -9096,11 +9096,10 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
         ):
             conn.execute(statement)
         for table_name in tracked_authenticated_tables:
-            key_columns = next(
-                entry["keyColumns"]
-                for entry in authority_query_manifest
-                if entry["table"] == table_name
-            )
+            # Both business and authorization indexes were checked against
+            # this source inventory above; authorization-only tables need
+            # authenticated triggers too.
+            key_columns = authority_primary_contract.PRIMARY_KEY_COLUMNS[table_name]
             trigger_name = _policy_candidate_authority_object_name(
                 "serverware", table_name, "authenticated"
             )
@@ -9143,8 +9142,8 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 + ".serverware_policy_authority_authenticated_apply("
                 "'credential_lease_replay_state', "
                 "pg_catalog.jsonb_build_object('scope', 'global'), "
-                "?, 'INSERT')",
-                (replay_seed["row_json"],),
+                "?::pg_catalog.jsonb, 'INSERT')",
+                (dumps(replay_seed["row_json"]),),
             )
         conn.execute(
             f"""
@@ -10885,6 +10884,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 previous_selector_key_digest text;
                 authenticated_key_digest text;
                 authenticated_leaf_digest text;
+                authenticated_leaf_present boolean;
                 authenticated_path text;
                 authenticated_parent_digest text;
                 authenticated_child_digests pg_catalog.jsonb;
@@ -18602,11 +18602,11 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         OR (
                             SELECT pg_catalog.count(*)
                             FROM pg_catalog.jsonb_object_keys(response_value)
-                        ) <> CASE
+                        ) <> (CASE
                             WHEN response_value->>'decision' = 'verified'
                             THEN 18
                             ELSE 17
-                        END
+                        END)
                         OR request_canonical IS DISTINCT FROM request_json
                         OR response_canonical IS DISTINCT FROM
                             verifier_response_json

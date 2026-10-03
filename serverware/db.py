@@ -7842,11 +7842,11 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 frame text;
             BEGIN
                 IF pg_catalog.octet_length(digest_domain) NOT BETWEEN 1 AND 256
-                    OR CASE WHEN digest_domain =
+                    OR (CASE WHEN digest_domain =
                         'serverware.policyAuthoritySnapshot/v3'
                         THEN pg_catalog.cardinality(digest_frames) <> 9
                         ELSE pg_catalog.cardinality(digest_frames)
-                            NOT BETWEEN 1 AND 8 END
+                            NOT BETWEEN 1 AND 8 END)
                 THEN
                     RAISE EXCEPTION
                         'authority digest framing is outside its fixed bound';

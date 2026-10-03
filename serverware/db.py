@@ -20971,7 +20971,8 @@ def _validate_policy_authority_owner_apply_function(
         "pg_catalog.pg_describe_object(classid, objid, objsubid) "
         "AS object_description "
         "FROM dependency_graph "
-        "ORDER BY catalog COLLATE \"C\", object_description COLLATE \"C\", "
+        "ORDER BY classid::pg_catalog.regclass::text COLLATE \"C\", "
+        "pg_catalog.pg_describe_object(classid, objid, objsubid) COLLATE \"C\", "
         "objid, objsubid",
         ([row["oid"] for row in function_rows],),
     ).fetchall()

@@ -292,6 +292,22 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
         self.assertIn("unexpected_grant is not None", ast.unparse(denying[0].test))
         self.assertTrue(any(isinstance(item, ast.Raise) for item in denying[0].body))
 
+    def test_owner_dependency_order_collates_expressions_and_retains_output_fields(self):
+        # PostgreSQL cannot resolve SELECT aliases inside COLLATE expressions.
+        # Inspect the actual fixed query only; this is not catalog/SQL proof.
+        query, parameters = constant_sql(self.owner, "dependency_rows")
+        projection, ordering = query.rsplit(") SELECT ", 1)[1].split(" FROM dependency_graph ORDER BY ")
+        self.assertEqual(projection,
+            "classid::pg_catalog.regclass::text AS catalog, objid, objsubid, "
+            "pg_catalog.pg_describe_object(classid, objid, objsubid) AS object_description")
+        self.assertEqual(ordering,
+            'classid::pg_catalog.regclass::text COLLATE "C", '
+            'pg_catalog.pg_describe_object(classid, objid, objsubid) COLLATE "C", '
+            "objid, objsubid")
+        self.assertEqual(query.count('COLLATE "C"'), 2)
+        self.assertEqual(query.count("%s"), 1)
+        self.assert_shape(parameters, "([row['oid'] for row in function_rows],)")
+
     def test_raw_connector_sets_exact_writer_transaction_before_any_other_sql(self):
         connect = calls(self.connector, "psycopg.connect")
         self.assertEqual(len(connect), 1)

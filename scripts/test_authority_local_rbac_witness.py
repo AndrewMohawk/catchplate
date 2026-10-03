@@ -1,10 +1,14 @@
 """Synthetic signed-original and source-boundary controls; no DB/owner admission."""
 import ast
+import contextlib
 import fcntl
 from copy import deepcopy
 import os
 from pathlib import Path
+import stat
 import tempfile
+import time
+import traceback
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -15,6 +19,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from serverware import authority_primary_contract as primary
 from serverware import authority_rbac_currentness as subject
 from serverware import authority_fd_entrypoint as entry
+from serverware import authority_launcher as launcher
+from serverware import authority_rbac_witness as witness
+from serverware import control_plane_rbac_currentness as currentness
+from serverware.oauth_application_owner import _Original, OAuthApplicationError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,7 +58,126 @@ def function(tree, name):
         and node.name == name)
 
 
+class _TlsProjectionControl:
+    """Only the projection/transport seam; never an admitted RBAC owner."""
+    connection_parameters = currentness._Owner.connection_parameters
+
+    def __init__(self, originals):
+        self.originals = originals
+        self.tls_root, self.certificate, self.key = originals
+        self.writer = False
+        self.deadline = time.monotonic_ns() + 10_000_000_000
+        self.policy = dict(endpoint=dict(host="synthetic.invalid", address="127.0.0.1",
+            port=5432, database="synthetic"), reader=dict(role="synthetic_reader"))
+
+    def check(self):
+        for original in self.originals: original.check()
+
+
+@contextlib.contextmanager
+def tls_projection_control():
+    # Genuine protected-original checks, synthetic bytes, no TLS/DB admission.
+    with contextlib.ExitStack() as cleanup:
+        originals = []
+        for index, raw in enumerate((b"synthetic-ca", b"synthetic-certificate", b"synthetic-private-key")):
+            fd = launcher._seal_bytes("synthetic-rbac-original", raw)
+            cleanup.callback(os.close, fd)
+            originals.append(_Original(fd, 16384 if index == 2 else 65536, private=index == 2))
+        yield _TlsProjectionControl(tuple(originals))
+
+
 class LocalRbacWitnessTests(unittest.TestCase):
+    def assert_descriptors_closed(self, descriptors):
+        self.assertTrue(descriptors)
+        for fd in descriptors:
+            with self.assertRaises(OSError): os.fstat(fd)
+
+    def test_role_can_reopen_only_scoped_sealed_tls_projections(self):
+        self.assertEqual((os.geteuid(), os.getegid()), (0, 0), "isolated root/drop control required")
+        with tls_projection_control() as owner:
+            pid = os.fork()
+            if pid == 0:
+                result = 1
+                try:
+                    os.setgroups([]); os.setresgid(65522, 65522, 65522); os.setresuid(65522, 65522, 65522)
+                    owner.check()
+                    offsets = [os.lseek(original.fd, 0, os.SEEK_CUR) for original in owner.originals]
+                    with self.assertRaises(PermissionError): os.open("/proc/self/fd/" + str(owner.key.fd), os.O_RDONLY)
+                    self.assertEqual(os.pread(owner.key.fd, 16385, 0), owner.key.raw)
+                    projected = []
+                    with owner.connection_parameters() as parameters:
+                        for name, original in zip(("sslrootcert", "sslcert", "sslkey"), owner.originals, strict=True):
+                            fd = int(parameters[name].rsplit("/", 1)[1]); projected.append(fd)
+                            self.assertNotIn(fd, [value.fd for value in owner.originals])
+                            info = os.fstat(fd)
+                            self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_nlink),
+                                (65522, 65522, 0o400, 0))
+                            self.assertEqual(fcntl.fcntl(fd, fcntl.F_GET_SEALS),
+                                fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+                            self.assertTrue(fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC)
+                            with open(parameters[name], "rb") as reopened:
+                                self.assertEqual(reopened.read(original.maximum + 1), original.raw)
+                    self.assert_descriptors_closed(projected)
+                    owner.check()
+                    self.assertEqual([os.lseek(original.fd, 0, os.SEEK_CUR) for original in owner.originals], offsets)
+                    result = 0
+                except BaseException:
+                    traceback.print_exc()
+                finally:
+                    os._exit(result)
+            observed, status = os.waitpid(pid, 0)
+            self.assertEqual(observed, pid)
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+            owner.check()
+
+    def test_partial_tls_projection_failure_closes_acquired_descriptors(self):
+        with tls_projection_control() as owner:
+            created, writes = [], 0
+            create, write = os.memfd_create, os.write
+            def recording_create(*args, **kwargs):
+                fd = create(*args, **kwargs); created.append(fd); return fd
+            def fail_second_write(fd, raw):
+                nonlocal writes
+                writes += 1
+                if writes == 2: raise OSError("synthetic second projection failure")
+                return write(fd, raw)
+            with patch.object(os, "memfd_create", side_effect=recording_create), patch.object(os, "write", side_effect=fail_second_write):
+                with self.assertRaisesRegex(OSError, "synthetic second projection failure"):
+                    with owner.connection_parameters(): self.fail("incomplete projection reached connect")
+            self.assertEqual(len(created), 2)
+            self.assert_descriptors_closed(created)
+            owner.check()
+
+    def test_connect_and_post_connect_original_failure_close_all_resources(self):
+        import psycopg
+        for after_connect in (False, True):
+            with self.subTest(after_connect=after_connect), tls_projection_control() as owner:
+                projected = []
+                closed = []
+                connection = SimpleNamespace(close=lambda: closed.append(True))
+                def connect(**parameters):
+                    projected.extend(int(parameters[name].rsplit("/", 1)[1]) for name in ("sslrootcert", "sslcert", "sslkey"))
+                    self.assertEqual(parameters["connect_timeout"], 1)
+                    self.assertEqual(parameters["options"], "-c search_path=pg_catalog")
+                    self.assertFalse(parameters["autocommit"])
+                    if not after_connect: raise RuntimeError("synthetic connect refusal")
+                    # Genuine original identity check must reject this change
+                    # after connect returns, and close the returned connection.
+                    os.fchmod(owner.key.fd, 0o600)
+                    return connection
+                close = os.close
+                def close_then_report(fd):
+                    close(fd)
+                    if projected and fd == projected[-1]: raise OSError("synthetic cleanup error")
+                with patch.object(psycopg, "connect", side_effect=connect), patch.object(os, "close", side_effect=close_then_report):
+                    with self.assertRaises(OAuthApplicationError if after_connect else RuntimeError) as caught:
+                        witness.Connection(owner, owner.deadline).__enter__()
+                if not after_connect:
+                    self.assertEqual(str(caught.exception), "synthetic connect refusal")
+                    owner.check()
+                self.assert_descriptors_closed(projected)
+                self.assertEqual(closed, [True] if after_connect else [])
+
     def test_actual_fixed_descriptor_delivery_preserves_originals(self):
         self.assertEqual((os.geteuid(), os.getegid()), (0, 0), "isolated root descriptor control required")
         self.assertEqual(list(entry.LOCAL_RBAC_DESCRIPTORS.values()), [240, 241, 242, 243])

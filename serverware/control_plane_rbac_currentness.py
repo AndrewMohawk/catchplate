@@ -7,7 +7,10 @@ explicit local successor is separately signed and makes no such claim; it
 still requires distinct real clusters and the same currentness checks.
 """
 import contextlib
+import fcntl
 import os
+import signal
+import stat
 import threading
 import time
 from serverware import authority_rbac_currentness as profile
@@ -54,15 +57,73 @@ class _Owner:
         profile.require(self.recovery is None and self.writer and self.process is not None and self.process.role_name == "verifier",
             "only the genuinely admitted RBAC verifier owns witness write permission")
 
+    @contextlib.contextmanager
     def connection_parameters(self):
+        """Role-readable sealed TLS copies, scoped to synchronous connect only."""
         self.check()
         endpoint = self.policy["endpoint"]
-        return {"host": endpoint["host"], "hostaddr": endpoint["address"], "port": endpoint["port"],
+        parameters = {"host": endpoint["host"], "hostaddr": endpoint["address"], "port": endpoint["port"],
             "dbname": endpoint["database"], "user": self.policy["writer" if self.writer else "reader"]["role"],
             "sslmode": "verify-full", "ssl_min_protocol_version": "TLSv1.3", "ssl_max_protocol_version": "TLSv1.3",
-            "sslrootcert": "/proc/self/fd/" + str(self.tls_root.fd),
-            "sslcert": "/proc/self/fd/" + str(self.certificate.fd), "sslkey": "/proc/self/fd/" + str(self.key.fd),
             "passfile": "/dev/null", "password": "", "service": "", "gssencmode": "disable", "application_name": "serverware-rbac-witness-v1"}
+        held, projected = [], []
+        seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+        cancellation = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+
+        def identity(fd, raw):
+            info = os.fstat(fd)
+            actual_seals = fcntl.fcntl(fd, fcntl.F_GET_SEALS)
+            flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+            profile.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 0
+                and (info.st_uid, info.st_gid) == (os.geteuid(), os.getegid())
+                and stat.S_IMODE(info.st_mode) == 0o400 and info.st_size == len(raw)
+                and actual_seals == seals and flags & fcntl.FD_CLOEXEC
+                and os.pread(fd, len(raw) + 1, 0) == raw)
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns, actual_seals, flags)
+
+        try:
+            for name, original, maximum in (("sslrootcert", self.tls_root, 65536),
+                    ("sslcert", self.certificate, 65536), ("sslkey", self.key, 16384)):
+                self.check()
+                raw = original.raw
+                profile.require(type(raw) is bytes and 2 <= len(raw) <= maximum)
+                # Register ownership before writes, including cancellation at
+                # the acquisition/registration boundary. Originals never change.
+                previous = signal.pthread_sigmask(signal.SIG_BLOCK, cancellation)
+                try:
+                    fd = os.memfd_create("serverware-rbac-tls-" + name,
+                        os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+                    try:
+                        held.append(fd)
+                    except BaseException:
+                        with contextlib.suppress(OSError): os.close(fd)
+                        raise
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+                offset = 0
+                while offset < len(raw):
+                    count = os.write(fd, raw[offset:])
+                    profile.require(count > 0)
+                    offset += count
+                os.fchmod(fd, 0o400)
+                fcntl.fcntl(fd, fcntl.F_ADD_SEALS, seals)
+                projected.append((fd, raw, identity(fd, raw)))
+                parameters[name] = "/proc/self/fd/" + str(fd)
+            self.check()
+            for fd, raw, expected in projected:
+                profile.require(identity(fd, raw) == expected)
+            yield parameters
+            self.check()
+            for fd, raw, expected in projected:
+                profile.require(identity(fd, raw) == expected)
+        finally:
+            previous = signal.pthread_sigmask(signal.SIG_BLOCK, cancellation)
+            try:
+                for fd in reversed(held):
+                    with contextlib.suppress(OSError): os.close(fd)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
     def limit(self, deadline=None):
         self.check()

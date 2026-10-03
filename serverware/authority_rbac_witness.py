@@ -32,9 +32,10 @@ class Connection:
         import psycopg
         from psycopg.rows import dict_row
         self.check()
-        self.connection = psycopg.connect(**self.owner.connection_parameters(), row_factory=dict_row, connect_timeout=1,
-            autocommit=False, options="-c search_path=pg_catalog")
         try:
+            with self.owner.connection_parameters() as parameters:
+                self.connection = psycopg.connect(**parameters, row_factory=dict_row, connect_timeout=1,
+                    autocommit=False, options="-c search_path=pg_catalog")
             self.check()
             remaining = max(1, (self.deadline-time.monotonic_ns())//1_000_000)
             self.connection.execute("SELECT pg_catalog.set_config('statement_timeout',%s,true),pg_catalog.set_config('idle_in_transaction_session_timeout',%s,true),pg_catalog.set_config('lock_timeout',%s,true)",
@@ -79,7 +80,8 @@ class Connection:
                     and function["allowed"] is expected_functions[key], "RBAC witness purpose-function ACL differs")
             self.check(); return self
         except BaseException:
-            self.connection.close(); raise
+            if self.connection is not None: self.connection.close()
+            raise
 
     def __exit__(self, kind, error, traceback):
         try:

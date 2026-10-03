@@ -11,6 +11,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware import authority_local_audit_reader
 from serverware.authority_store import counted_installation
 from serverware.authority_store.completion_read_sql import COMPLETION_READ_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store.successor_execution_privileges import SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST
@@ -33,6 +34,8 @@ from serverware.authority_store.audit_capacity_sql import (
     AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES,
 )
 
+_POLICY_CANDIDATE_AUTHORITY_STRUCTURAL_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+
 _EXTRACTED_NAMES = frozenset(
     {
         "_policy_candidate_authority_migration_version",
@@ -50,6 +53,7 @@ _EXTRACTED_NAMES = frozenset(
         "_policy_candidate_authority_postgres_object_authority",
         "_policy_candidate_authority_structure_manifest",
         "_policy_candidate_authority_manifest_digest",
+        "_policy_candidate_authority_manifest_json",
         "_policy_candidate_authority_required_guard_names",
         "_policy_candidate_authority_expected_structure_manifest",
         "_validate_policy_candidate_authority_structure",
@@ -172,6 +176,8 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "contract": _POLICY_CANDIDATE_AUTHORITY_SCHEMA_CONTRACT,
             "schemaVersion": _POLICY_CANDIDATE_AUTHORITY_SCHEMA_VERSION,
             "sourceRevision": _POLICY_CANDIDATE_AUTHORITY_SOURCE_REVISION,
+            "supportedLocalAuditReaderBootstrapProfile": authority_local_audit_reader.profile_contract(),
+            "structuralManifestMaxBytes": _POLICY_CANDIDATE_AUTHORITY_STRUCTURAL_MANIFEST_MAX_BYTES,
             "immutableTables": list(
                 _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
             ),
@@ -321,7 +327,9 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "sqlGrantManifest": {
                 operation: {
                     field: (
-                        list(value)
+                        [dict(template) for template in value]
+                        if field == "mutationTemplates"
+                        else list(value)
                         if isinstance(value, tuple)
                         else value
                     )
@@ -1244,17 +1252,21 @@ def _policy_candidate_authority_structure_manifest(
     }
 
 
+def _policy_candidate_authority_manifest_json(value: Any) -> str:
+    # Complete measured SQL definitions are larger than authority messages.
+    # Keep their separate bound on both produced and recorded originals while
+    # retaining the existing ASCII/integer canonical JSON profile.
+    return _candidate_authority_canonical_json(
+        "candidate-authority structural manifest",
+        value,
+        maximum=_POLICY_CANDIDATE_AUTHORITY_STRUCTURAL_MANIFEST_MAX_BYTES,
+    )
+
+
 def _policy_candidate_authority_manifest_digest(
     manifest: Mapping[str, Any],
 ) -> tuple[str, str]:
-    manifest_json = dumps(dict(manifest))
-    if (
-        len(manifest_json.encode("utf-8"))
-        > _POLICY_AUTHORITY_MAX_CANONICAL_AGGREGATE_BYTES
-    ):
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority structural manifest is too large"
-        )
+    manifest_json = _policy_candidate_authority_manifest_json(dumps(dict(manifest)))
     return (
         manifest_json,
         _policy_candidate_authority_framed_digest(
@@ -1414,7 +1426,12 @@ def _policy_candidate_authority_expected_structure_manifest(
     *,
     source_schema_program: str,
     legacy_completed_v9_receipt: bool = False,
+    local_audit_reader_profile: str | None = None,
 ) -> dict[str, Any]:
+    if local_audit_reader_profile is not None:
+        authority_local_audit_reader.require_profile(local_audit_reader_profile)
+        if legacy_completed_v9_receipt or not isinstance(conn, PostgresMetadataConnection):
+            raise PolicyCandidateAuthorityError("local audit reader profile requires fresh PostgreSQL source derivation")
     try:
         require_metadata_schema_program(
             source_schema_program,
@@ -1498,6 +1515,9 @@ def _policy_candidate_authority_expected_structure_manifest(
                     AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
                 ),
             )
+            if local_audit_reader_profile is not None:
+                authority_local_audit_reader.grant_reference_profile(
+                    conn.raw_connection, profile=local_audit_reader_profile)
             expected = _policy_candidate_authority_structure_manifest(
                 conn,
                 expected_namespace=scratch_schema,
@@ -1557,7 +1577,12 @@ def _validate_policy_candidate_authority_structure(
     *,
     require_recorded_contract: bool,
     source_schema_program: str | None = None,
+    local_audit_reader_profile: str | None = None,
 ) -> tuple[str, str]:
+    if local_audit_reader_profile is not None:
+        authority_local_audit_reader.require_profile(local_audit_reader_profile)
+        if source_schema_program is None:
+            raise PolicyCandidateAuthorityError("local audit reader selection requires the exact source declaration")
     manifest = _policy_candidate_authority_structure_manifest(conn)
     table_manifests = {
         str(table["name"]): table for table in manifest["tables"]
@@ -1679,6 +1704,7 @@ def _validate_policy_candidate_authority_structure(
             _policy_candidate_authority_expected_structure_manifest(
                 conn,
                 source_schema_program=source_schema_program,
+                local_audit_reader_profile=local_audit_reader_profile,
             )
         )
     else:
@@ -1697,8 +1723,7 @@ def _validate_policy_candidate_authority_structure(
             raise PolicyCandidateAuthorityError(
                 "candidate-authority source-pinned manifest is missing"
             )
-        expected_manifest_json = _candidate_authority_canonical_json(
-            "candidate-authority source-pinned structural manifest",
+        expected_manifest_json = _policy_candidate_authority_manifest_json(
             str(expected_rows[0]["structural_manifest_json"]),
         )
         expected_manifest = loads(expected_manifest_json, None)

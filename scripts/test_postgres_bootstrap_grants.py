@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 import re
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -142,6 +144,71 @@ def connector_options(connector, options, *, contract=CONTRACT,
 
 
 class PostgresBootstrapGrantTests(unittest.TestCase):
+    def test_local_reader_profile_refuses_without_original_development_authorization(self):
+        # Actual validators and init_db prefix only; no DB import or connection.
+        from serverware import authority_local_audit_reader as reader
+        from serverware import authority_local_rbac_bootstrap as rbac
+        function = deepcopy(next(node for node in connector_source().body
+            if isinstance(node, ast.FunctionDef) and node.name == "init_db"))
+        end = next(index for index, node in enumerate(function.body) if isinstance(node, ast.If)
+            and ast.unparse(node.test) == "local_audit_reader_profile is not None")
+        function.body = function.body[:end + 1]
+        function.decorator_list = []
+        namespace = dict(Path=Path, DB_PATH=Path("unused"), MetadataStoreError=BootstrapError,
+            metadata_store_backend_name=lambda: "postgres", audit_store_backend_name=lambda: "postgres",
+            _policy_candidate_offline_connection=SimpleNamespace(get=lambda: None),
+            _METADATA_STORE_BOOTSTRAP_CONTRACT_ID=CONTRACT)
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "reader-profile-admission-prefix", "exec"), namespace)
+        selection = dict(initialRbacTimestamp=100_000_000_000,
+            issuedAtUnixNanos=100_000_000_000, expiresAtUnixNanos=200_000_000_000)
+        cases = ((reader.PROFILE_ID, None, False), (reader.PROFILE_ID, selection, True),
+                 ("unknown-profile", selection, False), (True, selection, False))
+        for profile, original, production in cases:
+            with self.subTest(profile=profile, production=production), \
+                    mock.patch.object(rbac.config, "PRODUCTION_IMAGE", production), \
+                    mock.patch.object(rbac.config, "_production_release", return_value=production), \
+                    mock.patch.dict(rbac.os.environ, {"SERVERWARE_PRODUCTION_IMAGE": "0",
+                        "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_PROCESS_MODE": "metadata-bootstrap"}), \
+                    mock.patch.object(rbac.time, "time_ns", return_value=150_000_000_000):
+                with self.assertRaises((ValueError, BootstrapError)):
+                    namespace["init_db"](bootstrap_contract_id=CONTRACT,
+                        local_initial_rbac=original, local_audit_reader_profile=profile)
+
+    def test_local_reader_actual_and_reference_grants_precede_first_manifest(self):
+        # Source control flow, not proof that the SQL or role admission succeeded.
+        tree = connector_source()
+        init = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "init_db")
+        calls = {name: [node for node in ast.walk(init) if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == name] for name in
+            ("_seal_postgres_schema_acl", "local_reader.provision", "_record_policy_candidate_authority_migration")}
+        self.assertTrue(all(len(nodes) == 1 for nodes in calls.values()))
+        seal, provision, record = (nodes[0] for nodes in calls.values())
+        self.assertLess(seal.lineno, provision.lineno)
+        self.assertLess(provision.lineno, record.lineno)
+        self.assertEqual(ast.unparse(provision.args[0]), "conn.raw_connection")
+        self.assertEqual(ast.unparse(next(arg.value for arg in record.keywords
+            if arg.arg == "local_audit_reader_profile")), "local_audit_reader_profile")
+        initial_source = ast.unparse(init)
+        self.assertIn("_policy_candidate_authority_migration_version(conn) != 0", initial_source)
+        self.assertIn("SELECT pg_catalog.to_regrole(?) AS role", initial_source)
+        recorded = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+            and node.name == "_record_policy_candidate_authority_migration")
+        self.assertIn("local_audit_reader_profile is not None and prior_contract", ast.unparse(recorded))
+        schema = ast.parse((ROOT / "serverware/authority_store/schema.py").read_text())
+        expected = next(node for node in schema.body if isinstance(node, ast.FunctionDef)
+            and node.name == "_policy_candidate_authority_expected_structure_manifest")
+        reference_calls = {name: [node for node in ast.walk(expected) if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == name] for name in
+            ("_seal_postgres_schema_acl", "authority_local_audit_reader.grant_reference_profile",
+             "_policy_candidate_authority_structure_manifest")}
+        reference_seal = reference_calls["_seal_postgres_schema_acl"][0]
+        grant = reference_calls["authority_local_audit_reader.grant_reference_profile"][0]
+        manifest = min(reference_calls["_policy_candidate_authority_structure_manifest"], key=lambda node: node.lineno)
+        self.assertLess(reference_seal.lineno, grant.lineno)
+        self.assertLess(grant.lineno, manifest.lineno)
+        self.assertEqual(ast.unparse(grant.args[0]), "conn.raw_connection")
+        self.assertIn("profile=local_audit_reader_profile", ast.unparse(grant))
+
     def test_bootstrap_connectors_preserve_selected_finite_options(self):
         # Synthetic connect interception, not PostgreSQL or bootstrap proof.
         selections = (

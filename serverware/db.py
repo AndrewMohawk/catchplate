@@ -7198,6 +7198,7 @@ def _record_policy_candidate_authority_migration(
     conn: Any,
     *,
     source_schema_program: str,
+    local_audit_reader_profile: str | None = None,
 ) -> None:
     if isinstance(conn, PostgresMetadataConnection):
         prior_contract = conn.execute(
@@ -7206,6 +7207,8 @@ def _record_policy_candidate_authority_migration(
             "WHERE schema_version = ? LIMIT 2",
             (_POLICY_CANDIDATE_AUTHORITY_SCHEMA_VERSION,),
         ).fetchall()
+        if local_audit_reader_profile is not None and prior_contract:
+            raise PolicyCandidateAuthorityError("local audit reader profile cannot reseal an existing schema contract")
         stale_finalized_export = conn.execute(
             "SELECT source_revision "
             "FROM policy_activation_finalized_exports "
@@ -7231,6 +7234,7 @@ def _record_policy_candidate_authority_migration(
             conn,
             require_recorded_contract=False,
             source_schema_program=source_schema_program,
+            local_audit_reader_profile=local_audit_reader_profile,
         )
     )
     owner_contract: dict[str, Any] | None = None
@@ -7378,6 +7382,7 @@ def _record_policy_candidate_authority_migration(
         conn,
         require_recorded_contract=True,
         source_schema_program=source_schema_program,
+        local_audit_reader_profile=local_audit_reader_profile,
     )
 
 
@@ -26537,6 +26542,7 @@ def init_db(
     *,
     bootstrap_contract_id: str | None = None,
     local_initial_rbac: dict[str, int] | None = None,
+    local_audit_reader_profile: str | None = None,
 ) -> None:
     metadata_backend = metadata_store_backend_name()
     audit_backend = audit_store_backend_name()
@@ -26551,6 +26557,11 @@ def init_db(
                 or bootstrap_contract_id != _METADATA_STORE_BOOTSTRAP_CONTRACT_ID):
             raise MetadataStoreError("selected local RBAC time requires the initial offline PostgreSQL bootstrap")
         local_initial_rbac = dict(local_initial_rbac)
+    if local_audit_reader_profile is not None:
+        from serverware import authority_local_audit_reader as local_reader
+        local_reader.require_profile(local_audit_reader_profile)
+        if local_initial_rbac is None:
+            raise MetadataStoreError("local audit reader requires original local bootstrap authorization")
     if (
         borrowed_offline_connection is None
         and bootstrap_contract_id is None
@@ -26664,6 +26675,10 @@ def init_db(
             _ensure_column(conn, "audit_events", "storage_format_version", "INTEGER")
             _remediate_sqlite_audit_operations(conn, keyring=keyring)
         metadata_schema_source = _metadata_schema_source.metadata_schema_source()
+        if local_audit_reader_profile is not None:
+            if (_policy_candidate_authority_migration_version(conn) != 0
+                    or conn.execute("SELECT pg_catalog.to_regrole(?) AS role", (local_reader.ROLE,)).fetchone()["role"] is not None):
+                raise MetadataStoreError("local audit reader requires fresh schema and absent role; no adoption or resealing")
         _prepare_policy_candidate_authority_schema(
             conn,
             source_schema_program=metadata_schema_source,
@@ -27465,10 +27480,17 @@ def init_db(
                     AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
                 ),
             )
+        if local_audit_reader_profile is not None:
+            local_reader.provision(conn.raw_connection, database=conn.execute(
+                "SELECT pg_catalog.current_database() AS database").fetchone()["database"],
+                check=lambda: selected_timestamp(local_initial_rbac))
         _record_policy_candidate_authority_migration(
             conn,
             source_schema_program=metadata_schema_source,
+            local_audit_reader_profile=local_audit_reader_profile,
         )
+        if local_audit_reader_profile is not None:
+            selected_timestamp(local_initial_rbac)
     if not metadata_uses_postgres():
         initialize_rbac_authority()
         reconcile_policy_state_bundles(limit=100)

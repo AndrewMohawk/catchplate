@@ -32,13 +32,15 @@ USAGE = """Usage: python -I -B scripts/bootstrap_metadata_store.py [--help]
 Run only in a separately configured SERVERWARE_PROCESS_MODE=metadata-bootstrap
 process with PostgreSQL metadata, audit and grant backends, their configured
 admin/runtime identities, and genuine existing authority pins and services.
-No roles, credentials, pins or approvals are generated. Normal runtime startup
-is unchanged. Failure may leave partial initialization; do not assume rollback.
+No credentials, pins or approvals are generated. Normal runtime startup is
+unchanged. Failure may leave partial initialization; do not assume rollback.
 
 The local development coordinator may supply an initial RBAC timestamp and
 its original UNIX window through the fixed Python API only. This prospective
 initial-state recipe refuses existing state/bindings and production use. It is
 not an observed database head, a CLI flag, or permission to renew an approval.
+Its explicit local audit-reader profile creates only that absent fixed role,
+before the first schema contract is sealed; no existing role is adopted.
 """
 
 
@@ -77,7 +79,12 @@ def _prepare_bootstrap(*, initial_rbac_timestamp_epoch_ns, original_issued_at_un
     return local_initial_rbac
 
 
-def _execute_bootstrap(local_initial_rbac):
+def _execute_bootstrap(local_initial_rbac, *, local_audit_reader_profile=None):
+    if local_audit_reader_profile is not None:
+        from serverware import authority_local_audit_reader as reader
+        from serverware.authority_local_rbac_bootstrap import selected_timestamp
+        reader.require_profile(local_audit_reader_profile)
+        selected_timestamp(local_initial_rbac)
     db = _load_db()
     db._reject_runtime_metadata_admin_dsn()
     if db.metadata_store_backend_name() != "postgres" or db.audit_store_backend_name() != "postgres":
@@ -89,13 +96,17 @@ def _execute_bootstrap(local_initial_rbac):
     # authority admission. Never replace its pins or turn off its guards.
     if local_initial_rbac is None:
         db.init_db(bootstrap_contract_id=CONTRACT)
-    else:
+    elif local_audit_reader_profile is None:
         db.init_db(bootstrap_contract_id=CONTRACT, local_initial_rbac=local_initial_rbac)
+    else:
+        db.init_db(bootstrap_contract_id=CONTRACT, local_initial_rbac=local_initial_rbac,
+            local_audit_reader_profile=local_audit_reader_profile)
 
 
 def bootstrap(*, initial_rbac_timestamp_epoch_ns: int | None = None,
               original_issued_at_unix_ns: int | None = None,
-              original_expires_at_unix_ns: int | None = None) -> None:
+              original_expires_at_unix_ns: int | None = None,
+              local_audit_reader_profile: str | None = None) -> None:
     """Run the exact offline path, preserving errors for a private caller.
 
     Errors may contain connection secrets; callers must not publish their text.
@@ -105,7 +116,7 @@ def bootstrap(*, initial_rbac_timestamp_epoch_ns: int | None = None,
         initial_rbac_timestamp_epoch_ns=initial_rbac_timestamp_epoch_ns,
         original_issued_at_unix_ns=original_issued_at_unix_ns,
         original_expires_at_unix_ns=original_expires_at_unix_ns)
-    _execute_bootstrap(local_initial_rbac)
+    _execute_bootstrap(local_initial_rbac, local_audit_reader_profile=local_audit_reader_profile)
 
 
 def main(argv: list[str] | None = None, *, initial_rbac_timestamp_epoch_ns: int | None = None,

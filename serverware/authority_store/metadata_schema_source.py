@@ -3285,7 +3285,7 @@ def metadata_base_schema_source() -> str:
                 ),
                 CHECK (
                     length(structural_manifest_json)
-                    BETWEEN 2 AND 4194304
+                    BETWEEN 2 AND 8388608
                 ),
                 CHECK (
                     length(source_contract_digest) = 71

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import unittest
 
@@ -115,6 +116,33 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                 self.assertIn("current_user::pg_catalog.regrole = %s::pg_catalog.regrole AS current_is_runtime", sql)
                 self.assertNotIn("current_user = %s::pg_catalog.regrole", sql)
                 self.assertEqual(ast.unparse(queries[0].args[1].elts[0]), parameter)
+
+    def test_index_names_are_unqualified_and_bootstrap_tables_stay_qualified(self):
+        # Source shape only; actual PostgreSQL parsing is a separate control.
+        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        identifier = r"[a-z_][a-z_0-9]*(?:\s*\.\s*[a-z_][a-z_0-9]*)*"
+        index = re.compile(r"\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+"
+            r"(?:IF\s+NOT\s+EXISTS\s+)?(" + identifier + r")\s+ON\s+("
+            + identifier + r")\s*\(([^)]+)\)", re.IGNORECASE)
+        expected = {
+            "serverware_audit_events_created_at_desc": (
+                "serverware_audit.serverware_audit_events", "created_at DESC, sequence DESC"),
+            "serverware_audit_events_type_created_at": (
+                "serverware_audit.serverware_audit_events", "event_type, created_at DESC"),
+            "serverware_recovery_claims_user_sequence": (
+                "serverware_recovery_witness.serverware_recovery_authorization_claims",
+                "root_key_id, user_id, root_sequence"),
+        }
+        actual = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            for name, table, columns in index.findall(node.value):
+                self.assertNotIn(".", name, "PostgreSQL CREATE INDEX name cannot be qualified")
+                if name in expected:
+                    self.assertNotIn(name, actual)
+                    actual[name] = (re.sub(r"\s+", "", table), " ".join(columns.split()))
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

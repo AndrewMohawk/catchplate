@@ -22513,7 +22513,6 @@ def init_recovery_witness_store(
                                 CHECK (last_sequence > 0)
                             );
                         CREATE INDEX IF NOT EXISTS
-                            serverware_recovery_witness.
                             serverware_recovery_claims_user_sequence
                             ON serverware_recovery_witness.
                             serverware_recovery_authorization_claims
@@ -24981,11 +24980,11 @@ def init_audit_store(
                         applied_at TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS
-                        serverware_audit.serverware_audit_events_created_at_desc
+                        serverware_audit_events_created_at_desc
                         ON serverware_audit.serverware_audit_events
                             (created_at DESC, sequence DESC);
                     CREATE INDEX IF NOT EXISTS
-                        serverware_audit.serverware_audit_events_type_created_at
+                        serverware_audit_events_type_created_at
                         ON serverware_audit.serverware_audit_events
                             (event_type, created_at DESC);
                     DO $$

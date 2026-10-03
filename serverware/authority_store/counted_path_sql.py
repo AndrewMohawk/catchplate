@@ -313,8 +313,8 @@ def counted_path_functions_sql(namespace: str) -> tuple[str, ...]:
                         OR candidate.path_prefix COLLATE "C" IS DISTINCT FROM requested_prefixes[slot] COLLATE "C"
                         OR NOT {_digest('candidate.node_digest')}
                         OR candidate.subtree_count IS NULL OR candidate.subtree_count < 1
-                        OR candidate.subtree_count > CASE WHEN candidate.depth BETWEEN 145 AND 160
-                            THEN (1::bigint << (4*(160-candidate.depth))) ELSE 9223372036854775807::bigint END
+                        OR candidate.subtree_count > (CASE WHEN candidate.depth BETWEEN 145 AND 160
+                            THEN (1::bigint << (4*(160-candidate.depth))) ELSE 9223372036854775807::bigint END)
                         OR candidate.index_revision IS NULL OR candidate.index_revision < 1
                         OR candidate.index_revision > current_head.index_revision
                     THEN RAISE EXCEPTION 'counted path stored node contract changed'; END IF;
@@ -389,8 +389,8 @@ def counted_path_functions_sql(namespace: str) -> tuple[str, ...]:
                 IF prefix <> '' THEN
                     slot := pg_catalog.array_position(requested_prefixes,prefix);
                     IF slot IS NULL
-                        OR cached_digests[slot] IS DISTINCT FROM CASE WHEN folded.subtree_count > 0 THEN folded.node_digest ELSE NULL END
-                        OR cached_counts[slot] IS DISTINCT FROM CASE WHEN folded.subtree_count > 0 THEN folded.subtree_count ELSE NULL END
+                        OR cached_digests[slot] IS DISTINCT FROM (CASE WHEN folded.subtree_count > 0 THEN folded.node_digest ELSE NULL END)
+                        OR cached_counts[slot] IS DISTINCT FROM (CASE WHEN folded.subtree_count > 0 THEN folded.subtree_count ELSE NULL END)
                     THEN RAISE EXCEPTION 'counted path opened cache differs from reconstructed BEFORE'; END IF;
                 END IF;
                 SELECT * INTO STRICT folded FROM {namespace}.serverware_policy_authority_counted_branch(
@@ -411,7 +411,7 @@ def counted_path_functions_sql(namespace: str) -> tuple[str, ...]:
             END IF;
             next_revision := current_head.index_revision+1;
             IF after_counts[root_number] IS DISTINCT FROM current_head.leaf_count
-                - CASE WHEN old_member THEN 1 ELSE 0 END + CASE WHEN new_member THEN 1 ELSE 0 END
+                - (CASE WHEN old_member THEN 1 ELSE 0 END) + (CASE WHEN new_member THEN 1 ELSE 0 END)
             THEN RAISE EXCEPTION 'counted path member count delta changed'; END IF;
 
             -- First persistent write: all bounded acquisition and both genuine

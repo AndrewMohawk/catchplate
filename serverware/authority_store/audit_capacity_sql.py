@@ -302,7 +302,7 @@ def assert_audit_capacity_sql(
                 {authority_contract.MAX_REQUEST_BYTES}, FALSE
             ) AS measured;
             IF pg_catalog.jsonb_array_length(ac_selected)
-                - CASE WHEN ac_global_selection IS NULL THEN 0 ELSE 1 END
+                - (CASE WHEN ac_global_selection IS NULL THEN 0 ELSE 1 END)
                 > (ac_spec->>'maximumBusinessQueryRows')::bigint
             THEN
                 RAISE EXCEPTION 'authority audit capacity business selected row bound is exceeded';

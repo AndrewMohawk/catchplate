@@ -188,6 +188,15 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                             + r"\s*\)\s*REFERENCES\s+" + re.escape(parent) + r"\s*\(\s*"
                             + columns(target) + r"\s*\)\s*ON\s+DELETE\s+RESTRICT\b")
 
+    def test_active_authority_source_revisions_match_canonical_contract(self):
+        # Check the emitted SQL, excluding retired commented definitions. This
+        # source control does not claim PostgreSQL execution or store migration.
+        active = re.sub(r"/\*.*?\*/|--[^\n]*", "", self.complete, flags=re.DOTALL)
+        revisions = re.findall(
+            r"'(serverware\.policyCandidateAuthoritySource/[^']*)'", active)
+        self.assertTrue(revisions, "active authority source revision literals are absent")
+        self.assertEqual(set(revisions), {authority_contract.SOURCE_REVISION})
+
     def test_bootstrap_crypto_reads_only_the_supplied_transaction(self):
         _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
         reader = function(tree, "_postgres_metadata_crypto_required")

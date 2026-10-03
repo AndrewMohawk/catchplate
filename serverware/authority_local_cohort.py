@@ -361,13 +361,17 @@ class LocalCohortIssuer:
             del key
             self.verify_live()
             self.issued = True
-            return self.bootstrap_originals()
+            return self._format_bootstrap_originals()
         except BaseException as error:
             raise LocalCohortError(self) from error
 
     def bootstrap_originals(self):
         """Return original receipts only while the full cohort remains parked."""
         self.verify_live()
+        return self._format_bootstrap_originals()
+
+    def _format_bootstrap_originals(self):
+        """Format held originals after the caller's full live verification."""
         require(self.issued and not self.publication_started and not self.released
             and self.cohort_raw is not None and self.delivery_raw is not None)
         signed = document(self.cohort_raw, cohort.MAX_BYTES)

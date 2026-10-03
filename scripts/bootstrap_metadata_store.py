@@ -64,6 +64,50 @@ def _load_db():
     return db
 
 
+def _prepare_bootstrap(*, initial_rbac_timestamp_epoch_ns, original_issued_at_unix_ns,
+                       original_expires_at_unix_ns):
+    _preflight()
+    local_initial_rbac = None
+    if any(value is not None for value in (initial_rbac_timestamp_epoch_ns,
+            original_issued_at_unix_ns, original_expires_at_unix_ns)):
+        from serverware.authority_local_rbac_bootstrap import selected_timestamp
+        local_initial_rbac = dict(initialRbacTimestamp=initial_rbac_timestamp_epoch_ns,
+            issuedAtUnixNanos=original_issued_at_unix_ns, expiresAtUnixNanos=original_expires_at_unix_ns)
+        selected_timestamp(local_initial_rbac)
+    return local_initial_rbac
+
+
+def _execute_bootstrap(local_initial_rbac):
+    db = _load_db()
+    db._reject_runtime_metadata_admin_dsn()
+    if db.metadata_store_backend_name() != "postgres" or db.audit_store_backend_name() != "postgres":
+        raise ValueError("loaded database backends differ from the selected configuration")
+    for kind in ("ISSUER", "EXECUTOR", "RECOVERY"):
+        db._successor_installation_pins(kind)
+    db._policy_authority_verifier_public_key()
+    # The existing installer remains the sole semantic role, schema and
+    # authority admission. Never replace its pins or turn off its guards.
+    if local_initial_rbac is None:
+        db.init_db(bootstrap_contract_id=CONTRACT)
+    else:
+        db.init_db(bootstrap_contract_id=CONTRACT, local_initial_rbac=local_initial_rbac)
+
+
+def bootstrap(*, initial_rbac_timestamp_epoch_ns: int | None = None,
+              original_issued_at_unix_ns: int | None = None,
+              original_expires_at_unix_ns: int | None = None) -> None:
+    """Run the exact offline path, preserving errors for a private caller.
+
+    Errors may contain connection secrets; callers must not publish their text.
+    Failure can leave partial initialization and does not authorize a retry.
+    """
+    local_initial_rbac = _prepare_bootstrap(
+        initial_rbac_timestamp_epoch_ns=initial_rbac_timestamp_epoch_ns,
+        original_issued_at_unix_ns=original_issued_at_unix_ns,
+        original_expires_at_unix_ns=original_expires_at_unix_ns)
+    _execute_bootstrap(local_initial_rbac)
+
+
 def main(argv: list[str] | None = None, *, initial_rbac_timestamp_epoch_ns: int | None = None,
          original_issued_at_unix_ns: int | None = None, original_expires_at_unix_ns: int | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
@@ -74,31 +118,15 @@ def main(argv: list[str] | None = None, *, initial_rbac_timestamp_epoch_ns: int 
         print("metadata bootstrap refused: no configuration arguments are accepted; use --help", file=sys.stderr)
         return 2
     try:
-        _preflight()
-        local_initial_rbac = None
-        if any(value is not None for value in (initial_rbac_timestamp_epoch_ns,
-                original_issued_at_unix_ns, original_expires_at_unix_ns)):
-            from serverware.authority_local_rbac_bootstrap import selected_timestamp
-            local_initial_rbac = dict(initialRbacTimestamp=initial_rbac_timestamp_epoch_ns,
-                issuedAtUnixNanos=original_issued_at_unix_ns, expiresAtUnixNanos=original_expires_at_unix_ns)
-            selected_timestamp(local_initial_rbac)
+        local_initial_rbac = _prepare_bootstrap(
+            initial_rbac_timestamp_epoch_ns=initial_rbac_timestamp_epoch_ns,
+            original_issued_at_unix_ns=original_issued_at_unix_ns,
+            original_expires_at_unix_ns=original_expires_at_unix_ns)
     except ValueError:
         print("metadata bootstrap refused: explicit offline PostgreSQL configuration is required", file=sys.stderr)
         return 2
     try:
-        db = _load_db()
-        db._reject_runtime_metadata_admin_dsn()
-        if db.metadata_store_backend_name() != "postgres" or db.audit_store_backend_name() != "postgres":
-            raise ValueError("loaded database backends differ from the selected configuration")
-        for kind in ("ISSUER", "EXECUTOR", "RECOVERY"):
-            db._successor_installation_pins(kind)
-        db._policy_authority_verifier_public_key()
-        # The existing installer remains the sole semantic role, schema and
-        # authority admission. Never replace its pins or turn off its guards.
-        if local_initial_rbac is None:
-            db.init_db(bootstrap_contract_id=CONTRACT)
-        else:
-            db.init_db(bootstrap_contract_id=CONTRACT, local_initial_rbac=local_initial_rbac)
+        _execute_bootstrap(local_initial_rbac)
     except (Exception, KeyboardInterrupt):
         # Database/library exception strings can contain credential-bearing
         # connection details. Do not serialize them or claim atomic rollback.

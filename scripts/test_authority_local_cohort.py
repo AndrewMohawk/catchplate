@@ -268,9 +268,15 @@ class LocalCohortTests(unittest.TestCase):
         calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(issue) if isinstance(node, ast.Call)]
         signed = next(line for line, name in calls if name == "_signed_runtime_evidence")
         live = sorted(line for line, name in calls if name == "self.verify_live")
+        self.assertEqual(len(live), 2)
         self.assertLess(live[0], signed)
         self.assertGreater(live[1], signed)
+        self.assertNotIn("self.bootstrap_originals", [name for _, name in calls])
+        self.assertGreater(next(line for line, name in calls if name == "self._format_bootstrap_originals"), live[-1])
         self.assertNotIn("pair.publish_late_original", [name for _, name in calls])
+        bootstrap = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "bootstrap_originals")
+        calls = sorted((node.lineno, ast.unparse(node.func)) for node in ast.walk(bootstrap) if isinstance(node, ast.Call))
+        self.assertEqual([name for _, name in calls], ["self.verify_live", "self._format_bootstrap_originals"])
         calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(publish) if isinstance(node, ast.Call)]
         self.assertNotIn("_signed_runtime_evidence", [name for _, name in calls])
         live = sorted(line for line, name in calls if name == "self.verify_live")
@@ -309,7 +315,8 @@ class LocalCohortTests(unittest.TestCase):
 
     def test_held_bootstrap_refuses_unsigned_released_and_stale_state(self):
         for change in (dict(issued=False), dict(publication_started=True),
-                       dict(released={"executor"}), dict(delivery_raw=None)):
+                       dict(released={"executor"}), dict(cohort_raw=None), dict(delivery_raw=None),
+                       dict(verifier_raw=b"different synthetic receipt")):
             owner = self._held_codec_owner()
             for name, value in change.items():
                 setattr(owner, name, value)
@@ -319,6 +326,58 @@ class LocalCohortTests(unittest.TestCase):
         with patch.object(owner, "verify_live", side_effect=ValueError("expired or child changed")):
             with self.assertRaises(ValueError):
                 owner.bootstrap_originals()
+
+    def _unissued_codec_owner(self):
+        # Synthetic control-flow owner: preparation/key acquisition/live
+        # measurement are substituted below, never evidence of admission.
+        key, _, context = fixture()
+        owner = self._held_codec_owner()
+        owner.used = owner.issued = False
+        owner.cohort_raw = owner.verifier_raw = owner.delivery_raw = None
+        owner.raw, owner.originals, owner.boot, owner.key_fd = b"synthetic approval", {}, digest("boot"), -1
+        return owner, key, context
+
+    def test_synthetic_issue_two_checks_public_bootstrap_rechecks_and_single_use(self):
+        owner, key, context = self._unissued_codec_owner()
+        with patch.object(subject, "prepare", return_value=context), \
+             patch.object(subject.io, "signing_key", return_value=key), \
+             patch.object(subject.io, "_clock", return_value=150), \
+             patch.object(subject.time, "time_ns", return_value=150), \
+             patch.object(subject, "_signed_runtime_evidence", wraps=subject._signed_runtime_evidence) as signed, \
+             patch.object(owner, "verify_live") as live:
+            result = owner.issue()
+            self.assertEqual(live.call_count, 2)
+            self.assertEqual(result, owner.bootstrap_originals())
+            self.assertEqual(live.call_count, 3)
+            self.assertTrue(owner.used and owner.issued)
+            self.assertFalse(owner.publication_started or owner.released)
+            with self.assertRaises(subject.LocalCohortError):
+                owner.issue()
+            self.assertEqual(live.call_count, 3)
+            signed.assert_called_once()
+
+    def test_synthetic_issue_pre_and_post_sign_refusal_remain_single_use(self):
+        for fail_at in (1, 2):
+            owner, key, context = self._unissued_codec_owner()
+            with self.subTest(fail_at=fail_at), \
+                 patch.object(subject, "prepare", return_value=context), \
+                 patch.object(subject.io, "signing_key", return_value=key), \
+                 patch.object(subject.io, "_clock", return_value=150), \
+                 patch.object(subject.time, "time_ns", return_value=150), \
+                 patch.object(subject, "_signed_runtime_evidence", wraps=subject._signed_runtime_evidence) as signed, \
+                 patch.object(owner, "verify_live", side_effect=[None] * (fail_at - 1) + [ValueError("synthetic refusal")]) as live, \
+                 patch.object(owner, "_format_bootstrap_originals") as formatted:
+                with self.assertRaises(subject.LocalCohortError):
+                    owner.issue()
+                self.assertTrue(owner.used)
+                self.assertFalse(owner.issued or owner.publication_started or owner.released)
+                self.assertEqual(live.call_count, fail_at)
+                self.assertEqual(signed.call_count, fail_at - 1)
+                formatted.assert_not_called()
+                with self.assertRaises(subject.LocalCohortError):
+                    owner.issue()
+                self.assertEqual(live.call_count, fail_at)
+                self.assertEqual(signed.call_count, fail_at - 1)
 
     def test_held_publication_cannot_resign_or_retry_a_failed_release(self):
         from types import SimpleNamespace

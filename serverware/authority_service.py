@@ -309,6 +309,20 @@ def _require_digest(value: object, label: str) -> str:
     return value
 
 
+def _read_descriptor_original(descriptor: int, maximum: int) -> bytes:
+    # dup shares the producer's open-file offset. Retained originals must be
+    # read from byte zero without changing any sharer's offset. Callers keep
+    # their existing size, ownership, immutability and cryptographic checks.
+    with os.fdopen(os.dup(descriptor), "rb", closefd=True) as handle:
+        original = bytearray()
+        while len(original) <= maximum:
+            part = os.pread(handle.fileno(), min(65536, maximum + 1 - len(original)), len(original))
+            if not part:
+                break
+            original.extend(part)
+        return bytes(original)
+
+
 def _read_bounded_descriptor(
     environment_name: str,
     *,
@@ -335,8 +349,7 @@ def _read_bounded_descriptor(
                 f"{environment_name}_FD is invalid"
             ) from exc
         metadata = os.fstat(descriptor)
-        with os.fdopen(os.dup(descriptor), "rb", closefd=True) as handle:
-            value = handle.read(maximum + 1)
+        value = _read_descriptor_original(descriptor, maximum)
     else:
         path = Path(path_text)
         metadata = path.stat()
@@ -3686,20 +3699,12 @@ class AuthorityProcess:
             launch_certificate_descriptor = int(
                 launch_descriptors["certificate"]
             )
-            with os.fdopen(
-                os.dup(launch_private_descriptor),
-                "rb",
-                closefd=True,
-            ) as handle:
-                launch_private_value = handle.read(64 * 1024 + 1)
-            with os.fdopen(
-                os.dup(launch_certificate_descriptor),
-                "rb",
-                closefd=True,
-            ) as handle:
-                launch_certificate_value = handle.read(
-                    MAX_CONFIG_BYTES + 1
-                )
+            launch_private_value = _read_descriptor_original(
+                launch_private_descriptor, 64 * 1024
+            )
+            launch_certificate_value = _read_descriptor_original(
+                launch_certificate_descriptor, MAX_CONFIG_BYTES
+            )
         except (KeyError, OSError, ValueError) as exc:
             raise AuthorityServiceError(
                 "stage-zero launch identity descriptors are invalid"

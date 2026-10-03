@@ -1,7 +1,7 @@
 """Transaction-local, fresh-only preparation of the dedicated counted store.
 
 Existing stores are checked, never repaired or populated here. Genesis requires
-all six source tables to be empty under write-excluding locks. These local
+all seven source tables to be empty under write-excluding locks. These local
 representation checks do not authenticate population, primary/count root
 association, enrollment or currentness. The caller owns its active transaction,
 catalog/ACL admission and installation of the real all-writer trigger.
@@ -22,9 +22,13 @@ from serverware.authority_store.counted_store_sql import (
 
 COUNTED_SOURCE_TABLES = (
     "approval_grants", "control_plane_approvals", "oidc_browser_sessions",
+    "oidc_session_activation_deliveries",
     "webauthn_challenges", "webauthn_credentials", "webauthn_trust_publications",
 )
 _RELATIONS = tuple(sorted((*COUNTED_SOURCE_TABLES, *COUNTED_STORE_TABLES)))
+_RELATION_READ_LIMIT = len(_RELATIONS) + 1
+_GENESIS_HEAD_COUNT = 17
+_HEAD_READ_LIMIT = _GENESIS_HEAD_COUNT + 1
 _CATALOG_FIELDS = frozenset({"relation_name", "relation_oid", "relation_kind",
                              "persistence", "is_partition", "has_inheritance"})
 _HEAD_FIELDS = frozenset(COUNTED_HEAD_COLUMNS)
@@ -43,7 +47,8 @@ def _namespace(value: str) -> str:
 
 def _genesis_heads() -> tuple[dict[str, Any], ...]:
     profiles = tuple(projection.profile_for(name) for name in projection.INDEX_IDS)
-    if (len(profiles) != 11 or len({item.index_id for item in profiles}) != 11
+    if (len(profiles) != _GENESIS_HEAD_COUNT
+            or len({item.index_id for item in profiles}) != _GENESIS_HEAD_COUNT
             or tuple(sorted({item.table for item in profiles})) != COUNTED_SOURCE_TABLES):
         raise CountedInstallationError("counted installation source inventory changed")
     manifest = projection.projection_manifest_digest()
@@ -88,9 +93,9 @@ def _inventory(conn: Any, namespace: str) -> dict[str, int]:
         "JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
         "WHERE namespace.nspname = ? AND relation.relname IN ("
         + ", ".join("?" for _ in _RELATIONS)
-        + ") ORDER BY relation.relname COLLATE \"C\" LIMIT 10",
+        + f') ORDER BY relation.relname COLLATE "C" LIMIT {_RELATION_READ_LIMIT}',
         (namespace[1:-1], *_RELATIONS),
-    ).fetchmany(10)
+    ).fetchmany(_RELATION_READ_LIMIT)
     if type(rows) is not list or len(rows) > len(_RELATIONS):
         raise CountedInstallationError("counted installation relation inventory exceeds its bound")
     found = {}
@@ -144,9 +149,9 @@ _HEAD_SELECT = ", ".join(
 
 def _validate_heads(conn: Any, namespace: str, expected: tuple[dict[str, Any], ...]) -> None:
     rows = conn.execute(f'SELECT {_HEAD_SELECT} FROM {namespace}."{COUNTED_STORE_TABLES[0]}" '
-                        'AS head LIMIT 12').fetchmany(12)
-    if type(rows) is not list or len(rows) != 11:
-        raise CountedInstallationError("counted installation requires the complete eleven-head inventory")
+                        f'AS head LIMIT {_HEAD_READ_LIMIT}').fetchmany(_HEAD_READ_LIMIT)
+    if type(rows) is not list or len(rows) != _GENESIS_HEAD_COUNT:
+        raise CountedInstallationError("counted installation requires the complete seventeen-head inventory")
     by_id = {item["index_id"]: item for item in expected}
     seen = set()
     for row in rows:

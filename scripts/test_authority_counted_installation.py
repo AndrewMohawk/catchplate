@@ -13,6 +13,7 @@ import copy
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,7 @@ import test_authority_index_range as tree_oracle
 
 NAMESPACE = '"counted_installation_fixture"'
 SOURCES = ("approval_grants", "control_plane_approvals", "oidc_browser_sessions",
+    "oidc_session_activation_deliveries",
     "webauthn_challenges", "webauthn_credentials", "webauthn_trust_publications")
 STORES = ("policy_authority_counted_index_heads", "policy_authority_counted_index_leaves",
           "policy_authority_counted_index_nodes")
@@ -38,16 +40,47 @@ INDEX_IDS = (
     "webauthn_session_credential_status", "webauthn_grant_approver_active",
     "webauthn_control_approval_approved", "webauthn_publication_bundle_digest",
     "webauthn_publication_status", "webauthn_publication_generation",
+    "oidc_session_token_digest", "oidc_activation_delivery_session_id",
+    "oidc_activation_delivery_old_token_digest", "oidc_activation_delivery_new_token_digest",
+    "oidc_activation_delivery_assertion_digest", "oidc_activation_delivery_challenge_id",
 )
 I64 = 2**63 - 1
 
 
+def descriptor(index_id):
+    """Extend the independent oracle locally, never using the source registry."""
+    if index_id in INDEX_IDS[:11]:
+        return profile_oracle.descriptor(index_id)
+    table, field, membership = {
+        "oidc_session_token_digest": ("oidc_browser_sessions", "token_digest",
+                                      "all-rows-including-expired-or-revoked"),
+        "oidc_activation_delivery_session_id": ("oidc_session_activation_deliveries", "session_id",
+                                                "all-rows-including-expired-or-consumed"),
+        "oidc_activation_delivery_old_token_digest": ("oidc_session_activation_deliveries", "old_token_digest",
+                                                      "all-rows-including-expired-or-consumed"),
+        "oidc_activation_delivery_new_token_digest": ("oidc_session_activation_deliveries", "new_token_digest",
+                                                      "all-rows-including-expired-or-consumed"),
+        "oidc_activation_delivery_assertion_digest": ("oidc_session_activation_deliveries", "assertion_digest",
+                                                      "all-rows-including-expired-or-consumed"),
+        "oidc_activation_delivery_challenge_id": ("oidc_session_activation_deliveries", "challenge_id",
+                                                  "all-rows-including-expired-or-consumed"),
+    }[index_id]
+    # The shared literal oracle supplies only the common descriptor vocabulary.
+    result = profile_oracle.descriptor("webauthn_credential_id")
+    result.update(indexId=index_id, table=table, rowFields=[["id", "text"], [field, "text"]],
+                  selectorFields=[[field, "text"]], membership=membership,
+                  partitionFields=[field], orderCodec="zero16", intervalRule="whole-equality-partition")
+    return result
+
+
 def expected_heads():
     manifest = profile_oracle.framed("serverware.policyAuthorityIndexProjectionManifest/v1",
-        profile_oracle.utf8_json([profile_oracle.descriptor(name) for name in INDEX_IDS]))
+        profile_oracle.utf8_json([descriptor(name) for name in INDEX_IDS]))
     result = []
     for name in sorted(INDEX_IDS):
-        profile = profile_oracle.expected_profile(name)
+        document = descriptor(name)
+        profile = profile_oracle.contract.IndexProfile(name, document["table"], profile_oracle.framed(
+            "serverware.policyAuthorityIndexProjectionDescriptor/v1", profile_oracle.utf8_json(document)))
         result.append({"index_id": name, "table_name": profile.table,
             "counted_profile": "serverware.policyAuthorityCountedIndex/v1",
             "projection_digest": profile.projection_digest, "projection_manifest_digest": manifest,
@@ -92,7 +125,7 @@ class Connection:
         if sql.startswith("SELECT relation.relname::pg_catalog.text"):
             if parameters != (NAMESPACE[1:-1], *sorted((*SOURCES, *STORES))):
                 raise AssertionError("catalog query did not bind the exact source inventory")
-            if not sql.endswith('ORDER BY relation.relname COLLATE "C" LIMIT 10'):
+            if not sql.endswith('ORDER BY relation.relname COLLATE "C" LIMIT 11'):
                 raise AssertionError("catalog query is not bounded")
             return Rows(self, self.catalogues.pop(0) if self.catalogues else self.catalogue)
         if sql in {f'LOCK TABLE ONLY {NAMESPACE}."{name}" IN SHARE ROW EXCLUSIVE MODE'
@@ -114,7 +147,7 @@ class Connection:
                 raise AssertionError("head insert is not the exact eight source fields")
             self.heads.append(dict(zip(FIELDS, parameters)))
             return Rows(self, [])
-        if sql.startswith("SELECT CASE WHEN") and sql.endswith(f'FROM {NAMESPACE}."{STORES[0]}" AS head LIMIT 12'):
+        if sql.startswith("SELECT CASE WHEN") and sql.endswith(f'FROM {NAMESPACE}."{STORES[0]}" AS head LIMIT 18'):
             if parameters is not None:
                 raise AssertionError("head inventory must not filter corrupt or unknown rows")
             for name in FIELDS:
@@ -137,15 +170,16 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
         connection = Connection()
         self.assertIsNone(self.prepare(connection))
         sql = [item[0] for item in connection.statements]
-        self.assertEqual(len(sql), 29)
-        self.assertEqual(sql[1:7], [f'LOCK TABLE ONLY {NAMESPACE}."{name}" IN SHARE ROW EXCLUSIVE MODE'
+        self.assertEqual(len(sql), 37)
+        self.assertEqual(sql[1:8], [f'LOCK TABLE ONLY {NAMESPACE}."{name}" IN SHARE ROW EXCLUSIVE MODE'
                                    for name in SOURCES])
-        self.assertEqual(sql[8:14], [f'SELECT 1 AS present FROM ONLY {NAMESPACE}."{name}" LIMIT 1'
+        self.assertEqual(sql[9:16], [f'SELECT 1 AS present FROM ONLY {NAMESPACE}."{name}" LIMIT 1'
                                     for name in SOURCES])
-        self.assertEqual(tuple(sql[14:17]), counted_store_sql.counted_store_ddl(NAMESPACE))
+        self.assertEqual(tuple(sql[16:19]), counted_store_sql.counted_store_ddl(NAMESPACE))
         self.assertEqual(connection.heads, expected_heads())
-        self.assertEqual(connection.fetch_bounds, [10, 10, *([1] * 6), 12])
-        self.assertEqual(len(mutations(connection)), 14)
+        self.assertEqual(len(connection.heads), 17)
+        self.assertEqual(connection.fetch_bounds, [11, 11, *([1] * 7), 18])
+        self.assertEqual(len(mutations(connection)), 20)
         self.assertFalse(any(statement.strip().startswith(("BEGIN", "COMMIT", "ROLLBACK", "GRANT", "REVOKE"))
                              for statement in sql))
 
@@ -160,7 +194,7 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
         locks = [sql for sql, _ in connection.statements if sql.startswith("LOCK ")]
         self.assertEqual(locks, [f'LOCK TABLE ONLY {NAMESPACE}."{name}" IN SHARE ROW EXCLUSIVE MODE'
                                 for name in (*SOURCES, *sorted(STORES))])
-        self.assertEqual(connection.fetch_bounds, [10, 10, 10, 12])
+        self.assertEqual(connection.fetch_bounds, [11, 11, 11, 18])
 
     def test_every_populated_source_denies_fresh_genesis_before_any_store_write(self):
         for name in SOURCES:
@@ -169,7 +203,7 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
                 with self.assertRaisesRegex(installation.CountedInstallationError, "offline restage"):
                     self.prepare(connection)
                 self.assertFalse(mutations(connection))
-                self.assertEqual(len([sql for sql, _ in connection.statements if sql.startswith("LOCK ")]), 6)
+                self.assertEqual(len([sql for sql, _ in connection.statements if sql.startswith("LOCK ")]), 7)
 
     def test_partial_store_and_missing_source_inventories_deny_without_repair(self):
         for rows in (catalog(1), catalog(2), catalog(0)[1:], catalog(3)[1:]):
@@ -216,6 +250,22 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
                 self.prepare(connection)
             self.assertFalse(mutations(connection))
 
+    def test_existing_eleven_head_store_is_rejected_without_repair(self):
+        heads = [row for row in expected_heads() if row["index_id"] in INDEX_IDS[:11]]
+        self.assertEqual(len(heads), 11)
+        connection = Connection(existing=True, heads=heads)
+        with self.assertRaisesRegex(installation.CountedInstallationError, "complete seventeen-head inventory"):
+            self.prepare(connection)
+        self.assertFalse(mutations(connection))
+
+    def test_changed_source_profile_cardinality_or_duplicate_identity_precedes_sql(self):
+        for identities in (INDEX_IDS[:-1], (*INDEX_IDS, INDEX_IDS[0]), (INDEX_IDS[0], *INDEX_IDS[:-1])):
+            connection = Connection()
+            with mock.patch.object(installation.projection, "INDEX_IDS", identities):
+                with self.assertRaisesRegex(installation.CountedInstallationError, "source inventory changed"):
+                    self.prepare(connection)
+            self.assertEqual(connection.statements, [])
+
     def test_existing_source_profile_manifest_and_closed_head_shapes_are_exact(self):
         for delta in ({"table_name": "other"}, {"counted_profile": "other"},
                       {"projection_digest": "sha256:" + "0" * 64},
@@ -257,7 +307,7 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
         connection = Connection(existing=True, catalogues=[catalog(0), catalog(3), catalog(3)])
         self.assertIsNone(self.prepare(connection))
         self.assertFalse(mutations(connection))
-        self.assertEqual(connection.fetch_bounds, [10, 10, 10, 12])
+        self.assertEqual(connection.fetch_bounds, [11, 11, 11, 18])
 
     def test_exact_namespace_and_active_transaction_guards_precede_sql(self):
         for namespace in (None, "public", '"a";SELECT 1', '"A"', '"' + "a" * 64 + '"'):
@@ -305,6 +355,25 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
             + counted_maintenance_sql.counted_maintenance_functions_sql(canonical)))
         contract["genesisHeads"][0]["leaf_count"] = 5
         self.assertEqual(installation.counted_installation_contract()["genesisHeads"], expected_heads())
+
+    def test_delivery_dispatch_uses_exact_five_profiles_and_rejects_six(self):
+        table = "oidc_session_activation_deliveries"
+        delivery_ids = (
+            "oidc_activation_delivery_assertion_digest", "oidc_activation_delivery_challenge_id",
+            "oidc_activation_delivery_new_token_digest", "oidc_activation_delivery_old_token_digest",
+            "oidc_activation_delivery_session_id",
+        )
+        sql, = counted_maintenance_sql.counted_maintenance_functions_sql(NAMESPACE)
+        prefix = f"WHEN '{table}' THEN ARRAY["
+        cases = [line.strip() for line in sql.splitlines() if line.strip().startswith(prefix)]
+        self.assertEqual(cases, [prefix + ", ".join(f"'{name}'" for name in delivery_ids) + "]::text[]"])
+        real_index_ids = counted_maintenance_sql.projection.index_ids_for_table
+        # Refusal-only source perturbation, not an admitted production profile.
+        with mock.patch.object(counted_maintenance_sql.projection, "index_ids_for_table",
+                side_effect=lambda name: (*delivery_ids, "oidc_activation_delivery_extra")
+                if name == table else real_index_ids(name)):
+            with self.assertRaisesRegex(ValueError, "fanout exceeds its fixed bound"):
+                counted_maintenance_sql.counted_maintenance_functions_sql(NAMESPACE)
 
 
 if __name__ == "__main__":

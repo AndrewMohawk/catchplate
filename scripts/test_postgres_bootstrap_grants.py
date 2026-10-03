@@ -144,6 +144,38 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                     actual[name] = (re.sub(r"\s+", "", table), " ".join(columns.split()))
         self.assertEqual(actual, expected)
 
+    def test_acl_owner_query_uses_nonreserved_role_table_alias(self):
+        # Source-only regression; actual PostgreSQL parsing is a separate control.
+        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        function = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef)
+                        and node.name == "_seal_postgres_schema_acl")
+        queries = [node for node in ast.walk(function)
+                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "execute" and node.args
+                   and isinstance(node.args[0], ast.Constant)
+                   and isinstance(node.args[0].value, str)
+                   and " AS current_is_superuser " in node.args[0].value]
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(queries[0].args[0].value,
+            "SELECT namespace.nspowner = "
+            "current_user::pg_catalog.regrole::oid AS is_owner, "
+            "owner_role.rolname AS owner_role, "
+            "current_role_record.rolsuper AS current_is_superuser "
+            "FROM pg_catalog.pg_namespace AS namespace "
+            "JOIN pg_catalog.pg_roles AS owner_role "
+            "ON owner_role.oid = namespace.nspowner "
+            "JOIN pg_catalog.pg_roles AS current_role_record "
+            "ON current_role_record.oid = "
+            "current_user::pg_catalog.regrole::oid "
+            "WHERE namespace.nspname = %s")
+        self.assertEqual(ast.unparse(queries[0].args[1]), "(schema,)")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                self.assertNotRegex(node.value, r"\bcurrent_role\s*\.")
+                self.assertNotRegex(node.value,
+                    r"(?i)\b(?:FROM|JOIN)\s+pg_catalog\.pg_roles\s+AS\s+current_role\b")
+
 
 if __name__ == "__main__":
     unittest.main()

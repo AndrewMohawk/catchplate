@@ -3737,12 +3737,12 @@ def _seal_postgres_schema_acl(
             "SELECT namespace.nspowner = "
             "current_user::pg_catalog.regrole::oid AS is_owner, "
             "owner_role.rolname AS owner_role, "
-            "current_role.rolsuper AS current_is_superuser "
+            "current_role_record.rolsuper AS current_is_superuser "
             "FROM pg_catalog.pg_namespace AS namespace "
             "JOIN pg_catalog.pg_roles AS owner_role "
             "ON owner_role.oid = namespace.nspowner "
-            "JOIN pg_catalog.pg_roles AS current_role "
-            "ON current_role.oid = "
+            "JOIN pg_catalog.pg_roles AS current_role_record "
+            "ON current_role_record.oid = "
             "current_user::pg_catalog.regrole::oid "
             "WHERE namespace.nspname = %s",
             (schema,),

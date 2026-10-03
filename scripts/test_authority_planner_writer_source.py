@@ -37,6 +37,7 @@ TABLE_PRIVILEGES = {
     "policy_authority_authenticated_table_roots": frozenset({"SELECT"}),
     "policy_authority_webauthn_assertion_evidence": frozenset({"SELECT", "INSERT"}),
     "policy_authority_webauthn_evidence_retained_plans": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_webauthn_transition_retained_plans": frozenset({"SELECT", "INSERT"}),
     "policy_authority_writer_capabilities": frozenset({"SELECT", "UPDATE"}),
 }
 FUNCTION_SIGNATURES = (
@@ -116,12 +117,12 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         # Fixed expected syntax is parsed, never evaluated or extracted.
         self.assertEqual(ast.dump(node), ast.dump(ast.parse(expression, mode="eval").body))
 
-    def test_exact_eleven_table_privileges_are_immutable_and_do_not_grant_business_writes(self):
+    def test_exact_fifteen_table_privileges_are_immutable_and_do_not_grant_business_writes(self):
         self.assertIs(type(writer.PLANNER_WRITER_TABLE_PRIVILEGES), MappingProxyType)
         self.assertEqual(dict(writer.PLANNER_WRITER_TABLE_PRIVILEGES), TABLE_PRIVILEGES)
-        # Historical test ID retained; request/ACK custody add tables 12/13,
-        # and separate WebAuthn evidence raw3 custody adds table 14.
-        self.assertEqual(len(TABLE_PRIVILEGES), 14)
+        # Request/ACK custody add tables 12/13; WebAuthn raw3 evidence and
+        # raw4 transition custody add tables 14/15 without business writes.
+        self.assertEqual(len(TABLE_PRIVILEGES), 15)
         self.assertTrue(all(type(name) is str and type(value) is frozenset
                             for name, value in writer.PLANNER_WRITER_TABLE_PRIVILEGES.items()))
         with self.assertRaises(TypeError):
@@ -293,7 +294,7 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         columns = sql.split("SELECT 'column-privilege'", 1)[1].split("UNION ALL", 1)[0]
         self.assertIn("attribute.attnum > 0 AND attribute.attisdropped IS FALSE", columns)
         self.assertIn("CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f') THEN", columns)
-        self.assertIn("COALESCE(attribute.attacl, ARRAY[]::pg_catalog.aclitem[])", columns)
+        self.assertIn("THEN\n            attribute.attacl\n        ELSE NULL::pg_catalog.aclitem[] END", columns)
         self.assertIn("grant_entry.grantee = role_oid OR grant_entry.grantee = 0", columns)
         sequences = sql.split("SELECT 'sequence-privilege'", 1)[1].split("UNION ALL", 1)[0]
         self.assertIn("CASE WHEN relkind = 'S' THEN", sequences)
@@ -308,8 +309,55 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         self.assertIn("CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f', 'S') THEN", relations)
         self.assertIn("CASE WHEN relkind = 'S' THEN 'S'::pg_catalog.\"char\"", relations)
         self.assertIn("ELSE 'r'::pg_catalog.\"char\" END, relowner)", relations)
-        self.assertIn("ELSE ARRAY[]::pg_catalog.aclitem[] END", relations)
+        self.assertIn("ELSE NULL::pg_catalog.aclitem[] END", relations)
         self.assertIn("grant_entry.grantee = 0", relations)
+
+    def test_acl_expansion_preserves_real_grants_and_strict_null_inputs(self):
+        # Exact source-query controls only. PostgreSQL strict-NULL behavior and
+        # rejection of zero-dimensional ACL arrays require separate SQL proof.
+        _, verifier_tree = source("serverware/authority_store/verifier_read_sql.py")
+        _, initialization_tree = source("serverware/authority_store/initialization_store_access.py")
+        planner_sql, _ = writer.planner_writer_privilege_check(role="planner", namespace="metadata")
+        verifier_sql = ast.literal_eval(assigned(verifier_tree, "VERIFIER_READ_PRIVILEGE_SQL"))
+        initialization_sql = ast.literal_eval(assigned(initialization_tree, "_RAW_ACL_SQL"))
+
+        def compact(value):
+            return " ".join(value.split())
+
+        for sql in (planner_sql, verifier_sql, initialization_sql):
+            self.assertNotRegex(sql, r"ARRAY\s*\[\s*\]\s*::\s*(?:pg_catalog\.)?aclitem\[\]")
+        for sql, label, grantees in (
+            (planner_sql, "column-privilege", "grant_entry.grantee = role_oid OR grant_entry.grantee = 0"),
+            (verifier_sql, "public-column-privilege", "grant_entry.grantee = 0"),
+        ):
+            with self.subTest(branch=label):
+                column = sql.split("SELECT '" + label + "'", 1)[1].split("UNION ALL", 1)[0]
+                self.assertIn("attribute.attnum > 0", column)
+                self.assertIn("attribute.attisdropped IS FALSE", column)
+                self.assertEqual(compact(column.split("CROSS JOIN LATERAL ", 1)[1]),
+                    "pg_catalog.aclexplode( CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f') THEN "
+                    "attribute.attacl ELSE NULL::pg_catalog.aclitem[] END ) AS grant_entry WHERE " + grantees)
+                relation = sql.split("SELECT 'public-relation-privilege'", 1)[1].split("UNION ALL", 1)[0]
+                self.assertEqual(compact(relation.split("CROSS JOIN LATERAL ", 1)[1]),
+                    "pg_catalog.aclexplode( CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f', 'S') THEN "
+                    "COALESCE(relacl, pg_catalog.acldefault( CASE WHEN relkind = 'S' THEN "
+                    "'S'::pg_catalog.\"char\" ELSE 'r'::pg_catalog.\"char\" END, relowner)) "
+                    "ELSE NULL::pg_catalog.aclitem[] END ) AS grant_entry WHERE grant_entry.grantee = 0")
+                for branch, acl, kind, owner in (("public-schema-privilege", "nspacl", "n", "nspowner"),
+                                                 ("public-function-privilege", "proacl", "f", "proowner")):
+                    selected = sql.split("SELECT '" + branch + "'", 1)[1].split("UNION ALL", 1)[0]
+                    self.assertIn("COALESCE( " + acl + ", pg_catalog.acldefault('" + kind
+                        + "'::pg_catalog.\"char\", " + owner + ") )", compact(selected))
+                    self.assertIn("WHERE grant_entry.grantee = 0", selected)
+        initialization_column = initialization_sql.split("SELECT 'column',", 1)[1]
+        self.assertEqual(compact(initialization_column.split("CROSS JOIN LATERAL ", 1)[1]),
+            "pg_catalog.aclexplode(attribute.attacl) AS grant_entry ) SELECT scope, object_name, "
+            "column_name, grantor::pg_catalog.int8 AS grantor, grantee::pg_catalog.int8 AS grantee, "
+            "privilege_type, is_grantable FROM grants LIMIT 23")
+        for acl, kind, owner in (("namespace.nspacl", "n", "namespace.nspowner"),
+                                 ("relation.relacl", "r", "relation.relowner")):
+            self.assertIn("pg_catalog.aclexplode(COALESCE(" + acl + ", pg_catalog.acldefault('"
+                + kind + "'::pg_catalog.\"char\", " + owner + "))) AS grant_entry", compact(initialization_sql))
 
     def test_only_exact_typed_invoker_functions_have_execute_and_exact_metadata(self):
         sql = writer.PLANNER_WRITER_PRIVILEGE_SQL

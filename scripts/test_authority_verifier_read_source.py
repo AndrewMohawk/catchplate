@@ -255,12 +255,12 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIn("CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f', 'S') THEN", relation)
         self.assertIn("CASE WHEN relkind = 'S' THEN 'S'::pg_catalog.\"char\"", relation)
         self.assertIn("ELSE 'r'::pg_catalog.\"char\" END, relowner", relation)
-        self.assertIn("ELSE ARRAY[]::pg_catalog.aclitem[] END", relation)
+        self.assertIn("ELSE NULL::pg_catalog.aclitem[] END", relation)
         column = sql.split("SELECT 'public-column-privilege'", 1)[1].split("UNION ALL", 1)[0]
         self.assertIn("attribute.attnum > 0", column)
         self.assertIn("attribute.attisdropped IS FALSE", column)
         self.assertIn("CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f') THEN", column)
-        self.assertIn("ELSE ARRAY[]::pg_catalog.aclitem[] END", column)
+        self.assertIn("THEN\n            attribute.attacl\n        ELSE NULL::pg_catalog.aclitem[] END", column)
         self.assertEqual(sql.count("WHERE grant_entry.grantee = 0"), 4)
 
     def test_helper_has_no_database_registry_or_dynamic_sql_dependency(self):

@@ -139,7 +139,7 @@ VERIFIER_READ_PRIVILEGE_SQL = """WITH requested AS (
             COALESCE(relacl, pg_catalog.acldefault(
                 CASE WHEN relkind = 'S' THEN 'S'::pg_catalog."char"
                      ELSE 'r'::pg_catalog."char" END, relowner))
-        ELSE ARRAY[]::pg_catalog.aclitem[] END
+        ELSE NULL::pg_catalog.aclitem[] END
     ) AS grant_entry
     WHERE grant_entry.grantee = 0
     UNION ALL
@@ -151,8 +151,8 @@ VERIFIER_READ_PRIVILEGE_SQL = """WITH requested AS (
      AND attribute.attisdropped IS FALSE
     CROSS JOIN LATERAL pg_catalog.aclexplode(
         CASE WHEN relkind IN ('r', 'p', 'v', 'm', 'f') THEN
-            COALESCE(attribute.attacl, ARRAY[]::pg_catalog.aclitem[])
-        ELSE ARRAY[]::pg_catalog.aclitem[] END
+            attribute.attacl
+        ELSE NULL::pg_catalog.aclitem[] END
     ) AS grant_entry
     WHERE grant_entry.grantee = 0
     UNION ALL

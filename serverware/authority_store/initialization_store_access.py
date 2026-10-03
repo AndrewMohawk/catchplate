@@ -171,8 +171,7 @@ _RAW_ACL_SQL = """WITH requested AS (
     SELECT 'column', relation.relname::pg_catalog.text, attribute.attname::pg_catalog.text, grant_entry.*
     FROM requested JOIN pg_catalog.pg_class AS relation ON relation.oid = ANY(requested.relation_oids)
     JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.oid AND attribute.attnum > 0
-    CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(attribute.attacl,
-        ARRAY[]::pg_catalog.aclitem[])) AS grant_entry
+    CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS grant_entry
 )
 SELECT scope, object_name, column_name, grantor::pg_catalog.int8 AS grantor,
     grantee::pg_catalog.int8 AS grantee, privilege_type, is_grantable FROM grants LIMIT 23"""

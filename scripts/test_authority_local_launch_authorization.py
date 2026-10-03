@@ -90,7 +90,136 @@ def read_owner(raw):
             os.close(fd)
 
 
+@contextmanager
+def native_read_owner(raw):
+    # Real local FDs/read/hash/link checks, synthetic generation/verity/frozen
+    # results only. This is not kernel fs-verity or authentic child admission.
+    with read_owner(raw) as (owner, originals, held):
+        info = os.fstat(held[0])
+        row = dict(fd=originals[0], runtimePath="/runtime/lib-control.so",
+            device=info.st_dev, inode=info.st_ino, mode=subject.stat.S_IMODE(info.st_mode),
+            uid=info.st_uid, gid=info.st_gid, size=len(raw), sha256=subject.sha(raw),
+            generation=7, fsVerityDigest="sha256:" + "a" * 64)
+        with patch.object(subject, "_generation", return_value=7), patch.object(subject, "_frozen"), \
+                patch.object(subject.LocalLaunchAuthorizationIssuer, "_measured_verity", return_value=row["fsVerityDigest"]):
+            yield owner, originals, held, row
+
+
+def mapping_copy(owner, fd):
+    mapped = os.dup(fd)
+    owner._hold(mapped)
+    owner.mapping_fds.add(mapped)
+    return mapped
+
+
 class LocalLaunchAuthorizationTests(unittest.TestCase):
+    def test_same_call_native_measurement_reuses_only_full_verified_original(self):
+        raw = b"synthetic native original" * 3000
+        with native_read_owner(raw) as (owner, _originals, _held, row):
+            measurements = {}
+            owner._read = Mock(wraps=owner._read)
+            fd = owner._row(row, regular=True, native_measurements=measurements)
+            self.assertEqual(measurements[row["runtimePath"]][0], fd)
+            mapped = mapping_copy(owner, fd)
+            with patch.object(subject.os, "pread", wraps=os.pread) as pread:
+                self.assertEqual(owner._retained_mapping_digest(mapped, measurements[row["runtimePath"]]), row["sha256"])
+                pread.assert_called_once_with(mapped, 1, len(raw))
+            owner._read.assert_called_once_with(fd, subject.launch.MAX_CLOSURE_FILE_BYTES)
+            # A new call-local map still requires a new complete original read.
+            fresh = {}
+            owner._row(row, regular=True, native_measurements=fresh)
+            self.assertEqual(owner._read.call_count, 2)
+            self.assertEqual(fresh, measurements)
+        for changed in ("sha256", "fsVerityDigest"):
+            with self.subTest(changed=changed), native_read_owner(raw) as (owner, _originals, _held, row):
+                measurements = {}
+                row[changed] = "sha256:" + "b" * 64
+                with self.assertRaises(ValueError):
+                    owner._row(row, regular=True, native_measurements=measurements)
+                self.assertEqual(measurements, {})
+
+    def test_native_reuse_rechecks_physical_custody_guards_and_eof(self):
+        for change in ("held", "child", "mapping", "child-index", "owner", "link", "size",
+                       "generation", "verity", "frozen", "live", "eof", "after-eof"):
+            with self.subTest(change=change), native_read_owner(b"native original") as (owner, originals, held, row):
+                measurements = {}
+                fd = owner._row(row, regular=True, native_measurements=measurements)
+                mapped = mapping_copy(owner, fd)
+                real_pread = os.pread
+                if change in {"held", "child", "mapping"}:
+                    os.dup2(originals[1], {"held": fd, "child": originals[0], "mapping": mapped}[change])
+                elif change == "child-index": owner.child_handles[originals[0]] = held[1]
+                elif change == "owner": del owner.owned[mapped]
+                elif change == "link": del owner.link_by_fd[fd]
+                elif change == "size": os.ftruncate(fd, row["size"] + 1)
+                elif change == "generation": subject._generation.return_value = 8
+                elif change == "verity": owner._measured_verity.return_value = "sha256:" + "b" * 64
+                elif change == "frozen": subject._frozen.side_effect = ValueError("not frozen")
+                elif change == "live": owner._check_live.side_effect = ValueError("expired or exited")
+                def read(descriptor, size, offset):
+                    value = real_pread(descriptor, size, offset)
+                    if change == "after-eof": os.dup2(originals[1], mapped)
+                    return b"unexpected" if change == "eof" else value
+                with patch.object(subject.os, "pread", side_effect=read), self.assertRaises(ValueError):
+                    owner._retained_mapping_digest(mapped, measurements[row["runtimePath"]])
+
+    def test_mapping_fallback_fresh_vdso_and_unchanged_maps_remain_required(self):
+        for scenario in ("eligible", "ineligible", "changed-maps"):
+            with self.subTest(scenario=scenario), native_read_owner(b"native original") as (owner, _originals, held, row):
+                if scenario == "ineligible": row["fsVerityDigest"] = None
+                measurements = {}
+                owner._read = Mock(wraps=owner._read)
+                owner._row(row, regular=True, native_measurements=measurements)
+                self.assertEqual(bool(measurements), scenario != "ineligible")
+                known, unknown, memory = (mapping_copy(owner, held[index]) for index in (0, 1, 1))
+                lines = []
+                for address, fd, path in (("1000-2000", known, row["runtimePath"]),
+                                         ("3000-4000", unknown, "/runtime/unknown.so")):
+                    info = os.fstat(fd)
+                    lines.append(f"{address} r-xp 0 {os.major(info.st_dev):x}:{os.minor(info.st_dev):x} {info.st_ino} {path}\n")
+                maps = ("".join(lines) + "0-4 r-xp 0 00:00 0 [vdso]\n").encode("ascii")
+                owner.child_pid = os.getpid()
+                paths = {f"/proc/{owner.child_pid}/map_files/1000-2000": known,
+                    f"/proc/{owner.child_pid}/map_files/3000-4000": unknown,
+                    f"/proc/{owner.child_pid}/mem": memory}
+                owner._open = Mock(side_effect=paths.__getitem__)
+                owner._proc = Mock(side_effect=[maps, maps + b"\n" if scenario == "changed-maps" else maps])
+                with patch.object(subject.os, "pread", wraps=os.pread) as pread:
+                    if scenario == "changed-maps":
+                        with self.assertRaises(ValueError): owner._mappings(measurements)
+                    else:
+                        self.assertEqual(owner._mappings(measurements), {
+                            row["runtimePath"]: row["sha256"],
+                            "/runtime/unknown.so": subject.sha(b"unrelated public fixture"),
+                            "[vdso]": subject.sha(b"unre")})
+                    pread.assert_any_call(memory, 4, 0)
+                owner._read.assert_any_call(unknown, subject.launch.MAX_NATIVE_MAPPING_BYTES, mapping=True)
+                self.assertEqual(owner._read.call_count, 3 if scenario == "ineligible" else 2)
+                self.assertEqual(owner._proc.call_count, 2)
+
+    def test_existing_borrowed_row_and_mappings_need_no_new_methods(self):
+        # The pilot prepare helper borrows these methods, not the issuer class.
+        # Preserve its complete-read default; this synthetic shape is no owner.
+        class Borrower:
+            _row = subject.LocalLaunchAuthorizationIssuer._row
+            _mappings = subject.LocalLaunchAuthorizationIssuer._mappings
+        with native_read_owner(b"native original") as (owner, _originals, held, row):
+            borrower = Borrower()
+            borrower._child_fd, borrower._read = owner._child_fd, Mock(wraps=owner._read)
+            self.assertEqual(borrower._row(row, regular=True), held[0])
+            mapped, memory = mapping_copy(owner, held[0]), mapping_copy(owner, held[1])
+            info = os.fstat(mapped)
+            maps = (f"1000-2000 r-xp 0 {os.major(info.st_dev):x}:{os.minor(info.st_dev):x} {info.st_ino} {row['runtimePath']}\n"
+                    + "0-4 r-xp 0 00:00 0 [vdso]\n").encode("ascii")
+            borrower.child_pid, borrower.mapping_fds = os.getpid(), owner.mapping_fds
+            borrower._proc, borrower.check = Mock(return_value=maps), owner.check
+            borrower._open = Mock(side_effect=[mapped, memory])
+            self.assertEqual(borrower._mappings(), {
+                row["runtimePath"]: row["sha256"], "[vdso]": subject.sha(b"unre")})
+            borrower._read.assert_any_call(mapped, subject.launch.MAX_NATIVE_MAPPING_BYTES, mapping=True)
+            self.assertFalse(hasattr(borrower, "_measured_verity"))
+            self.assertFalse(hasattr(borrower, "_retained_mapping_digest"))
+
     def test_active_reads_check_each_chunk_and_empty_eof_without_global_sweeps(self):
         for raw in (b"", b"x", b"x" * 65537):
             with self.subTest(size=len(raw)), read_owner(raw) as (owner, _originals, held):
@@ -189,6 +318,9 @@ class LocalLaunchAuthorizationTests(unittest.TestCase):
         self.assertEqual(len(mappings), 1)
         self.assertIn(mappings[0], list(ast.walk(methods["_mappings"])))
         self.assertIn("self.mapping_fds.add(fd)", ast.unparse(methods["_mappings"]))
+        self.assertIn("native_measurements = {}", ast.unparse(methods["verify_live"]))
+        self.assertIn("self._mappings(native_measurements)", ast.unparse(methods["verify_live"]))
+        self.assertNotIn("self.native_measurements", ast.unparse(owner))
 
     def test_effective_environment_joins_validated_descriptor_arguments(self):
         for evidence in (False, True):

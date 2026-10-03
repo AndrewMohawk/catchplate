@@ -503,7 +503,15 @@ class LocalLaunchAuthorizationIssuer:
             self._hold(fd)
         return fd
 
-    def _row(self, row, *, regular):
+    @staticmethod
+    def _measured_verity(fd):
+        measured = bytearray(struct.pack("=HH64s", 0, 64, bytes(64)))
+        fcntl.ioctl(fd, 0xC0046686, measured, True)
+        algorithm, length, digest = struct.unpack("=HH64s", measured)
+        require(algorithm == 1 and length == 32)
+        return "sha256:" + digest[:32].hex()
+
+    def _row(self, row, *, regular, native_measurements=None):
         fd = self._child_fd(row["fd"])
         info = os.fstat(fd)
         actual = dict(device=info.st_dev, inode=info.st_ino, mode=stat.S_IMODE(info.st_mode), uid=info.st_uid, gid=info.st_gid)
@@ -515,14 +523,49 @@ class LocalLaunchAuthorizationIssuer:
         if regular:
             raw = self._read(fd, launch.MAX_CLOSURE_FILE_BYTES)
             require(len(raw) == row["size"] and sha(raw) == row["sha256"])
+            verity = None
             if row.get("fsVerityDigest") is not None:
-                measured = bytearray(struct.pack("=HH64s", 0, 64, bytes(64)))
-                fcntl.ioctl(fd, 0xC0046686, measured, True)
-                algorithm, length, digest = struct.unpack("=HH64s", measured)
-                require(algorithm == 1 and length == 32 and "sha256:" + digest[:32].hex() == row["fsVerityDigest"])
+                verity = LocalLaunchAuthorizationIssuer._measured_verity(fd)
+                require(verity == row["fsVerityDigest"])
+            if (native_measurements is not None and "generation" in row and verity is not None
+                    and info.st_size <= launch.MAX_NATIVE_MAPPING_BYTES):
+                self._check_live(); self._check_link(fd)
+                require(io._identity(os.fstat(fd)) == io._identity(info)
+                    and self._owned_identity(fd) == self.owned[fd]
+                    and _generation(fd) == row["generation"]
+                    and row["runtimePath"] not in native_measurements)
+                _frozen(fd)
+                native_measurements[row["runtimePath"]] = (
+                    fd, row["fd"], io._identity(info), row["generation"], verity, row["sha256"])
         return fd
 
-    def _mappings(self):
+    def _retained_mapping_digest(self, fd, measured):
+        # Only the fully read, verity-measured original from this verify_live
+        # call is reusable; neither the record nor its FD gains new ownership.
+        held, number, identity, generation, verity, digest = measured
+        def check():
+            self._check_live()
+            require(fd in self.mapping_fds and fd not in self.link_by_fd
+                and held not in self.mapping_fds and self.child_handles.get(number) == held
+                and fd in self.owned and held in self.owned
+                and self._owned_identity(fd) == self.owned[fd]
+                and self._owned_identity(held) == self.owned[held])
+            self._check_link(held)
+            require(io._identity(os.fstat(fd)) == identity == io._identity(os.fstat(held))
+                and stat.S_ISREG(identity[2]) and 0 <= identity[6] <= launch.MAX_NATIVE_MAPPING_BYTES)
+            for original in (held, fd):
+                require(_generation(original) == generation)
+                _frozen(original)
+                require(self._measured_verity(original) == verity)
+            self._check_live(); self._check_link(held)
+            require(io._identity(os.fstat(fd)) == identity == io._identity(os.fstat(held)))
+        check()
+        end = os.pread(fd, 1, identity[6])
+        check()
+        require(not end)
+        return digest
+
+    def _mappings(self, native_measurements=None):
         raw = self._proc("maps", 1024 * 1024)
         mappings, inodes = {}, {}
         memory = None
@@ -550,7 +593,10 @@ class LocalLaunchAuthorizationIssuer:
                 major, minor = (int(value, 16) for value in device.split(":"))
                 require((os.major(info.st_dev), os.minor(info.st_dev), info.st_ino) == (major, minor, int(inode)))
                 self.mapping_fds.add(fd)
-                digest, identity = sha(self._read(fd, launch.MAX_NATIVE_MAPPING_BYTES, mapping=True)), (device, inode)
+                measured = None if native_measurements is None else native_measurements.get(path)
+                digest = (self._retained_mapping_digest(fd, measured) if measured is not None
+                    else sha(self._read(fd, launch.MAX_NATIVE_MAPPING_BYTES, mapping=True)))
+                identity = (device, inode)
             require(path not in mappings or (mappings[path], inodes[path]) == (digest, identity))
             mappings[path], inodes[path] = digest, identity
         require("[vdso]" in mappings and self._proc("maps", 1024 * 1024) == raw)
@@ -574,8 +620,10 @@ class LocalLaunchAuthorizationIssuer:
                 name, value = entry.decode("ascii").split("=", 1)
                 require(name not in environment); environment[name] = value
         environment = _effective_environment(environment, request, observed["environment"])
+        native_measurements = {}
         for row in request["retainedFiles"]:
-            self._row(row, regular=True)
+            self._row(row, regular=True, native_measurements=(native_measurements
+                if row["runtimePath"] in payload["nativeExecutableMappings"] else None))
         for row in request["retainedDirectories"]:
             self._row(row, regular=False)
         self._row(observed["bootstrap"], regular=True)
@@ -645,7 +693,7 @@ class LocalLaunchAuthorizationIssuer:
                 and locks[0][1:4] == ["FLOCK", "ADVISORY", "WRITE"]
                 and locks[0][4] in {str(self.child_pid), str(observed["process"]["parentPid"])}
                 and locks[0][-2:] == ["0", "EOF"])
-        mappings = self._mappings()
+        mappings = self._mappings(native_measurements)
         require(mappings == payload["nativeExecutableMappings"])
         host = request["hostEvidence"]
         # This local issuer defines these pins as literal kernel pseudo-file bytes.

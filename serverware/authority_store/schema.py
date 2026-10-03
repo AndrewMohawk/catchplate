@@ -1643,6 +1643,13 @@ def _validate_policy_candidate_authority_structure(
         for table in table_manifests.values()
         for trigger in table["triggers"]
     }
+    if isinstance(conn, PostgresMetadataConnection):
+        # Authenticated business-table guards extend beyond the protected-table
+        # subset. The complete schema inventory remains subject to exact equality.
+        actual_trigger_names.update(
+            str(trigger["name"])
+            for trigger in manifest["objectAuthority"]["triggers"]
+        )
     actual_function_names = {
         str(function["name"]) for function in manifest["functions"]
     }

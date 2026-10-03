@@ -146,6 +146,37 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             require_metadata_schema_program(value, legacy_completed_v9_receipt=True)
 
+    def test_postgres_required_guards_include_complete_schema_inventory(self):
+        # Source-linkage control only. The disposable full-schema fixture proves
+        # real business-table guard acceptance and a dropped guard's refusal.
+        _, tree = read_source("serverware/authority_store/schema.py")
+        validator = function(tree, "_validate_policy_candidate_authority_structure")
+        updates = [node for node in calls(validator, "update")
+                   if isinstance(node.func, ast.Attribute)
+                   and isinstance(node.func.value, ast.Name)
+                   and node.func.value.id == "actual_trigger_names"]
+        self.assertEqual(len(updates), 1)
+        branches = [node for node in ast.walk(validator) if isinstance(node, ast.If)
+                    and any(isinstance(item, ast.Expr) and item.value is updates[0]
+                            for item in node.body)]
+        self.assertEqual(len(branches), 1)
+        self.assert_shape(branches[0].test, "isinstance(conn, PostgresMetadataConnection)")
+        self.assertEqual(len(updates[0].args), 1)
+        self.assert_shape(updates[0].args[0],
+            '(str(trigger["name"]) for trigger in manifest["objectAuthority"]["triggers"])')
+        self.assert_shape(assignment(validator, "missing_triggers").value,
+                          "sorted(required_triggers - actual_trigger_names)")
+        refusal = [node for node in ast.walk(validator) if isinstance(node, ast.If)
+                   and ast.dump(node.test) == ast.dump(ast.parse(
+                       "missing_triggers or missing_functions", mode="eval").body)]
+        self.assertEqual(len(refusal), 1)
+        self.assertTrue(any(isinstance(node, ast.Raise) for node in refusal[0].body))
+        equality = [node for node in ast.walk(validator) if isinstance(node, ast.If)
+                    and ast.dump(node.test) == ast.dump(ast.parse(
+                        "manifest != expected_manifest", mode="eval").body)]
+        self.assertEqual(len(equality), 1)
+        self.assertTrue(any(isinstance(node, ast.Raise) for node in equality[0].body))
+
     def test_composite_foreign_keys_have_exact_active_unique_targets(self):
         # Six confirmed PostgreSQL target-key regressions, not a SQL parser or
         # execution proof. Retired commented DDL must not satisfy the controls.

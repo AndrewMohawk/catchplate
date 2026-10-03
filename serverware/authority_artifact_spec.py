@@ -103,6 +103,10 @@ WITNESS_CHECKPOINT_DIGEST_DOMAIN = (
 AUTHORITY_SCHEMA_VERSION = 9
 MAX_BUNDLE_FILES = 32768
 MAX_IMPORTS = 16384
+CPYTHON_SYSCONFIG_DATA_MODULE = "_sysconfigdata__linux_x86_64-linux-gnu"
+CPYTHON_SYSCONFIG_DATA_PATH = (
+    "python/lib/python3.11/" + CPYTHON_SYSCONFIG_DATA_MODULE + ".py"
+)
 MAX_NATIVE_OBJECTS = 8192
 MAX_SCHEMAS = 4096
 MAX_MIGRATIONS = 256
@@ -1677,7 +1681,13 @@ def _validate_python_import(value: object) -> None:
         keys={"module", "path", "kind", "isPackage", "sha256"},
     )
     module = _require_ascii(entry["module"], name="module", maximum=512)
-    if any(
+    # CPython imports this selected ABI's build data by its non-identifier name.
+    # Admit only its measured source path, not arbitrary hyphenated modules.
+    if module == CPYTHON_SYSCONFIG_DATA_MODULE:
+        if (entry["path"] != CPYTHON_SYSCONFIG_DATA_PATH
+                or entry["kind"] != "source" or entry["isPackage"] is not False):
+            raise ArtifactContractError("CPython sysconfig source binding is not exact")
+    elif any(
         not part
         or part[0].isdigit()
         or not part.replace("_", "a").isalnum()

@@ -625,8 +625,9 @@ class _SealedClosureFinder(importlib.abc.MetaPathFinder):
                 is not None
             ):
                 return None
-            raise ImportError(
-                f"{fullname} is outside the measured import closure"
+            raise ModuleNotFoundError(
+                f"{fullname} is outside the measured import closure",
+                name=fullname,
             )
         descriptor = int(entry["descriptor"])
         kind = entry["kind"]

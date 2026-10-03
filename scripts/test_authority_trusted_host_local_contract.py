@@ -29,6 +29,48 @@ def fixture():
     return source, [native]
 
 
+class CPythonSysconfigImportTests(unittest.TestCase):
+    @staticmethod
+    def entry():
+        return dict(module="_sysconfigdata__linux_x86_64-linux-gnu",
+                    path="python/lib/python3.11/_sysconfigdata__linux_x86_64-linux-gnu.py",
+                    kind="source", isPackage=False, sha256="sha256:" + "1" * 64)
+
+    def test_exact_selected_cpython_build_data_is_a_source_import(self):
+        entry = self.entry()
+        self.assertEqual(artifact.CPYTHON_SYSCONFIG_DATA_MODULE, entry["module"])
+        self.assertEqual(artifact.CPYTHON_SYSCONFIG_DATA_PATH, entry["path"])
+        artifact._validate_python_import(entry)
+
+    def test_sysconfig_exception_refuses_other_names_paths_kinds_and_packages(self):
+        changes = (
+            {"module": "arbitrary-hyphen"},
+            {"module": "_sysconfigdata__linux_aarch64-linux-gnu"},
+            {"module": "_sysconfigdata__linux_x86_64-linux-gnu.extra"},
+            {"module": "package._sysconfigdata__linux_x86_64-linux-gnu"},
+            {"path": "source/_sysconfigdata__linux_x86_64-linux-gnu.py"},
+            {"path": "python/lib/python3.12/_sysconfigdata__linux_x86_64-linux-gnu.py"},
+            {"path": "python/lib/python3.11/site-packages/_sysconfigdata__linux_x86_64-linux-gnu.py"},
+            {"path": "python/lib/python3.11/_sysconfigdata__linux_x86_64-linux-gnu/__init__.py"},
+            {"path": "python/lib/python3.11/../_sysconfigdata__linux_x86_64-linux-gnu.py"},
+            {"kind": "bytecode"}, {"kind": "extension"}, {"kind": "data"},
+            {"isPackage": True}, {"isPackage": 0}, {"isPackage": None},
+            {"sha256": "not-a-digest"},
+        )
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(artifact.ArtifactContractError):
+                artifact._validate_python_import(dict(self.entry(), **change))
+
+    def test_ordinary_module_identifier_validation_is_unchanged(self):
+        for module in ("sysconfig", "zoneinfo._tzpath", "_ordinary_build_data"):
+            with self.subTest(module=module):
+                artifact._validate_python_import(dict(self.entry(), module=module,
+                                                     path="source/ordinary.py"))
+        for module in ("", "0module", "package..module", "ordinary-module", "module.\N{SNOWMAN}"):
+            with self.subTest(module=module), self.assertRaises(artifact.ArtifactContractError):
+                artifact._validate_python_import(dict(self.entry(), module=module))
+
+
 class TrustedHostLocalContractTests(unittest.TestCase):
     def test_request_role_manifest_path_call_preserves_path_validation(self):
         tree = ast.parse(Path(stage.__file__).read_text())

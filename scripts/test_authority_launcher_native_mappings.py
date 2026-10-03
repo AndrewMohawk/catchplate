@@ -107,6 +107,43 @@ def preload_fixture():
 
 
 class NativeMappingsTests(unittest.TestCase):
+    def test_missing_measured_module_preserves_not_found_name(self):
+        finder = subject._SealedClosureFinder({}, {})
+        for name in ("unmeasured_fixture", "unmeasured_fixture.child"):
+            with self.subTest(name=name), self.assertRaises(ModuleNotFoundError) as failure:
+                finder.find_spec(name)
+            self.assertEqual(failure.exception.name, name)
+            self.assertIsInstance(failure.exception, ImportError)
+
+    def test_missing_measured_module_never_reaches_downstream_finder(self):
+        name = "serverware_unmeasured_import_fixture"
+        self.assertNotIn(name, sys.modules)
+        finder = subject._SealedClosureFinder({}, {})
+        with patch.object(importlib.machinery.PathFinder, "find_spec") as downstream, \
+                patch.object(sys, "meta_path", [finder, importlib.machinery.PathFinder]):
+            with self.assertRaises(ModuleNotFoundError) as failure:
+                importlib.import_module(name)
+            downstream.assert_not_called()
+        self.assertEqual(failure.exception.name, name)
+        self.assertNotIn(name, sys.modules)
+
+    def test_optional_absent_platform_import_is_catchable_without_fallback(self):
+        self.assertNotIn("msvcrt", sys.modules)
+        self.assertNotIn("msvcrt", sys.builtin_module_names)
+        finder = subject._SealedClosureFinder({}, {})
+        namespace = {}
+        # Match the optional Windows-module probe used by Linux subprocess.
+        code = compile("try:\n    import msvcrt\nexcept ModuleNotFoundError as error:\n"
+                       "    missing_name = error.name\n    windows = False\n"
+                       "else:\n    windows = True\n", "public-platform-probe", "exec")
+        with patch.object(importlib.machinery.PathFinder, "find_spec") as downstream, \
+                patch.object(sys, "meta_path", [finder, importlib.machinery.PathFinder]):
+            exec(code, namespace)
+            downstream.assert_not_called()
+        self.assertFalse(namespace["windows"])
+        self.assertEqual(namespace["missing_name"], "msvcrt")
+        self.assertNotIn("msvcrt", sys.modules)
+
     def test_preload_dependency_first_shared_and_retained_handles(self):
         with preload_fixture() as (bundle, files, baseline):
             handles = [object(), object()]

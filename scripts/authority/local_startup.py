@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import signal
 import sys
 
@@ -39,6 +40,46 @@ def arguments(argv):
     return dict(plan_fd=fd, plan_sha256=digest, listener_fd=3)
 
 
+def _failure_line(value):
+    try:
+        print(value, file=sys.stderr, flush=True)
+    except BaseException:
+        pass  # Broken diagnostics must not prevent cleanup or failure return.
+
+
+def _failure_name(value):
+    return value if type(value) is str and re.fullmatch(r"[A-Za-z0-9_.<>-]{1,96}", value) else "unknown"
+
+
+def _failure_diagnostics(error, owner):
+    """Fixed metadata only: never format exceptions, source lines or locals."""
+    admitted = getattr(owner, "admitted", "unknown")
+    status = getattr(owner, "child_status", "unknown")
+    _failure_line("LOCAL_STARTUP_FAILURE_ADMITTED=" + (str(int(admitted)) if type(admitted) is bool else "unknown"))
+    _failure_line("LOCAL_STARTUP_FAILURE_CHILD_STATUS=" + ("none" if status is None else
+        str(status) if type(status) is int and -255 <= status <= 255 else "unknown"))
+    seen = set()
+    current = error
+    # The original exception plus at most four cause/context links.
+    for index in range(5):
+        if not isinstance(current, BaseException) or id(current) in seen:
+            break
+        seen.add(id(current))
+        _failure_line(f"LOCAL_STARTUP_FAILURE_CAUSE={index}:{_failure_name(type(current).__name__)}")
+        trace = current.__traceback__
+        for _ in range(8):
+            if trace is None:
+                break
+            code = trace.tb_frame.f_code
+            filename = code.co_filename
+            name = Path(filename).name if type(filename) is str and len(filename) <= 4096 else "unknown"
+            line = trace.tb_lineno
+            line = line if type(line) is int and 0 < line < 2**31 else 0
+            _failure_line(f"LOCAL_STARTUP_FAILURE_FRAME={index}:{_failure_name(name)}:{_failure_name(code.co_name)}:{line}")
+            trace = trace.tb_next
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv == ["--help"]:
@@ -60,12 +101,16 @@ def main(argv=None):
     except BaseException as error:
         owner = getattr(error, "owner", None) or owner
         try:
+            _failure_diagnostics(error, owner)
+        except BaseException:
+            pass
+        try:
             if owner is not None:
                 owner.close(cancel=True)
         except BaseException:
-            print("local startup failed; child or descriptor cleanup is uncertain; no retry", file=sys.stderr)
+            _failure_line("local startup failed; child or descriptor cleanup is uncertain; no retry")
             return 1
-        print("local startup failed; no readiness asserted; retained files were not removed", file=sys.stderr)
+        _failure_line("local startup failed; no readiness asserted; retained files were not removed")
         return 1
 
 

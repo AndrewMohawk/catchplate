@@ -649,6 +649,46 @@ class _SealedClosureFinder(importlib.abc.MetaPathFinder):
         )
 
 
+def _loaded_native_dependency_mappings(bundle, loaded):
+    """Select dependencies of successful imports from the verified ELF graph.
+
+    An extension's own mapping uses its sealed memfd, but the dynamic loader
+    maps its DT_NEEDED objects at their signed runtime paths. Available but
+    unimported extensions do not make their dependency mappings mandatory.
+    """
+    objects = bundle["nativeClosure"]["objects"]
+    native = [*bundle["nativeClosure"]["executables"], *objects]
+    by_path = {row["path"]: row for row in objects}
+    by_runtime = {row["runtimePath"]: row for row in native}
+    imports = [row for row in bundle["pythonImportClosure"]
+               if row["kind"] == "extension"]
+    by_mapping = {f"/memfd:{row['module']} (deleted)": row for row in imports}
+    if (len(by_path) != len(objects) or len(by_runtime) != len(native)
+            or len(by_mapping) != len(imports)):
+        raise LaunchError("native dependency graph identity is ambiguous")
+    pending = []
+    for path, digest in loaded.items():
+        imported = by_mapping.get(path)
+        root = None if imported is None else by_path.get(imported["path"])
+        if (root is None or imported["sha256"] != digest
+                or root["sha256"] != digest):
+            raise LaunchError("loaded extension differs from signed native graph")
+        pending.extend(root["needed"])
+    dependencies = {}
+    while pending:
+        path = pending.pop()
+        if path in dependencies:
+            continue
+        row = by_runtime.get(path)
+        if row is None:
+            raise LaunchError("loaded native dependency is outside signed graph")
+        dependencies[path] = row["sha256"]
+        pending.extend(row["needed"])
+        if row.get("ptInterp") is not None:
+            pending.append(row["ptInterp"])
+    return dependencies
+
+
 def _native_identity(metadata):
     return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
             metadata.st_uid, metadata.st_gid, metadata.st_size,
@@ -2944,10 +2984,14 @@ def _enter(
         else:
             from serverware import authority_service
 
-        if any(path in expected_native and expected_native[path] != digest
-               for path, digest in loaded_native_mappings.items()):
-            raise LaunchError("sealed native mapping identity is ambiguous")
-        expected_native.update(loaded_native_mappings)
+        dependencies = _loaded_native_dependency_mappings(
+            verified_package.package["bundle"], loaded_native_mappings,
+        )
+        for additions in (loaded_native_mappings, dependencies):
+            if any(path in expected_native and expected_native[path] != digest
+                   for path, digest in additions.items()):
+                raise LaunchError("sealed native mapping identity is ambiguous")
+            expected_native.update(additions)
         _verify_native_mappings(
             expected_native, require_exact=True,
             files=native_files, memory=memory,

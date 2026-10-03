@@ -14,6 +14,7 @@ import stat
 import sys
 import unittest
 from contextlib import ExitStack, contextmanager
+from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
@@ -61,7 +62,78 @@ def signed_file_row(fd, raw, *, survives=True):
                 gid=metadata.st_gid, sha256=sha(raw), surviveExec=survives)
 
 
+def dependency_bundle():
+    def native(name, needed):
+        return dict(path="native/" + name, runtimePath="/native/" + name,
+                    sha256=sha(name.encode()), needed=needed, soname=None,
+                    elfClass="ELF64", machine=62)
+    objects = [native("first.so", ["/native/direct.so"]),
+               native("second.so", ["/native/shared.so"]),
+               native("direct.so", ["/native/shared.so"]),
+               native("shared.so", ["/native/direct.so"])]
+    imports = [dict(module=name, path="native/" + name + ".so",
+                    kind="extension", isPackage=False,
+                    sha256=sha((name + ".so").encode()))
+               for name in ("first", "second")]
+    return dict(nativeClosure=dict(objects=objects, executables=[]),
+                pythonImportClosure=imports)
+
+
 class NativeMappingsTests(unittest.TestCase):
+    def test_loaded_dependency_graph_direct_transitive_shared_and_cycle(self):
+        bundle = dependency_bundle()
+        loaded = {"/memfd:" + name + " (deleted)": sha((name + ".so").encode())
+                  for name in ("first", "second")}
+        self.assertEqual(subject._loaded_native_dependency_mappings(bundle, loaded),
+                         {"/native/direct.so": sha(b"direct.so"),
+                          "/native/shared.so": sha(b"shared.so")})
+
+    def test_unloaded_extension_dependencies_are_not_mandatory(self):
+        bundle = dependency_bundle()
+        objects = bundle["nativeClosure"]["objects"]
+        objects.append(dict(objects[2], path="native/unloaded.so",
+                            runtimePath="/native/unloaded.so", needed=[],
+                            sha256=sha(b"unloaded.so")))
+        objects[1]["needed"] = ["/native/unloaded.so"]
+        self.assertEqual(subject._loaded_native_dependency_mappings(bundle, {}), {})
+        self.assertEqual(subject._loaded_native_dependency_mappings(
+            bundle, {"/memfd:first (deleted)": sha(b"first.so")}),
+            {"/native/direct.so": sha(b"direct.so"),
+             "/native/shared.so": sha(b"shared.so")})
+
+    def test_loaded_extension_root_and_digest_joins_fail_closed(self):
+        loaded = {"/memfd:first (deleted)": sha(b"first.so")}
+        for failure in ("unknown", "loaded-digest", "import-digest", "native-digest", "path"):
+            bundle, values = dependency_bundle(), dict(loaded)
+            if failure == "unknown":
+                values = {"/memfd:unknown (deleted)": sha(b"first.so")}
+            elif failure == "loaded-digest":
+                values["/memfd:first (deleted)"] = sha(b"wrong")
+            elif failure == "import-digest":
+                bundle["pythonImportClosure"][0]["sha256"] = sha(b"wrong")
+            elif failure == "native-digest":
+                bundle["nativeClosure"]["objects"][0]["sha256"] = sha(b"wrong")
+            else:
+                bundle["pythonImportClosure"][0]["path"] = "native/unselected.so"
+            with self.subTest(failure=failure), self.assertRaises(subject.LaunchError):
+                subject._loaded_native_dependency_mappings(bundle, values)
+
+    def test_missing_edges_and_ambiguous_graph_joins_fail_closed(self):
+        for failure in ("missing-edge", "duplicate-path", "duplicate-runtime", "duplicate-module"):
+            bundle = dependency_bundle()
+            objects = bundle["nativeClosure"]["objects"]
+            if failure == "missing-edge":
+                objects[2]["needed"] = ["/native/unselected.so"]
+            elif failure in ("duplicate-path", "duplicate-runtime"):
+                extra = deepcopy(objects[2])
+                extra["runtimePath" if failure == "duplicate-path" else "path"] = "/different"
+                objects.append(extra)
+            else:
+                bundle["pythonImportClosure"].append(deepcopy(bundle["pythonImportClosure"][0]))
+            with self.subTest(failure=failure), self.assertRaises(subject.LaunchError):
+                subject._loaded_native_dependency_mappings(
+                    bundle, {"/memfd:first (deleted)": sha(b"first.so")})
+
     def test_exact_path_inode_device_and_retained_descriptor_required(self):
         with public_file() as (fd, raw, binding):
             mapped = row(fd)

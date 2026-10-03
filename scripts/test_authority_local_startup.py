@@ -12,7 +12,9 @@ import signal
 import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -36,6 +38,75 @@ def fixture():
 
 
 class LocalStartupTests(unittest.TestCase):
+    def test_idle_wait_preserves_checks_fd_sets_readiness_and_deadline_clipping(self):
+        # Synthetic scheduling only, not an admitted owner or child lifetime.
+        for write in (False, True):
+            for ready in (False, True):
+                for boot_remaining, epoch_remaining, timeout in ((5.0, 5.0, 1.0), (0.25, 5.0, 0.25), (5.0, 0.125, 0.125)):
+                    with self.subTest(write=write, ready=ready, boot=boot_remaining, epoch=epoch_remaining):
+                        calls, channel = [], object()
+                        owner = SimpleNamespace(child_pidfd=41, channel=channel,
+                            value=dict(deadlineBoottimeNs=1_000_000_000 + int(boot_remaining * 1e9),
+                                expiresAtUnixNanos=2_000_000_000 + int(epoch_remaining * 1e9)),
+                            check=lambda *, child_live: calls.append(("check", child_live)))
+
+                        def selected(readable, writable, exceptional, seconds):
+                            calls.append(("select", readable, writable, exceptional, seconds))
+                            return ([channel] if ready and not write else [],
+                                [channel] if ready and write else [], [])
+
+                        with patch.object(startup.time, "clock_gettime_ns", return_value=1_000_000_000), \
+                                patch.object(startup.time, "time_ns", return_value=2_000_000_000), \
+                                patch.object(startup.select, "select", side_effect=selected):
+                            self.assertIs(startup.LocalAuthorityStartup._wait(owner, write=write), ready)
+                        self.assertEqual(calls, [("check", True),
+                            ("select", [41] if write else [41, channel], [channel] if write else [], [], timeout),
+                            ("check", True)])
+
+    def test_idle_wait_propagates_precheck_and_postcheck_refusal(self):
+        for effects, selected_count in (([ValueError("precheck")], 0), ([None, ValueError("postcheck")], 1)):
+            with self.subTest(selected_count=selected_count):
+                owner = SimpleNamespace(child_pidfd=41, channel=object(),
+                    value=dict(deadlineBoottimeNs=5_000_000_000, expiresAtUnixNanos=5_000_000_000),
+                    check=Mock(side_effect=effects))
+                with patch.object(startup.time, "clock_gettime_ns", return_value=0), \
+                        patch.object(startup.time, "time_ns", return_value=0), \
+                        patch.object(startup.select, "select", return_value=([], [], [])) as selected:
+                    with self.assertRaises(ValueError):
+                        startup.LocalAuthorityStartup._wait(owner)
+                self.assertEqual(selected.call_count, selected_count)
+                self.assertEqual(owner.check.call_count, selected_count + 1)
+                self.assertTrue(all(call.kwargs == {"child_live": True} for call in owner.check.call_args_list))
+
+    def test_late_idle_wait_clips_original_deadlines_and_rechecks_ready_pidfd(self):
+        for boot_remaining, epoch_remaining, timeout in ((5.0, 5.0, 1.0), (0.25, 5.0, 0.25), (5.0, 0.125, 0.125)):
+            with self.subTest(boot=boot_remaining, epoch=epoch_remaining):
+                calls = []
+
+                def checked(*, child_live):
+                    calls.append(("check", child_live))
+                    if len(calls) > 1:
+                        raise ValueError("child guard refused after PIDFD readiness")
+
+                def selected(readable, writable, exceptional, seconds):
+                    calls.append(("select", readable, writable, exceptional, seconds))
+                    return [41], [], []
+
+                owner = SimpleNamespace(child_pidfd=41, purposes=("manifest",),
+                    directory_fds={"exchangeDirectory": 73}, check=checked,
+                    value=dict(deadlineBoottimeNs=1_000_000_000 + int(boot_remaining * 1e9),
+                        expiresAtUnixNanos=2_000_000_000 + int(epoch_remaining * 1e9)))
+                with patch.object(startup.time, "clock_gettime_ns", return_value=1_000_000_000), \
+                        patch.object(startup.time, "time_ns", return_value=2_000_000_000), \
+                        patch.object(startup.select, "select", side_effect=selected), \
+                        patch.object(startup.os, "scandir") as scanned:
+                    scanned.return_value.__enter__.return_value = iter(())
+                    with self.assertRaises(ValueError):
+                        startup.LocalAuthorityStartup._late(owner)
+                    scanned.assert_called_once_with(73)
+                self.assertEqual(calls, [("check", True),
+                    ("select", [41], [], [], timeout), ("check", True)])
+
     def test_plan_accepts_existing_full_closure_bound_not_an_arbitrary_128(self):
         value = fixture()
         value["retainedFiles"] += [dict(path=f"/runtime/source/selected-{index:05d}.py", sha256="sha256:" + "2" * 64)

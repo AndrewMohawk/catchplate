@@ -467,8 +467,10 @@ class LocalAuthorityStartup:
         self.check(child_live=True)
         remaining = min(self.value["deadlineBoottimeNs"] - time.clock_gettime_ns(time.CLOCK_BOOTTIME),
                         self.value["expiresAtUnixNanos"] - time.time_ns()) / 1e9
+        # Avoid rescanning retained resources every 50ms while the channel is idle.
+        # Channel/PIDFD readiness still wakes immediately; original clocks bind.
         readable, writable, _ = select.select([self.child_pidfd] + ([] if write else [self.channel]),
-            [self.channel] if write else [], [], max(0, min(0.05, remaining)))
+            [self.channel] if write else [], [], max(0, min(1.0, remaining)))
         self.check(child_live=True)
         return bool(writable if write else self.channel in readable)
 
@@ -587,7 +589,11 @@ class LocalAuthorityStartup:
                     # copy crosses the existing protected-descriptor protocol.
                     sources[purpose] = (self._sealed(raw, "local-late-" + purpose), raw)
             if len(sources) != len(self.purposes):
-                select.select([self.child_pidfd], [], [], 0.05)
+                # Late file publication can take one idle interval to observe;
+                # child exit still wakes immediately and neither clock extends.
+                remaining = min(self.value["deadlineBoottimeNs"] - time.clock_gettime_ns(time.CLOCK_BOOTTIME),
+                                self.value["expiresAtUnixNanos"] - time.time_ns()) / 1e9
+                select.select([self.child_pidfd], [], [], max(0, min(1.0, remaining)))
         self.check(full=True, child_live=True)
         return sources
 

@@ -9659,6 +9659,70 @@ def metadata_base_schema_source() -> str:
             """
 
 
-def metadata_schema_source() -> str:
+def metadata_initialization_index_source() -> str:
+    """Final indexes installed after compatibility columns and backfills."""
+    return """
+            CREATE INDEX IF NOT EXISTS policy_state_bundles_dispatch_deadline
+                ON policy_state_bundles (state, dispatch_deadline_at_epoch_ms, reservation_id);
+            CREATE INDEX IF NOT EXISTS policy_state_bundles_reservation_deadline
+                ON policy_state_bundles (state, reservation_deadline_at_epoch_ms, reservation_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS approval_grants_reserved_attempt
+                ON approval_grants (reserved_attempt_id)
+                WHERE reserved_attempt_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS control_plane_approvals_webauthn_lookup
+                ON control_plane_approvals (approver_webauthn_credential_id, status);
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_attestation_challenge
+                ON setup_sessions (attestation_challenge_digest)
+                WHERE attestation_challenge_digest IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_enrollment_verifier_receipt
+                ON setup_sessions (enrollment_verifier_receipt_digest)
+                WHERE enrollment_verifier_receipt_digest IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_runtime_evidence
+                ON setup_sessions (runtime_evidence_digest)
+                WHERE runtime_evidence_digest IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_hardware_assurance
+                ON setup_sessions (hardware_assurance_digest)
+                WHERE hardware_assurance_digest IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_hardware_verification_receipt
+                ON setup_sessions (hardware_verification_receipt_digest)
+                WHERE hardware_verification_receipt_digest IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_final_consumption
+                ON setup_sessions (final_consumption_id)
+                WHERE final_consumption_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_final_receipt
+                ON setup_sessions (final_receipt_digest)
+                WHERE final_receipt_digest IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS oidc_browser_sessions_pending_expiry
+                ON oidc_browser_sessions (status, pending_expires_at);
+            CREATE INDEX IF NOT EXISTS webauthn_challenges_type_user_state
+                ON webauthn_challenges (challenge_type, user_id, used_at, expires_at);
+            CREATE INDEX IF NOT EXISTS webauthn_challenges_type_scope_state
+                ON webauthn_challenges (challenge_type, scope_key, used_at, expires_at);
+            CREATE INDEX IF NOT EXISTS webauthn_challenges_live_expiry
+                ON webauthn_challenges (used_at, expires_at);
+            CREATE INDEX IF NOT EXISTS webauthn_challenges_user_created
+                ON webauthn_challenges (user_id, created_at);
+            CREATE INDEX IF NOT EXISTS webauthn_challenges_created
+                ON webauthn_challenges (created_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS webauthn_challenges_one_live_oidc_binding
+                ON webauthn_challenges (challenge_type, user_id, scope_key)
+                WHERE challenge_type = 'oidc-session-binding'
+                    AND used_at IS NULL AND scope_key IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS webauthn_credentials_user_active
+                ON webauthn_credentials (user_id, revoked_at, created_at);
+            CREATE INDEX IF NOT EXISTS webauthn_credentials_user_class_active
+                ON webauthn_credentials (user_id, authenticator_class, revoked_at);
+            CREATE INDEX IF NOT EXISTS oidc_login_states_source_expiry
+                ON oidc_login_states (source_key, expires_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_one_pending_key
+                ON approval_requests (pending_key)
+                WHERE status = 'pending';
+            """
+
+
+def metadata_schema_source(*, include_initialization_indexes: bool = True) -> str:
     from serverware import authority_native_activation_schema
-    return metadata_base_schema_source() + authority_native_activation_schema.source() + authority_v9_schema_source()
+    source = metadata_base_schema_source() + authority_native_activation_schema.source() + authority_v9_schema_source()
+    if include_initialization_indexes:
+        source += metadata_initialization_index_source()
+    return source

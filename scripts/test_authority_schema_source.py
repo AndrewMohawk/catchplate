@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
+from serverware import authority_contract, authority_native_activation_schema
 from serverware.authority_store import schema as schema_module
 from serverware.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE,
@@ -31,6 +31,7 @@ from serverware.authority_store.completed_v9_schema_source import (
 )
 from serverware.authority_store.metadata_schema_source import (
     metadata_base_schema_source,
+    metadata_initialization_index_source,
     metadata_schema_source,
 )
 from serverware.authority_store.v9_schema_source import (
@@ -133,6 +134,8 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def setUpClass(cls):
         cls.base = metadata_base_schema_source()
         cls.extension = authority_v9_schema_source()
+        cls.initial = cls.base + authority_native_activation_schema.source() + cls.extension
+        cls.initialization_indexes = metadata_initialization_index_source()
         cls.complete = metadata_schema_source()
 
     def assert_shape(self, node, expression):
@@ -381,16 +384,19 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                           "os.environ.get('SERVERWARE_PROCESS_MODE', '').strip() != 'metadata-bootstrap'")
         self.assertIsInstance(admission.body[0].body[0], ast.Raise)
 
-    def test_complete_program_is_exact_base_plus_rendered_extension(self):
+    def test_complete_program_includes_final_initialization_indexes(self):
         for value in (self.base, self.extension, self.complete):
             self.assertIs(type(value), str)
             self.assertTrue(value)
-        self.assertEqual(self.complete, self.base + self.extension)
+        self.assertEqual(
+            metadata_schema_source(include_initialization_indexes=False), self.initial,
+        )
+        self.assertEqual(self.complete, self.initial + self.initialization_indexes)
         self.assertEqual(metadata_schema_source(), self.complete)
         self.assertNotIn(START, self.base)
         self.assertNotIn("CREATE TABLE IF NOT EXISTS credentials (", self.extension)
         self.assertTrue(self.complete.startswith(self.base))
-        self.assertTrue(self.complete.endswith(self.extension))
+        self.assertTrue(self.complete.endswith(self.initialization_indexes))
 
     def test_complete_inventory_and_receipt_boundaries_are_unique(self):
         for table in (
@@ -521,6 +527,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             "metadata_schema_source.py": {
                 ("__future__", "annotations", None),
                 ("serverware.authority_store.v9_schema_source", "authority_v9_schema_source", None),
+                ("serverware", "authority_native_activation_schema", None),
             },
             "v9_schema_source.py": {
                 ("__future__", "annotations", None), ("serverware", "authority_contract", None),
@@ -543,7 +550,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                          if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
                 self.assertTrue(names.isdisjoint({"open", "eval", "exec", "compile", "__import__"}))
 
-    def test_db_initialization_uses_one_complete_program_for_prepare_apply_and_record(self):
+    def test_db_initialization_preserves_late_indexes_and_compares_complete_program(self):
         _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
         aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
                    and node.module == "serverware.authority_store" for alias in node.names
@@ -556,16 +563,28 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                                for target in node.targets)]
         self.assertEqual(len(assignments), 1)
         self.assert_shape(assignments[0].value, "_metadata_schema_source.metadata_schema_source()")
-        self.assertEqual(len(calls(init, "metadata_schema_source")), 1)
+        self.assertEqual(len(calls(init, "metadata_schema_source")), 2)
         self.assertEqual(calls(init, "authority_v9_schema_source"), [])
         prepare = calls(init, "_prepare_policy_candidate_authority_schema")
         apply = calls(init, "_execute_metadata_schema_statements")
         record = calls(init, "_record_policy_candidate_authority_migration")
-        self.assertEqual((len(prepare), len(apply), len(record)), (1, 1, 1))
+        self.assertEqual((len(prepare), len(apply), len(record)), (1, 2, 1))
+        apply.sort(key=lambda call: call.lineno)
         for call in (prepare[0], record[0]):
             self.assert_shape(keyword(call, "source_schema_program"), "metadata_schema_source")
         self.assertEqual(len(apply[0].args), 2)
-        self.assert_shape(apply[0].args[1], "metadata_schema_source")
+        self.assert_shape(
+            apply[0].args[1],
+            "_metadata_schema_source.metadata_schema_source(include_initialization_indexes=False)",
+        )
+        sqlite_branch = next(
+            node for node in ast.walk(init)
+            if isinstance(node, ast.If) and apply[1] in calls(node, "_execute_metadata_schema_statements")
+        )
+        self.assert_shape(sqlite_branch.test, "not isinstance(conn, PostgresMetadataConnection)")
+        self.assertIsInstance(apply[1].args[1], ast.Constant)
+        self.assertIn("CREATE TRIGGER IF NOT EXISTS audit_events_event_json_size_insert", apply[1].args[1].value)
+        self.assertIn("CREATE TRIGGER IF NOT EXISTS audit_events_event_json_size_update", apply[1].args[1].value)
         self.assertLess(assignments[0].lineno, prepare[0].lineno)
         self.assertLess(prepare[0].lineno, apply[0].lineno)
         self.assertLess(apply[0].lineno, record[0].lineno)

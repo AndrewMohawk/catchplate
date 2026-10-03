@@ -765,6 +765,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_audit_backfill_spec.py \
 	scripts/test_authority_table_acl_source.py \
 	scripts/test_authority_schema_source.py \
+	scripts/test_metadata_initialization_declaration.py \
 	scripts/test_authority_issuer_source.py \
 	scripts/test_authority_witness_transport_source.py \
 	scripts/test_authority_verifier_read_source.py \

@@ -26683,9 +26683,13 @@ def init_db(
             conn,
             source_schema_program=metadata_schema_source,
         )
+        # Keep compatibility indexes after their column additions/backfills.
+        # The complete declaration above still pins the final structure.
         _execute_metadata_schema_statements(
             conn,
-            metadata_schema_source,
+            _metadata_schema_source.metadata_schema_source(
+                include_initialization_indexes=False,
+            ),
         )
         _finalize_policy_candidate_authority_outbox_contract(conn)
         _install_policy_candidate_authority_guards(conn)

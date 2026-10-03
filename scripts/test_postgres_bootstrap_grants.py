@@ -96,6 +96,26 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
         for field in ("approver_policy_json", "approver_policy_digest", "authority_capability_id"):
             self.assertIn(field, ddl)
 
+    def test_runtime_identity_queries_compare_regrole_to_regrole(self):
+        # Source-only SQL/type regression, not database execution or readiness.
+        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        for name, parameter in (("_pinned_auxiliary_pg_connect", "runtime_role"),
+                                ("_metadata_pg_connect_with_dsn", "_METADATA_STORE_RUNTIME_ROLE")):
+            with self.subTest(builder=name):
+                function = next(node for node in tree.body
+                                if isinstance(node, ast.FunctionDef) and node.name == name)
+                queries = [node for node in ast.walk(function)
+                           if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                           and node.func.attr == "execute" and node.args
+                           and isinstance(node.args[0], ast.Constant)
+                           and isinstance(node.args[0].value, str)
+                           and " AS current_is_runtime" in node.args[0].value]
+                self.assertEqual(len(queries), 1)
+                sql = queries[0].args[0].value
+                self.assertIn("current_user::pg_catalog.regrole = %s::pg_catalog.regrole AS current_is_runtime", sql)
+                self.assertNotIn("current_user = %s::pg_catalog.regrole", sql)
+                self.assertEqual(ast.unparse(queries[0].args[1].elts[0]), parameter)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1376,12 +1376,12 @@ def install_authority_v9_executor(
                         policy_authority_query_dependency_manifests
                         AS business
                     UNION ALL
-                    SELECT authorization.operation,
-                        authorization.table_name,
-                        authorization.key_columns_json
+                    SELECT authorization_entry.operation,
+                        authorization_entry.table_name,
+                        authorization_entry.key_columns_json
                     FROM {namespace}.
                         policy_authority_authorization_dependency_manifests
-                        AS authorization
+                        AS authorization_entry
                 ) AS dependency
                 WHERE dependency.operation = capability.operation
                   AND dependency.table_name = selected_row->>'table';

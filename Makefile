@@ -610,6 +610,7 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_onboarding_evidence.py \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
+	scripts/test_agent_trust_import_identity.py \
 	scripts/test_codebase_attestation.py \
 	scripts/test_native_postgres_contract.py \
 	scripts/test_native_postgres_batch.py \

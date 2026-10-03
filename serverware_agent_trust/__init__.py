@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+from functools import lru_cache
 import re
 import tomllib
 from pathlib import Path
@@ -51,18 +52,30 @@ def _project_identity() -> tuple[str, str]:
     return _validate_project_identity(distribution.metadata.get("Name"), distribution.version)
 
 
-DISTRIBUTION_NAME, __version__ = _project_identity()
-ENROLLMENT_CLI_COMMAND = DISTRIBUTION_NAME
+@lru_cache(maxsize=1)
+def _tooling_identity() -> tuple[str, str]:
+    # Public-original parsers also run from measured sealed source descriptors.
+    # Package metadata is required only when the tooling identity is requested.
+    # Cache successful strict discovery, never a missing-metadata substitute.
+    return _project_identity()
+
+
+def __getattr__(name: str) -> str:
+    if name not in {"DISTRIBUTION_NAME", "__version__", "ENROLLMENT_CLI_COMMAND"}:
+        raise AttributeError(name)
+    distribution, version = _tooling_identity()
+    return version if name == "__version__" else distribution
 
 
 def enrollment_tooling_contract() -> dict[str, object]:
-    expected_output = f"{ENROLLMENT_CLI_COMMAND} {__version__}"
+    distribution, version = _tooling_identity()
+    expected_output = f"{distribution} {version}"
     return {
         "apiVersion": ENROLLMENT_TOOLING_API_VERSION,
-        "command": ENROLLMENT_CLI_COMMAND,
-        "distribution": DISTRIBUTION_NAME,
-        "version": __version__,
-        "versionCheck": [ENROLLMENT_CLI_COMMAND, "--version"],
+        "command": distribution,
+        "distribution": distribution,
+        "version": version,
+        "versionCheck": [distribution, "--version"],
         "expectedVersionOutput": expected_output,
     }
 
@@ -78,15 +91,15 @@ def validate_enrollment_tooling(packet: object) -> dict[str, object]:
         raise ValueError("enrollment tooling contract fields do not match the closed schema")
     if tooling.get("apiVersion") != ENROLLMENT_TOOLING_API_VERSION:
         raise ValueError("enrollment tooling contract API version is unsupported")
-    if tooling.get("command") != ENROLLMENT_CLI_COMMAND:
+    if tooling.get("command") != expected["command"]:
         raise ValueError("enrollment tooling contract requires an unsupported command")
-    if tooling.get("distribution") != DISTRIBUTION_NAME:
+    if tooling.get("distribution") != expected["distribution"]:
         raise ValueError("enrollment tooling contract requires an unsupported distribution")
     required_version = tooling.get("version")
-    if required_version != __version__:
+    if required_version != expected["version"]:
         raise ValueError(
-            f"enrollment packet requires {ENROLLMENT_CLI_COMMAND} version "
-            f"{required_version!r}; running version is {__version__!r}"
+            f"enrollment packet requires {expected['command']} version "
+            f"{required_version!r}; running version is {expected['version']!r}"
         )
     if tooling.get("versionCheck") != expected["versionCheck"]:
         raise ValueError("enrollment tooling contract version check invocation is invalid")

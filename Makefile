@@ -637,6 +637,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_launcher_native_mappings.py \
 	scripts/test_authority_local_cohort.py \
 	scripts/test_authority_local_historical_archive.py \
+	scripts/test_authority_local_historical_archive_roundtrip.py \
 	scripts/test_authority_local_trust_commit.py \
 	scripts/test_authority_local_enrollment_configuration.py \
 	scripts/test_authority_local_enrollment_attestation.py \

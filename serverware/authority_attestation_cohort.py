@@ -250,13 +250,18 @@ def _verify_cohort_against_scope(
     )
     cohort_issued, cohort_expires = _times(payload, maximum_age, now)
     admitted = []
+    packages_raw = None
     for peer, receipt, observed in zip(ROLES, receipts, inner_payloads):
         _verify_signature(receipt, held_key)
         peer_launch = _digest(observed["launchManifestDigest"], "peer launch manifest")
         peer_request = _digest(observed["stageZeroRequestDigest"], "peer stage-zero request")
+        if packages_raw is None:
+            # Reuse this invocation's owned inventory bytes at the original
+            # first-serialization point; no signatures or live checks are cached.
+            packages_raw = canonical_json_bytes(measured_packages)
         expected_closure = _domain_digest(
             "serverware.policyAuthorityRuntimeClosure/v2",
-            peer_launch.encode("ascii"), canonical_json_bytes(measured_packages),
+            peer_launch.encode("ascii"), packages_raw,
         )
         if (
             observed["processMode"] != roles[peer][0]

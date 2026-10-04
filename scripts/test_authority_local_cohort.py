@@ -88,6 +88,53 @@ def select_archive(context, key, payload):
 
 
 class LocalCohortTests(unittest.TestCase):
+    def test_scope_inventory_bytes_reused_only_within_one_verification(self):
+        # Actual signed codec admission, not live child or database evidence.
+        results = []
+        for version in ("first", "second"):
+            key, _, context = fixture()
+            context["service"]["packageVersions"] = {"synthetic-test": version}
+            context["static"] = subject.cohort._static_configuration(context["service"])
+            raw, _ = subject._signed_cohort(context, key, now_unix_ns=150)
+            packages = context["static"][2]
+            with patch.object(subject.cohort, "canonical_json_bytes",
+                    wraps=subject.cohort.canonical_json_bytes) as serialize, \
+                 patch.object(subject.cohort, "_verify_signature",
+                    wraps=subject.cohort._verify_signature) as signatures:
+                admitted, payload, _ = verify(raw, context, key)
+            self.assertEqual(sum(call.args[0] is packages for call in serialize.call_args_list), 1)
+            self.assertEqual([call.args[0]["schema"] for call in signatures.call_args_list],
+                [subject.cohort.SCHEMA, *[subject.cohort.RECEIPT_SCHEMA] * 5])
+            self.assertEqual(admitted.cohort_bytes, raw)
+            self.assertEqual(admitted.receipts, tuple((row["payload"]["role"], subject.canonical(row),
+                subject.cohort._domain_digest(subject.cohort.RECEIPT_SCHEMA, subject.canonical(row)))
+                for row in payload["receipts"]))
+            results.append(admitted)
+        self.assertNotEqual(results[0].cohort_digest, results[1].cohort_digest)
+        self.assertNotEqual(results[0].receipts, results[1].receipts)
+
+    def test_scope_inventory_reuse_keeps_signature_refusal_order(self):
+        key, _, context = fixture()
+        raw, _ = subject._signed_cohort(context, key, now_unix_ns=150)
+        for index in (0, 4):
+            envelope = subject.document(raw, subject.cohort.MAX_BYTES)
+            envelope["payload"]["receipts"][index]["signature"] = subject.spec.strict_base64url_encode(bytes(64))
+            envelope["signature"] = subject.spec.strict_base64url_encode(key.sign(subject.cohort._domain_digest(
+                subject.cohort.SCHEMA, subject.canonical(envelope["payload"])).encode("ascii")))
+            changed = subject.canonical(envelope)
+            packages = context["static"][2]
+            with self.subTest(receipt=index), \
+                 patch.object(subject.cohort, "canonical_json_bytes",
+                    wraps=subject.cohort.canonical_json_bytes) as serialize, \
+                 patch.object(subject.cohort, "_verify_signature",
+                    wraps=subject.cohort._verify_signature) as signatures:
+                with self.assertRaisesRegex(subject.cohort.AttestationCohortError,
+                        "attestation root signature is invalid"):
+                    verify(changed, context, key)
+            self.assertEqual(signatures.call_count, index + 2)
+            self.assertEqual(sum(call.args[0] is packages for call in serialize.call_args_list),
+                0 if index == 0 else 1)
+
     def _prepare_payload_codec(self, payload, declared, manifest, key):
         # Execute only the actual byte equality/signature/digest expressions.
         # This synthetic codec control does not claim package or live admission.

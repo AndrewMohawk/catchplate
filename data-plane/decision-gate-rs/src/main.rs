@@ -17089,6 +17089,34 @@ fn validate_local_response_proof_mode(
     Ok(())
 }
 
+fn validate_response_proof_configuration(
+    is_production: bool,
+    attestation_command: Option<&str>,
+    server_instance_id: Option<&str>,
+) -> Result<(), String> {
+    if is_production && attestation_command.is_none() {
+        return Err(
+            "production requires SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and SERVERWARE_DATA_PLANE_INSTANCE_ID"
+                .to_string(),
+        );
+    }
+    // The control-plane actor also binds audit and release authorization. Its
+    // presence alone does not opt development traffic into response proofs.
+    if attestation_command.is_some() {
+        let instance_id = server_instance_id.ok_or_else(|| {
+            "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND requires SERVERWARE_DATA_PLANE_INSTANCE_ID"
+                .to_string()
+        })?;
+        if !instance_id.starts_with("spiffe://") || instance_id.len() <= "spiffe://".len() {
+            return Err(
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID for response proofs"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 impl CustodyResponseProofSigner {
     fn probe(&self) -> Result<(), String> {
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
@@ -51752,25 +51780,11 @@ fn main() -> Result<(), String> {
             "policy-shadow/production management listener must bind to loopback, got {management_host}"
         ));
     }
-    if response_proof_attestation_command.is_some() != server_instance_id.is_some() {
-        return Err(
-            "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and SERVERWARE_DATA_PLANE_INSTANCE_ID must be set together"
-                .to_string(),
-        );
-    }
-    if let Some(instance_id) = server_instance_id.as_deref() {
-        if !instance_id.starts_with("spiffe://") || instance_id.len() <= "spiffe://".len() {
-            return Err(
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID".to_string(),
-            );
-        }
-    }
-    if is_production && response_proof_attestation_command.is_none() {
-        return Err(
-            "production requires SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and SERVERWARE_DATA_PLANE_INSTANCE_ID"
-                .to_string(),
-        );
-    }
+    validate_response_proof_configuration(
+        is_production,
+        response_proof_attestation_command.as_deref(),
+        server_instance_id.as_deref(),
+    )?;
     let policy_high_water_path = env::var("SERVERWARE_POLICY_HIGH_WATER_FILE")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -53732,6 +53746,43 @@ mod tests {
         assert!(validate_local_response_proof_mode(true, true)
             .expect_err("production response proof must require custody")
             .contains("development-only"));
+    }
+
+    #[test]
+    fn response_proof_configuration_allows_development_actor_without_provider() {
+        for instance_id in [None, Some("pilot-local"), Some("spiffe://development/gate")] {
+            validate_response_proof_configuration(false, None, instance_id)
+                .expect("development actor does not enable response proofs");
+        }
+    }
+
+    #[test]
+    fn response_proof_configuration_requires_spiffe_with_provider() {
+        for is_production in [false, true] {
+            validate_response_proof_configuration(
+                is_production,
+                Some("/selected/response-proof-attest"),
+                Some("spiffe://selected/gate"),
+            )
+            .expect("configured response proofs retain SPIFFE identity");
+            for instance_id in [None, Some(""), Some("pilot-local"), Some("spiffe://")] {
+                assert!(validate_response_proof_configuration(
+                    is_production,
+                    Some("/selected/response-proof-attest"),
+                    instance_id,
+                )
+                .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn response_proof_configuration_requires_production_provider() {
+        for instance_id in [None, Some("pilot-local"), Some("spiffe://selected/gate")] {
+            assert!(validate_response_proof_configuration(true, None, instance_id)
+                .expect_err("production cannot omit the proof provider")
+                .contains("production requires"));
+        }
     }
 
     #[test]

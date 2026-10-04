@@ -61,6 +61,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from serverware import authority_contract
+from serverware.postgres_options import bounded_connection_options
 from serverware import authority_oauth_activation as oauth_activation
 from serverware import authority_oauth_activation_policy as oauth_activation_policy
 from serverware import authority_oauth_exchange as oauth_exchange
@@ -6571,7 +6572,7 @@ class AuthorityProcess:
             dsn,
             row_factory=dict_row,
             connect_timeout=int(self.role_config["databaseConnectTimeoutSeconds"]),
-            options="-c search_path=pg_catalog",
+            options=bounded_connection_options(dsn, error_type=AuthorityServiceError),
         ) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
@@ -6758,15 +6759,16 @@ class AuthorityProcess:
         import psycopg
         from psycopg.rows import dict_row
 
+        dsn = _read_dsn_descriptor(
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
+        )
         with psycopg.connect(
-            _read_dsn_descriptor(
-                "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
-            ),
+            dsn,
             row_factory=dict_row,
             connect_timeout=int(
                 self.role_config["databaseConnectTimeoutSeconds"]
             ),
-            options="-c search_path=pg_catalog",
+            options=bounded_connection_options(dsn, error_type=AuthorityServiceError),
         ) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
@@ -6842,15 +6844,16 @@ class AuthorityProcess:
         import psycopg
         from psycopg.rows import dict_row
 
+        dsn = _read_dsn_descriptor(
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
+        )
         with psycopg.connect(
-            _read_dsn_descriptor(
-                "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
-            ),
+            dsn,
             row_factory=dict_row,
             connect_timeout=int(
                 self.role_config["databaseConnectTimeoutSeconds"]
             ),
-            options="-c search_path=pg_catalog",
+            options=bounded_connection_options(dsn, error_type=AuthorityServiceError),
         ) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
@@ -6921,15 +6924,16 @@ class AuthorityProcess:
         import psycopg
         from psycopg.rows import dict_row
 
+        dsn = _read_dsn_descriptor(
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
+        )
         with psycopg.connect(
-            _read_dsn_descriptor(
-                "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
-            ),
+            dsn,
             row_factory=dict_row,
             connect_timeout=int(
                 self.role_config["databaseConnectTimeoutSeconds"]
             ),
-            options="-c search_path=pg_catalog",
+            options=bounded_connection_options(dsn, error_type=AuthorityServiceError),
         ) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
@@ -7197,15 +7201,16 @@ class AuthorityProcess:
         import psycopg
         from psycopg.rows import dict_row
 
+        dsn = _read_dsn_descriptor(
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
+        )
         with psycopg.connect(
-            _read_dsn_descriptor(
-                "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
-            ),
+            dsn,
             row_factory=dict_row,
             connect_timeout=int(
                 self.role_config["databaseConnectTimeoutSeconds"]
             ),
-            options="-c search_path=pg_catalog",
+            options=bounded_connection_options(dsn, error_type=AuthorityServiceError),
         ) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
@@ -9684,15 +9689,16 @@ class AuthorityProcess:
         from psycopg.rows import dict_row
         from serverware import db
 
+        dsn = _read_dsn_descriptor(
+            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
+        )
         with psycopg.connect(
-            _read_dsn_descriptor(
-                "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
-            ),
+            dsn,
             row_factory=dict_row,
             connect_timeout=int(
                 self.role_config["databaseConnectTimeoutSeconds"]
             ),
-            options="-c search_path=pg_catalog",
+            options=bounded_connection_options(dsn, error_type=AuthorityServiceError),
         ) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:

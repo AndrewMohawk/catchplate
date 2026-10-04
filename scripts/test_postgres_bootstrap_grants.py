@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from serverware.postgres_options import bounded_connection_options
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "serverware.metadataStoreBootstrap/v1"
@@ -112,6 +114,7 @@ def connector_options(connector, options, *, contract=CONTRACT,
     psycopg = SimpleNamespace(connect=connect)
     namespace = {
         "re": re, "os": SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": mode}),
+        "bounded_connection_options": bounded_connection_options,
         "MetadataStoreError": BootstrapError, "AuditStoreError": BootstrapError,
         "RecoveryWitnessError": BootstrapError,
         "_METADATA_STORE_BOOTSTRAP_CONTRACT_ID": CONTRACT,
@@ -179,6 +182,7 @@ def authority_connector_options(connector, options, *, mode, observed):
 
     namespace = {
         "re": re, "os": SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": mode}),
+        "bounded_connection_options": bounded_connection_options,
         "MetadataStoreError": BootstrapError,
         "_POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE": "policy-authority-executor",
         "_POLICY_AUTHORITY_ISSUER_PROCESS_MODE": "policy-authority-issuer",
@@ -203,6 +207,76 @@ def authority_connector_options(connector, options, *, mode, observed):
         assert effective["dbname"] == "synthetic"
         return effective["options"]
     raise AssertionError("authority connector did not reach the intercepted connect call")
+
+
+SERVICE_READERS = (
+    "_read_roots", "_read_writer_outcome", "_read_policy_capability_outcome",
+    "_read_committed_writer_replay", "_read_webauthn_authority",
+    "_handle_read_persisted_plan",
+)
+
+
+@lru_cache(maxsize=1)
+def service_connection_source():
+    tree = ast.parse((ROOT / "serverware/authority_service.py").read_text())
+    return next(node for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == "AuthorityProcess")
+
+
+def service_reader_options(method, options, *, observed):
+    """Execute only actual DSN/read-connect expressions, not service admission."""
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    assert observed == {}
+    observed.update(descriptors=[], connects=[])
+    dsn = make_conninfo(dbname="synthetic", host="synthetic.invalid", sslmode="verify-full",
+                       **({} if options is None else {"options": options}))
+    function = next(node for node in service_connection_source().body
+                    if isinstance(node, ast.FunctionDef) and node.name == method)
+    reads = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+             and ast.unparse(node.func) == "_read_dsn_descriptor"]
+    assert len(reads) == 1
+    selected = next(node for node in function.body if isinstance(node, ast.Assign)
+                    and node.value is reads[0])
+    assert len(selected.targets) == 1 and ast.unparse(selected.targets[0]) == "dsn"
+    opening = next(node for node in function.body if isinstance(node, ast.With)
+                   and ast.unparse(node.items[0].context_expr.func) == "psycopg.connect")
+    call = opening.items[0].context_expr
+    assert function.body.index(selected) < function.body.index(opening)
+    assert len(call.args) == 1 and ast.unparse(call.args[0]) == "dsn"
+    expected_descriptor = ("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
+        if method == "_handle_read_persisted_plan"
+        else "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN")
+
+    class ConnectObserved(BaseException):
+        pass
+
+    def descriptor(name):
+        assert name == expected_descriptor and not observed["descriptors"]
+        observed["descriptors"].append(name)
+        return dsn
+
+    def connect(*args, **kwargs):
+        observed["connects"].append((args, kwargs))
+        raise ConnectObserved()  # No connection, transaction or authority admission.
+
+    namespace = dict(_read_dsn_descriptor=descriptor,
+        self=SimpleNamespace(role_config={"databaseConnectTimeoutSeconds": 7}),
+        psycopg=SimpleNamespace(connect=connect), dict_row="synthetic-row-factory",
+        bounded_connection_options=bounded_connection_options, AuthorityServiceError=BootstrapError)
+    source = ast.fix_missing_locations(ast.Module(body=[selected, ast.Expr(value=call)], type_ignores=[]))
+    try:
+        exec(compile(source, "service-read-connect-options", "exec"), namespace)
+    except ConnectObserved:
+        assert len(observed["connects"]) == 1
+        args, kwargs = observed["connects"][0]
+        assert args == (dsn,) and set(kwargs) == {"row_factory", "connect_timeout", "options"}
+        assert kwargs["row_factory"] == "synthetic-row-factory" and kwargs["connect_timeout"] == 7
+        effective = conninfo_to_dict(make_conninfo(dsn, options=kwargs["options"]))
+        assert {key: value for key, value in effective.items() if key != "options"} == {
+            "dbname": "synthetic", "host": "synthetic.invalid", "sslmode": "verify-full"}
+        return effective["options"]
+    raise AssertionError("service reader did not reach the intercepted connect call")
 
 
 class PostgresBootstrapGrantTests(unittest.TestCase):
@@ -409,6 +483,41 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                         authority_connector_options(connector, "-c statement_timeout=5000",
                             mode=mode, observed=observed)
                     self.assertEqual(observed, {"descriptors": [], "connects": []})
+
+    def test_service_readers_preserve_selected_finite_options(self):
+        selections = (
+            ("-c statement_timeout=5000", "-c statement_timeout=5000ms -c search_path=pg_catalog"),
+            ("--statement_timeout=5s -clock_timeout=250ms "
+             "-c idle_in_transaction_session_timeout=1min -c search_path=public",
+             "-c statement_timeout=5000ms -c lock_timeout=250ms "
+             "-c idle_in_transaction_session_timeout=60000ms -c search_path=pg_catalog"),
+        )
+        for method in SERVICE_READERS:
+            for selected, expected in selections:
+                with self.subTest(method=method, selected=selected):
+                    observed = {}
+                    self.assertEqual(service_reader_options(method, selected, observed=observed), expected)
+                    self.assertEqual(len(observed["descriptors"]), 1)
+
+    def test_service_readers_preserve_unselected_options(self):
+        for method in SERVICE_READERS:
+            for selected in (None, ""):
+                with self.subTest(method=method, selected=selected):
+                    self.assertEqual(service_reader_options(method, selected, observed={}),
+                                     "-c search_path=pg_catalog")
+
+    def test_service_readers_refuse_unsafe_options_before_connect(self):
+        rejected = ("-c statement_timeout=0", "-c lock_timeout=0",
+                    "-c idle_in_transaction_session_timeout=0", "-c statement_timeout=invalid",
+                    "-c role=synthetic_owner", "-c statement_timeout=1\\")
+        for method in SERVICE_READERS:
+            for selected in rejected:
+                with self.subTest(method=method, selected=selected):
+                    observed = {}
+                    with self.assertRaises(BootstrapError):
+                        service_reader_options(method, selected, observed=observed)
+                    self.assertEqual(len(observed["descriptors"]), 1)
+                    self.assertEqual(observed["connects"], [])
 
     def test_initialization_restores_selected_finite_statement_budget_after_locks(self):
         # Source routing only; the PostgreSQL DDL control runs independently.

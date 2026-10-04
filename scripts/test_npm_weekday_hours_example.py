@@ -57,8 +57,14 @@ class NpmWeekdayHoursExampleControls(unittest.TestCase):
         return match.route
 
     def test_self_contained_identity_and_original_npm_jit_contract(self):
-        self.assertEqual(self.bundle["principals"], [next(
-            p for p in self.catalog["principals"] if p["id"] == "agent:example-mtls")])
+        catalog_principal = next(
+            p for p in self.catalog["principals"] if p["id"] == "agent:example-mtls")
+        identity_fields = {"id", "sourceCidrs", "mtls"}
+        self.assertEqual(len(self.bundle["principals"]), 1)
+        self.assertEqual(set(self.principal), identity_fields)
+        # A one-principal bundle needs no catalog-only disambiguation header.
+        self.assertEqual(self.principal,
+            {field: catalog_principal[field] for field in identity_fields})
         self.assertEqual(self.bundle["credentials"], [next(
             c for c in self.catalog["credentials"] if c["id"] == "cred-npm")])
         self.assertEqual(len(self.bundle["routes"]), 1)

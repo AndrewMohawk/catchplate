@@ -9869,7 +9869,9 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
     assert verified_mtls is not None
     assert (
         mtls_snapshot.identify_principal(
-            "10.1.2.3", RawHeaders([]), verified_mtls
+            "10.1.2.3",
+            RawHeaders([("X-Serverware-Agent", "example-agent-mtls")]),
+            verified_mtls,
         ).id
         == "agent:example-mtls"
     )
@@ -9878,7 +9880,7 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
     mtls_flow.client_conn.serverware_mtls_evidence = mismatched_mtls
     assert mtls_snapshot.identify_principal(
         "10.1.2.3",
-        RawHeaders([]),
+        RawHeaders([("X-Serverware-Agent", "example-agent-mtls")]),
         _verified_mtls_evidence(mtls_flow),
     ) is None
     contradictory_mtls = dict(mismatched_mtls)

@@ -86,6 +86,29 @@ def tls_projection_control():
         yield _TlsProjectionControl(tuple(originals))
 
 
+@contextlib.contextmanager
+def timed_tls_projection_control(*, remaining_ns, projection_ns=0):
+    """Real original/projection checks; a clocked transport seam, not DB admission."""
+    clock = [10_000_000_000]
+    with patch.object(witness.time, "monotonic_ns", side_effect=lambda: clock[0]), \
+            patch.dict(os.environ, {}, clear=True), tls_projection_control() as owner:
+        owner.deadline = clock[0] + 60_000_000_000
+        connection = witness.Connection(owner, clock[0] + remaining_ns)
+        projected = []
+        original_parameters = owner.connection_parameters
+
+        @contextlib.contextmanager
+        def delayed_parameters():
+            with original_parameters() as parameters:
+                projected.extend(int(parameters[name].rsplit("/", 1)[1])
+                    for name in ("sslrootcert", "sslcert", "sslkey"))
+                clock[0] += projection_ns
+                yield parameters
+
+        with patch.object(owner, "connection_parameters", side_effect=delayed_parameters):
+            yield owner, connection, clock, projected
+
+
 class LocalRbacWitnessTests(unittest.TestCase):
     def assert_descriptors_closed(self, descriptors):
         self.assertTrue(descriptors)
@@ -185,13 +208,15 @@ class LocalRbacWitnessTests(unittest.TestCase):
     def test_connect_and_post_connect_original_failure_close_all_resources(self):
         import psycopg
         for after_connect in (False, True):
-            with self.subTest(after_connect=after_connect), tls_projection_control() as owner:
+            with self.subTest(after_connect=after_connect), \
+                    patch.object(witness.time, "monotonic_ns", return_value=10_000_000_000), \
+                    tls_projection_control() as owner:
                 projected = []
                 closed = []
                 connection = SimpleNamespace(close=lambda: closed.append(True))
                 def connect(**parameters):
                     projected.extend(int(parameters[name].rsplit("/", 1)[1]) for name in ("sslrootcert", "sslcert", "sslkey"))
-                    self.assertEqual(parameters["connect_timeout"], 1)
+                    self.assertEqual(parameters["connect_timeout"], 10)
                     self.assertEqual(parameters["options"], "-c search_path=pg_catalog")
                     self.assertFalse(parameters["autocommit"])
                     if not after_connect: raise RuntimeError("synthetic connect refusal")
@@ -211,6 +236,95 @@ class LocalRbacWitnessTests(unittest.TestCase):
                     owner.check()
                 self.assert_descriptors_closed(projected)
                 self.assertEqual(closed, [True] if after_connect else [])
+
+    def test_connect_timeout_uses_original_remainder_after_tls_projection(self):
+        import psycopg
+        cases = ((10_750_000_000, 2_500_000_000, 8),
+            (50_900_000_000, 2_000_000_000, 30),
+            (2_999_999_999, 0, 2), (2_000_000_000, 0, 2), (1, 0, 2))
+        for remaining, projection, expected in cases:
+            with self.subTest(remaining_ns=remaining, projection_ns=projection), \
+                    timed_tls_projection_control(remaining_ns=remaining, projection_ns=projection) as fixture:
+                owner, connection, clock, projected = fixture
+                deadlines = owner.deadline, connection.deadline
+
+                def connect(**parameters):
+                    self.assertEqual(clock[0], 10_000_000_000 + projection)
+                    self.assertEqual(len(projected), 3)
+                    for fd in projected: os.fstat(fd)
+                    self.assertIs(type(parameters["connect_timeout"]), int)
+                    self.assertEqual(parameters["connect_timeout"], expected)
+                    self.assertGreaterEqual(parameters["connect_timeout"], 2)
+                    self.assertLessEqual(parameters["connect_timeout"], 30)
+                    self.assertEqual(parameters["options"], "-c search_path=pg_catalog")
+                    self.assertFalse(parameters["autocommit"])
+                    raise RuntimeError("synthetic transport refusal")
+
+                with patch.object(psycopg, "connect", side_effect=connect) as transport:
+                    with self.assertRaisesRegex(RuntimeError, "^synthetic transport refusal$"):
+                        connection.__enter__()
+                transport.assert_called_once()
+                self.assertIsNone(connection.connection)
+                self.assertEqual((owner.deadline, connection.deadline), deadlines)
+                self.assert_descriptors_closed(projected)
+                owner.check()
+
+    def test_expired_after_projection_refuses_without_connect_or_retry(self):
+        import psycopg
+        for projection in (1_000_000_000, 1_000_000_001):
+            with self.subTest(projection_ns=projection), \
+                    timed_tls_projection_control(remaining_ns=1_000_000_000, projection_ns=projection) as fixture:
+                owner, connection, _clock, projected = fixture
+                deadlines = owner.deadline, connection.deadline
+                with patch.object(psycopg, "connect") as transport:
+                    with self.assertRaises(ValueError): connection.__enter__()
+                transport.assert_not_called()
+                self.assertIsNone(connection.connection)
+                self.assertEqual((owner.deadline, connection.deadline), deadlines)
+                self.assert_descriptors_closed(projected)
+                owner.check()
+
+    def test_subsecond_connect_return_keeps_deadline_and_closes_before_late_sql(self):
+        import psycopg
+        for offset in (-1, 0, 1):
+            with self.subTest(return_offset_ns=offset), \
+                    timed_tls_projection_control(remaining_ns=1_500_000_000, projection_ns=1_000_000_000) as fixture:
+                owner, connection, clock, projected = fixture
+                deadlines = owner.deadline, connection.deadline
+                closed, statements = [], []
+
+                def close():
+                    closed.append(True)
+                    returned.closed = True
+
+                def execute(*args):
+                    statements.append(args)
+                    # Stop at the first SQL boundary: never fabricate catalog
+                    # rows, a successful admitted connection, or a DB outcome.
+                    raise RuntimeError("synthetic first SQL boundary")
+
+                returned = SimpleNamespace(closed=False, close=close, execute=execute)
+
+                def connect(**parameters):
+                    self.assertEqual(parameters["connect_timeout"], 2)
+                    clock[0] = connection.deadline + offset
+                    return returned
+
+                with patch.object(psycopg, "connect", side_effect=connect) as transport:
+                    if offset < 0:
+                        with self.assertRaisesRegex(RuntimeError, "^synthetic first SQL boundary$"):
+                            connection.__enter__()
+                    else:
+                        with self.assertRaises(ValueError): connection.__enter__()
+                transport.assert_called_once()
+                self.assertEqual(len(statements), 1 if offset < 0 else 0)
+                if statements:
+                    self.assertTrue(statements[0][0].startswith("SELECT pg_catalog.set_config('statement_timeout'"))
+                self.assertEqual(closed, [True])
+                self.assertTrue(returned.closed)
+                self.assertEqual((owner.deadline, connection.deadline), deadlines)
+                self.assert_descriptors_closed(projected)
+                owner.check()
 
     def test_actual_fixed_descriptor_delivery_preserves_originals(self):
         self.assertEqual((os.geteuid(), os.getegid()), (0, 0), "isolated root descriptor control required")

@@ -34,7 +34,15 @@ class Connection:
         self.check()
         try:
             with self.owner.connection_parameters() as parameters:
-                self.connection = psycopg.connect(**parameters, row_factory=dict_row, connect_timeout=1,
+                # TLS projection uses the same original operation window. Do
+                # not impose a separate one-second cold-connect allowance.
+                remaining_ns = self.deadline - time.monotonic_ns()
+                wire.require(remaining_ns > 0, "RBAC witness connection window expired")
+                # psycopg/libpq enforce a two-second minimum. Preserve callers
+                # with less time left; the check below rejects a late return
+                # before any SQL and the exception path closes the connection.
+                timeout = min(30, max(2, remaining_ns // 1_000_000_000))
+                self.connection = psycopg.connect(**parameters, row_factory=dict_row, connect_timeout=timeout,
                     autocommit=False, options="-c search_path=pg_catalog")
             self.check()
             remaining = max(1, (self.deadline-time.monotonic_ns())//1_000_000)

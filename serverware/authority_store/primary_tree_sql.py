@@ -248,6 +248,8 @@ def authenticated_tree_functions_sql(
                 parent_digest text;
                 previous_root_digest text;
                 child_digests pg_catalog.jsonb;
+                empty_child text;
+                empty_children pg_catalog.jsonb;
                 current_prefix text;
                 new_revision bigint;
                 new_leaf_count bigint;
@@ -397,6 +399,10 @@ def authenticated_tree_functions_sql(
                         new_leaf_count := new_leaf_count + 1;
                     END IF;
                 END IF;
+                empty_child := {guard_namespace}.
+                    serverware_policy_authority_authenticated_empty(
+                        {_POLICY_AUTHORITY_AUTHENTICATED_TREE_DEPTH}
+                    );
                 FOR current_depth IN REVERSE
                     {_POLICY_AUTHORITY_AUTHENTICATED_TREE_DEPTH - 1}..0
                 LOOP
@@ -407,10 +413,7 @@ def authenticated_tree_functions_sql(
                         pg_catalog.jsonb_agg(
                             COALESCE(
                                 node.node_digest,
-                                {guard_namespace}.
-                                    serverware_policy_authority_authenticated_empty(
-                                        current_depth + 1
-                                    )
+                                empty_child
                             )
                             ORDER BY child.ordinality
                         ),
@@ -458,6 +461,25 @@ def authenticated_tree_functions_sql(
                         SET node_digest = EXCLUDED.node_digest,
                             root_revision = EXCLUDED.root_revision;
                     END IF;
+                    -- At depth d, empty_child is E[d+1]. Advance the same
+                    -- empty ladder once, including when DELETE prunes a node.
+                    SELECT pg_catalog.jsonb_agg(
+                        empty_child ORDER BY ordinal
+                    )
+                    INTO empty_children
+                    FROM pg_catalog.generate_series(
+                        1,
+                        {_POLICY_AUTHORITY_AUTHENTICATED_TREE_RADIX}
+                    ) AS ordinal;
+                    empty_child := {guard_namespace}.
+                        serverware_policy_authority_framed_digest(
+                            'serverware.policyAuthorityAuthenticatedNode/v1',
+                            current_depth::text,
+                            {guard_namespace}.
+                                serverware_policy_authority_canonical_json(
+                                    empty_children
+                                )
+                        );
                 END LOOP;
                 SELECT node_digest
                 INTO parent_digest
@@ -468,8 +490,7 @@ def authenticated_tree_functions_sql(
                   AND path_prefix = '';
                 parent_digest := COALESCE(
                     parent_digest,
-                    {guard_namespace}.
-                        serverware_policy_authority_authenticated_empty(0)
+                    empty_child
                 );
                 now_epoch_ns := pg_catalog.floor(
                     pg_catalog.extract(

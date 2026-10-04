@@ -96,6 +96,26 @@ class AuthorityPrimaryTreeSourceTests(unittest.TestCase):
         self.assertIn("old_key, NULL, 'DELETE'", trigger)
         self.assertIn("new_key, new_row, 'INSERT'", trigger)
 
+    def test_apply_rolls_one_empty_digest_per_depth_including_pruned_nodes(self) -> None:
+        apply = statements()[3]
+        compact = " ".join(re.sub(r"--[^\n]*", "", apply).split())
+        helper = PREFIX + "authenticated_empty("
+        self.assertEqual(compact.count(helper), 1)
+        before, remaining = compact.split("FOR current_depth IN REVERSE 63..0 LOOP", 1)
+        loop, after = remaining.split("END LOOP;", 1)
+        self.assertIn("empty_child := " + NAMESPACE + ". " + helper + " 64 );", before)
+        self.assertNotIn(helper, loop)
+        self.assertIn("COALESCE( node.node_digest, empty_child )", loop)
+        # The ladder must advance even when DELETE takes the pruning branch.
+        self.assertIn("IF child_count = 0 AND current_depth > 0 THEN", loop)
+        self.assertIn("END IF; SELECT pg_catalog.jsonb_agg( empty_child ORDER BY ordinal ) "
+                      "INTO empty_children FROM pg_catalog.generate_series( 1, 16 ) AS ordinal;", loop)
+        self.assertEqual(loop.count("empty_child :="), 1)
+        self.assertIn("empty_child := " + NAMESPACE + ". " + PREFIX + "framed_digest( "
+                      "'serverware.policyAuthorityAuthenticatedNode/v1', current_depth::text, "
+                      + NAMESPACE + ". " + PREFIX + "canonical_json( empty_children ) );", loop)
+        self.assertIn("parent_digest := COALESCE( parent_digest, empty_child );", after)
+
     def test_real_installer_executes_shared_functions_at_existing_dependency_positions(self) -> None:
         source, shared = sources()
         parsed = ast.parse(source)

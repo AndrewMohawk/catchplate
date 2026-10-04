@@ -299,26 +299,44 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
     def test_real_trigger_insert_update_delete_roots_leaves_and_history(self) -> None:
         first = outbox_row("clé-雪😀", attempts=-2, actor_id=None)
         second = outbox_row("second", "claimed", claim_id="claim", last_error="café")
+
+        def assert_equivalent(rows, revision):
+            tree = InventoryTree(rows, revision=revision)
+            self.assert_tree(tree)
+            records = [tree.record(identifier) for identifier in
+                       (first["id"], second["id"], "absent-rolling-empty-component")]
+            selected = tuple(record["selectedRow"] for record in records)
+            expected = tuple(sorted((record["proof"] for record in records),
+                                    key=lambda proof: (proof["table"], proof["keyDigest"])))
+            actual = self.read_batch(selected, (tree.root.json_projection(),))
+            self.assertEqual(actual, expected)
+            by_address = {(row["table"], row["keyDigest"]): row for row in selected}
+            for proof in actual:
+                self.assertEqual(radix.reconstruct_multiproof_root(proof,
+                    selected=by_address[(proof["table"], proof["keyDigest"])]), tree.root.root_digest)
+            # Real trigger statements retain their existing server-side bound.
+            self.assertEqual(self.connection.execute("SHOW statement_timeout").fetchone(), ("5s",))
+
         self.assertEqual(self.insert(OUTBOX, first), first)
-        self.assert_tree(InventoryTree([first], revision=1))
+        assert_equivalent([first], revision=1)
         self.assert_last_mutation(OUTBOX, {"id": first["id"]}, first, "INSERT")
         self.assertEqual(self.insert(OUTBOX, second), second)
-        self.assert_tree(InventoryTree([first, second], revision=2))
+        assert_equivalent([first, second], revision=2)
         after = {**first, "status": "audited", "attempts": 3, "last_error": "終😀"}
         changed = self.connection.execute(sql.SQL(
             "UPDATE {} AS target SET status=%s,attempts=%s,last_error=%s WHERE id=%s "
             "RETURNING pg_catalog.to_jsonb(target)"
         ).format(self.object(OUTBOX)), (after["status"], after["attempts"], after["last_error"], first["id"])).fetchone()[0]
         self.assertEqual(changed, after)
-        self.assert_tree(InventoryTree([after, second], revision=3))
+        assert_equivalent([after, second], revision=3)
         self.assert_last_mutation(OUTBOX, {"id": first["id"]}, after, "UPDATE")
         self.assertEqual(self.connection.execute(sql.SQL("DELETE FROM {} WHERE id=%s")
             .format(self.object(OUTBOX)), (first["id"],)).rowcount, 1)
-        self.assert_tree(InventoryTree([second], revision=4))
+        assert_equivalent([second], revision=4)
         self.assert_last_mutation(OUTBOX, {"id": first["id"]}, None, "DELETE")
         self.assertEqual(self.connection.execute(sql.SQL("DELETE FROM {} WHERE id=%s")
             .format(self.object(OUTBOX)), (second["id"],)).rowcount, 1)
-        self.assert_tree(InventoryTree([], revision=5))
+        assert_equivalent([], revision=5)
         self.assert_tree(aggregate_tree())
 
     def test_same_value_update_advances_revision_without_changing_digest_or_count(self) -> None:

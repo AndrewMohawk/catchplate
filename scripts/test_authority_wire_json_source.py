@@ -33,7 +33,9 @@ WIRE_COUNTS = {
 }
 TREE_ARGUMENTS = {
     PREFIX + "authenticated_empty": ("empty_children",),
-    PREFIX + "authenticated_apply": ("authenticated_key", "authenticated_row", "child_digests"),
+    PREFIX + "authenticated_apply": (
+        "authenticated_key", "authenticated_row", "child_digests", "empty_children",
+    ),
     PREFIX + "apply_verified": (
         "projected.key_value", "key_value", "current_value", "key_value", "key_value",
         "authenticated_child_digests", "selector.value->'key'",
@@ -50,16 +52,17 @@ MIXED_TREE_DOMAINS = (
 )
 # SHA-256 of the exact original source lines, including indentation/newlines,
 # from CREATE OR REPLACE FUNCTION through its closing dollar-quote delimiter.
-# Recorded read-only from committed 984ca5c, db.py:7296-7355,8671-8722,8727-9006.
+# Recorded read-only from committed 984ca5c, db.py:7296-7355,8671-8722.
 # No runtime Git lookup or automatic fingerprint refresh is permitted here.
-# Extraction to primary_tree_sql.py preserves the exact templates. The one
-# approved apply timestamp grammar repair is mapped back explicitly below;
-# persisted tree serialization/hashing and every other byte stay pinned.
+# Extraction to primary_tree_sql.py preserves these canonical/empty templates.
+# The apply function has an explicitly approved optimization, pinned separately.
 UNCHANGED_SQL_SHA256 = {
     TREE: "416f18a283f701b94e9be7046fb10d4b708d795a38a523bde253e67293682708",
     PREFIX + "authenticated_empty": "9ae84436a40e8d5e34ae4cda1042b110b830464b1265c4423169b5fa438c97ef",
-    PREFIX + "authenticated_apply": "e4abba19a81a9d3e0a65aeac93ec9e34a0b4f0e5b3cf378aa10d3908d82fc043",
 }
+# Exact reviewed apply template with the rolling empty-digest ladder and the
+# earlier qualified EXTRACT grammar repair; not byte-identical to 984ca5c.
+APPROVED_ROLLING_EMPTY_APPLY_SQL_SHA256 = "3ccce1ed53fb88e5e87f89e311fbe6aeaedb1de922f7b225d20a6124f4f77e36"
 
 
 def database_source() -> str:
@@ -123,7 +126,7 @@ def assert_partition(source: str, shared_source: str | None = None) -> dict[str,
     if set(literals) != expected_functions:
         raise AssertionError("serializer SQL function inventory changed")
     actual_calls = Counter(name for sql in literals.values() for name in CALL.findall(sql))
-    if (actual_calls != Counter({TREE: 14, WIRE: 71})
+    if (actual_calls != Counter({TREE: 15, WIRE: 71})
             or actual_calls != Counter(CALL.findall(source + shared_source))):
         raise AssertionError("serializer call inventory changed or has an unclassified call")
     for name, sql in literals.items():
@@ -164,22 +167,20 @@ class AuthorityWireJsonSourceTests(unittest.TestCase):
     def test_every_database_serializer_call_has_an_explicit_partition(self) -> None:
         literals = assert_partition(database_source())
         self.assertEqual(sum(WIRE_COUNTS.values()), 71)
-        self.assertEqual(sum(len(arguments) for arguments in TREE_ARGUMENTS.values()), 11)
+        self.assertEqual(sum(len(arguments) for arguments in TREE_ARGUMENTS.values()), 12)
         self.assertEqual(len(literals), 12)
 
-    def test_persisted_tree_function_source_is_byte_identical_to_committed_baseline(self) -> None:
+    def test_unchanged_canonical_and_empty_source_match_committed_baseline(self) -> None:
         literals = assert_partition(database_source())
         for name, expected in UNCHANGED_SQL_SHA256.items():
             with self.subTest(name=name):
                 literal = literals[name]
-                if name == PREFIX + "authenticated_apply":
-                    # Qualified functions take comma-separated arguments, not
-                    # EXTRACT's special FROM syntax. This explicit one-token
-                    # compatibility mapping does not repin any tree hash code.
-                    repaired = "'epoch', pg_catalog.clock_timestamp()"
-                    self.assertEqual(literal.count(repaired), 1)
-                    literal = literal.replace(repaired, "epoch FROM pg_catalog.clock_timestamp()")
                 self.assertEqual(hashlib.sha256(literal.encode("utf-8")).hexdigest(), expected)
+
+    def test_apply_source_matches_approved_rolling_empty_optimization(self) -> None:
+        literal = assert_partition(database_source())[PREFIX + "authenticated_apply"]
+        self.assertEqual(hashlib.sha256(literal.encode("utf-8")).hexdigest(),
+                         APPROVED_ROLLING_EMPTY_APPLY_SQL_SHA256)
 
     def test_shared_renderer_changes_remain_inside_the_same_partition(self) -> None:
         source, shared = database_source(), shared_tree_source()

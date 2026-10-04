@@ -3365,7 +3365,7 @@ def _metadata_psycopg():
 def _postgres_bootstrap_options(
     dsn: str, *, error_type: type[Exception]
 ) -> str:
-    """Retain explicitly bounded installer timeouts, never its search path."""
+    """Retain explicitly bounded connection timeouts, never its search path."""
     from psycopg.conninfo import conninfo_to_dict
 
     def refused() -> None:
@@ -3475,10 +3475,7 @@ def _pinned_auxiliary_pg_connect(
             dsn,
             connect_timeout=connect_timeout,
             row_factory=dict_row,
-            options=(
-                _postgres_bootstrap_options(dsn, error_type=error_type)
-                if bootstrap else "-c search_path=pg_catalog"
-            ),
+            options=_postgres_bootstrap_options(dsn, error_type=error_type),
         )
         if retain_connection is not None:
             retain_connection(conn)
@@ -20091,10 +20088,7 @@ def _metadata_pg_connect_with_dsn(
         dsn,
         connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
-        options=(
-            _postgres_bootstrap_options(dsn, error_type=MetadataStoreError)
-            if admin else "-c search_path=pg_catalog"
-        ),
+        options=_postgres_bootstrap_options(dsn, error_type=MetadataStoreError),
     )
     try:
         with conn.cursor() as cur:

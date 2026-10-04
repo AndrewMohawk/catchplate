@@ -92,7 +92,7 @@ def connector_source():
 def connector_options(connector, options, *, contract=CONTRACT,
                       mode="metadata-bootstrap"):
     """Execute real connector routing, stopping before any connection or SQL."""
-    from psycopg.conninfo import make_conninfo
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
     tree = connector_source()
     names = {connector, "_postgres_bootstrap_options"}
@@ -139,7 +139,10 @@ def connector_options(connector, options, *, contract=CONTRACT,
     except ConnectObserved:
         assert len(calls) == 1 and calls[0][0] == (dsn,)
         assert calls[0][1]["connect_timeout"] == 5
-        return calls[0][1]["options"], guards
+        # Exercise real libpq conninfo composition, not a synthetic DSN parser.
+        effective = conninfo_to_dict(make_conninfo(dsn, options=calls[0][1]["options"]))
+        assert effective["dbname"] == "synthetic"
+        return effective["options"], guards
     raise AssertionError("connector did not reach the intercepted connect call")
 
 
@@ -231,9 +234,31 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                     self.assertEqual(tokens[-2:], ["-c", "search_path=pg_catalog"])
                     self.assertEqual(guards, [])
 
-    def test_runtime_and_unselected_bootstrap_connect_options_remain_unchanged(self):
+    def test_runtime_connectors_preserve_selected_finite_options(self):
+        # Exact runtime connector prefix plus real conninfo; no DB connection.
+        selections = (
+            ("-c statement_timeout=5000", {"statement_timeout": "5000ms"}),
+            ("-cstatement_timeout=5s -c lock_timeout=250ms "
+             "--idle_in_transaction_session_timeout=1min -c search_path=public",
+             {"statement_timeout": "5000ms", "lock_timeout": "250ms",
+              "idle_in_transaction_session_timeout": "60000ms"}),
+        )
         for connector in ("_metadata_pg_connect_with_dsn", "_pinned_auxiliary_pg_connect"):
-            for selected in (None, "", "-c statement_timeout=0 -c search_path=public"):
+            for selected, expected in selections:
+                with self.subTest(connector=connector, selected=selected):
+                    actual, guards = connector_options(connector, selected,
+                        contract=None, mode="serverware-control-plane")
+                    tokens = actual.split()
+                    self.assertEqual(tokens[::2], ["-c"] * (len(expected) + 1))
+                    self.assertEqual(dict(token.split("=", 1) for token in tokens[1::2]),
+                                     {**expected, "search_path": "pg_catalog"})
+                    self.assertEqual(tokens[-2:], ["-c", "search_path=pg_catalog"])
+                    self.assertEqual(guards, ["runtime-admin"]
+                                     if connector == "_metadata_pg_connect_with_dsn" else [])
+
+    def test_runtime_and_bootstrap_unselected_connect_options_remain_unchanged(self):
+        for connector in ("_metadata_pg_connect_with_dsn", "_pinned_auxiliary_pg_connect"):
+            for selected in (None, ""):
                 with self.subTest(connector=connector, runtime=selected):
                     actual, guards = connector_options(connector, selected,
                                                        contract=None, mode="serverware-control-plane")
@@ -244,6 +269,20 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                 with self.subTest(connector=connector, bootstrap=selected):
                     self.assertEqual(connector_options(connector, selected),
                                      ("-c search_path=pg_catalog", []))
+
+    def test_runtime_connectors_refuse_unbounded_or_unsafe_options_before_connect(self):
+        rejected = ("-c statement_timeout=0", "-c lock_timeout=0",
+                    "-c idle_in_transaction_session_timeout=0", "-c statement_timeout=-1",
+                    "-c statement_timeout=2147483648", "-c statement_timeout=25d",
+                    "-c statement_timeout=1.5s", "-c statement_timeout=infinite",
+                    "-c statement_timeout=", "-c", "--statement_timeout",
+                    "-c role=synthetic_owner", "-c unknown_setting=1", "--",
+                    "-c statement_timeout=1\\")
+        for connector in ("_metadata_pg_connect_with_dsn", "_pinned_auxiliary_pg_connect"):
+            for selected in rejected:
+                with self.subTest(connector=connector, selected=selected), self.assertRaises(BootstrapError):
+                    connector_options(connector, selected,
+                        contract=None, mode="serverware-control-plane")
 
     def test_bootstrap_connectors_refuse_unsafe_options_and_wrong_authority(self):
         rejected = ("-c statement_timeout=0", "-c lock_timeout=0",

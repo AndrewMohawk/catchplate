@@ -146,6 +146,65 @@ def connector_options(connector, options, *, contract=CONTRACT,
     raise AssertionError("connector did not reach the intercepted connect call")
 
 
+AUTHORITY_CONNECTORS = (
+    ("_policy_authority_executor_pg_connect_raw", "policy-authority-executor",
+     "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN"),
+    ("_policy_authority_capability_issuer_pg_connect_raw", "policy-authority-issuer",
+     "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN"),
+)
+
+
+def authority_connector_options(connector, options, *, mode, observed):
+    """Observe descriptor routing and stop at connect; no authority/DB imports."""
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    assert observed == {}
+    observed.update(descriptors=[], connects=[])
+    dsn = make_conninfo(dbname="synthetic", **({} if options is None else {"options": options}))
+    functions = [node for node in connector_source().body
+                 if isinstance(node, ast.FunctionDef)
+                 and node.name in {connector, "_postgres_bootstrap_options"}]
+    assert len(functions) == 2
+
+    class ConnectObserved(BaseException):
+        pass
+
+    def descriptor(name):
+        observed["descriptors"].append(name)
+        return dsn
+
+    def connect(*args, **kwargs):
+        observed["connects"].append((args, kwargs))
+        raise ConnectObserved()  # Never return a simulated admitted connection.
+
+    namespace = {
+        "re": re, "os": SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": mode}),
+        "MetadataStoreError": BootstrapError,
+        "_POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE": "policy-authority-executor",
+        "_POLICY_AUTHORITY_ISSUER_PROCESS_MODE": "policy-authority-issuer",
+        "METADATA_STORE_CONNECT_TIMEOUT_SECONDS": 5,
+        "_policy_authority_dsn_from_descriptor": descriptor,
+        "_metadata_psycopg": lambda: (SimpleNamespace(connect=connect), "synthetic-row-factory"),
+    }
+    exec(compile(ast.Module(body=functions, type_ignores=[]),
+                 "authority-connect-options-routing", "exec"), namespace)
+    try:
+        namespace[connector]()
+    except ConnectObserved:
+        assert len(observed["connects"]) == 1
+        args, kwargs = observed["connects"][0]
+        assert args == (dsn,)
+        assert kwargs["connect_timeout"] == 5 and kwargs["row_factory"] == "synthetic-row-factory"
+        if connector == "_policy_authority_capability_issuer_pg_connect_raw":
+            assert kwargs["autocommit"] is False
+        else:
+            assert "autocommit" not in kwargs
+        effective = conninfo_to_dict(make_conninfo(dsn, options=kwargs["options"]))
+        assert effective["dbname"] == "synthetic"
+        return effective["options"]
+    raise AssertionError("authority connector did not reach the intercepted connect call")
+
+
 class PostgresBootstrapGrantTests(unittest.TestCase):
     def test_local_reader_profile_refuses_without_original_development_authorization(self):
         # Actual validators and init_db prefix only; no DB import or connection.
@@ -298,6 +357,58 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
             for authority in ({"contract": "wrong"}, {"mode": "serverware-control-plane"}):
                 with self.subTest(connector=connector, authority=authority), self.assertRaises(BootstrapError):
                     connector_options(connector, "-c statement_timeout=30000", **authority)
+
+    def test_authority_connectors_preserve_selected_finite_options(self):
+        selections = (
+            ("-c statement_timeout=5000", "-c statement_timeout=5000ms -c search_path=pg_catalog"),
+            ("-cstatement_timeout=5s --lock_timeout=250ms "
+             "-c idle_in_transaction_session_timeout=1min -c search_path=public",
+             "-c statement_timeout=5000ms -c lock_timeout=250ms "
+             "-c idle_in_transaction_session_timeout=60000ms -c search_path=pg_catalog"),
+        )
+        for connector, mode, descriptor in AUTHORITY_CONNECTORS:
+            for selected, expected in selections:
+                with self.subTest(connector=connector, selected=selected):
+                    observed = {}
+                    self.assertEqual(authority_connector_options(connector, selected,
+                        mode=mode, observed=observed), expected)
+                    self.assertEqual(observed["descriptors"], [descriptor])
+
+    def test_authority_connectors_preserve_unselected_options(self):
+        for connector, mode, descriptor in AUTHORITY_CONNECTORS:
+            for selected in (None, ""):
+                with self.subTest(connector=connector, selected=selected):
+                    observed = {}
+                    self.assertEqual(authority_connector_options(connector, selected,
+                        mode=mode, observed=observed), "-c search_path=pg_catalog")
+                    self.assertEqual(observed["descriptors"], [descriptor])
+
+    def test_authority_connectors_refuse_unsafe_options_before_connect(self):
+        rejected = ("-c statement_timeout=0", "-c lock_timeout=0",
+                    "-c idle_in_transaction_session_timeout=0", "-c statement_timeout=-1",
+                    "-c statement_timeout=2147483648", "-c role=synthetic_owner",
+                    "-c unknown_setting=1", "-c statement_timeout=1\\")
+        for connector, mode, descriptor in AUTHORITY_CONNECTORS:
+            for selected in rejected:
+                with self.subTest(connector=connector, selected=selected):
+                    observed = {}
+                    with self.assertRaises(BootstrapError):
+                        authority_connector_options(connector, selected, mode=mode, observed=observed)
+                    self.assertEqual(observed["descriptors"], [descriptor])
+                    self.assertEqual(observed["connects"], [])
+
+    def test_authority_connectors_refuse_wrong_mode_before_descriptor_access(self):
+        modes = ("", "serverware-control-plane", "policy-authority-executor", "policy-authority-issuer")
+        for connector, expected_mode, _ in AUTHORITY_CONNECTORS:
+            for mode in modes:
+                if mode == expected_mode:
+                    continue
+                with self.subTest(connector=connector, mode=mode):
+                    observed = {}
+                    with self.assertRaises(BootstrapError):
+                        authority_connector_options(connector, "-c statement_timeout=5000",
+                            mode=mode, observed=observed)
+                    self.assertEqual(observed, {"descriptors": [], "connects": []})
 
     def test_initialization_restores_selected_finite_statement_budget_after_locks(self):
         # Source routing only; the PostgreSQL DDL control runs independently.

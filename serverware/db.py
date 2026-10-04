@@ -21297,7 +21297,7 @@ def _policy_authority_executor_pg_connect_raw():
         dsn,
         connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
-        options="-c search_path=pg_catalog",
+        options=_postgres_bootstrap_options(dsn, error_type=MetadataStoreError),
     )
     try:
         with conn.cursor() as cur:
@@ -21459,7 +21459,7 @@ def _policy_authority_capability_issuer_pg_connect_raw():
         dsn,
         connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
-        options="-c search_path=pg_catalog",
+        options=_postgres_bootstrap_options(dsn, error_type=MetadataStoreError),
         autocommit=False,
     )
     try:

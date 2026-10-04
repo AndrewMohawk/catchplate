@@ -626,6 +626,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_admission.py \
 	scripts/test_authority_local_startup.py \
 	scripts/test_authority_local_startup_failure_diagnostics.py \
+	scripts/test_authority_package_signature_digest_reuse.py \
 	scripts/test_authority_local_artifacts.py \
 	scripts/test_authority_local_artifact_witness.py \
 	scripts/test_authority_local_trust.py \

@@ -437,15 +437,16 @@ def package_signature_message(
 ) -> bytes:
     if purpose not in SIGNATURE_PURPOSES:
         raise ArtifactContractError("signature purpose is not recognized")
-    validate_artifact_bundle(bundle)
+    # The digest helper validates the bundle; reuse only within this message.
+    validated_bundle_digest = artifact_bundle_digest(bundle)
     validate_generation_statement(
         generation,
-        expected_bundle_digest=artifact_bundle_digest(bundle),
+        expected_bundle_digest=validated_bundle_digest,
     )
     bound = {
         "schema": SIGNED_PACKAGE_SCHEMA,
         "purpose": purpose,
-        "artifactBundleDigest": artifact_bundle_digest(bundle),
+        "artifactBundleDigest": validated_bundle_digest,
         "generationDigest": generation_statement_digest(generation),
     }
     return domain_digest(

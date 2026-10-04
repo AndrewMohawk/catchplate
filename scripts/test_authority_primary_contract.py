@@ -24,9 +24,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
+from serverware import authority_native_activation_schema
 from serverware import authority_primary_contract as primary
 from serverware.authority_store.metadata_schema_source import (
     metadata_base_schema_source,
+    metadata_initialization_index_source,
     metadata_schema_source,
 )
 from serverware.authority_store.v9_schema_source import authority_v9_schema_source
@@ -72,12 +74,14 @@ def manifest_row_fixture(operation: str, *, authorization: bool) -> tuple[list[d
 
 def committed_schema_literals() -> str:
     """Use the real pure producers, without importing db or the executor."""
-    for filename, maximum in (("metadata_schema_source.py", 16 * 1024 * 1024),
-                              ("v9_schema_source.py", 2 * 1024 * 1024)):
-        if (ROOT / "serverware/authority_store" / filename).stat().st_size > maximum:
+    for filename, maximum in (("authority_store/metadata_schema_source.py", 16 * 1024 * 1024),
+                              ("authority_store/v9_schema_source.py", 2 * 1024 * 1024),
+                              ("authority_native_activation_schema.py", 1024 * 1024)):
+        if (ROOT / "serverware" / filename).stat().st_size > maximum:
             raise AssertionError("schema source exceeded the bounded source fixture")
     database_sql = metadata_schema_source()
-    if database_sql != metadata_base_schema_source() + authority_v9_schema_source():
+    if database_sql != (metadata_base_schema_source() + authority_native_activation_schema.source()
+                        + authority_v9_schema_source() + metadata_initialization_index_source()):
         raise AssertionError("complete metadata source composition changed")
     # The pre-v2 table declarations are deliberately inert, including the old
     # artifact_digest key. They must not be mistaken for current source DDL.
@@ -214,11 +218,31 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
                 self.assertEqual(entry.root_class, "business" if entry.table in business else "authorization")
                 self.assertIs(entry.write_access, entry.table in spec["businessWrites"])
         counter = {entry.table: entry for entry in primary.primary_table_contracts("webauthn.counter.cas")}
-        challenge = {entry.table: entry for entry in primary.primary_table_contracts("webauthn.challenge.create")}
+        evidence = {entry.table: entry for entry in primary.primary_table_contracts("webauthn.registration.evidence.admit")}
         self.assertEqual(counter["webauthn_credentials"].root_class, "business")
         self.assertTrue(counter["webauthn_credentials"].write_access)
-        self.assertEqual(challenge["webauthn_credentials"].root_class, "authorization")
-        self.assertFalse(challenge["webauthn_credentials"].write_access)
+        self.assertEqual(evidence["webauthn_trust_publications"].root_class, "authorization")
+        self.assertFalse(evidence["webauthn_trust_publications"].write_access)
+
+    def test_challenge_storage_has_only_its_actual_measured_relation(self) -> None:
+        for operation in ("webauthn.challenge.create", "webauthn.challenge.claim",
+                          "webauthn.challenge.consume"):
+            with self.subTest(operation=operation):
+                spec = authority_contract.operation_spec(operation)
+                self.assertEqual(tuple(spec["businessReads"]), ())
+                self.assertEqual(tuple(spec["businessWrites"]), ("webauthn_challenges",))
+                self.assertEqual(tuple(spec["businessReadBeforeWrite"]), ("webauthn_challenges",))
+                self.assertEqual(tuple(spec["authorizationReads"]), ())
+                entry, = primary.primary_table_contracts(operation)
+                self.assertEqual((entry.table, entry.key_columns, entry.root_class, entry.write_access),
+                                 ("webauthn_challenges", ("id",), "business", True))
+                rows, entries = manifest_row_fixture(operation, authorization=False)
+                self.assertEqual([row["table"] for row in entries], ["webauthn_challenges"])
+                self.assertEqual(len(primary.validate_planner_manifest_rows(
+                    operation, rows, authorization=False)), 1)
+                self.assertEqual(manifest_row_fixture(operation, authorization=True), ([], []))
+                self.assertEqual(primary.validate_planner_manifest_rows(
+                    operation, [], authorization=True), ())
 
     def test_inventory_and_returned_contracts_are_immutable(self) -> None:
         with self.assertRaises(TypeError):
@@ -317,7 +341,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
             self.assertEqual(digest(), expected_digest)
 
     def test_planner_admits_real_source_business_and_authorization_rows(self) -> None:
-        operation = "webauthn.challenge.consume"
+        operation = "webauthn.registration.evidence.admit"
         for authorization in (False, True):
             rows, entries = manifest_row_fixture(operation, authorization=authorization)
             self.assertTrue(rows)
@@ -346,7 +370,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
             "webauthn.counter.cas", [], authorization=True), ())
 
     def test_planner_rejects_coherent_key_and_entry_digest_with_copied_manifest_label(self) -> None:
-        operation = "webauthn.challenge.consume"
+        operation = "webauthn.registration.evidence.admit"
         for authorization in (False, True):
             rows, entries = manifest_row_fixture(operation, authorization=authorization)
             primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)
@@ -362,7 +386,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
                 primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)
 
     def test_planner_rejects_each_metadata_substitution_missing_field_and_extra_field(self) -> None:
-        operation = "webauthn.challenge.consume"
+        operation = "webauthn.registration.evidence.admit"
         for authorization in (False, True):
             rows, _ = manifest_row_fixture(operation, authorization=authorization)
             primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)
@@ -381,7 +405,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
     def test_planner_numeric_flags_do_not_accept_python_equality_coercions(self) -> None:
         for operation, authorization in (("webauthn.counter.cas", False),
                                          ("jit.request", False),
-                                         ("webauthn.challenge.consume", True)):
+                                         ("webauthn.registration.evidence.admit", True)):
             rows, _ = manifest_row_fixture(operation, authorization=authorization)
             primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)
             if operation == "jit.request":
@@ -401,7 +425,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
                                 authorization=authorization)
 
     def test_planner_requires_exact_canonical_json_spelling(self) -> None:
-        operation = "webauthn.challenge.consume"
+        operation = "webauthn.registration.evidence.admit"
         for authorization in (False, True):
             rows, _ = manifest_row_fixture(operation, authorization=authorization)
             primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)
@@ -415,7 +439,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
                         operation, [{**rows[0], field: changed}, *rows[1:]], authorization=authorization)
 
     def test_planner_inventory_mode_and_row_shapes_are_bounded_and_closed(self) -> None:
-        operation = "webauthn.challenge.consume"
+        operation = "webauthn.registration.evidence.admit"
         for authorization in (False, True):
             rows, _ = manifest_row_fixture(operation, authorization=authorization)
             primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)

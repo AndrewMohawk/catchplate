@@ -36,7 +36,7 @@ import test_authority_global_audit_capacity as capacity_fixture
 
 
 COUNTER = "webauthn.counter.cas"
-CHALLENGE = "webauthn.challenge.consume"
+REGISTRATION = "webauthn.registration.create"
 
 
 def fixture(operation: str = COUNTER) -> tuple[dict, dict[str, IndependentTree]]:
@@ -45,12 +45,16 @@ def fixture(operation: str = COUNTER) -> tuple[dict, dict[str, IndependentTree]]
         "webauthn_credentials": [{"id": "credential-a", "sign_count": 1, "label": "hardware"}],
         "webauthn_challenges": [{"id": "challenge-a", "used_at": None}],
     }
+    if operation == REGISTRATION:
+        # This real source operation also requires a proven capacity counter;
+        # the fixture remains a component transition, not credential issuance.
+        rows[capacity_fixture.TABLE] = [capacity_fixture.counter_row()]
     trees = {
         contract.table: IndependentTree(rows.get(contract.table, []), table=contract.table,
                                         columns=contract.key_columns)
         for contract in primary.primary_table_contracts(operation)
     }
-    target = "webauthn_credentials" if operation == COUNTER else "webauthn_challenges"
+    target = "webauthn_credentials"
     selected = []
     proofs = []
     for contract in primary.primary_table_contracts(operation):
@@ -62,8 +66,7 @@ def fixture(operation: str = COUNTER) -> tuple[dict, dict[str, IndependentTree]]
         selected.append(entry)
         proofs.append(tree.proof(entry))
     target_row = next(row for row in selected if row["table"] == target)
-    after = ({**target_row["row"], "sign_count": 2} if operation == COUNTER
-             else {**target_row["row"], "used_at": "2026-01-01T00:00:00Z"})
+    after = {**target_row["row"], "sign_count": 2}
     return {
         "operation": operation,
         "business_before_roots": [trees[contract.table].root.json_projection()
@@ -163,21 +166,27 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         self.assertEqual(verify(result, arguments), result)
 
     def test_authorization_inventory_stays_unchanged_with_real_source_classes(self) -> None:
-        arguments, trees = fixture(CHALLENGE)
+        arguments, trees = fixture(REGISTRATION)
         result = transition.derive_primary_root_transition(**arguments)
-        spec = authority_contract.operation_spec(CHALLENGE)
+        spec = authority_contract.operation_spec(REGISTRATION)
+        self.assertEqual(tuple(spec["authorizationReads"]),
+                         ("webauthn_challenges", "webauthn_trust_publications"))
         self.assertEqual([root["table"] for root in result["authorizationBeforeRoots"]],
                          list(spec["authorizationReads"]))
         self.assertEqual(result["authorizationBeforeRoots"], result["authorizationAfterRoots"])
         expected = IndependentTree([arguments["mutations"][0]["row"]],
-                                   table="webauthn_challenges", revision=2)
-        self.assertEqual(result["businessAfterRoots"], [expected.root.json_projection()])
-        auth_row = next(row for row in arguments["selected_rows"] if row["table"] == "webauthn_credentials")
-        self.assertEqual(trees["webauthn_credentials"].root.json_projection(),
+                                   table="webauthn_credentials", revision=2)
+        self.assertEqual(result["businessAfterRoots"], [
+            expected.root.json_projection() if root["table"] == expected.table else root
+            for root in arguments["business_before_roots"]
+        ])
+        auth_row = next(row for row in arguments["selected_rows"] if row["table"] == "webauthn_challenges")
+        self.assertEqual(trees["webauthn_challenges"].root.json_projection(),
                          next(root for root in result["authorizationAfterRoots"] if root["table"] == auth_row["table"]))
         with self.assertRaisesRegex(PrimaryRadixMutationError, "not writable business state"):
             transition.derive_primary_root_transition(**{
-                **arguments, "mutations": [change(auth_row, "UPDATE", {**auth_row["row"], "sign_count": 2})],
+                **arguments, "mutations": [change(auth_row, "UPDATE", {
+                    **auth_row["row"], "used_at": "2026-01-01T00:00:00Z"})],
             })
 
     def test_root_digest_uses_independent_wire_framing_and_every_closed_field(self) -> None:
@@ -303,15 +312,15 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         self.assertEqual(transition.metric_bounds()["hashWork"], 35018)
 
     def test_actual_authorization_sources_bind_present_and_absent_primary_rows(self) -> None:
-        arguments, _ = fixture(CHALLENGE)
+        arguments, _ = fixture(REGISTRATION)
         # Authenticate all selected rows first; the projection is not itself a
         # membership verifier or a substitute for this complete delta check.
         result = transition.derive_primary_root_transition(**arguments)
         self.assertEqual(verify(result, arguments), result)
-        sources = transition.derive_authorization_sources(operation=CHALLENGE,
+        sources = transition.derive_authorization_sources(operation=REGISTRATION,
                                                          selected_rows=arguments["selected_rows"])
         self.assertEqual([entry["table"] for entry in sources],
-                         list(authority_contract.operation_spec(CHALLENGE)["authorizationReads"]))
+                         list(authority_contract.operation_spec(REGISTRATION)["authorizationReads"]))
         self.assertEqual({entry["present"] for entry in sources}, {True, False})
         for source in sources:
             self.assertEqual(set(source), {"table", "selector", "present", "row", "rowDigest"})
@@ -337,28 +346,29 @@ class AuthorityRootTransitionTests(unittest.TestCase):
             transition.validate_primary_root_transition(result)
 
     def test_authorization_query_coverage_is_separate_and_fail_closed(self) -> None:
-        arguments, _ = fixture(CHALLENGE)
-        business_only = [entry for entry in arguments["selected_rows"] if entry["table"] == "webauthn_challenges"]
+        arguments, _ = fixture(REGISTRATION)
+        business_tables = {entry["table"] for entry in arguments["business_before_roots"]}
+        business_only = [entry for entry in arguments["selected_rows"] if entry["table"] in business_tables]
         # An unchanged supplied auth root is valid delta input, but never means
         # an authorization query actually selected its required source row.
         delta_only = {**arguments, "selected_rows": business_only,
                       "before_proofs": [proof for proof in arguments["before_proofs"]
-                                        if proof["table"] == "webauthn_challenges"]}
+                                        if proof["table"] in business_tables]}
         transition.derive_primary_root_transition(**delta_only)
         with self.assertRaisesRegex(PrimaryRadixMutationError, "do not cover declared relations"):
-            transition.derive_authorization_sources(operation=CHALLENGE, selected_rows=business_only)
-        auth = next(row for row in arguments["selected_rows"] if row["table"] == "webauthn_credentials")
+            transition.derive_authorization_sources(operation=REGISTRATION, selected_rows=business_only)
+        auth = next(row for row in arguments["selected_rows"] if row["table"] == "webauthn_challenges")
         with self.assertRaisesRegex(PrimaryRadixMutationError, "identity is duplicated"):
-            transition.derive_authorization_sources(operation=CHALLENGE,
+            transition.derive_authorization_sources(operation=REGISTRATION,
                                                    selected_rows=arguments["selected_rows"] + [auth])
         malformed = copy.deepcopy(arguments["selected_rows"])
         next(row for row in malformed if row["table"] == auth["table"])["present"] = 1
         with self.assertRaisesRegex(PrimaryRadixMutationError, "key or presence is not exact"):
-            transition.derive_authorization_sources(operation=CHALLENGE, selected_rows=malformed)
+            transition.derive_authorization_sources(operation=REGISTRATION, selected_rows=malformed)
 
     def test_unicode_authorization_wire_remains_distinct_from_persisted_tree_json(self) -> None:
-        arguments, _ = fixture(CHALLENGE)
-        row = next(entry for entry in arguments["selected_rows"] if entry["table"] == "webauthn_credentials")
+        arguments, _ = fixture(REGISTRATION)
+        row = next(entry for entry in arguments["selected_rows"] if entry["table"] == "webauthn_challenges")
         row["row"]["label"] = "café-雪"
         tree = IndependentTree([row["row"]], table=row["table"])
         arguments["authorization_before_roots"] = [
@@ -369,7 +379,7 @@ class AuthorityRootTransitionTests(unittest.TestCase):
                                      for proof in arguments["before_proofs"]]
         transition.derive_primary_root_transition(**arguments)
         source = next(entry for entry in transition.derive_authorization_sources(
-            operation=CHALLENGE, selected_rows=arguments["selected_rows"]) if entry["table"] == tree.table)
+            operation=REGISTRATION, selected_rows=arguments["selected_rows"]) if entry["table"] == tree.table)
         domain = "serverware.policyAuthorityAuthorizationRow/v1"
         self.assertEqual(source["rowDigest"], wire_digest(domain, tree.table.encode(), wire_json(source["selector"]),
                                                         b"present", wire_json(source["row"])))
@@ -562,18 +572,18 @@ class PrimaryPlanInputTests(unittest.TestCase):
             transition.verify_primary_plan_inputs(**pristine, mutations=())
 
     def test_authorization_rows_share_genuine_before_root_context_without_changing_heads(self):
-        arguments, _ = fixture(CHALLENGE)
+        arguments, _ = fixture(REGISTRATION)
         inputs = {name: value for name, value in arguments.items() if name != "mutations"}
         verified = transition.verify_primary_plan_inputs(**inputs)
         self.assertEqual([root.json_projection() for root in verified.result.business_after_roots],
                          inputs["business_before_roots"])
         self.assertEqual([root.json_projection() for root in verified.result.authorization_after_roots],
                          inputs["authorization_before_roots"])
-        sources = transition.derive_authorization_sources(operation=CHALLENGE,
+        sources = transition.derive_authorization_sources(operation=REGISTRATION,
                                                           selected_rows=verified.selected_rows)
         self.assertEqual({source["present"] for source in sources}, {True, False})
         changed = copy.deepcopy(inputs)
-        proof = next(item for item in changed["before_proofs"] if item["table"] == "webauthn_credentials")
+        proof = next(item for item in changed["before_proofs"] if item["table"] == "webauthn_challenges")
         proof["rootRevision"] += 1
         refresh_proof_digest(proof)
         with self.assertRaises(PrimaryRadixMutationError):

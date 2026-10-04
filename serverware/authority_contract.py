@@ -3287,19 +3287,22 @@ _OPERATIONS = {
         reads=("webauthn_credentials",),
         writes=("webauthn_credentials",),
     ),
+    # These measured operations store/claim/consume challenge rows; they do not
+    # authorize credential registration or assertions. Those retain their own
+    # credential/trust dependencies and admission checks in separate operations.
     "webauthn.challenge.create": _spec(
         "create_webauthn_challenge",
-        reads=_WEBAUTHN,
+        reads=("webauthn_challenges",),
         writes=("webauthn_challenges",),
     ),
     "webauthn.challenge.claim": _spec(
         "claim_webauthn_challenge",
-        reads=_WEBAUTHN,
+        reads=("webauthn_challenges",),
         writes=("webauthn_challenges",),
     ),
     "webauthn.challenge.consume": _spec(
         "mark_webauthn_challenge_used",
-        reads=_WEBAUTHN,
+        reads=("webauthn_challenges",),
         writes=("webauthn_challenges",),
     ),
 }

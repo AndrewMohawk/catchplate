@@ -40,7 +40,7 @@ def selected():
 def chain():
     # Unauthenticated schema data, never a provisioning-receipt signature.
     plan = untrusted_plan(local=True)
-    identity = dict(device=1, inode=2, generation=3, mode=0o750, uid=0, gid=0)
+    identity = dict(device=1, inode=2, generation=3, mode=plan["destination"]["directoryMode"], uid=0, gid=0)
     raw = local.spec.canonical_json_bytes(dict(completedAt="2026-10-01T00:00:02Z", generationDirectoryIdentity=identity))
     source = local.spec.domain_digest("serverware.authorityProvisioningSourceIdentity/v1", local.spec.canonical_json_bytes(plan["sourceRoot"]))
     first = dict(schema=local.contract.PROVISIONING_STATE_SCHEMA, stateId=PIN, revision=0, status="Prepared",
@@ -121,6 +121,27 @@ class TrustCommitTests(unittest.TestCase):
         self.assertEqual(cli.arguments(args)["witness_directory_fd"], 8)
         for wrong in (args+["--reset"], [args[0], "03", *args[2:]], args[:-1]+["3"], args[:-1]+["-1"]):
             with self.assertRaises(ValueError): cli.arguments(wrong)
+
+    @unittest.skipUnless(sys.platform == "linux" and os.geteuid() == 0, "root-owned Linux directory modes")
+    def test_actual_generation_directory_uses_plan_mode_not_private_destination_mode(self):
+        mode = untrusted_plan(local=True)["destination"]["directoryMode"]
+        with tempfile.TemporaryDirectory(prefix="local-trust-generation-mode-") as directory:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                local.install._set_generation_directory_mode(fd, mode)
+                local._directory(fd, mode)
+                with self.assertRaises(ValueError): local._directory(fd, 0o750)
+                os.fchmod(fd, 0o750)
+                local._directory(fd, 0o750)
+                with self.assertRaises(ValueError): local._directory(fd, mode)
+            finally: os.close(fd)
+        tree = ast.parse(Path(local.__file__).read_text())
+        owner = next(row for row in tree.body if isinstance(row, ast.ClassDef) and row.name == "LocalArtifactTrustCommit")
+        methods = {row.name: row for row in owner.body if isinstance(row, ast.FunctionDef)}
+        self.assertIn("self._subdirectory(generations, name, plan['destination']['directoryMode'])",
+            ast.unparse(methods["_authenticate"]))
+        self.assertIn("_directory(child, self._plan['destination']['directoryMode'])",
+            ast.unparse(methods["_installation"]))
 
     @unittest.skipUnless(sys.platform == "linux", "Linux atomic exchange")
     def test_real_exchange_retains_displaced_original_and_open_fd_identities(self):

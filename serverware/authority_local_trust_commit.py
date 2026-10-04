@@ -341,7 +341,7 @@ class LocalArtifactTrustCommit:
             and install._identity(self._root) == receipt["destinationRootIdentity"])
         self._plan, self._receipt, self._verification = plan, receipt, verification
         self._witness_records(prior, verified)
-        self._tree = self._subdirectory(generations, name, 0o750)
+        self._tree = self._subdirectory(generations, name, plan["destination"]["directoryMode"])
         require(install._identity(self._tree) == receipt["generationDirectoryIdentity"])
         self._installation(receipt)
         bundle = verified.package["bundle"]
@@ -386,7 +386,7 @@ class LocalArtifactTrustCommit:
                     require(path in rows or path in directories)
                     with install._owning(): child = self._hold(install._open_beneath(fd, entry.name, _READ))
                     if path in directories:
-                        _directory(child, 0o750); visit(child, path + "/")
+                        _directory(child, self._plan["destination"]["directoryMode"]); visit(child, path + "/")
                     else:
                         row, info = rows[path], os.fstat(child)
                         require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size == row["size"]

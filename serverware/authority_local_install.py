@@ -180,6 +180,18 @@ def _rename(parent, source, target_parent, target):
         error = ctypes.get_errno(); raise OSError(error, os.strerror(error))
 
 
+def _set_generation_directory_mode(fd, mode):
+    """Publish code traversal only; installation records and file modes stay private."""
+    _require(type(mode) is int and mode == contract.LOCAL_GENERATION_DIRECTORY_MODE)
+    before = os.fstat(fd)
+    _require(stat.S_ISDIR(before.st_mode) and before.st_uid == before.st_gid == 0
+        and stat.S_IMODE(before.st_mode) == 0o700)
+    os.fchmod(fd, mode); os.fsync(fd)
+    after = os.fstat(fd)
+    _require((after.st_dev, after.st_ino, after.st_uid, after.st_gid)
+        == (before.st_dev, before.st_ino, 0, 0) and stat.S_IMODE(after.st_mode) == mode)
+
+
 class LocalAuthorityInstaller:
     def __init__(self, token):
         _require(token is _TOKEN)
@@ -481,7 +493,7 @@ class LocalAuthorityInstaller:
             self.stage = "freezing"
             for path in sorted(parents, key=lambda name: (name.count("/"), name), reverse=True):
                 self.check(); fd = parents[path]
-                os.fchmod(fd, 0o750); os.fsync(fd)
+                _set_generation_directory_mode(fd, self.plan["destination"]["directoryMode"])
                 if path: _immutable(fd); os.fsync(fd)
             self.check()
             _rename(self.directories[".incoming"], self.name, self.directories["generations"], self.name)

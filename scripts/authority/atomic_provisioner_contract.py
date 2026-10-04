@@ -30,7 +30,10 @@ VERIFICATION_RECEIPT_SCHEMA = (
     "serverware.authorityArtifactVerificationReceipt/v1"
 )
 PROVISIONING_PLAN_SCHEMA = "serverware.authorityAtomicProvisioningPlan/v1"
-LOCAL_PROVISIONING_PLAN_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningPlan/v1"
+# V2 publishes traversable runtime directories for unprivileged consumers.
+# V1's root-group-only directories are not interchangeable with this plan.
+LOCAL_PROVISIONING_PLAN_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningPlan/v2"
+LOCAL_GENERATION_DIRECTORY_MODE = 0o755
 LOCAL_PROVISIONING_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningReceipt/v1"
 LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptSignature/v1"
 LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptDigest/v1"
@@ -732,7 +735,7 @@ def build_provisioning_plan(
             "terminalReceiptDirectory": "receipts",
             "ownerUid": uid,
             "ownerGid": gid,
-            "directoryMode": 0o750,
+            "directoryMode": LOCAL_GENERATION_DIRECTORY_MODE if trusted_host_local else 0o750,
             "renameFlags": ["RENAME_NOREPLACE"],
         },
         "entries": entries,
@@ -922,7 +925,7 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
         minimum=0,
         maximum=2**32 - 2,
     )
-    if destination["directoryMode"] != 0o750:
+    if destination["directoryMode"] != (LOCAL_GENERATION_DIRECTORY_MODE if local else 0o750):
         raise ProvisioningContractError(
             "generation directory mode changed"
         )
@@ -1235,6 +1238,7 @@ def validate_provisioning_receipt(
             or value["generationDigest"] != plan["generationDigest"]
             or value["generationSequence"] != plan["generationSequence"]
             or value["stepContractDigest"] != plan["stepContractDigest"]
+            or value["generationDirectoryIdentity"]["mode"] != plan["destination"]["directoryMode"]
             or [
                 (
                     entry["path"],

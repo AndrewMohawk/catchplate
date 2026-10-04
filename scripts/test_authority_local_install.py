@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
+import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -41,7 +44,9 @@ def plan(*, local):
             runtimePath="/srv/source", device=1, inode=2, generation=3, mountId=4, mode=0o555, uid=0, gid=0),
         destination=dict(root="/srv/authority-artifacts", generationsDirectory="generations", generationDirectory=name,
             stagingDirectory=".incoming/" + name, lockFile=".authority-generation.lock", terminalReceiptDirectory="receipts",
-            ownerUid=0, ownerGid=0, directoryMode=0o750, renameFlags=["RENAME_NOREPLACE"]),
+            ownerUid=0, ownerGid=0,
+            directoryMode=contract.LOCAL_GENERATION_DIRECTORY_MODE if local else 0o750,
+            renameFlags=["RENAME_NOREPLACE"]),
         entries=[dict(path="source.py", sourceSha256=PIN, size=3, mode=0o444, uid=0, gid=0,
             requireFsVerity=True, requireImmutable=True)],
         steps=[dict(ordinal=index, step=step) for index, step in enumerate(steps, 1)],
@@ -88,6 +93,92 @@ class LocalInstallTests(unittest.TestCase):
         self.assertNotEqual(contract.provisioning_receipt_signature_message(dict(schema=contract.LOCAL_PROVISIONING_RECEIPT_SCHEMA,
             signatureBase64Url="", marker=PIN)), contract.provisioning_receipt_signature_message(
                 dict(schema=contract.PROVISIONING_RECEIPT_SCHEMA, signatureBase64Url="", marker=PIN)))
+
+    def test_local_generation_mode_is_versioned_and_native_mode_unchanged(self):
+        self.assertEqual(contract.LOCAL_PROVISIONING_PLAN_SCHEMA,
+            "serverware.authorityTrustedHostLocalProvisioningPlan/v2")
+        self.assertEqual(contract.LOCAL_GENERATION_DIRECTORY_MODE, 0o755)
+        def rehash(value):
+            value.pop("planId")
+            value["planId"] = artifact.domain_digest(contract.PROVISIONING_PLAN_DIGEST_DOMAIN,
+                artifact.canonical_json_bytes(value))
+        for local, expected, swapped in ((False, 0o750, 0o755), (True, 0o755, 0o750)):
+            value = plan(local=local)
+            self.assertEqual(value["destination"]["directoryMode"], expected)
+            contract.validate_provisioning_plan(value)
+            value["destination"]["directoryMode"] = swapped
+            rehash(value)
+            with self.assertRaises(contract.ProvisioningContractError): contract.validate_provisioning_plan(value)
+        old = plan(local=True)
+        old["schema"] = "serverware.authorityTrustedHostLocalProvisioningPlan/v1"
+        old["destination"]["directoryMode"] = 0o750
+        rehash(old)
+        with self.assertRaises(contract.ProvisioningContractError): contract.validate_provisioning_plan(old)
+
+    @unittest.skipUnless(sys.platform == "linux" and os.geteuid() == 0,
+        "actual root-to-65532 DAC test in disposable Linux container")
+    def test_actual_finalized_generation_exec_import_preserves_private_denial(self):
+        # Real installer mode helper and real dropped-UID exec/import only: no
+        # signature, fs-verity, immutable flag, mount or full-install admission.
+        with tempfile.TemporaryDirectory(prefix="authority-install-dac-") as directory:
+            base = Path(directory); base.chmod(0o755)
+            generation = base / "generation"
+            source, runtime = generation / "source", generation / "runtime"
+            binary = runtime / "bin"
+            directories = (generation, source, runtime, binary)
+            for path in directories: path.mkdir(mode=0o700)
+            executable = binary / "python3"
+            shutil.copyfile(sys.executable, executable); executable.chmod(0o555)
+            module = source / "public_fixture.py"
+            module.write_text("VALUE = 'public-source-read'\n"); module.chmod(0o444)
+            configuration = generation / "configuration.json"
+            configuration.write_bytes(b"synthetic-private-configuration"); configuration.chmod(0o400)
+            private, old_mode = base / "private-installation", base / "old-generation"
+            private.mkdir(mode=0o700); old_mode.mkdir(mode=0o750)
+            private_leaf, old_leaf = private / "receipt", old_mode / "public.py"
+            for path in (private_leaf, old_leaf): path.write_bytes(b"synthetic"); path.chmod(0o444)
+            leaves = (executable, module, configuration, private_leaf, old_leaf)
+            def identity(path):
+                info = path.stat()
+                return (info.st_dev, info.st_ino, info.st_size, stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
+            originals = {path: identity(path) for path in leaves}
+            for path in reversed(directories):
+                fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+                try:
+                    for invalid in (0o750, 0o777, True):
+                        with self.assertRaises(ValueError): install._set_generation_directory_mode(fd, invalid)
+                    self.assertEqual(stat.S_IMODE(os.fstat(fd).st_mode), 0o700)
+                    install._set_generation_directory_mode(fd, contract.LOCAL_GENERATION_DIRECTORY_MODE)
+                    info = os.fstat(fd)
+                    self.assertEqual((stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid), (0o755, 0, 0))
+                    with self.assertRaises(ValueError): install._set_generation_directory_mode(fd, 0o755)
+                finally: os.close(fd)
+            self.assertEqual({path: identity(path) for path in leaves}, originals)
+            probe = """import os, sys
+assert os.getresuid() == os.getresgid() == (65532, 65532, 65532)
+assert os.getgroups() == []
+os.chdir(sys.argv[1])
+sys.path.insert(0, os.getcwd())
+import public_fixture
+assert public_fixture.VALUE == 'public-source-read'
+for path in sys.argv[2:]:
+    try:
+        with open(path, 'rb'):
+            raise AssertionError('private path became readable')
+    except PermissionError:
+        pass
+print('UID65532_EXEC_IMPORT_AND_PRIVATE_DENIAL=1')
+"""
+            result = subprocess.run([str(executable), "-I", "-B", "-S", "-c", probe,
+                str(source), str(configuration), str(private_leaf), str(old_leaf)],
+                user=65532, group=65532, extra_groups=(), cwd="/", env={"PATH": os.defpath},
+                capture_output=True, text=True, timeout=10, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "UID65532_EXEC_IMPORT_AND_PRIVATE_DENIAL=1\n")
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(old_mode.stat().st_mode), 0o750)
+            self.assertEqual({path: identity(path) for path in leaves}, originals)
 
     def test_public_cli_is_fixed_and_all_handles_distinct(self):
         argv = ["--configuration-fd", "3", "--configuration-sha256", PIN, "--package-fd", "4", "--package-sha256", PIN,

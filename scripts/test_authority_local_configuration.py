@@ -170,6 +170,21 @@ def historical_configuration(selected, payload, root):
 
 
 class LocalConfigurationControls(unittest.TestCase):
+    def test_fresh_signing_rejects_v1_but_historical_preparation_keeps_originals(self):
+        from serverware import authority_local_database_credentials as credentials
+        selected, _, _ = fixture()
+        local._require_current_database_issuances(selected)
+        original = local.document(selected["databaseIssuanceOriginals"]["planner"].encode("ascii"), local.io.MAX_PUBLIC)
+        original["schema"] = credentials.LEGACY_ISSUANCE_SCHEMA
+        selected["databaseIssuanceOriginals"]["planner"] = local.spec.canonical_json_bytes(original).decode("ascii")
+        self.assertEqual(prepare(selected)["selected"], selected)
+        with self.assertRaises(ValueError): local._require_current_database_issuances(selected)
+        # Source-order control: the actual fresh owner applies this gate before
+        # private-key descriptor admission; this is not a live owner fixture.
+        source = inspect.getsource(local.LocalConfigurationIssuer.__init__)
+        self.assertLess(source.index("_require_current_database_issuances("),
+                        source.index("io._input(signing_key_fd"))
+
     def test_historical_policy_genesis_preserves_exact_configuration_binding(self):
         selected, payload, root = fixture()
         payload[local.generator.genesis_policy.FIELD] = dict(

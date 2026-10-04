@@ -27,16 +27,19 @@ from serverware.authority_artifact_spec import canonical_json_bytes as canonical
 from serverware.authority_local_artifacts import document, sha
 from serverware.authority_local_snapshot import _boot
 from serverware.authority_witness_journal import _rename_noreplace
+from serverware.authority_store.planner_read_sql import ROLE as PLANNER_ROLE
 
-APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialApproval/v1"
-ISSUANCE_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialIssuance/v1"
-INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialInventory/v1"
+APPROVAL_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialApproval/v2"
+ISSUANCE_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialIssuance/v2"
+INVENTORY_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialInventory/v2"
+LEGACY_ISSUANCE_SCHEMA = "serverware.authorityTrustedHostLocalDatabaseCredentialIssuance/v1"
 RUNTIME_DIRECTORY = "/run/serverware/database-tls"
 MAX_DOCUMENT = 65536
 MAX_OPERATION_NS = 300_000_000_000
 MAX_CERTIFICATE_SECONDS = 7 * 86400
 CA_NAME = "serverware-local-database-ca"
 FIXED_ROLES = {
+    "planner": PLANNER_ROLE,
     "planner-writer": "serverware_policy_authority_planner_writer",
     "issuer": "serverware_policy_capability_issuer",
     "completion-reader": "serverware_policy_authority_completion_reader",
@@ -74,12 +77,13 @@ def dns_name(value):
 
 
 def role_roster(value):
+    require(value["schema"] == APPROVAL_SCHEMA)
     roles = value["databaseRoles"]
     require(type(roles) is dict and set(roles) == {"metadata", "audit", "verifier", "executor"})
     for item in roles.values(): identifier(item)
-    selected = dict(FIXED_ROLES, planner=roles["metadata"], **{
+    selected = dict(FIXED_ROLES, **{"metadata-runtime": roles["metadata"],
         "audit-runtime": roles["audit"], "verifier": roles["verifier"], "executor": roles["executor"]})
-    require(len(set(selected.values())) == 12 and "serverware_policy_authority_owner" not in selected.values())
+    require(len(set(selected.values())) == 13 and "serverware_policy_authority_owner" not in selected.values())
     require(type(value["includeAuditReader"]) is bool)
     if value["includeAuditReader"]:
         require(AUDIT_READER not in selected.values())
@@ -129,16 +133,26 @@ def _name(text):
     return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, text)])
 
 
-def issuance(raw, *, purpose=None):
-    """Check actual public certificate originals, not issuance-owner/PG proof."""
+def issuance(raw, *, purpose=None, require_current=False):
+    """Authenticate originals; v1 decoding retains its historical planner meaning.
+
+    Fresh consumers require v2 explicitly. Neither version proves ownership,
+    installation or PostgreSQL admission, and v1 is never relabelled as v2.
+    """
     value = document(raw, MAX_DOCUMENT)
+    require(type(require_current) is bool)
     require(set(value) == {"schema", "purpose", "databaseRole", "database", "host", "port", "intendedOwner",
         "runtimeDirectory", "approvalSha256", "issuedAtUnixNanos", "caCertificateOriginal", "certificateOriginal", "claims"}
-        and value["schema"] == ISSUANCE_SCHEMA and canonical(value["claims"]) == canonical(CLAIMS))
-    allowed = set(FIXED_ROLES) | {"planner", "audit-runtime", "verifier", "executor", "audit-inclusion-reader"}
+        and value["schema"] in {ISSUANCE_SCHEMA, LEGACY_ISSUANCE_SCHEMA}
+        and (not require_current or value["schema"] == ISSUANCE_SCHEMA)
+        and canonical(value["claims"]) == canonical(CLAIMS))
+    current = value["schema"] == ISSUANCE_SCHEMA
+    fixed = FIXED_ROLES if current else {name: role for name, role in FIXED_ROLES.items() if name != "planner"}
+    allowed = set(fixed) | {"planner", "audit-runtime", "verifier", "executor", "audit-inclusion-reader"}
+    if current: allowed.add("metadata-runtime")
     require(value["purpose"] in allowed and (purpose is None or value["purpose"] == purpose))
     role = identifier(value["databaseRole"])
-    if value["purpose"] in FIXED_ROLES: require(role == FIXED_ROLES[value["purpose"]])
+    if value["purpose"] in fixed: require(role == fixed[value["purpose"]])
     if value["purpose"] == "audit-inclusion-reader": require(role == AUDIT_READER)
     require(value["runtimeDirectory"] == RUNTIME_DIRECTORY + "/" + value["purpose"])
     identifier(value["database"])
@@ -201,7 +215,8 @@ def _certificate(subject, key, ca, ca_key, selected, *, server=False):
 
 def material(selected, *, approval_sha256, issued_at_unix_ns, check):
     """Generate genuine material; pure callers cannot claim runtime installation."""
-    require(selected["issuedAtUnixNanos"] <= issued_at_unix_ns < selected["expiresAtUnixNanos"])
+    require(selected["schema"] == APPROVAL_SCHEMA
+        and selected["issuedAtUnixNanos"] <= issued_at_unix_ns < selected["expiresAtUnixNanos"])
     result, records = {}, {}
     def pair(name, subject, ca=None, ca_key=None, *, server=False):
         check()

@@ -256,6 +256,19 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
                 payloadDigest=payload_digest, deadline=selected["deadlineBoottimeNs"], epochLimit=selected["expiresAtUnixNanos"])
 
 
+def _require_current_database_issuances(selected):
+    """Fresh signing cannot turn historical v1 credentials into current authority.
+
+    Retained custody still validates its actual historical originals through
+    prepare/_service; only acquisition of a new signing owner is v2-only.
+    """
+    from serverware.authority_local_database_credentials import issuance
+
+    for role in sorted(SERVICE_ROLES):
+        issuance(selected["databaseIssuanceOriginals"][role].encode("ascii"),
+                 purpose=role, require_current=True)
+
+
 class LocalConfigurationIssuer:
     def __init__(self, *, approval_fd, approval_sha256, signing_key_fd):
         io._process()
@@ -270,6 +283,7 @@ class LocalConfigurationIssuer:
         self._previous_boot, self._previous_unix = io._clock(), time.time_ns()
         self._prepared = prepare(self._raw, boot=self._boot,
             now_boottime_ns=self._previous_boot, now_unix_ns=self._previous_unix)
+        _require_current_database_issuances(self._prepared["selected"])
         key_identity = io._input(signing_key_fd, 32, private=True)
         _require(key_identity[:2] != self._identity[:2])
         self._key_identity = key_identity

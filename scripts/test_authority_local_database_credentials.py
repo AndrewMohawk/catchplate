@@ -31,7 +31,7 @@ def selection(*, include_reader=False, now_unix_ns=None):
     selected["intendedOwners"] = {purpose:dict(uid=65000+index, gid=65000+index)
         for index, purpose in enumerate(["server", *local.role_roster(selected)])}
     for purpose, uid in (("planner", 65518), ("planner-writer", 65519), ("verifier", 65520),
-                         ("issuer", 65521), ("executor", 65522)):
+                         ("issuer", 65521), ("executor", 65522), ("metadata-runtime", 65532)):
         selected["intendedOwners"][purpose] = dict(uid=uid, gid=uid)
     return selected, now
 
@@ -73,7 +73,7 @@ def filesystem_scenario():
             try: owner.run(); owner.check()
             finally: owner.close()
             names = os.listdir(directory)
-            assert len(names) == 55 and "inventory.json" in names and not any(name.startswith(".") for name in names)
+            assert len(names) == 59 and "inventory.json" in names and not any(name.startswith(".") for name in names)
             assert "pg_hba.fragment" in names and (Path(path)/"pg_hba.fragment").read_bytes().startswith(b"hostssl ")
             inventory = local.document((Path(path)/"inventory.json").read_bytes(), local.MAX_DOCUMENT)
             for name, row in inventory["files"].items():
@@ -103,13 +103,15 @@ def filesystem_scenario():
 class LocalDatabaseCredentialControls(unittest.TestCase):
     def test_closed_roster_matches_foundation_and_optional_reader_is_separate(self):
         selected, _ = selection()
-        self.assertEqual(len(local.role_roster(selected)), 12)
+        self.assertEqual(len(local.role_roster(selected)), 13)
+        self.assertEqual(local.role_roster(selected)["planner"], "serverware_policy_authority_planner")
+        self.assertEqual(local.role_roster(selected)["metadata-runtime"], "pilot_metadata_runtime")
         self.assertNotIn("serverware_policy_authority_owner", local.role_roster(selected).values())
         from serverware import authority_contract
         self.assertEqual(local.FIXED_ROLES["successor-issuer"], authority_contract.SUCCESSOR_ISSUER_ROLE)
         self.assertEqual(local.FIXED_ROLES["completion-reader"], authority_contract.COMPLETION_READER_ROLE)
         selected["includeAuditReader"] = True
-        self.assertEqual(len(local.role_roster(selected)), 13)
+        self.assertEqual(len(local.role_roster(selected)), 14)
         from serverware import authority_local_audit_reader
         self.assertEqual(local.role_roster(selected)["audit-inclusion-reader"], authority_local_audit_reader.ROLE)
         selected["databaseRoles"]["metadata"] = "serverware_policy_authority_owner"
@@ -134,7 +136,59 @@ class LocalDatabaseCredentialControls(unittest.TestCase):
             self.assertEqual(identity["tlsIssuerDn"], "/CN="+local.CA_NAME)
             self.assertEqual(identity["credentialIssuanceDigest"], local.sha(raw))
             self.assertTrue(identity["tlsClientSerial"].isdigit())
-        self.assertEqual(len({local.issuance(raw)["tlsClientSerial"] for raw in f["originals"].values()}), 12)
+        self.assertEqual(len({local.issuance(raw)["tlsClientSerial"] for raw in f["originals"].values()}), 13)
+
+    def test_v2_planner_and_runtime_have_distinct_real_keys_certificates_and_roles(self):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from psycopg.conninfo import conninfo_to_dict
+        f = fixture()
+        identities, public_keys = {}, set()
+        for purpose, role, uid in (("planner", local.PLANNER_ROLE, 65518),
+                                   ("metadata-runtime", "pilot_metadata_runtime", 65532)):
+            raw = f["originals"][purpose]
+            original = local.document(raw, local.MAX_DOCUMENT)
+            self.assertEqual(original["schema"], local.ISSUANCE_SCHEMA)
+            self.assertEqual(original["intendedOwner"], dict(uid=uid, gid=uid))
+            identities[purpose] = local.issuance(raw, purpose=purpose, require_current=True)
+            self.assertEqual(identities[purpose]["databaseRole"], role)
+            key = serialization.load_pem_private_key(f["material"][purpose+".key.pem"], password=None)
+            cert = x509.load_pem_x509_certificate(f["material"][purpose+".cert.pem"])
+            public_key = local._public_key(key.public_key())
+            self.assertEqual(public_key, local._public_key(cert.public_key()))
+            public_keys.add(public_key)
+            dsn = conninfo_to_dict(f["material"][purpose+".dsn"].decode("ascii"))
+            self.assertEqual(dsn["user"], role)
+            self.assertEqual(dsn["sslkey"], local.RUNTIME_DIRECTORY+"/"+purpose+"/private-key.pem")
+        self.assertEqual(len(public_keys), 2)
+        self.assertNotEqual(identities["planner"]["tlsClientDn"], identities["metadata-runtime"]["tlsClientDn"])
+        self.assertNotEqual(identities["planner"]["tlsClientSerial"], identities["metadata-runtime"]["tlsClientSerial"])
+        inventory = local.document(f["material"]["inventory.json"], local.MAX_DOCUMENT)
+        self.assertEqual(inventory["schema"], local.INVENTORY_SCHEMA)
+        self.assertTrue(local.APPROVAL_SCHEMA.endswith("/v2"))
+        selected = dict(f["selected"], databaseRoles=dict(f["selected"]["databaseRoles"], metadata=local.PLANNER_ROLE))
+        with self.assertRaises(ValueError): local.approval(local.canonical(selected))
+
+    def test_historical_v1_keeps_old_planner_meaning_but_cannot_be_fresh_v2(self):
+        f = fixture()
+        # Synthetic historical v1 original with a genuine runtime-role certificate:
+        # v1's planner purpose was not the newly fixed read-only SQL role.
+        original = local.document(f["originals"]["metadata-runtime"], local.MAX_DOCUMENT)
+        original.update(schema=local.LEGACY_ISSUANCE_SCHEMA, purpose="planner",
+                        runtimeDirectory=local.RUNTIME_DIRECTORY+"/planner")
+        raw = local.canonical(original)
+        self.assertEqual(local.issuance(raw, purpose="planner")["databaseRole"], "pilot_metadata_runtime")
+        with self.assertRaises(ValueError): local.issuance(raw, purpose="planner", require_current=True)
+        with self.assertRaises(ValueError):
+            local.issuance(local.canonical(dict(original, schema=local.ISSUANCE_SCHEMA)), purpose="planner")
+        with self.assertRaises(ValueError):
+            local.issuance(local.canonical(dict(original, purpose="metadata-runtime",
+                runtimeDirectory=local.RUNTIME_DIRECTORY+"/metadata-runtime")))
+        old_approval = dict(f["selected"], schema=local.APPROVAL_SCHEMA.replace("/v2", "/v1"))
+        with self.assertRaises(ValueError): local.approval(local.canonical(old_approval))
+        with self.assertRaises(ValueError):
+            local.material(old_approval, approval_sha256=local.sha(local.canonical(old_approval)),
+                           issued_at_unix_ns=f["now_unix_ns"], check=lambda:None)
 
     def test_rebinding_wrong_ca_and_claimed_installation_refuse(self):
         first, second = fixture(), fixture()
@@ -155,7 +209,7 @@ class LocalDatabaseCredentialControls(unittest.TestCase):
             self.assertEqual(dsn["sslkey"], local.RUNTIME_DIRECTORY+"/"+purpose+"/private-key.pem")
             self.assertNotIn("password", dsn)
         hba = f["material"]["pg_hba.fragment"].decode("ascii")
-        self.assertEqual(hba.count(" cert clientname=CN\n"), 12)
+        self.assertEqual(hba.count(" cert clientname=CN\n"), 13)
         self.assertNotIn(" trust", hba)
         self.assertNotIn("serverware_policy_authority_owner", hba)
         self.assertFalse(local.CLAIMS["databaseSessionObserved"])

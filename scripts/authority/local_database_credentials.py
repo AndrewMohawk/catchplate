@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 USAGE = """Usage: python -I -B scripts/authority/local_database_credentials.py --approval-fd N --approval-sha256 sha256:HEX --output-directory-fd N
 
 Explicit metadata-bootstrap process mode, nonproduction development channel.
-Protected root0400 approval pins an empty root0700 output directory, twelve
+Protected root0400 approval pins an empty root0700 output directory, thirteen
 existing LOGIN identities, intended owners, server DNS name/client network and
 original operation/certificate bounds. Optional separately provisioned local
 audit reader adds only its fixed purpose; no NOLOGIN owner credential is issued.

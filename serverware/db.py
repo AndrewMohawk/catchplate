@@ -50,6 +50,7 @@ from serverware.authority_store import (
 from serverware.authority_store import schema as _authority_schema
 from serverware.authority_store import v9_schema_source as _authority_v9_schema_source
 from serverware.authority_store import planner_writer_sql as _authority_planner_writer_sql
+from serverware.authority_store import planner_read_sql as _authority_planner_read_sql
 from serverware.authority_store import verifier_read_sql as _authority_verifier_read_sql
 from serverware.authority_store import completion_read_sql as _authority_completion_read_sql
 from serverware.authority_store import successor_execution_sql as _successor_execution_sql
@@ -3603,6 +3604,14 @@ def _seal_postgres_schema_acl(
         _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
         "serverware_candidate_authority_expected_v9",
     }
+    if completion_enabled and _authority_planner_read_sql.ROLE in {
+        runtime_role, authority_executor_role, authority_verifier_role, authority_owner_role,
+        authority_capability_issuer_role, authority_planner_writer_role,
+        _METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE, authority_contract.SUCCESSOR_ISSUER_ROLE,
+        authority_contract.SUCCESSOR_EXECUTOR_ROLE, authority_contract.SUCCESSOR_RECOVERY_ROLE,
+        _policy_file_read_sql.ROLE, _policy_file_genesis_sql.ROLE,
+    }:
+        raise error_type("metadata planner reader must be a separate fixed role")
     if completion_enabled and {_policy_file_read_sql.ROLE, _policy_file_genesis_sql.ROLE} & {
         runtime_role, authority_executor_role, authority_verifier_role, authority_owner_role,
         authority_capability_issuer_role, authority_planner_writer_role,
@@ -4348,6 +4357,11 @@ def _seal_postgres_schema_acl(
                 + " OWNER TO "
                 + owner_role_name
             )
+        if completion_enabled:
+            try:
+                _authority_planner_read_sql.seal_planner_read_acl(cur, namespace=schema)
+            except ValueError as exc:
+                raise error_type("PostgreSQL planner read ACL sealing refused") from exc
         unexpected = cur.execute(
             "SELECT DISTINCT grantee.rolname AS role_name "
             "FROM pg_catalog.pg_class AS relation "
@@ -4365,6 +4379,7 @@ def _seal_postgres_schema_acl(
             "AND grantee.rolname <> %s "
             "AND grantee.rolname <> %s "
             "AND grantee.rolname <> %s "
+            "AND grantee.rolname <> %s "
             "AND grantee.rolname <> %s LIMIT 1",
             (
                 schema,
@@ -4373,6 +4388,7 @@ def _seal_postgres_schema_acl(
                 verifier_role,
                 planner_writer_role,
                 completion_role,
+                _authority_planner_read_sql.ROLE if completion_enabled else runtime_role,
             ),
         ).fetchone()
         unexpected_function = cur.execute(
@@ -20529,6 +20545,7 @@ def _policy_authority_owner_verification_profile_digest(
             "fullClosureVerification":
                 "offline-bootstrap-and-explicit-authority-audit",
             "plannerWriterPrivilegeContract": planner_writer_privilege_contract,
+            "plannerReadPrivilegeContract": _authority_planner_read_sql.privilege_contract(),
             "verifierSessionContract": verifier_session_contract,
             "verifierMeasurementDigest": verifier_measurement_digest,
             "verifierProcessModes": [

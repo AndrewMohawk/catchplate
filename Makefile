@@ -885,6 +885,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_global_audit_capacity_postgres.py \
 	scripts/test_authority_verifier_read_postgres.py \
 	scripts/test_authority_planner_writer_postgres.py \
+	scripts/test_authority_planner_readonly_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \
 	scripts/test_authority_counted_hash_postgres.py \
 	scripts/test_authority_counted_projection_postgres.py \
@@ -1071,6 +1072,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/metadata_schema_source.py \
 	serverware/authority_store/mutation_sql.py \
 	serverware/authority_store/planner_connection.py \
+	serverware/authority_store/planner_read_sql.py \
 	serverware/authority_store/planner_writer_sql.py \
 	serverware/authority_store/postgres_trigger_manifest.py \
 	serverware/authority_store/primary_tree_sql.py \
@@ -4104,6 +4106,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_writer_producers.py \
 				serverware/authority_revocation_coordinator.py \
 				serverware/authority_store/planner_connection.py \
+				serverware/authority_store/planner_read_sql.py \
 				serverware/authority_store/authorization_records.py \
 				serverware/authority_store/revocation_capability.py \
 				serverware/authority_store/revocation_capability_sql.py \
@@ -11006,6 +11009,13 @@ verify-authority-planner-writer:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
 	python3 scripts/test_authority_planner_writer_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
+
+# Catalog-only component fixture, not TLS or full bootstrap admission coverage.
+.PHONY: verify-authority-planner-readonly
+verify-authority-planner-readonly:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	python3 scripts/test_authority_planner_readonly_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py

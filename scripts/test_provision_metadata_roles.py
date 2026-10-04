@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from serverware import authority_contract
 from serverware import db as database
-from serverware.authority_store import policy_file_read_sql, policy_file_genesis_sql
+from serverware.authority_store import planner_read_sql, policy_file_read_sql, policy_file_genesis_sql
 
 spec = importlib.util.spec_from_file_location("provision_metadata_roles", Path(__file__).with_name("provision_metadata_roles.py"))
 cli = importlib.util.module_from_spec(spec)
@@ -53,16 +53,19 @@ def environment():
 
 
 class MetadataRoleProvisioningTests(unittest.TestCase):
-    def test_closed_plan_is_thirteen_roles_with_only_owner_nologin(self):
+    def test_closed_plan_is_fourteen_roles_with_only_owner_nologin(self):
         db = fixture()
         plan = cli.role_plan(db)
-        self.assertEqual(len(plan), 13)
+        self.assertEqual(len(plan), 14)
+        self.assertIn((planner_read_sql.ROLE, True), plan)
+        self.assertNotEqual(planner_read_sql.ROLE, db._METADATA_STORE_RUNTIME_ROLE)
         self.assertEqual([name for name, login in plan if not login], [db._METADATA_STORE_AUTHORITY_OWNER_ROLE])
         self.assertIn((authority_contract.SUCCESSOR_ISSUER_ROLE, True), plan)
         self.assertIn((policy_file_genesis_sql.ROLE, True), plan)
 
     def test_role_aliases_and_invalid_identifiers_refuse(self):
         for field, value in (("_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE", "pilot_metadata_runtime"),
+                             ("_METADATA_STORE_RUNTIME_ROLE", planner_read_sql.ROLE),
                              ("_AUDIT_STORE_RUNTIME_ROLE", "serverware_policy_authority_owner"),
                              ("_METADATA_STORE_RUNTIME_ROLE", 'bad";SELECT 1')):
             db = fixture()
@@ -71,7 +74,7 @@ class MetadataRoleProvisioningTests(unittest.TestCase):
                 cli.role_plan(db)
         db = fixture()
         db._AUDIT_STORE_RUNTIME_ROLE = db._METADATA_STORE_RUNTIME_ROLE
-        self.assertEqual(len(cli.role_plan(db)), 12)
+        self.assertEqual(len(cli.role_plan(db)), 13)
 
     def test_help_plan_and_apply_are_explicit_and_do_not_echo_secrets(self):
         for arguments, expected, connects in ((["--help"], 0, False), (["--plan"], 0, False),

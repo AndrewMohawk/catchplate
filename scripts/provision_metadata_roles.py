@@ -50,11 +50,14 @@ def _load_db():
 
 
 def role_plan(db) -> tuple[tuple[str, bool], ...]:
+    from serverware.authority_store.planner_read_sql import ROLE as planner_role
+
     roles = [
         (db._METADATA_STORE_RUNTIME_ROLE, True),
         (db._METADATA_STORE_AUTHORITY_EXECUTOR_ROLE, True),
         (db._METADATA_STORE_AUTHORITY_VERIFIER_ROLE, True),
         (db._METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE, True),
+        (planner_role, True),
         (db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE, True),
         (db._METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE, True),
         (db.authority_contract.SUCCESSOR_ISSUER_ROLE, True),

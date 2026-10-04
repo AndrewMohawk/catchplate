@@ -50,6 +50,7 @@ class PackageSignatureDigestReuseControls(unittest.TestCase):
         if fixture["verified"].disposition != "CurrentExactRetry":
             raise AssertionError("synthetic package did not pass real verification")
         package = json.loads(spec.canonical_json_bytes(fixture["package"]))
+        cls.package = package
         cls.bundle = package["bundle"]
         cls.generation = package["generation"]
 
@@ -116,6 +117,61 @@ class PackageSignatureDigestReuseControls(unittest.TestCase):
             bundle["files"][0]["size"] = -1
             with self.assertRaises(spec.ArtifactContractError):
                 spec.package_signature_message(PURPOSES[0], bundle, generation)
+            self.assertEqual(digest.call_count, 3)
+            self.assertEqual(validate.call_count, 3)
+
+    def test_signed_package_validation_preserves_package_and_digest_bytes(self):
+        package = deepcopy(self.package)
+        before = spec.canonical_json_bytes(package)
+        # Literal unchanged signed-package digest formula, not a mocked result.
+        expected = spec.domain_digest(spec.SIGNED_PACKAGE_DIGEST_DOMAIN, before)
+        self.assertIsNone(spec.validate_signed_artifact_package(package))
+        self.assertEqual(spec.canonical_json_bytes(package), before)
+        self.assertEqual(spec.signed_artifact_package_digest(package), expected)
+
+    def test_signed_package_keeps_bundle_before_generation_refusals(self):
+        for refusal in ("bundle", "generation", "both"):
+            with self.subTest(refusal=refusal):
+                package = deepcopy(self.package)
+                if refusal in {"bundle", "both"}:
+                    package["bundle"]["files"][0]["size"] = -1
+                if refusal in {"generation", "both"}:
+                    package["generation"]["artifactBundleDigest"] = "sha256:" + "0" * 64
+                # Exact old validation prefix for the changed boundary; all
+                # downstream bindings/signature checks remain real and intact.
+                with self.assertRaises(spec.ArtifactContractError) as old:
+                    spec.validate_artifact_bundle(package["bundle"])
+                    spec.validate_generation_statement(package["generation"],
+                        expected_bundle_digest=spec.artifact_bundle_digest(package["bundle"]))
+                with patch.object(spec, "validate_generation_statement",
+                        wraps=spec.validate_generation_statement) as generation:
+                    with self.assertRaises(spec.ArtifactContractError) as current:
+                        spec.validate_signed_artifact_package(package)
+                self.assertEqual(str(current.exception), str(old.exception))
+                if refusal in {"bundle", "both"}:
+                    generation.assert_not_called()
+        package = deepcopy(self.package)
+        package["schema"] = "invalid"
+        with patch.object(spec, "artifact_bundle_digest", wraps=spec.artifact_bundle_digest) as digest:
+            with self.assertRaises(spec.ArtifactContractError):
+                spec.validate_signed_artifact_package(package)
+            digest.assert_not_called()
+
+    def test_signed_package_validates_bundle_once_per_call_without_cache(self):
+        package = deepcopy(self.package)
+        bundle = package["bundle"]
+        with patch.object(spec, "artifact_bundle_digest", wraps=spec.artifact_bundle_digest) as digest, \
+                patch.object(spec, "validate_artifact_bundle", wraps=spec.validate_artifact_bundle) as validate, \
+                patch.object(spec, "canonical_json_bytes", wraps=spec.canonical_json_bytes) as canonical:
+            for count in (1, 2):
+                self.assertIsNone(spec.validate_signed_artifact_package(package))
+                self.assertEqual(digest.call_count, count)
+                self.assertEqual(validate.call_count, count)
+                self.assertIs(validate.call_args.args[0], bundle)
+                self.assertEqual(sum(call.args[0] is bundle for call in canonical.call_args_list), count)
+            bundle["files"][0]["size"] = -1
+            with self.assertRaises(spec.ArtifactContractError):
+                spec.validate_signed_artifact_package(package)
             self.assertEqual(digest.call_count, 3)
             self.assertEqual(validate.call_count, 3)
 

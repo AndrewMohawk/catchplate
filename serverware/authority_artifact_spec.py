@@ -3477,10 +3477,10 @@ def validate_signed_artifact_package(package: Mapping[str, Any]) -> None:
     )
     if value["schema"] != SIGNED_PACKAGE_SCHEMA:
         raise ArtifactContractError("signed package schema changed")
-    validate_artifact_bundle(value["bundle"])
+    validated_bundle_digest = artifact_bundle_digest(value["bundle"])
     validate_generation_statement(
         value["generation"],
-        expected_bundle_digest=artifact_bundle_digest(value["bundle"]),
+        expected_bundle_digest=validated_bundle_digest,
     )
     _validate_generation_bundle_bindings(
         value["bundle"], value["generation"], value["trustMaterial"]

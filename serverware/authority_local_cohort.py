@@ -143,6 +143,9 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns, archive_origi
         context = pair.prepare(source["launchApproval"], source["observation"], boot=boot,
             now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
         payload, declared = context["payload"], context["selected"]
+        # pair.prepare already checked these exact canonical bytes; reuse only
+        # within this role's current validation, never across owner checks.
+        payload_raw = declared["payloadOriginal"].encode("ascii")
         require(payload["role"] == role and context["rootPublic"] == root_raw
             and declared["exchangeDirectory"] == pins["exchangeDirectory"])
         for first, last in (("issuedAtBoottimeNs", "deadlineBoottimeNs"), ("issuedAtUnixNanos", "expiresAtUnixNanos")):
@@ -162,9 +165,9 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns, archive_origi
         manifest = document(source["manifest"], pair.LATE_LIMITS["manifest.json"])
         require(set(manifest) == {"schema", "payload", "signature"}
             and manifest["schema"] == launch.LAUNCH_MANIFEST_SCHEMA
-            and canonical(manifest["payload"]) == declared["payloadOriginal"].encode("ascii"))
+            and canonical(manifest["payload"]) == payload_raw)
         root.verify(spec.strict_base64url_decode(manifest["signature"], name="launch signature", decoded_size=64),
-            launch._domain_digest(launch.LAUNCH_MANIFEST_SCHEMA, canonical(payload)).encode("ascii"))
+            launch._domain_digest(launch.LAUNCH_MANIFEST_SCHEMA, payload_raw).encode("ascii"))
         certificate = document(source["certificate"], pair.LATE_LIMITS["certificate.json"])
         stage.validate_signed_launch_identity(certificate, request=payload["stageZeroRequest"], **context["kwargs"])
         require(certificate["payload"] == pair.certificate_payload(payload["stageZeroRequest"],
@@ -174,7 +177,7 @@ def prepare(raw, originals, *, boot, now_boottime_ns, now_unix_ns, archive_origi
         require(pair._epoch(request["launch"]["validFrom"]) <= runtime_start < runtime_end
             <= pair._epoch(request["launch"]["validUntil"])
             and runtime_end <= pair._epoch(context["issuer"].not_after))
-        identities[role] = (launch._domain_digest(launch.LAUNCH_PAYLOAD_SCHEMA, canonical(payload)),
+        identities[role] = (launch._domain_digest(launch.LAUNCH_PAYLOAD_SCHEMA, payload_raw),
             stage.stage_zero_request_digest(payload["stageZeroRequest"], **context["kwargs"]))
         contexts[role] = context
     service_raw = selected["serviceConfigurationOriginal"].encode("ascii")

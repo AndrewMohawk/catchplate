@@ -88,6 +88,62 @@ def select_archive(context, key, payload):
 
 
 class LocalCohortTests(unittest.TestCase):
+    def _prepare_payload_codec(self, payload, declared, manifest, key):
+        # Execute only the actual byte equality/signature/digest expressions.
+        # This synthetic codec control does not claim package or live admission.
+        tree = ast.parse(Path(subject.__file__).read_text())
+        prepare = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "prepare")
+        loop = next(node for node in prepare.body if isinstance(node, ast.For) and ast.unparse(node.target) == "role")
+        assignments = {ast.unparse(node.targets[0]): node for node in loop.body if isinstance(node, ast.Assign)}
+        raw = assignments["payload_raw"]
+        self.assertLess(assignments["context"].lineno, raw.lineno)
+        self.assertEqual(ast.unparse(assignments["context"].value.func), "pair.prepare")
+        manifest_at = loop.body.index(assignments["manifest"])
+        body = [raw, *loop.body[manifest_at:manifest_at + 3]]
+        identity = assignments["identities[role]"].value.elts[0]
+        namespace = dict(subject.__dict__, payload=payload, declared=declared,
+            source={"manifest": manifest}, root=key.public_key())
+        exec(compile(ast.Module(body=body, type_ignores=[]), subject.__file__, "exec"), namespace)
+        return eval(compile(ast.Expression(identity), subject.__file__, "eval"), namespace)
+
+    def test_prepare_reuses_canonical_payload_bytes_only_within_invocation(self):
+        key = Ed25519PrivateKey.from_private_bytes(b"\x24" * 32)
+        results = []
+        for label in ("first", "second"):
+            payload = {"publicSyntheticPayload": label}
+            raw = subject.canonical(payload)
+            declared = {"payloadOriginal": raw.decode("ascii")}
+            manifest = subject.canonical(dict(schema=subject.launch.LAUNCH_MANIFEST_SCHEMA,
+                payload=payload, signature=subject.spec.strict_base64url_encode(key.sign(
+                    subject.launch._domain_digest(subject.launch.LAUNCH_MANIFEST_SCHEMA, raw).encode("ascii")))))
+            expected = subject.launch._domain_digest(subject.launch.LAUNCH_PAYLOAD_SCHEMA, raw)
+            with patch.object(subject, "canonical", wraps=subject.canonical) as serialize:
+                result = self._prepare_payload_codec(payload, declared, manifest, key)
+                # The manifest equality still serializes its independently
+                # parsed payload; neither domain hash serializes it again.
+                serialize.assert_called_once_with(payload)
+            self.assertEqual(result, expected)
+            results.append(result)
+        self.assertNotEqual(*results)
+
+    def test_prepare_payload_reuse_keeps_manifest_and_signature_refusals(self):
+        key = Ed25519PrivateKey.from_private_bytes(b"\x24" * 32)
+        payload = {"publicSyntheticPayload": "original"}
+        raw = subject.canonical(payload)
+        declared = {"payloadOriginal": raw.decode("ascii")}
+        envelope = dict(schema=subject.launch.LAUNCH_MANIFEST_SCHEMA, payload=payload,
+            signature=subject.spec.strict_base64url_encode(key.sign(subject.launch._domain_digest(
+                subject.launch.LAUNCH_MANIFEST_SCHEMA, raw).encode("ascii"))))
+        changed = deepcopy(envelope)
+        changed["payload"]["publicSyntheticPayload"] = "different"
+        with self.assertRaises(ValueError):
+            self._prepare_payload_codec(payload, declared, subject.canonical(changed), key)
+        changed = deepcopy(envelope)
+        changed["signature"] = subject.spec.strict_base64url_encode(bytes(64))
+        from cryptography.exceptions import InvalidSignature
+        with self.assertRaises(InvalidSignature):
+            self._prepare_payload_codec(payload, declared, subject.canonical(changed), key)
+
     def test_retained_v4_requires_exact_selection_pin_and_original(self):
         _, selected, context = retained_fixture()
         self.assertEqual(subject.approval(subject.canonical(selected), boot=digest("boot"),

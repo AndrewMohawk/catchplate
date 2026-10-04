@@ -35,6 +35,7 @@ from serverware import authority_artifact_spec
 from serverware import authority_stage_zero_contract
 from serverware import authority_transition_registry
 from serverware import authority_witness_capacity as capacity
+from serverware.authority_denial_diagnostics import report_denial
 from serverware.authority_witness_journal import JournalConflict, WitnessJournalIO
 
 
@@ -2605,7 +2606,6 @@ class WitnessServer:
                 float(self.configuration["requestTimeoutSeconds"])
             )
             pid, uid, gid = _peer_identity(connection)
-            peer_process = _capture_peer_process(pid)
             request, canonical_request = _receive(connection)
             if request.get("phase") == "credential-release-consume":
                 peer = self.configuration[
@@ -2625,6 +2625,11 @@ class WitnessServer:
                 raise WitnessError(
                     "witness peer identity is not allowed"
                 )
+            # Only credential consumption binds a certified live process.
+            # Verifier requests use SO_PEERCRED and the pinned signing key;
+            # they need not inspect another unprivileged UID's proc namespace.
+            if request.get("phase") == "credential-release-consume":
+                peer_process = _capture_peer_process(pid)
             response = self.witness.transition_bytes(
                 request,
                 canonical_request,
@@ -2632,6 +2637,7 @@ class WitnessServer:
             )
             _send_canonical(connection, response)
         except Exception as exc:
+            report_denial("replay-witness", exc)
             try:
                 _send(
                     connection,

@@ -771,6 +771,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_metadata_initialization_declaration.py \
 	scripts/test_authority_issuer_source.py \
 	scripts/test_authority_witness_transport_source.py \
+	scripts/test_authority_witness_peer_phase.py \
 	scripts/test_authority_verifier_read_source.py \
 	scripts/test_authority_planner_writer_source.py \
 	scripts/test_authority_transition_registry.py \

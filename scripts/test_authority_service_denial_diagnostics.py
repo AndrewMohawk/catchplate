@@ -17,6 +17,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "serverware/authority_service.py"
+DIAGNOSTICS_SOURCE = ROOT / "serverware/authority_denial_diagnostics.py"
 SECRET = "synthetic-secret-message-token-and-dsn"
 SECRET_PATH = "/synthetic-private-path-token/"
 
@@ -27,9 +28,12 @@ class DenialDiagnosticTests(unittest.TestCase):
         if SOURCE.stat().st_size > 2 * 1024 * 1024:
             raise AssertionError("source exceeds focused fixture bound")
         cls.tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-        cls.helper = next(node for node in cls.tree.body
+        if DIAGNOSTICS_SOURCE.stat().st_size > 16384:
+            raise AssertionError("diagnostic source exceeds focused fixture bound")
+        diagnostic_tree = ast.parse(DIAGNOSTICS_SOURCE.read_text(encoding="utf-8"))
+        cls.helper = next(node for node in diagnostic_tree.body
                           if isinstance(node, ast.FunctionDef)
-                          and node.name == "_denial_diagnostics")
+                          and node.name == "report_denial")
         cls.catches = {}
         for name in ("AuthorityRuntimeRelay", "AuthorityServer"):
             owner = next(node for node in cls.tree.body
@@ -66,8 +70,8 @@ class DenialDiagnosticTests(unittest.TestCase):
             fcntl=SimpleNamespace(fcntl=read_flags, F_GETFL=fcntl.F_GETFL),
         )
         exec(compile(ast.Module(body=[copy.deepcopy(self.helper)], type_ignores=[]),
-                     str(SOURCE), "exec"), namespace)
-        return namespace["_denial_diagnostics"], writes, flag_reads, namespace
+                     str(DIAGNOSTICS_SOURCE), "exec"), namespace)
+        return namespace["report_denial"], writes, flag_reads, namespace
 
     @staticmethod
     def error(depth=0, *, filename=SECRET_PATH + "authority_service.py", name="fail"):
@@ -132,6 +136,24 @@ class DenialDiagnosticTests(unittest.TestCase):
         diagnostic("authority-server", self.error(filename=SECRET_PATH + "bad name.py",
                                                   name="X" * 97))
         self.assertIn(b":unavailable:unavailable:3\n", writes.pop())
+
+    def test_replay_witness_stage_and_exact_service_alias(self):
+        aliases = [(alias.name, alias.asname) for node in self.tree.body
+                   if isinstance(node, ast.ImportFrom)
+                   and node.module == "serverware.authority_denial_diagnostics"
+                   for alias in node.names]
+        self.assertEqual(aliases, [("report_denial", "_denial_diagnostics")])
+        diagnostic, writes, flags, _namespace = self.diagnostic()
+        diagnostic("replay-witness", self.error())
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(flags, [])
+        output = writes[0].decode("ascii")
+        self.assertIn("AUTHORITY_DENIAL_STAGE=replay-witness\n", output)
+        self.assertIn("AUTHORITY_DENIAL_TYPE=0:ValueError\n", output)
+        self.assertIn(":authority_service.py:fail:3\n", output)
+        for secret in (SECRET, SECRET_PATH, "requestId", "{'", "ValueError("):
+            self.assertNotIn(secret, output)
+        self.assertLessEqual(len(writes[0]), 4096)
 
     def test_sink_skips_no_flag_mutation_or_retry_and_introspection_failure(self):
         for options in ({"mode": stat.S_IFIFO | 0o600},

@@ -610,6 +610,7 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_onboarding_evidence.py \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
+	scripts/test_npm_weekday_hours_example.py \
 	scripts/test_agent_trust_import_identity.py \
 	scripts/test_codebase_attestation.py \
 	scripts/test_native_postgres_contract.py \
@@ -10942,6 +10943,7 @@ verify-production-release-proof: verify-production-launch-assets verify-launch-a
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:
+	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_npm_weekday_hours_example.py
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_credential_constraints.py
 	$(MITMPROXY_TEST_RUN) python scripts/test_credential_constraints.py --proxy-transport-only
 	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml

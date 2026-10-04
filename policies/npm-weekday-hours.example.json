@@ -1,0 +1,267 @@
+{
+  "apiVersion": "serverware.policy/v1",
+  "kind": "PolicyBundle",
+  "metadata": {
+    "id": "serverware-npm-weekday-hours-example",
+    "sequence": 1,
+    "rollbackEpoch": 1
+  },
+  "defaults": {
+    "action": "deny",
+    "failMode": "closed",
+    "unknownHosts": "block",
+    "unknownPaths": "block",
+    "validationFailure": "block"
+  },
+  "principals": [
+    {
+      "id": "agent:example-mtls",
+      "sourceCidrs": [
+        "10.0.0.0/8"
+      ],
+      "mtls": {
+        "verifiedByTrustedIngress": true,
+        "sanSpiffeIds": [
+          "spiffe://agents.example.test/agent/example"
+        ],
+        "sanDnsNames": [
+          "example-agent.agents.example.test"
+        ],
+        "sanUris": [
+          "urn:serverware:agent:example"
+        ],
+        "certificateSha256": "sha256:c2a5140ef6d8a3bc5472798f00b4bd22d33826d0a7d17724e68a4bb86b87c21f",
+        "spkiSha256": "sha256:1f4d8c8b7a3e90d2c6f547ab16a0be23447b7bb192332eec9b3f76c93ad283fe",
+        "issuerSpkiSha256": "sha256:5bcf9e3428ea16b49a96a2e8d2ecf2d6557a39219db2b8b53ca99c8f55d844e1"
+      }
+    }
+  ],
+  "credentials": [
+    {
+      "id": "cred-npm",
+      "credentialType": "static",
+      "provider": "npm",
+      "providerSubject": "replace-with-verified-npm-account",
+      "injection": {
+        "type": "bearer",
+        "header": "Authorization"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "example.npm.publish.weekday_utc.yubikey_jit",
+      "principals": [
+        "agent:example-mtls"
+      ],
+      "match": {
+        "scheme": "https",
+        "host": "registry.npmjs.org",
+        "port": 443,
+        "methods": [
+          "PUT",
+          "POST",
+          "DELETE"
+        ],
+        "paths": [
+          "/{package}",
+          "/{package}/-rev/{revision}",
+          "/{package}/-/{tarball}/-rev/{revision}",
+          "/-/package/{package}/dist-tags/{tag}",
+          "/-/package/{package}/access",
+          "/-/npm/v1/tokens",
+          "/-/npm/v1/tokens/token/{token}",
+          "/-/npm/v1/user",
+          "/-/team/{scope}/{team}/package"
+        ]
+      },
+      "credentialRef": "cred-npm",
+      "adapter": {
+        "type": "npm.registry",
+        "config": {
+          "credentialBinding": {
+            "credentialType": "static",
+            "provider": "npm",
+            "subjects": [
+              "replace-with-verified-npm-account"
+            ],
+            "secretClass": "automationToken"
+          },
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "accept-encoding",
+              "npm-auth-type",
+              "npm-command",
+              "npm-in-ci",
+              "npm-otp",
+              "npm-scope",
+              "user-agent"
+            ],
+            "discardHeaders": [
+              "npm-session"
+            ],
+            "allowedQueryKeys": [],
+            "allowedMediaTypes": [
+              "application/json"
+            ],
+            "maxBodyBytes": 16777216,
+            "valueRules": []
+          },
+          "operations": [
+            "publish",
+            "unpublish",
+            "distTagWrite",
+            "tokenWrite",
+            "metadataWrite"
+          ],
+          "publishResponseContract": "npm-public-registry-receipt-v1",
+          "response": {
+            "mode": "json",
+            "maxBodyBytes": 65536,
+            "contentTypes": [
+              "application/json"
+            ],
+            "allowedFields": [
+              "ok",
+              "published"
+            ],
+            "allowedHeaders": [],
+            "error": {
+              "mode": "json",
+              "maxBodyBytes": 65536,
+              "allowedFields": [
+                "error",
+                "reason",
+                "code"
+              ],
+              "allowedHeaders": [
+                "retry-after"
+              ],
+              "onInvalid": "block"
+            }
+          }
+        }
+      },
+      "constraints": [
+        {
+          "id": "npm-illustrative-weekday-hours",
+          "description": "Illustrative hours and timezone for later operator review: Monday-Friday 09:00 inclusive to 17:00 exclusive UTC. Replace and independently verify the example workload mTLS pins and npm account/credential bindings, and approve the schedule before deployment.",
+          "type": "requestTimeWindow",
+          "timezone": "UTC",
+          "weekdays": [
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri"
+          ],
+          "dailyWindows": [
+            {
+              "start": "09:00",
+              "end": "17:00"
+            }
+          ]
+        },
+        {
+          "id": "npm-common-writes-require-jit",
+          "description": "Only the npm.registry adapter's closed write operations are admitted; the route-level JIT block separately requires one hardware-attested WebAuthn approval consumed at each forward start.",
+          "type": "operationPolicy",
+          "allowedOperations": [
+            "npm.publish",
+            "npm.unpublish",
+            "npm.distTagWrite",
+            "npm.tokenWrite",
+            "npm.metadataWrite"
+          ]
+        },
+        {
+          "id": "npm-write-response-envelope",
+          "type": "responseEnvelope",
+          "phase": "response",
+          "operations": [
+            "npm.publish",
+            "npm.unpublish",
+            "npm.distTagWrite",
+            "npm.tokenWrite",
+            "npm.metadataWrite"
+          ],
+          "statusCodes": [
+            200,
+            201,
+            400,
+            401,
+            403,
+            404,
+            409,
+            422,
+            429,
+            500,
+            502,
+            503
+          ],
+          "bodyPresence": "required",
+          "contentTypes": [
+            "application/json"
+          ],
+          "allowedResponseHeaderNames": [
+            "retry-after"
+          ],
+          "responseHeaderRules": [
+            {
+              "name": "retry-after",
+              "required": false,
+              "predicate": {
+                "kind": "pattern",
+                "pattern": "^[0-9]{1,6}$",
+                "maxLength": 6
+              }
+            }
+          ]
+        }
+      ],
+      "jit": {
+        "required": true,
+        "mode": "perOperation",
+        "ttlSeconds": 30,
+        "maxUses": 1,
+        "consumeOn": "forwardStart",
+        "binding": {
+          "type": "operationDigest",
+          "fields": [
+            "principal",
+            "routeId",
+            "credentialRef",
+            "credentialVersion",
+            "policyHash",
+            "method",
+            "authority",
+            "path",
+            "query",
+            "selectedHeaders",
+            "bodySha256",
+            "operation",
+            "packageName",
+            "packageVersion",
+            "tarballIntegrity"
+          ]
+        },
+        "approvers": {
+          "quorum": 1,
+          "users": [
+            "user:release-manager"
+          ],
+          "authn": {
+            "webauthnRequired": true,
+            "userVerification": "required",
+            "allowedAuthenticatorClasses": [
+              "yubikey",
+              "hardware"
+            ],
+            "requireHardwareAttestation": true
+          }
+        }
+      }
+    }
+  ]
+}

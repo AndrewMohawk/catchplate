@@ -7,6 +7,7 @@ or hardware-backed custody; Python key copies are not claimed to be erased.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ from serverware import authority_artifact_spec as spec
 from serverware import authority_primary_contract as primary
 from serverware import authority_launcher as launcher
 from serverware.authority_local_artifacts import sha
+from serverware.authority_local_install import _owning
 from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 SCHEMA = "serverware.authorityTrustedHostLocalConfigurationApproval/v1"
@@ -257,6 +259,7 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
 class LocalConfigurationIssuer:
     def __init__(self, *, approval_fd, approval_sha256, signing_key_fd):
         io._process()
+        self._pid = os.getpid()
         _require(type(approval_fd) is int and type(signing_key_fd) is int
                  and approval_fd >= 3 and signing_key_fd >= 3 and approval_fd != signing_key_fd)
         self._fd, self._key_fd = approval_fd, signing_key_fd
@@ -271,11 +274,14 @@ class LocalConfigurationIssuer:
         _require(key_identity[:2] != self._identity[:2])
         self._key_identity = key_identity
         self._used = False
+        self._issued_original = None
+        self._public_custody_attempted = False
         self.check()
 
     def check(self):
         now_boot, now_unix = io._clock(), time.time_ns()
-        _require(self._previous_boot <= now_boot < self._prepared["deadline"]
+        _require(os.getpid() == self._pid
+            and self._previous_boot <= now_boot < self._prepared["deadline"]
             and self._previous_unix <= now_unix < self._prepared["epochLimit"]
             and launcher._boot_identity_digest() == self._boot
             and io._input(self._fd, io.MAX_PUBLIC) == self._identity
@@ -299,8 +305,111 @@ class LocalConfigurationIssuer:
         self.check()
         raw = spec.canonical_json_bytes(envelope)
         _require(len(raw) <= MAX_CONFIGURATION)
+        self._issued_original = raw  # Only a fully successful issue can transfer custody.
         return raw
+
+    def take_public_custody(self):
+        """One ownership transfer; callers retain the result under _owning()."""
+        return IssuedConfigurationCustody._take(self)
 
     def publish(self):
         raw = self.issue()
         io.write_public(raw, deadline_boottime_ns=self._prepared["deadline"], check=self.check)
+
+
+class IssuedConfigurationCustody:
+    """Public-only, same-boot custody of an actually issued service configuration.
+
+    The approved verifier issuance authenticates certificate/CA association,
+    not possession of TLS files, a database connection, or currentness. This
+    owner has no signing key, issuer reference/callback, or signing operation.
+    It neither reopens an expired approval nor authorizes a retained restart.
+    """
+
+    __slots__ = ("_fd", "_identity", "_raw", "_issued", "_boot", "_pid",
+                 "_last_boot", "_last_unix", "_closed")
+
+    def __init__(self):
+        raise TypeError("public configuration custody requires a successful issuer transfer")
+
+    @classmethod
+    def _take(cls, issuer):
+        io._process()
+        _require(cls is IssuedConfigurationCustody and type(issuer) is LocalConfigurationIssuer
+            and os.getpid() == issuer._pid
+            and issuer._issued_original is not None and not issuer._public_custody_attempted
+            and issuer._prepared["selected"]["role"] == "authority-service")
+        issuer._public_custody_attempted = True  # A failed acquisition is not retryable.
+        issuer.check()
+        _require(io.read_public(issuer._fd, io.MAX_PUBLIC) == issuer._raw)
+        self = object.__new__(cls)
+        self._fd, self._identity, self._closed = None, issuer._identity, False
+        self._raw, self._issued, self._boot = issuer._raw, issuer._issued_original, issuer._boot
+        self._pid = os.getpid()
+        self._last_boot, self._last_unix = issuer._previous_boot, issuer._previous_unix
+        try:
+            with _owning():
+                self._fd = fcntl.fcntl(issuer._fd, fcntl.F_DUPFD_CLOEXEC, 3)
+            _require(io._input(self._fd, io.MAX_PUBLIC) == issuer._identity == self._identity)
+            self.check()
+            issuer.check()
+            _require(io.read_public(issuer._fd, io.MAX_PUBLIC) == self._raw)
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def check(self):
+        io._process()
+        _require(type(self) is IssuedConfigurationCustody and not self._closed
+            and os.getpid() == self._pid and launcher._boot_identity_digest() == self._boot)
+        now_boot, now_unix = io._clock(), time.time_ns()
+        _require(self._last_boot <= now_boot and self._last_unix <= now_unix
+            and io._input(self._fd, io.MAX_PUBLIC) == self._identity
+            and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
+        # Revalidate the actual approved originals, not a retained mutable DTO.
+        prepared = prepare(self._raw, boot=self._boot, now_boottime_ns=now_boot, now_unix_ns=now_unix)
+        _require(prepared["selected"]["role"] == "authority-service")
+        issued = document(self._issued, MAX_CONFIGURATION)
+        _require(set(issued) == {"schema", "payload", "signature"}
+            and issued["schema"] == generator.SERVICE_CONFIGURATION_SCHEMA
+            and issued["payload"] == prepared["payload"])
+        Ed25519PublicKey.from_public_bytes(prepared["rootPublic"]).verify(
+            spec.strict_base64url_decode(issued["signature"], name="issued configuration signature", decoded_size=64),
+            signature_message("authority-service", issued["payload"]))
+        after_boot, after_unix = io._clock(), time.time_ns()
+        _require(now_boot <= after_boot < prepared["deadline"]
+            and now_unix <= after_unix < prepared["epochLimit"]
+            and launcher._boot_identity_digest() == self._boot
+            and io._input(self._fd, io.MAX_PUBLIC) == self._identity
+            and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
+        self._last_boot, self._last_unix = after_boot, after_unix
+
+    def service_original(self):
+        self.check()
+        return self._issued
+
+    def approval_original(self):
+        self.check()
+        return self._raw
+
+    def verifier_issuance_original(self):
+        self.check()
+        return document(self._raw, io.MAX_PUBLIC)["databaseIssuanceOriginals"]["verifier"].encode("ascii")
+
+    def close(self):
+        """Release only our duplicate, including after expiry or content refusal."""
+        if self._closed:
+            return
+        io._process()
+        _require(os.getpid() == self._pid)
+        with _owning():
+            if self._fd is not None:
+                # Content/metadata changes invalidate reads, not ownership of
+                # this inode. Never close an FD recycled onto a different inode.
+                _require(io._identity(os.fstat(self._fd))[:2] == self._identity[:2])
+                fd = self._fd
+                self._fd, self._closed = None, True
+                os.close(fd)
+            else:
+                self._closed = True

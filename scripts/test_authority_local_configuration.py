@@ -8,9 +8,11 @@ import inspect
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.exceptions import InvalidSignature
@@ -312,6 +314,194 @@ class LocalConfigurationControls(unittest.TestCase):
                         next(row.lineno for row in calls if row.func.attr == "signing_key"))
         self.assertIn("self._prepared = prepare(", inspect.getsource(local.LocalConfigurationIssuer.__init__))
         self.assertIn('root_digest=_spki(selected["configurationRootPublicKeyBase64Url"])', inspect.getsource(local._service))
+
+
+class IssuedConfigurationCustodyControls(unittest.TestCase):
+    """Real synthetic issuance/FD custody only; no DB, pilot startup or reader."""
+
+    def setUp(self):
+        if os.geteuid() != 0 or os.getegid() != 0 or not sys.flags.isolated or not sys.flags.dont_write_bytecode:
+            self.skipTest("real protected custody requires isolated root -I -B; not simulated")
+        self.inputs = set()
+        self.addCleanup(self._close_inputs)
+
+    def _close_inputs(self):
+        while self.inputs:
+            os.close(self.inputs.pop())
+
+    def _issuer(self, *, regular=False):
+        selected, payload, root = fixture()
+        raw = local.spec.canonical_json_bytes(selected)
+        path = None
+        if regular:
+            directory = tempfile.TemporaryDirectory(prefix="configuration-custody-")
+            self.addCleanup(directory.cleanup)
+            path = Path(directory.name) / "approval.json"
+            path.write_bytes(raw); path.chmod(0o400)
+            public = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        else:
+            public = sealed(raw)
+        private = sealed(SEED)
+        self.inputs.update((public, private))
+        issuer = local.LocalConfigurationIssuer(approval_fd=public, approval_sha256=local.sha(raw), signing_key_fd=private)
+        return issuer, selected, payload, root, public, private, path
+
+    def _take(self, issuer):
+        with local._owning():
+            custody = issuer.take_public_custody()
+        self.addCleanup(custody.close)
+        return custody
+
+    def test_successful_public_custody_keeps_originals_without_private_key(self):
+        issuer, selected, payload, root, public, private, _ = self._issuer()
+        issued = issuer.issue()
+        custody = self._take(issuer)
+        self.assertEqual(custody.service_original(), issued)
+        self.assertEqual(custody.approval_original(), local.spec.canonical_json_bytes(selected))
+        self.assertEqual(custody.verifier_issuance_original(), selected["databaseIssuanceOriginals"]["verifier"].encode("ascii"))
+        self.assertEqual(os.fstat(custody._fd).st_ino, os.fstat(public).st_ino)
+        self.assertNotIn(custody._fd, (public, private))
+        self.assertFalse(os.get_inheritable(custody._fd))
+        self.assertFalse(hasattr(custody, "issue") or hasattr(custody, "_key_fd") or hasattr(custody, "_prepared"))
+        self.assertFalse(any(getattr(custody, name) is issuer for name in custody.__slots__))
+        # The caller releases BOTH borrowed originals. Only a public duplicate
+        # remains; checks must not reach the issuer or any signing operation.
+        for fd in (public, private):
+            os.close(fd); self.inputs.remove(fd)
+        with mock.patch.object(local.io, "signing_key", side_effect=AssertionError("private access")), \
+                mock.patch.object(local.LocalConfigurationIssuer, "check", side_effect=AssertionError("issuer retained")):
+            custody.check()
+            result = local.document(custody.service_original(), local.MAX_CONFIGURATION)
+            root.public_key().verify(local.spec.strict_base64url_decode(result["signature"], name="actual output", decoded_size=64),
+                local.signature_message("authority-service", payload))
+        owned = custody._fd
+        custody.close(); custody.close()
+        with self.assertRaises(OSError):
+            os.fstat(owned)
+        with self.assertRaises(ValueError):
+            custody.check()
+
+    def test_failed_issue_duplicate_and_failed_acquisition_refuse(self):
+        issuer, *_ = self._issuer()
+        with self.assertRaises(ValueError):
+            issuer.take_public_custody()
+        # Failure after real signing but before the final issuer check returns
+        # must not produce a success slot or an acquirable public owner.
+        with mock.patch.object(issuer, "check", side_effect=[None, ValueError("synthetic post-sign failure")]):
+            with self.assertRaises(ValueError):
+                issuer.issue()
+        self.assertIsNone(issuer._issued_original)
+        with self.assertRaises(ValueError):
+            issuer.take_public_custody()
+        success, *_ = self._issuer()
+        success.issue(); self._take(success)
+        with self.assertRaises(ValueError):
+            success.take_public_custody()
+        failed, *_ = self._issuer()
+        failed.issue()
+        real_fcntl = fcntl.fcntl
+        def fail_dup(fd, operation, *args):
+            if operation == fcntl.F_DUPFD_CLOEXEC:
+                raise OSError("synthetic duplicate failure")
+            return real_fcntl(fd, operation, *args)
+        with mock.patch.object(local.fcntl, "fcntl", side_effect=fail_dup):
+            with self.assertRaises(OSError):
+                failed.take_public_custody()
+        self.assertTrue(failed._public_custody_attempted)
+        with self.assertRaises(ValueError):
+            failed.take_public_custody()
+
+    def test_original_bounds_and_changed_approval_refuse_but_owned_close_remains_safe(self):
+        issuer, selected, _, _, public, private, _ = self._issuer()
+        issuer.issue(); custody = self._take(issuer)
+        with mock.patch.object(local.launcher, "_boot_identity_digest", return_value="sha256:" + "0" * 64):
+            with self.assertRaises(ValueError):
+                custody.check()
+        with mock.patch.object(local.io, "_clock", return_value=selected["issuedAtBoottimeNs"] - 1):
+            with self.assertRaises(ValueError):
+                custody.check()
+        with mock.patch.object(local.io, "_clock", return_value=selected["deadlineBoottimeNs"]), \
+                mock.patch.object(local.time, "time_ns", return_value=selected["expiresAtUnixNanos"]):
+            with self.assertRaises(ValueError):
+                custody.check()
+            custody.close()  # Expiry must not leak or consume borrowed inputs.
+        os.fstat(public); os.fstat(private)
+        changed, _, _, _, original, _, path = self._issuer(regular=True)
+        changed.issue(); mutated = self._take(changed)
+        path.chmod(0o600)
+        with path.open("r+b") as writer:
+            writer.seek(-1, os.SEEK_END); writer.write(b"x")
+        path.chmod(0o400)
+        with self.assertRaises(ValueError):
+            mutated.check()
+        mutated.close()
+        os.fstat(original)
+
+    def test_issued_payload_and_signature_are_checked_not_caller_factory_inputs(self):
+        with self.assertRaises(TypeError):
+            local.IssuedConfigurationCustody()
+        issuer, *_ = self._issuer()
+        issuer.issue(); custody = self._take(issuer)
+        original = custody._issued
+        for field in ("payload", "signature"):
+            changed = local.document(original, local.MAX_CONFIGURATION)
+            if field == "payload":
+                changed["payload"]["launchNonceDigest"] = "sha256:" + "0" * 64
+            else:
+                changed["signature"] = local.spec.strict_base64url_encode(bytes(64))
+            custody._issued = local.spec.canonical_json_bytes(changed)
+            with self.subTest(field=field), self.assertRaises((ValueError, InvalidSignature)):
+                custody.check()
+        custody._issued = original
+        custody.check()
+        self.assertEqual(tuple(inspect.signature(local.LocalConfigurationIssuer.take_public_custody).parameters), ("self",))
+        self.assertEqual(tuple(inspect.signature(local.IssuedConfigurationCustody._take).parameters), ("issuer",))
+
+    def test_real_fork_cannot_issue_or_take_inherited_issuer(self):
+        unissued, *_ = self._issuer()
+        issued, *_ = self._issuer()
+        issued.issue()
+        child = os.fork()
+        if child == 0:
+            try:
+                for action in (unissued.check, unissued.issue, issued.take_public_custody):
+                    try:
+                        action()
+                    except ValueError:
+                        continue
+                    os._exit(31)
+                os._exit(0)
+            except BaseException:
+                os._exit(32)
+        reaped, status = os.waitpid(child, 0)
+        self.assertEqual(reaped, child)
+        self.assertTrue(os.WIFEXITED(status))
+        self.assertEqual(os.WEXITSTATUS(status), 0)
+        self.assertFalse(unissued._used or issued._public_custody_attempted)
+        unissued.check()
+        self._take(issued).check()
+
+    def test_selected_pilot_template_retains_checks_and_closes_public_owner(self):
+        path = os.environ.get("SERVERWARE_TEST_PILOT_CONFIGURATION_TEMPLATE")
+        if path is None:
+            self.skipTest("explicit selected template path required for integration source control")
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+        owner = next(row for row in tree.body if isinstance(row, ast.ClassDef) and row.name == "LiveConfiguration")
+        methods = {row.name: row for row in owner.body if isinstance(row, ast.FunctionDef)}
+        calls = lambda node, name: [row for row in ast.walk(node) if isinstance(row, ast.Call)
+            and isinstance(row.func, ast.Attribute) and row.func.attr == name]
+        signing = methods["_sign_configuration"]
+        self.assertLess(calls(signing, "issue")[0].lineno, calls(signing, "_publish")[0].lineno)
+        self.assertLess(calls(signing, "_publish")[0].lineno, calls(signing, "take_public_custody")[0].lineno)
+        branch = next(row for row in signing.body if isinstance(row, ast.If))
+        self.assertEqual(ast.unparse(branch.test), "name == 'authority-service'")
+        protected = next(row for row in branch.body if isinstance(row, ast.With))
+        self.assertEqual(ast.unparse(protected.items[0].context_expr), "configuration._owning()")
+        self.assertEqual(ast.unparse(protected.body[0]), "self.configuration_custody = owner.take_public_custody()")
+        for method, operation in (("check", "check"), ("close", "close")):
+            self.assertIn("self.configuration_custody." + operation + "()", ast.unparse(methods[method]))
+        close = ast.unparse(methods["close"])
+        self.assertLess(close.index("self.configuration_custody.close()"), close.index("while self.handles:"))
 
 
 if __name__ == "__main__":

@@ -1733,6 +1733,14 @@ _POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES = frozenset(
         "audit_events",
     }
 )
+# These protected framework custody rows are not runtime-readable. Keep the
+# bootstrap grants, exact ACL verification, and runtime admission in agreement.
+_POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES = frozenset(
+    {
+        authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
+        authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+    }
+)
 _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES = tuple(
     (
         function_name,
@@ -4095,13 +4103,12 @@ def _seal_postgres_schema_acl(
         )
         for table in sorted(runtime_read_only_tables):
             table_name = _policy_candidate_authority_identifier(table)
-            # The current-root marker is executor-readable framework custody,
-            # not a runtime-readable business row. No runtime role gets DML.
+            # Framework custody is not a runtime-readable business row.
+            # No protected table permits runtime DML.
             cur.execute(
                 (
                     "REVOKE ALL ON "
-                    if table in {authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
-                        authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE}
+                    if table in _POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES
                     else "REVOKE INSERT, UPDATE, DELETE ON "
                 )
                 + schema_name
@@ -4795,8 +4802,7 @@ def _seal_postgres_schema_acl(
                 set()
                 if kind == "S" or (
                     kind in {"r", "p"}
-                    and name in {authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
-                        authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE}
+                    and name in _POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES
                     and name in runtime_read_only_tables
                 )
                 else {"SELECT"}
@@ -20286,8 +20292,14 @@ def _metadata_pg_connect_with_dsn(
                     "OR relation.oid IS NULL "
                     "OR relation.relkind NOT IN ('r', 'p') "
                     "OR CASE WHEN relation.relkind IN ('r', 'p') THEN ("
+                    "CASE WHEN required.table_name = ANY(%s::text[]) THEN ("
                     "pg_catalog.has_table_privilege("
-                    "current_user, relation.oid, 'SELECT') IS NOT TRUE "
+                    "current_user, relation.oid, 'SELECT') IS NOT FALSE "
+                    "OR pg_catalog.has_any_column_privilege("
+                    "current_user, relation.oid, 'SELECT') IS NOT FALSE"
+                    ") ELSE "
+                    "pg_catalog.has_table_privilege("
+                    "current_user, relation.oid, 'SELECT') IS NOT TRUE END "
                     "OR pg_catalog.has_table_privilege("
                     "current_user, relation.oid, "
                     "'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') "
@@ -20299,6 +20311,7 @@ def _metadata_pg_connect_with_dsn(
                     (
                         sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
                         _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
+                        sorted(_POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES),
                     ),
                 ).fetchone()
                 if invalid_protected_table_privilege is not None:

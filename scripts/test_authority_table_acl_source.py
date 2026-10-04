@@ -5,11 +5,14 @@ Import only the real pure contract. Inspect bounded committed source ASTs,
 never import db/schema, execute extracted functions, or replace the registry.
 These controls cannot prove GRANT/REVOKE, effective role membership, column
 privileges, catalog behavior, migrations or whole startup admission at runtime.
+The runtime predicate control evaluates only its extracted SQL boolean logic
+in in-memory SQLite with synthetic privilege results, not a PostgreSQL catalog.
 """
 from __future__ import annotations
 
 import ast
 import re
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -261,7 +264,9 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertEqual(len(checks), 1)
         expected = named_assignment(checks[0], "expected", recursive=True)
         self.assert_shape(expected.value,
-            "set() if kind == 'S' else {'SELECT'} if kind in {'r', 'p'} "
+            "set() if kind == 'S' or (kind in {'r', 'p'} "
+            "and name in _POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES "
+            "and name in runtime_read_only_tables) else {'SELECT'} if kind in {'r', 'p'} "
             "and name in runtime_read_only_tables else requested_table_privileges "
             "if kind in {'r', 'p'} else set()")
         source = ast.get_source_segment(self.db_source, checks[0])
@@ -275,6 +280,25 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertTrue(any(isinstance(node, ast.Raise) for node in ast.walk(rejecting[0])))
 
     def test_runtime_effective_table_and_column_privileges_are_checked_before_owner_admission(self):
+        inaccessible = "_POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES"
+        self.assert_shape(named_assignment(self.db_tree, inaccessible).value,
+            "frozenset({authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE, "
+            "authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE})")
+        revoke = [node for node in ast.walk(self.seal) if isinstance(node, ast.IfExp)
+            and isinstance(node.body, ast.Constant) and node.body.value == "REVOKE ALL ON "]
+        self.assertEqual(len(revoke), 1)
+        self.assert_shape(revoke[0].test, "table in " + inaccessible)
+        self.assert_shape(revoke[0].orelse, "'REVOKE INSERT, UPDATE, DELETE ON '")
+        # The bootstrap verifier and admission query share the same explicit
+        # classification; no protected table is removed to make admission pass.
+        runtime_check = next(node for node in ast.walk(self.seal) if isinstance(node, ast.For)
+            and "actual_runtime_grants.get(name, set())" in ast.get_source_segment(self.db_source, node))
+        self.assert_shape(named_assignment(runtime_check, "expected", recursive=True).value,
+            "set() if kind == 'S' or (kind in {'r', 'p'} "
+            "and name in _POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES "
+            "and name in runtime_read_only_tables) else {'SELECT'} if kind in {'r', 'p'} "
+            "and name in runtime_read_only_tables else requested_table_privileges "
+            "if kind in {'r', 'p'} else set()")
         function = named_function(self.db_tree, "_metadata_pg_connect_with_dsn")
         assignment = named_assignment(function, "invalid_protected_table_privilege", recursive=True)
         blocks = [node for node in ast.walk(function) if isinstance(node, ast.If)
@@ -289,14 +313,19 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertIsInstance(query.args[0], ast.Constant)
         sql = query.args[0].value
         self.assert_shape(query.args[1],
-            "(sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES), _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME)")
+            "(sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES), "
+            "_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, "
+            "sorted(_POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES))")
         for fragment in ("FROM pg_catalog.unnest(%s::text[])",
                 "LEFT JOIN pg_catalog.pg_namespace AS namespace ON namespace.nspname = %s",
                 "ON relation.relnamespace = namespace.oid AND relation.relname = required.table_name",
                 "WHERE namespace.oid IS NULL OR relation.oid IS NULL",
                 "relation.relkind NOT IN ('r', 'p')",
                 "CASE WHEN relation.relkind IN ('r', 'p') THEN (",
-                "pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT') IS NOT TRUE",
+                "CASE WHEN required.table_name = ANY(%s::text[]) THEN (",
+                "pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT') IS NOT FALSE",
+                "pg_catalog.has_any_column_privilege(current_user, relation.oid, 'SELECT') IS NOT FALSE",
+                ") ELSE pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT') IS NOT TRUE END",
                 "'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') IS NOT FALSE",
                 "pg_catalog.has_any_column_privilege(current_user, relation.oid, 'INSERT,UPDATE,REFERENCES') IS NOT FALSE",
                 ") ELSE FALSE END LIMIT 1"):
@@ -310,6 +339,53 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assert_shape(denial.body[0].exc,
             "MetadataStoreError('runtime metadata protected-table privileges are not source exact')")
         self.assertLess(denial.end_lineno, owner.lineno)
+        self.assertEqual(sql.count("%s"), 3)
+
+        # Evaluate the actual boolean predicate with catalog-return-value
+        # fixtures. Only PostgreSQL-specific lookup expressions are replaced;
+        # CASE/IS/AND/OR and the existence/kind guards remain the source SQL.
+        predicate = sql.split("WHERE ", 1)[1].removesuffix(" LIMIT 1")
+        replacements = {
+            "required.table_name = ANY(%s::text[])": "inaccessible",
+            "pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT')": "table_select",
+            "pg_catalog.has_any_column_privilege(current_user, relation.oid, 'SELECT')": "column_select",
+            "pg_catalog.has_table_privilege(current_user, relation.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')": "table_write",
+            "pg_catalog.has_any_column_privilege(current_user, relation.oid, 'INSERT,UPDATE,REFERENCES')": "column_write",
+            "namespace.oid": "namespace_oid", "relation.oid": "relation_oid",
+            "relation.relkind": "relation_kind",
+        }
+        for original, synthetic in replacements.items():
+            self.assertIn(original, predicate)
+            predicate = predicate.replace(original, synthetic)
+        self.assertNotIn("pg_catalog", predicate)
+        self.assertNotIn("%s", predicate)
+        columns = ("namespace_oid", "relation_oid", "relation_kind", "inaccessible",
+                   "table_select", "column_select", "table_write", "column_write")
+        synthetic_query = "SELECT (" + predicate + ") FROM (SELECT " + ", ".join(
+            "? AS " + column for column in columns) + ")"
+        denied_tables = {authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
+                         authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE}
+        with sqlite3.connect(":memory:") as conn:
+            for table in ("webauthn_credentials", *sorted(denied_tables)):
+                denied_read = table in denied_tables
+                baseline = dict(namespace_oid=1, relation_oid=2, relation_kind="r",
+                    inaccessible=int(denied_read), table_select=int(not denied_read),
+                    column_select=int(not denied_read), table_write=0, column_write=0)
+                cases = [("exact", {}, 0), ("partitioned", {"relation_kind": "p"}, 0)]
+                cases.extend((field, {field: changed}, 1) for field, changed in (
+                    ("namespace_oid", None), ("relation_oid", None), ("relation_kind", "v"),
+                    ("table_write", 1), ("column_write", 1),
+                    ("table_write", None), ("column_write", None), ("table_select", None)))
+                cases.append(("wrong-select", {"table_select": int(denied_read)}, 1))
+                if denied_read:
+                    cases.extend((("column-only-select", {"column_select": 1}, 1),
+                                  ("unknown-column-select", {"column_select": None}, 1)))
+                for label, changes, expected in cases:
+                    with self.subTest(table=table, case=label):
+                        fixture = {**baseline, **changes}
+                        actual = conn.execute(synthetic_query,
+                            tuple(fixture[column] for column in columns)).fetchone()[0]
+                        self.assertEqual(actual, expected)
 
     def test_default_detailed_schema_inventory_contains_the_same_twelve_tables(self):
         function = named_function(self.schema_tree, "_policy_candidate_authority_schema_tables")

@@ -6183,6 +6183,7 @@ def compile_policy_bundle(
     *,
     verify_signature: bool = False,
     validate_schema: bool = False,
+    enforce_signed_policy_constraints: bool = False,
     signing_trust: PolicySigningTrust | None = None,
 ) -> PolicySnapshot:
     _admit_policy_json_object(raw)
@@ -6196,8 +6197,9 @@ def compile_policy_bundle(
         raise PolicyBundleError("kind must be PolicyBundle")
 
     metadata = raw.get("metadata") or {}
-    signed_policy = isinstance(metadata.get("signature"), str) and metadata["signature"].startswith(
-        "ed25519:"
+    signed_policy = enforce_signed_policy_constraints or (
+        isinstance(metadata.get("signature"), str)
+        and metadata["signature"].startswith("ed25519:")
     )
     if "validFrom" in metadata:
         raise PolicyBundleError("metadata.validFrom is unsupported until activation-time enforcement is implemented")

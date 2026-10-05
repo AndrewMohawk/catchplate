@@ -1943,6 +1943,14 @@ class PolicyCandidateRequest(BaseModel):
     dry_run: list[PolicyDryRunCase] = Field(default_factory=list, alias="dryRun")
 
 
+class PolicyPreviewRequest(PolicyCandidateRequest):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    dry_run: list[PolicyDryRunCase] = Field(
+        default_factory=list, alias="dryRun", max_length=256
+    )
+
+
 class PolicyPublishRequest(PolicyCandidateRequest):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -5814,6 +5822,59 @@ def _run_policy_dry_runs(
         "count": len(results),
         "passed": all(item["passed"] for item in results),
         "results": results,
+    }
+
+
+def _policy_preview_report(
+    *, bundle: dict[str, Any], dry_run: list[PolicyDryRunCase]
+) -> dict[str, Any]:
+    """Read-only draft observations, never signing or publication authority."""
+    metadata = bundle.get("metadata")
+    if isinstance(metadata, dict) and any(
+        name in metadata for name in ("signature", "signingKeyId")
+    ):
+        raise HTTPException(
+            status_code=400, detail="policy preview requires an unsigned draft"
+        )
+    try:
+        candidate = compile_policy_bundle(
+            bundle, verify_signature=False, validate_schema=True,
+            enforce_signed_policy_constraints=True,
+        )
+    except PolicyBundleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _assert_policy_candidate_credential_bindings(candidate)
+    current = get_policy_snapshot()
+    current_raw = current.raw if current else None
+    current_metadata = (
+        current_raw.get("metadata")
+        if isinstance(current_raw, dict)
+        and isinstance(current_raw.get("metadata"), dict)
+        else {}
+    )
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return {
+        "apiVersion": "serverware.policyPreview/v1",
+        "ok": True,
+        "previewOnly": True,
+        "signatureVerified": False,
+        "activated": False,
+        "publicationReady": False,
+        "candidate": {
+            "draftHash": candidate.hash,
+            "sequence": metadata.get("sequence"),
+            "rollbackEpoch": metadata.get("rollbackEpoch"),
+            "routes": len(candidate.routes),
+            "principals": len(candidate.principals),
+            "credentials": len(candidate.credentials),
+        },
+        "current": {
+            "policyHash": current.hash if current else None,
+            "sequence": current_metadata.get("sequence"),
+            "rollbackEpoch": current_metadata.get("rollbackEpoch"),
+        },
+        "diff": _policy_diff(current_raw, bundle),
+        "dryRun": _run_policy_dry_runs(candidate, dry_run),
     }
 
 
@@ -11650,6 +11711,14 @@ async def policy_authority_candidate_decision_gate_activate(
     return _policy_shadow_activation_publication_result(
         publication, recovered=False
     )
+
+
+@app.post("/api/policy/preview")
+def policy_preview(
+    payload: PolicyPreviewRequest,
+    _: AdminIdentity = Depends(require_role("policy_author", "policy_publisher")),
+) -> dict[str, Any]:
+    return _policy_preview_report(bundle=payload.bundle, dry_run=payload.dry_run)
 
 
 @app.post("/api/policy/candidate")
@@ -23216,7 +23285,7 @@ UI_HTML = r"""
         __SERVERWARE_WORKLOAD_ISSUANCE_HTML__
         <section id="policy-workspace" class="policy-authoring-section">
           <h2>Workload identity and route assignment</h2>
-          <p class="section-kicker">Production signed policy candidate</p>
+          <p class="section-kicker">Preview a draft, then stage an independently signed policy</p>
           <form id="policy-route-form">
             <label for="policy-template">Restriction template</label>
             <select id="policy-template" name="template"></select>
@@ -23242,8 +23311,11 @@ UI_HTML = r"""
           <p id="policy-candidate-summary" class="hint" role="status" aria-live="polite"></p>
           <p id="policy-identity-change-summary" class="hint" role="status" aria-live="polite"></p>
           <p class="hint">Route-match preview checks policy selection only. It does not authenticate a client certificate, provision an issuer, or prove runtime enforcement.</p>
-          <label for="policy-candidate-output">Signed candidate, diff, and route-match dry-run</label>
+          <label for="policy-candidate-output">Unsigned draft, diff, and route-match preview</label>
           <textarea id="policy-candidate-output" class="policy-result" readonly></textarea>
+          <label for="policy-signed-bundle">Signed candidate PolicyBundle from your policy authority</label>
+          <textarea id="policy-signed-bundle" class="policy-result" spellcheck="false"></textarea>
+          <p class="hint">Preview does not sign or activate a policy. To stage it, supply the same draft signed by your policy authority and its runtime handoff package. The server verifies the signature and artifact bindings.</p>
           <label for="policy-authority-package">Signed staged authority and runtime handoff package</label>
           <textarea id="policy-authority-package" class="policy-result" spellcheck="false"></textarea>
           __SERVERWARE_POLICY_CANDIDATE_HTML__
@@ -24280,11 +24352,15 @@ UI_HTML = r"""
 
     async function api(path, options = {}) {
       const operation = credentialReplacementApiGuard(options.credentialReplacement);
+      const checkContext = options.checkContext;
+      if (checkContext !== undefined && typeof checkContext !== 'function') throw new Error('Invalid request context guard');
+      checkContext?.();
       if (!requireAdminToken()) throw new Error('admin token required');
       const captureAuthenticatedResponse = options.captureAuthenticatedResponse === true;
       const fetchOptions = {...options};
       delete fetchOptions.captureAuthenticatedResponse;
       delete fetchOptions.credentialReplacement;
+      delete fetchOptions.checkContext;
       const method = String(options.method || 'GET').toUpperCase();
       const unsafe = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
       const csrf = unsafe ? await ensureCsrfToken(operation) : null;
@@ -24296,10 +24372,13 @@ UI_HTML = r"""
         ...(csrf ? {'X-Serverware-CSRF-Token': csrf} : {}),
         ...(options.headers || {})
       };
+      checkContext?.();
       const res = await fetch(path, {...fetchOptions, method, headers, credentials: 'same-origin'});
       operation?.check();
+      checkContext?.();
       const text = res.status === 204 ? '' : await res.text();
       operation?.check();
+      checkContext?.();
       let payload = null;
       if (text) {
         try { payload = JSON.parse(text); } catch (_) { payload = {detail: text}; }
@@ -25054,8 +25133,13 @@ UI_HTML = r"""
       );
       const staged = Boolean(
         candidateReady
-        && state.policyCanary?.canary?.status === 'running'
-        && state.policyCanary.canary.candidatePolicyHash === state.policyCandidate?.report?.candidate?.policyHash
+        && setupSession?.phase === 'policy_staged'
+        && typeof setupSession.canaryId === 'string' && setupSession.canaryId
+        && /^sha256:[0-9a-f]{64}$/.test(setupSession.policyHash || '')
+        && state.policyCanary?.canary?.status === 'ready'
+        && state.policyCanary?.monitoring?.candidateShadowEvaluationImplemented === true
+        && state.policyCanary.canary.id === setupSession.canaryId
+        && state.policyCanary.canary.candidatePolicyHash === setupSession.policyHash
       );
       const active = setupAssignmentIsActive(selection);
       const packetMatches = Boolean(
@@ -25068,7 +25152,8 @@ UI_HTML = r"""
       $('setup-connect-button').textContent = oauthProvider ? 'Connect credential' : 'Add credential';
       $('setup-connect-button').disabled = Boolean(setupSession?.credentialId) || Boolean(oauthProvider && !oauthProvider.configured);
       $('setup-preview-button').disabled = !selection.principalId || !selection.credentialId || !selection.routeId || (Boolean(template?.jit) && !selection.approvers);
-      $('setup-stage-button').disabled = !candidateReady || setupSession?.phase !== 'credential_activated';
+      $('setup-stage-button').disabled = !candidateReady || setupSession?.phase !== 'credential_activated'
+        || !$('policy-signed-bundle').value.trim() || !$('policy-authority-package').value.trim();
       $('setup-activate-button').disabled = !staged || setupSession?.phase !== 'policy_staged';
       $('setup-enroll-button').disabled = !active || setupSession?.phase !== 'policy_activated';
       $('setup-command-button').disabled = !packetMatches;
@@ -25865,26 +25950,64 @@ UI_HTML = r"""
     function invalidatePolicyCandidate() {
       policyPreviewGeneration += 1;
       state.policyCandidate = null;
+      $('policy-signed-bundle').value = '';
       renderPolicyCandidate();
+    }
+
+    function policyAuthoringScope() {
+      return JSON.stringify([adminToken(), oidcSessionStatusUnknown, state.currentUserId,
+        state.currentUserRoles, state.authStatus?.authenticated, state.authStatus?.userId,
+        state.authStatus?.authMethod, state.authStatus?.sessionState, state.authStatus?.roles]);
     }
 
     async function previewPolicyCandidate() {
       invalidatePolicyCandidate();
       const generation = policyPreviewGeneration;
       const candidate = buildPolicyCandidate();
-      const report = await api('/api/policy/candidate', {
+      const authScope = policyAuthoringScope();
+      const checkContext = () => {
+        if (generation !== policyPreviewGeneration || policyAuthoringScope() !== authScope || !hasOperatorAuth()) {
+          throw new Error('Policy inputs or authentication changed; preview the current draft again');
+        }
+        if (state.activePolicy?.policy_hash !== candidate.basePolicyHash) {
+          throw new Error('Active policy changed; preview the current draft again');
+        }
+      };
+      const report = await api('/api/policy/preview', {
         method: 'POST',
+        checkContext,
         body: JSON.stringify({bundle: candidate.bundle, dryRun: candidate.dryRun})
       });
-      if (generation !== policyPreviewGeneration) {
-        throw new Error('Policy inputs changed while preview was running; preview the current draft again');
+      checkContext();
+      if (report?.apiVersion !== 'serverware.policyPreview/v1' || report.previewOnly !== true
+          || report.signatureVerified !== false || report.activated !== false || report.publicationReady !== false
+          || report.current?.policyHash !== candidate.basePolicyHash) {
+        throw new Error('The server did not return a read-only preview for the current policy');
       }
-      if (state.activePolicy?.policy_hash !== candidate.basePolicyHash) {
-        throw new Error('Active policy changed while preview was running; preview the current draft again');
-      }
-      state.policyCandidate = {...candidate, report, stage: null};
+      state.policyCandidate = {...candidate, report, checkContext, stage: null};
       renderPolicyCandidate();
       return report;
+    }
+
+    function signedPolicyCandidate(candidate) {
+      const raw = $('policy-signed-bundle').value.trim();
+      if (!raw) throw new Error('Supply an independently signed candidate PolicyBundle before staging');
+      const bundle = JSON.parse(raw);
+      if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)
+          || typeof bundle.metadata?.signature !== 'string'
+          || !/^ed25519:[A-Za-z0-9_-]{86}$/.test(bundle.metadata.signature)
+          || !/^sha256:[0-9a-f]{64}$/.test(bundle.metadata.signingKeyId || '')) {
+        throw new Error('The candidate must contain an Ed25519 signature and signing key identity');
+      }
+      const draft = JSON.parse(JSON.stringify(bundle));
+      delete draft.metadata.signature;
+      delete draft.metadata.signingKeyId;
+      if (canonicalJson(draft) !== canonicalJson(candidate.bundle)) {
+        throw new Error('The signed bundle differs from the previewed draft; preview the intended draft again');
+      }
+      // Shape and draft equality are not signature verification. The existing
+      // handoff endpoint verifies the signature and independently held artifacts.
+      return bundle;
     }
 
     function renderPolicyCandidate() {
@@ -25892,12 +26015,15 @@ UI_HTML = r"""
       const report = candidate?.report;
       const checks = Array.isArray(report?.dryRun?.results) ? report.dryRun.results : [];
       const dryRunPassed = report?.dryRun?.passed === true && checks.length > 0 && checks.every((item) => item.passed === true);
-      $('policy-stage-button').disabled = !candidate || !report || !state.activePolicy || !dryRunPassed || candidate.basePolicyHash !== state.activePolicy.policy_hash;
+      let contextCurrent = false;
+      try { candidate?.checkContext(); contextCurrent = Boolean(candidate); } catch (_) { /* Stale preview cannot stage. */ }
+      const authoritySupplied = Boolean($('policy-signed-bundle').value.trim() && $('policy-authority-package').value.trim());
+      $('policy-stage-button').disabled = !contextCurrent || !report || !state.activePolicy || !dryRunPassed || !authoritySupplied || candidate.basePolicyHash !== state.activePolicy.policy_hash;
       $('policy-identity-change-summary').textContent = candidate?.identityChangeSummary || '';
-      $('policy-candidate-output').value = candidate ? JSON.stringify({candidate: candidate.report, stage: candidate.stage}, null, 2) : '';
+      $('policy-candidate-output').value = candidate ? JSON.stringify({unsignedDraft: candidate.bundle, preview: candidate.report, stage: candidate.stage}, null, 2) : '';
       const passed = checks.filter((item) => item.passed === true).length;
       $('policy-candidate-summary').textContent = report
-        ? `${report.candidate?.routes || 0} routes; ${passed}/${checks.length} dry-run checks passed${dryRunPassed ? '' : '; staging disabled'}; ${report.candidate?.policyHash || 'candidate hash unavailable'}`
+        ? `Unsigned preview: ${report.candidate?.routes || 0} routes; ${passed}/${checks.length} route-match checks passed${dryRunPassed && contextCurrent ? '' : '; staging disabled'}; ${authoritySupplied ? 'signed material supplied; verification occurs on staging' : 'signed bundle and runtime handoff still required'}; draft ${report.candidate?.draftHash || 'hash unavailable'}`
         : 'Preview a candidate before staging it.';
     }
 
@@ -25925,25 +26051,41 @@ UI_HTML = r"""
 
     async function stagePolicyCanary() {
       const candidate = state.policyCandidate;
-      if (!candidate || !candidate.report) throw new Error('Preview and validate the signed candidate first');
+      if (!candidate || !candidate.report) throw new Error('Preview the policy draft first');
+      candidate.checkContext();
       const checks = Array.isArray(candidate.report.dryRun?.results) ? candidate.report.dryRun.results : [];
       if (candidate.report.dryRun?.passed !== true || !checks.length || checks.some((item) => item.passed !== true)) {
-        throw new Error('The signed candidate dry-run did not pass every check');
+        throw new Error('The policy draft route-match preview did not pass every check');
       }
-      const active = await api('/api/policy');
-      if (candidate !== state.policyCandidate) throw new Error('Policy draft changed after staging was requested; preview again');
+      const signedBundle = signedPolicyCandidate(candidate);
+      const suppliedPackage = policyAuthorityPackage();
+      const signedText = $('policy-signed-bundle').value;
+      const packageText = $('policy-authority-package').value;
+      const setupSession = state.setupSession;
+      const setupRevision = setupSession?.revision;
+      const checkContext = () => {
+        candidate.checkContext();
+        if (candidate !== state.policyCandidate || $('policy-signed-bundle').value !== signedText
+            || $('policy-authority-package').value !== packageText
+            || state.setupSession !== setupSession || setupSession?.revision !== setupRevision) {
+          throw new Error('Staging inputs changed. Inspect any submitted handoff before another action.');
+        }
+      };
+      const active = await api('/api/policy', {checkContext});
+      checkContext();
       if (active.policy_hash !== candidate.basePolicyHash) throw new Error('Active policy changed after preview; generate a new candidate');
       const importedPackage = await api('/api/policy/authority/candidates/package', {
         method: 'POST',
+        checkContext,
         body: JSON.stringify({
           apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
           requestId: authorityRequestId(),
           purpose: 'handoff',
-          package: policyAuthorityPackage()
+          package: suppliedPackage
         })
       });
       const authorityPackage = importedPackage.portalPackage;
-      if (candidate !== state.policyCandidate) throw new Error('Policy draft changed while the handoff package was loading; preview again');
+      checkContext();
       const handoff = authorityPackage.handoff;
       const requiredHandoff = [
         'candidateId',
@@ -25962,25 +26104,28 @@ UI_HTML = r"""
       }
       const handoffResult = await api('/api/policy/authority/candidates/handoff', {
         method: 'POST',
+        checkContext,
         body: JSON.stringify({
           apiVersion: 'serverware.policyAuthorityCandidateHandoff/v1',
           requestId: authorityRequestId(),
           ...handoff,
-          candidatePolicyBundle: candidate.report.signedBundle
+          candidatePolicyBundle: signedBundle
         })
       });
+      checkContext();
       candidate.stage = {
         handoff: handoffResult,
         packageDigest: importedPackage.packageDigest,
         portalPackage: authorityPackage
       };
-      if (state.setupSession?.phase === 'credential_activated') {
-        const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/canary`, {
+      if (setupSession?.phase === 'credential_activated') {
+        const bound = await api(`/api/setup/sessions/${encodeURIComponent(setupSession.id)}/canary`, {
           method: 'POST',
+          checkContext,
           body: JSON.stringify({
-            expectedRevision: state.setupSession.revision,
+            expectedRevision: setupRevision,
             canaryId: handoff.canaryId,
-            candidatePolicyBundle: candidate.report.signedBundle
+            candidatePolicyBundle: signedBundle
           })
         });
         rememberSetupSession(bound.session);
@@ -26439,6 +26584,9 @@ UI_HTML = r"""
     });
     for (const eventName of ['input', 'change']) {
       $('policy-route-form').addEventListener(eventName, invalidatePolicyCandidate);
+    }
+    for (const id of ['policy-signed-bundle', 'policy-authority-package']) {
+      $(id).addEventListener('input', () => { renderPolicyCandidate(); renderSetupWorkflow(); });
     }
 
     function auditSearchParams({exportMode = false} = {}) {

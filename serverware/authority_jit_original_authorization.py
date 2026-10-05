@@ -137,13 +137,18 @@ def sign_control(*, control_bytes, action, signer_role, signer_identity, signer_
     owned = control.decode_control(raw, expected_action=action, work=work)
     pins = _pins(signer_role, signer_identity, signer_spki_digest, configuration_digest, work)
     window = clock._validate(live_window)
+    # Carry the original invocation's narrower epoch bound to the writer.
+    # This maps the held opening bracket, never a fresh now-plus-duration;
+    # the original window, issue sample and control deadline stay unchanged.
+    expires = min(window[3], window[0] + owned["originalDeadlineNs"] - window[1])
+    _require(window[0] < expires <= window[3])
     evidence.keys._public_binding(signer_public_key, signer_spki_digest, work)
     evidence.keys._pair_on_work(signer_private_key, signer_public_key, work)
     work.charge(input_bytes=MAX_BYTES, json_nodes=MAX_NODES)
     payload = {"schema": SCHEMA, "sourceRevision": evidence.authority.SOURCE_REVISION,
         "role": pins[0], "identity": pins[1], "spkiDigest": pins[2], "configurationDigest": pins[3],
         "controlDigest": evidence.plan._frame(CONTROL_DOMAIN, (raw,), work), "controlByteCount": len(raw),
-        "issuedAtEpochNs": window[0], "expiresAtEpochNs": window[3],
+        "issuedAtEpochNs": window[0], "expiresAtEpochNs": expires,
         "originalDeadlineNs": owned["originalDeadlineNs"]}
     _bind(payload, raw, owned, pins, window, work)
     result = _sign(payload, signer_private_key, signer_public_key, work)

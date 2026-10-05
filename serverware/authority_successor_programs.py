@@ -61,6 +61,15 @@ def _challenge_maintenance(*, read_dsn, connect_timeout_seconds, database_identi
         maximum_plan_age_ns=maximum_plan_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns)
 
 
+def _jit_assertion(*, read_planner, page_caller):
+    # The real owner joins one native pass, signing, original-page retention
+    # and independent readback replay. Registration does not grant request,
+    # current-root or execution admission, and never selects jit.decide.
+    from serverware.authority_jit_compound_production import _JitCompoundProducer
+
+    return _JitCompoundProducer(read_planner=read_planner, page_caller=page_caller)
+
+
 def _evidence_owner(operation, *, read_planner, planner_private_key, planner_public_key,
         expected_planner_identity, expected_planner_spki_digest, configuration_digest):
     from serverware import authority_webauthn_evidence_plan_owner as owner
@@ -280,6 +289,7 @@ PROGRAMS: Final[Mapping[str, SuccessorPlanningProgram]] = MappingProxyType({
             plan_factory=_activation_delivery_plan),
         _program("webauthn.credential.revoke", _revocation, "signed-originals"),
         _program("webauthn.challenge.maintain", _challenge_maintenance, "signed-originals"),
+        _program("jit.assertion.issue", _jit_assertion, "signed-originals"),
         _program("webauthn.registration.evidence.admit", _registration_evidence,
             "signed-originals", _registration_evidence_kernel),
         _program("webauthn.registration.finalize", _registration, "read-acquisition",

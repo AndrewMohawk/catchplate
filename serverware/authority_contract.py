@@ -2587,7 +2587,7 @@ _OPERATIONS = {
         maximum_work_units=1024,
     ),
     "jit.assertion.issue": _spec(
-        "issue_jit_assertion_receipt",
+        "serverware_policy_authority_jit_assertion_issue",
         reads=(
             "approval_requests", "policy_high_water", "rbac_role_bindings",
             "webauthn_challenges", "webauthn_credentials",

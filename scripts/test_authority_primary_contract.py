@@ -482,7 +482,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
     def test_both_live_loaders_use_the_directly_tested_manifest_admission(self) -> None:
         # Source wiring is distinct from the real pure admission calls above;
         # this does not import or bypass the deliberately closed registry.
-        path = ROOT / "serverware/authority_planner.py"
+        path = ROOT / "serverware/authority_planner_read.py"
         self.assertLess(path.stat().st_size, 2 * 1024 * 1024)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for name, authorization in (("_load_manifest", False), ("_load_authorization_manifest", True)):

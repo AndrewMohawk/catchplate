@@ -30,6 +30,7 @@ from serverware.authority_query_read_work import QueryReadValidationLimits, _Val
 EPOCH, MONOTONIC, LIFETIME = 1_800_000_000_000_000_000, 1_000_000_000, 1_000_000_000
 WINDOW = (EPOCH, MONOTONIC, MONOTONIC + 10, EPOCH + LIFETIME, MONOTONIC + LIFETIME, LIFETIME, 0)
 DEADLINE = MONOTONIC + LIFETIME // 2
+ORIGINAL_EXPIRY = min(WINDOW[3], EPOCH + DEADLINE - MONOTONIC)
 IDENTITY = dict(zip(("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest"),
     ("sha256:" + digit * 64 for digit in "123")))
 PRIVATE = Ed25519PrivateKey.from_private_bytes(b"\x41" * 32)
@@ -107,7 +108,7 @@ class JitOriginalAuthorizationControls(unittest.TestCase):
                     self.assertEqual(payload["controlDigest"], frame(source.CONTROL_DOMAIN, raw))
                     self.assertEqual(observed.authorization_digest, frame(source.IDENTITY_DOMAIN, signed))
                     self.assertEqual((observed.issued_at_epoch_ns, observed.expires_at_epoch_ns,
-                        observed.original_deadline_ns), (WINDOW[0], WINDOW[3], DEADLINE))
+                        observed.original_deadline_ns), (WINDOW[0], ORIGINAL_EXPIRY, DEADLINE))
                     self.assertEqual(observed.control, json.loads(raw))
                     self.assertNotIn("originalDeadlineNs", observed.control["context"])
                     self.assertEqual(observed.control["context"]["operation"], "jit.assertion.issue")
@@ -192,7 +193,7 @@ class JitOriginalAuthorizationControls(unittest.TestCase):
                 EPOCH + LIFETIME // 4, MONOTONIC + LIFETIME // 4, WINDOW[5], WINDOW[6])
             observed = verify(signed, raw, live_window=narrower)
             self.assertEqual((observed.issued_at_epoch_ns, observed.expires_at_epoch_ns,
-                observed.original_deadline_ns), (EPOCH, WINDOW[3], DEADLINE))
+                observed.original_deadline_ns), (EPOCH, ORIGINAL_EXPIRY, DEADLINE))
             for issue, expiry in ((EPOCH + 101, EPOCH + 1000),
                     (EPOCH - LIFETIME, EPOCH + 1000), (EPOCH - 100, EPOCH + 100)):
                 payload = json.loads(signed)["payload"]
@@ -247,9 +248,29 @@ class JitOriginalAuthorizationControls(unittest.TestCase):
             source._bind(payload, raw, observed.control, pins, window, meter)
             actual = verify(relayed, raw, live_window=window)
             self.assertEqual((actual.issued_at_epoch_ns, actual.expires_at_epoch_ns, actual.original_deadline_ns),
-                (EPOCH, WINDOW[3], DEADLINE))
+                (EPOCH, ORIGINAL_EXPIRY, DEADLINE))
             self.assertEqual(actual.control, observed.control)
             self.assertNotEqual(actual.authorization_digest, observed.authorization_digest)
+
+    def test_original_monotonic_bound_is_signed_as_narrow_epoch_expiry_before_native_keys(self):
+        with clocks():
+            raw = control()
+            signed = sign(raw)
+            selected = json.loads(signed)["payload"]
+            self.assertEqual(selected["issuedAtEpochNs"], WINDOW[0])
+            self.assertEqual(selected["expiresAtEpochNs"], ORIGINAL_EXPIRY)
+            self.assertEqual(selected["originalDeadlineNs"], DEADLINE)
+            self.assertLess(ORIGINAL_EXPIRY, WINDOW[3])
+            # Wall time advances to the original narrower expiry while the
+            # actual monotonic sample remains before the control deadline.
+            with patch.object(source.clock.time, "time_ns", return_value=ORIGINAL_EXPIRY):
+                with self.assertRaises(REFUSALS):
+                    verify(signed, raw)
+            invalid = json.loads(raw)
+            invalid["originalDeadlineNs"] = MONOTONIC
+            with patch.object(source.evidence.keys, "_public_binding",
+                    side_effect=AssertionError("invalid interval reached native key")), self.assertRaises(ValueError):
+                sign(canonical(invalid))
 
     def test_complete_comparison_reservation_precedes_actual_signature(self):
         with clocks():

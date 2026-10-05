@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from serverware import authority_jit_original_actions as actions
 from test_authority_jit_original_configuration import Fixture
-from test_authority_jit_original_authorization import WINDOW, EPOCH, MONOTONIC, DEADLINE, clocks, work
+from test_authority_jit_original_authorization import WINDOW, EPOCH, MONOTONIC, DEADLINE, ORIGINAL_EXPIRY, clocks, work
 from test_authority_jit_original_pages import binding
 
 
@@ -80,7 +80,7 @@ class JitOriginalActionControls(unittest.TestCase):
                 self.assertIs(sent["control_bytes"], raw)
                 observed = actions._verify(selected, role=role, action=action,
                     authorization_bytes=sent["authorization_bytes"], control_bytes=raw, window=WINDOW, work=work())
-                self.assertEqual((observed.issued_at_epoch_ns, observed.expires_at_epoch_ns), (WINDOW[0], WINDOW[3]))
+                self.assertEqual((observed.issued_at_epoch_ns, observed.expires_at_epoch_ns), (WINDOW[0], ORIGINAL_EXPIRY))
 
     def test_genuine_verifier_relay_preserves_original_interval_with_narrow_receiving_window(self):
         planner, verifier = self.configs["planner"], self.configs["verifier"]

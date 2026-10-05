@@ -181,7 +181,7 @@ class _Invocation:
                 or (cursor is None and trace is None and callable(read) and retain is None))
             and (retain is None or callable(retain)))
         if cursor is not None:
-            from serverware.authority_planner import PlannerTrace
+            from serverware.authority_planner_read import PlannerTrace
             _require(type(trace) is PlannerTrace and trace.operation == OPERATION
                 and trace._jit_successor is True)
         self.cursor, self.trace, self._check_callback = cursor, trace, check
@@ -232,11 +232,15 @@ class _Invocation:
             _require(self._active is None and not self._callback_active and len(self._records) < MAX_STAGES)
             stage = _Stage(self, name, acquire and self.cursor is not None)
             self._active = stage
-            # At most ten source-local checks examine the <=MAX_STAGES held
-            # ledger metadata in this call site (including one raw callback).
-            # Reserve that bounded bookkeeping independently of body/engine
-            # bytes; no completed stage receives a later debit.
-            stage.work.charge(input_bytes=1024 * 1024, json_nodes=65536)
+            # At most ten local scans examine <=138 compound ledgers. The
+            # configured producer's neutral replay checks additionally scan
+            # <=69 sealed production ledgers at most twenty times in a read
+            # stage. Fixed metadata ceilings of 512/256 bytes and 32 nodes
+            # per respective record total <=1,059,840 bytes/88,320 nodes;
+            # the remainder covers bounded active/configuration scaffolding.
+            # Reserve on this actual child BEFORE neutral callbacks, apart
+            # from body/engine bytes. No sealed ledger receives a late debit.
+            stage.work.charge(input_bytes=2 * 1024 * 1024, json_nodes=131072)
             stage.check()
             yield stage
             stage.check()

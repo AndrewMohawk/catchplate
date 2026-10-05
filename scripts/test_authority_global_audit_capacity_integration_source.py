@@ -77,10 +77,11 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text, cls.tree = source("serverware/authority_planner.py")
+        _, cls.read_tree = source("serverware/authority_planner_read.py")
         _, cls.trace_tree = source("serverware/authority_audit_trace.py")
 
     def method(self, name, owner="TypedTransitionPlanningProgram"):
-        return definition(self.tree, name, owner)
+        return definition(self.read_tree if owner == "PlannerTrace" else self.tree, name, owner)
 
     def test_all_nineteen_source_participants_have_only_named_framework_slots(self):
         actual = {name for name, spec in authority_contract.OPERATIONS.items()
@@ -417,7 +418,8 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual({item.name for item in imports[0].names}, {
             "AuditTraceBudget", "AuditTraceError", "MAX_PLAN_TRACE_ENTRIES", "audit_capacity_scan_key",
         })
-        self.assertEqual(len(calls(self.tree, "AuditTraceBudget")), 2)
+        self.assertEqual(sum(len(calls(tree, "AuditTraceBudget"))
+            for tree in (self.tree, self.read_tree)), 2)
         self.assertFalse(any(isinstance(node, ast.ClassDef) and node.name == "_PlannerTraceBudget"
                              for node in self.tree.body))
         producer = self.method("close", "PlannerTrace")
@@ -847,7 +849,8 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertIn(name, allowed)
         self.assertNotIn("_complete_queries", ast.unparse(assigned["allowed_writes"]))
         self.assertEqual([ast.unparse(item) for item in call(init, "AuditTraceBudget").args], ["operation"])
-        self.assertEqual(len(calls(self.tree, "AuditTraceBudget")), 2)
+        self.assertEqual(sum(len(calls(tree, "AuditTraceBudget"))
+            for tree in (self.tree, self.read_tree)), 2)
         read = self.method("read", "PlannerTrace")
         checked = call(read, "authority_index_trace.validate_complete_read_trace")
         self.assertEqual([ast.unparse(item) for item in checked.args], ["self.operation", "table", "key"])

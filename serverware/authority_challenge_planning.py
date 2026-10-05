@@ -25,6 +25,7 @@ from serverware import authority_challenge_policy as policy
 from serverware import authority_challenge_snapshot as snapshots
 from serverware import authority_revocation_root_reader as physical
 from serverware.authority_query_read_work import _ValidationWork
+from serverware.authority_planner_read import _source_admission_work
 
 
 roots, reader, heads, authority = physical.roots, physical.roots.reader, physical.roots.heads, requests.authority
@@ -261,31 +262,6 @@ class _Catalog:
         _require(type(self.pending) is list)
         result, self.pending = self.pending, None
         return result
-
-
-def _source_admission_work(operation, work):
-    """Conservative reservations for genuine fixed catalog source rebuilds.
-
-    These descriptors come only from measured source, never database/request
-    values. Their bounded reconstruction is not a generic CPU/allocation claim.
-    Reserve repeated full source documents, hashes, row copies and comparisons
-    before the original planner admission functions reconstruct/compare them.
-    """
-    primary = roots.primary
-    operations = roots._callback(work, authority.operation_manifest)
-    query = roots._callback(work, primary.source_query_manifest)
-    authorization = roots._callback(work, primary.source_authorization_manifest)
-    for _ in range(4):
-        work.prepare_encoding(operations)
-        work.prepare_copy(operations)
-        work.charge(hashes=len(operations))
-    for document, repeats in ((query, 3), (authorization, 2)):
-        for _ in range(repeats):
-            work.prepare_encoding(document)
-            work.prepare_copy(document)
-            work.prepare_scan(document)
-            work.charge(hashes=1 + sum(entry["operation"] == operation for entry in document),
-                input_bytes=16 + 128)
 
 
 def _initial_roots(setup, operation, manifest_digest):

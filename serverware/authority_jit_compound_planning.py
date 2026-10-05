@@ -221,10 +221,10 @@ class JitCompoundReadPlanner:
         _require(len(identities) == 12)
         guard = existing._Guard(self, configured, live_window, now_epoch_ns, deadline_epoch_ns, check, work)
         guard.check()
-        from serverware import authority_planner as planner
+        from serverware import authority_planner_read as planner
         from serverware import authority_jit_compound as compound
         from serverware import control_plane_rbac_currentness as rbac
-        from serverware.authority_challenge_planning import _source_admission_work
+        from serverware.authority_planner_read import _source_admission_work
         import psycopg
         from psycopg.rows import dict_row
         from psycopg.transaction import Transaction

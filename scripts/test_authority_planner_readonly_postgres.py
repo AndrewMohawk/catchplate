@@ -47,7 +47,7 @@ TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFEREN
 
 def planner_mutation_query():
     """Extract only the unchanged production catalog query; never fake TLS."""
-    path = ROOT / "serverware/authority_planner.py"
+    path = ROOT / "serverware/authority_planner_read.py"
     if path.stat().st_size > 2 * 1024 * 1024:
         raise AssertionError("planner source exceeds fixture bound")
     tree = ast.parse(path.read_text(encoding="utf-8"))

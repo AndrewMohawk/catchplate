@@ -24,7 +24,7 @@ from serverware import authority_transition_core as core
 from serverware.authority_query_read_work import _ValidationWork
 
 OPERATION = "jit.assertion.issue"
-HANDLER = "issue_jit_assertion_receipt"
+HANDLER = "serverware_policy_authority_jit_assertion_issue"
 RECEIPT_TABLE = "jit_webauthn_assertion_receipts"
 ARGUMENT_FIELDS = frozenset({
     "approval_request_id", "approver_id", "challenge_id", "credential_record_id",

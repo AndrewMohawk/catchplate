@@ -77,7 +77,7 @@ def acquire(parts, *, work=None):
 
 def real_trace_read():
     """Compile the complete actual method, not a rewritten gate or stub."""
-    path = Path(__file__).resolve().parents[1] / "serverware/authority_planner.py"
+    path = Path(__file__).resolve().parents[1] / "serverware/authority_planner_read.py"
     parsed = ast.parse(path.read_text())
     cls = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == "PlannerTrace")
     method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "read")

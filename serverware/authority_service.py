@@ -4628,6 +4628,18 @@ class AuthorityProcess:
             evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
             context=owned_context, root_inventory=inventory, work=work)
 
+    def _produce_jit_compound(self, *, request, business_before_roots,
+            authorization_before_roots, expected_counted_heads, live_window,
+            original_deadline_ns, check, work):
+        """Private measured production; request/root admission and execution stay upstream."""
+        from serverware import authority_jit_compound_service as jit
+
+        return jit._produce_on_work(self, request=request,
+            business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots,
+            expected_counted_heads=expected_counted_heads, live_window=live_window,
+            original_deadline_ns=original_deadline_ns, check=check, work=work)
+
     def _challenge_maintenance_producer(self, *, operation, work):
         """Actual measured planner signer/read settings, without SQL or dispatch."""
         from serverware import authority_challenge_service as challenges

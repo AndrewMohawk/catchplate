@@ -23450,6 +23450,8 @@ UI_HTML = r"""
   <script>
     let state = {credentials: [], pendingOAuthCredentials: [], oauthIssuanceUncertainties: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, enrollmentPacketText: null, enrollmentPacketFileSha256: null, setupSessions: [], setupSession: null, setupChallenge: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
+    let setupCredentialContext = null;
+    let setupCredentialSequence = 0;
     let refreshInFlight = null;
     let hasRendered = false;
     let policyPreviewGeneration = 0;
@@ -23752,6 +23754,7 @@ UI_HTML = r"""
     }
 
     function markOIDCSessionStatusUnknown() {
+      invalidateSetupCredentialContext();
       registrationCaptureInvalidate('Browser authentication became unknown.');
       discardCredentialReplacement('Browser authentication became unknown. Local replacement discarded.');
       sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
@@ -23790,6 +23793,7 @@ UI_HTML = r"""
           state.authStatus?.sessionActivationMode])
           !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated,
             status.roles, status.sessionActivationMode])) {
+        invalidateSetupCredentialContext();
         discardCredentialReplacement('Browser authentication changed. Local replacement discarded.');
         registrationCaptureInvalidate('Browser authentication changed.');
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
@@ -24454,12 +24458,14 @@ UI_HTML = r"""
       target.replaceChildren(summary, reviewButton, continueButton);
     }
 
-    async function controlPlaneAssertion(challengeDetail, operation = null) {
+    async function controlPlaneAssertion(challengeDetail, operation = null, checkContext = undefined) {
+      checkContext?.();
       operation?.check();
       operation?.assertion();
       if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
       const options = await api('/api/control-plane/mutations/webauthn/options', {
         credentialReplacement: operation,
+        checkContext,
         method: 'POST',
         body: JSON.stringify({
           action: challengeDetail.action,
@@ -24469,10 +24475,12 @@ UI_HTML = r"""
         })
       });
       operation?.check();
+      checkContext?.();
       if (!(options.publicKey.allowCredentials || []).length) throw new Error('No registered passkey is available for this operator');
       const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options),
         ...(operation ? {signal: operation.controller.signal} : {})});
       operation?.check();
+      checkContext?.();
       return credentialToJson(assertion);
     }
 
@@ -24485,13 +24493,16 @@ UI_HTML = r"""
 
     async function runControlPlaneMutation(original) {
       const operation = credentialReplacementGuard(original);
+      const checkContext = setupCredentialMutationGuard(original);
       const mutation = JSON.parse(JSON.stringify(original));
       operation?.retain(mutation);
       while (true) {
         try {
           operation?.check();
-          const result = await api(mutation.path, {...mutationOptions(mutation), credentialReplacement: operation});
+          checkContext?.();
+          const result = await api(mutation.path, {...mutationOptions(mutation), credentialReplacement: operation, checkContext});
           operation?.check();
+          checkContext?.();
           if (pendingMutation && mutation.approvalId && pendingMutation.approvalId === mutation.approvalId) {
             pendingMutation = null;
             if (operation) operation.pending = null;
@@ -24501,10 +24512,11 @@ UI_HTML = r"""
           return {pending: false, result, mutation};
         } catch (error) {
           operation?.check();
+          checkContext?.();
           const detail = error instanceof ApiError ? error.detail : null;
           if (error.status === 412 && detail && detail.error === 'control_plane_webauthn_required') {
             operation?.challenge(detail);
-            const assertion = await controlPlaneAssertion(detail, operation);
+            const assertion = await controlPlaneAssertion(detail, operation, checkContext);
             operation?.check();
             mutation.body = mutation.body || {};
             mutation.body.mfa = {...(mutation.body.mfa || {}), assertion};
@@ -24524,6 +24536,7 @@ UI_HTML = r"""
             setStatus(`${mutation.label} is waiting for approval ${detail.approvalId}.`, 'pending');
             await refresh();
             operation?.check();
+            checkContext?.();
             return {pending: true, approval: detail};
           }
           throw error;
@@ -24534,7 +24547,12 @@ UI_HTML = r"""
     async function continuePendingMutation() {
       if (pendingMutation?.kind === credentialReplacementKind) return continueCredentialReplacement();
       if (!pendingMutation) throw new Error('No control-plane mutation is waiting');
+      const original = pendingMutation;
+      const checkContext = setupCredentialMutationGuard(original);
+      const setupContext = checkContext ? setupCredentialContext : null;
       await refresh();
+      checkContext?.();
+      if (checkContext && pendingMutation !== original) throw new Error('Pending Setup credential request changed; no continuation was sent');
       const approval = (state.controlPlaneApprovals || []).find((item) => item.id === pendingMutation.approvalId);
       if (!approval) throw new Error('Pending approval is not visible to this operator');
       if (approval.status === 'pending') {
@@ -24542,10 +24560,17 @@ UI_HTML = r"""
         return {pending: true};
       }
       if (approval.status !== 'approved') throw new Error(`Approval ${approval.id} is ${approval.status}`);
-      const completed = await runControlPlaneMutation(pendingMutation);
-      if (completed.pending) return completed;
-      await finishMutation(completed.mutation, completed.result);
-      return completed;
+      if (setupContext?.continuing) throw new Error('This Setup credential continuation is already in progress');
+      if (setupContext) setupContext.continuing = true;
+      try {
+        const completed = await runControlPlaneMutation(checkContext ? original : pendingMutation);
+        if (completed.pending) return completed;
+        await finishMutation(completed.mutation, completed.result);
+        if (setupContext) completed.uiHandled = true;
+        return completed;
+      } finally {
+        if (setupContext) setupContext.continuing = false;
+      }
     }
 
     async function reviewPendingMutationApproval() {
@@ -24562,6 +24587,10 @@ UI_HTML = r"""
     }
 
     async function finishMutation(mutation, result) {
+      if (mutation.kind === 'credential-create' && mutation.setupCredentialContextId !== undefined) {
+        await finishSetupCredentialCreation(mutation, result);
+        return;
+      }
       if (mutation.kind === 'oauth-start') {
         sessionStorage.removeItem(oauthDraftKey);
         window.location.assign(result.authorizationUrl);
@@ -24957,7 +24986,8 @@ UI_HTML = r"""
       );
     }
 
-    async function createSetupSession() {
+    async function createSetupSession(checkContext = undefined) {
+      checkContext?.();
       const selection = currentSetupSelection();
       if (!selection.template || !selection.principalId || !selection.routeId) {
         throw new Error('Select a template, principal, and route before creating a setup run');
@@ -24973,8 +25003,9 @@ UI_HTML = r"""
         routeId: selection.routeId
       };
       if (activeRoute) body.routePolicyDigest = await sha256CanonicalJson(activeRoute);
+      checkContext?.();
       const result = await api('/api/setup/sessions', {
-        method: 'POST',
+        method: 'POST', checkContext,
         body: JSON.stringify(body)
       });
       rememberSetupSession(result.session);
@@ -25011,9 +25042,10 @@ UI_HTML = r"""
       return result;
     }
 
-    async function ensureSetupSession() {
+    async function ensureSetupSession(checkContext = undefined) {
+      checkContext?.();
       if (setupSessionMatchesSelection()) return state.setupSession;
-      const result = await createSetupSession();
+      const result = await createSetupSession(checkContext);
       return result.session;
     }
 
@@ -25031,6 +25063,74 @@ UI_HTML = r"""
       });
       session = rememberSetupSession(result.session);
       return session;
+    }
+
+    function setupCredentialSelection() {
+      const {template, principalId, routeId, approvers} = currentSetupSelection();
+      return JSON.stringify([template, principalId, routeId, approvers]);
+    }
+
+    function setupCredentialSessionIdentity(session) {
+      return JSON.stringify([session?.id, session?.revision, session?.status, session?.phase,
+        session?.templateId, session?.principalId, session?.routeId, session?.routePolicyDigest,
+        session?.ownerId, session?.currentAssigneeId, session?.credentialId, session?.credentialVersion]);
+    }
+
+    function invalidateSetupCredentialContext() {
+      if (setupCredentialContext) setupCredentialContext.invalid = true;
+    }
+
+    function setupCredentialMutationGuard(mutation) {
+      if (mutation.setupCredentialContextId === undefined) return undefined;
+      const context = setupCredentialContext;
+      const check = () => {
+        if (!context || context !== setupCredentialContext || context.invalid
+            || mutation.kind !== 'credential-create' || mutation.persist !== false
+            || mutation.setupCredentialContextId !== context.id
+            || !hasOperatorAuth() || policyAuthoringScope() !== context.authScope
+            || setupCredentialSelection() !== context.selection
+            || setupCredentialSessionIdentity(state.setupSession) !== context.sessionIdentity) {
+          throw new Error('Setup or authentication changed. No further credential request was sent; inspect the original run before starting again.');
+        }
+      };
+      check();
+      return check;
+    }
+
+    async function finishSetupCredentialCreation(mutation, result) {
+      const context = setupCredentialContext;
+      const credentialId = result?.id;
+      try {
+        const checkContext = setupCredentialMutationGuard(mutation);
+        if (typeof credentialId !== 'string' || !credentialId || context.bindAttempted) {
+          throw new Error('The exact created credential ID is unavailable or binding was already attempted');
+        }
+        // The create response is authoritative for this ID. Never choose a list fallback.
+        const template = policyTemplates[context.template];
+        const injection = policyCredentialInjection(result, null, template);
+        signedPolicyCredential(result, injection);
+        if (!template.custom) policyCredentialBinding(result, {adapter: template.adapter});
+        context.bindAttempted = true;
+        const bound = await api(`/api/setup/sessions/${encodeURIComponent(context.sessionId)}/credential`, {
+          method: 'POST', checkContext,
+          body: JSON.stringify({expectedRevision: context.revision, credentialId})
+        });
+        checkContext();
+        const session = bound?.session;
+        if (session?.id !== context.sessionId || session.credentialId !== credentialId
+            || session.revision !== context.revision + 1 || session.phase !== 'credential_activated'
+            || session.status !== 'active' || session.credentialVersion !== result.credential_version
+            || session.templateId !== context.template || session.principalId !== context.principalId
+            || session.routeId !== context.routeId) throw new Error('Setup binding response does not match the original request');
+        rememberSetupSession(session);
+        state.credentials = [result, ...(state.credentials || []).filter((item) => item.id !== credentialId)];
+        setupCredentialContext = null;
+        renderSetupWorkflow();
+        setStatus('Created credential bound to the original Setup run. Preview the assignment explicitly when ready.', 'success');
+      } catch (error) {
+        if (context) context.invalid = true;
+        throw new Error(`Credential creation succeeded${typeof credentialId === 'string' ? ` (${credentialId})` : ''}, but Setup binding was not confirmed. Refresh and inspect the original run and credential before any manual continuation; do not create it again. ${error.message}`);
+      }
     }
 
     function currentSetupSelection() {
@@ -26351,12 +26451,23 @@ UI_HTML = r"""
           method: 'POST',
           body: {name: form.get('name'), kind, secret: form.get('secret'), metadata}
         };
+        if (setupCredentialContext) {
+          mutation.setupCredentialContextId = setupCredentialContext.id;
+          setupCredentialMutationGuard(mutation)();
+          if (setupCredentialContext.submitted) throw new Error('This Setup credential was already submitted. Continue its approval or inspect the original run; do not create it again.');
+          const template = policyTemplates[setupCredentialContext.template];
+          const injection = policyCredentialInjection(candidateCredential, null, template);
+          signedPolicyCredential(candidateCredential, injection);
+          if (!template.custom) policyCredentialBinding(candidateCredential, {adapter: template.adapter});
+          setupCredentialContext.submitted = true;
+        }
         const completed = await runControlPlaneMutation(mutation);
         if (!completed.pending) {
           event.target.reset();
           event.target.metadata.value = '{}';
           syncCredentialKindFields(true);
           await finishMutation(completed.mutation, completed.result);
+          if (mutation.setupCredentialContextId !== undefined) completed.uiHandled = true;
         }
         return completed;
       });
@@ -26434,15 +26545,40 @@ UI_HTML = r"""
 
     async function prepareSetupProviderLogin() {
       const selection = currentSetupSelection();
+      const originalSelection = setupCredentialSelection();
+      const authScope = policyAuthoringScope();
+      const originalSession = setupCredentialSessionIdentity(state.setupSession);
+      const checkPreparation = () => {
+        if (!hasOperatorAuth() || policyAuthoringScope() !== authScope
+            || setupCredentialSelection() !== originalSelection
+            || setupCredentialSessionIdentity(state.setupSession) !== originalSession) {
+          throw new Error('Setup or authentication changed while preparing the credential form');
+        }
+      };
       const template = policyTemplates[selection.template];
       if (!template) throw new Error('Select a restriction template');
-      const setupSession = await ensureSetupSession();
+      const setupSession = await ensureSetupSession(checkPreparation);
+      if (!hasOperatorAuth() || policyAuthoringScope() !== authScope || setupCredentialSelection() !== originalSelection
+          || setupCredentialSessionIdentity(state.setupSession) !== setupCredentialSessionIdentity(setupSession)) {
+        throw new Error('Setup or authentication changed while preparing the credential form');
+      }
       const provider = (state.oauthProviders || []).find((item) => item.id === template.provider);
       if (!provider) {
         const binding = template.adapter?.config?.credentialBinding;
         if (binding?.credentialType !== 'static' || typeof binding.secretClass !== 'string') {
           throw new Error('This static template has no valid credential identity contract');
         }
+        if (setupSession.status !== 'active' || setupSession.phase !== 'created' || setupSession.credentialId
+            || setupSession.templateId !== selection.template || setupSession.principalId !== selection.principalId
+            || setupSession.routeId !== selection.routeId) throw new Error('This Setup run is not an unbound run for the selected template, principal, and route');
+        if (setupCredentialContext?.submitted) throw new Error('A Setup credential was already submitted. Continue its approval or inspect the original run before starting again.');
+        setupCredentialContext = {
+          id: ++setupCredentialSequence, authScope, selection: originalSelection,
+          sessionIdentity: setupCredentialSessionIdentity(setupSession),
+          sessionId: setupSession.id, revision: setupSession.revision,
+          template: selection.template, principalId: selection.principalId, routeId: selection.routeId,
+          submitted: false, bindAttempted: false, invalid: false
+        };
         $('credential-name').value = `${template.label} credential`;
         $('credential-kind').value = template.injection?.type || 'bearer';
         $('credential-provider').value = template.provider || '';
@@ -26645,9 +26781,11 @@ UI_HTML = r"""
       runUiAction('Verify setup evidence', verifySetupEvidence);
     });
     $('setup-session').addEventListener('change', (event) => {
+      invalidateSetupCredentialContext();
       runUiAction('Load setup run', () => loadSetupSession(event.target.value));
     });
     $('setup-template').addEventListener('change', () => {
+      invalidateSetupCredentialContext();
       state.setupVerification = null;
       const template = policyTemplates[$('setup-template').value];
       $('setup-route-id').value = template?.routeId || '';
@@ -26656,6 +26794,7 @@ UI_HTML = r"""
     });
     for (const id of ['setup-principal', 'setup-credential', 'setup-route-id', 'setup-approvers']) {
       $(id).addEventListener(id === 'setup-route-id' || id === 'setup-approvers' ? 'input' : 'change', () => {
+        invalidateSetupCredentialContext();
         state.setupVerification = null;
         renderSetupWorkflow();
       });
@@ -27265,6 +27404,7 @@ UI_HTML = r"""
     initOAuthActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
+      invalidateSetupCredentialContext();
       registrationCaptureInvalidate('Entered operator credentials changed.');
       discardCredentialReplacement('Operator token changed. Local replacement discarded.');
       sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');

@@ -84772,6 +84772,73 @@ def _audit_item_matches(item: dict[str, Any], filters: dict[str, Any]) -> bool:
     return True
 
 
+class AuditSearchCursorError(ValueError):
+    """An audit search position is malformed or belongs to different filters."""
+
+
+def _audit_search_cursor_encode(
+    backend: str, filter_digest: str, position: Any
+) -> str:
+    if backend == "sqlite":
+        created_at, event_id = position
+        # IDs may contain 256 Unicode/control characters. Encoding their UTF-8
+        # bytes keeps even those genuine append IDs inside the 2048-byte token.
+        position = [
+            created_at,
+            base64.urlsafe_b64encode(event_id.encode("utf-8")).decode("ascii").rstrip("="),
+        ]
+    raw = dumps([1, backend, filter_digest, position]).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _audit_search_cursor_decode(
+    cursor: str, backend: str, filter_digest: str
+) -> Any:
+    # This is a read position, not an authorization or audit-verification token.
+    try:
+        if not isinstance(cursor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,2048}", cursor):
+            raise ValueError
+        raw = base64.b64decode(
+            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
+        )
+        payload = json.loads(raw)
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 4
+            or type(payload[0]) is not int
+            or payload[:3] != [1, backend, filter_digest]
+        ):
+            raise ValueError
+        position = payload[3]
+        if backend == "postgres":
+            if type(position) is not int or not 1 <= position <= 9223372036854775807:
+                raise ValueError
+        elif backend == "sqlite":
+            if (
+                not isinstance(position, list)
+                or len(position) != 2
+                or not isinstance(position[0], str)
+                or not re.fullmatch(r"[0-9T:.+Z-]{1,64}", position[0])
+                or not isinstance(position[1], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,1366}", position[1])
+            ):
+                raise ValueError
+            event_id = base64.b64decode(
+                position[1] + "=" * (-len(position[1]) % 4),
+                altchars=b"-_", validate=True,
+            ).decode("utf-8")
+            if not 1 <= len(event_id) <= 256:
+                raise ValueError
+            position = [position[0], event_id]
+        else:
+            raise ValueError
+        if _audit_search_cursor_encode(backend, filter_digest, position) != cursor:
+            raise ValueError
+        return position
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise AuditSearchCursorError("invalid audit search cursor or changed filters") from exc
+
+
 def search_audit_events(
     *,
     limit: int = 100,
@@ -84790,12 +84857,39 @@ def search_audit_events(
     start: str | None = None,
     end: str | None = None,
     q: str | None = None,
+    paginate: bool = False,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     limit = max(1, min(int(limit), 10000))
     scan_limit = max(limit, min(int(scan_limit), 50000))
-    if audit_uses_postgres():
+    filters = {
+        "event_type": event_type,
+        "actor_type": actor_type,
+        "actor_id": actor_id,
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "policy_hash": policy_hash,
+        "credential_id": credential_id,
+        "credential_version": credential_version,
+        "approval_id": approval_id,
+        "decision": decision,
+        "attestation_measurement": attestation_measurement,
+        "start": start,
+        "end": end,
+        "q": q,
+    }
+    backend = audit_store_backend_name()
+    filter_digest = hashlib.sha256(dumps(filters).encode("utf-8")).hexdigest() if paginate else ""
+    position = None
+    if cursor is not None:
+        if not paginate:
+            raise AuditSearchCursorError("audit search cursor requires pagination")
+        position = _audit_search_cursor_decode(cursor, backend, filter_digest)
+    # The extra candidate is only lookahead, never part of this page's scan.
+    fetch_limit = scan_limit + 1 if paginate else scan_limit
+    if backend == "postgres":
         conditions: list[str] = []
-        params: dict[str, Any] = {"scan_limit": scan_limit}
+        params: dict[str, Any] = {"scan_limit": fetch_limit}
         if event_type:
             conditions.append("event_type = %(event_type)s")
             params["event_type"] = event_type
@@ -84811,6 +84905,9 @@ def search_audit_events(
         if end:
             conditions.append("created_at <= %(end)s")
             params["end"] = end
+        if position is not None:
+            conditions.append("sequence < %(before_sequence)s")
+            params["before_sequence"] = position
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with _audit_pg_connect() as conn:
             with conn.cursor() as cur:
@@ -84821,7 +84918,7 @@ def search_audit_events(
                 total_candidates = int(cur.fetchone()["count"])
                 cur.execute(
                     f"""
-                    SELECT id, event_type, actor_type, actor_id, event_json,
+                    SELECT {'sequence, ' if paginate else ''}id, event_type, actor_type, actor_id, event_json,
                            prev_event_hash, event_hash, created_at
                     FROM serverware_audit_events
                     {where}
@@ -84849,6 +84946,9 @@ def search_audit_events(
         if end:
             conditions.append("created_at <= ?")
             params_list.append(end)
+        if position is not None:
+            conditions.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            params_list.extend((position[0], position[0], position[1]))
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with connect() as conn:
             total_candidates = int(
@@ -84864,9 +84964,8 @@ def search_audit_events(
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
-                (*params_list, scan_limit),
+                (*params_list, fetch_limit),
             ).fetchall()
-    items = [_audit_item_from_row(row) for row in rows]
     field_filters = {
         "principal_id": principal_id,
         "route_id": route_id,
@@ -84880,33 +84979,43 @@ def search_audit_events(
         "attestation_measurement": attestation_measurement,
         "q": q,
     }
-    matches = [item for item in items if _audit_item_matches(item, field_filters)]
-    return {
+    if paginate:
+        items = []
+        matches = []
+        for row in rows[:scan_limit]:
+            item = _audit_item_from_row(row)
+            if backend == "postgres":
+                item.pop("sequence")
+            items.append(item)
+            if _audit_item_matches(item, field_filters):
+                matches.append(item)
+                if len(matches) == limit:
+                    break
+        has_more = len(rows) > len(items)
+        next_cursor = None
+        if has_more and items:
+            # Stop at the consumed boundary, not the end of the fetched batch:
+            # later matches in that batch must still be available next time.
+            last = rows[len(items) - 1]
+            next_position = last["sequence"] if backend == "postgres" else [last["created_at"], last["id"]]
+            next_cursor = _audit_search_cursor_encode(backend, filter_digest, next_position)
+    else:
+        items = [_audit_item_from_row(row) for row in rows]
+        matches = [item for item in items if _audit_item_matches(item, field_filters)]
+    result = {
         "ok": True,
-        "backend": audit_store_backend_name(),
-        "filters": {
-            "event_type": event_type,
-            "actor_type": actor_type,
-            "actor_id": actor_id,
-            "principal_id": principal_id,
-            "route_id": route_id,
-            "policy_hash": policy_hash,
-            "credential_id": credential_id,
-            "credential_version": credential_version,
-            "approval_id": approval_id,
-            "decision": decision,
-            "attestation_measurement": attestation_measurement,
-            "start": start,
-            "end": end,
-            "q": q,
-        },
+        "backend": backend,
+        "filters": filters,
         "count": min(len(matches), limit),
         "matched_in_scan": len(matches),
         "scanned": len(items),
         "total_candidates": total_candidates,
-        "complete": len(items) >= total_candidates,
+        "complete": not has_more if paginate else len(items) >= total_candidates,
         "items": matches[:limit],
     }
+    if paginate:
+        result.update(next_cursor=next_cursor, has_more=has_more)
+    return result
 
 
 def export_audit_events_jsonl(

@@ -17942,6 +17942,7 @@ def audit_events(
 def audit_search(
     limit: int = Query(100, ge=1, le=1000),
     scan_limit: int = Query(5000, ge=1, le=50000, alias="scanLimit"),
+    cursor: str | None = Query(default=None, min_length=1, max_length=2048),
     event_type: str | None = Query(default=None, alias="eventType"),
     actor_type: str | None = Query(default=None, alias="actorType"),
     actor_id: str | None = Query(default=None, alias="actorId"),
@@ -17960,24 +17961,29 @@ def audit_search(
     q: str | None = None,
     _: AdminIdentity = Depends(require_role("auditor")),
 ) -> dict[str, Any]:
-    return db.search_audit_events(
-        limit=limit,
-        scan_limit=scan_limit,
-        event_type=event_type,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        principal_id=principal_id,
-        route_id=route_id,
-        policy_hash=policy_hash,
-        credential_id=credential_id,
-        credential_version=credential_version,
-        approval_id=approval_id,
-        decision=decision,
-        attestation_measurement=attestation_measurement,
-        start=start,
-        end=end,
-        q=q,
-    )
+    try:
+        return db.search_audit_events(
+            limit=limit,
+            scan_limit=scan_limit,
+            paginate=True,
+            cursor=cursor,
+            event_type=event_type,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            principal_id=principal_id,
+            route_id=route_id,
+            policy_hash=policy_hash,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            approval_id=approval_id,
+            decision=decision,
+            attestation_measurement=attestation_measurement,
+            start=start,
+            end=end,
+            q=q,
+        )
+    except db.AuditSearchCursorError as exc:
+        raise HTTPException(status_code=400, detail="Invalid audit search cursor; start a new search") from exc
 
 
 @app.get("/api/audit/export")
@@ -23407,6 +23413,10 @@ UI_HTML = r"""
           <thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Evidence</th><th>Chain</th></tr></thead>
           <tbody id="audit-events"></tbody>
         </table>
+        <div class="toolbar">
+          <span id="audit-page" class="muted">No search loaded</span>
+          <button id="audit-next" class="secondary" type="button" onclick="runUiAction('Next audit page', () => searchAudit({nextPage: true}))" disabled>Next page</button>
+        </div>
       </section>
       <section id="custody-workspace" aria-labelledby="custody-heading" hidden>
         <div class="toolbar">
@@ -23455,6 +23465,8 @@ UI_HTML = r"""
     let setupLoadGeneration = 0;
     let setupLoadInFlight = null;
     let refreshInFlight = null;
+    let auditSearchGeneration = 0;
+    let auditSearchBusy = false;
     let hasRendered = false;
     let policyPreviewGeneration = 0;
     const $ = (id) => document.getElementById(id);
@@ -25572,8 +25584,11 @@ UI_HTML = r"""
       const chain = state.auditChain;
       const chainPill = chain ? pill(chain.ok === true && chain.complete !== false ? 'approved' : 'denied') : '<span class="pill warn">not verified</span>';
       $('audit-summary').innerHTML = result
-        ? `${result.complete ? '<span class="pill good">complete scan</span>' : '<span class="pill warn">partial scan</span>'}<strong>${esc(result.count)} shown</strong><span class="muted">${esc(result.matched_in_scan)} matched / ${esc(result.scanned)} scanned / ${esc(result.total_candidates)} candidates</span>${chainPill}`
+        ? `${result.has_more ? '<span class="pill warn">more events to scan</span>' : '<span class="pill good">end of search</span>'}<strong>${esc(result.count)} shown</strong><span class="muted">${esc(result.scanned)} scanned this page / ${esc(result.total_candidates)} remaining candidates before this page</span>${chainPill}`
         : `<span class="muted">Run a search to inspect audit events.</span>${chain ? chainPill : ''}`;
+      $('audit-next').disabled = auditSearchBusy || !result?.has_more || !result?.next_cursor
+        || result.query !== auditSearchParams().toString() || result.authScope !== policyAuthoringScope();
+      $('audit-page').textContent = auditSearchBusy ? 'Loading page…' : result ? `Page ${result.page}` : 'No search loaded';
       const items = result?.items || [];
       $('audit-events').innerHTML = items.map((item) => `
         <tr>
@@ -26879,10 +26894,37 @@ UI_HTML = r"""
       return params;
     }
 
-    async function searchAudit() {
-      state.auditSearchResult = await api(`/api/audit/search?${auditSearchParams()}`);
+    async function searchAudit({nextPage = false} = {}) {
+      const query = auditSearchParams().toString();
+      const authScope = policyAuthoringScope();
+      const previous = state.auditSearchResult;
+      if (nextPage && (auditSearchBusy || !previous?.has_more || !previous?.next_cursor
+          || previous.query !== query || previous.authScope !== authScope)) {
+        throw new Error('Start a new audit search before continuing with changed filters or authentication');
+      }
+      const generation = ++auditSearchGeneration;
+      const checkContext = () => {
+        if (generation !== auditSearchGeneration || query !== auditSearchParams().toString()
+            || authScope !== policyAuthoringScope() || !hasOperatorAuth()) {
+          throw new Error('Audit search inputs or authentication changed; the old page was discarded');
+        }
+      };
+      checkContext();
+      const params = new URLSearchParams(query);
+      if (nextPage) params.set('cursor', previous.next_cursor);
+      auditSearchBusy = true;
       renderAuditInvestigation();
-      return state.auditSearchResult;
+      try {
+        const result = await api(`/api/audit/search?${params}`, {checkContext});
+        checkContext();
+        state.auditSearchResult = {...result, query, authScope, page: nextPage ? previous.page + 1 : 1};
+        return state.auditSearchResult;
+      } finally {
+        if (generation === auditSearchGeneration) {
+          auditSearchBusy = false;
+          renderAuditInvestigation();
+        }
+      }
     }
 
     async function verifyAuditChain() {
@@ -26918,6 +26960,14 @@ UI_HTML = r"""
       event.preventDefault();
       runUiAction('Search audit', searchAudit);
     });
+    for (const eventName of ['input', 'change']) {
+      $('audit-search-form').addEventListener(eventName, () => {
+        auditSearchGeneration += 1;
+        auditSearchBusy = false;
+        state.auditSearchResult = null;
+        renderAuditInvestigation();
+      });
+    }
     $('control-plane-status-filter').addEventListener('change', renderControlPlaneApprovals);
     $('control-plane-search').addEventListener('input', renderControlPlaneApprovals);
     $('jit-approval-status-filter').addEventListener('change', renderJitApprovals);

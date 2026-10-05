@@ -411,28 +411,30 @@ def _page(value, *, ordinal, count, lower, whole, root, profile, counted, user_i
     return upper, (row["created_at"], row["id"], projected), int(row["revoked_at"] is None)
 
 
-def verify_history(*, manifest: dict, count_body: bytes, read_page: Callable[[int], bytes],
-                   operation: str, user_id: str, cutoff_us: int, maximum_count: int,
-                   maximum_bytes: int, primary_root: dict, index_head: CapturedIndexHead) -> HistoryObservation:
-    """Independently replay the original count and every raw page exactly once.
-
-    The fixed phase schedule belongs to this successor, not to a generic v3
-    validator. Malformed data aborts this call; a callback cannot ask for extra
-    phases or substitute metrics, rows, verified pages, clocks or root heads.
-    """
+def _replay_history(*, manifest, count_body, read_page, operation, user_id, cutoff_us,
+                    maximum_count, maximum_bytes, primary_root, index_head):
+    """One genuine engine shared by initial acquisition and independent replay."""
     work = _ValidationWork(QueryReadValidationLimits())
     context, root, profile, counted, whole = _context(operation=operation, user_id=user_id,
         cutoff_us=cutoff_us, maximum_count=maximum_count, maximum_bytes=maximum_bytes,
         primary_root=primary_root, index_head=index_head, work=work)
-    _closed(manifest, _MANIFEST_FIELDS)
-    if type(manifest["pages"]) is not list or len(manifest["pages"]) > maximum_count:
-        raise RecoveryHistoryError("recovery history page inventory exceeds original configuration")
-    owned = _own(manifest, work)
-    if owned["schema"] != SCHEMA or {key: owned[key] for key in _CONTEXT_FIELDS} != context:
-        raise RecoveryHistoryError("recovery history manifest differs from independent originals")
-    core.require_digest(owned["chainDigest"], "recovery history final chain")
-    for descriptor in owned["pages"]:
-        _descriptor(descriptor)
+    producing = manifest is None
+    if producing:
+        owned = {"schema": SCHEMA, **context, "countBody": body_descriptor(count_body, work=work),
+                 "pages": [], "chainDigest": None}
+    else:
+        _closed(manifest, _MANIFEST_FIELDS)
+        if type(manifest["pages"]) is not list or len(manifest["pages"]) > maximum_count:
+            raise RecoveryHistoryError("recovery history page inventory exceeds original configuration")
+        owned = _own(manifest, work)
+        manifest_context = {key: owned[key] for key in _CONTEXT_FIELDS}
+        # Python mapping equality aliases True and 1. Original signed JSON
+        # context is exact typed data, so compare actual canonical encodings.
+        if owned["schema"] != SCHEMA or work.wire(manifest_context) != work.wire(context):
+            raise RecoveryHistoryError("recovery history manifest differs from independent originals")
+        core.require_digest(owned["chainDigest"], "recovery history final chain")
+        for descriptor in owned["pages"]:
+            _descriptor(descriptor)
     count_raw = _body(count_body, owned["countBody"], work)
     _closed(count_raw, {"schema", "frontier"})
     if count_raw["schema"] != COUNT_SCHEMA:
@@ -442,16 +444,17 @@ def verify_history(*, manifest: dict, count_body: bytes, read_page: Callable[[in
         limits=ranges.IndexRangeLimits(max_entries=count_reader.MAX_PREFIXES, max_leaves=1,
             max_opened_nodes=count_reader.MAX_OPENED_NODES,
             max_hashes=16 * count_reader.MAX_OPENED_NODES), work=work).count
-    if count > maximum_count or count != len(owned["pages"]):
+    if count > maximum_count or (not producing and count != len(owned["pages"])):
         raise RecoveryHistoryError("recovery history page count differs from authenticated population")
     chain = chain_seed(context, owned["countBody"], work=work)
     phases = [work.metrics]
     lower, projected, identities, active = whole.lower, [], set(), 0
     raw_bytes, projected_bytes = len(count_body), 2
-    for ordinal, descriptor in enumerate(owned["pages"]):
+    for ordinal in range(count):
         # One nonrenewable, source-fixed data-phase budget; no retry loop.
         work = _ValidationWork(QueryReadValidationLimits())
         raw = read_page(ordinal)
+        descriptor = body_descriptor(raw, work=work) if producing else owned["pages"][ordinal]
         value = _body(raw, descriptor, work)
         lower, item, row_active = _page(value, ordinal=ordinal, count=count, lower=lower,
             whole=whole, root=root, profile=profile, counted=counted, user_id=user_id, work=work)
@@ -465,11 +468,17 @@ def verify_history(*, manifest: dict, count_body: bytes, read_page: Callable[[in
         identities.add(item[1])
         active += row_active
         chain = chain_step(chain, ordinal, descriptor, work=work)
+        if producing:
+            # Only a bounded length/digest descriptor survives this raw page.
+            work.prepare_copy(descriptor)
+            owned["pages"].append(descriptor.copy())
         raw_bytes += len(raw)
         phases.append(work.metrics)
         del raw, value  # Retain only the bounded canonical legacy projection.
-    if (count and lower != whole.upper) or chain != owned["chainDigest"]:
+    if (count and lower != whole.upper) or (not producing and chain != owned["chainDigest"]):
         raise RecoveryHistoryError("recovery history coverage or final raw-page chain differs")
+    if producing:
+        owned["chainDigest"] = chain
     work = _ValidationWork(QueryReadValidationLimits())
     # Canonical array hashing without allocating/normalizing the full history.
     # Sorting and interpreter overhead are bounded by count, not JSON work units.
@@ -489,5 +498,36 @@ def verify_history(*, manifest: dict, count_body: bytes, read_page: Callable[[in
             or total.json_nodes > (count + 2) * MAX_JSON_NODES
             or raw_bytes > (count + 1) * MAX_BODY_BYTES):
         raise RecoveryHistoryError("recovery history exceeded its source compound schedule")
-    return HistoryObservation("sha256:" + digest.hexdigest(), count, active, chain,
+    return owned, HistoryObservation("sha256:" + digest.hexdigest(), count, active, chain,
         HistoryMetrics(tuple(phases), total, raw_bytes, projected_bytes))
+
+
+def verify_history(*, manifest: dict, count_body: bytes, read_page: Callable[[int], bytes],
+                   operation: str, user_id: str, cutoff_us: int, maximum_count: int,
+                   maximum_bytes: int, primary_root: dict, index_head: CapturedIndexHead) -> HistoryObservation:
+    """Replay every original against an independently admitted parent manifest.
+
+    The fixed count/page/close schedule belongs to this successor, not generic
+    v3 validation. No extra phases, metrics, verified pages or clocks are input.
+    In particular a missing manifest cannot switch this API into production.
+    """
+    _closed(manifest, _MANIFEST_FIELDS)
+    _, observation = _replay_history(manifest=manifest, count_body=count_body, read_page=read_page,
+        operation=operation, user_id=user_id, cutoff_us=cutoff_us, maximum_count=maximum_count,
+        maximum_bytes=maximum_bytes, primary_root=primary_root, index_head=index_head)
+    return observation
+
+
+def produce_history(*, count_body: bytes, read_page: Callable[[int], bytes], operation: str,
+                    user_id: str, cutoff_us: int, maximum_count: int, maximum_bytes: int,
+                    primary_root: dict, index_head: CapturedIndexHead) -> tuple[dict, HistoryObservation]:
+    """Verify genuine first-pass originals while deriving their bounded manifest.
+
+    The caller owns the original MVCC/cutoff and acquisition ledgers. After it
+    derives/signs the parent, a second same-snapshot pass must match/persist the
+    exact bodies. The executor then uses verify_history on retained originals.
+    A returned manifest/observation is neither signed authority nor persistence.
+    """
+    return _replay_history(manifest=None, count_body=count_body, read_page=read_page,
+        operation=operation, user_id=user_id, cutoff_us=cutoff_us, maximum_count=maximum_count,
+        maximum_bytes=maximum_bytes, primary_root=primary_root, index_head=index_head)

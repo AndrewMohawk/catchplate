@@ -169,6 +169,11 @@ class RecoveryHistoryTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(history.RecoveryHistoryError):
                 Fixture().verify(**change)
         fixture = Fixture()
+        manifest = fixture.manifest()
+        manifest["cutoffUs"] = True  # Equal to 1 in Python, not the same signed JSON original.
+        with self.assertRaises(history.RecoveryHistoryError):
+            fixture.verify(manifest=manifest)
+        fixture = Fixture()
         fixture.pages[0] = fixture.pages[0] + b"\n"
         with self.assertRaises(history.RecoveryHistoryError):
             fixture.verify()
@@ -195,6 +200,30 @@ class RecoveryHistoryTests(unittest.TestCase):
                 row["transports"] = text
                 work = _ValidationWork(QueryReadValidationLimits())
                 self.assertEqual(history.project_history_row(row, work=work), encoded(legacy_projection(row)))
+
+    def test_first_pass_producer_uses_same_real_proofs_and_matches_independent_manifest(self):
+        fixture = Fixture()
+        calls = []
+        def read(ordinal):
+            calls.append(ordinal)
+            return fixture.pages[ordinal]
+        def produce():
+            return history.produce_history(count_body=fixture.count_body, read_page=read,
+                operation="webauthn.recovery.create", user_id="target", cutoff_us=1,
+                maximum_count=1000, maximum_bytes=4 * 1024 * 1024,
+                primary_root=fixture.primary.root.json_projection(), index_head=fixture.head)
+        manifest, result = produce()
+        self.assertEqual(manifest, fixture.manifest())
+        self.assertEqual(calls, [0, 1])
+        self.assertEqual((result.digest, result.count, result.active_count),
+                         (fixture.verify().digest, 2, 1))
+        with self.assertRaises(history.RecoveryHistoryError):
+            fixture.verify(manifest=None)
+        page = json.loads(fixture.pages[0])
+        page["beforeProofs"][0]["rootDigest"] = digest(b"different-primary-root")
+        fixture.pages[0] = encoded(page)
+        with self.assertRaises(ValueError):
+            produce()
 
 
 if __name__ == "__main__":

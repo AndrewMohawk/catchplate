@@ -71,6 +71,10 @@ from serverware.portal_admin_token_publication import (
     ADMIN_TOKEN_PUBLICATION_HTML,
     ADMIN_TOKEN_PUBLICATION_SCRIPT,
 )
+from serverware.portal_static_credential_replacement import (
+    STATIC_CREDENTIAL_REPLACEMENT_HTML,
+    STATIC_CREDENTIAL_REPLACEMENT_SCRIPT,
+)
 from serverware.portal_public_revocation import PUBLIC_REVOCATION_HTML, PUBLIC_REVOCATION_SCRIPT
 from serverware.portal_oauth_consent import OAUTH_CONSENT_HTML, OAUTH_CONSENT_SCRIPT, enrolled_oauth_profile
 from serverware.portal_oauth_measured_consent import (
@@ -22812,7 +22816,7 @@ UI_HTML = r"""
     .filter-grid label { margin-top: 0; }
     .audit-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
     .attestation-summary { margin-bottom: 12px; }
-    dialog { border: 1px solid var(--line); border-radius: 8px; padding: 0; width: min(420px, calc(100vw - 32px)); color: var(--ink); background: var(--surface); }
+    dialog { border: 1px solid var(--line); border-radius: 8px; padding: 0; width: min(420px, calc(100vw - 32px)); color: var(--text); background: var(--panel); }
     dialog::backdrop { background: rgba(15, 23, 42, .48); }
     dialog form { display: grid; gap: 12px; padding: 20px; }
     dialog h2 { margin: 0; font-size: 18px; }
@@ -22971,6 +22975,7 @@ UI_HTML = r"""
       </div>
     </form>
   </dialog>
+  __SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_HTML__
   <main id="main-content" tabindex="-1">
     <div class="main-grid">
     <section class="passkey-section" aria-labelledby="passkey-heading">
@@ -23619,6 +23624,7 @@ UI_HTML = r"""
     }
 
     function markOIDCSessionStatusUnknown() {
+      discardCredentialReplacement('Browser authentication became unknown. Local replacement discarded.');
       sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
       workloadIssuanceInvalidate('Browser session state became unknown.');
       setupEnrollmentClear();
@@ -23652,6 +23658,7 @@ UI_HTML = r"""
       if (JSON.stringify([state.authStatus?.userId, state.authStatus?.authMethod,
           state.authStatus?.sessionState, state.authStatus?.authenticated, state.authStatus?.roles])
           !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated, status.roles])) {
+        discardCredentialReplacement('Browser authentication changed. Local replacement discarded.');
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
         workloadIssuanceInvalidate('Browser authentication changed.');
         setupEnrollmentClear();
@@ -23670,6 +23677,8 @@ UI_HTML = r"""
     }
 
     function renderAuthStatus() {
+      credentialReplacementAuthChanged();
+      renderCredentialReplacement();
       const authenticated = Boolean(state.authStatus?.authenticated);
       const pendingWebAuthn = Boolean(state.authStatus?.webauthnRequired);
       const hasBrowserSession = ['pending_webauthn', 'active'].includes(state.authStatus?.sessionState);
@@ -23713,6 +23722,7 @@ UI_HTML = r"""
     }
 
     async function signInWithOIDC() {
+      discardCredentialReplacement('Sign-in started. Local replacement discarded.');
       sessionActivationInvalidate('Sign-in started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-in started.');
       setupEnrollmentClear();
@@ -23927,6 +23937,7 @@ UI_HTML = r"""
     }
 
     async function signOutOperator() {
+      discardCredentialReplacement('Sign-out started. Local replacement discarded.');
       sessionActivationInvalidate('Sign-out started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-out started.');
       setupEnrollmentClear();
@@ -23986,6 +23997,7 @@ UI_HTML = r"""
       const values = {};
       document.querySelectorAll('input, select, textarea').forEach((control) => {
         if (control.id === 'admin-token' || control.id === 'webauthn-bootstrap-token'
+            || control.id.startsWith('credential-replacement-')
             || control.id.startsWith('registration-handoff-')
             || control.id.startsWith('workload-issuance-')
             || control.id.startsWith('oauth-activation-')
@@ -24002,6 +24014,7 @@ UI_HTML = r"""
         const control = key.startsWith('id:') ? $(key.slice(3)) : null;
         if (!control) return;
         if (control.id === 'webauthn-bootstrap-token' || control.id.startsWith('registration-handoff-')
+            || control.id.startsWith('credential-replacement-')
             || control.id.startsWith('workload-issuance-')
             || control.id.startsWith('session-activation-')) return;
         if (control.id.startsWith('setup-')) return;
@@ -24182,28 +24195,36 @@ UI_HTML = r"""
       }
     }
 
-    async function ensureCsrfToken() {
+    async function ensureCsrfToken(operation = null) {
+      operation?.check();
       if (adminToken()) return null;
       if (csrfToken) return csrfToken;
       const response = await fetch('/api/csrf', {
         headers: adminHeaders(),
         credentials: 'same-origin',
-        cache: 'no-store'
+        cache: 'no-store',
+        ...(operation ? {signal: operation.controller.signal} : {})
       });
+      operation?.check();
       const payload = await response.json();
+      operation?.check();
       if (!response.ok) throw new ApiError(response.status, payload);
       csrfToken = payload.token;
       return csrfToken;
     }
 
     async function api(path, options = {}) {
+      const operation = credentialReplacementApiGuard(options.credentialReplacement);
       if (!requireAdminToken()) throw new Error('admin token required');
       const captureAuthenticatedResponse = options.captureAuthenticatedResponse === true;
       const fetchOptions = {...options};
       delete fetchOptions.captureAuthenticatedResponse;
+      delete fetchOptions.credentialReplacement;
       const method = String(options.method || 'GET').toUpperCase();
       const unsafe = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
-      const csrf = unsafe ? await ensureCsrfToken() : null;
+      const csrf = unsafe ? await ensureCsrfToken(operation) : null;
+      operation?.check();
+      if (operation) fetchOptions.signal = operation.controller.signal;
       const headers = {
         'Content-Type': 'application/json',
         ...adminHeaders(),
@@ -24211,12 +24232,15 @@ UI_HTML = r"""
         ...(options.headers || {})
       };
       const res = await fetch(path, {...fetchOptions, method, headers, credentials: 'same-origin'});
+      operation?.check();
       const text = res.status === 204 ? '' : await res.text();
+      operation?.check();
       let payload = null;
       if (text) {
         try { payload = JSON.parse(text); } catch (_) { payload = {detail: text}; }
       }
       if (res.status === 401) {
+        discardCredentialReplacement('Operator authentication was refused. Local replacement discarded.');
         $('admin-token').value = '';
         $('admin-token').placeholder = 'Operator token rejected';
         csrfToken = null;
@@ -24247,6 +24271,9 @@ UI_HTML = r"""
     function restorePendingMutation() {
       try {
         pendingMutation = JSON.parse(sessionStorage.getItem(pendingMutationKey) || 'null');
+        if (pendingMutation?.kind === credentialReplacementKind) {
+          pendingMutation = null; sessionStorage.removeItem(pendingMutationKey);
+        }
       } catch (_) {
         pendingMutation = null;
         sessionStorage.removeItem(pendingMutationKey);
@@ -24279,9 +24306,12 @@ UI_HTML = r"""
       target.replaceChildren(summary, reviewButton, continueButton);
     }
 
-    async function controlPlaneAssertion(challengeDetail) {
+    async function controlPlaneAssertion(challengeDetail, operation = null) {
+      operation?.check();
+      operation?.assertion();
       if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
       const options = await api('/api/control-plane/mutations/webauthn/options', {
+        credentialReplacement: operation,
         method: 'POST',
         body: JSON.stringify({
           action: challengeDetail.action,
@@ -24290,8 +24320,11 @@ UI_HTML = r"""
           approvalId: challengeDetail.approvalId ?? null
         })
       });
+      operation?.check();
       if (!(options.publicKey.allowCredentials || []).length) throw new Error('No registered passkey is available for this operator');
-      const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+      const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options),
+        ...(operation ? {signal: operation.controller.signal} : {})});
+      operation?.check();
       return credentialToJson(assertion);
     }
 
@@ -24303,35 +24336,46 @@ UI_HTML = r"""
     }
 
     async function runControlPlaneMutation(original) {
+      const operation = credentialReplacementGuard(original);
       const mutation = JSON.parse(JSON.stringify(original));
+      operation?.retain(mutation);
       while (true) {
         try {
-          const result = await api(mutation.path, mutationOptions(mutation));
+          operation?.check();
+          const result = await api(mutation.path, {...mutationOptions(mutation), credentialReplacement: operation});
+          operation?.check();
           if (pendingMutation && mutation.approvalId && pendingMutation.approvalId === mutation.approvalId) {
             pendingMutation = null;
+            if (operation) operation.pending = null;
             persistPendingMutation();
             renderPendingMutation();
           }
           return {pending: false, result, mutation};
         } catch (error) {
+          operation?.check();
           const detail = error instanceof ApiError ? error.detail : null;
           if (error.status === 412 && detail && detail.error === 'control_plane_webauthn_required') {
-            const assertion = await controlPlaneAssertion(detail);
+            operation?.challenge(detail);
+            const assertion = await controlPlaneAssertion(detail, operation);
+            operation?.check();
             mutation.body = mutation.body || {};
             mutation.body.mfa = {...(mutation.body.mfa || {}), assertion};
             continue;
           }
           if (error.status === 428 && detail && detail.error === 'control_plane_approval_required') {
+            operation?.challenge(detail);
             mutation.body = mutation.body || {};
             const mfa = {...(mutation.body.mfa || {}), approvalId: detail.approvalId};
             delete mfa.assertion;
             mutation.body.mfa = mfa;
             mutation.approvalId = detail.approvalId;
-            pendingMutation = mutation;
+            if (operation) operation.pause(mutation, detail);
+            else pendingMutation = mutation;
             persistPendingMutation();
             renderPendingMutation();
             setStatus(`${mutation.label} is waiting for approval ${detail.approvalId}.`, 'pending');
             await refresh();
+            operation?.check();
             return {pending: true, approval: detail};
           }
           throw error;
@@ -24340,6 +24384,7 @@ UI_HTML = r"""
     }
 
     async function continuePendingMutation() {
+      if (pendingMutation?.kind === credentialReplacementKind) return continueCredentialReplacement();
       if (!pendingMutation) throw new Error('No control-plane mutation is waiting');
       await refresh();
       const approval = (state.controlPlaneApprovals || []).find((item) => item.id === pendingMutation.approvalId);
@@ -24530,7 +24575,7 @@ UI_HTML = r"""
 
     function credentialActions(item) {
       const managedOAuth = item.kind === 'oauth2' && item.metadata?.oauth === true;
-      if (!managedOAuth) return `<button class="danger" type="button" onclick="runUiAction('Delete credential', () => deleteCredential('${item.id}'))">Delete</button>`;
+      if (!managedOAuth) return credentialReplacementButton(item) + `<button class="danger" type="button" onclick="runUiAction('Delete credential', () => deleteCredential('${item.id}'))">Delete</button>`;
       if ((item.lifecycle_status || 'active') !== 'active') {
         return `<button class="danger" type="button" onclick="runUiAction('Retry OAuth disconnect', () => deleteCredential('${item.id}'))">Retry disconnect</button>`;
       }
@@ -26845,6 +26890,8 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_RECONNECT_SCRIPT__
     __SERVERWARE_OAUTH_SUCCESSION_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
+    __SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_SCRIPT__
+    initCredentialReplacement();
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
     initRegistrationHandoff();
@@ -26858,6 +26905,7 @@ UI_HTML = r"""
     initOAuthActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
+      discardCredentialReplacement('Operator token changed. Local replacement discarded.');
       sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');
       workloadIssuanceInvalidate('Entered operator credentials changed.');
       setupEnrollmentClear();
@@ -26924,6 +26972,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__", WORKLOAD_ISSUANCE_SCRIPT),
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__", ADMIN_TOKEN_PUBLICATION_HTML),
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__", ADMIN_TOKEN_PUBLICATION_SCRIPT),
+    ("__SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_HTML__", STATIC_CREDENTIAL_REPLACEMENT_HTML),
+    ("__SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_SCRIPT__", STATIC_CREDENTIAL_REPLACEMENT_SCRIPT),
     ("__SERVERWARE_PUBLIC_REVOCATION_HTML__", PUBLIC_REVOCATION_HTML),
     ("__SERVERWARE_PUBLIC_REVOCATION_SCRIPT__", PUBLIC_REVOCATION_SCRIPT),
     ("__SERVERWARE_OAUTH_CONSENT_HTML__", OAUTH_CONSENT_HTML),

@@ -27,6 +27,7 @@ SHELL := /bin/sh
 .PHONY: verify-production-proxy-ingress-materials
 .PHONY: verify-provider-policy-parity verify-webauthn-trust-projection verify-authority-row-mutations
 .PHONY: verify-authority-verifier-read verify-authority-planner-writer
+.PHONY: verify-portal-static-credential-replacement
 .PHONY: production-source-capture production-release-build production-release-publish production-release-sign production-release-deploy
 .NOTPARALLEL: production-release-build production-release-publish production-release-sign production-release-deploy production-release-proof
 
@@ -863,6 +864,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_policy_canary_workflow.py \
 	scripts/test_policy_publish_workflow.py \
 	scripts/test_portal_agent_enrollment_ui.py \
+	scripts/test_portal_static_credential_replacement.py \
 	scripts/test_prepare_aws_kms_materials.py \
 	scripts/test_production_handoff.py \
 	scripts/test_production_image_builds.py \
@@ -11077,6 +11079,10 @@ verify-credential-lease-delivery:
 verify-control-plane-mutation-mfa:
 	docker compose up -d --build serverware
 	docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
+
+# Source/synthetic controls require Node, not the Python-only isolated inventory.
+verify-portal-static-credential-replacement:
+	python3 -I -B scripts/test_portal_static_credential_replacement.py
 
 verify-control-plane-two-person:
 	docker compose up -d --build serverware

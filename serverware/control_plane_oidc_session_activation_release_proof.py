@@ -56,8 +56,19 @@ def _prove_on_permission(permission):
     setup_endpoint = setup_transport._endpoint(setup_policy.endpoint) if setup_policy is not None else None
     setup_original = setup_policy.issuer_policy_bytes if setup_policy is not None else None
     setup_planner_original = setup_policy.current_activation_planner_bytes if setup_policy is not None else None
+    request_bound = setup_policy is not None and setup_policy.request_bound is True
     response_pin = owner._response_pin
-    planner_original = parent.activation_planning.planner_bootstrap_bytes
+    planning_material = parent.activation_planning
+    resource_original = None
+    if request_bound:
+        from serverware import control_plane_oidc_session_activation_request_dispatch as requested
+        from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as resource_config
+        if type(planning_material) is not resource_config._RequestPlanningMaterial or setup_planner_original is not None:
+            execution._fail("resource proof requires actual request planning without a future template")
+        resource_original = planning_material.policy_bytes
+        planner_original = requested._planner_original_on_permission(permission)
+    else:
+        planner_original = planning_material.planner_bootstrap_bytes
     intent_enrollment, intent_scope_original = intent_policy.enrollment_bytes, intent_policy.expected_scope_bytes
     intent_forbidden = intent_policy.forbidden_public_keys
     target_digest = target[2]["localDigest"]
@@ -82,14 +93,18 @@ def _prove_on_permission(permission):
                 or parent.release_proof_acquisition is not setup_policy
                 or (setup_policy is not None and (setup_policy.endpoint != setup_endpoint
                     or setup_policy.issuer_policy_bytes is not setup_original
-                    or setup_policy.current_activation_planner_bytes is not setup_planner_original))
+                    or setup_policy.current_activation_planner_bytes is not setup_planner_original
+                    or setup_policy.request_bound is not request_bound))
                 or binding.runtime_root_public_key is not root or policy.endpoint != endpoint
                 or policy.expected_scope_bytes is not scope_original or policy.enrollment_bytes is not enrollment
                 or policy.forbidden_public_keys is not forbidden or policy.proof_public_key is not public_key
                 or intent_policy.enrollment_bytes is not intent_enrollment
                 or intent_policy.expected_scope_bytes is not intent_scope_original
                 or intent_policy.forbidden_public_keys is not intent_forbidden
-                or parent.activation_planning.planner_bootstrap_bytes is not planner_original
+                or parent.activation_planning is not planning_material
+                or (request_bound and (planning_material.policy_bytes is not resource_original
+                    or requested._planner_original_on_permission(permission) is not planner_original))
+                or (not request_bound and planning_material.planner_bootstrap_bytes is not planner_original)
                 or owner._response_pin != response_pin
                 or permission._release_intent_original is not original or permission._release_intent_context is not context
                 or permission._consume_completion_originals is not completed or permission._sql_originals is not activation_raw
@@ -155,6 +170,13 @@ def _prove_on_permission(permission):
     if setup_policy is not None:
         current()
         policy_reservation = 0
+        if request_bound:
+            # Own the embedded static policy's repeated original graphs before
+            # decoding, within the unchanged whole-call inventory ceiling.
+            policy_reservation = 8 * (len(setup_original) + len(resource_original))
+            reserved += policy_reservation
+            if reserved >= planning.consume.MAX_ORIGINAL_BYTES:
+                execution._fail("resource proof policy exceeds the original whole-call capacity")
         if setup_planner_original is not None:
             planning._same_bytes(setup_planner_original, planner_original, work,
                 "release proof setup independently current planner")
@@ -164,9 +186,14 @@ def _prove_on_permission(permission):
             reserved += policy_reservation
             if reserved >= planning.consume.MAX_ORIGINAL_BYTES:
                 execution._fail("versioned proof policy exceeds the original whole-call capacity")
+        policy_window, policy_bound = permission._planning_bounds
         setup_payload = acquisition._policy_on_work(setup_original, release_intent=intent_policy,
             release_proof=policy, root_public_key=root, work=work,
-            activation_planner_bytes=planner_original, current=current)
+            activation_planner_bytes=None if request_bound else planner_original,
+            activation_policy_bytes=resource_original, current=current,
+            live_window=policy_window if request_bound else None,
+            transport_deadline_ns=policy_bound if request_bound else None,
+            _continuity=continuity if request_bound else None)
         current()
         window, _bound = permission._planning_bounds
         interval = setup_payload["issuedAtEpochNs"], setup_payload["expiresAtEpochNs"]
@@ -177,7 +204,10 @@ def _prove_on_permission(permission):
             (setup_transport.PURPOSE, completed[2], completed[3], original), response=False)
         policy_size, _policy_nodes = work.measure(setup_payload)
         current()
-        if setup_planner_original is None:
+        if request_bound:
+            if 4 * len(setup_original) + 2 * policy_size + 8 * len(resource_original) > policy_reservation:
+                execution._fail("resource proof policy exceeds its pre-decoding capture reservation")
+        elif setup_planner_original is None:
             reserved += 4 * len(setup_original) + 2 * policy_size
         elif 4 * len(setup_original) + 2 * policy_size + 8 * len(setup_planner_original) > policy_reservation:
             execution._fail("versioned proof policy exceeds its pre-decoding capture reservation")

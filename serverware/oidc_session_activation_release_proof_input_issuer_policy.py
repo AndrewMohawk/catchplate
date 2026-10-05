@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from serverware import authority_oidc_session_activation_consume_input_production as lifetime_source
 from serverware import oidc_session_activation_release_proof_bootstrap as bootstrap
 from serverware.authority_query_read_work import QueryReadWorkError
+from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
 
 
 completion = bootstrap.completion
@@ -25,11 +26,14 @@ SCHEMA = "serverware.signedOidcSessionActivationReleaseProofInputIssuerPolicy/v1
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofInputIssuerPolicy/v1"
 V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseProofInputIssuerPolicy/v2"
 V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofInputIssuerPolicy/v2"
+V3_SCHEMA = "serverware.signedOidcSessionActivationReleaseProofInputIssuerPolicy/v3"
+V3_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofInputIssuerPolicy/v3"
 SIGNATURE_DOMAIN = SCHEMA
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseProofInputIssuerPolicyIdentity/v1"
 COMPLETION_BOOTSTRAP_IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseProofInputCompletionBootstrapIdentity/v1"
 V1_MAX_BYTES = 64 * 1024
 V2_MAX_BYTES = 6 * 1024 * 1024
+V3_MAX_BYTES = V2_MAX_BYTES
 MAX_BYTES = V2_MAX_BYTES
 MAX_COMPLETION_BOOTSTRAP_BYTES = completion.MAX_BYTES
 MAX_ORIGINAL_BYTES = bootstrap.MAX_ORIGINAL_BYTES
@@ -39,6 +43,7 @@ PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "trustMode",
     "completionBootstrapDigest", "proofEnrollmentDigest", "intentEnrollmentDigest",
     "proofScope", "callerId", "proofLaunch", "issuedAtEpochNs", "expiresAtEpochNs"})
 V2_PAYLOAD_FIELDS = PAYLOAD_FIELDS | {"currentActivationPlanner"}
+V3_PAYLOAD_FIELDS = (PAYLOAD_FIELDS - {"completionBootstrapDigest"}) | {"activationIssuancePolicy"}
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 
 
@@ -96,22 +101,31 @@ def _canonical(original, value, work):
 
 def _payload_shape(payload, work):
     v2 = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
-    shape._object(payload, V2_PAYLOAD_FIELDS if v2 else PAYLOAD_FIELDS, "proof input issuer policy")
-    for name, expected in (("schema", V2_PAYLOAD_SCHEMA if v2 else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    v3 = type(payload) is dict and payload.get("schema") == V3_PAYLOAD_SCHEMA
+    shape._object(payload, V3_PAYLOAD_FIELDS if v3 else V2_PAYLOAD_FIELDS if v2 else PAYLOAD_FIELDS, "proof input issuer policy")
+    for name, expected in (("schema", V3_PAYLOAD_SCHEMA if v3 else V2_PAYLOAD_SCHEMA if v2 else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
-    for name in ("completionBootstrapDigest", "proofEnrollmentDigest", "intentEnrollmentDigest"):
+    for name in (("proofEnrollmentDigest", "intentEnrollmentDigest") if v3 else
+            ("completionBootstrapDigest", "proofEnrollmentDigest", "intentEnrollmentDigest")):
         shape._digest(payload[name])
     proof_enrollments._scope_shape(payload["proofScope"])
     authorization._token(payload["callerId"])
     bootstrap._launch_shape(payload["proofLaunch"], work)
-    authorization._interval(payload, MAX_RECEIPT_AGE_NS)
+    authorization._interval(payload, LOCAL_SESSION_MAX_NS if v3 else MAX_RECEIPT_AGE_NS)
     if v2:
         original = payload["currentActivationPlanner"]
         maximum = bootstrap.release_bootstrap.planner_bootstrap.MAX_BYTES
         shape._object(original, bootstrap._ORIGINAL_FIELDS, "proof input current activation planner")
         shape._integer(original["byteCount"], maximum, minimum=2)
         authorization.transport._transport_shape(original["base64Url"], original["byteCount"], maximum)
+        shape._digest(original["bytesDigest"])
+    if v3:
+        from serverware import oidc_session_activation_request_issuance_policy as resources
+        original = payload["activationIssuancePolicy"]
+        shape._object(original, bootstrap._ORIGINAL_FIELDS, "proof static activation issuance policy")
+        shape._integer(original["byteCount"], resources.MAX_BYTES, minimum=2)
+        authorization.transport._transport_shape(original["base64Url"], original["byteCount"], resources.MAX_BYTES)
         shape._digest(original["bytesDigest"])
 
 
@@ -124,8 +138,9 @@ def _read(original, work):
     shape._base64url(envelope["signatureBase64Url"], signature=True)
     _payload_shape(envelope["payload"], work)
     v2 = envelope["payload"]["schema"] == V2_PAYLOAD_SCHEMA
-    shape._literal(envelope["schema"], V2_SCHEMA if v2 else SCHEMA)
-    if len(raw) > (V2_MAX_BYTES if v2 else V1_MAX_BYTES):
+    v3 = envelope["payload"]["schema"] == V3_PAYLOAD_SCHEMA
+    shape._literal(envelope["schema"], V3_SCHEMA if v3 else V2_SCHEMA if v2 else SCHEMA)
+    if len(raw) > (V3_MAX_BYTES if v3 else V2_MAX_BYTES if v2 else V1_MAX_BYTES):
         _fail("proof input policy exceeds its exact version bound")
     _canonical(raw, envelope, work)
     return envelope
@@ -180,7 +195,7 @@ def _cold_reservation_bytes(policy_size, completion_size, proof_size, intent_siz
 def _current_planner_bytes(payload, work, current):
     """Extract the versioned original only; this supplies no authority."""
     _payload_shape(payload, work)
-    if payload["schema"] == PAYLOAD_SCHEMA:
+    if payload["schema"] in (PAYLOAD_SCHEMA, V3_PAYLOAD_SCHEMA):
         return None
     return completion.grammar._original(payload["currentActivationPlanner"],
         bootstrap.release_bootstrap.planner_bootstrap.MAX_BYTES, work, current)
@@ -192,9 +207,22 @@ def _join(payload, originals, root, lifetime, work):
     lifetime.narrow(interval[1], lifetime.window[5], lifetime.window[6])
     lifetime.attach(completion.primitives._launch_guard(interval,
         (lifetime.window[1], lifetime.window[0], lifetime.window[2]), lifetime.base, work))
-    for raw, digest, field in zip(originals,
+    resource_material = None
+    if payload["schema"] == V3_PAYLOAD_SCHEMA:
+        from serverware import oidc_session_activation_release_proof_resources as resources
+        resource_material = resources._admit_on_work(payload=payload,
+            proof_enrollment_bytes=originals[1], intent_enrollment_bytes=originals[2], root_public_key=root,
+            live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work,
+            _continuity=lifetime.continuity)
+        lifetime.attach(resource_material.live)
+    joins = zip(originals,
             (_completion_bootstrap_digest_on_work, _proof_enrollment_digest_on_work, _intent_enrollment_digest_on_work),
-            ("completionBootstrapDigest", "proofEnrollmentDigest", "intentEnrollmentDigest")):
+            ("completionBootstrapDigest", "proofEnrollmentDigest", "intentEnrollmentDigest"))
+    for raw, digest, field in joins:
+        if resource_material is not None and field == "completionBootstrapDigest":
+            # No future completion is selected by the cold resource policy.
+            # The actual late original is authenticated immediately below.
+            continue
         plan._same(digest(raw, work), payload[field], work, "proof input exact independent " + field)
         current()
     cm = completion._verify_on_work(bootstrap_bytes=originals[0], root_public_key=root,
@@ -203,10 +231,15 @@ def _join(payload, originals, root, lifetime, work):
     if type(cm) is not completion._CompletionMaterial:
         _fail("proof input policy requires actual completion-original admission")
     for material in (cm, cm.custody_material, cm.custody_material.history):
-        if not material.attestation_interval[0] <= interval[0] < interval[1] <= material.attestation_interval[1]:
+        if resource_material is None and not material.attestation_interval[0] <= interval[0] < interval[1] <= material.attestation_interval[1]:
             _fail("proof input policy escapes independently admitted completion authority")
+        if resource_material is not None:
+            lifetime.narrow(material.attestation_interval[1], lifetime.window[5], lifetime.window[6])
         lifetime.attach(completion.primitives._launch_guard(material.attestation_interval,
             material.opening_sample, lifetime.base, work))
+    if resource_material is not None:
+        resources._late_on_work(resource_material, cm, root_public_key=root, lifetime=lifetime, work=work)
+        lifetime.attach(cm.custody_material.live)
     current_original = _current_planner_bytes(payload, work, current)
     current_planner = None
     if current_original is not None:
@@ -314,18 +347,29 @@ def _produce_on_work(*, payload, completion_bootstrap_bytes, proof_enrollment_by
     authorization._public(root)
     _payload_shape(owned, work)
     v2 = owned["schema"] == V2_PAYLOAD_SCHEMA
-    maximum = V2_MAX_BYTES if v2 else V1_MAX_BYTES
-    schema = V2_SCHEMA if v2 else SCHEMA
+    v3 = owned["schema"] == V3_PAYLOAD_SCHEMA
+    maximum = V3_MAX_BYTES if v3 else V2_MAX_BYTES if v2 else V1_MAX_BYTES
+    schema = V3_SCHEMA if v3 else V2_SCHEMA if v2 else SCHEMA
     policy_size, _policy_nodes = work.measure(owned)
     if policy_size > maximum:
         _fail("proof input policy payload exceeds its version bound")
-    originals = _originals(completion_bootstrap_bytes, proof_enrollment_bytes,
-        intent_enrollment_bytes, work, min(maximum, policy_size + 256))
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     lifetime = _Lifetime(window, min(transport_deadline_ns, window[4]), work, _continuity)
     lifetime.current()
-    _join(owned, originals, root, lifetime, work)
+    if v3:
+        from serverware import oidc_session_activation_release_proof_resources as resources
+        if completion_bootstrap_bytes is not None:
+            _fail("static proof resource publication cannot select a future completion")
+        static = resources._admit_on_work(payload=owned, proof_enrollment_bytes=proof_enrollment_bytes,
+            intent_enrollment_bytes=intent_enrollment_bytes, root_public_key=root,
+            live_window=window, transport_deadline_ns=lifetime.bound, work=work,
+            _continuity=lifetime.continuity)
+        lifetime.attach(static.live)
+    else:
+        originals = _originals(completion_bootstrap_bytes, proof_enrollment_bytes,
+            intent_enrollment_bytes, work, min(maximum, policy_size + 256))
+        _join(owned, originals, root, lifetime, work)
     live = lifetime.current
     keys._pair_on_work(private, root, work)
     live()

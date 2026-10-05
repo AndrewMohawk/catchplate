@@ -197,9 +197,15 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
             or current() >= intent_payload["expiresAtEpochNs"]):
         _fail("proof setup original intent is future-issued or expired")
     _created, delivery_expiry = custody._scope(release["deliveryScope"], work)
-    issued = max(policy.payload["issuedAtEpochNs"], intent_payload["issuedAtEpochNs"])
+    # The runtime policy can predate this actual request. It never supplies a
+    # replacement issue time for the late completion/custody/history originals.
+    work.charge(input_bytes=4096, json_nodes=64)
+    completed_intervals = tuple(item.attestation_interval for item in
+        (material, material.custody_material, material.custody_material.history))
+    issued = max(policy.payload["issuedAtEpochNs"], intent_payload["issuedAtEpochNs"],
+        *(interval[0] for interval in completed_intervals))
     expires = min(policy.payload["expiresAtEpochNs"], intent_payload["expiresAtEpochNs"], delivery_expiry,
-        issued + bootstrap.completion.MAX_RECEIPT_AGE_NS)
+        *(interval[1] for interval in completed_intervals), issued + bootstrap.completion.MAX_RECEIPT_AGE_NS)
     if issued >= expires:
         _fail("proof setup output has no common original interval")
     lifetime.narrow(expires, enrollment["maximumAgeNs"], enrollment["maximumClockSkewNs"])

@@ -16,6 +16,7 @@ from serverware import oidc_session_activation_release_proof_input_issuer_policy
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v2"
+V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v3"
 SOCKET_PATH = "/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock"
 V1_MAX_BYTES = 128 * 1024
 V2_MAX_BYTES = 8 * 1024 * 1024 + 4096
@@ -39,6 +40,7 @@ class _ReleaseProofAcquisitionMaterial:
     endpoint: tuple
     issuer_policy_bytes: bytes
     current_activation_planner_bytes: bytes | None = None
+    request_bound: bool = False
 
 
 class _Capture(capture._JSONCapture):
@@ -65,7 +67,7 @@ def _shape(value):
     if value is None:
         return
     shape._object(value, _FIELDS, "control-plane release proof acquisition")
-    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA):
+    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA):
         _fail("release proof acquisition has no fixed version")
     maximum = issuer.V1_MAX_BYTES if value["schema"] == SCHEMA else issuer.V2_MAX_BYTES
     _endpoint(value["endpoint"])
@@ -82,7 +84,8 @@ def _cold_current():
 
 
 def _policy_on_work(original, *, release_intent, release_proof, root_public_key, work,
-        activation_planner_bytes=None, current=None):
+        activation_planner_bytes=None, activation_policy_bytes=None, current=None,
+        live_window=None, transport_deadline_ns=None, _continuity=None):
     """Authenticate only static root policy and exact independently admitted pins."""
     if (type(release_intent) is not intent._ReleaseIntentMaterial
             or type(release_proof) is not proof._ReleaseProofMaterial):
@@ -102,6 +105,18 @@ def _policy_on_work(original, *, release_intent, release_proof, root_public_key,
         issuer.lifetime_source._same_bytes(selected_original, activation_planner_bytes, work,
             "release proof acquisition exact current planner original")
         current()
+    if payload["schema"] == issuer.V3_PAYLOAD_SCHEMA:
+        from serverware import oidc_session_activation_release_proof_resources as resources
+        if type(activation_policy_bytes) is not bytes or activation_planner_bytes is not None:
+            _fail("resource proof setup requires its exact static issuance policy, not a future planner")
+        admitted = resources._admit_on_work(payload=payload,
+            proof_enrollment_bytes=release_proof.enrollment_bytes,
+            intent_enrollment_bytes=release_intent.enrollment_bytes, root_public_key=root_public_key,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
+        issuer.lifetime_source._same_bytes(admitted.issuance_policy_bytes, activation_policy_bytes,
+            work, "proof resource actual parent static policy original")
+        admitted.live()
+        current()
     intent_scope = intent._scope_on_work(release_intent.expected_scope_bytes, work)
     proof_scope = proof._scope_on_work(release_proof.expected_scope_bytes, work)
     for actual, expected, label in (
@@ -110,6 +125,9 @@ def _policy_on_work(original, *, release_intent, release_proof, root_public_key,
             (payload["proofEnrollmentDigest"], release_proof.enrollment_digest, "proof enrollment"),
             (payload["intentEnrollmentDigest"], release_intent.enrollment_digest, "intent enrollment")):
         plan._same(actual, expected, work, "release proof acquisition " + label)
+    if payload["schema"] == issuer.V3_PAYLOAD_SCHEMA:
+        admitted.live()
+    current()
     return payload
 
 
@@ -130,15 +148,23 @@ def _admit_on_work(*, release_proof_acquisition, release_intent, release_proof,
             wrapped["base64Url"], wrapped["byteCount"], issuer.MAX_BYTES, work)
         endpoint = _endpoint(owned["endpoint"])
         planner_original = None
+        resource_original = None
         if owned["schema"] == V2_SCHEMA:
             if type(activation_planning) is not intent.planning._PlanningMaterial:
                 _fail("versioned proof acquisition requires the actual current parent planner")
             planner_original = activation_planning.planner_bootstrap_bytes
+        if owned["schema"] == V3_SCHEMA:
+            from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
+            if type(activation_planning) is not requested._RequestPlanningMaterial:
+                _fail("resource proof acquisition requires actual request-bound parent planning")
+            resource_original = activation_planning.policy_bytes
         payload = _policy_on_work(original, release_intent=held_intent, release_proof=held_proof,
-            root_public_key=root, work=work, activation_planner_bytes=planner_original)
-        wanted_schema = issuer.PAYLOAD_SCHEMA if owned["schema"] == SCHEMA else issuer.V2_PAYLOAD_SCHEMA
+            root_public_key=root, work=work, activation_planner_bytes=planner_original,
+            activation_policy_bytes=resource_original)
+        wanted_schema = (issuer.V3_PAYLOAD_SCHEMA if owned["schema"] == V3_SCHEMA else
+            issuer.PAYLOAD_SCHEMA if owned["schema"] == SCHEMA else issuer.V2_PAYLOAD_SCHEMA)
         shape._literal(payload["schema"], wanted_schema)
-        return _ReleaseProofAcquisitionMaterial(endpoint, original, planner_original)
+        return _ReleaseProofAcquisitionMaterial(endpoint, original, planner_original, owned["schema"] == V3_SCHEMA)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationReleaseProofAcquisitionBootstrapError):
             raise

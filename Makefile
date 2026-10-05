@@ -2328,6 +2328,17 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
 	serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
 	serverware/oidc_session_activation_release_dynamic_sealed_launcher.py \
+	serverware/authority_registration_current_root_head.py \
+	serverware/authority_registration_request_issuance.py \
+	serverware/registration_dynamic_entrypoint.py \
+	serverware/registration_execution_authorizer_dynamic_launcher.py \
+	serverware/registration_execution_reserver_dynamic_launcher.py \
+	serverware/registration_execution_sql_dynamic_launcher.py \
+	serverware/registration_execution_completion_dynamic_launcher.py \
+	serverware/registration_finalization_authorizer_dynamic_launcher.py \
+	serverware/registration_finalization_reserver_dynamic_launcher.py \
+	serverware/registration_finalization_sql_dynamic_launcher.py \
+	serverware/registration_finalization_completion_dynamic_launcher.py \
 	serverware/oidc_session_activation_request_issuance_policy.py \
 	serverware/oidc_session_activation_request_issuer_launcher.py \
 	serverware/oidc_session_activation_request_issuer_startup.py \
@@ -5428,6 +5439,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
 				serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
 				serverware/oidc_session_activation_release_dynamic_sealed_launcher.py \
+				serverware/authority_registration_current_root_head.py \
+				serverware/authority_registration_request_issuance.py \
+				serverware/registration_dynamic_entrypoint.py \
+				serverware/registration_execution_authorizer_dynamic_launcher.py \
+				serverware/registration_execution_reserver_dynamic_launcher.py \
+				serverware/registration_execution_sql_dynamic_launcher.py \
+				serverware/registration_execution_completion_dynamic_launcher.py \
+				serverware/registration_finalization_authorizer_dynamic_launcher.py \
+				serverware/registration_finalization_reserver_dynamic_launcher.py \
+				serverware/registration_finalization_sql_dynamic_launcher.py \
+				serverware/registration_finalization_completion_dynamic_launcher.py \
 				serverware/oidc_session_activation_request_issuance_policy.py \
 				serverware/oidc_session_activation_request_issuer_launcher.py \
 				serverware/oidc_session_activation_request_issuer_startup.py \

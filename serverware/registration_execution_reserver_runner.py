@@ -5,7 +5,9 @@ import os
 import signal
 
 
-def main():
+def main(*, _one_request=False):
+    if type(_one_request) is not bool:
+        raise ValueError("registration request mode must be source fixed")
     from serverware import registration_execution_reserver_startup as startup
 
     stopping, status, previous = False, 0, {}
@@ -20,8 +22,12 @@ def main():
         startup.initialize_from_environment()
         while not stopping:
             try:
-                startup.require_started().serve_once()
+                accepted = startup.require_started().serve_once()
+                if _one_request and accepted:
+                    break
             except startup.ReserverRequestError:
+                if _one_request:
+                    raise
                 startup.require_started()
     except BaseException:
         status = 1

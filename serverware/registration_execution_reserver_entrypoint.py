@@ -149,14 +149,17 @@ def _journal_directory(device, inode):
         os.close(parent)
 
 
-def main():
+def main(*, _sealed_originals=False):
     if os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("registration reserver delivery must begin as root")
     if (os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME):
         raise RuntimeError("registration reserver requires one exact socket activation")
-    _require_inventory({3})
-    owned, reservations, retained = {3}, {}, {}
+    from serverware import registration_dynamic_entrypoint as original_delivery
+    incoming = original_delivery._incoming("registration_execution_reserver_entrypoint", _sealed_originals)
+    inherited = {3} if incoming is None else {3, original_delivery.BOOTSTRAP_INPUT_FD}
+    _require_inventory(inherited)
+    owned, reservations, retained = inherited, {}, {}
     try:
         os.set_blocking(3, False)  # Root delivery only; cold admission does not alter borrowed OFDs.
         _listener(3)
@@ -168,7 +171,8 @@ def main():
             reservations[target] = delivery._material_identity(os.fstat(reserved))
         for path, target, maximum in ((ROOT_PATH, ROOT_FD, MAX_ROOT_BYTES),
                 (BOOTSTRAP_PATH, BOOTSTRAP_FD, MAX_BOOTSTRAP_BYTES)):
-            source = _open_material(path, maximum)
+            source = (original_delivery._source("registration_execution_reserver_entrypoint", incoming)
+                if _sealed_originals and target == BOOTSTRAP_FD else _open_material(path, maximum))
             owned.add(source)
             _retain(source, target, reservations, owned)
             retained[target] = delivery._material_identity(os.fstat(target))
@@ -235,7 +239,9 @@ def main():
                 owned.discard(descriptor)
                 raise RuntimeError("registration reserver descriptor changed before exec")
         _require_inventory(INHERITED_DESCRIPTORS)
-        os.execve(PYTHON, [PYTHON, "-I", LAUNCHER, "--run"], environment)
+        launcher = ("/runtime/authority-bootstrap/registration_execution_reserver_dynamic_launcher.py"
+            if _sealed_originals else LAUNCHER)
+        os.execve(PYTHON, [PYTHON, "-I", launcher, "--run"], environment)
         raise RuntimeError("registration reserver runner exec unexpectedly returned")
     finally:
         for descriptor in sorted(owned, reverse=True):

@@ -24662,6 +24662,15 @@ UI_HTML = r"""
             if (requestedSetupId && error.status !== 404 && error.status !== 403) throw error;
           }
         }
+        let selectedPolicyCanary = policyCanaryResult.status === 'fulfilled' ? policyCanaryResult.value : null;
+        if (setupSession?.canaryId) {
+          try {
+            selectedPolicyCanary = await api(`/api/policy/canary/status?canaryId=${encodeURIComponent(setupSession.canaryId)}`);
+          } catch (_) {
+            // The latest global canary cannot substitute for this saved Setup run.
+            selectedPolicyCanary = null;
+          }
+        }
         const latest = {
           enrollmentPacket: state.enrollmentPacket,
           enrollmentPacketText: state.enrollmentPacketText,
@@ -24680,7 +24689,7 @@ UI_HTML = r"""
           ...bootstrap,
           controlPlaneApprovals: controlPlaneResult.status === 'fulfilled' ? controlPlaneResult.value : [],
           activePolicy: policyResult.status === 'fulfilled' ? policyResult.value : null,
-          policyCanary: policyCanaryResult.status === 'fulfilled' ? policyCanaryResult.value : null,
+          policyCanary: selectedPolicyCanary,
           attestation: attestationResult.status === 'fulfilled'
             ? attestationResult.value
             : {error: String(attestationResult.reason?.message || attestationResult.reason || 'Attestation unavailable')},
@@ -25236,14 +25245,15 @@ UI_HTML = r"""
         && state.policyCandidate.templateId === selection.template
       );
       const staged = Boolean(
-        candidateReady
-        && setupSession?.phase === 'policy_staged'
+        setupSession?.phase === 'policy_staged'
         && typeof setupSession.canaryId === 'string' && setupSession.canaryId
         && /^sha256:[0-9a-f]{64}$/.test(setupSession.policyHash || '')
         && state.policyCanary?.canary?.status === 'ready'
         && state.policyCanary?.monitoring?.candidateShadowEvaluationImplemented === true
         && state.policyCanary.canary.id === setupSession.canaryId
         && state.policyCanary.canary.candidatePolicyHash === setupSession.policyHash
+        && (state.policyCanary?.decisionGateActivation?.publication == null
+          || state.policyCanary?.authorityFinalizationState === 'external-finalization-package-required')
       );
       const active = setupAssignmentIsActive(selection);
       const packetMatches = Boolean(

@@ -594,7 +594,15 @@ def assemble(
     *,
     purpose: str,
     trust: VerificationTrust,
+    signed_bundle: dict[str, Any] | None = None,
+    policy_public_key: Path | None = None,
+    policy_public_key_sha256: str | None = None,
 ) -> dict[str, Any]:
+    carrier_inputs = (signed_bundle, policy_public_key, policy_public_key_sha256)
+    if any(value is not None for value in carrier_inputs) and (
+        any(value is None for value in carrier_inputs) or purpose != "handoff"
+    ):
+        raise AssemblyError("signed-bundle carrier requires handoff purpose and all public-key inputs")
     _signed_record(artifact, "artifact", trust)
     _signed_record(assignment, "assignment", trust)
     _signed_record(load_receipt, "load receipt", trust)
@@ -646,7 +654,85 @@ def assemble(
     }
     _reject_private_material(package, "portal package")
     _canonical_bytes(package)
+    if signed_bundle is not None:
+        return _bundle_carrier(
+            package, signed_bundle, artifact, assignment,
+            public_key_path=policy_public_key,
+            public_key_sha256=policy_public_key_sha256,
+        )
     return package
+
+
+def _bundle_carrier(package, bundle, artifact, assignment, *, public_key_path, public_key_sha256):
+    # Only the explicitly selected public key is used. In particular, do not
+    # call policy_public_key(): its compatibility fallback can create a key.
+    pin = _digest(public_key_sha256, "policy public-key SPKI digest")
+    encoded = _read_pinned_public_file(public_key_path, "policy public key", 16 * 1024)
+    if b"PRIVATE KEY" in encoded.upper():
+        raise AssemblyError("policy public key contains private key material")
+    try:
+        key = (serialization.load_pem_public_key(encoded)
+            if encoded.lstrip().startswith(b"-----BEGIN")
+            else serialization.load_der_public_key(encoded))
+    except (TypeError, ValueError) as exc:
+        raise AssemblyError("policy public key cannot be decoded") from exc
+    if not isinstance(key, Ed25519PublicKey):
+        raise AssemblyError("policy public key is not Ed25519")
+    spki = key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    if "sha256:" + hashlib.sha256(spki).hexdigest() != pin:
+        raise AssemblyError("policy public key differs from its independent SPKI pin")
+    metadata = bundle.get("metadata")
+    if (bundle.get("apiVersion") not in {"serverware.policy/v1", "serverware.policy/v2"}
+        or not isinstance(metadata, dict) or metadata.get("signingKeyId") != pin
+        or not isinstance(metadata.get("signature"), str)
+        or re.fullmatch(r"ed25519:[A-Za-z0-9_-]{86}", metadata["signature"]) is None):
+        raise AssemblyError("candidate bundle signature identity is invalid")
+    signature_text = metadata["signature"][8:]
+    signature = base64.urlsafe_b64decode(signature_text + "==")
+    if base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii") != signature_text:
+        raise AssemblyError("candidate bundle signature encoding is not canonical")
+    # Reuse the actual v1/v2 signature framing, not a second JSON codec.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from serverware.policy_bundle import PolicyBundleError, policy_signature_bytes
+    try:
+        message = policy_signature_bytes(bundle)
+        key.verify(signature, message)
+    except (InvalidSignature, PolicyBundleError, TypeError, ValueError) as exc:
+        raise AssemblyError("candidate bundle signature is invalid") from exc
+    bundle_digest = "sha256:" + hashlib.sha256(_canonical_bytes(bundle)).hexdigest()
+    policy_digest = "sha256:" + hashlib.sha256(message).hexdigest()
+    # assemble() has verified these literal envelopes. Join signed payloads,
+    # not merely the caller-supplied outer SQL-record projections.
+    artifact_envelope = json.loads(artifact["artifact_envelope_json"])
+    assignment_envelope = json.loads(assignment["assignment_envelope_json"])
+    artifact_payload = artifact_envelope["payload"]
+    artifact_record = artifact_payload.get("record")
+    assignment_payload = assignment_envelope["payload"]
+    identity = assignment_payload.get("policyIdentity")
+    if (artifact_envelope["signatureDomain"] != "serverware.policyCandidateArtifact/v2"
+        or artifact_envelope["kind"] != "PolicyCandidateArtifact"
+        or set(artifact_payload) != {"issuedAtEpochNs", "expiresAtEpochNs", "record"}
+        or not isinstance(artifact_record, dict)
+        or assignment_envelope["signatureDomain"] != "serverware.policyShadowAssignment/v1"
+        or assignment_envelope["kind"] != "PolicyShadowAssignment"
+        or not isinstance(identity, dict)
+        or artifact_record.get("policy_bundle_digest") != bundle_digest
+        or artifact.get("policy_bundle_digest") != bundle_digest
+        or assignment.get("policy_bundle_digest") != bundle_digest
+        or identity.get("policyBundleSha256") != bundle_digest
+        or artifact_record.get("policy_hash") != policy_digest
+        or artifact.get("policy_hash") != policy_digest
+        or identity.get("candidatePolicySha256") != policy_digest
+        or artifact_record.get("candidate_id") != package["handoff"]["candidateId"]
+        or artifact_record.get("predecessor_policy_hash") != package["handoff"]["predecessorPolicyHash"]
+        or assignment_payload.get("canaryId") != package["handoff"]["canaryId"]
+        or identity.get("predecessorPolicySha256") != package["handoff"]["predecessorPolicyHash"]):
+        raise AssemblyError("signed bundle differs from authenticated artifact or assignment")
+    carrier = {"apiVersion": "serverware.policyAuthorityPortalCarrier/v1",
+        "signedPolicyBundle": bundle, "portalPackage": package}
+    if len(_canonical_bytes(carrier)) + 1 > MAX_INPUT_BYTES:
+        raise AssemblyError("portal carrier exceeds the fixed import bound")
+    return carrier
 
 
 def _write_output(path: Path, payload: bytes) -> None:
@@ -693,6 +779,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--verification-trust", required=True, type=Path)
     parser.add_argument("--verification-trust-sha256", required=True)
     parser.add_argument("--activation", type=Path)
+    parser.add_argument("--signed-bundle", type=Path,
+        help="optional already-signed bundle; emits a v1 carrier for handoff only")
+    parser.add_argument("--policy-public-key", type=Path,
+        help="independently trusted root-owned Ed25519 PUBLIC key (PEM or DER)")
+    parser.add_argument("--policy-public-key-sha256",
+        help="independently selected sha256: digest of public-key DER SPKI")
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -724,6 +816,10 @@ def main() -> int:
             activation,
             purpose=args.purpose,
             trust=trust,
+            signed_bundle=(_load_object(args.signed_bundle, "signed policy bundle")
+                if args.signed_bundle is not None else None),
+            policy_public_key=args.policy_public_key,
+            policy_public_key_sha256=args.policy_public_key_sha256,
         )
         payload = _canonical_bytes(package) + b"\n"
         if args.output is None:

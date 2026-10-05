@@ -23313,6 +23313,10 @@ UI_HTML = r"""
           <p class="hint">Route-match preview checks policy selection only. It does not authenticate a client certificate, provision an issuer, or prove runtime enforcement.</p>
           <label for="policy-candidate-output">Unsigned draft, diff, and route-match preview</label>
           <textarea id="policy-candidate-output" class="policy-result" readonly></textarea>
+          <label for="policy-authority-carrier">Import an assembled policy-authority carrier</label>
+          <input id="policy-authority-carrier" type="file" accept="application/json,.json">
+          <button type="button" class="secondary" onclick="runUiAction('Import policy authority carrier', importPolicyAuthorityCarrier)">Import signed material for this preview</button>
+          <p id="policy-carrier-status" class="hint" role="status">Import only fills the controls below. It does not sign, stage, publish or activate a policy.</p>
           <label for="policy-signed-bundle">Signed candidate PolicyBundle from your policy authority</label>
           <textarea id="policy-signed-bundle" class="policy-result" spellcheck="false"></textarea>
           <p class="hint">Preview does not sign or activate a policy. To stage it, supply the same draft signed by your policy authority and its runtime handoff package. The server verifies the signature and artifact bindings.</p>
@@ -25989,8 +25993,7 @@ UI_HTML = r"""
       return report;
     }
 
-    function signedPolicyCandidate(candidate) {
-      const raw = $('policy-signed-bundle').value.trim();
+    function signedPolicyCandidate(candidate, raw = $('policy-signed-bundle').value.trim()) {
       if (!raw) throw new Error('Supply an independently signed candidate PolicyBundle before staging');
       const bundle = JSON.parse(raw);
       if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)
@@ -26008,6 +26011,91 @@ UI_HTML = r"""
       // Shape and draft equality are not signature verification. The existing
       // handoff endpoint verifies the signature and independently held artifacts.
       return bundle;
+    }
+
+    async function importPolicyAuthorityCarrier() {
+      const candidate = state.policyCandidate;
+      if (!candidate?.report?.previewOnly) throw new Error('Preview the current policy draft before importing signed material');
+      candidate.checkContext();
+      const input = $('policy-authority-carrier'), file = input.files?.[0];
+      if (input.files?.length !== 1 || !file || file.size < 2 || file.size > 8 * 1024 * 1024) {
+        throw new Error('Choose one policy authority carrier JSON file, at most 8 MiB');
+      }
+      const signedBefore = $('policy-signed-bundle').value, packageBefore = $('policy-authority-package').value;
+      const controlledBefore = $('controlled-candidate-handoff').value;
+      const current = () => {
+        candidate.checkContext();
+        if (candidate !== state.policyCandidate || input.files?.length !== 1 || input.files[0] !== file
+            || controlledCandidateBusy || $('policy-signed-bundle').value !== signedBefore
+            || $('policy-authority-package').value !== packageBefore
+            || $('controlled-candidate-handoff').value !== controlledBefore) {
+          throw new Error('Policy import context changed; no controls were replaced');
+        }
+      };
+      current();
+      const bytes = await file.arrayBuffer();
+      current();
+      if (bytes.byteLength !== file.size) throw new Error('Policy carrier file changed while reading');
+      // The existing bounded parser rejects duplicate fields and preserves
+      // numeric originals; the import itself is not signature verification.
+      const carrier = oauthConsentParse(new TextDecoder('utf-8', {fatal: true}).decode(bytes), 8 * 1024 * 1024).value;
+      if (!oauthConsentClosed(carrier, ['apiVersion', 'signedPolicyBundle', 'portalPackage'])
+          || carrier.apiVersion !== 'serverware.policyAuthorityPortalCarrier/v1') {
+        throw new Error('The policy authority carrier has an unsupported or open schema');
+      }
+      const authorityPackage = carrier.portalPackage;
+      const handoffFields = ['candidateId', 'artifactEnvelopeDigest', 'canaryId', 'assignmentEnvelopeDigest',
+        'loadReceiptEnvelopeDigest', 'instanceId', 'bootId', 'runtimeAttestationHandoffDigest', 'predecessorPolicyHash'];
+      if (!oauthConsentClosed(authorityPackage, ['apiVersion', 'handoff', 'activation'])
+          || authorityPackage.apiVersion !== 'serverware.policyAuthorityPortalPackage/v1'
+          || !oauthConsentClosed(authorityPackage.handoff, handoffFields)
+          || !oauthConsentClosed(authorityPackage.activation, [])
+          || handoffFields.some((name) => typeof authorityPackage.handoff[name] !== 'string'
+            || !authorityPackage.handoff[name] || authorityPackage.handoff[name].length > 256)
+          || authorityPackage.handoff.predecessorPolicyHash !== candidate.basePolicyHash) {
+        throw new Error('The carrier is not an initial handoff for the previewed predecessor');
+      }
+      const signedText = oauthConsentCanonical(carrier.signedPolicyBundle);
+      // Policy signatures distinguish integer from binary64 values, including
+      // negative floating zero. Do not use OAuth's looser numeric equality.
+      const sameOriginal = (a, b) => {
+        if (a instanceof OAuthConsentNumber || b instanceof OAuthConsentNumber) {
+          if (!(a instanceof OAuthConsentNumber && b instanceof OAuthConsentNumber)) return false;
+          const integerA = /^-?[0-9]+$/.test(a.raw), integerB = /^-?[0-9]+$/.test(b.raw);
+          if (integerA !== integerB) return false;
+          if (integerA) return BigInt(a.raw) === BigInt(b.raw);
+          return Number.isFinite(Number(a.raw)) && Number.isFinite(Number(b.raw))
+            && Object.is(Number(a.raw), Number(b.raw));
+        }
+        if (a && b && typeof a === 'object' && typeof b === 'object') {
+          return Array.isArray(a) === Array.isArray(b) && Object.keys(a).length === Object.keys(b).length
+            && Object.keys(a).every((key) => Object.hasOwn(b, key) && sameOriginal(a[key], b[key]));
+        }
+        return a === b;
+      };
+      const originalDraft = oauthConsentParse(signedText, 8 * 1024 * 1024).value;
+      if (!originalDraft?.metadata || typeof originalDraft.metadata !== 'object') {
+        throw new Error('The carrier has no signed policy metadata');
+      }
+      delete originalDraft.metadata.signature;
+      delete originalDraft.metadata.signingKeyId;
+      if (!sameOriginal(originalDraft, oauthConsentParse(JSON.stringify(candidate.bundle), 8 * 1024 * 1024).value)) {
+        throw new Error('The carrier differs from the previewed draft, including its signed numeric types and values');
+      }
+      const stagedBundle = signedPolicyCandidate(candidate, signedText);
+      if (!sameOriginal(carrier.signedPolicyBundle, oauthConsentParse(JSON.stringify(stagedBundle), 8 * 1024 * 1024).value)) {
+        throw new Error('Existing staging cannot preserve this signed bundle; no material was imported');
+      }
+      const packageText = oauthConsentCanonical(authorityPackage);
+      const controlledText = oauthConsentCanonical({apiVersion: 'serverware.policyAuthorityCandidateHandoff/v1',
+        requestId: authorityRequestId(), ...authorityPackage.handoff, candidatePolicyBundle: carrier.signedPolicyBundle});
+      current();
+      $('policy-signed-bundle').value = signedText;
+      $('policy-authority-package').value = packageText;
+      $('controlled-candidate-handoff').value = controlledText;
+      $('policy-carrier-status').textContent = 'Matching signed material imported. No request was sent; server signature, current authority and runtime checks still apply when you explicitly stage or publish.';
+      renderPolicyCandidate();
+      renderSetupWorkflow();
     }
 
     function renderPolicyCandidate() {

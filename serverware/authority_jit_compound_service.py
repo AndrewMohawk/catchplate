@@ -67,9 +67,10 @@ def _inputs_on_work(request, business, authorization, heads, work):
     return owned["request"], tuple(owned["business"]), tuple(owned["authorization"]), tuple(values)
 
 
-def _producer_on_work(process, *, live_window, work):
+def _producer_on_work(process, *, live_window, work, processing_owner=None):
     """Bind the actual page signer and protected planner-read descriptor only."""
-    caller = pages._caller_on_work(process, live_window=live_window, work=work)
+    caller = pages._caller_on_work(process, live_window=live_window, work=work,
+        processing_owner=processing_owner)
     _require(caller._configured.local_role == "planner")
     pages._PageCaller._live(caller, work)
     owned, digest, generation, dsn, private, runtime = measured._measured_context_on_work(
@@ -84,7 +85,7 @@ def _producer_on_work(process, *, live_window, work):
 
 
 def _produce_on_work(process, *, request, business_before_roots, authorization_before_roots,
-        expected_counted_heads, live_window, original_deadline_ns, check, work):
+        expected_counted_heads, live_window, original_deadline_ns, check, work, processing_owner=None):
     """Call the genuine fixed producer with no request-selected I/O owner."""
     _require(type(work) is _ValidationWork and callable(check))
     owned_request, business, authorization, heads = _inputs_on_work(request,
@@ -92,7 +93,13 @@ def _produce_on_work(process, *, request, business_before_roots, authorization_b
     window = clock._validate(live_window)
     source.shape._integer(original_deadline_ns, minimum=1)
     _require(window[2] < original_deadline_ns <= window[4])
-    producer, caller = _producer_on_work(process, live_window=window, work=work)
+    if processing_owner is not None:
+        from serverware.authority_jit_compound_request_service import _page_bounds
+
+        _page_bounds(processing_owner, original_window=window,
+            original_deadline_ns=original_deadline_ns, work=work)
+    producer, caller = _producer_on_work(process, live_window=window, work=work,
+        processing_owner=processing_owner)
     from serverware import authority_jit_compound_production as production
 
     _require(type(producer) is production._JitCompoundProducer

@@ -123,12 +123,20 @@ class _PageCaller:
 
     def _live(self, work):
         _require(type(self) is _PageCaller)
+        _require(type(self._held) is tuple and len(self._held) in (3, 4))
         _require(self._identity == (os.getpid(), threading.get_ident())
             and self._configured is self._held[0] and self._check_owner is self._held[1]
             and self._window is self._held[2])
         configuration._snapshot(self._configured)
         self._check_owner(work)
         clock._check_on_work(self._window, work=work)
+        if len(self._held) == 4:
+            from serverware.authority_jit_compound_request_service import _RequestOwner, _page_bounds
+
+            processing = self._held[3]
+            _require(type(processing) is _RequestOwner)
+            _page_bounds(processing, original_window=self._window,
+                original_deadline_ns=processing.original_deadline, work=work)
 
     def persist(self, *, context, body_bytes, descriptor, original_deadline_ns, work):
         """One fixed measured planner request, never caller-selected SQL."""
@@ -138,7 +146,8 @@ class _PageCaller:
             original_deadline_ns=original_deadline_ns, descriptor=descriptor, work=work)
         returned = actions.persist_page(configuration=self._configured, control_bytes=encoded,
             body_bytes=body_bytes, live_window=self._window, work=work,
-            check=lambda: _PageCaller._live(self, work))
+            check=lambda: _PageCaller._live(self, work),
+            processing_owner=self._held[3] if len(self._held) == 4 else None)
         _require(type(returned) is wire.PageExchange and type(returned.body_bytes) is bytes)
         # The actual exchange requires a literal echo after writer closure.
         work.charge(input_bytes=len(body_bytes) + len(returned.body_bytes))
@@ -152,26 +161,35 @@ class _PageCaller:
         encoded = wire.control.encode_control(action="read", context=context,
             original_deadline_ns=original_deadline_ns, descriptor=None, work=work)
         returned = actions.read_page(configuration=self._configured, control_bytes=encoded,
-            live_window=self._window, work=work, check=lambda: _PageCaller._live(self, work))
+            live_window=self._window, work=work, check=lambda: _PageCaller._live(self, work),
+            processing_owner=self._held[3] if len(self._held) == 4 else None)
         _require(type(returned) is wire.PageExchange and type(returned.body_bytes) is bytes)
         _PageCaller._live(self, work)
         return returned.body_bytes
 
 
-def _caller_on_work(process, *, live_window, work):
+def _caller_on_work(process, *, live_window, work, processing_owner=None):
     """Configure real planner/verifier page calls under an existing window."""
     from serverware import authority_service as service
 
     _require(type(process) is service.AuthorityProcess and process.role_name in ("planner", "verifier"))
-    configured, check = _configured_on_work(process, local_role=process.role_name, work=work)
     window = clock._validate(live_window)
+    if processing_owner is not None:
+        from serverware.authority_jit_compound_request_service import _RequestOwner, _page_bounds
+
+        _require(type(processing_owner) is _RequestOwner
+            and processing_owner.caller.process is process and process.role_name == "planner")
+        _page_bounds(processing_owner, original_window=window,
+            original_deadline_ns=processing_owner.original_deadline, work=work)
+    configured, check = _configured_on_work(process, local_role=process.role_name, work=work)
     _require(window[3] - window[0] <= configured.maximum_age_ns
         and window[6] <= configured.maximum_clock_skew_ns)
     result = object.__new__(_PageCaller)
     object.__setattr__(result, "_configured", configured)
     object.__setattr__(result, "_check_owner", check)
     object.__setattr__(result, "_window", window)
-    object.__setattr__(result, "_held", (configured, check, window))
+    object.__setattr__(result, "_held", (configured, check, window) if processing_owner is None
+        else (configured, check, window, processing_owner))
     object.__setattr__(result, "_identity", (os.getpid(), threading.get_ident()))
     _PageCaller._live(result, work)
     return result

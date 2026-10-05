@@ -172,7 +172,7 @@ def decode_response(response_bytes, *, authorization_bytes, control_bytes, body_
 
 def exchange(*, path, action, authorization_bytes, control_bytes, body_bytes,
         original_deadline_ns, expected_peer_uid, expected_peer_gid, work,
-        transport_deadline_ns=None) -> PageExchange:
+        transport_deadline_ns=None, processing_owner=None) -> PageExchange:
     """One exact-peer exchange; no signature verdict or successful proof DTO."""
     packet, selected = _request(action=action, authorization_bytes=authorization_bytes,
         control_bytes=control_bytes, work=work)
@@ -184,6 +184,13 @@ def exchange(*, path, action, authorization_bytes, control_bytes, body_bytes,
         type(transport_deadline_ns) is int and 0 < transport_deadline_ns < 2**63)
     effective_deadline = (original_deadline_ns if transport_deadline_ns is None
         else min(original_deadline_ns, transport_deadline_ns))
+    if processing_owner is not None:
+        from serverware.authority_jit_compound_request_service import _RequestOwner, _page_bounds
+
+        _require(type(processing_owner) is _RequestOwner)
+        bounded, _epoch = _page_bounds(processing_owner,
+            original_window=processing_owner.original, original_deadline_ns=original_deadline_ns, work=work)
+        effective_deadline = min(effective_deadline, bounded)
     if action == "persist":
         # Check the signed control's detached descriptor against the actual
         # original body before any transport side effect.
@@ -193,6 +200,12 @@ def exchange(*, path, action, authorization_bytes, control_bytes, body_bytes,
     request_body_size = 0 if body_bytes is None else len(body_bytes)
     expected_request = transport._metrics(len(packet), request_body_size, 17)
     work.charge(input_bytes=expected_request.wire_bytes)
+    if processing_owner is not None:
+        # The fixed exchange has at most eleven high-level I/O calls plus
+        # opening/return checks (24 owner checks). Reserve their bounded
+        # identity/clock metadata before the neutral native call. Fragmented
+        # recv loops retain the same absolute timeout, not extra graph scans.
+        work.charge(input_bytes=1024 * 1024, json_nodes=65536)
     # The unchanged opaque transport knows incoming lengths before allocating.
     # Capacity for its fixed ceiling is held across an allowance-neutral call;
     # it is not refunded, replenished, or mislabeled as a SQL acquisition.
@@ -201,7 +214,11 @@ def exchange(*, path, action, authorization_bytes, control_bytes, body_bytes,
     response = evidence.production._callback(work, lambda: transport._socket_exchange(path,
         action=action, control_bytes=packet, body_bytes=body_bytes,
         original_deadline_ns=effective_deadline,
-        expected_peer_uid=expected_peer_uid, expected_peer_gid=expected_peer_gid))
+        expected_peer_uid=expected_peer_uid, expected_peer_gid=expected_peer_gid,
+        processing_owner=processing_owner, processing_work=work if processing_owner is not None else None))
+    if processing_owner is not None:
+        _page_bounds(processing_owner, original_window=processing_owner.original,
+            original_deadline_ns=original_deadline_ns, work=work)
     _require(type(response) is transport.RawResponse
         and type(response.metrics) is transport.ExchangeMetrics
         and type(response.metrics.request) is transport.FrameMetrics
@@ -217,4 +234,7 @@ def exchange(*, path, action, authorization_bytes, control_bytes, body_bytes,
         work.charge(input_bytes=len(body_bytes) + len(response.body_bytes))
         _require(response.body_bytes == body_bytes)
     evidence.production._callback(work, lambda: transport._deadline(effective_deadline))
+    if processing_owner is not None:
+        _page_bounds(processing_owner, original_window=processing_owner.original,
+            original_deadline_ns=original_deadline_ns, work=work)
     return PageExchange(response.body_bytes, response.metrics)

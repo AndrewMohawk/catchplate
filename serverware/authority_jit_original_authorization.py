@@ -129,7 +129,8 @@ def _sign(payload, private, public, work):
 
 
 def sign_control(*, control_bytes, action, signer_role, signer_identity, signer_spki_digest,
-        signer_private_key, signer_public_key, configuration_digest, live_window, work) -> bytes:
+        signer_private_key, signer_public_key, configuration_digest, live_window, work,
+        processing_owner=None) -> bytes:
     _require(isinstance(signer_private_key, Ed25519PrivateKey)
         and isinstance(signer_public_key, Ed25519PublicKey))
     raw = control_bytes
@@ -141,6 +142,12 @@ def sign_control(*, control_bytes, action, signer_role, signer_identity, signer_
     # This maps the held opening bracket, never a fresh now-plus-duration;
     # the original window, issue sample and control deadline stay unchanged.
     expires = min(window[3], window[0] + owned["originalDeadlineNs"] - window[1])
+    if processing_owner is not None:
+        from serverware.authority_jit_compound_request_service import _page_bounds
+
+        bounded_mono, bounded_epoch = _page_bounds(processing_owner,
+            original_window=window, original_deadline_ns=owned["originalDeadlineNs"], work=work)
+        expires = min(expires, bounded_epoch, window[0] + bounded_mono - window[1])
     _require(window[0] < expires <= window[3])
     evidence.keys._public_binding(signer_public_key, signer_spki_digest, work)
     evidence.keys._pair_on_work(signer_private_key, signer_public_key, work)
@@ -153,6 +160,9 @@ def sign_control(*, control_bytes, action, signer_role, signer_identity, signer_
     _bind(payload, raw, owned, pins, window, work)
     result = _sign(payload, signer_private_key, signer_public_key, work)
     _bind(payload, raw, owned, pins, window, work)
+    if processing_owner is not None:
+        _page_bounds(processing_owner, original_window=window,
+            original_deadline_ns=owned["originalDeadlineNs"], work=work)
     return result
 
 

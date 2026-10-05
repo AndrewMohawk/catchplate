@@ -14,7 +14,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIELDS = ("request", "business_before_roots", "authorization_before_roots",
-    "expected_counted_heads", "live_window", "original_deadline_ns", "check", "work")
+    "expected_counted_heads", "live_window", "original_deadline_ns", "check", "work", "processing_owner")
 
 
 def read(path):
@@ -47,7 +47,9 @@ class JitCompoundProcessSourceControls(unittest.TestCase):
             self.assertEqual(tuple(arg.arg for arg in function.args.kwonlyargs), FIELDS)
             self.assertEqual(function.args.posonlyargs, [])
             self.assertEqual(function.args.defaults, [])
-            self.assertEqual(function.args.kw_defaults, [None] * len(FIELDS))
+            self.assertEqual(function.args.kw_defaults[:-1], [None] * (len(FIELDS) - 1))
+            self.assertIsInstance(function.args.kw_defaults[-1], ast.Constant)
+            self.assertIsNone(function.args.kw_defaults[-1].value)
             self.assertIsNone(function.args.vararg)
             self.assertIsNone(function.args.kwarg)
         self.assertTrue(self.method.name.startswith("_produce_"))

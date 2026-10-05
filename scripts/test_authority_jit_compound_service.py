@@ -83,7 +83,7 @@ class JitCompoundServiceControls(unittest.TestCase):
         tree = ast.parse(inspect.getsource(service))
         methods = {item.name: item for item in tree.body if isinstance(item, ast.FunctionDef)}
         source = ast.unparse(methods["_producer_on_work"])
-        self.assertIn("pages._caller_on_work(process, live_window=live_window, work=work)", source)
+        self.assertIn("pages._caller_on_work(process, live_window=live_window, work=work, processing_owner=processing_owner)", source)
         self.assertIn("caller._configured.local_role == 'planner'", source)
         self.assertIn("role='planner', signing=False, read_descriptor=_READ_DSN, work=work", source)
         self.assertIn("private is None", source)

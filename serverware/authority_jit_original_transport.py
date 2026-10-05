@@ -77,6 +77,46 @@ def _metrics(control, body, header):
     return FrameMetrics(control, body, header, header + control + body)
 
 
+class _ProcessingIO:
+    """Exact entered planning owner; fixed body I/O, not per-fragment scans.
+
+    Every underlying syscall still uses the narrowed absolute deadline. These
+    owner checks bracket each fixed header/body operation, connect, peer check,
+    shutdown and EOF. They do not impose a new stream fragmentation limit.
+    """
+
+    def __init__(self, owner, work, deadline):
+        self.owner, self.work, self.deadline = owner, work, deadline
+        self.held = owner, work, deadline
+        _require((owner is None) == (work is None))
+        self.check()
+
+    def check(self):
+        _require(all(actual is original for actual, original in zip(
+            (self.owner, self.work, self.deadline), self.held, strict=True)))
+        if self.owner is not None:
+            from serverware.authority_jit_compound_request_service import _RequestOwner, _page_bounds
+
+            _require(type(self.owner) is _RequestOwner)
+            bounded, _epoch = _page_bounds(self.owner, original_window=self.owner.original,
+                original_deadline_ns=self.owner.original_deadline, work=self.work)
+            _require(self.deadline <= bounded)
+        _deadline(self.deadline)
+
+    def call(self, operation):
+        self.check()
+        try:
+            result = operation()
+        except BaseException:
+            try:
+                self.check()
+            except BaseException:
+                pass
+            raise
+        self.check()
+        return result
+
+
 def _recv_request(connection, *, prefix, deadline_ns):
     """Peer admission precedes prefix acquisition in the actual service owner."""
     _deadline(deadline_ns)
@@ -105,19 +145,21 @@ def _send_response(connection, *, control_bytes, body_bytes, deadline_ns):
     return _metrics(control, body, 16)
 
 
-def _recv_response(connection, deadline_ns):
-    _require(wire._recv_prefix(connection, deadline_ns=deadline_ns) == RESPONSE_MAGIC)
-    header = wire._recv_exact_until(connection, 8, deadline_ns=deadline_ns)
+def _recv_response(connection, deadline_ns, *, processing=None):
+    held = _ProcessingIO(None, None, deadline_ns) if processing is None else processing
+    _require(type(held) is _ProcessingIO and held.deadline == deadline_ns)
+    _require(held.call(lambda: wire._recv_prefix(connection, deadline_ns=deadline_ns)) == RESPONSE_MAGIC)
+    header = held.call(lambda: wire._recv_exact_until(connection, 8, deadline_ns=deadline_ns))
     control, body = int.from_bytes(header[:4], "big"), int.from_bytes(header[4:], "big")
     _response_lengths(control, body)
-    control_bytes = wire._recv_exact_until(connection, control, deadline_ns=deadline_ns)
-    body_bytes = wire._recv_exact_until(connection, body, deadline_ns=deadline_ns)
-    wire._require_eof(connection, deadline_ns)
+    control_bytes = held.call(lambda: wire._recv_exact_until(connection, control, deadline_ns=deadline_ns))
+    body_bytes = held.call(lambda: wire._recv_exact_until(connection, body, deadline_ns=deadline_ns))
+    held.call(lambda: wire._require_eof(connection, deadline_ns))
     return control_bytes, body_bytes, _metrics(control, body, 16)
 
 
 def _socket_exchange(path, *, action, control_bytes, body_bytes, original_deadline_ns,
-                     expected_peer_uid, expected_peer_gid):
+                     expected_peer_uid, expected_peer_gid, processing_owner=None, processing_work=None):
     """Return raw bytes from one exact-peer exchange; never a verified result."""
     _require(type(path) is str and path.startswith("/") and "\x00" not in path and 1 <= len(path) <= 107)
     try:
@@ -132,19 +174,23 @@ def _socket_exchange(path, *, action, control_bytes, body_bytes, original_deadli
     control, body = len(control_bytes), 0 if body_bytes is None else len(body_bytes)
     _lengths(action, control, body)
     _deadline(original_deadline_ns)
+    processing = _ProcessingIO(processing_owner, processing_work, original_deadline_ns)
     header = REQUEST_MAGIC + _ACTIONS[action] + control.to_bytes(4, "big") + body.to_bytes(4, "big")
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        wire._call_until(connection, original_deadline_ns, lambda: connection.connect(path))
-        peer_uid, peer_gid, _peer_pid = wire._call_until(connection, original_deadline_ns,
-            lambda: authority_transport._peer_identity(connection))
+        processing.call(lambda: wire._call_until(connection, original_deadline_ns,
+            lambda: connection.connect(path)))
+        peer_uid, peer_gid, _peer_pid = processing.call(lambda: wire._call_until(
+            connection, original_deadline_ns, lambda: authority_transport._peer_identity(connection)))
         _require(peer_uid == expected_peer_uid and peer_gid == expected_peer_gid)
         for raw in (header, control_bytes):
-            wire._send_exact_until(connection, raw, deadline_ns=original_deadline_ns)
+            processing.call(lambda: wire._send_exact_until(connection, raw, deadline_ns=original_deadline_ns))
         if body_bytes is not None:
-            wire._send_exact_until(connection, body_bytes, deadline_ns=original_deadline_ns)
-        wire._call_until(connection, original_deadline_ns, lambda: connection.shutdown(socket.SHUT_WR))
-        response_control, response_body, response_metrics = _recv_response(connection, original_deadline_ns)
+            processing.call(lambda: wire._send_exact_until(connection, body_bytes, deadline_ns=original_deadline_ns))
+        processing.call(lambda: wire._call_until(connection, original_deadline_ns,
+            lambda: connection.shutdown(socket.SHUT_WR)))
+        response_control, response_body, response_metrics = _recv_response(connection,
+            original_deadline_ns, processing=processing)
     except BaseException:
         try:
             connection.close()
@@ -152,6 +198,6 @@ def _socket_exchange(path, *, action, control_bytes, body_bytes, original_deadli
             pass
         raise
     connection.close()
-    wire._check_deadline(original_deadline_ns)
+    processing.check()
     return RawResponse(response_control, response_body,
         ExchangeMetrics(_metrics(control, body, 17), response_metrics))

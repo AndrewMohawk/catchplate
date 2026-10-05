@@ -130,6 +130,7 @@ from serverware import authority_revocation_planning_transport as planning_trans
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_recovery_history_transport as retained_page_transport
 from serverware import authority_jit_original_transport as jit_original_transport
+from serverware import authority_jit_compound_transport as jit_compound_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
@@ -4630,7 +4631,7 @@ class AuthorityProcess:
 
     def _produce_jit_compound(self, *, request, business_before_roots,
             authorization_before_roots, expected_counted_heads, live_window,
-            original_deadline_ns, check, work):
+            original_deadline_ns, check, work, processing_owner=None):
         """Private measured production; request/root admission and execution stay upstream."""
         from serverware import authority_jit_compound_service as jit
 
@@ -4638,7 +4639,8 @@ class AuthorityProcess:
             business_before_roots=business_before_roots,
             authorization_before_roots=authorization_before_roots,
             expected_counted_heads=expected_counted_heads, live_window=live_window,
-            original_deadline_ns=original_deadline_ns, check=check, work=work)
+            original_deadline_ns=original_deadline_ns, check=check, work=work,
+            processing_owner=processing_owner)
 
     def _challenge_maintenance_producer(self, *, operation, work):
         """Actual measured planner signer/read settings, without SQL or dispatch."""
@@ -10682,6 +10684,7 @@ class AuthorityServer:
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
                 retained_page_transport.REQUEST_MAGIC,
                 jit_original_transport.REQUEST_MAGIC,
+                jit_compound_transport.REQUEST_MAGIC,
                 *custody_caller_transport.REQUEST_MAGICS,
                 *custody_reconcile_transport.REQUEST_MAGICS,
                 custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
@@ -10722,6 +10725,15 @@ class AuthorityServer:
                 detached = True
                 authority_public_revocation_service.serve_process(
                     self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix == jit_compound_transport.REQUEST_MAGIC:
+                # Fixed signed verifier-to-planner production only. The
+                # writer's verifier reservation exception is refused above;
+                # current-root/capability/execution admission stays separate.
+                from serverware import authority_jit_compound_ingress
+
+                authority_jit_compound_ingress.serve_process(self.process, connection,
+                    deadline_ns=deadline_ns, prefix=prefix)
                 return
             if prefix == jit_original_transport.REQUEST_MAGIC:
                 # The writer's verifier-only reservation exception is denied

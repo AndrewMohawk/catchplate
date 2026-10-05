@@ -35,7 +35,8 @@ def _require(value):
         raise JitOriginalActionError("JIT original page action differs from its original role custody")
 
 
-def _start(configuration, *, roles, action, control_bytes, live_window, work, check):
+def _start(configuration, *, roles, action, control_bytes, live_window, work, check,
+        processing_owner=None):
     original = selections._snapshot(configuration)
     _require(configuration.local_role in roles and type(work) is _ValidationWork and callable(check))
     evidence.capture._SharedLedger(work)
@@ -47,6 +48,13 @@ def _start(configuration, *, roles, action, control_bytes, live_window, work, ch
     _require(window[3] - window[0] <= configuration.maximum_age_ns
         and window[6] <= configuration.maximum_clock_skew_ns)
     deadline = min(selected["originalDeadlineNs"], window[4])
+    processing_epoch = None
+    if processing_owner is not None:
+        from serverware.authority_jit_compound_request_service import _page_bounds
+
+        processing_mono, processing_epoch = _page_bounds(processing_owner,
+            original_window=window, original_deadline_ns=selected["originalDeadlineNs"], work=work)
+        deadline = min(deadline, processing_mono)
     identity = os.getpid(), threading.get_ident()
     limits = work.limits
     bounds = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
@@ -64,6 +72,8 @@ def _start(configuration, *, roles, action, control_bytes, live_window, work, ch
         _require(all(type(value) is int and before <= value <= maximum
             for before, value, maximum in zip(previous_work, values, bounds, strict=True)))
         epoch = clock._check_on_work(window, work=work)
+        if processing_epoch is not None:
+            _require(epoch < processing_epoch)
         if signed_interval is not None:
             issued, expires = signed_interval
             _require(issued <= epoch + window[6] and epoch - issued <= window[5] and epoch < expires)
@@ -78,6 +88,9 @@ def _start(configuration, *, roles, action, control_bytes, live_window, work, ch
             _require(not busy)
             busy = True
             _require(evidence.production._callback(work, check) is None)
+            if processing_owner is not None:
+                _page_bounds(processing_owner, original_window=window,
+                    original_deadline_ns=selected["originalDeadlineNs"], work=work)
             local()
         except BaseException:
             failed = True
@@ -104,7 +117,7 @@ def _identity(configuration, role, work):
     return dict(zip(selections._IDENTITY_FIELDS, values, strict=True))
 
 
-def _sign(configuration, *, action, control_bytes, window, work):
+def _sign(configuration, *, action, control_bytes, window, work, processing_owner=None):
     role = configuration.local_role
     _require(role in ("planner", "verifier"))
     return authorization.sign_control(control_bytes=control_bytes, action=action,
@@ -113,7 +126,7 @@ def _sign(configuration, *, action, control_bytes, window, work):
             else configuration.verifier_spki_digest), signer_private_key=configuration.private_key,
         signer_public_key=(configuration.planner_public_key if role == "planner"
             else configuration.verifier_public_key), configuration_digest=configuration.configuration_digest,
-        live_window=window, work=work)
+        live_window=window, work=work, processing_owner=processing_owner)
 
 
 def _verify(configuration, *, role, action, authorization_bytes, control_bytes, window, work):
@@ -130,39 +143,52 @@ def _verify(configuration, *, role, action, authorization_bytes, control_bytes, 
 
 
 def _exchange(configuration, *, endpoint, action, authorization_bytes, control_bytes,
-        body_bytes, selected, window, work, guard, local_deadline_ns=None):
+        body_bytes, selected, window, work, guard, local_deadline_ns=None, processing_owner=None):
     guard()
+    if processing_owner is not None:
+        from serverware.authority_jit_compound_request_service import _page_bounds
+
+        bounded, _epoch = _page_bounds(processing_owner, original_window=window,
+            original_deadline_ns=selected["originalDeadlineNs"], work=work)
+        local_deadline_ns = bounded if local_deadline_ns is None else min(local_deadline_ns, bounded)
     path, uid, gid = endpoint
     result = wire.exchange(path=path, action=action, authorization_bytes=authorization_bytes,
         control_bytes=control_bytes, body_bytes=body_bytes,
         original_deadline_ns=selected["originalDeadlineNs"],
         transport_deadline_ns=(window[4] if local_deadline_ns is None else min(window[4], local_deadline_ns)),
-        expected_peer_uid=uid, expected_peer_gid=gid, work=work)
+        expected_peer_uid=uid, expected_peer_gid=gid, work=work, processing_owner=processing_owner)
     guard()
     _require(type(result) is wire.PageExchange)
     return result
 
 
-def persist_page(*, configuration, control_bytes, body_bytes, live_window, work, check) -> wire.PageExchange:
+def persist_page(*, configuration, control_bytes, body_bytes, live_window, work, check,
+        processing_owner=None) -> wire.PageExchange:
     selected, window, guard, bind_interval = _start(configuration, roles=("planner",), action="persist",
-        control_bytes=control_bytes, live_window=live_window, work=work, check=check)
+        control_bytes=control_bytes, live_window=live_window, work=work, check=check,
+        processing_owner=processing_owner)
     wire.control._body(selected, body_bytes, work)
-    signed = _sign(configuration, action="persist", control_bytes=control_bytes, window=window, work=work)
+    signed = _sign(configuration, action="persist", control_bytes=control_bytes, window=window,
+        work=work, processing_owner=processing_owner)
     guard()
     return _exchange(configuration, endpoint=configuration.writer_endpoint, action="persist",
         authorization_bytes=signed, control_bytes=control_bytes, body_bytes=body_bytes,
-        selected=selected, window=window, work=work, guard=guard)
+        selected=selected, window=window, work=work, guard=guard, processing_owner=processing_owner)
 
 
-def read_page(*, configuration, control_bytes, live_window, work, check) -> wire.PageExchange:
+def read_page(*, configuration, control_bytes, live_window, work, check,
+        processing_owner=None) -> wire.PageExchange:
     selected, window, guard, bind_interval = _start(configuration, roles=("planner", "verifier"), action="read",
-        control_bytes=control_bytes, live_window=live_window, work=work, check=check)
-    signed = _sign(configuration, action="read", control_bytes=control_bytes, window=window, work=work)
+        control_bytes=control_bytes, live_window=live_window, work=work, check=check,
+        processing_owner=processing_owner)
+    signed = _sign(configuration, action="read", control_bytes=control_bytes, window=window,
+        work=work, processing_owner=processing_owner)
     guard()
     endpoint = (configuration.writer_endpoint if configuration.local_role == "planner"
         else configuration.planner_endpoint)
     return _exchange(configuration, endpoint=endpoint, action="read", authorization_bytes=signed,
-        control_bytes=control_bytes, body_bytes=None, selected=selected, window=window, work=work, guard=guard)
+        control_bytes=control_bytes, body_bytes=None, selected=selected, window=window, work=work,
+        guard=guard, processing_owner=processing_owner)
 
 
 def _relay_authorization(configuration, *, authorization_bytes, control_bytes, window, work, guard, bind_interval):

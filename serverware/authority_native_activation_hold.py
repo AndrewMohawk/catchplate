@@ -77,7 +77,7 @@ def sql(namespace, *, operation_sql, mutations_sql):
                 WHERE h.scope = '{SCOPE}' AND h.phase = 'held'
                   AND m->>'table' = '{TABLE}' AND m->>'operation' = 'UPDATE'
                   AND m->'expectedRow' = to_jsonb(h) AND m->'row'->>'phase' = 'published'
-                  AND (m->'row' - 'phase' - 'publication_sha256' - 'finalization_digest') =
+                  AND ((m->'row') - 'phase' - 'publication_sha256' - 'finalization_digest') =
                     (to_jsonb(h) - 'phase' - 'publication_sha256' - 'finalization_digest')
                   AND f->>'table' = 'policy_native_activation_finalizations' AND f->>'operation' = 'INSERT'
                   AND f->'row'->>'activation_id' = h.activation_id

@@ -459,8 +459,8 @@ def _packet(namespace):
         IF crx_marker->>'before_vector_digest' IS DISTINCT FROM {_digest(namespace, vector.IDENTITY_DOMAIN, 'crx_before_vector_json')}
             OR crx_marker->>'after_vector_digest' IS DISTINCT FROM {_digest(namespace, vector.IDENTITY_DOMAIN, 'crx_after_vector_json')}
             OR crx_marker->>'result_digest' IS DISTINCT FROM {_digest(namespace, 'serverware.policyAuthorityControlledWriterResult/v2', 'crx_result_json')}
-            OR (sxe_packet->'beforeVector' - 'primaryRoots' - 'countedRoots') IS DISTINCT FROM {_literal(effects._json(header))}::jsonb
-            OR (sxe_packet->'afterVector' - 'primaryRoots' - 'countedRoots') IS DISTINCT FROM {_literal(effects._json(header))}::jsonb
+            OR ((sxe_packet->'beforeVector') - 'primaryRoots' - 'countedRoots') IS DISTINCT FROM {_literal(effects._json(header))}::jsonb
+            OR ((sxe_packet->'afterVector') - 'primaryRoots' - 'countedRoots') IS DISTINCT FROM {_literal(effects._json(header))}::jsonb
         THEN RAISE EXCEPTION 'successor custody result/vector commitments changed'; END IF;
         IF crx_operation = {_literal(delivery_packet.OPERATION)} THEN
             {_originals(namespace, delivery=True)}

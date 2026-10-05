@@ -714,6 +714,24 @@ def _validate_configuration_document(
         expected_role_bindings=expected_role_bindings)
 
 
+def _recovery_selection(value, *, webauthn):
+    """Project explicit recovery limits without altering signed originals.
+
+    The generator consumes an independently selected payload; it cannot add
+    defaults, migrate an old signed block or replace the bytes being hashed.
+    The same source validator is called by Service6 and local signing.
+    """
+    selected = recovery_configuration.configuration(value, webauthn=webauthn)
+    if selected is not None:
+        policy = selected[recovery_configuration.retention.FIELD]
+        projected = recovery_configuration.retention.project_policy(
+            terminal_retention_seconds=policy["terminalRetentionSeconds"],
+            maximum_retained=policy["maximumRetained"])
+        if projected != policy:
+            raise GeneratorError("recovery retention projection differs from its explicit original")
+    return selected
+
+
 def validate_configuration_payload(
     value: Mapping[str, Any], *, role: str, source_revision: str,
     expected_generation_binding: Mapping[str, Any], expected_generation_binding_digest: str,
@@ -965,7 +983,7 @@ def validate_configuration_payload(
         try:
             if challenge_maintenance_policy.FIELD in payload:
                 challenge_maintenance_policy._shape(payload[challenge_maintenance_policy.FIELD])
-            recovery = recovery_configuration.configuration(payload.get(recovery_configuration.FIELD),
+            recovery = _recovery_selection(payload.get(recovery_configuration.FIELD),
                 webauthn=payload["webauthn"])
             if recovery_configuration.FIELD in payload and recovery is None:
                 raise GeneratorError("explicit recovery selection is null")

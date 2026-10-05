@@ -17,6 +17,8 @@ def fixture():
         recovery_root_key_id="sha256:" + "2" * 64, recovery_root_provider="offline-root",
         recovery_audience="https://example.test/recovery")
     selected = dict(schema=configuration.SCHEMA, policy=policy, rootPublicPemSha256="sha256:" + "3" * 64,
+        retentionPolicy=configuration.retention.project_policy(
+            terminal_retention_seconds=7_776_000, maximum_retained=100_000),
         metadata=dict(database="metadata", clusterId="101", serverAddress="192.0.2.1", serverPort=5432,
             faultDomain="metadata-operator"),
         witness=dict(endpoint=dict(host="witness.example.test", address="192.0.2.2", port=5432, database="witness"),

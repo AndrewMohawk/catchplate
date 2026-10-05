@@ -1530,6 +1530,7 @@ _RECOVERY_PROOF_SET = (
     "primary-key-row", "authenticated-root-delta",
     authority_complete_query.PROOF_PRIMITIVE, "authenticated-counted-index-cardinality",
 )
+_RECOVERY_AUDITED_PROOF_SET = _RECOVERY_PROOF_SET + ("aggregate-high-water",)
 _VERIFIED_APPROVAL_AUTHORITY = (
     "policy_high_water",
     "policy_publications",
@@ -3434,7 +3435,7 @@ _OPERATIONS = {
         mutation_kinds={"webauthn_recovery_ceremonies": ("INSERT",),
             "webauthn_challenges": ("INSERT",), "metadata_audit_outbox": ("INSERT",),
             "policy_authority_bounded_aggregate_states": ("UPDATE",)},
-        proof_primitives=_RECOVERY_PROOF_SET,
+        proof_primitives=_RECOVERY_AUDITED_PROOF_SET,
         maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
     ),
     "webauthn.recovery.candidate": _spec(
@@ -3445,7 +3446,7 @@ _OPERATIONS = {
         mutation_kinds={"webauthn_recovery_ceremonies": ("UPDATE",),
             "webauthn_challenges": ("UPDATE",), "metadata_audit_outbox": ("INSERT",),
             "policy_authority_bounded_aggregate_states": ("UPDATE",)},
-        proof_primitives=_RECOVERY_PROOF_SET,
+        proof_primitives=_RECOVERY_AUDITED_PROOF_SET,
         maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
     ),
     "webauthn.recovery.finalize": _spec(
@@ -3457,7 +3458,7 @@ _OPERATIONS = {
             "webauthn_challenges": ("UPDATE",), "webauthn_credentials": ("INSERT",),
             "webauthn_recovery_root_state": ("INSERT", "UPDATE"),
             "metadata_audit_outbox": ("INSERT",), "policy_authority_bounded_aggregate_states": ("UPDATE",)},
-        proof_primitives=_RECOVERY_PROOF_SET,
+        proof_primitives=_RECOVERY_AUDITED_PROOF_SET,
         maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
     ),
     "webauthn.recovery.expire": _spec(
@@ -3485,7 +3486,7 @@ _OPERATIONS = {
         mutation_kinds={"webauthn_recovery_ceremonies": ("UPDATE",),
             "webauthn_recovery_revocations": ("UPDATE",), "webauthn_challenges": ("UPDATE",),
             "metadata_audit_outbox": ("INSERT",), "policy_authority_bounded_aggregate_states": ("UPDATE",)},
-        proof_primitives=_RECOVERY_PROOF_SET,
+        proof_primitives=_RECOVERY_AUDITED_PROOF_SET,
         maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
     ),
     # These measured operations store/claim/consume challenge rows; they do not

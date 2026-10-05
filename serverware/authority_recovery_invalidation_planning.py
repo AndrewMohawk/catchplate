@@ -316,8 +316,8 @@ class RecoveryInvalidationReadPlanner:
         acquisition._request(owned[0], work)
         guard = _Guard(self, configured, live_window, now_epoch_ns, deadline_epoch_ns, check, work)
         guard.check()
-        from serverware import authority_planner as planner
-        from serverware.authority_challenge_planning import _source_admission_work
+        from serverware import authority_planner_read as planner
+        from serverware.authority_planner_read import _source_admission_work
         import psycopg
         from psycopg.rows import dict_row
         from psycopg.transaction import Transaction

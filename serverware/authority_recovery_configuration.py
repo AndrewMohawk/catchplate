@@ -10,6 +10,8 @@ import ipaddress
 import re
 from urllib.parse import urlsplit
 
+from serverware import authority_recovery_retention_policy as retention
+
 FIELD = "webauthnRecovery"
 SCHEMA = "serverware.policyAuthorityWebAuthnRecoveryCustody/v1"
 DESCRIPTORS = {
@@ -67,8 +69,14 @@ def configuration(value, *, webauthn):
     """Validate shape/joins only; absence never enables recovery implicitly."""
     if value is None:
         return None
-    _closed(value, {"schema", "policy", "rootPublicPemSha256", "metadata", "witness"})
+    # Existing absent blocks stay disabled. A present older block must be
+    # explicitly migrated and re-signed; do not supply ambient retention.
+    _closed(value, {"schema", "policy", "rootPublicPemSha256", "metadata", "witness", retention.FIELD})
     require(value["schema"] == SCHEMA)
+    try:
+        retention._shape(value[retention.FIELD])
+    except retention.RecoveryRetentionPolicyError as exc:
+        raise RecoveryConfigurationError("recovery retention selection differs") from exc
     _digest(value["rootPublicPemSha256"])
     policy = _closed(value["policy"], POLICY_FIELDS)
     for name in ("authorization_policy_digest", "recovery_root_key_id"):

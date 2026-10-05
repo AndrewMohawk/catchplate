@@ -23452,6 +23452,8 @@ UI_HTML = r"""
     let pendingMutation = null;
     let setupCredentialContext = null;
     let setupCredentialSequence = 0;
+    let setupLoadGeneration = 0;
+    let setupLoadInFlight = null;
     let refreshInFlight = null;
     let hasRendered = false;
     let policyPreviewGeneration = 0;
@@ -24623,10 +24625,13 @@ UI_HTML = r"""
 
     async function refresh() {
       if (refreshInFlight) return refreshInFlight;
+      while (setupLoadInFlight) await setupLoadInFlight;
+      if (refreshInFlight) return refreshInFlight;
       if (!hasOperatorAuth()) {
         render();
         return;
       }
+      const selectedSetupGeneration = setupLoadGeneration;
       refreshInFlight = (async () => {
         const retained = {
           enrollmentPacket: state.enrollmentPacket,
@@ -24671,6 +24676,7 @@ UI_HTML = r"""
             selectedPolicyCanary = null;
           }
         }
+        if (selectedSetupGeneration !== setupLoadGeneration) return;
         const latest = {
           enrollmentPacket: state.enrollmentPacket,
           enrollmentPacketText: state.enrollmentPacketText,
@@ -24711,6 +24717,7 @@ UI_HTML = r"""
             directApprovalError = error;
           }
         }
+        if (selectedSetupGeneration !== setupLoadGeneration) return;
         render(captureControlState());
         if (directApprovalError) {
           setStatus(`Approval link could not be loaded: ${directApprovalError.message}`, 'error');
@@ -25024,17 +25031,51 @@ UI_HTML = r"""
     }
 
     async function loadSetupSession(id) {
-      if (!id) {
-        rememberSetupSession(null);
+      const generation = ++setupLoadGeneration;
+      const authScope = policyAuthoringScope();
+      const checkContext = () => {
+        if (generation !== setupLoadGeneration || $('setup-session').value !== id
+            || !hasOperatorAuth() || policyAuthoringScope() !== authScope) {
+          throw new Error('Setup selection or authentication changed; the old load was discarded');
+        }
+      };
+      const pending = (async () => {
+        checkContext();
+        state.policyCanary = null;
         state.setupVerification = null;
+        $('setup-activate-button').disabled = true;
+        renderPolicyCanary();
+        if (!id) {
+          rememberSetupSession(null);
+          renderSetupWorkflow();
+          return null;
+        }
+        const result = await api(`/api/setup/sessions/${encodeURIComponent(id)}`, {checkContext});
+        checkContext();
+        const session = result?.session;
+        if (session?.id !== id) throw new Error('Setup response does not match the selected run');
+        let selectedPolicyCanary = null;
+        if (session.canaryId) {
+          try {
+            selectedPolicyCanary = await api(`/api/policy/canary/status?canaryId=${encodeURIComponent(session.canaryId)}`, {checkContext});
+          } catch (_) {
+            checkContext();
+            // A failed exact read cannot fall back to another run's canary.
+          }
+        }
+        checkContext();
+        rememberSetupSession(session);
+        state.policyCanary = selectedPolicyCanary;
         renderSetupWorkflow();
-        return null;
+        renderPolicyCanary();
+        return session;
+      })();
+      setupLoadInFlight = pending;
+      try {
+        return await pending;
+      } finally {
+        if (setupLoadInFlight === pending) setupLoadInFlight = null;
       }
-      const result = await api(`/api/setup/sessions/${encodeURIComponent(id)}`);
-      rememberSetupSession(result.session);
-      state.setupVerification = null;
-      renderSetupWorkflow();
-      return result.session;
     }
 
     async function handoffSetupSession() {

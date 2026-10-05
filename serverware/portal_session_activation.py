@@ -20,7 +20,7 @@ SESSION_ACTIVATION_CSS = r"""
 
 SESSION_ACTIVATION_HTML = r"""
       <section id="session-activation-workspace" aria-labelledby="session-activation-heading">
-        <h2 id="session-activation-heading">Activate or recover this browser session</h2>
+        <h2 id="session-activation-heading" tabindex="-1">Activate or recover this browser session</h2>
         <p>Select one explicit action for a real retained finalization local ID. This panel uses the browser cookie, never the operator-token field. A locator is not proof of ownership, completion or permission.</p>
         <div class="session-activation-fields">
           <div><label for="session-activation-locator">Retained finalization local ID</label>
@@ -84,6 +84,25 @@ SESSION_ACTIVATION_SCRIPT = r"""
     let sessionActivationPending = null;
     const sessionActivationAttempts = new Set();
 
+    function openProtectedOIDCSessionWorkflow() {
+      if (sessionActivationBusy || oidcSessionActivationBusy) return {uiHandled: true, blocked: true};
+      const protectedMode = !oidcSessionStatusUnknown
+        && state.authStatus?.sessionActivationMode === 'protected'
+        && state.authStatus?.sessionState === 'pending_webauthn'
+        && state.authStatus?.webauthnRequired === true;
+      const message = protectedMode
+        ? 'Protected session workflow selected, not readiness or activation. Use a real retained finalization ID below, or follow Retained registration actions to obtain it. Choose each authorization/action explicitly; no request or hardware prompt was started.'
+        : 'Session activation mode is unavailable or not confirmed for this pending session. Refresh session status or ask the operator to complete protected configuration. No legacy fallback, request or hardware prompt was started.';
+      sessionActivationMessage(message, !protectedMode);
+      setStatus(message, protectedMode ? 'pending' : 'error');
+      $('session-activation-workspace').scrollIntoView({block: 'start', behavior: 'auto'});
+      $('session-activation-heading').focus();
+      if (protectedMode) $('session-activation-locator').focus();
+      // Navigation only: retain selection, attempt locks and page-local IDs.
+      // In particular, do not infer/copy an ID or run the panel's next action.
+      return {uiHandled: true, blocked: !protectedMode};
+    }
+
     function sessionActivationDigest(value) {
       return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
     }
@@ -108,7 +127,8 @@ SESSION_ACTIVATION_SCRIPT = r"""
         state.policy_hash, state.policy_signing_key_id, state.activePolicy?.policy_hash,
         state.activePolicy?.policy_signing_key_id, state.authStatus?.authenticated,
         state.authStatus?.userId, state.authStatus?.authMethod, state.authStatus?.sessionState,
-        state.authStatus?.webauthnRequired, roles(state.authStatus?.roles), credentials]);
+        state.authStatus?.webauthnRequired, state.authStatus?.sessionActivationMode,
+        roles(state.authStatus?.roles), credentials]);
     }
 
     function sessionActivationMessage(message, error = false) {

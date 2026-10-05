@@ -3619,6 +3619,24 @@ def healthz() -> dict[str, Any]:
     }
 
 
+def _operator_session_activation_mode() -> str:
+    """Cold profile selection for navigation, never present-user readiness."""
+    from serverware import control_plane_enrollment_startup as enrollment
+    from serverware.control_plane_custody_startup import CustodyStartupError
+    from serverware.control_plane_custody_client import CustodyClientError
+
+    try:
+        owner = enrollment.require_started()
+        if owner is None:
+            return "legacy"
+        if type(owner) is not enrollment._EnrollmentOwner:
+            return "unavailable"
+        return "protected" if owner.activation_execution_enabled is True else "unavailable"
+    except (enrollment.EnrollmentStartupError, CustodyStartupError, CustodyClientError, OSError):
+        # A broken or partial protected owner cannot select a legacy fallback.
+        return "unavailable"
+
+
 @app.get("/api/auth/status")
 def operator_auth_status(request: Request) -> dict[str, Any]:
     identity = None
@@ -3641,6 +3659,7 @@ def operator_auth_status(request: Request) -> dict[str, Any]:
             session and session.get("status") == "pending_webauthn"
         ),
         "oidcBrowserLoginConfigured": browser_login_configured(),
+        "sessionActivationMode": _operator_session_activation_mode(),
     }
 
 
@@ -23654,12 +23673,15 @@ UI_HTML = r"""
           || !Array.isArray(status.roles) || !status.roles.every(role => typeof role === 'string')
           || typeof status.webauthnRequired !== 'boolean'
           || typeof status.oidcBrowserLoginConfigured !== 'boolean'
+          || !['legacy', 'protected', 'unavailable'].includes(status.sessionActivationMode)
           || (status.authenticated && (!oidcSessionActivationIsActive(status) || status.userId === null))) {
         throw new Error('Authentication status response is invalid');
       }
       if (JSON.stringify([state.authStatus?.userId, state.authStatus?.authMethod,
-          state.authStatus?.sessionState, state.authStatus?.authenticated, state.authStatus?.roles])
-          !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated, status.roles])) {
+          state.authStatus?.sessionState, state.authStatus?.authenticated, state.authStatus?.roles,
+          state.authStatus?.sessionActivationMode])
+          !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated,
+            status.roles, status.sessionActivationMode])) {
         discardCredentialReplacement('Browser authentication changed. Local replacement discarded.');
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
         workloadIssuanceInvalidate('Browser authentication changed.');
@@ -23698,7 +23720,9 @@ UI_HTML = r"""
       $('operator-auth-status').className = !oidcSessionStatusUnknown && (authenticated || tokenAuthenticated) ? 'pill good' : 'pill warn';
       $('operator-sign-in').hidden = hasBrowserSession || tokenAuthenticated || !state.authStatus?.oidcBrowserLoginConfigured;
       $('operator-session-verify').hidden = !pendingWebAuthn;
-      $('operator-session-verify').disabled = oidcSessionActivationBusy;
+      $('operator-session-verify').disabled = oidcSessionActivationBusy || sessionActivationBusy || oidcSessionStatusUnknown;
+      $('operator-session-verify').textContent = state.authStatus?.sessionActivationMode === 'legacy'
+        ? 'Verify passkey' : 'Open protected session workflow';
       let statusRefresh = $('operator-session-status-refresh');
       if (!statusRefresh) {
         statusRefresh = document.createElement('button');
@@ -23786,6 +23810,8 @@ UI_HTML = r"""
     }
 
     async function verifyOIDCSessionPasskey() {
+      if (state.authStatus?.sessionActivationMode !== 'legacy') return openProtectedOIDCSessionWorkflow();
+      if (sessionActivationBusy) throw new Error('A protected session action is already in progress.');
       sessionActivationInvalidate('Another passkey action started. Discarded activation authorization.');
       if (oidcSessionActivationBusy) throw new Error('A session action is already in progress. No additional request was sent.');
       if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');

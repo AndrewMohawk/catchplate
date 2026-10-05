@@ -52,6 +52,9 @@ from serverware.authority_store.wire_json_sql import WIRE_JSON_MAX_DEPTH, WIRE_J
 
 
 OPERATIONS = authority.CURRENT_ROOT_COMMIT_MARKER_CONTRACT["operations"]
+# These typed planners have dedicated compound/stream protocols. They are not
+# aggregate successor packet operations and must never enter that SQL map.
+_DEDICATED_PLANNING_OPERATIONS = ("jit.assertion.issue", "webauthn.challenge.maintain")
 _SELECTED_FIELDS = ("table", "key", "keyDigest", "present", "row", "contractSelector")
 
 
@@ -59,11 +62,30 @@ def _json(value):
     return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":"))
 
 
+def _operation_source(operation):
+    """Project one source-selected operation, without selecting an executor."""
+    spec = authority.operation_spec(operation)
+    tables = sorted(set(spec["businessReads"]) | set(spec["businessWrites"]) | set(spec["authorizationReads"]))
+    if authority.CURRENT_ROOT_COMMIT_MARKER_TABLE in tables:
+        raise ValueError("current-root marker entered business roots")
+    return {
+        "keys": {table: list(primary.PRIMARY_KEY_COLUMNS[table]) for table in tables},
+        "writes": list(spec["businessWrites"]),
+        "templates": {item["templateId"]: {"table": item["table"], "mutation": item["mutation"],
+            "predicate": item["predicate"], "cardinality": item["cardinality"]}
+            for item in spec["mutationTemplates"]},
+        "maximumQueryRows": spec["maximumQueryRows"], "maximumMutations": spec["maximumMutations"],
+        "maximumWorkUnits": spec["maximumWorkUnits"],
+    }
+
+
 def _source():
-    """Static renderer inputs from the actual complete source inventories."""
+    """Complete source closure, with only aggregate operations in the SQL map."""
     primary._require_coverage()
-    if (tuple(sorted(operation for operation, spec in authority.OPERATIONS.items()
-            if spec["planningMode"] == "typed-successor-planning")) != OPERATIONS
+    if (not set(OPERATIONS).isdisjoint(_DEDICATED_PLANNING_OPERATIONS)
+            or tuple(sorted(operation for operation, spec in authority.OPERATIONS.items()
+                if spec["planningMode"] == "typed-successor-planning"))
+                != tuple(sorted(OPERATIONS + _DEDICATED_PLANNING_OPERATIONS))
             or tuple(sorted(primary.PRIMARY_KEY_COLUMNS)) != vector.PRIMARY_TABLES
             or tuple(sorted(vector.projection.INDEX_IDS)) != vector.INDEX_IDS):
         raise ValueError("current-root SQL source inventory changed")
@@ -86,21 +108,7 @@ def _source():
     heads = {identity: {"table": vector.projection.profile_for(identity).table,
         "projectionDigest": vector.projection.profile_for(identity).projection_digest}
         for identity in vector.INDEX_IDS}
-    operations = {}
-    for operation in OPERATIONS:
-        spec = authority.operation_spec(operation)
-        tables = sorted(set(spec["businessReads"]) | set(spec["businessWrites"]) | set(spec["authorizationReads"]))
-        if authority.CURRENT_ROOT_COMMIT_MARKER_TABLE in tables:
-            raise ValueError("current-root marker entered business roots")
-        operations[operation] = {
-            "keys": {table: list(primary.PRIMARY_KEY_COLUMNS[table]) for table in tables},
-            "writes": list(spec["businessWrites"]),
-            "templates": {item["templateId"]: {"table": item["table"], "mutation": item["mutation"],
-                "predicate": item["predicate"], "cardinality": item["cardinality"]}
-                for item in spec["mutationTemplates"]},
-            "maximumQueryRows": spec["maximumQueryRows"], "maximumMutations": spec["maximumMutations"],
-            "maximumWorkUnits": spec["maximumWorkUnits"],
-        }
+    operations = {operation: _operation_source(operation) for operation in OPERATIONS}
     return header, heads, operations
 
 
@@ -435,8 +443,8 @@ def maintenance_execution_begin_sql(namespace: str) -> str:
     # Reuse the actual row/phase renderer's exact UPDATE/DELETE source check,
     # including all nine maintained profiles; do not clone its validator.
     maintenance._source()
-    header, heads, operations = _source()
-    selected = {maintenance.OPERATION: operations[maintenance.OPERATION]}
+    header, heads, _operations = _source()
+    selected = {maintenance.OPERATION: _operation_source(maintenance.OPERATION)}
     return (_maintenance_only_sql() + _setup_sql(namespace, header, heads, selected)
         + _operation_inputs_sql(namespace)
         + "\n        THEN RAISE EXCEPTION 'successor same-call operation inputs differ'; END IF;\n"

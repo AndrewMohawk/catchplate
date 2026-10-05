@@ -23111,14 +23111,31 @@ UI_HTML = r"""
               <option value="query">Query</option>
               <option value="cookie">Cookie</option>
             </select>
+            <p class="hint">These static credential bindings are operator-configured. They do not verify a provider account or ownership.</p>
+            <label for="credential-provider">Provider ID</label>
+            <input id="credential-provider" name="provider" required maxlength="64" pattern="[a-z][a-z0-9.-]{0,63}" placeholder="npm" autocomplete="off">
+            <label for="credential-provider-subject">Provider subject or account</label>
+            <input id="credential-provider-subject" name="providerSubject" required maxlength="512" autocomplete="off">
+            <label for="credential-secret-class">Secret class</label>
+            <select id="credential-secret-class" name="secretClass" required>
+              <option value="bearerToken">Bearer token</option>
+              <option value="automationToken">npm automation token</option>
+              <option value="granularAccessToken">npm granular access token</option>
+              <option value="legacyToken">npm legacy token</option>
+              <option value="basicPassword">Basic password</option>
+              <option value="customHeader">Custom header</option>
+              <option value="queryToken">Query token</option>
+              <option value="cookie">Cookie</option>
+            </select>
             <label for="credential-secret">Secret</label>
             <textarea id="credential-secret" name="secret" required autocomplete="off"></textarea>
             <div id="credential-injection-name-row" hidden>
               <label id="credential-injection-name-label" for="credential-injection-name">Injection name</label>
               <input id="credential-injection-name" name="injectionName" maxlength="256" autocomplete="off">
             </div>
-            <label for="credential-metadata">Metadata JSON</label>
+            <label for="credential-metadata">Additional metadata JSON</label>
             <textarea id="credential-metadata" name="metadata">{}</textarea>
+            <p class="hint">Optional metadata aliases must agree with the bindings above. Never put secret material in metadata.</p>
             <button type="submit">Create credential</button>
           </form>
         </section>
@@ -24711,8 +24728,55 @@ UI_HTML = r"""
       }).join('');
     }
 
+    function staticCredentialClasses(kind) {
+      const classes = {
+        bearer: ['bearerToken', 'automationToken', 'granularAccessToken', 'legacyToken'],
+        basic: ['basicPassword'], header: ['customHeader'], query: ['queryToken'], cookie: ['cookie']
+      };
+      return Object.prototype.hasOwnProperty.call(classes, kind) ? classes[kind] : [];
+    }
+
+    function staticCredentialMetadata(form) {
+      const kind = String(form.get('kind') || '');
+      const metadata = JSON.parse(form.get('metadata') || '{}');
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        throw new Error('Additional credential metadata must be a JSON object');
+      }
+      if (metadata.oauth === true || !staticCredentialClasses(kind).length) {
+        throw new Error('Managed OAuth credentials require the verified provider connection flow');
+      }
+      const provider = String(form.get('provider') || '');
+      const subject = String(form.get('providerSubject') || '');
+      const secretClass = String(form.get('secretClass') || '');
+      const providerAliases = {'twitter': 'x', 'x.oauth': 'x', 'x.oauth2': 'x', 'google.oauth': 'google', 'google.oauth2': 'google'};
+      const providerAlias = Object.prototype.hasOwnProperty.call(providerAliases, provider) ? providerAliases[provider] : null;
+      if (!/^[a-z][a-z0-9.-]{0,63}$/.test(provider) || providerAlias) {
+        throw new Error(`Enter a canonical provider ID${providerAlias ? ` (${providerAlias})` : ''}`);
+      }
+      if (new TextEncoder().encode(subject).length > 512) throw new Error('Provider subject exceeds 512 UTF-8 bytes');
+      if (!staticCredentialClasses(kind).includes(secretClass)) throw new Error('Secret class does not match the credential kind');
+      for (const [names, value] of [
+        [['provider', 'provider_id'], provider],
+        [['provider_subject', 'account_subject'], subject],
+        [['secret_class', 'token_class'], secretClass]
+      ]) {
+        if (names.some(name => Object.prototype.hasOwnProperty.call(metadata, name) && metadata[name] !== value)) {
+          throw new Error(`Additional metadata conflicts with ${names[0]}`);
+        }
+        metadata[names[0]] = value;
+      }
+      const credential = {id: 'new credential', kind, metadata};
+      credentialProviderSubject(credential);
+      staticCredentialSecretClass(credential);
+      return metadata;
+    }
+
     function syncCredentialKindFields(reset = false) {
       const kind = $('credential-kind').value;
+      const classes = staticCredentialClasses(kind);
+      const secretClass = $('credential-secret-class');
+      Array.from(secretClass.options).forEach(option => { option.disabled = !classes.includes(option.value); });
+      if (reset || !classes.includes(secretClass.value)) secretClass.value = classes[0] || '';
       const settings = {
         header: ['Header name', 'x-api-key'],
         basic: ['Username', 'service-account'],
@@ -26029,7 +26093,7 @@ UI_HTML = r"""
       runUiAction('Create credential', async () => {
         const form = new FormData(event.target);
         const kind = String(form.get('kind') || '');
-        const metadata = JSON.parse(form.get('metadata') || '{}');
+        const metadata = staticCredentialMetadata(form);
         const injectionNameValue = String(form.get('injectionName') || '').trim();
         if (kind === 'basic') metadata.username = injectionNameValue;
         if (['header', 'query', 'cookie'].includes(kind)) metadata.injection_name = injectionNameValue;
@@ -26138,12 +26202,11 @@ UI_HTML = r"""
         }
         $('credential-name').value = `${template.label} credential`;
         $('credential-kind').value = template.injection?.type || 'bearer';
-        $('credential-metadata').value = JSON.stringify({
-          provider: template.provider,
-          provider_subject: 'replace-with-account-subject',
-          secret_class: binding.secretClass
-        }, null, 2);
+        $('credential-provider').value = template.provider || '';
+        $('credential-provider-subject').value = '';
+        $('credential-metadata').value = '{}';
         syncCredentialKindFields(true);
+        $('credential-secret-class').value = binding.secretClass;
         if (template.injection?.type === 'header') $('credential-injection-name').value = template.injection.name || 'x-api-key';
         if (['query', 'cookie'].includes(template.injection?.type)) $('credential-injection-name').value = template.injection.name || '';
         if (template.injection?.type === 'basic') $('credential-injection-name').value = template.injection.username || '';

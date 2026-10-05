@@ -26,8 +26,22 @@ from serverware.authority_query_read_work import _ValidationWork
 READ_PROFILE = "serverware.policyAuthorityCountedHeadRead/v1"
 HEAD_TABLE = "policy_authority_counted_index_heads"
 COMPLETION_OPERATION = "webauthn.trust.complete"
-MAX_HEADS = 11
-MAX_ACTIVATION_HEADS = 13
+CHALLENGE_OPERATIONS = ("webauthn.challenge.create", "webauthn.challenge.maintain")
+JIT_RECEIPT_OPERATION = "jit.assertion.issue"
+RECOVERY_OPERATIONS = tuple("webauthn.recovery." + phase
+    for phase in ("create", "candidate", "finalize", "expire", "prune", "invalidate"))
+RECOVERY_HISTORY_OPERATIONS = tuple("webauthn.recovery." + phase
+    for phase in ("create", "candidate", "finalize"))
+RECOVERY_HISTORY_ID = "webauthn_credential_user_history"
+CHALLENGE_COUNT_IDS = (
+    "webauthn_challenge_created_global", "webauthn_challenge_created_user",
+    "webauthn_challenge_terminal_unreferenced_global",
+    "webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+)
+# Fixed source inventories include the seven new challenge projections on
+# every potential challenge write. These are not caller-controlled budgets.
+MAX_HEADS = 18
+MAX_ACTIVATION_HEADS = 20
 _FIELDS = ("index_id", "table_name", "counted_profile", "projection_digest",
            "projection_manifest_digest", "index_revision", "root_digest", "leaf_count")
 _TRACE_FIELDS = frozenset({"profile", "indexIds", "rowLimit"})
@@ -45,7 +59,7 @@ class IndexHeadReadError(reader.IndexReadError):
 
 
 def _activation_ids(*, include_write_heads: bool) -> tuple[str, ...]:
-    """Fixed activation-only inventory; old operation ceilings stay unchanged."""
+    """Fixed activation-only inventory, including every challenge write head."""
     if type(include_write_heads) is not bool:
         raise IndexHeadReadError("activation counted mode is not source exact")
     reads = {complete._role(complete.ACTIVATION_OPERATION, name).index_id
@@ -53,15 +67,65 @@ def _activation_ids(*, include_write_heads: bool) -> tuple[str, ...]:
     writes = {index_id
         for table in authority_contract.operation_spec(complete.ACTIVATION_OPERATION)["businessWrites"]
         for index_id in projection.index_ids_for_table(table)}
-    if len(reads) != 7 or len(writes) != 12 or len(reads | writes) != MAX_ACTIVATION_HEADS:
+    if len(reads) != 7 or len(writes) != 19 or len(reads | writes) != MAX_ACTIVATION_HEADS:
         raise IndexHeadReadError("activation counted source inventory changed")
     return tuple(sorted(reads | writes if include_write_heads else reads))
 
 
 def _head_limit(operation: str) -> int:
+    if operation in RECOVERY_OPERATIONS:
+        return 12 if operation == "webauthn.recovery.finalize" else 10 if operation in RECOVERY_HISTORY_OPERATIONS else 9
+    if operation == JIT_RECEIPT_OPERATION:
+        return 12
+    if operation in CHALLENGE_OPERATIONS:
+        return 9
     if operation == complete.DELIVERY_OPERATION:
         return 7
     return MAX_ACTIVATION_HEADS if operation == complete.ACTIVATION_OPERATION else MAX_HEADS
+
+
+def _challenge_ids(*, include_write_heads: bool) -> tuple[str, ...]:
+    """Fixed count/read or complete all-profile write inventory, never a subset."""
+    writes = projection.index_ids_for_table("webauthn_challenges")
+    if len(writes) != 9 or not set(CHALLENGE_COUNT_IDS) < set(writes):
+        raise IndexHeadReadError("challenge counted source inventory changed")
+    return writes if include_write_heads else CHALLENGE_COUNT_IDS
+
+
+def _jit_receipt_ids() -> tuple[str, ...]:
+    writes = {identity
+        for table in authority_contract.operation_spec(JIT_RECEIPT_OPERATION)["businessWrites"]
+        for identity in projection.index_ids_for_table(table)}
+    expected = (set(projection.index_ids_for_table("webauthn_challenges"))
+                | set(projection.index_ids_for_table("webauthn_credentials")))
+    if writes != expected or len(writes) != 12:
+        raise IndexHeadReadError("JIT receipt write heads differ from their fixed source inventory")
+    return tuple(sorted(writes))
+
+
+def _recovery_write_ids(operation: str) -> tuple[str, ...]:
+    """Potential write heads only; complete-history read admission is separate."""
+    if operation not in RECOVERY_OPERATIONS:
+        raise IndexHeadReadError("recovery head operation is not source fixed")
+    writes = {identity
+        for table in authority_contract.operation_spec(operation)["businessWrites"]
+        for identity in projection.index_ids_for_table(table)}
+    expected = set(projection.index_ids_for_table("webauthn_challenges"))
+    if operation == "webauthn.recovery.finalize":
+        expected.update(projection.index_ids_for_table("webauthn_credentials"))
+    if writes != expected or len(writes) != (12 if operation == "webauthn.recovery.finalize" else 9):
+        raise IndexHeadReadError("recovery write heads differ from their fixed source inventory")
+    return tuple(sorted(writes))
+
+
+def _recovery_ids(operation: str, *, include_write_heads: bool) -> tuple[str, ...]:
+    reads = {RECOVERY_HISTORY_ID} if operation in RECOVERY_HISTORY_OPERATIONS else set()
+    if not include_write_heads and not reads:
+        raise IndexHeadReadError("recovery maintenance has no history read role")
+    identities = reads | set(_recovery_write_ids(operation)) if include_write_heads else reads
+    if len(identities) != (_head_limit(operation) if include_write_heads else 1):
+        raise IndexHeadReadError("recovery read/write head union differs from its fixed source inventory")
+    return tuple(sorted(identities))
 
 
 def _delivery_ids() -> tuple[str, ...]:
@@ -98,7 +162,7 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
 
     Revocation preserves its existing role/potential-write union and no-context
     API. Registration/staging read heads follow their rebound argument family;
-    OIDC activation admits its seven read heads or fixed thirteen read/write
+    OIDC activation admits its seven read heads or fixed twenty read/write
     heads only when the private transition owner requests the full write union.
     Delivery consumption has exactly seven read heads containing all five
     potential write profiles, so its full mode keeps the same fixed union.
@@ -112,8 +176,21 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
             or type(operation) is not str or not 1 <= len(operation) <= 128
             or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION,
                                  complete.STAGE_OPERATION, complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION,
-                                 COMPLETION_OPERATION)):
+                                 COMPLETION_OPERATION, JIT_RECEIPT_OPERATION, *CHALLENGE_OPERATIONS,
+                                 *RECOVERY_OPERATIONS)):
         raise IndexHeadReadError("counted head operation has no declared source inventory")
+    if operation in RECOVERY_OPERATIONS:
+        if arguments is not None or queries is not None:
+            raise IndexHeadReadError("recovery heads require their exact source-owned history/write inventory")
+        return _recovery_ids(operation, include_write_heads=include_write_heads)
+    if operation == JIT_RECEIPT_OPERATION:
+        if not include_write_heads or arguments is not None or queries is not None:
+            raise IndexHeadReadError("JIT receipt heads require explicit write-only source admission")
+        return _jit_receipt_ids()
+    if operation in CHALLENGE_OPERATIONS:
+        if arguments is not None or queries is not None:
+            raise IndexHeadReadError("challenge heads use a fixed source inventory, not a query subset")
+        return _challenge_ids(include_write_heads=include_write_heads)
     if operation == COMPLETION_OPERATION:
         if not include_write_heads or arguments is not None or queries is not None:
             raise IndexHeadReadError("completion heads require explicit write-only source admission")
@@ -166,9 +243,17 @@ def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries
     """Validate one physical source-owned SELECT marker without hashing."""
     if type(operation) is not str or type(include_write_heads) is not bool:
         raise IndexHeadReadError("counted head operation is not an exact source identity")
-    if operation == complete.ACTIVATION_OPERATION and arguments is None and queries is None:
+    if operation in RECOVERY_OPERATIONS and arguments is None and queries is None:
+        inventories = (_recovery_ids(operation, include_write_heads=True),)
+        if operation in RECOVERY_HISTORY_OPERATIONS:
+            inventories += (_recovery_ids(operation, include_write_heads=False),)
+    elif operation == JIT_RECEIPT_OPERATION and arguments is None and queries is None:
+        inventories = (_jit_receipt_ids(),)
+    elif operation in CHALLENGE_OPERATIONS and arguments is None and queries is None:
+        inventories = (_challenge_ids(include_write_heads=False), _challenge_ids(include_write_heads=True))
+    elif operation == complete.ACTIVATION_OPERATION and arguments is None and queries is None:
         # Trace shape is not mode authority. The fixed source owner and actual
-        # collector bind either seven reads or the complete thirteen-head union.
+        # collector bind either seven reads or the complete twenty-head union.
         inventories = (_activation_ids(include_write_heads=False),
                        _activation_ids(include_write_heads=True))
     elif operation == complete.DELIVERY_OPERATION and arguments is None and queries is None:
@@ -281,10 +366,22 @@ def _read_index_heads_on_scope(cursor, *, operation, identities, trace, work, ac
     if (acquisition.cursor is not cursor or acquisition.trace is not trace or acquisition.work is not work
             or type(operation) is not str or operation not in (complete.OPERATION,
                 complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
-                complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION, COMPLETION_OPERATION)
+                complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION, COMPLETION_OPERATION,
+                JIT_RECEIPT_OPERATION, *CHALLENGE_OPERATIONS, *RECOVERY_OPERATIONS)
             or type(getattr(trace, "operation", None)) is not str or trace.operation != operation
             or type(identities) is not tuple or not 1 <= len(identities) <= _head_limit(operation)):
         raise IndexHeadReadError("counted head source scope changed")
+    if operation in RECOVERY_OPERATIONS:
+        inventories = (_recovery_ids(operation, include_write_heads=True),)
+        if operation in RECOVERY_HISTORY_OPERATIONS:
+            inventories += (_recovery_ids(operation, include_write_heads=False),)
+        if identities not in inventories:
+            raise IndexHeadReadError("recovery observed head inventory is not source fixed")
+    if operation == JIT_RECEIPT_OPERATION and identities != _jit_receipt_ids():
+        raise IndexHeadReadError("JIT receipt observed head inventory is not source fixed")
+    if operation in CHALLENGE_OPERATIONS and identities not in (
+            _challenge_ids(include_write_heads=False), _challenge_ids(include_write_heads=True)):
+        raise IndexHeadReadError("challenge observed head inventory is not source fixed")
     if operation == complete.ACTIVATION_OPERATION and identities not in (
             _activation_ids(include_write_heads=False), _activation_ids(include_write_heads=True)):
         raise IndexHeadReadError("activation observed head inventory is not source fixed")

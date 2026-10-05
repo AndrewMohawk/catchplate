@@ -214,14 +214,27 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
 
     def test_sealer_catalog_matches_exact_types_acl_flags_and_search_path(self):
         unexpected, parameters = constant_sql(self.seal, "unexpected_function")
-        self.assertEqual(unexpected.count("pg_catalog.oidvectortypes(function_record.proargtypes)"), 3)
-        self.assertEqual(unexpected.count("grant_entry.privilege_type = 'EXECUTE'"), 3)
-        self.assertEqual(unexpected.count("AND NOT grant_entry.is_grantable"), 3)
+        # Three signature inventories plus the five source-fixed completion
+        # and policy-file functions, all under the same fail-closed ACL gate.
+        self.assertEqual(unexpected.count("pg_catalog.oidvectortypes(function_record.proargtypes)"), 8)
+        self.assertEqual(unexpected.count("grant_entry.privilege_type = 'EXECUTE'"), 8)
+        self.assertEqual(unexpected.count("AND NOT grant_entry.is_grantable"), 8)
+        self.assertEqual(unexpected.count("pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text'"), 5)
         self.assertIn("AND NOT COALESCE((", unexpected)
         self.assertTrue(unexpected.endswith("), FALSE) LIMIT 1"))
         self.assertNotIn("pg_get_function_identity_arguments", unexpected)
         self.assert_shape(parameters, "(schema, executor_role, sorted(authority_executor_function_identities), "
-            "capability_issuer_role, issuer_function_identities, planner_writer_role, planner_function_identities)")
+            "capability_issuer_role, issuer_function_identities, planner_writer_role, planner_function_identities, "
+            "authority_contract.SUCCESSOR_ISSUER_ROLE if completion_enabled else '', "
+            "authority_contract.SUCCESSOR_ISSUE_FUNCTION if completion_enabled else '', "
+            "authority_contract.SUCCESSOR_EXECUTOR_ROLE if completion_enabled else '', "
+            "authority_contract.SUCCESSOR_EXECUTE_FUNCTION if completion_enabled else '', "
+            "authority_contract.SUCCESSOR_RECOVERY_ROLE if completion_enabled else '', "
+            "authority_contract.SUCCESSOR_READ_FUNCTION if completion_enabled else '', "
+            "_policy_file_read_sql.ROLE if completion_enabled else '', "
+            "_policy_file_read_sql.FUNCTION if completion_enabled else '', "
+            "_policy_file_genesis_sql.ROLE if completion_enabled else '', "
+            "_policy_file_genesis_sql.FUNCTION if completion_enabled else '')")
         query, parameters = constant_sql(self.seal, "capability_issuer_function_grants")
         self.assertIn("pg_catalog.oidvectortypes(function_record.proargtypes) AS argument_types", query)
         for fragment in ("function_record.prosecdef", "function_record.proconfig",
@@ -262,13 +275,28 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
             "or [str(row['proname']) for row in function_rows] != closure_function_names")
         query, parameters = constant_sql(self.owner, "unexpected_grant")
         self.assertLess(closure[0].end_lineno, assignment(self.owner, "unexpected_grant").lineno)
-        self.assertEqual(query.count("pg_catalog.oidvectortypes(function_record.proargtypes)"), 3)
-        self.assertEqual(query.count("grant_entry.privilege_type = 'EXECUTE'"), 3)
-        self.assertEqual(query.count("AND NOT grant_entry.is_grantable"), 3)
+        self.assertEqual(query.count("pg_catalog.oidvectortypes(function_record.proargtypes)"), 6)
+        self.assertEqual(query.count("grant_entry.privilege_type = 'EXECUTE'"), 6)
+        self.assertEqual(query.count("AND NOT grant_entry.is_grantable"), 6)
+        self.assertEqual(query.count("pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text'"), 3)
         self.assertIn("AND NOT COALESCE((", query)
         self.assertTrue(query.endswith("), FALSE) LIMIT 1"))
         self.assertNotIn("pg_get_function_identity_arguments", query)
-        self.assertEqual(len(parameters.elts), 7)
+        self.assert_shape(parameters, """(
+            [row['oid'] for row in function_rows],
+            sorted(function_name + '(' + ', '.join(argument_types) + ')'
+                for function_name, argument_types in _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES),
+            executor_role,
+            sorted(name + '(' + ', '.join(types) + ')'
+                for name, types in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES),
+            _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE,
+            sorted(name + '(' + ', '.join(types) + ')'
+                for name, types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES),
+            _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
+            authority_contract.SUCCESSOR_ISSUE_FUNCTION, authority_contract.SUCCESSOR_ISSUER_ROLE,
+            authority_contract.SUCCESSOR_EXECUTE_FUNCTION, authority_contract.SUCCESSOR_EXECUTOR_ROLE,
+            authority_contract.SUCCESSOR_READ_FUNCTION, authority_contract.SUCCESSOR_RECOVERY_ROLE)
+        """)
         self.assert_shape(parameters.elts[3], "sorted(name + '(' + ', '.join(types) + ')' "
             "for name, types in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES)")
         self.assert_shape(parameters.elts[4], "_METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE")
@@ -314,8 +342,8 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
         keywords = {item.arg: item.value for item in connect[0].keywords}
         self.assertEqual(set(keywords), {"connect_timeout", "row_factory", "options", "autocommit"})
         self.assert_shape(keywords["autocommit"], "False")
-        self.assert_shape(keywords["options"], "'-c search_path=pg_catalog'")
-        self.assert_shape(keywords["connect_timeout"], "METADATA_STORE_CONNECT_TIMEOUT_SECONDS")
+        self.assert_shape(keywords["options"], "_postgres_bootstrap_options(dsn, error_type=MetadataStoreError)")
+        self.assert_shape(keywords["connect_timeout"], "connect_timeout")
         self.assert_shape(keywords["row_factory"], "dict_row")
         self.assert_shape(connect[0].args[0], "dsn")
         statements = calls(self.connector, "cur.execute")
@@ -330,6 +358,24 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
         self.assertFalse(calls(self.connector, "conn.transaction"))
         self.assertFalse(calls(self.connector, "conn.commit"))
         self.assertFalse(calls(self.connector, "conn.rollback"))
+
+    def test_connector_requires_measured_database_pins_without_ambient_tls_fallback(self):
+        self.assertEqual([argument.arg for argument in self.connector.args.kwonlyargs], ["database_pins"])
+        self.assertEqual(self.connector.args.kw_defaults, [None])
+        self.assertFalse(self.connector.args.args)
+        admitted = calls(self.connector, "_authority_database_pins")
+        self.assertEqual(len(admitted), 1)
+        self.assert_shape(admitted[0], "_authority_database_pins(database_pins, "
+            "expected_role=_METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE)")
+        self.assertLess(admitted[0].lineno, calls(self.connector, "psycopg.connect")[0].lineno)
+        source = ast.get_source_segment(self.db_source, self.connector)
+        for name in ("CAPABILITY_ISSUER_TLS_CLIENT_DN", "CAPABILITY_ISSUER_TLS_CLIENT_SERIAL",
+                "CAPABILITY_ISSUER_TLS_ISSUER_DN"):
+            self.assertNotIn(name, source)
+        for expression in ("identity['client_dn'] != tls_client_dn",
+                "str(identity['client_serial']) != tls_client_serial", "identity['issuer_dn'] != tls_issuer_dn"):
+            self.assertTrue(any(ast.dump(node) == ast.dump(ast.parse(expression, mode="eval").body)
+                for node in ast.walk(self.connector)))
 
     def test_connector_readback_requires_serializable_read_write_not_deferrable_and_original_identity(self):
         # This query has no parameters; use the actual unique execute rather
@@ -396,7 +442,9 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
                 outer = [node for node in method.body if isinstance(node, ast.With)]
                 self.assertEqual(len(outer), 1)
                 self.assert_shape(outer[0].items[0].context_expr,
-                    "db._policy_authority_capability_issuer_pg_connect_raw()")
+                    "db._policy_authority_capability_issuer_pg_connect_raw(database_pins="
+                    "tuple(self.role_config[name] for name in ('databaseRole', 'tlsClientDn', "
+                    "'tlsClientSerial', 'tlsIssuerDn', 'databaseConnectTimeoutSeconds')))")
                 self.assertEqual(ast.unparse(outer[0].items[0].optional_vars), "connection")
                 self.assertEqual(len(outer[0].body), 1)
                 transaction = outer[0].body[0]

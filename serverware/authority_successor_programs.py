@@ -45,6 +45,22 @@ def _revocation(*, read_dsn, connect_timeout_seconds, database_identity,
         maximum_plan_age_ns=maximum_plan_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns)
 
 
+def _challenge_maintenance(*, read_dsn, connect_timeout_seconds, database_identity,
+        planner_private_key, planner_public_key, planner_identity, planner_spki_digest,
+        configuration_digest, maintenance_policy, maximum_plan_age_ns, maximum_clock_skew_ns):
+    # The actual source owner owns a native SERIALIZABLE read-only snapshot,
+    # two bounded raw-page passes and real signing. It is not an aggregate v3
+    # TransitionKernel adapter and cannot produce a business execution grant.
+    from serverware.authority_challenge_planning import MaintenancePlanner
+
+    return MaintenancePlanner(operation="webauthn.challenge.maintain", read_dsn=read_dsn,
+        connect_timeout_seconds=connect_timeout_seconds, database_identity=database_identity,
+        planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+        planner_identity=planner_identity, planner_spki_digest=planner_spki_digest,
+        configuration_digest=configuration_digest, maintenance_policy=maintenance_policy,
+        maximum_plan_age_ns=maximum_plan_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns)
+
+
 def _evidence_owner(operation, *, read_planner, planner_private_key, planner_public_key,
         expected_planner_identity, expected_planner_spki_digest, configuration_digest):
     from serverware import authority_webauthn_evidence_plan_owner as owner
@@ -263,6 +279,7 @@ PROGRAMS: Final[Mapping[str, SuccessorPlanningProgram]] = MappingProxyType({
         _program("oidc.session.activation-delivery.consume", _activation_delivery, "read-acquisition",
             plan_factory=_activation_delivery_plan),
         _program("webauthn.credential.revoke", _revocation, "signed-originals"),
+        _program("webauthn.challenge.maintain", _challenge_maintenance, "signed-originals"),
         _program("webauthn.registration.evidence.admit", _registration_evidence,
             "signed-originals", _registration_evidence_kernel),
         _program("webauthn.registration.finalize", _registration, "read-acquisition",

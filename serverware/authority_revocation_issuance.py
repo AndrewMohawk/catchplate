@@ -35,8 +35,8 @@ _CALL_INPUTS = capability.wire._EXPECTATIONS - _CONFIGURED
 
 def _validate_configuration(configuration):
     """Bound fixed local custody without serializing keys or enrolling trust."""
-    if type(configuration) is not tuple or len(configuration) != 11:
-        raise ValueError("revocation issuer configuration is not an exact eleven-tuple")
+    if type(configuration) is not tuple or len(configuration) != 12:
+        raise ValueError("revocation issuer configuration is not an exact twelve-tuple")
     if any(not isinstance(key, Ed25519PublicKey) for key in configuration[:3]):
         raise ValueError("revocation issuer configuration requires Ed25519 public keys")
     for identity in configuration[3:5]:
@@ -54,6 +54,13 @@ def _validate_configuration(configuration):
     capability.shape._integer(pins[3], minimum=1)
     capability.shape._integer(pins[4])
     capability.shape._integer(configuration[9], minimum=1)
+    database_pins = configuration[11]
+    if (type(database_pins) is not tuple or len(database_pins) != 5
+            or any(type(value) is not str or not 1 <= len(value) <= 4096 or "\x00" in value
+                for value in database_pins[:4])
+            or database_pins[0] != "serverware_policy_capability_issuer"
+            or type(database_pins[4]) not in (int, float) or not 1 <= database_pins[4] <= 300):
+        raise ValueError("revocation issuer database pins are not an exact bounded source tuple")
 
 
 def _inputs_from_configuration(configuration, expectations, execution_id, receipt_id, work):
@@ -64,7 +71,7 @@ def _inputs_from_configuration(configuration, expectations, execution_id, receip
         raise ValueError("revocation issuer requires exactly fifteen external historical expectations")
     (planner_key, verifier_key, witness_key, planner_identity, verifier_identity,
         issuer_identity, issuer_pins, configuration_digest, witness_identity,
-        generation_sequence, generation_digest) = configuration
+        generation_sequence, generation_digest, _database_pins) = configuration
     handles = {"planner_public_key": planner_key, "verifier_public_key": verifier_key,
                "database_now": expectations["database_now"]}
     capability.plan._verification_types(**handles)
@@ -172,7 +179,7 @@ def _issue_invocation_on_configuration(configuration, *, envelope_bytes, work, o
 class RevocationCapabilityIssuer:
     """Constructor-owned independent pins, not a configured public route.
 
-    The eleven-tuple is captured once per invocation before any opener/key
+    The twelve-tuple is captured once per invocation before any opener/key
     callback. It pins handles, not arbitrary mutable key internals or external
     provenance. Historical request, roots and clocks (including the original
     acquisition's database_now) remain mandatory caller inputs. Current age and
@@ -194,7 +201,7 @@ class RevocationCapabilityIssuer:
                  expected_planner_identity, expected_verifier_identity,
                  expected_issuer_session_identity_digest, issuer_pins,
                  expected_configuration_digest, expected_witness_identity_digest,
-                 expected_generation_sequence, expected_generation_digest):
+                 expected_generation_sequence, expected_generation_digest, database_pins):
         capability.shape.validate_identity_shape(expected_planner_identity)
         capability.shape.validate_identity_shape(expected_verifier_identity)
         issuance._closed(issuer_pins, _PIN_FIELDS)
@@ -203,7 +210,7 @@ class RevocationCapabilityIssuer:
             tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS),
             expected_issuer_session_identity_digest, tuple(issuer_pins[name] for name in _PIN_FIELDS),
             expected_configuration_digest, expected_witness_identity_digest,
-            expected_generation_sequence, expected_generation_digest)
+            expected_generation_sequence, expected_generation_digest, database_pins)
         _validate_configuration(configuration)
         object.__setattr__(self, "_configuration", configuration)
 
@@ -222,7 +229,7 @@ class RevocationCapabilityIssuer:
             # Lazy import preserves the real startup gate. There is no caller
             # connection, DSN, connector override or planner-writer fallback.
             from serverware import db
-            return db._policy_authority_capability_issuer_pg_connect_raw()
+            return db._policy_authority_capability_issuer_pg_connect_raw(database_pins=configuration[11])
 
         return _run_on_configuration(configuration, envelope_bytes=envelope_bytes,
             witness_request_bytes=witness_request_bytes,
@@ -241,7 +248,7 @@ class RevocationCapabilityIssuer:
 
         def open_issuer():
             from serverware import db
-            return db._policy_authority_capability_issuer_pg_connect_raw()
+            return db._policy_authority_capability_issuer_pg_connect_raw(database_pins=configuration[11])
 
         return _issue_invocation_on_configuration(configuration, envelope_bytes=envelope_bytes,
             work=work, opener=open_issuer)

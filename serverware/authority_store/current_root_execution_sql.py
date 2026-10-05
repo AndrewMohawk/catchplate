@@ -16,6 +16,8 @@ crx_result_json (canonical genuine kernel result), crx_before_vector_json and
 crx_after_vector_json (canonical complete vectors), crx_marker (exact18 storage
 projection) and crx_deadline_epoch_ns (unchanged independently admitted expiry).
 The declarations below include these inputs; all other locals are scratch.
+The maintenance begin/finish fragments use the same fixed scalar/vector/marker
+locals, but never consume aggregate selected rows, mutations or work units.
 
 The enclosing owner must also admit exact installed schema/ACL/function and
 ALL business trigger definitions and retain bounded inherited statement/lock/idle
@@ -212,20 +214,8 @@ def _observe_sql(namespace):
     """
 
 
-def current_root_execution_apply_body_sql(namespace: str) -> str:
-    """Render real CAS/root/marker statements, NOT an admitted callable function.
-
-    On success crx_result_digest and crx_marker_json describe transaction-local
-    effects only. Outer COMMIT, genuine postcommit readback and external signed
-    completion remain separate. No returning prior marker or expired retry.
-    """
-    mutation_sql._schema_name(namespace)
-    header, heads, operations = _source()
-    digest_checks = " OR ".join(
-        f"pg_catalog.jsonb_typeof(crx_marker->{_literal(name)}) IS DISTINCT FROM 'string'"
-        f" OR crx_marker->>{_literal(name)} COLLATE \"C\" !~ '^sha256:[0-9a-f]{{64}}$'"
-        for name in authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS if name.endswith("_digest"))
-    columns = ", ".join(authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS)
+def _setup_sql(namespace, header, heads, operations):
+    """Original transaction, source and complete-descriptor setup."""
     return f"""
         {_live_sql()}
         IF pg_catalog.current_setting('server_version_num')::integer / 10000 <> 16
@@ -241,10 +231,20 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
         crx_heads := {_literal(_json(heads))}::jsonb;
         crx_primary_ids := ARRAY[{', '.join(_literal(name) for name in vector.PRIMARY_TABLES)}]::text[];
         crx_index_ids := ARRAY[{', '.join(_literal(name) for name in vector.INDEX_IDS)}]::text[];
-        IF crx_source IS NULL OR crx_request_digest IS NULL OR crx_operation_id IS NULL
+"""
+
+
+def _operation_inputs_sql(namespace):
+    """Shared exact operation/request identity condition; caller closes its IF."""
+    return f"""        IF crx_source IS NULL OR crx_request_digest IS NULL OR crx_operation_id IS NULL
             OR crx_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{{64}}$'
             OR crx_operation_id IS DISTINCT FROM {namespace}.serverware_policy_authority_domain_digest(
-                'serverware.policyAuthorityOperation/v2', crx_operation, crx_request_digest)
+                'serverware.policyAuthorityOperation/v2', crx_operation, crx_request_digest)"""
+
+
+def _aggregate_inputs_sql(namespace):
+    """Unchanged aggregate-only array and genuine replay-work guards."""
+    return f"""{_operation_inputs_sql(namespace)}
             OR pg_catalog.jsonb_typeof(crx_selected_rows) IS DISTINCT FROM 'array'
             OR pg_catalog.jsonb_typeof(crx_mutations) IS DISTINCT FROM 'array'
             OR crx_work_units IS NULL OR crx_work_units < 0
@@ -255,7 +255,16 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
         THEN RAISE EXCEPTION 'successor selected or mutation inventory exceeds source limits'; END IF;
         {_wire(namespace, 'crx_selected_rows', 'crx_selected_json', authority.MAX_PLAN_SELECTED_BYTES)}
         {_wire(namespace, 'crx_mutations', 'crx_mutation_json', authority.MAX_RESULT_BYTES)}
-        IF crx_before_vector_json IS NULL OR crx_after_vector_json IS NULL OR crx_result_json IS NULL
+"""
+
+
+def _vectors_marker_sql(namespace):
+    """Original canonical vector/result and exact marker-scope validation."""
+    digest_checks = " OR ".join(
+        f"pg_catalog.jsonb_typeof(crx_marker->{_literal(name)}) IS DISTINCT FROM 'string'"
+        f" OR crx_marker->>{_literal(name)} COLLATE \"C\" !~ '^sha256:[0-9a-f]{{64}}$'"
+        for name in authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS if name.endswith("_digest"))
+    return f"""        IF crx_before_vector_json IS NULL OR crx_after_vector_json IS NULL OR crx_result_json IS NULL
             OR pg_catalog.octet_length(crx_before_vector_json) NOT BETWEEN 2 AND {vector.MAX_BYTES}
             OR pg_catalog.octet_length(crx_after_vector_json) NOT BETWEEN 2 AND {vector.MAX_BYTES}
             OR pg_catalog.octet_length(crx_result_json) NOT BETWEEN 2 AND {authority.MAX_RESULT_BYTES}
@@ -298,7 +307,12 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
                 <> (crx_marker->>'predecessor_sequence')::numeric + 1
         THEN RAISE EXCEPTION 'successor marker sequence or fence is invalid'; END IF;
         {_wire(namespace, 'crx_marker', 'crx_marker_json', 4096, 64, 2)}
-        -- Prevent root-row phantoms while locking the complete existing source
+"""
+
+
+def _locked_before_sql(namespace):
+    """Original complete before-root locks and unused marker identity."""
+    return f"""        -- Prevent root-row phantoms while locking the complete existing source
         -- inventories. These locks and the following row locks survive until
         -- the outer transaction ends; no missing root is initialized here.
         LOCK TABLE {namespace}.policy_authority_authenticated_table_roots,
@@ -315,7 +329,12 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
                     OR marker.operation_id = crx_operation_id
                     OR marker.capability_digest = crx_marker->>'capability_digest')))
         THEN RAISE EXCEPTION 'successor marker identity is already used'; END IF;
-        IF EXISTS (SELECT 1 FROM pg_catalog.jsonb_array_elements(crx_selected_rows) AS item(value)
+"""
+
+
+def _aggregate_effects_sql(namespace):
+    """Unchanged selected-row, capacity and ordered aggregate CAS body."""
+    return f"""        IF EXISTS (SELECT 1 FROM pg_catalog.jsonb_array_elements(crx_selected_rows) AS item(value)
                 GROUP BY item.value->>'table', item.value->'key' HAVING count(*) <> 1)
             OR EXISTS (SELECT 1 FROM pg_catalog.jsonb_array_elements(crx_mutations) AS item(value)
                 GROUP BY item.value->>'table', item.value->'key' HAVING count(*) <> 1)
@@ -361,7 +380,13 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
             key_columns := crx_source->'keys'->(mutation->>'table');
             {mutation_sql.apply_mutation_sql(namespace)}
         END LOOP;
-        {_observe_sql(namespace)}
+"""
+
+
+def _finish_sql(namespace):
+    """Original maintained after-root equality and exact unique marker insert."""
+    columns = ", ".join(authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS)
+    return f"""        {_observe_sql(namespace)}
         IF crx_actual_json IS DISTINCT FROM crx_after_vector_json
         THEN RAISE EXCEPTION 'successor actual maintained after vector differs'; END IF;
         {_live_sql()}
@@ -374,3 +399,55 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
         THEN RAISE EXCEPTION 'successor immutable marker insertion was not exact'; END IF;
         {_live_sql()}
     """
+
+
+def current_root_execution_apply_body_sql(namespace: str) -> str:
+    """Render the unchanged aggregate body from the shared exact fragments.
+
+    All original guards and statement order remain, including actual selected
+    rows/mutations/work units. This remains only a protected-owner fragment.
+    """
+    mutation_sql._schema_name(namespace)
+    header, heads, operations = _source()
+    return (_setup_sql(namespace, header, heads, operations)
+        + _aggregate_inputs_sql(namespace) + _vectors_marker_sql(namespace)
+        + _locked_before_sql(namespace) + _aggregate_effects_sql(namespace) + _finish_sql(namespace))
+
+
+def _maintenance_only_sql():
+    return """
+        IF crx_operation IS DISTINCT FROM 'webauthn.challenge.maintain'
+        THEN RAISE EXCEPTION 'maintenance execution operation is not source fixed'; END IF;
+    """
+
+
+def maintenance_execution_begin_sql(namespace: str) -> str:
+    """Lock complete predecessors for the genuine sealed maintenance stream.
+
+    Only fixed crx operation/request/id/result/vectors/marker/deadline locals
+    are inputs. No aggregate selected rows, mutations or invented work units
+    are supplied. The protected caller owns every intervening source step and
+    the single outer transaction; this fragment provides no admission itself.
+    """
+    from serverware.authority_store import challenge_maintenance_effects_sql as maintenance
+
+    mutation_sql._schema_name(namespace)
+    # Reuse the actual row/phase renderer's exact UPDATE/DELETE source check,
+    # including all nine maintained profiles; do not clone its validator.
+    maintenance._source()
+    header, heads, operations = _source()
+    selected = {maintenance.OPERATION: operations[maintenance.OPERATION]}
+    return (_maintenance_only_sql() + _setup_sql(namespace, header, heads, selected)
+        + _operation_inputs_sql(namespace)
+        + "\n        THEN RAISE EXCEPTION 'successor same-call operation inputs differ'; END IF;\n"
+        + _vectors_marker_sql(namespace) + _locked_before_sql(namespace))
+
+
+def maintenance_execution_finish_sql(namespace: str) -> str:
+    """Close that same transaction after every genuine maintenance stream step.
+
+    The original complete after vector must match before the one unique marker
+    INSERT. No SQL authority, retry, commit or prior-marker success is added.
+    """
+    mutation_sql._schema_name(namespace)
+    return _maintenance_only_sql() + _finish_sql(namespace)

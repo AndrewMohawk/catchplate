@@ -23,6 +23,7 @@ from serverware import authority_complete_query as complete
 from serverware import authority_complete_query_batch as capture
 from serverware import authority_contract as authority
 from serverware import authority_audit_capacity as capacity
+from serverware import authority_challenge_retention as retention
 from serverware import authority_revocation_invocation as invocation
 from serverware import authority_transition_core as core
 from serverware import authority_transition_webauthn as support
@@ -50,8 +51,7 @@ _CREDENTIAL_FIELDS = frozenset({"credential_id", "user_id", "label", "public_key
     "attestation_trust_path", "attestation_leaf_sha256", "attestation_root_sha256",
     "attestation_trust_bundle_digest", "attestation_trust_bundle_sequence",
     "attestation_verified_at", "transports", "user_verified"})
-_CHALLENGE_FIELDS = frozenset({"id", "challenge", "challenge_type", "user_id",
-    "approval_request_id", "payload_json", "scope_key", "expires_at", "used_at", "created_at"})
+_CHALLENGE_FIELDS = retention.ROW_FIELDS
 _MODES = frozenset({"bootstrap-token", "development-bootstrap", "existing-webauthn",
     "oidc-session-first-enrollment"})
 

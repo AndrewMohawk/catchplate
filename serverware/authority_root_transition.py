@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from serverware import authority_audit_capacity, authority_contract
+from serverware import authority_challenge_retention
 from serverware.authority_radix_mutation import (
     PrimaryRadixLimits,
     PrimaryRadixMembershipResult,
@@ -275,6 +276,9 @@ def derive_primary_root_transition(
             or len(before_proofs) != len(selected_rows)
             or len(mutations) > spec["maximumMutations"]):
         raise PrimaryRadixMutationError("primary root transition inventory exceeds operation bounds")
+    authority_challenge_retention.validate_inline_delta(
+        operation=operation, selected_rows=selected_rows, mutations=mutations,
+    )
     business = _roots(list(business_before_roots))
     authorization = _roots(list(authorization_before_roots))
     result = evaluate_primary_radix_batch(

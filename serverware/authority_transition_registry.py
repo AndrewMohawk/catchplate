@@ -227,7 +227,8 @@ def _registry_closure_errors() -> tuple[str, ...]:
             "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"
         }
         expected_result = (
-            "signed-originals" if evidence_operation or operation == "webauthn.credential.revoke"
+            "signed-originals" if evidence_operation or operation in {
+                "webauthn.credential.revoke", "webauthn.challenge.maintain"}
             else "read-acquisition"
         )
         spec = authority_contract.operation_spec(operation)

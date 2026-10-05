@@ -63,7 +63,8 @@ def constructor_inputs(fixture, pins):
         "issuer_pins": copy.deepcopy(pins), "expected_configuration_digest": fixture.configuration_digest,
         "expected_witness_identity_digest": fixture.witness_identity,
         "expected_generation_sequence": fixture.generation_sequence,
-        "expected_generation_digest": fixture.generation_digest}
+        "expected_generation_digest": fixture.generation_digest,
+        "database_pins": ("serverware_policy_capability_issuer", "CN=fixture-issuer", "1", "CN=fixture-ca", 2)}
 
 
 def call_inputs(fixture):
@@ -207,7 +208,8 @@ class RevocationIssuerTests(unittest.TestCase):
         owner = configured.RevocationCapabilityIssuer(**supplied)
         original = owner._snapshot_configuration()
         self.assertIs(type(original), tuple)
-        self.assertEqual(len(original), 11)
+        self.assertEqual(len(original), 12)
+        self.assertEqual(original[11], supplied["database_pins"])
         self.assertEqual(original[3], tuple(fixture.plan.identity[name] for name in IDENTITY_FIELDS))
         self.assertEqual(original[4], tuple(fixture.plan.semantic.receipt.identity[name] for name in IDENTITY_FIELDS))
         self.assertEqual(original[6], tuple(pins[name] for name in ("measurementDigest", "attestationReceiptDigest",
@@ -215,7 +217,9 @@ class RevocationIssuerTests(unittest.TestCase):
         for name in ("expected_planner_identity", "expected_verifier_identity"):
             supplied[name]["measurementDigest"] = oracle.sha(b"mutated caller identity")
         supplied["issuer_pins"]["maximumAgeNs"] = 1
+        supplied["database_pins"] = ("serverware_policy_capability_issuer", "CN=changed", "2", "CN=changed-ca", 3)
         self.assertIs(owner._snapshot_configuration(), original)
+        self.assertNotEqual(original[11], supplied["database_pins"])
         connection = Connection(fixture, pins)
         self.assertEqual(self.issue(fixture, connection, owner=owner), issuance_oracle.expected_receipt(fixture))
         with self.assertRaises((AttributeError, TypeError)):
@@ -223,12 +227,21 @@ class RevocationIssuerTests(unittest.TestCase):
 
     def test_constructor_and_snapshot_reject_foreign_or_malformed_configuration(self):
         fixture, pins = role_bound_fixture(), issuance_oracle.issuer_pins()
+        class ForeignPin(str):
+            def __eq__(self, other):
+                raise AssertionError("foreign database pin callback")
         for name, value in (("planner_public_key", object()), ("verifier_public_key", object()),
                 ("witness_public_key", object()), ("expected_generation_sequence", True),
                 ("expected_generation_sequence", 0), ("expected_issuer_session_identity_digest", "bad"),
                 ("expected_witness_identity_digest", None), ("expected_generation_digest", "sha256:" + "G" * 64),
                 ("expected_planner_identity", {}), ("expected_verifier_identity", {**fixture.signer_identity, "extra": None}),
-                ("issuer_pins", {**pins, "maximumAgeNs": True}), ("issuer_pins", {**pins, "extra": None})):
+                ("issuer_pins", {**pins, "maximumAgeNs": True}), ("issuer_pins", {**pins, "extra": None}),
+                ("database_pins", None), ("database_pins", ["serverware_policy_capability_issuer", "dn", "1", "ca", 2]),
+                ("database_pins", ("wrong_role", "dn", "1", "ca", 2)),
+                ("database_pins", (ForeignPin("serverware_policy_capability_issuer"), "dn", "1", "ca", 2)),
+                ("database_pins", ("serverware_policy_capability_issuer", "", "1", "ca", 2)),
+                ("database_pins", ("serverware_policy_capability_issuer", "dn", "1", "ca", True)),
+                ("database_pins", ("serverware_policy_capability_issuer", "dn", "1", "ca", float("nan")))):
             with self.subTest(field=name), self.assertRaises(ValueError):
                 self.owner(fixture, pins, **{name: value})
         owner = self.owner(fixture, pins)

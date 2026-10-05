@@ -21,6 +21,8 @@ from scripts.authority import native_pilot_authority_io as io
 from serverware import authority_artifact_spec as spec
 from serverware import authority_primary_contract as primary
 from serverware import authority_launcher as launcher
+from serverware import authority_recovery_configuration as recovery_configuration
+from serverware import authority_challenge_policy as challenge_maintenance_policy
 from serverware.authority_local_artifacts import sha
 from serverware.authority_local_install import _owning
 from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
@@ -95,6 +97,16 @@ def _service(payload, selected, *, now_unix):
     """Join real credential originals and static source topology; no live owner."""
     from serverware.authority_local_database_credentials import issuance
 
+    if challenge_maintenance_policy.FIELD in payload:
+        challenge_maintenance_policy._shape(payload[challenge_maintenance_policy.FIELD])
+    recovery = recovery_configuration.configuration(payload.get(recovery_configuration.FIELD),
+        webauthn=payload["webauthn"])
+    _require(recovery_configuration.FIELD not in payload or recovery is not None)
+    for manifest in selected["roleManifests"]:
+        expected = launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[manifest["role"]]
+        if manifest["role"] == "verifier" and recovery is not None:
+            expected |= recovery_configuration.CREDENTIAL_NAMES
+        _require(manifest["credentialNames"] == sorted(expected))
     originals = selected["databaseIssuanceOriginals"]
     _require(type(originals) is dict and set(originals) == SERVICE_ROLES)
     identities = {}
@@ -131,7 +143,7 @@ def _service(payload, selected, *, now_unix):
         and len({row["caCertificateSha256"] for row in identities.values()}) == 1 and len(targets) == 1)
     generator.genesis_policy.configuration(payload.get(generator.genesis_policy.FIELD),
         root_digest=_spki(selected["configurationRootPublicKeyBase64Url"]))
-    for role in ("issuer", "executor"):
+    for role in ("verifier", "issuer", "executor"):
         _require(payload[role + "CredentialIssuanceDigest"] == identities[role]["credentialIssuanceDigest"])
     executor = identities["executor"]
     _require(all(payload[outer] == executor[inner] for outer, inner in (
@@ -203,7 +215,9 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
             and row["processMode"] == launcher.PROCESS_MODES[name]
             and row["listenerName"] == launcher.ROLE_LISTENER_NAMES[name]
             and row["argv"] == {"schema": spec.LOCAL_ARGUMENTS_SCHEMA}
-            and row["credentialNames"] == sorted(launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[name]))
+            and (row["credentialNames"] == sorted(launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[name])
+                or name == "verifier" and row["credentialNames"] == sorted(
+                    launcher.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[name] | recovery_configuration.CREDENTIAL_NAMES)))
     keys = selected["runtimePublicKeys"]
     _require(type(keys) is dict and set(keys) == RUNTIME_KEY_ROLES)
     key_bytes = [_public(keys[name]) for name in sorted(keys)]

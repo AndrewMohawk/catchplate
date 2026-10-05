@@ -9256,7 +9256,37 @@ def metadata_base_schema_source() -> str:
                 payload_json TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 used_at TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                retention_recovery_id TEXT,
+                retention_recovery_row_digest TEXT,
+                retention_jit_receipt_digest TEXT,
+                retention_jit_row_digest TEXT,
+                retention_activation_receipt_digest TEXT,
+                retention_activation_row_digest TEXT,
+                retention_reference_mask BIGINT NOT NULL DEFAULT 0,
+                -- New-source ordering contract, never an adoption/backfill of
+                -- historical custom IDs. Installation separately requires all
+                -- challenge/reference source tables to be genuinely empty.
+                CONSTRAINT webauthn_challenge_fresh_generated_id CHECK (
+                    (length(id) = 36 AND id COLLATE "C" ~
+                     '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') OR
+                    (length(id) = 71 AND id COLLATE "C" ~ '^sha256:[0-9a-f]{64}$')),
+                CHECK ((retention_recovery_id IS NULL) =
+                       (retention_recovery_row_digest IS NULL)),
+                CHECK ((retention_jit_receipt_digest IS NULL) =
+                       (retention_jit_row_digest IS NULL)),
+                CHECK ((retention_activation_receipt_digest IS NULL) =
+                       (retention_activation_row_digest IS NULL)),
+                CHECK (retention_reference_mask =
+                    CASE WHEN retention_recovery_id IS NULL THEN 0 ELSE 1 END +
+                    CASE WHEN retention_jit_receipt_digest IS NULL THEN 0 ELSE 2 END +
+                    CASE WHEN retention_activation_receipt_digest IS NULL THEN 0 ELSE 4 END),
+                CHECK (retention_recovery_row_digest IS NULL OR
+                       retention_recovery_row_digest ~ '^sha256:[0-9a-f]{64}$'),
+                CHECK (retention_jit_row_digest IS NULL OR
+                       retention_jit_row_digest ~ '^sha256:[0-9a-f]{64}$'),
+                CHECK (retention_activation_row_digest IS NULL OR
+                       retention_activation_row_digest ~ '^sha256:[0-9a-f]{64}$')
             );
 
             CREATE TABLE IF NOT EXISTS jit_webauthn_assertion_receipts (

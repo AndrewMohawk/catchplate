@@ -1720,6 +1720,7 @@ _POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES = frozenset(
         *_JIT_AUTHORITY_RUNTIME_READ_ONLY_TABLES,
         *authority_contract.V9_ADDITIONAL_PROTECTED_TABLES,
         *authority_contract.POSTGRES_COUNTED_STORE_TABLES,
+        *authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES,
         "policy_authority_genesis_preparations",
         "policy_authority_genesis_finalizations",
         "policy_high_water",
@@ -6742,6 +6743,14 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "retained WebAuthn transition storage requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.RECOVERY_HISTORY_PAGE_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "recovery history page storage requires a separately reviewed migration"
+                )
+            if _metadata_table_exists(conn, authority_contract.CHALLENGE_MAINTENANCE_PAGE_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "challenge maintenance page storage requires a separately reviewed migration"
+                )
             if _metadata_table_exists(conn, authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE):
                 raise PolicyCandidateAuthorityError(
                     "current-root commit marker storage requires a separately reviewed migration"
@@ -7121,6 +7130,14 @@ def _prepare_policy_candidate_authority_schema(
         raise PolicyCandidateAuthorityError(
             "retained WebAuthn transition storage requires a separately reviewed migration"
         )
+    if _metadata_table_exists(conn, authority_contract.RECOVERY_HISTORY_PAGE_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "recovery history page storage requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.CHALLENGE_MAINTENANCE_PAGE_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "challenge maintenance page storage requires a separately reviewed migration"
+        )
     if _metadata_table_exists(conn, authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE):
         raise PolicyCandidateAuthorityError(
             "current-root commit marker storage requires a separately reviewed migration"
@@ -7357,9 +7374,107 @@ def _successor_installation_pins(kind: str) -> tuple[str, ...]:
     return pins
 
 
+def _policy_authority_recovery_history_page_ddl(namespace: str) -> str:
+    from serverware.authority_store import recovery_history_pages
+
+    if (namespace not in ('"serverware_metadata"', '"serverware_candidate_authority_expected_v9"')
+            or recovery_history_pages.TABLE != "serverware_metadata." + authority_contract.RECOVERY_HISTORY_PAGE_TABLE
+            or recovery_history_pages.COLUMNS != authority_contract.RECOVERY_HISTORY_PAGE_COLUMNS):
+        raise PolicyCandidateAuthorityError("recovery history page source/namespace is not exact")
+    ddl = recovery_history_pages.installation_sql()
+    if ddl.count(recovery_history_pages.TABLE) != 1:
+        raise PolicyCandidateAuthorityError("recovery history page declaration is not source exact")
+    return ddl.replace(recovery_history_pages.TABLE,
+        namespace + '."' + authority_contract.RECOVERY_HISTORY_PAGE_TABLE + '"')
+
+
+def _install_policy_authority_recovery_history_pages(conn: Any) -> None:
+    """Fresh locked PG source only; existing pages require their recorded contract."""
+    if not isinstance(conn, PostgresMetadataConnection) or conn.in_transaction is not True:
+        raise PolicyCandidateAuthorityError("recovery history installation requires the original PostgreSQL transaction")
+    row = conn.execute("SELECT pg_catalog.current_schema() AS schema_name").fetchone()
+    if row is None or row["schema_name"] not in (
+            "serverware_metadata", "serverware_candidate_authority_expected_v9"):
+        raise PolicyCandidateAuthorityError("recovery history installation namespace is not source admitted")
+    namespace = _policy_candidate_authority_identifier(row["schema_name"])
+    ddl = _policy_authority_recovery_history_page_ddl(namespace)
+    if _metadata_table_exists(conn, authority_contract.RECOVERY_HISTORY_PAGE_TABLE):
+        # IF NOT EXISTS is never existing-store admission. The normal source
+        # manifest replay independently creates an absent pristine scratch table.
+        if row["schema_name"] != "serverware_metadata":
+            raise PolicyCandidateAuthorityError("recovery history scratch table is not pristine")
+        _validate_policy_candidate_authority_structure(conn, require_recorded_contract=True)
+        return
+    if _policy_candidate_authority_migration_version(conn) != 0:
+        raise PolicyCandidateAuthorityError("recovery history pages require fresh source; no legacy adoption")
+    sources = (
+        "oidc_browser_sessions", "policy_authority_planner_transactions", "policy_authority_schema_contracts",
+        "webauthn_challenges", "webauthn_credentials", "webauthn_recovery_ceremonies",
+        "webauthn_recovery_revocations", "webauthn_recovery_root_state",
+        "webauthn_trust_publication_high_water", "webauthn_trust_publications",
+    )
+    for table in sources:
+        conn.execute(f'LOCK TABLE ONLY {namespace}."{table}" IN SHARE ROW EXCLUSIVE MODE')
+    for table in sources:
+        if conn.execute(f'SELECT 1 AS present FROM ONLY {namespace}."{table}" LIMIT 1').fetchone() is not None:
+            raise PolicyCandidateAuthorityError("recovery history pages require locked empty sources; no adoption")
+    conn.execute(ddl)
+
+
+def _policy_authority_challenge_maintenance_page_ddl(namespace: str) -> str:
+    from serverware.authority_store import challenge_maintenance_pages
+
+    if (namespace not in ('"serverware_metadata"', '"serverware_candidate_authority_expected_v9"')
+            or challenge_maintenance_pages.TABLE != "serverware_metadata." + authority_contract.CHALLENGE_MAINTENANCE_PAGE_TABLE
+            or challenge_maintenance_pages.COLUMNS != authority_contract.CHALLENGE_MAINTENANCE_PAGE_COLUMNS):
+        raise PolicyCandidateAuthorityError("challenge maintenance page source/namespace is not exact")
+    ddl = challenge_maintenance_pages.installation_sql()
+    if ddl.count(challenge_maintenance_pages.TABLE) != 1:
+        raise PolicyCandidateAuthorityError("challenge maintenance page declaration is not source exact")
+    return ddl.replace(challenge_maintenance_pages.TABLE,
+        namespace + '."' + authority_contract.CHALLENGE_MAINTENANCE_PAGE_TABLE + '"')
+
+
+def _install_policy_authority_challenge_maintenance_pages(conn: Any) -> None:
+    """Fresh locked PG source only; existing pages require their recorded contract."""
+    if not isinstance(conn, PostgresMetadataConnection) or conn.in_transaction is not True:
+        raise PolicyCandidateAuthorityError("challenge maintenance installation requires the original PostgreSQL transaction")
+    row = conn.execute("SELECT pg_catalog.current_schema() AS schema_name").fetchone()
+    if row is None or row["schema_name"] not in (
+            "serverware_metadata", "serverware_candidate_authority_expected_v9"):
+        raise PolicyCandidateAuthorityError("challenge maintenance installation namespace is not source admitted")
+    namespace = _policy_candidate_authority_identifier(row["schema_name"])
+    ddl = _policy_authority_challenge_maintenance_page_ddl(namespace)
+    if _metadata_table_exists(conn, authority_contract.CHALLENGE_MAINTENANCE_PAGE_TABLE):
+        if row["schema_name"] != "serverware_metadata":
+            raise PolicyCandidateAuthorityError("challenge maintenance scratch table is not pristine")
+        _validate_policy_candidate_authority_structure(conn, require_recorded_contract=True)
+        return
+    if _policy_candidate_authority_migration_version(conn) != 0:
+        raise PolicyCandidateAuthorityError("challenge maintenance pages require fresh source; no legacy adoption")
+    # Preserve the recovery installer's full locked-empty source inventory,
+    # adding the two other genuine challenge-reference relations.
+    sources = (
+        "oidc_browser_sessions", "policy_authority_planner_transactions", "policy_authority_schema_contracts",
+        "webauthn_challenges", "webauthn_credentials", "webauthn_recovery_ceremonies",
+        "webauthn_recovery_revocations", "webauthn_recovery_root_state",
+        "webauthn_trust_publication_high_water", "webauthn_trust_publications",
+        "jit_webauthn_assertion_receipts", "policy_activation_webauthn_assertions",
+    )
+    for table in sources:
+        conn.execute(f'LOCK TABLE ONLY {namespace}."{table}" IN SHARE ROW EXCLUSIVE MODE')
+    for table in sources:
+        if conn.execute(f'SELECT 1 AS present FROM ONLY {namespace}."{table}" LIMIT 1').fetchone() is not None:
+            raise PolicyCandidateAuthorityError("challenge maintenance pages require locked empty sources; no adoption")
+    conn.execute(ddl)
+
+
 def _install_policy_candidate_authority_guards(conn: Any) -> None:
+    immutable_tables = (_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
+        + (authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES
+           if isinstance(conn, PostgresMetadataConnection) else ()))
     authority_tables = (
-        _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
+        immutable_tables
         + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES
     )
     if isinstance(conn, PostgresMetadataConnection):
@@ -7554,6 +7669,8 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 "policy-authority capability issuer requires a distinct "
                 "pinned mTLS client certificate identity"
             )
+        _install_policy_authority_recovery_history_pages(conn)
+        _install_policy_authority_challenge_maintenance_pages(conn)
         conn.execute(
             """
             CREATE OR REPLACE FUNCTION serverware_reject_policy_authority_mutation()
@@ -7604,7 +7721,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 "FOR EACH ROW EXECUTE FUNCTION "
                 "serverware_validate_policy_authority_insert()"
             )
-        for table in _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES:
+        for table in immutable_tables:
             trigger = _policy_candidate_authority_object_name(
                 "serverware", table, "immutable"
             )
@@ -9078,6 +9195,12 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 "serverware_policy_authority_authenticated_trigger("
                 f"{trigger_arguments})"
             )
+        from serverware.authority_store import challenge_retention_sql
+
+        for statement in challenge_retention_sql.challenge_retention_installation_sql(
+            guard_namespace
+        ):
+            conn.execute(statement)
         replay_seed = conn.execute(
             "SELECT pg_catalog.to_jsonb(state) AS row_json "
             "FROM credential_lease_replay_state AS state "
@@ -20366,11 +20489,43 @@ def _metadata_pg_connect_with_dsn(
     return conn
 
 
-def _policy_authority_verifier_public_key() -> bytes:
-    encoded = os.environ.get(
+def _authority_database_pins(database_pins, *, expected_role):
+    """Admit one immutable role/TLS/timeout selection, never ambient state."""
+    from math import isfinite
+
+    if (type(database_pins) is not tuple or len(database_pins) != 5
+            or type(expected_role) is not str or not expected_role):
+        raise MetadataStoreError("authority database pins are not a closed selection")
+    role, client_dn, client_serial, issuer_dn, timeout = database_pins
+    if (any(type(value) is not str or not value or "\x00" in value
+            for value in (role, client_dn, client_serial, issuer_dn))
+            or role != expected_role
+            or type(timeout) not in (int, float) or not isfinite(timeout)
+            or not 1 <= timeout <= 300):
+        raise MetadataStoreError("authority database pins are invalid")
+    try:
+        valid = (len(role.encode("utf-8")) <= 63
+            and len(client_dn.encode("utf-8")) <= 4096
+            and len(issuer_dn.encode("utf-8")) <= 4096
+            and len(client_serial.encode("ascii")) <= 256
+            and re.fullmatch(r"[0-9A-Fa-f:]+", client_serial) is not None)
+    except UnicodeError as exc:
+        raise MetadataStoreError("authority database pins have invalid encoding") from exc
+    if not valid:
+        raise MetadataStoreError("authority database pins exceed their source bounds")
+    # libpq expects integral seconds, matching existing measured connectors.
+    return role, client_dn, client_serial, issuer_dn, int(timeout)
+
+
+def _policy_authority_verifier_public_key(*, database_configuration=None) -> bytes:
+    if database_configuration is not None:
+        from serverware.authority_database_configuration import require
+        database_configuration = require(database_configuration)
+    encoded = (database_configuration.verifier_public_key_base64url
+        if database_configuration is not None else os.environ.get(
         "SERVERWARE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL",
         "",
-    ).strip()
+    ).strip())
     public_key_bytes = _candidate_authority_b64url(
         "policy-authority verifier Ed25519 public key",
         encoded,
@@ -20381,9 +20536,10 @@ def _policy_authority_verifier_public_key() -> bytes:
         encoding=serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
-    expected_spki_digest = os.environ.get(
+    expected_spki_digest = (database_configuration.verifier_spki_digest
+        if database_configuration is not None else os.environ.get(
         "SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256", ""
-    ).strip()
+    ).strip())
     if not hmac.compare_digest(
         _candidate_authority_sha256(spki_der),
         expected_spki_digest,
@@ -20411,7 +20567,11 @@ def _policy_authority_owner_verification_profile_digest(
     function_definition_digest: str,
     verifier_spki_digest: str,
     verifier_measurement_digest: str,
+    database_configuration=None,
 ) -> str:
+    if database_configuration is not None:
+        from serverware.authority_database_configuration import require
+        database_configuration = require(database_configuration)
     planner_writer_privilege_contract = {
         "plannerWriterRole": _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
         "plannerWriterTablePrivileges": {
@@ -20482,6 +20642,26 @@ def _policy_authority_owner_verification_profile_digest(
             "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_ISSUER_DN", ""
         ).strip(),
     }
+    if database_configuration is not None:
+        selected = database_configuration
+        verifier_session_contract.update({
+            "attestationReceiptDigest": selected.verifier_attestation_receipt_digest,
+            "credentialIssuanceDigest": selected.verifier_credential_issuance_digest,
+            "executorRole": selected.executor_pins[0],
+            "verifierReadRole": selected.verifier_pins[0],
+            "tlsClientDn": selected.verifier_pins[1],
+            "tlsClientSerial": selected.verifier_pins[2],
+            "tlsIssuerDn": selected.verifier_pins[3],
+        })
+        capability_issuer_session_contract.update({
+            "attestationReceiptDigest": selected.issuer_attestation_receipt_digest,
+            "credentialIssuanceDigest": selected.issuer_credential_issuance_digest,
+            "measurementDigest": selected.issuer_measurement_digest,
+            "sessionRole": selected.issuer_pins[0],
+            "tlsClientDn": selected.issuer_pins[1],
+            "tlsClientSerial": selected.issuer_pins[2],
+            "tlsIssuerDn": selected.issuer_pins[3],
+        })
     material = dumps(
         {
             "contractId": _POLICY_AUTHORITY_OWNER_CONTRACT_ID,
@@ -20570,7 +20750,21 @@ def _validate_policy_authority_owner_apply_function(
     cur: Any,
     *,
     source_structural_manifest_digest: str | None = None,
+    database_configuration=None,
 ) -> dict[str, Any]:
+    if database_configuration is not None:
+        from serverware.authority_database_configuration import require
+        database_configuration = require(database_configuration)
+    executor_role = (_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE if database_configuration is None
+        else database_configuration.executor_pins[0])
+    owner_role = _METADATA_STORE_AUTHORITY_OWNER_ROLE
+    audit_store_identity_digest = _POLICY_AUTHORITY_AUDIT_STORE_IDENTITY_DIGEST
+    audit_signer_spki_digest = _POLICY_AUTHORITY_AUDIT_SIGNER_SPKI_DIGEST
+    if database_configuration is not None:
+        from serverware.authority_database_configuration import OWNER_ROLE
+        owner_role = OWNER_ROLE
+        audit_store_identity_digest = database_configuration.audit_store_identity_digest
+        audit_signer_spki_digest = database_configuration.audit_signer_spki_digest
     if source_structural_manifest_digest is None:
         source_contract_rows = cur.execute(
             "SELECT source_revision, source_contract_digest, "
@@ -20584,7 +20778,8 @@ def _validate_policy_authority_owner_apply_function(
             or source_contract_rows[0]["source_revision"]
             != _POLICY_CANDIDATE_AUTHORITY_SOURCE_REVISION
             or source_contract_rows[0]["source_contract_digest"]
-            != _policy_candidate_authority_source_contract_digest()
+            != _policy_candidate_authority_source_contract_digest(
+                database_configuration=database_configuration)
         ):
             raise MetadataStoreError(
                 "owner policy-authority source manifest is unavailable"
@@ -20650,6 +20845,18 @@ def _validate_policy_authority_owner_apply_function(
     capability_issuer_tls_issuer_dn = os.environ.get(
         "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_ISSUER_DN", ""
     ).strip()
+    if database_configuration is not None:
+        selected = database_configuration
+        verifier_spki_digest = selected.verifier_spki_digest
+        verifier_measurement_digest = selected.verifier_measurement_digest
+        verifier_attestation_receipt_digest = selected.verifier_attestation_receipt_digest
+        verifier_credential_issuance_digest = selected.verifier_credential_issuance_digest
+        verifier_tls_client_dn, verifier_tls_client_serial, verifier_tls_issuer_dn = selected.verifier_pins[1:4]
+        capability_issuer_measurement_digest = selected.issuer_measurement_digest
+        capability_issuer_attestation_receipt_digest = selected.issuer_attestation_receipt_digest
+        capability_issuer_credential_issuance_digest = selected.issuer_credential_issuance_digest
+        capability_issuer_tls_client_dn, capability_issuer_tls_client_serial, capability_issuer_tls_issuer_dn = selected.issuer_pins[1:4]
+        replay_witness_identity_digest = selected.replay_witness_identity_digest
     for label, value in (
         ("verifier SPKI", verifier_spki_digest),
         ("verifier measurement", verifier_measurement_digest),
@@ -20676,11 +20883,11 @@ def _validate_policy_authority_owner_apply_function(
         ("replay witness identity", replay_witness_identity_digest),
         (
             "audit store identity",
-            _POLICY_AUTHORITY_AUDIT_STORE_IDENTITY_DIGEST,
+            audit_store_identity_digest,
         ),
         (
             "audit signer SPKI",
-            _POLICY_AUTHORITY_AUDIT_SIGNER_SPKI_DIGEST,
+            audit_signer_spki_digest,
         ),
     ):
         if re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
@@ -20725,7 +20932,7 @@ def _validate_policy_authority_owner_apply_function(
         raise MetadataStoreError(
             "policy-authority capability issuer mTLS identity is not distinct"
         )
-    verifier_public_key = _policy_authority_verifier_public_key()
+    verifier_public_key = _policy_authority_verifier_public_key(database_configuration=database_configuration)
     required_guards, required_guard_functions = (
         _policy_candidate_authority_required_guard_names(postgres=True)
     )
@@ -20848,7 +21055,7 @@ def _validate_policy_authority_owner_apply_function(
                 for function_name, argument_types
                 in _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
             ),
-            _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE,
+            executor_role,
             sorted(
                 name + "(" + ", ".join(types) + ")"
                 for name, types in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
@@ -20889,7 +21096,7 @@ def _validate_policy_authority_owner_apply_function(
         "WHERE role_path.role_oid = "
         "pg_catalog.to_regrole(%s)::pg_catalog.oid "
         "LIMIT 1",
-        (_METADATA_STORE_AUTHORITY_OWNER_ROLE,),
+        (owner_role,),
     ).fetchone()
     server_version_row = cur.execute(
         "SELECT pg_catalog.current_setting('server_version_num') "
@@ -21037,7 +21244,8 @@ def _validate_policy_authority_owner_apply_function(
             },
             "postgresServerVersionNum": server_version_num,
             "sourceContractDigest":
-                _policy_candidate_authority_source_contract_digest(),
+                _policy_candidate_authority_source_contract_digest(
+                    database_configuration=database_configuration),
             "sourceStructuralManifestDigest":
                 source_structural_manifest_digest,
             "sourceRevision":
@@ -21072,7 +21280,7 @@ def _validate_policy_authority_owner_apply_function(
         != _POLICY_AUTHORITY_OWNER_POSTGRES_MAJOR
         or any(
             row["owner_role"]
-            != _METADATA_STORE_AUTHORITY_OWNER_ROLE
+            != owner_role
             or bool(row["owner_can_login"])
             or bool(row["owner_is_superuser"])
             or bool(row["owner_can_create_role"])
@@ -21145,8 +21353,8 @@ def _validate_policy_authority_owner_apply_function(
         or extension_rows
         or len(
             {
-                _POLICY_AUTHORITY_AUDIT_STORE_IDENTITY_DIGEST,
-                _POLICY_AUTHORITY_AUDIT_SIGNER_SPKI_DIGEST,
+                audit_store_identity_digest,
+                audit_signer_spki_digest,
                 verifier_spki_digest,
                 verifier_measurement_digest,
                 verifier_attestation_receipt_digest,
@@ -21174,6 +21382,7 @@ def _validate_policy_authority_owner_apply_function(
                 function_definition_digest=definition_digest,
                 verifier_spki_digest=verifier_spki_digest,
                 verifier_measurement_digest=verifier_measurement_digest,
+                database_configuration=database_configuration,
             ),
         "response_max_bytes":
             _POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES,
@@ -21244,7 +21453,11 @@ def _validate_recorded_policy_authority_owner_contract(
     return contract
 
 
-def _policy_authority_executor_pg_connect_raw():
+def _policy_authority_executor_pg_connect_raw(*, database_configuration):
+    from serverware.authority_database_configuration import require
+    database_configuration = require(database_configuration)
+    expected_role, client_dn, client_serial, issuer_dn, connect_timeout = _authority_database_pins(
+        database_configuration.executor_pins, expected_role=database_configuration.executor_pins[0])
     if (
         os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
         != _POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE
@@ -21259,12 +21472,16 @@ def _policy_authority_executor_pg_connect_raw():
     psycopg, dict_row = _metadata_psycopg()
     conn = psycopg.connect(
         dsn,
-        connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
+        connect_timeout=connect_timeout,
         row_factory=dict_row,
         options=_postgres_bootstrap_options(dsn, error_type=MetadataStoreError),
+        autocommit=False,
     )
     try:
         with conn.cursor() as cur:
+            # This opens the original writer transaction before any admission
+            # SELECT. The handler's nested transaction must remain a savepoint.
+            cur.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
             cur.execute("SET search_path TO pg_catalog")
             namespace = cur.execute(
                 "SELECT pg_catalog.to_regnamespace(%s) IS NOT NULL "
@@ -21282,6 +21499,9 @@ def _policy_authority_executor_pg_connect_raw():
             role = cur.execute(
                 "SELECT current_user AS current_role, "
                 "current_user = session_user AS exact_session, "
+                "pg_catalog.current_setting('transaction_isolation') AS transaction_isolation, "
+                "pg_catalog.current_setting('transaction_read_only') AS read_only, "
+                "pg_catalog.current_setting('transaction_deferrable') AS deferrable, "
                 "role_record.rolsuper, role_record.rolcreaterole, "
                 "role_record.rolcreatedb, role_record.rolreplication, "
                 "role_record.rolbypassrls, "
@@ -21337,8 +21557,11 @@ def _policy_authority_executor_pg_connect_raw():
             if (
                 role is None
                 or role["current_role"]
-                != _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE
+                != expected_role
                 or not bool(role["exact_session"])
+                or role["transaction_isolation"] != "serializable"
+                or role["read_only"] != "off"
+                or role["deferrable"] != "off"
                 or bool(role["rolsuper"])
                 or bool(role["rolcreaterole"])
                 or bool(role["rolcreatedb"])
@@ -21351,24 +21574,17 @@ def _policy_authority_executor_pg_connect_raw():
                 or tls_session is None
                 or not bool(tls_session["ssl"])
                 or tls_session["client_dn"]
-                != os.environ.get(
-                    "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_TLS_CLIENT_DN", ""
-                ).strip()
+                != client_dn
                 or str(tls_session["client_serial"])
-                != os.environ.get(
-                    "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_TLS_CLIENT_SERIAL",
-                    "",
-                ).strip()
+                != client_serial
                 or tls_session["issuer_dn"]
-                != os.environ.get(
-                    "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_TLS_ISSUER_DN", ""
-                ).strip()
+                != issuer_dn
             ):
                 raise MetadataStoreError(
                     "policy-authority executor role or mTLS session is not exact"
                 )
             live_owner_contract = (
-                _validate_policy_authority_owner_apply_function(cur)
+                _validate_policy_authority_owner_apply_function(cur, database_configuration=database_configuration)
             )
             recorded_owner_contracts = cur.execute(
                 "SELECT contract_id, schema_version, source_revision, "
@@ -21398,9 +21614,11 @@ def _policy_authority_executor_pg_connect_raw():
     return conn
 
 
-def _policy_authority_capability_issuer_pg_connect_raw():
+def _policy_authority_capability_issuer_pg_connect_raw(*, database_pins):
     """Return an admitted issuer connection with its writer transaction open.
 
+    Expected role/TLS identity comes from the caller's admitted measured
+    configuration, never from ambient TLS variables or observed DB values.
     Transaction mode is set before the first admission read. The caller owns
     the returned connection context and therefore its commit/rollback/close;
     a later connection.transaction() is only a nested savepoint. Until return,
@@ -21415,13 +21633,16 @@ def _policy_authority_capability_issuer_pg_connect_raw():
             "policy-authority capability issuer credentials are restricted "
             "to the separately measured issuer process"
         )
+    (_database_role, tls_client_dn, tls_client_serial, tls_issuer_dn,
+        connect_timeout) = _authority_database_pins(
+            database_pins, expected_role=_METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE)
     dsn = _policy_authority_dsn_from_descriptor(
         "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN"
     )
     psycopg, dict_row = _metadata_psycopg()
     conn = psycopg.connect(
         dsn,
-        connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
+        connect_timeout=connect_timeout,
         row_factory=dict_row,
         options=_postgres_bootstrap_options(dsn, error_type=MetadataStoreError),
         autocommit=False,
@@ -21506,21 +21727,9 @@ def _policy_authority_capability_issuer_pg_connect_raw():
                 or direct_authority is not None
                 or inherited_authority is not None
                 or not bool(identity["ssl"])
-                or identity["client_dn"]
-                != os.environ.get(
-                    "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_CLIENT_DN",
-                    "",
-                ).strip()
-                or str(identity["client_serial"])
-                != os.environ.get(
-                    "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_CLIENT_SERIAL",
-                    "",
-                ).strip()
-                or identity["issuer_dn"]
-                != os.environ.get(
-                    "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_ISSUER_DN",
-                    "",
-                ).strip()
+                or identity["client_dn"] != tls_client_dn
+                or str(identity["client_serial"]) != tls_client_serial
+                or identity["issuer_dn"] != tls_issuer_dn
             ):
                 raise MetadataStoreError(
                     "policy-authority capability issuer session is not exact"
@@ -22450,7 +22659,7 @@ def _invoke_policy_authority_owner_contract(
     return dict(result["response"])
 
 
-def _assert_postgres_metadata_runtime_ready() -> None:
+def _assert_postgres_metadata_runtime_ready(*, authority_database_configuration=None) -> None:
     with _metadata_pg_connect_raw() as raw_connection:
         with raw_connection.cursor() as cur:
             contract = cur.execute(
@@ -22503,10 +22712,21 @@ def _assert_postgres_metadata_runtime_ready() -> None:
         _rbac_authority_state_from_conn(conn)
     process_mode = os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
     if process_mode == _POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE:
-        with _policy_authority_executor_pg_connect_raw():
+        with _policy_authority_executor_pg_connect_raw(database_configuration=authority_database_configuration):
             pass
     elif process_mode == _POLICY_AUTHORITY_ISSUER_PROCESS_MODE:
-        with _policy_authority_capability_issuer_pg_connect_raw():
+        if authority_database_configuration is not None:
+            from serverware.authority_database_configuration import require
+            issuer_pins = require(authority_database_configuration).issuer_pins
+        else:
+            # Legacy bootstrap/CP boundary only. Measured service callers
+            # supply signed role pins directly; the connector has no fallback.
+            issuer_pins = (_METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE,
+                os.environ.get("SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_CLIENT_DN", "").strip(),
+                os.environ.get("SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_CLIENT_SERIAL", "").strip(),
+                os.environ.get("SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_ISSUER_DN", "").strip(),
+                METADATA_STORE_CONNECT_TIMEOUT_SECONDS)
+        with _policy_authority_capability_issuer_pg_connect_raw(database_pins=issuer_pins):
             pass
 
 
@@ -26501,6 +26721,7 @@ def init_db(
     bootstrap_contract_id: str | None = None,
     local_initial_rbac: dict[str, int] | None = None,
     local_audit_reader_profile: str | None = None,
+    authority_database_configuration=None,
 ) -> None:
     metadata_backend = metadata_store_backend_name()
     audit_backend = audit_store_backend_name()
@@ -26536,7 +26757,7 @@ def init_db(
         and borrowed_offline_connection is None
         and bootstrap_contract_id is None
     ):
-        _assert_postgres_metadata_runtime_ready()
+        _assert_postgres_metadata_runtime_ready(authority_database_configuration=authority_database_configuration)
         return
     if (
         metadata_uses_postgres()
@@ -84014,6 +84235,10 @@ def create_webauthn_challenge(
 
 def row_to_webauthn_challenge(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
+    # Source-derived storage commitments never become public challenge fields.
+    from serverware.authority_challenge_retention import DERIVED_FIELDS
+    for field in DERIVED_FIELDS:
+        item.pop(field, None)
     item["payload"] = loads(item.pop("payload_json"), {})
     return item
 

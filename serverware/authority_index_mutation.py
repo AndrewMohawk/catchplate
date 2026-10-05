@@ -105,6 +105,14 @@ class IndexMutationResult:
     metrics: IndexMutationMetrics
 
 
+@dataclass(frozen=True, slots=True)
+class _IndexMutationOverlay:
+    """Privately retained actual fold nodes, never a verification input."""
+
+    result: IndexMutationResult
+    nodes: dict[str, CountedNode | None]
+
+
 def _limits(value: IndexMutationLimits) -> IndexMutationLimits:
     if type(value) is not IndexMutationLimits:
         raise IndexMutationError("index mutation limits have an unexpected exact type")
@@ -237,13 +245,19 @@ def _phase_work(terminals, opened) -> int:
     return hashes
 
 
-def _fold(profile, terminals, opened) -> CountedNode:
+def _fold(profile, terminals, opened, *, retained=None) -> CountedNode:
     nodes = {path: leaf_node(profile, record) if type(record) is IndexLeaf
              else CountedNode(record.digest, record.count) for path, record in terminals.items()}
+    if retained is not None:
+        # Actual immutable node references, not another hash/JSON pass. Only
+        # the private raw-input wrapper supplies this fresh internal map.
+        retained.update(nodes)
     root = None
     for prefix in opened:
         children = tuple(nodes.pop(prefix + digit, None) for digit in _NIBBLES)
         node = branch_node(profile, prefix, children)
+        if retained is not None:
+            retained[prefix] = node if node.count else None
         # An opened absence branch has a real empty hash but is represented as
         # None in its parent, the counted contract's only empty-child spelling.
         if node.count:
@@ -255,10 +269,11 @@ def _fold(profile, terminals, opened) -> CountedNode:
     return root
 
 
-def evaluate_index_mutations(
+def _evaluate_index_mutations(
     *, profile: IndexProfile, before_root: CountedNode, changes: tuple[IndexLeafChange, ...],
     frontier: tuple[IndexLeaf | OpaqueSubtree, ...], limits: IndexMutationLimits,
-) -> IndexMutationResult:
+    retain_nodes: bool,
+) -> _IndexMutationOverlay:
     """Verify every old target path, then genuinely fold its changed tree.
 
     Untouched opaque records must be immediate children of opened ancestors,
@@ -269,6 +284,8 @@ def evaluate_index_mutations(
     their own; the complete before digest AND count must match before success.
     """
     limits = _limits(limits)
+    if type(retain_nodes) is not bool:
+        raise IndexMutationError("index mutation private capture selection changed")
     try:
         profile = validate_profile(profile)
         before_root = validate_counted_node(before_root)
@@ -284,9 +301,35 @@ def evaluate_index_mutations(
     actual_before = _fold(profile, before, opened)
     if actual_before != before_root:
         raise IndexMutationError("index mutation reconstructed before root or count differs")
-    actual_after = _fold(profile, after, opened)
-    return IndexMutationResult(actual_before, actual_after, IndexMutationMetrics(
+    retained = {} if retain_nodes else None
+    actual_after = (_fold(profile, after, opened) if retained is None
+                    else _fold(profile, after, opened, retained=retained))
+    if retained is not None:
+        for change in changes:
+            if change.after is None:
+                retained[change.key] = None
+    result = IndexMutationResult(actual_before, actual_after, IndexMutationMetrics(
         changes=len(changes), frontier_entries=len(frontier), opened_nodes=len(opened),
         child_slots=2 * 16 * len(opened), before_hashes=before_hashes, after_hashes=after_hashes,
         input_bytes=budget.input_bytes,
     ))
+    return _IndexMutationOverlay(result, {} if retained is None else retained)
+
+
+def evaluate_index_mutations(*, profile: IndexProfile, before_root: CountedNode,
+        changes: tuple[IndexLeafChange, ...], frontier: tuple[IndexLeaf | OpaqueSubtree, ...],
+        limits: IndexMutationLimits) -> IndexMutationResult:
+    """Preserve the public raw-input fold and its original result/limits."""
+    return _evaluate_index_mutations(profile=profile, before_root=before_root,
+        changes=changes, frontier=frontier, limits=limits, retain_nodes=False).result
+
+
+def _evaluate_index_mutations_overlay(*, profile, before_root, changes, frontier, limits):
+    """Reconstruct both roots from originals and retain the actual NEW nodes.
+
+    These conditional producer observations never replace raw before proofs
+    during later replay. No caller supplied node map or successful result is
+    accepted, and the sole fold still admits every original limit and hash.
+    """
+    return _evaluate_index_mutations(profile=profile, before_root=before_root,
+        changes=changes, frontier=frontier, limits=limits, retain_nodes=True)

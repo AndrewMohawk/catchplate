@@ -61,6 +61,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from serverware import authority_contract
+from serverware import authority_recovery_configuration as recovery_configuration
+from serverware import authority_challenge_policy as challenge_maintenance_policy
 from serverware.authority_denial_diagnostics import report_denial as _denial_diagnostics
 from serverware.postgres_options import bounded_connection_options
 from serverware import authority_oauth_activation as oauth_activation
@@ -126,6 +128,7 @@ from serverware import authority_revocation_planner_custody_transport as custody
 from serverware import authority_revocation_custody_read_transport as custody_read_transport
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
+from serverware import authority_recovery_history_transport as retained_page_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
@@ -1243,6 +1246,7 @@ class MeasuredConfiguration:
             "executorTlsClientDn",
             "executorTlsClientSerial",
             "executorTlsIssuerDn",
+            "verifierCredentialIssuanceDigest",
             "issuerCredentialIssuanceDigest",
             "executorCredentialIssuanceDigest",
         }
@@ -1259,7 +1263,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
+            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1301,6 +1305,7 @@ class MeasuredConfiguration:
                     "queryManifestDigest",
                     "generationBindingDigest",
                     "executorSessionIdentityDigest",
+                    "verifierCredentialIssuanceDigest",
                     "issuerCredentialIssuanceDigest",
                     "executorCredentialIssuanceDigest",
                 )
@@ -1318,6 +1323,21 @@ class MeasuredConfiguration:
         )
         configuration._verify_generation_binding()
         configuration._verify_role_topology()
+        if challenge_maintenance_policy.FIELD in payload:
+            try:
+                challenge_maintenance_policy._shape(payload[challenge_maintenance_policy.FIELD])
+            except ValueError as exc:
+                raise AuthorityServiceError("authority challenge maintenance policy is invalid") from exc
+        if recovery_configuration.FIELD in payload:
+            try:
+                if recovery_configuration.configuration(
+                    payload[recovery_configuration.FIELD], webauthn=payload["webauthn"]
+                ) is None:
+                    raise ValueError("explicit recovery selection cannot be null")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AuthorityServiceError(
+                    "authority recovery original-custody selection is invalid"
+                ) from exc
         if evidence_policy.FIELD in payload:
             try:
                 evidence_policy.validate_policy(
@@ -3910,6 +3930,17 @@ class AuthorityProcess:
         }
 
     def _reject_wrong_credentials(self) -> None:
+        recovery_selected = recovery_configuration.FIELD in self.configuration.payload
+        recovery_expected = recovery_configuration.CREDENTIAL_NAMES if (
+            self.role_name == "verifier" and recovery_selected
+        ) else frozenset()
+        for name in recovery_configuration.CREDENTIAL_NAMES:
+            if (bool(os.environ.get(name)) != (name in recovery_expected)
+                    or os.environ.get(name[:-3] + "_PATH")
+                    or os.environ.get(name[:-3])):
+                raise AuthorityServiceError(
+                    "authority recovery descriptors are not the exact selected verifier set"
+                )
         allowed = {
             "verifier": {
                 "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"
@@ -4000,6 +4031,59 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "authority planner-writer signer credential set is not exact"
             )
+
+    def _borrow_recovery_custody(self, *, metadata_connection, deadline_ns, work):
+        """Borrow this verifier's original selection during one held read.
+
+        This private integration is not a serving purpose or witness verdict.
+        The successor caller owns the actual metadata transaction and original
+        deadline, and closes the returned borrower before leaving that scope.
+        No descriptor is duplicated, replaced, exported or closed here.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+
+        if (type(self) is not AuthorityProcess or self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration
+                or type(work) is not _ValidationWork
+                or type(deadline_ns) is not int
+                or not time.monotonic_ns() < deadline_ns < 2**63):
+            raise AuthorityServiceError("recovery custody requires the actual current verifier")
+        configuration = self.configuration
+        authority_launch_guard.require_active("verifier")
+        generation = dict(authority_launch_guard.generation())
+        names = recovery_configuration.CREDENTIAL_NAMES | {
+            "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
+            "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
+        }
+        descriptors = {}
+        for name in names:
+            raw = os.environ.get(name)
+            if (type(raw) is not str or not raw.isascii() or not raw.isdecimal()
+                    or len(raw) > 10 or str(int(raw)) != raw or int(raw) < 3):
+                raise AuthorityServiceError("recovery original descriptor slot is not canonical")
+            descriptors[name] = int(raw)
+        original_pid, original_limits = os.getpid(), work.limits
+
+        def check_owner():
+            if (os.getpid() != original_pid or self.configuration is not configuration
+                    or self.role_name != "verifier"
+                    or self.process_mode != "policy-authority-verifier"
+                    or work.limits is not original_limits
+                    or time.monotonic_ns() >= deadline_ns
+                    or metadata_connection.closed
+                    or dict(authority_launch_guard.generation()) != generation):
+                raise AuthorityServiceError("recovery original invocation owner changed")
+            authority_launch_guard.require_active("verifier")
+
+        check_owner()
+        return recovery_configuration._recovery_from_configuration_on_work(
+            payload=configuration.payload, configuration_digest=configuration.digest,
+            generation=generation, runtime_role_identities=configuration.runtime_role_identities,
+            configuration_owner=configuration, observed_descriptors=descriptors,
+            metadata_connection=metadata_connection, original_deadline_ns=deadline_ns,
+            check=check_owner, work=work,
+        )
 
     def _consume_attestation_release(self) -> dict[str, Any]:
         evidence = self.configuration.attestation_evidence
@@ -4542,6 +4626,18 @@ class AuthorityProcess:
         return verifier.verify_handoff(envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
             context=owned_context, root_inventory=inventory, work=work)
+
+    def _challenge_maintenance_producer(self, *, operation, work):
+        """Actual measured planner signer/read settings, without SQL or dispatch."""
+        from serverware import authority_challenge_service as challenges
+
+        return challenges._producer_on_work(self, operation=operation, work=work)
+
+    def _challenge_maintenance_verifier(self, *, operation, work):
+        """Actual verifier role and pinned planner key, no currentness verdict."""
+        from serverware import authority_challenge_service as challenges
+
+        return challenges._verifier_on_work(self, operation=operation, work=work)
 
     def _webauthn_transition_planner(self, *, operation, work):
         """Construct a fixed configured successor reader without opening SQL."""
@@ -9836,7 +9932,11 @@ class AuthorityProcess:
             raise AuthorityServiceError("issuer capability digest changed")
         from serverware import db
 
-        with db._policy_authority_capability_issuer_pg_connect_raw() as connection:
+        with db._policy_authority_capability_issuer_pg_connect_raw(
+            database_pins=tuple(self.role_config[name] for name in (
+                "databaseRole", "tlsClientDn", "tlsClientSerial", "tlsIssuerDn",
+                "databaseConnectTimeoutSeconds")),
+        ) as connection:
             # Admission already owns the outer SERIALIZABLE writer
             # transaction. This savepoint and the connection context both
             # remain open until the returned identity has been checked.
@@ -9898,7 +9998,11 @@ class AuthorityProcess:
         receipt_json = _canonical(receipt).decode("ascii")
         from serverware import db
 
-        with db._policy_authority_capability_issuer_pg_connect_raw() as connection:
+        with db._policy_authority_capability_issuer_pg_connect_raw(
+            database_pins=tuple(self.role_config[name] for name in (
+                "databaseRole", "tlsClientDn", "tlsClientSerial", "tlsIssuerDn",
+                "databaseConnectTimeoutSeconds")),
+        ) as connection:
             # Keep the original admitted transaction through result checking;
             # a mismatched receipt must not be discovered after its commit.
             with connection.transaction():
@@ -10016,11 +10120,12 @@ class AuthorityProcess:
         from serverware import db
 
         from serverware import control_plane_rbac_currentness as rbac_currentness
+        from serverware.authority_database_configuration import from_measured_configuration
+        database_configuration = from_measured_configuration(self.configuration)
         with rbac_currentness.execution_guard(typed_request, result, payload["capabilityId"], payload["deadlineMonotonicNs"]) as rbac_guard:
-            with db._policy_authority_executor_pg_connect_raw() as raw:
+            with db._policy_authority_executor_pg_connect_raw(database_configuration=database_configuration) as raw:
                 with raw.transaction():
                     with raw.cursor() as cursor:
-                        cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
                         if rbac_guard is not None:
                             rbac_owner, rbac_head = rbac_guard
                             rbac_roots = rbac_currentness.metadata_roots(cursor, rbac_owner)
@@ -10029,7 +10134,8 @@ class AuthorityProcess:
                     receipt_json = db.execute_authority_v9(
                         capability_id=payload["capabilityId"], envelope_id=payload["envelopeId"],
                         planner_transaction_id=payload["plannerTransactionId"], exact_request_bytes=exact_request,
-                        exact_result_bytes=exact_result, deadline_monotonic_ns=payload["deadlineMonotonicNs"], connection=connection)
+                        exact_result_bytes=exact_result, deadline_monotonic_ns=payload["deadlineMonotonicNs"], connection=connection,
+                        expected_executor_role=database_configuration.executor_pins[0])
                     if time.monotonic_ns() >= payload["deadlineMonotonicNs"]:
                         raise AuthorityServiceError("v9 executor transaction crossed its deadline")
         try:
@@ -10523,12 +10629,25 @@ class AuthorityServer:
         try:
             writer_transport._check_deadline(deadline_ns)
             uid, gid, _pid = _peer_identity(connection)
+            writer_reservation_peer = False
             if uid != self.peer_uid or gid != self.peer_gid:
-                raise AuthorityServiceError(
-                    "authority socket peer identity is not allowed"
-                )
+                # The writer's configured primary peer remains the planner.
+                # The verifier has one additional canonical-envelope purpose,
+                # never access to the planner's detached custody protocols.
+                if self.process.role_name != "planner-writer":
+                    raise AuthorityServiceError(
+                        "authority socket peer identity is not allowed"
+                    )
+                verifier = self.process.configuration.role("verifier")
+                if (uid != int(verifier["serviceUid"])
+                        or gid != int(verifier["serviceGid"])):
+                    raise AuthorityServiceError(
+                        "authority socket peer identity is not allowed"
+                    )
+                writer_reservation_peer = True
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
+                retained_page_transport.REQUEST_MAGIC,
                 *custody_caller_transport.REQUEST_MAGICS,
                 *custody_reconcile_transport.REQUEST_MAGICS,
                 custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
@@ -10558,11 +10677,26 @@ class AuthorityServer:
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
             from serverware import authority_public_revocation_transport as public_revocation_wire
+            if writer_reservation_peer and (
+                    detached or prefix in public_revocation_wire.REQUEST_MAGICS):
+                detached = True
+                raise AuthorityServiceError(
+                    "verifier writer peer cannot use detached protocols"
+                )
             if prefix in public_revocation_wire.REQUEST_MAGICS:
                 from serverware import authority_public_revocation_service
                 detached = True
                 authority_public_revocation_service.serve_process(
                     self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix == retained_page_transport.REQUEST_MAGIC:
+                # The writer's verifier exception was refused above. This
+                # fixed page route therefore keeps verifier -> planner ->
+                # writer custody; it grants no verifier SQL/read privilege.
+                from serverware import authority_challenge_page_service
+
+                authority_challenge_page_service.serve_process(self.process, connection,
+                    deadline_ns=deadline_ns, prefix=prefix)
                 return
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
             if prefix == registration_finalization_execution_caller.REQUEST_MAGIC:
@@ -10650,6 +10784,12 @@ class AuthorityServer:
                 raise AuthorityServiceError("authority message is not JSON") from exc
             if not isinstance(request, dict) or _canonical(request) != encoded:
                 raise AuthorityServiceError("authority message is not canonical")
+            if self.process.role_name == "planner-writer" and (
+                    (request.get("purpose") == "reserve-execution-envelope")
+                    != writer_reservation_peer):
+                raise AuthorityServiceError(
+                    "writer canonical purpose does not match its exact peer"
+                )
             response = self.process.handle(request)
             writer_transport._check_deadline(deadline_ns)
             _send_message_until(connection, response, deadline_ns=deadline_ns)

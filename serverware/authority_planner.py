@@ -13,6 +13,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from serverware import authority_audit_capacity
+from serverware import authority_challenge_retention
+from serverware import authority_challenge_id
 from serverware.authority_audit_trace import (
     AuditTraceBudget,
     AuditTraceError,
@@ -126,20 +128,7 @@ WEBAUTHN_CHALLENGE_PLANNING_SCAN_MAX = (
 WEBAUTHN_CHALLENGE_OPERATIONS = (
     authority_transition_registry.WEBAUTHN_CHALLENGE_OPERATIONS
 )
-WEBAUTHN_CHALLENGE_ROW_FIELDS = frozenset(
-    {
-        "id",
-        "challenge",
-        "challenge_type",
-        "user_id",
-        "scope_key",
-        "approval_request_id",
-        "payload_json",
-        "expires_at",
-        "used_at",
-        "created_at",
-    }
-)
+WEBAUTHN_CHALLENGE_ROW_FIELDS = authority_challenge_retention.ROW_FIELDS
 AUTHORITATIVE_INPUT_FIELDS = frozenset(
     {
         "authorityRootSetBeforeDigest",
@@ -308,7 +297,8 @@ def _webauthn_public_row(row: Mapping[str, Any]) -> dict[str, Any]:
         raise AuthorityPlannerError(
             "WebAuthn challenge payload JSON is invalid"
         ) from exc
-    public = dict(row)
+    # Inline commitments are storage/proof data, not a new browser API field.
+    public = {field: row[field] for field in authority_challenge_retention.BASE_FIELDS}
     public.pop("payload_json")
     public["payload"] = payload
     return public
@@ -628,19 +618,30 @@ def _query_trace_key(
 
 class PlannerTrace:
     def __init__(self, *, operation: str, _complete_queries: bool = False,
-                 _counted_writes: bool = False) -> None:
+                 _counted_writes: bool = False, _challenge_successor: bool = False,
+                 _recovery_successor: bool = False) -> None:
         if (type(_complete_queries) is not bool
                 or _complete_queries and operation not in (authority_complete_query.OPERATION,
                     authority_complete_query.REGISTRATION_OPERATION, authority_complete_query.STAGE_OPERATION,
                     authority_complete_query.ACTIVATION_OPERATION, authority_complete_query.DELIVERY_OPERATION)
                 or type(_counted_writes) is not bool
                 or _counted_writes and (operation != authority_transition_webauthn_completion.OPERATION
-                                       or _complete_queries)):
+                                       or _complete_queries)
+                or type(_challenge_successor) is not bool
+                or _challenge_successor and (operation not in authority_index_heads.CHALLENGE_OPERATIONS
+                                             or _complete_queries or _counted_writes)
+                or type(_recovery_successor) is not bool
+                or _recovery_successor and (operation not in authority_index_heads.RECOVERY_HISTORY_OPERATIONS
+                    or _complete_queries or _counted_writes or _challenge_successor)):
             raise AuthorityPlannerError("complete trace scope is not source admitted")
         spec = authority_contract.operation_spec(operation)
         self.operation = operation
         self._complete_queries = _complete_queries
         self._counted_writes = _counted_writes
+        # Only the separate source-fixed challenge owner requests this scope.
+        # The public v3 planner still constructs the default-deny trace.
+        self._challenge_successor = _challenge_successor
+        self._recovery_successor = _recovery_successor
         self.business_reads = frozenset(
             set(spec["businessReads"]) | set(spec["businessWrites"])
         )
@@ -654,7 +655,8 @@ class PlannerTrace:
             | set(spec["frameworkPreconditions"])
             | set(spec["frameworkWrites"])
             | ({authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
-                authority_index_reader.NODE_TABLE} if _complete_queries or _counted_writes else set())
+                authority_index_reader.NODE_TABLE}
+               if _complete_queries or _counted_writes or _challenge_successor or _recovery_successor else set())
         )
         self.allowed_writes = frozenset(
             set(spec["businessWrites"]) | set(spec["frameworkWrites"])
@@ -669,13 +671,31 @@ class PlannerTrace:
             )
         if (table in {authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
                       authority_index_reader.NODE_TABLE}
-                or isinstance(key, Mapping) and key.get("profile") == authority_index_trace.PRIMARY_READ_PROFILE):
-            if not self._complete_queries and not self._counted_writes:
+                or isinstance(key, Mapping) and key.get("profile") in {
+                    authority_index_trace.PRIMARY_READ_PROFILE,
+                    "serverware.policyAuthorityChallengePrimaryRead/v1",
+                    authority_index_trace.RECOVERY_HISTORY_PRIMARY_READ_PROFILE}):
+            if not any((self._complete_queries, self._counted_writes,
+                        self._challenge_successor, self._recovery_successor)):
                 raise AuthorityPlannerError("complete trace profile has no current planner admission")
             try:
                 if (type(key) is dict
                         and key.get("profile") == authority_index_trace.MUTATION_READ_PROFILE):
                     authority_index_trace.validate_mutation_read_trace(self.operation, table, key)
+                elif self._challenge_successor:
+                    if table == authority_index_heads.HEAD_TABLE:
+                        authority_index_heads.validate_head_trace_key(
+                            self.operation, key, include_write_heads=True)
+                    elif type(key) is dict and key.get("profile") == authority_index_trace.COUNT_READ_PROFILE:
+                        authority_index_trace.validate_count_read_trace(self.operation, table, key)
+                    else:
+                        authority_index_trace.validate_challenge_read_trace(self.operation, table, key)
+                elif self._recovery_successor:
+                    if table == authority_index_heads.HEAD_TABLE:
+                        authority_index_heads.validate_head_trace_key(
+                            self.operation, key, include_write_heads=True)
+                    else:
+                        authority_index_trace.validate_recovery_history_read_trace(self.operation, table, key)
                 elif self._counted_writes:
                     if table != authority_index_heads.HEAD_TABLE:
                         raise AuthorityPlannerError("completion trace cannot admit complete-range reads")
@@ -1389,7 +1409,7 @@ class TypedTransitionPlanningProgram:
             )
         try:
             finalized_mutations = authority_audit_capacity.finalize_capacity(
-                context, transition.mutations,
+                context, authority_challenge_retention.expand_mutations(context, transition.mutations),
             )
             total_work_units = authority_audit_capacity.transition_work_units(
                 operation=operation,
@@ -1530,6 +1550,7 @@ class WebAuthnChallengePlanningProgram:
             "businessIntent",
         }
         challenge_id = arguments.get("challenge_id")
+        authority_challenge_id.require_generated(challenge_id)
         challenge = arguments.get("challenge")
         challenge_type = arguments.get("challenge_type")
         user_id = arguments.get("user_id")
@@ -1602,6 +1623,7 @@ class WebAuthnChallengePlanningProgram:
             "used_at": None,
             "created_at": created_at_value,
         }
+        expected_row = authority_challenge_retention.derive_row(expected_row, None, None, None)
         if (
             set(expected_row) != WEBAUTHN_CHALLENGE_ROW_FIELDS
             or expires_at - created_at

@@ -81,7 +81,7 @@ class ConfigurationFixture:
                 "signingSpkiDigest": spki(key), "responseSigningSpkiDigest": spki(key),
                 "requestTimeoutSeconds": 1.25, "databaseConnectTimeoutSeconds": 2.5}
         roles["planner"]["plannerSessionIdentityDigest"] = planner_identity["sessionIdentityDigest"]
-        roles["issuer"] = {"processMode": "policy-authority-issuer", "databaseRole": "fixture_issuer",
+        roles["issuer"] = {"processMode": "policy-authority-issuer", "databaseRole": "serverware_policy_capability_issuer",
             "tlsClientDn": "CN=fixture-issuer", "tlsClientSerial": "73", "tlsIssuerDn": "CN=fixture-ca",
             "measurementDigest": oracle.sha(b"configured issuer measurement"),
             "attestationReceiptDigest": oracle.sha(b"configured issuer attestation"),
@@ -216,7 +216,7 @@ class RevocationConfigurationTests(unittest.TestCase):
             return configured._issue_invocation_on_configuration(owner._snapshot_configuration(),
                 envelope_bytes=fixture.invocation.raw, work=work, opener=opener)
 
-    def test_real_key_decoding_and_independent_configuration_sessions_map_exact_eleven_pins(self):
+    def test_real_key_decoding_and_independent_configuration_sessions_map_exact_twelve_pins(self):
         fixture = ConfigurationFixture()
         expected_work = independent_configuration_work(fixture)["total"]
         work = self.work(expected_work)
@@ -230,7 +230,9 @@ class RevocationConfigurationTests(unittest.TestCase):
             tuple(expected["expected_verifier_identity"][name] for name in identities),
             expected["expected_issuer_session_identity_digest"], tuple(expected["issuer_pins"][name] for name in pins),
             expected["expected_configuration_digest"], expected["expected_witness_identity_digest"],
-            expected["expected_generation_sequence"], expected["expected_generation_digest"])
+            expected["expected_generation_sequence"], expected["expected_generation_digest"],
+            tuple(fixture.payload["roles"]["issuer"][name] for name in (
+                "databaseRole", "tlsClientDn", "tlsClientSerial", "tlsIssuerDn", "databaseConnectTimeoutSeconds")))
         actual = owner._snapshot_configuration()
         self.assertEqual(tuple(raw_key(key) for key in actual[:3]), tuple(raw_key(key) for key in independent[:3]))
         self.assertEqual(actual[3:], independent[3:])

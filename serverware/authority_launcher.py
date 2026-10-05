@@ -86,7 +86,7 @@ ROLE_IDENTITIES = {
 }
 ROLE_SUPPLEMENTARY_GIDS = {
     "runtime": (65520,),
-    "verifier": (65518, 65521, 65522, 65523),
+    "verifier": (65518, 65519, 65521, 65522, 65523),
     "planner": (65519,),
     "planner-writer": (),
     "issuer": (65523,),
@@ -180,6 +180,16 @@ for _rbac_role in ("verifier", "planner", "executor"):
         "SERVERWARE_RBAC_WITNESS_CONFIG_FD", "SERVERWARE_RBAC_WITNESS_ROOT_FD", "SERVERWARE_RBAC_WITNESS_TLS_ROOT_FD",
         "SERVERWARE_RBAC_WITNESS_CLIENT_CERTIFICATE_FD", "SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD",
     })
+
+# Kept literal in this stdlib-only measured entrypoint. The focused recovery
+# contract check joins this roster to authority_recovery_configuration.
+RECOVERY_CREDENTIAL_DESCRIPTOR_NAMES = frozenset({
+    "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY_FD",
+    "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN_FD",
+    "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_TLS_ROOT_FD",
+    "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_CLIENT_CERTIFICATE_FD",
+    "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_CLIENT_KEY_FD",
+})
 
 
 class LaunchError(RuntimeError):
@@ -2503,12 +2513,17 @@ def _enter(
     trusted_host_local: bool,
     native_readers: contextlib.ExitStack,
     public_revocation: bool = False,
+    webauthn_recovery: bool = False,
     local_admission: tuple[int, str, int] | None = None,
 ) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise LaunchError("public revocation launch selection is not a fixed terminal role")
     expected_credentials = ROLE_CREDENTIAL_DESCRIPTOR_NAMES[role] | (
         {"SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD"} if public_revocation else set())
+    if type(webauthn_recovery) is not bool or webauthn_recovery and role != "verifier":
+        raise LaunchError("recovery originals require the fixed verifier role")
+    if webauthn_recovery:
+        expected_credentials |= RECOVERY_CREDENTIAL_DESCRIPTOR_NAMES
     flags = sys.flags
     required_isolation_flags = ("-I", "-P", "-s", "-S", "-E")
     original_arguments = list(sys.orig_argv)
@@ -3163,6 +3178,12 @@ def main(argv: list[str] | None = None) -> int:
     required_assignments = (
         ROLE_CREDENTIAL_DESCRIPTOR_NAMES[args.role] | {BOOTSTRAP_CONTROL_NAME}
     )
+    recovery_names = {assignment.partition("=")[0] for assignment in args.descriptor}
+    recovery_names &= RECOVERY_CREDENTIAL_DESCRIPTOR_NAMES
+    if recovery_names and (args.role != "verifier" or recovery_names != RECOVERY_CREDENTIAL_DESCRIPTOR_NAMES):
+        raise LaunchError("recovery originals require the complete fixed verifier roster")
+    if recovery_names:
+        required_assignments |= RECOVERY_CREDENTIAL_DESCRIPTOR_NAMES
     if args.public_webauthn_revocation:
         required_assignments |= {"SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD"}
     if args.role in RUNTIME_EVIDENCE_ROLES:
@@ -3233,6 +3254,7 @@ def main(argv: list[str] | None = None) -> int:
             trusted_host_local=args.trusted_host_local,
             native_readers=native_readers,
             public_revocation=args.public_webauthn_revocation,
+            webauthn_recovery=bool(recovery_names),
             local_admission=local_admission,
         )
 

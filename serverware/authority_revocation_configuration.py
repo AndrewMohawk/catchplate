@@ -322,6 +322,8 @@ def _issuer_from_configuration_on_work(*, payload, configuration_digest, generat
         issuance = owned["issuerCredentialIssuanceDigest"]
         issuer_frames = (issuer["databaseRole"], issuer["tlsClientDn"], issuer["tlsClientSerial"],
             issuer["tlsIssuerDn"], issuer_measurement, issuer_receipt, issuance)
+        issuer_database_pins = tuple(issuer[name] for name in (
+            "databaseRole", "tlsClientDn", "tlsClientSerial", "tlsIssuerDn", "databaseConnectTimeoutSeconds"))
         planner_encoded, planner_spki = planner["signingPublicKeyBase64Url"], planner["signingSpkiDigest"]
         verifier_encoded, verifier_spki = verifier["signingPublicKeyBase64Url"], verifier["signingSpkiDigest"]
         witness_encoded, witness_identity = witness["signingPublicKeyBase64Url"], witness["identityDigest"]
@@ -345,7 +347,8 @@ def _issuer_from_configuration_on_work(*, payload, configuration_digest, generat
                 "credentialIssuanceDigest": issuance, "maximumAgeNs": maximum_age_ns,
                 "maximumClockSkewNs": maximum_clock_skew_ns},
             expected_configuration_digest=configuration_digest, expected_witness_identity_digest=witness_identity,
-            expected_generation_sequence=generation_sequence, expected_generation_digest=generation_digest)
+            expected_generation_sequence=generation_sequence, expected_generation_digest=generation_digest,
+            database_pins=issuer_database_pins)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RevocationConfigurationError):
             raise

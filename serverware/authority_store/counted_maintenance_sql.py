@@ -14,8 +14,8 @@ from serverware import authority_index_contract as contract
 from serverware import authority_index_projection as projection
 
 
-# Fixed ceiling for the five activation-delivery profiles, not a caller budget.
-MAX_EVENT_PROFILES = 5
+# Exact source fanout: nine challenge profiles, not a proof/work cap increase.
+MAX_EVENT_PROFILES = 9
 COUNTED_MAINTENANCE_FUNCTION_NAMES = (
     "serverware_policy_authority_counted_apply_event",
 )

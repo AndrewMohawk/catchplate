@@ -193,7 +193,7 @@ ROLE_IDENTITIES = {
 ROLE_SUPPLEMENTARY_GIDS = {
     "control-plane": (65530, 65524),
     "runtime": (65520,),
-    "verifier": (65518, 65521, 65522, 65523),
+    "verifier": (65518, 65519, 65521, 65522, 65523),
     "planner": (65519,),
     "planner-writer": (),
     "issuer": (65523,),

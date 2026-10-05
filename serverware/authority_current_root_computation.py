@@ -78,7 +78,15 @@ def _snapshot_shape(document):
             shape._digest(document[name])
         elif document[name] is not None:
             raise CurrentRootComputationError("computation snapshot invented another plan family's authority")
-    maxima = replay._frame_maxima(document["operation"])
+    if document["operation"] == "webauthn.challenge.maintain":
+        # Only the snapshot grammar admits this streamed raw3 family. Its
+        # genuine producer/replay is separate from generic aggregate replay.
+        from serverware import authority_challenge_plan as maintenance_plan
+
+        maxima = (maintenance_plan.MAX_PARENT_BYTES, maintenance_plan.requests.MAX_REQUEST_BYTES,
+            maintenance_plan.manifests.MAX_MANIFEST_BYTES)
+    else:
+        maxima = replay._frame_maxima(document["operation"])
     expected_count = len(maxima)
     frames = document["originalFrames"]
     if type(frames) is not list or len(frames) != expected_count:

@@ -27,7 +27,7 @@ COUNTED_SOURCE_TABLES = (
 )
 _RELATIONS = tuple(sorted((*COUNTED_SOURCE_TABLES, *COUNTED_STORE_TABLES)))
 _RELATION_READ_LIMIT = len(_RELATIONS) + 1
-_GENESIS_HEAD_COUNT = 17
+_GENESIS_HEAD_COUNT = 24
 _HEAD_READ_LIMIT = _GENESIS_HEAD_COUNT + 1
 _CATALOG_FIELDS = frozenset({"relation_name", "relation_oid", "relation_kind",
                              "persistence", "is_partition", "has_inheritance"})

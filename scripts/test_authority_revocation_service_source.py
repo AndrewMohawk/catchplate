@@ -238,10 +238,11 @@ class RevocationServiceSourceTests(unittest.TestCase):
         options = {keyword.arg: keyword.value for keyword in owners[0].keywords}
         self.assertEqual(set(options), {"planner_public_key", "verifier_public_key", "witness_public_key",
             "expected_planner_identity", "expected_verifier_identity", "expected_issuer_session_identity_digest",
-            "issuer_pins", "expected_configuration_digest", "expected_witness_identity_digest",
+            "issuer_pins", "database_pins", "expected_configuration_digest", "expected_witness_identity_digest",
             "expected_generation_sequence", "expected_generation_digest"})
         for name, value in (("planner_public_key", "planner_key"), ("verifier_public_key", "verifier_key"),
                 ("witness_public_key", "witness_key"), ("expected_issuer_session_identity_digest", "issuer_session"),
+                ("database_pins", "issuer_database_pins"),
                 ("expected_configuration_digest", "configuration_digest"), ("expected_generation_sequence", 'launch["sequence"]'),
                 ("expected_generation_digest", 'launch["digest"]')):
             self.shape(options[name], value)

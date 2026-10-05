@@ -15,6 +15,7 @@ from typing import Any
 
 from serverware import authority_complete_query as complete
 from serverware import authority_index_projection as projection
+from serverware import authority_challenge_id as challenge_ids
 from serverware import authority_index_range as ranges
 from serverware.authority_index_contract import (
     I64_MAX, KEY_NIBBLES, CountedNode, IndexLeaf, IndexRangeError, KeyInterval,
@@ -557,7 +558,17 @@ def _read_complete_frontier_body(
             work.charge(hashes=1, input_bytes=16)
         key_digest = framed_digest("serverware.policyAuthorityBusinessKey/v1",
                                    profile.table.encode("ascii"), canonical_bytes({"id": primary_id}))
-        if key_digest != leaf.primary_key_digest or leaf.key[-64:] != key_digest[7:]:
+        if projection._definition(profile.index_id).order_codec.endswith(
+                "/generated-challenge-id-text-order"):
+            # Fresh source profiles retain the independent BusinessKey payload
+            # but use the real generated ID's text order, never a hash tie.
+            try:
+                suffix_matches = leaf.key[-80:] == challenge_ids.order_suffix(primary_id)
+            except ValueError as exc:
+                raise IndexReadError("counted challenge lookup violates its fresh ID contract") from exc
+        else:
+            suffix_matches = leaf.key[-64:] == key_digest[7:]
+        if key_digest != leaf.primary_key_digest or not suffix_matches:
             raise IndexReadError("counted-index primary lookup differs from its BusinessKey commitment")
         previous = leaf.key
         primary_digests.add(key_digest)

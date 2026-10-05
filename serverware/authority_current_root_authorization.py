@@ -332,8 +332,17 @@ def _request_content(payload, work):
         ledger = capture._SharedLedger(work)
         before = capability._wire(payload["beforeVector"], ledger, vector.MAX_BYTES, vector.MAX_NODES)
         after = capability._wire(payload["afterVector"], ledger, vector.MAX_BYTES, vector.MAX_NODES)
-        delta._validate_on_work(operation=operation, before_vector_bytes=before,
-            after_vector_bytes=after, work=work)
+        if operation == "webauthn.challenge.maintain":
+            # Source-fixed six-phase compatibility only. Each phase retains
+            # its original proof/mutation caps; execution still needs genuine
+            # raw-page replay and its protected single-commit stream owner.
+            from serverware import authority_challenge_current_root as maintenance_delta
+
+            maintenance_delta.validate_necessary_delta(before_vector_bytes=before,
+                after_vector_bytes=after, work=work)
+        else:
+            delta._validate_on_work(operation=operation, before_vector_bytes=before,
+                after_vector_bytes=after, work=work)
     else:
         original = transport._decode(payload["writerReceiptBase64Url"],
             payload["writerReceiptByteCount"], MAX_WRITER_RECEIPT_BYTES, work)

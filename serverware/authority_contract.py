@@ -308,6 +308,10 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = _AUDIT_COUNTER_REPLACEMENT_OPERATIONS | retirement_catalog.OPERATIONS
+_AUDIT_COUNTER_REPLACEMENT_OPERATIONS = _AUDIT_COUNTER_REPLACEMENT_OPERATIONS | frozenset({
+    "webauthn.recovery.create", "webauthn.recovery.candidate",
+    "webauthn.recovery.finalize", "webauthn.recovery.invalidate",
+})
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
     "policy.canary.delivery.prepare", "policy.canary.delivery.claim", "policy.canary.delivery.recover",
     "webauthn.trust.stage", "webauthn.trust.complete", "webauthn.registration.create",
@@ -321,6 +325,7 @@ PROOF_PRIMITIVES = frozenset(
         "ordered-exact-page",
         "aggregate-high-water",
         "authenticated-secondary-index",
+        "authenticated-counted-index-cardinality",
         authority_complete_query.PROOF_PRIMITIVE,
         "authenticated-root-delta",
         "capacity-reservation",
@@ -342,6 +347,11 @@ _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS = frozenset(
 )
 _TYPED_SUCCESSOR_PLANNING_OPERATIONS = frozenset(
     {
+        "jit.assertion.issue",
+        "webauthn.challenge.maintain",
+        "webauthn.recovery.create", "webauthn.recovery.candidate",
+        "webauthn.recovery.finalize", "webauthn.recovery.expire",
+        "webauthn.recovery.prune", "webauthn.recovery.invalidate",
         "oidc.session.activate",
         "oidc.session.activation-delivery.consume",
         "webauthn.credential.revoke",
@@ -541,6 +551,66 @@ WEBAUTHN_TRANSITION_RETENTION_CONTRACT = MappingProxyType({
         "logical-attempt-reservation", "capability", "outer-commit", "execution", "witness"),
 })
 
+# PostgreSQL-only immutable raw pages. Retention is not proof admission,
+# independent currentness, or permission to execute the parent plan.
+RECOVERY_HISTORY_PAGE_TABLE = "policy_authority_recovery_history_pages"
+RECOVERY_HISTORY_PAGE_COLUMNS = (
+    "parent_plan_digest", "history_manifest_digest", "source_revision",
+    "operation", "operation_id", "request_digest", "configuration_digest",
+    "page_kind", "page_ordinal", "body_digest", "body_byte_count",
+    "body_bytes", "retained_at_epoch_ns",
+)
+RECOVERY_HISTORY_PAGE_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityRecoveryHistoryPageCustody/v1",
+    "table": RECOVERY_HISTORY_PAGE_TABLE,
+    "columns": RECOVERY_HISTORY_PAGE_COLUMNS,
+    "primaryKey": ("parent_plan_digest", "history_manifest_digest", "page_kind", "page_ordinal"),
+    "operations": ("webauthn.recovery.create", "webauthn.recovery.candidate", "webauthn.recovery.finalize"),
+    "maximumBodyBytes": 4 * 1024 * 1024, "maximumRowPages": 10000,
+    "countOrdinal": 0, "postgresOnly": True, "sqliteAdmission": False,
+    "plannerWriterPrivileges": ("SELECT", "INSERT"), "executorPrivileges": ("SELECT",),
+    "verifierPrivileges": (), "runtimeWrites": (),
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "freshInstallation": "locked-empty-source-only-no-existing-store-adoption",
+    "existingStore": "full-recorded-source-and-structural-contract-required",
+    "transactionOwnership": "caller-owned-serializable-writer-with-nested-savepoint",
+    "bodyAdmission": "exact-parent-bound-original-bytes-independent-proof-replay-required",
+    "publicExecutionEnabled": False,
+})
+CHALLENGE_MAINTENANCE_PAGE_TABLE = "policy_authority_challenge_maintenance_pages"
+CHALLENGE_MAINTENANCE_PAGE_COLUMNS = (
+    "parent_plan_digest", "maintenance_manifest_digest", "source_revision",
+    "operation", "operation_id", "request_digest", "configuration_digest",
+    "phase_ordinal", "page_kind", "index_id", "page_ordinal",
+    "body_digest", "body_byte_count", "body_bytes", "retained_at_epoch_ns",
+)
+CHALLENGE_MAINTENANCE_PAGE_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityChallengeMaintenancePageCustody/v1",
+    "table": CHALLENGE_MAINTENANCE_PAGE_TABLE,
+    "columns": CHALLENGE_MAINTENANCE_PAGE_COLUMNS,
+    "primaryKey": ("parent_plan_digest", "maintenance_manifest_digest", "phase_ordinal",
+        "page_kind", "index_id", "page_ordinal"),
+    "operations": ("webauthn.challenge.create", "webauthn.challenge.maintain"),
+    "phases": ("pre-expire", "pre-old", "pre-overflow", "scope",
+        "post-expire", "post-old", "post-overflow", "admission"),
+    "pageKinds": ("count", "range", "rank", "primary", "write", "candidate"),
+    "maximumBodyBytes": 4 * 1024 * 1024,
+    "maximumCountPages": 3, "maximumPrimaryPages": 256,
+    "maximumWritePagesPerIndex": 5121, "maximumCandidatePages": 25,
+    "rangeOrdinal": 0, "rankOrdinal": 0,
+    "postgresOnly": True, "sqliteAdmission": False,
+    "plannerWriterPrivileges": ("SELECT", "INSERT"), "executorPrivileges": ("SELECT",),
+    "verifierPrivileges": (), "runtimeWrites": (),
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "freshInstallation": "locked-empty-source-only-no-existing-store-adoption",
+    "existingStore": "full-recorded-source-and-structural-contract-required",
+    "transactionOwnership": "caller-owned-serializable-writer-with-nested-savepoint",
+    "contextOnlyRead": "untrusted-framing-and-context-only",
+    "bodyAdmission": "independent-raw-page-group-chain-original-parent-manifest-and-proof-replay-required",
+    "publicExecutionEnabled": False,
+})
+POSTGRES_IMMUTABLE_CUSTODY_TABLES = (RECOVERY_HISTORY_PAGE_TABLE, CHALLENGE_MAINTENANCE_PAGE_TABLE)
+
 # Protected transaction evidence, deliberately not an authenticated business
 # row. The postcommit receipt commits this marker; the marker must not depend
 # on that later receipt or on the external current-root completion receipt.
@@ -711,6 +781,7 @@ POSTGRES_COUNTED_FUNCTION_SIGNATURES = MappingProxyType({
     "serverware_policy_authority_counted_branch": ("text", "text", "text[]", "bigint[]"),
     "serverware_policy_authority_counted_expiry_micros": ("text",),
     "serverware_policy_authority_counted_signed_order": ("bigint",),
+    "serverware_policy_authority_counted_challenge_id_order": ("text",),
     "serverware_policy_authority_counted_field": ("jsonb", "text", "text"),
     "serverware_policy_authority_counted_project": ("text", "jsonb"),
     "serverware_policy_authority_counted_apply_index": ("text", "text", "jsonb", "jsonb"),
@@ -729,6 +800,7 @@ POSTGRES_COUNTED_FUNCTION_CONTRACTS = MappingProxyType({
         "searchPath": ("pg_catalog",) if name in {
             "serverware_policy_authority_counted_expiry_micros",
             "serverware_policy_authority_counted_signed_order",
+            "serverware_policy_authority_counted_challenge_id_order",
             "serverware_policy_authority_counted_field",
             "serverware_policy_authority_counted_project",
         } else ("pg_catalog", "$metadata", "pg_temp"),
@@ -737,7 +809,7 @@ POSTGRES_COUNTED_FUNCTION_CONTRACTS = MappingProxyType({
 })
 POSTGRES_COUNTED_MAINTENANCE_CONTRACT = MappingProxyType({
     "schema": "serverware.policyAuthorityCountedMaintenanceAdmission/v1",
-    "maximumProfilesPerNormalizedEvent": 3,
+    "maximumProfilesPerNormalizedEvent": 9,
     "workAccounting": "bounded-per-profile-not-whole-operation",
     "plannerCompleteQueryAdmission": False,
     "sqliteInstalled": False,
@@ -766,6 +838,8 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         REVOCATION_RETAINED_CAPABILITY_TABLE,
         WEBAUTHN_EVIDENCE_RETAINED_TABLE,
         WEBAUTHN_TRANSITION_RETAINED_TABLE,
+        RECOVERY_HISTORY_PAGE_TABLE,
+        CHALLENGE_MAINTENANCE_PAGE_TABLE,
         CURRENT_ROOT_COMMIT_MARKER_TABLE,
         SUCCESSOR_EXECUTION_CUSTODY_TABLE,
         "policy_authority_query_dependency_manifests",
@@ -1167,7 +1241,8 @@ def _spec(
         "serverware.policyAuthorityPlanningAdapter/"
         f"{handler}/v1"
     )
-    assertion_required = webauthn in _VERIFIED_ASSERTION_POLICIES
+    receipt_required = webauthn in _VERIFIED_ASSERTION_POLICIES
+    assertion_required = receipt_required or webauthn == "raw-assertion-verified-by-successor-kernel"
     assertion_business_writes = (
         {
             "webauthn_challenges",
@@ -1224,7 +1299,7 @@ def _spec(
         | ({REVOCATION_RETAINED_TABLE} if handler == "revoke_webauthn_credential" else set())
         | (
             {"policy_authority_webauthn_assertion_evidence"}
-            if assertion_required
+            if receipt_required
             else set()
         )
     )
@@ -1232,7 +1307,7 @@ def _spec(
         set(_BASE_FRAMEWORK_WRITES)
         | (
             {"policy_authority_webauthn_assertion_evidence"}
-            if assertion_required
+            if receipt_required
             else set()
         )
     )
@@ -1415,6 +1490,15 @@ _WEBAUTHN = (
     "webauthn_challenges",
     "webauthn_credentials",
     "webauthn_trust_publications",
+)
+_RECOVERY_CURRENT_READS = (
+    "oidc_browser_sessions", "webauthn_credentials", "webauthn_trust_publications",
+    "webauthn_trust_publication_high_water", "webauthn_recovery_ceremonies",
+    "webauthn_challenges",
+)
+_RECOVERY_PROOF_SET = (
+    "primary-key-row", "authenticated-root-delta",
+    authority_complete_query.PROOF_PRIMITIVE, "authenticated-counted-index-cardinality",
 )
 _VERIFIED_APPROVAL_AUTHORITY = (
     "policy_high_water",
@@ -2472,6 +2556,27 @@ _OPERATIONS = {
         maximum_mutations=132,
         maximum_work_units=1024,
     ),
+    "jit.assertion.issue": _spec(
+        "issue_jit_assertion_receipt",
+        reads=(
+            "approval_requests", "policy_high_water", "rbac_role_bindings",
+            "webauthn_challenges", "webauthn_credentials",
+            "webauthn_trust_publications", "webauthn_trust_publication_high_water",
+            "jit_webauthn_assertion_receipts",
+        ),
+        writes=("webauthn_challenges", "webauthn_credentials", "jit_webauthn_assertion_receipts"),
+        mutation_kinds={
+            "webauthn_challenges": ("UPDATE",),
+            "webauthn_credentials": ("UPDATE",),
+            "jit_webauthn_assertion_receipts": ("INSERT",),
+        },
+        webauthn="raw-assertion-verified-by-successor-kernel",
+        approver_policy=True,
+        proof_primitives=("primary-key-row", "authenticated-root-delta"),
+        maximum_query_rows=16,
+        maximum_mutations=3,
+        maximum_work_units=512,
+    ),
     "jit.decide": _spec(
         "approve_request",
         reads=(
@@ -3287,6 +3392,72 @@ _OPERATIONS = {
         reads=("webauthn_credentials",),
         writes=("webauthn_credentials",),
     ),
+    # Source-owned successor contracts only: raw attestation/root signatures
+    # and full paged history still require the independent owning kernel.
+    # No successful evidence DTO, old receipt admission or public route is
+    # established by declaring this table footprint.
+    "webauthn.recovery.create": _spec(
+        "serverware_policy_authority_webauthn_recovery_create",
+        reads=_RECOVERY_CURRENT_READS + ("webauthn_recovery_revocations",),
+        writes=("webauthn_recovery_ceremonies", "webauthn_challenges",
+                "metadata_audit_outbox", "policy_authority_bounded_aggregate_states"),
+        mutation_kinds={"webauthn_recovery_ceremonies": ("INSERT",),
+            "webauthn_challenges": ("INSERT",), "metadata_audit_outbox": ("INSERT",),
+            "policy_authority_bounded_aggregate_states": ("UPDATE",)},
+        proof_primitives=_RECOVERY_PROOF_SET,
+        maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
+    ),
+    "webauthn.recovery.candidate": _spec(
+        "serverware_policy_authority_webauthn_recovery_candidate",
+        reads=_RECOVERY_CURRENT_READS + ("webauthn_recovery_root_state",),
+        writes=("webauthn_recovery_ceremonies", "webauthn_challenges",
+                "metadata_audit_outbox", "policy_authority_bounded_aggregate_states"),
+        mutation_kinds={"webauthn_recovery_ceremonies": ("UPDATE",),
+            "webauthn_challenges": ("UPDATE",), "metadata_audit_outbox": ("INSERT",),
+            "policy_authority_bounded_aggregate_states": ("UPDATE",)},
+        proof_primitives=_RECOVERY_PROOF_SET,
+        maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
+    ),
+    "webauthn.recovery.finalize": _spec(
+        "serverware_policy_authority_webauthn_recovery_finalize",
+        reads=_RECOVERY_CURRENT_READS + ("webauthn_recovery_root_state",),
+        writes=("webauthn_recovery_ceremonies", "webauthn_challenges", "webauthn_credentials",
+                "webauthn_recovery_root_state", "metadata_audit_outbox", "policy_authority_bounded_aggregate_states"),
+        mutation_kinds={"webauthn_recovery_ceremonies": ("UPDATE",),
+            "webauthn_challenges": ("UPDATE",), "webauthn_credentials": ("INSERT",),
+            "webauthn_recovery_root_state": ("INSERT", "UPDATE"),
+            "metadata_audit_outbox": ("INSERT",), "policy_authority_bounded_aggregate_states": ("UPDATE",)},
+        proof_primitives=_RECOVERY_PROOF_SET,
+        maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
+    ),
+    "webauthn.recovery.expire": _spec(
+        "serverware_policy_authority_webauthn_recovery_expire",
+        reads=("webauthn_recovery_ceremonies", "webauthn_challenges"),
+        writes=("webauthn_recovery_ceremonies", "webauthn_challenges"),
+        mutation_kinds={"webauthn_recovery_ceremonies": ("UPDATE",), "webauthn_challenges": ("UPDATE",)},
+        proof_primitives=_RECOVERY_PROOF_SET,
+        maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
+    ),
+    "webauthn.recovery.prune": _spec(
+        "serverware_policy_authority_webauthn_recovery_prune",
+        reads=("webauthn_recovery_ceremonies", "webauthn_recovery_revocations", "webauthn_challenges"),
+        writes=("webauthn_recovery_ceremonies", "webauthn_recovery_revocations", "webauthn_challenges"),
+        mutation_kinds={"webauthn_recovery_ceremonies": ("DELETE",),
+            "webauthn_recovery_revocations": ("DELETE",), "webauthn_challenges": ("UPDATE",)},
+        proof_primitives=_RECOVERY_PROOF_SET,
+        maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
+    ),
+    "webauthn.recovery.invalidate": _spec(
+        "serverware_policy_authority_webauthn_recovery_invalidate",
+        reads=("webauthn_recovery_ceremonies", "webauthn_recovery_revocations", "webauthn_challenges"),
+        writes=("webauthn_recovery_ceremonies", "webauthn_recovery_revocations", "webauthn_challenges",
+                "metadata_audit_outbox", "policy_authority_bounded_aggregate_states"),
+        mutation_kinds={"webauthn_recovery_ceremonies": ("UPDATE",),
+            "webauthn_recovery_revocations": ("UPDATE",), "webauthn_challenges": ("UPDATE",),
+            "metadata_audit_outbox": ("INSERT",), "policy_authority_bounded_aggregate_states": ("UPDATE",)},
+        proof_primitives=_RECOVERY_PROOF_SET,
+        maximum_query_rows=256, maximum_mutations=512, maximum_work_units=16384,
+    ),
     # These measured operations store/claim/consume challenge rows; they do not
     # authorize credential registration or assertions. Those retain their own
     # credential/trust dependencies and admission checks in separate operations.
@@ -3294,6 +3465,23 @@ _OPERATIONS = {
         "create_webauthn_challenge",
         reads=("webauthn_challenges",),
         writes=("webauthn_challenges",),
+        proof_primitives=("primary-key-row", "authenticated-root-delta",
+                          authority_complete_query.PROOF_PRIMITIVE,
+                          "authenticated-counted-index-cardinality"),
+    ),
+    # Internal successor phase bound to the same original create intent and
+    # cutoff. This source contract does not install a standalone public route.
+    "webauthn.challenge.maintain": _spec(
+        "serverware_policy_authority_challenge_maintenance",
+        reads=("webauthn_challenges",),
+        writes=("webauthn_challenges",),
+        mutation_kinds={"webauthn_challenges": ("UPDATE", "DELETE")},
+        proof_primitives=("primary-key-row", "authenticated-root-delta",
+                          authority_complete_query.PROOF_PRIMITIVE,
+                          "authenticated-counted-index-cardinality"),
+        maximum_query_rows=256,
+        maximum_mutations=256,
+        maximum_work_units=8192,
     ),
     "webauthn.challenge.claim": _spec(
         "claim_webauthn_challenge",
@@ -3548,6 +3736,8 @@ def operation_contract_document() -> dict[str, Any]:
         "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
         "webauthnEvidenceRetention": dict(WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
         "webauthnTransitionRetention": dict(WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
+        "recoveryHistoryPageCustody": dict(RECOVERY_HISTORY_PAGE_CONTRACT),
+        "challengeMaintenancePageCustody": dict(CHALLENGE_MAINTENANCE_PAGE_CONTRACT),
         "currentRootCommitMarker": dict(CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
         "revocationWriterRequestCustody": dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
         "revocationWriterAckCustody": dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),

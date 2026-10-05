@@ -41,6 +41,8 @@ from serverware import authority_oauth_measured_pending_retirement_policy as oau
 from serverware import authority_oauth_measured_capture_retirement_policy as oauth_capture_retirement_policy
 from serverware import authority_credential_currentness_policy as credential_currentness_policy
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
+from serverware import authority_recovery_configuration as recovery_configuration
+from serverware import authority_challenge_policy as challenge_maintenance_policy
 from serverware.authority_artifact_spec import (
     ARTIFACT_BUNDLE_SCHEMA,
     AUTHORITY_SCHEMA_VERSION,
@@ -139,6 +141,7 @@ SERVICE_CONFIGURATION_FIELDS = frozenset(
         "executorTlsClientDn",
         "executorTlsClientSerial",
         "executorTlsIssuerDn",
+        "verifierCredentialIssuanceDigest",
         "issuerCredentialIssuanceDigest",
         "executorCredentialIssuanceDigest",
     }
@@ -733,6 +736,10 @@ def validate_configuration_payload(
     else:
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
+        if isinstance(value, Mapping) and recovery_configuration.FIELD in value:
+            expected_fields = expected_fields | {recovery_configuration.FIELD}
+        if isinstance(value, Mapping) and challenge_maintenance_policy.FIELD in value:
+            expected_fields = expected_fields | {challenge_maintenance_policy.FIELD}
         if isinstance(value, Mapping):
             for optional_field in (genesis_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD):
                 if optional_field in value:
@@ -910,6 +917,11 @@ def validate_configuration_payload(
             not isinstance(issuer, Mapping)
             or not isinstance(executor, Mapping)
             or _digest(
+                payload["verifierCredentialIssuanceDigest"],
+                name="verifier credential-issuance digest",
+            )
+            != payload["verifierCredentialIssuanceDigest"]
+            or _digest(
                 payload["issuerCredentialIssuanceDigest"],
                 name="issuer credential-issuance digest",
             )
@@ -919,8 +931,8 @@ def validate_configuration_payload(
                 name="executor credential-issuance digest",
             )
             != payload["executorCredentialIssuanceDigest"]
-            or payload["issuerCredentialIssuanceDigest"]
-            == payload["executorCredentialIssuanceDigest"]
+            or len({payload[role + "CredentialIssuanceDigest"]
+                    for role in ("verifier", "issuer", "executor")}) != 3
         ):
             raise GeneratorError(
                 "credential-issuance digests are invalid or not distinct"
@@ -951,6 +963,12 @@ def validate_configuration_payload(
                     "authority WebAuthn enrollment authorization policy is invalid"
                 ) from exc
         try:
+            if challenge_maintenance_policy.FIELD in payload:
+                challenge_maintenance_policy._shape(payload[challenge_maintenance_policy.FIELD])
+            recovery = recovery_configuration.configuration(payload.get(recovery_configuration.FIELD),
+                webauthn=payload["webauthn"])
+            if recovery_configuration.FIELD in payload and recovery is None:
+                raise GeneratorError("explicit recovery selection is null")
             oauth_activation_policy.validate_policy(payload.get(oauth_activation_policy.FIELD), payload=payload, root_key=root_key)
             oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload, root_key=root_key)
             policy_candidate_policy.validate_policy(payload.get(policy_candidate_policy.FIELD), payload=payload, root_key=root_key)

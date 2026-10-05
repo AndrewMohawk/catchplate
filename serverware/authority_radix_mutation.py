@@ -231,6 +231,21 @@ class PrimaryRadixMutationInputs:
             raise PrimaryRadixMutationError("primary mutation inputs shape is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class _PrimaryRadixOverlay:
+    """Same-invocation computed nodes for conditional proof production only.
+
+    The map is the actual engine's already owned node overlay, not supplied
+    cache data or an accepted verifier result. A later phase must reconstruct
+    every rebased raw proof against its independently computed prior root.
+    Retaining these references adds no hash or JSON traversal. Consumers must
+    not mutate the private map or expose it across a callback.
+    """
+
+    inputs: PrimaryRadixMutationInputs
+    nodes: dict[tuple[str, int, str], str]
+
+
 def _context_fields(value: Any, expected: type, names: tuple[str, ...]) -> tuple[Any, ...]:
     if type(value) is not expected:
         raise PrimaryRadixMutationError("primary radix context has an unexpected exact type")
@@ -336,7 +351,8 @@ def _evaluate_primary_radix_batch(
     mutations: tuple[dict[str, Any], ...],
     limits: PrimaryRadixLimits,
 ) -> tuple[PrimaryRadixBatchResult, tuple[dict[str, Any], ...],
-           tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+           tuple[dict[str, Any], ...], tuple[dict[str, Any], ...],
+           dict[tuple[str, int, str], str]]:
     """Calculate an exact final primary-root vector, or reject the entire batch.
 
     Mutation input order need not be the SQL sort order: distinct original keys
@@ -543,7 +559,7 @@ def _evaluate_primary_radix_batch(
                                    len(ancestors), budget.hash_work, input_bytes, budget.nodes),
     )
     return (result, tuple(snapshot["selected"]), tuple(snapshot["proofs"]),
-            tuple(snapshot["mutations"]))
+            tuple(snapshot["mutations"]), overlay)
 
 
 def evaluate_primary_radix_batch(
@@ -561,7 +577,7 @@ def evaluate_primary_radix_batch(
     Distinct original-key mutations commute for final roots/counts; this does
     not claim intermediate SQL revision history or authenticated currentness.
     """
-    result, _, _, _ = _evaluate_primary_radix_batch(
+    result, _, _, _, _ = _evaluate_primary_radix_batch(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=mutations, limits=limits,
@@ -586,7 +602,7 @@ def evaluate_primary_radix_inputs(
     projection consumer must call this evaluator over actual inputs itself;
     a caller-created or previously returned container is not a substitute.
     """
-    result, owned_selected, owned_proofs, owned_mutations = _evaluate_primary_radix_batch(
+    result, owned_selected, owned_proofs, owned_mutations, _ = _evaluate_primary_radix_batch(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=mutations, limits=limits,
@@ -610,9 +626,24 @@ def evaluate_primary_radix_memberships(
     or a caller-created membership result. No extra JSON copy or hash is added.
     The result establishes membership relative to supplied heads only.
     """
-    result, owned_selected, owned_proofs, _ = _evaluate_primary_radix_batch(
+    result, owned_selected, owned_proofs, _, _ = _evaluate_primary_radix_batch(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=(), limits=limits,
     )
     return PrimaryRadixMembershipResult(result, owned_selected, owned_proofs)
+
+
+def _evaluate_primary_radix_overlay(*, table_contracts, business_before_roots,
+        authorization_before_roots, selected_rows, before_proofs, mutations, limits):
+    """Run the sole genuine engine and retain its exact computed node map.
+
+    This private producer path always takes raw proofs and full OLD/NEW rows.
+    No successful result or caller-created overlay can skip engine admission.
+    Existing public entrypoints/results and all original limits are unchanged.
+    """
+    result, selected, proofs, changes, nodes = _evaluate_primary_radix_batch(
+        table_contracts=table_contracts, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+        before_proofs=before_proofs, mutations=mutations, limits=limits)
+    return _PrimaryRadixOverlay(PrimaryRadixMutationInputs(result, selected, proofs, changes), nodes)

@@ -142,6 +142,7 @@ def _static_configuration(value: object) -> tuple:
         _positive(trust["maximumReceiptAgeNs"], "maximum receipt age"),
         _digest(value.get("issuerCredentialIssuanceDigest"), "issuer issuance"),
         _digest(value.get("executorCredentialIssuanceDigest"), "executor issuance"),
+        _digest(value.get("verifierCredentialIssuanceDigest"), "verifier issuance"),
     )
 
 
@@ -215,7 +216,7 @@ def _verify_cohort_against_scope(
     local_binding: tuple[str, str, str] | None,
     evaluation_epoch_ns: int | None,
 ) -> tuple[_AdmittedCohort, dict, tuple[dict, ...]]:
-    roles, bindings, measured_packages, maximum_age, issuer_issuance, executor_issuance = static_configuration
+    roles, bindings, measured_packages, maximum_age, issuer_issuance, executor_issuance, verifier_issuance = static_configuration
     try:
         envelope = json.loads(
             held_bytes, object_pairs_hook=_unique_object,
@@ -288,9 +289,10 @@ def _verify_cohort_against_scope(
             raise AttestationCohortError("cohort validity extends beyond an original receipt")
         receipt_bytes = canonical_json_bytes(receipt)
         receipt_digest = _domain_digest(RECEIPT_SCHEMA, receipt_bytes)
-        if (peer == "issuer" and receipt_digest == issuer_issuance) or (
-            peer == "executor" and receipt_digest == executor_issuance
-        ):
+        if receipt_digest == {
+            "issuer": issuer_issuance, "executor": executor_issuance,
+            "verifier": verifier_issuance,
+        }.get(peer):
             raise AttestationCohortError("credential issuance is not a distinct receipt identity")
         admitted.append((peer, receipt_bytes, receipt_digest))
 
@@ -312,7 +314,7 @@ def _admit_on_current_launch(
     held_bytes, held_role, held_key = original_bytes, role, root_public_key
     held_digest = _digest(configuration_digest, "configuration")
     static_configuration = _static_configuration(configuration_payload)
-    _roles, bindings, packages, maximum_age, issuer_issuance, executor_issuance = static_configuration
+    _roles, bindings, packages, maximum_age, issuer_issuance, executor_issuance, verifier_issuance = static_configuration
     if not isinstance(held_key, Ed25519PublicKey):
         raise AttestationCohortError("admitted attestation root is not Ed25519")
 
@@ -334,7 +336,7 @@ def _admit_on_current_launch(
         or generation.get("operationManifestDigest") != authority.OPERATION_MANIFEST_DIGEST
         or type(actual_bindings) is not dict or len(actual_bindings) > 256
         or any(actual_bindings.get(peer) != bindings[peer] for peer in ROLES)
-        or issuer_issuance == executor_issuance
+        or len({issuer_issuance, executor_issuance, verifier_issuance}) != 3
     ):
         raise AttestationCohortError("cohort policy differs from the admitted local launch")
     result, payload, inner_payloads = _verify_cohort_against_scope(
@@ -408,7 +410,7 @@ def _admit_at_evaluation_time(
         label="historical role manifests",
     )
     static_configuration = _static_configuration(owned_config)
-    _roles, bindings, packages, _maximum_age, issuer_issuance, executor_issuance = static_configuration
+    _roles, bindings, packages, _maximum_age, issuer_issuance, executor_issuance, verifier_issuance = static_configuration
     if not isinstance(held_key, Ed25519PublicKey):
         raise AttestationCohortError("admitted historical root is not Ed25519")
     try:
@@ -439,7 +441,7 @@ def _admit_at_evaluation_time(
         or any(actual_bindings.get(peer) != bindings[peer] for peer in ROLES)
         or owned_config.get("roleRuntimeClosureDigests") != runtime_closures
         or packages != held_packages
-        or issuer_issuance == executor_issuance
+        or len({issuer_issuance, executor_issuance, verifier_issuance}) != 3
         or type(owned_config.get("generationSequence")) is not int
         or owned_config.get("generationSequence") != owned_generation["sequence"]
         or owned_config.get("generationBindingDigest") != configuration_binding

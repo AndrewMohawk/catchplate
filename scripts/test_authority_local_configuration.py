@@ -97,6 +97,7 @@ def fixture():
         executorSessionIdentityDigest=PIN, executorRole=identities["executor"]["databaseRole"],
         executorTlsClientDn=identities["executor"]["tlsClientDn"], executorTlsClientSerial=identities["executor"]["tlsClientSerial"],
         executorTlsIssuerDn=identities["executor"]["tlsIssuerDn"],
+        verifierCredentialIssuanceDigest=identities["verifier"]["credentialIssuanceDigest"],
         issuerCredentialIssuanceDigest=identities["issuer"]["credentialIssuanceDigest"],
         executorCredentialIssuanceDigest=identities["executor"]["credentialIssuanceDigest"])
     raw = local.spec.canonical_json_bytes(payload)
@@ -290,9 +291,22 @@ class LocalConfigurationControls(unittest.TestCase):
             changed = copy.deepcopy(payload); changed["roles"]["issuer"][field] += "changed"
             with self.subTest(field=field), self.assertRaises(ValueError):
                 prepare(replace_payload(selected, changed))
-        changed = copy.deepcopy(payload); changed["issuerCredentialIssuanceDigest"] = PIN
-        with self.assertRaises(ValueError):
-            prepare(replace_payload(selected, changed))
+        for role in ("verifier", "issuer", "executor"):
+            changed = copy.deepcopy(payload); changed[role + "CredentialIssuanceDigest"] = PIN
+            with self.subTest(role=role), self.assertRaises(ValueError):
+                prepare(replace_payload(selected, changed))
+
+    def test_verifier_issuance_requires_its_actual_original_not_another_role(self):
+        selected, payload, _ = fixture()
+        for replacement in (None, payload["issuerCredentialIssuanceDigest"],
+                            payload["executorCredentialIssuanceDigest"]):
+            changed = copy.deepcopy(payload)
+            if replacement is None:
+                del changed["verifierCredentialIssuanceDigest"]
+            else:
+                changed["verifierCredentialIssuanceDigest"] = replacement
+            with self.subTest(replacement=replacement), self.assertRaises(local.generator.GeneratorError):
+                prepare(replace_payload(selected, changed))
 
     def test_witness_requires_literal_signed_service_and_no_fabricated_history(self):
         selected, payload, root = fixture()

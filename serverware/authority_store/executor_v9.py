@@ -9,6 +9,7 @@ from typing import Any
 
 from serverware import authority_contract
 from serverware import authority_audit_capacity
+from serverware import authority_challenge_retention
 from serverware import authority_native_activation_hold
 from serverware import authority_transition_registry
 from serverware.authority_store import planner_connection
@@ -2214,12 +2215,12 @@ def install_authority_v9_executor(
     )
 
 
-def _require_executor(connection: Any) -> Any:
+def _require_executor(connection: Any, *, expected_role: str | None = None) -> Any:
     raw = _require_postgres_connection(connection)
     _require_serializable(raw)
     _require_database_role(
         raw,
-        _db_value("_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE"),
+        _db_value("_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE") if expected_role is None else expected_role,
     )
     return raw
 
@@ -2807,6 +2808,9 @@ def reserve_authority_planner_transaction(
     ):
         raise ValueError("planner selector or mutation closure is not exact")
     authority_audit_capacity.validate_capacity_transition(
+        operation=operation, selected_rows=selected_business_rows, mutations=mutation_plan,
+    )
+    authority_challenge_retention.validate_inline_delta(
         operation=operation, selected_rows=selected_business_rows, mutations=mutation_plan,
     )
     authority_audit_capacity.validate_transition_work_units(
@@ -3415,6 +3419,10 @@ def complete_authority_planner_transaction(
         operation=plan["operation"], selected_rows=planner_payload["selectedBusinessRows"],
         mutations=planner_payload["mutationPlan"],
     )
+    authority_challenge_retention.validate_inline_delta(
+        operation=plan["operation"], selected_rows=planner_payload["selectedBusinessRows"],
+        mutations=planner_payload["mutationPlan"],
+    )
     authority_audit_capacity.validate_transition_work_units(
         operation=plan["operation"], work_units=plan["workUnits"],
         mutations=planner_payload["mutationPlan"],
@@ -3470,7 +3478,7 @@ def complete_authority_planner_transaction(
             f"SELECT serverware_metadata.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
             (plan["operation"], selected_json, mutation_json, plan["workUnits"]),
         )
-        updated = cursor.execute(
+        cursor.execute(
             "UPDATE serverware_metadata."
             "policy_authority_planner_transactions "
             "SET status = 'planned', authorization_projection_digest = %s, "
@@ -3489,6 +3497,8 @@ def complete_authority_planner_transaction(
                 planner_transaction_id,
             ),
         )
+        # execute() returns this cursor; reuse and close replace its rowcount.
+        updated_rowcount = cursor.rowcount
         row = cursor.execute(
             "SELECT * FROM serverware_metadata."
             "policy_authority_planner_transactions "
@@ -3496,7 +3506,7 @@ def complete_authority_planner_transaction(
             (planner_transaction_id,),
         ).fetchone()
     _require_v3_planner_row(row)
-    if updated.rowcount not in (0, 1) or row is None:
+    if updated_rowcount not in (0, 1) or row is None:
         raise _db_value("MetadataStoreError")(
             "authority planner completion CAS failed"
         )
@@ -3770,7 +3780,7 @@ def fail_authority_v9_transaction(
             raise _db_value("MetadataStoreError")(
                 "authority v9 failure cannot replace a terminal state"
             )
-        capability_update = cursor.execute(
+        cursor.execute(
             "UPDATE serverware_metadata."
             "policy_authority_writer_capabilities "
             "SET status = 'failed', failure_digest = %s, "
@@ -3778,7 +3788,8 @@ def fail_authority_v9_transaction(
             "WHERE capability_id = %s AND status = 'issued'",
             (failure_digest, terminal_at_epoch_ns, capability_id),
         )
-        envelope_update = cursor.execute(
+        capability_rowcount = cursor.rowcount
+        cursor.execute(
             "UPDATE serverware_metadata."
             "policy_authority_execution_envelopes "
             "SET status = 'failed', exact_response_base64url = %s, "
@@ -3796,7 +3807,8 @@ def fail_authority_v9_transaction(
                 envelope_id,
             ),
         )
-        planner_update = cursor.execute(
+        envelope_rowcount = cursor.rowcount
+        cursor.execute(
             "UPDATE serverware_metadata."
             "policy_authority_planner_transactions "
             "SET status = 'failed', exact_response_base64url = %s, "
@@ -3813,10 +3825,11 @@ def fail_authority_v9_transaction(
                 planner_transaction_id,
             ),
         )
+        planner_rowcount = cursor.rowcount
     if (
-        capability_update.rowcount != 1
-        or envelope_update.rowcount != 1
-        or planner_update.rowcount != 1
+        capability_rowcount != 1
+        or envelope_rowcount != 1
+        or planner_rowcount != 1
     ):
         raise _db_value("MetadataStoreError")(
             "authority v9 atomic failure CAS failed"
@@ -3837,6 +3850,7 @@ def execute_authority_v9(
     exact_result_bytes: bytes,
     deadline_monotonic_ns: int,
     connection: Any,
+    expected_executor_role: str | None = None,
 ) -> str:
     if (
         len(exact_request_bytes) < 2
@@ -3868,7 +3882,7 @@ def execute_authority_v9(
             "executorHandler"
         ]
     )
-    raw = _require_executor(connection)
+    raw = _require_executor(connection, expected_role=expected_executor_role)
     with raw.cursor() as cursor:
         row = cursor.execute(
             "SELECT serverware_metadata."

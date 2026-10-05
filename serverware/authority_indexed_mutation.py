@@ -96,6 +96,20 @@ class IndexedMutationResult:
     metrics: IndexedMutationMetrics
 
 
+@dataclass(frozen=True, slots=True)
+class _IndexedMutationOverlay:
+    """Actual same-call primary/counted nodes for a conditional producer.
+
+    No evaluator accepts this observation instead of raw inputs. A successor
+    uses these already computed references to produce later raw evidence,
+    which is independently replayed against the preceding calculated roots.
+    """
+
+    result: IndexedMutationResult
+    primary_nodes: dict[tuple[str, int, str], str]
+    counted_nodes: dict[str, dict[str, CountedNode | None]]
+
+
 class _Budget:
     """Local engine units, optionally debited to an existing invocation meter.
 
@@ -229,7 +243,7 @@ def _changes_for_index(index_id, mutations, old_digests, new_digests, budget):
 
 
 def _verify_primary(*, table_contracts, business_before_roots, authorization_before_roots,
-                    selected_rows, before_proofs, mutations, budget):
+                    selected_rows, before_proofs, mutations, budget, captured_nodes=None):
     """Run the genuine primary body once on this computation's remaining budget.
 
     Private composition only: public entrypoints always supply raw inputs and
@@ -244,10 +258,17 @@ def _verify_primary(*, table_contracts, business_before_roots, authorization_bef
         max_json_nodes=(limits.primary.max_json_nodes if budget.work is None else
             min(limits.primary.max_json_nodes, _positive_remaining(
                 budget.remaining_json_nodes(), "primary node"))))
-    verified = primary.evaluate_primary_radix_inputs(
+    calculate = (primary.evaluate_primary_radix_inputs if captured_nodes is None
+                 else primary._evaluate_primary_radix_overlay)
+    observed = calculate(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=mutations, limits=primary_limits)
+    if captured_nodes is None:
+        verified = observed
+    else:
+        verified = observed.inputs
+        captured_nodes.update(observed.nodes)
     budget.hash_work(verified.result.metrics.hash_work)
     budget.input_work(verified.result.metrics.input_bytes)
     budget.node_work(verified.result.metrics.json_nodes)
@@ -329,7 +350,7 @@ def _prepare_index_changes(item, prepared, budget):
     return profile, changes, delta, allowance
 
 
-def _evaluate_one_index(item, prepared, profile, changes, budget, reserved):
+def _evaluate_one_index(item, prepared, profile, changes, budget, reserved, captured_nodes=None):
     """Fold an owned frontier with the genuine sparse evaluator and same ledger.
 
     Only this frontier's already charged scalar framing receives ``reserved``
@@ -342,8 +363,15 @@ def _evaluate_one_index(item, prepared, profile, changes, budget, reserved):
             budget.remaining_hashes(), "hash")),
         max_input_bytes=min(limits.index.max_input_bytes, _positive_remaining(
             budget.remaining_input_bytes() + reserved, "input")))
-    calculated = counted.evaluate_index_mutations(profile=profile, before_root=item.index_root,
+    calculate = (counted.evaluate_index_mutations if captured_nodes is None
+                 else counted._evaluate_index_mutations_overlay)
+    observed = calculate(profile=profile, before_root=item.index_root,
         changes=changes, frontier=item.frontier, limits=index_limits)
+    if captured_nodes is None:
+        calculated = observed
+    else:
+        calculated = observed.result
+        captured_nodes.update(observed.nodes)
     budget.hash_work(calculated.metrics.hashes)
     budget.input_work(calculated.metrics.input_bytes - reserved)
     if calculated.after_root.count > prepared.primary_after_counts[profile.table]:
@@ -351,14 +379,14 @@ def _evaluate_one_index(item, prepared, profile, changes, budget, reserved):
     return calculated
 
 
-def evaluate_indexed_primary_batch(
+def _evaluate_indexed_primary_batch(
     *, table_contracts: tuple[primary.PrimaryTableContract, ...],
     business_before_roots: tuple[primary.PrimaryRoot, ...],
     authorization_before_roots: tuple[primary.PrimaryRoot, ...],
     selected_rows: tuple[dict[str, Any], ...], before_proofs: tuple[dict[str, Any], ...],
     mutations: tuple[dict[str, Any], ...], index_inputs: tuple[IndexedMutationInput, ...],
-    limits: IndexedMutationLimits,
-) -> IndexedMutationResult:
+    limits: IndexedMutationLimits, retain_nodes: bool, challenge_component: bool = False,
+) -> _IndexedMutationOverlay:
     """Reverify actual primary inputs and every affected fixed counted index.
 
     Primary-key-changing UPDATE stays forbidden by the primary engine. Explicit
@@ -369,14 +397,32 @@ def evaluate_indexed_primary_batch(
     trigger execution or an independently authenticated head vector.
     """
     limits = _copy(limits, IndexedMutationLimits)
+    if type(retain_nodes) is not bool or type(challenge_component) is not bool:
+        raise IndexedMutationError("indexed mutation private capture selection changed")
     budget = _Budget(limits)
     # Detach every counted record before primary verification. Later caller
     # changes cannot substitute another head/frontier between the two engines.
     inputs, reservations = _inputs_snapshot(index_inputs, budget)
+    primary_nodes, counted_nodes = {}, {}
     verified = _verify_primary(table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
-        before_proofs=before_proofs, mutations=mutations, budget=budget)
-    prepared = _prepare_primary_changes(verified, tuple(item.index_id for item in inputs), budget)
+        before_proofs=before_proofs, mutations=mutations, budget=budget,
+        captured_nodes=primary_nodes if retain_nodes else None)
+    source_ids = tuple(item.index_id for item in inputs)
+    if challenge_component:
+        # Only the distinct challenge compound uses this private relative
+        # component. The ordinary public batch still requires all affected
+        # profiles below. The compound must independently replay all nine
+        # components and compare their actual primary-after roots before it
+        # can expose one completed phase; this partial result is not a plan.
+        source_ids = projection.index_ids_for_table("webauthn_challenges")
+        if (len(source_ids) != 9 or len(inputs) != 1 or inputs[0].index_id not in source_ids
+                or tuple(root.table for root in verified.result.business_after_roots)
+                    != ("webauthn_challenges",)
+                or verified.result.authorization_after_roots or not verified.mutations
+                or any(item["table"] != "webauthn_challenges" for item in verified.mutations)):
+            raise IndexedMutationError("challenge index component escaped its fixed source family")
+    prepared = _prepare_primary_changes(verified, source_ids, budget)
 
     before_heads, after_heads, index_metrics = [], [], []
     projection_allowance = context_hashes = 0
@@ -388,10 +434,54 @@ def evaluate_indexed_primary_batch(
         # record framing. Credit it for this call only; all other frontiers
         # remain reserved while real input/work accumulate across profiles.
         reserved = reservations[item.index_id]
-        calculated = _evaluate_one_index(item, prepared, profile, changes, budget, reserved)
+        nodes = {} if retain_nodes else None
+        calculated = _evaluate_one_index(item, prepared, profile, changes, budget, reserved, nodes)
+        if nodes is not None:
+            counted_nodes[item.index_id] = nodes
         before_heads.append(IndexedMutationHead(item.index_id, item.index_revision, calculated.before_root))
         after_heads.append(IndexedMutationHead(item.index_id, item.index_revision + delta, calculated.after_root))
         index_metrics.append((item.index_id, calculated.metrics))
-    return IndexedMutationResult(verified.result, tuple(before_heads), tuple(after_heads),
+    result = IndexedMutationResult(verified.result, tuple(before_heads), tuple(after_heads),
         IndexedMutationMetrics(verified.result.metrics, tuple(index_metrics), context_hashes,
                                projection_allowance, prepared.new_row_hashes, budget.input_bytes))
+    return _IndexedMutationOverlay(result, primary_nodes, counted_nodes)
+
+
+def evaluate_indexed_primary_batch(
+    *, table_contracts: tuple[primary.PrimaryTableContract, ...],
+    business_before_roots: tuple[primary.PrimaryRoot, ...],
+    authorization_before_roots: tuple[primary.PrimaryRoot, ...],
+    selected_rows: tuple[dict[str, Any], ...], before_proofs: tuple[dict[str, Any], ...],
+    mutations: tuple[dict[str, Any], ...], index_inputs: tuple[IndexedMutationInput, ...],
+    limits: IndexedMutationLimits,
+) -> IndexedMutationResult:
+    """Preserve the public raw-input engine and its original result/limits."""
+    return _evaluate_indexed_primary_batch(table_contracts=table_contracts,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        selected_rows=selected_rows, before_proofs=before_proofs, mutations=mutations,
+        index_inputs=index_inputs, limits=limits, retain_nodes=False).result
+
+
+def _evaluate_indexed_primary_overlay(*, table_contracts, business_before_roots,
+        authorization_before_roots, selected_rows, before_proofs, mutations, index_inputs, limits):
+    """Reverify every original and retain the sole engines' computed nodes."""
+    return _evaluate_indexed_primary_batch(table_contracts=table_contracts,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        selected_rows=selected_rows, before_proofs=before_proofs, mutations=mutations,
+        index_inputs=index_inputs, limits=limits, retain_nodes=True)
+
+
+def _evaluate_challenge_index_component(*, table_contracts, business_before_roots,
+        authorization_before_roots, selected_rows, before_proofs, mutations, index_inputs, limits):
+    """One genuine private component; never a complete-profile assertion.
+
+    This accepts all original raw primary proofs and exactly one raw index
+    frontier, then runs the unchanged proof/projection/fold engines. It grants
+    no mutation or root authority, accepts no computed result, and is not an
+    option on either public evaluator. Only the source-fixed compound owner
+    joins the full nine-stage series under its bounded original schedule.
+    """
+    return _evaluate_indexed_primary_batch(table_contracts=table_contracts,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        selected_rows=selected_rows, before_proofs=before_proofs, mutations=mutations,
+        index_inputs=index_inputs, limits=limits, retain_nodes=True, challenge_component=True)

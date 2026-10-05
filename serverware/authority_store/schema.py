@@ -143,7 +143,18 @@ def _policy_candidate_authority_decode_base64url(
     return payload
 
 
-def _policy_candidate_authority_source_contract_digest() -> str:
+def _policy_candidate_authority_source_contract_digest(*, database_configuration=None) -> str:
+    # Bootstrap retains its explicit configuration boundary. A measured process
+    # has no ambient database role environment: use the same independently
+    # admitted role pins as its actual owner/TLS validation, never an empty or
+    # attacker-supplied import-global replacement.
+    owner_role = _METADATA_STORE_AUTHORITY_OWNER_ROLE
+    verifier_role = _METADATA_STORE_AUTHORITY_VERIFIER_ROLE
+    if database_configuration is not None:
+        from serverware.authority_database_configuration import OWNER_ROLE, require
+        database_configuration = require(database_configuration)
+        owner_role = OWNER_ROLE
+        verifier_role = database_configuration.verifier_pins[0]
     issuer_functions = set(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS)
     issuer_signatures = {
         **authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES,
@@ -182,6 +193,7 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "immutableTables": list(
                 _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
             ),
+            "postgresImmutableCustodyTables": list(authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES),
             "headTables": list(_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES),
             "jitAuthorityRuntimeReadOnlyTables":
                 sorted(_JIT_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
@@ -207,6 +219,10 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "revocationRetention": dict(authority_contract.REVOCATION_RETENTION_CONTRACT),
             "webauthnEvidenceRetention": dict(authority_contract.WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
             "webauthnTransitionRetention": dict(authority_contract.WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
+            "recoveryHistoryPageCustody": dict(authority_contract.RECOVERY_HISTORY_PAGE_CONTRACT),
+            "recoveryHistoryPageDdl": _policy_authority_recovery_history_page_ddl('"serverware_metadata"'),
+            "challengeMaintenancePageCustody": dict(authority_contract.CHALLENGE_MAINTENANCE_PAGE_CONTRACT),
+            "challengeMaintenancePageDdl": _policy_authority_challenge_maintenance_page_ddl('"serverware_metadata"'),
             "currentRootCommitMarker": dict(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
             "successorExecutionCustody": dict(authority_contract.SUCCESSOR_EXECUTION_CUSTODY_CONTRACT),
             "successorExecutionPrivilegeSqlDigest": SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST,
@@ -227,7 +243,7 @@ def _policy_candidate_authority_source_contract_digest() -> str:
                 v9_schema_source.capability_retention_sqlite_guards_sql(),
             "objectOwnershipContract":
                 "serverware.policyAuthorityObjectOwnership/v1",
-            "authorityOwnerRole": _METADATA_STORE_AUTHORITY_OWNER_ROLE,
+            "authorityOwnerRole": owner_role,
             "plannerWriterRole": _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
             "plannerWriterTablePrivileges": {
                 table: sorted(privileges)
@@ -238,7 +254,7 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "plannerWriterPrivilegeSqlDigest": PLANNER_WRITER_PRIVILEGE_SQL_DIGEST,
             "plannerReadPrivilegeContract": planner_read_sql.privilege_contract(),
             "verifierReadContract": authority_contract.VERIFIER_READ_CONTRACT,
-            "verifierReadRole": _METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+            "verifierReadRole": verifier_role,
             "verifierReadTables": sorted(authority_contract.VERIFIER_READ_TABLES),
             "verifierReadPrivilegeSqlDigest": VERIFIER_READ_PRIVILEGE_SQL_DIGEST,
             "completionReadContract": authority_contract.COMPLETION_READ_CONTRACT,
@@ -879,6 +895,7 @@ def _policy_candidate_authority_schema_tables(*, postgres: bool = False) -> tupl
             + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES
             + authority_contract.V9_ADDITIONAL_PROTECTED_TABLES
             + (authority_contract.POSTGRES_COUNTED_STORE_TABLES if postgres else ())
+            + (authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES if postgres else ())
             + (
                 "metadata_audit_outbox",
                 "rbac_authority_state",
@@ -1322,17 +1339,16 @@ def _policy_candidate_authority_required_guard_names(
                               "serverware_successor_custody_sqlite_insert_guard",
                               "serverware_capability_retention_insert_guard",
                               "serverware_capability_sidecar_sqlite_insert_guard"})
-    for table in (
-        _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
-        + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES
-    ):
+    immutable_tables = (_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
+        + (authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES if postgres else ()))
+    for table in immutable_tables + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES:
         trigger_names.add(
             _policy_candidate_authority_object_name(
                 "serverware", table, "canonical", "insert"
             )
         )
         if postgres:
-            if table in _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES:
+            if table in immutable_tables:
                 trigger_names.add(
                     _policy_candidate_authority_object_name(
                         "serverware", table, "immutable"
@@ -1363,6 +1379,15 @@ def _policy_candidate_authority_required_guard_names(
     ):
         trigger_names.add(f"serverware_{head_table}_successor")
     if postgres:
+        # Source-derived equality only: never an automatic inline backfill.
+        # Exact definitions and deferrability enter the structural manifest.
+        from serverware.authority_store import challenge_retention_sql
+
+        trigger_names.update(
+            f"serverware_retention_{ordinal}"
+            for ordinal, _ in enumerate(challenge_retention_sql.SOURCE_TABLES)
+        )
+        function_names.add(challenge_retention_sql.FUNCTION_NAME)
         for entries in _POLICY_AUTHORITY_OPERATION_QUERY_MANIFEST.values():
             for entry in entries:
                 trigger_names.add(
@@ -1607,6 +1632,20 @@ def _validate_policy_candidate_authority_structure(
                 raise PolicyCandidateAuthorityError(
                     "counted custody columns are not source exact: " + table
                 )
+        history = table_manifests[authority_contract.RECOVERY_HISTORY_PAGE_TABLE]
+        if (tuple(column["name"] for column in history["columns"])
+                != authority_contract.RECOVERY_HISTORY_PAGE_COLUMNS
+                or any(column["nullable"] for column in history["columns"])
+                or tuple(history["primaryKey"])
+                != authority_contract.RECOVERY_HISTORY_PAGE_CONTRACT["primaryKey"]):
+            raise PolicyCandidateAuthorityError("recovery history page columns/key are not source exact")
+        maintenance = table_manifests[authority_contract.CHALLENGE_MAINTENANCE_PAGE_TABLE]
+        if (tuple(column["name"] for column in maintenance["columns"])
+                != authority_contract.CHALLENGE_MAINTENANCE_PAGE_COLUMNS
+                or any(column["nullable"] for column in maintenance["columns"])
+                or tuple(maintenance["primaryKey"])
+                != authority_contract.CHALLENGE_MAINTENANCE_PAGE_CONTRACT["primaryKey"]):
+            raise PolicyCandidateAuthorityError("challenge maintenance page columns/key are not source exact")
     marker_columns = table_manifests[
         authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE
     ]["columns"]

@@ -18,6 +18,7 @@ from serverware.authority_store.wire_json_sql import WIRE_JSON_MAX_DEPTH, WIRE_J
 COUNTED_PROJECTION_FUNCTION_NAMES = (
     "serverware_policy_authority_counted_expiry_micros",
     "serverware_policy_authority_counted_signed_order",
+    "serverware_policy_authority_counted_challenge_id_order",
     "serverware_policy_authority_counted_field",
     "serverware_policy_authority_counted_project",
 )
@@ -100,6 +101,25 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
         $counted_order$
         """,
         f"""
+        CREATE OR REPLACE FUNCTION {namespace}.serverware_policy_authority_counted_challenge_id_order(value text)
+        RETURNS text LANGUAGE plpgsql IMMUTABLE SECURITY INVOKER
+        SET search_path = pg_catalog
+        AS $counted_challenge_id$
+        BEGIN
+            -- Fresh source contract only. This never hashes an arbitrary ID
+            -- into a tie key or adopts a historical custom-ID population.
+            IF value IS NOT NULL AND pg_catalog.octet_length(value) = 36 AND
+                value COLLATE "C" ~ '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
+            THEN RETURN '00' || pg_catalog.replace(value, '-', '') || pg_catalog.repeat('0',46);
+            ELSIF value IS NOT NULL AND pg_catalog.octet_length(value) = 71 AND
+                value COLLATE "C" ~ '^sha256:[0-9a-f]{{64}}$'
+            THEN RETURN '01' || pg_catalog.substring(value,8) || pg_catalog.repeat('0',14);
+            END IF;
+            RAISE EXCEPTION 'fresh challenge source requires canonical UUID36 or sha256 ID; legacy adoption is forbidden';
+        END;
+        $counted_challenge_id$
+        """,
+        f"""
         CREATE OR REPLACE FUNCTION {namespace}.serverware_policy_authority_counted_field(
             source_row jsonb, field_name text, field_kind text
         ) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE SECURITY INVOKER
@@ -117,8 +137,9 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
             THEN RAISE EXCEPTION 'counted referenced field is missing'; END IF;
             value := source_row->field_name;
             kind := pg_catalog.jsonb_typeof(value);
-            IF field_kind COLLATE "C" = 'nullable-text' AND kind = 'null' THEN RETURN value; END IF;
-            IF field_kind COLLATE "C" IN ('int32','int64') THEN
+            IF field_kind COLLATE "C" IN ('nullable-text','nullable-utc-expiry') AND kind = 'null'
+            THEN RETURN value; END IF;
+            IF field_kind COLLATE "C" IN ('int32','int64','reference-mask') THEN
                 IF kind <> 'number' THEN
                     RAISE EXCEPTION 'counted integer is not an exact bounded signed value';
                 END IF;
@@ -128,6 +149,7 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
                 THEN RAISE EXCEPTION 'counted integer is not an exact bounded signed value'; END IF;
                 integer_value := scalar::numeric;
                 IF (field_kind COLLATE "C" = 'int32' AND integer_value NOT BETWEEN -2147483648 AND 2147483647)
+                    OR (field_kind COLLATE "C" = 'reference-mask' AND integer_value NOT BETWEEN 0 AND 7)
                     OR integer_value NOT BETWEEN -9223372036854775808::numeric AND 9223372036854775807::numeric
                 THEN RAISE EXCEPTION 'counted integer exceeds its source range'; END IF;
                 RETURN pg_catalog.to_jsonb(integer_value::bigint);
@@ -140,7 +162,10 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
             CASE field_kind COLLATE "C"
                 WHEN 'text' THEN RETURN value;
                 WHEN 'nullable-text' THEN RETURN value;
-                WHEN 'utc-expiry' THEN RETURN pg_catalog.to_jsonb(
+                WHEN 'challenge-id' THEN
+                    PERFORM {namespace}.serverware_policy_authority_counted_challenge_id_order(scalar);
+                    RETURN value;
+                WHEN 'utc-expiry', 'nullable-utc-expiry' THEN RETURN pg_catalog.to_jsonb(
                     {namespace}.serverware_policy_authority_counted_expiry_micros(scalar));
                 WHEN 'session-status' THEN choices := ARRAY['pending_webauthn','active','revoked'];
                 WHEN 'live-session-status' THEN choices := ARRAY['pending_webauthn','active'];
@@ -170,6 +195,8 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
             partition_json text;
             partition_digest text;
             ordering_key text := pg_catalog.repeat('0',32);
+            challenge_ordered boolean := FALSE;
+            challenge_timestamp bigint;
             binding text;
         BEGIN
             IF source_row IS NULL OR pg_catalog.jsonb_typeof(source_row) <> 'object' THEN
@@ -225,6 +252,33 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
                     ordering_key := {namespace}.serverware_policy_authority_counted_signed_order(
                         (typed_fields->>'rollback_epoch')::bigint)
                         || {namespace}.serverware_policy_authority_counted_signed_order((typed_fields->>'sequence')::bigint);
+                WHEN 'webauthn_challenge_unused_global', 'webauthn_challenge_unused_user' THEN
+                    IF typed_fields->'used_at' <> 'null'::jsonb THEN RETURN; END IF;
+                    challenge_ordered := TRUE;
+                    challenge_timestamp := (typed_fields->>'expires_at')::bigint;
+                    IF index_identity COLLATE "C" = 'webauthn_challenge_unused_user' THEN
+                        partition_fields := pg_catalog.jsonb_build_object('user_id',typed_fields->'user_id');
+                    END IF;
+                WHEN 'webauthn_challenge_created_global', 'webauthn_challenge_created_user' THEN
+                    challenge_ordered := TRUE;
+                    challenge_timestamp := (typed_fields->>'created_at')::bigint;
+                    IF index_identity COLLATE "C" = 'webauthn_challenge_created_user' THEN
+                        partition_fields := pg_catalog.jsonb_build_object('user_id',typed_fields->'user_id');
+                    END IF;
+                WHEN 'webauthn_challenge_terminal_unreferenced_global' THEN
+                    IF typed_fields->'used_at' = 'null'::jsonb
+                        OR (typed_fields->>'retention_reference_mask')::bigint <> 0 THEN RETURN; END IF;
+                    challenge_ordered := TRUE;
+                    challenge_timestamp := (typed_fields->>'used_at')::bigint;
+                WHEN 'webauthn_challenge_scope_unused' THEN
+                    IF typed_fields->'used_at' <> 'null'::jsonb THEN RETURN; END IF;
+                    challenge_ordered := TRUE;
+                    partition_fields := pg_catalog.jsonb_build_object(
+                        'challenge_type',typed_fields->'challenge_type', 'user_id',typed_fields->'user_id',
+                        'scope_key',typed_fields->'scope_key');
+                WHEN 'webauthn_challenge_value' THEN
+                    challenge_ordered := TRUE;
+                    partition_fields := pg_catalog.jsonb_build_object('challenge',typed_fields->'challenge');
                 ELSE RAISE EXCEPTION 'counted membership is not source admitted';
             END CASE;
             primary_id := typed_fields->>'id';
@@ -241,8 +295,15 @@ def counted_projection_functions_sql(namespace: str) -> tuple[str, ...]:
             partition_digest := {namespace}.serverware_policy_authority_framed_digest(
                 '{projection.PARTITION_DOMAIN}', '{projection.COUNTED_PROFILE}', index_identity,
                 source_table, source_projection, partition_json);
-            index_key := pg_catalog.substring(partition_digest,8) || ordering_key
-                || pg_catalog.substring(primary_key_digest,8);
+            IF challenge_ordered THEN
+                ordering_key := CASE WHEN challenge_timestamp IS NULL THEN pg_catalog.repeat('0',16)
+                    ELSE {namespace}.serverware_policy_authority_counted_signed_order(challenge_timestamp) END;
+                index_key := pg_catalog.substring(partition_digest,8) || ordering_key
+                    || {namespace}.serverware_policy_authority_counted_challenge_id_order(primary_id);
+            ELSE
+                index_key := pg_catalog.substring(partition_digest,8) || ordering_key
+                    || pg_catalog.substring(primary_key_digest,8);
+            END IF;
             RETURN NEXT;
         END;
         $counted_project$

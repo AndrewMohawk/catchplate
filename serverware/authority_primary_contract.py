@@ -50,6 +50,7 @@ PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "credentials": ("id",),
     "durable_budget_definitions": ("budget_key",),
     "durable_budget_events": ("reservation_id",),
+    "jit_webauthn_assertion_receipts": ("assertion_receipt_digest",),
     "metadata_audit_outbox": ("id",),
     "oidc_browser_sessions": ("id",),
     "oidc_session_activation_deliveries": ("id",),
@@ -177,6 +178,9 @@ PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "traversal_budget_page_reservations": ("reservation_id",),
     "webauthn_challenges": ("id",),
     "webauthn_credentials": ("id",),
+    "webauthn_recovery_ceremonies": ("id",),
+    "webauthn_recovery_root_state": ("signing_key_id", "user_id"),
+    "webauthn_recovery_revocations": ("id",),
     "webauthn_trust_publication_high_water": ("authority_scope",),
     "webauthn_trust_publications": ("id",),
 })

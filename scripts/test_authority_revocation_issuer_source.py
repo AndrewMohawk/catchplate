@@ -88,14 +88,14 @@ class RevocationIssuerSourceTests(unittest.TestCase):
             "planner_public_key", "verifier_public_key", "witness_public_key", "expected_planner_identity",
             "expected_verifier_identity", "expected_issuer_session_identity_digest", "issuer_pins",
             "expected_configuration_digest", "expected_witness_identity_digest", "expected_generation_sequence",
-            "expected_generation_digest"])
+            "expected_generation_digest", "database_pins"])
         self.assert_shape(assignment(constructor, "configuration").value, """(
             planner_public_key, verifier_public_key, witness_public_key,
             tuple(expected_planner_identity[name] for name in _IDENTITY_FIELDS),
             tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS),
             expected_issuer_session_identity_digest, tuple(issuer_pins[name] for name in _PIN_FIELDS),
             expected_configuration_digest, expected_witness_identity_digest,
-            expected_generation_sequence, expected_generation_digest)""")
+            expected_generation_sequence, expected_generation_digest, database_pins)""")
         identities = calls(constructor, "capability.shape.validate_identity_shape")
         self.assertEqual([ast.unparse(call.args[0]) for call in identities],
             ["expected_planner_identity", "expected_verifier_identity"])
@@ -110,9 +110,10 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assert_shape(assignment(snapshot, "configuration").value, "self._configuration")
         self.assert_shape(snapshot.body[-1].value, "configuration")
         validation = definition(self.tree, "_validate_configuration")
-        self.assert_shape(validation.body[1].test, "type(configuration) is not tuple or len(configuration) != 11")
+        self.assert_shape(validation.body[1].test, "type(configuration) is not tuple or len(configuration) != 12")
         self.assertIn("len(identity) != 3", ast.get_source_segment(self.source, validation))
         self.assertIn("len(pins) != 5", ast.get_source_segment(self.source, validation))
+        self.assertIn("len(database_pins) != 5", ast.get_source_segment(self.source, validation))
 
     def test_exact_fifteen_historical_inputs_cannot_replace_role_bound_signer_or_pins(self):
         self.assert_shape(assignment(self.tree, "_CALL_INPUTS").value, "capability.wire._EXPECTATIONS - _CONFIGURED")
@@ -211,7 +212,8 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertEqual(len(opener.body), 2)
         self.assertIsInstance(opener.body[0], ast.ImportFrom)
         self.assertEqual((opener.body[0].module, tuple(alias.name for alias in opener.body[0].names)), ("serverware", ("db",)))
-        self.assert_shape(opener.body[1].value, "db._policy_authority_capability_issuer_pg_connect_raw()")
+        self.assert_shape(opener.body[1].value,
+            "db._policy_authority_capability_issuer_pg_connect_raw(database_pins=configuration[11])")
         run = calls(issue, "_run_on_configuration")
         self.assertEqual(len(run), 1)
         self.assert_shape(run[0], """_run_on_configuration(configuration, envelope_bytes=envelope_bytes,
@@ -361,7 +363,8 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertIsInstance(opener.body[0], ast.ImportFrom)
         self.assertEqual((opener.body[0].module, tuple(alias.name for alias in opener.body[0].names)),
             ("serverware", ("db",)))
-        self.assert_shape(opener.body[1].value, "db._policy_authority_capability_issuer_pg_connect_raw()")
+        self.assert_shape(opener.body[1].value,
+            "db._policy_authority_capability_issuer_pg_connect_raw(database_pins=configuration[11])")
         delegated = calls(method, "_issue_invocation_on_configuration")
         self.assertEqual(len(delegated), 1)
         self.assert_shape(delegated[0], """_issue_invocation_on_configuration(configuration,

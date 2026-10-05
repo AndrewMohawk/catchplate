@@ -639,6 +639,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_service_descriptor_reads.py \
 	scripts/test_authority_service_denial_diagnostics.py \
 	scripts/test_authority_launcher_native_mappings.py \
+	scripts/test_authority_writer_socket_access.py \
+	scripts/test_authority_writer_reservation_peer.py \
 	scripts/test_authority_local_cohort.py \
 	scripts/test_authority_local_retained_rbac.py \
 	scripts/test_authority_local_historical_archive.py \
@@ -777,6 +779,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_schema_source.py \
 	scripts/test_metadata_initialization_declaration.py \
 	scripts/test_authority_issuer_source.py \
+	scripts/test_authority_issuer_database_pins.py \
+	scripts/test_authority_executor_database_configuration.py \
 	scripts/test_authority_witness_transport_source.py \
 	scripts/test_authority_witness_peer_phase.py \
 	scripts/test_authority_verifier_read_source.py \

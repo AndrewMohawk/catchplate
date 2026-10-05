@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 from serverware import authority_contract
 from serverware import authority_audit_capacity
+from serverware import authority_challenge_retention
 from serverware import authority_complete_query
 from serverware import authority_transition_core as core
 from serverware import authority_webauthn_trust as trust
@@ -35,10 +36,7 @@ REVOKE_FIELDS = frozenset({
     "registration_challenge_ids",
 })
 CASCADE_MAX = 32
-_CHALLENGE_FIELDS = frozenset({
-    "id", "challenge", "challenge_type", "user_id", "scope_key",
-    "approval_request_id", "payload_json", "expires_at", "used_at", "created_at",
-})
+_CHALLENGE_FIELDS = authority_challenge_retention.ROW_FIELDS
 _LIST_FIELDS = (
     "approval_grant_ids", "control_plane_approval_ids", "oidc_session_ids",
     "registration_challenge_ids",

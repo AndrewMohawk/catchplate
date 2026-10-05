@@ -34,7 +34,8 @@ def fixture():
         packageVersions={"synthetic-test": "1"},
         credentialReleaseTrust=dict(schema="serverware.trustedHostLocalCredentialReleaseTrust/v1",
             trustMode="trusted-host-local", maximumReceiptAgeNs=200),
-        issuerCredentialIssuanceDigest=digest("issuer-issuance"), executorCredentialIssuanceDigest=digest("executor-issuance"))
+        issuerCredentialIssuanceDigest=digest("issuer-issuance"), executorCredentialIssuanceDigest=digest("executor-issuance"),
+        verifierCredentialIssuanceDigest=digest("verifier-issuance"))
     selected = dict(schema=subject.SCHEMA, purpose=subject.PURPOSE, rootDelegation=subject.DELEGATION,
         historicalArchiveSelection=subject.INITIAL_HISTORY,
         configurationRootPublicKeyBase64Url=subject.spec.strict_base64url_encode(public),

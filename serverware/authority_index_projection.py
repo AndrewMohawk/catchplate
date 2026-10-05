@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from serverware import authority_challenge_id as challenge_ids
+
 from serverware.authority_index_contract import (
     PROFILE as COUNTED_PROFILE,
     IndexLeaf,
@@ -55,6 +57,8 @@ _ENUM_CHOICES = (
     ("publication-status", ("pending", "published")),
     ("global-scope", ("global",)),
 )
+_CHALLENGE_DIRECTION = ("at-or-before", "strictly-after", "all")
+_CHALLENGE_ORDER_SUFFIX = "/generated-challenge-id-text-order"
 
 
 class IndexProjectionError(IndexRangeError):
@@ -73,7 +77,7 @@ class _Definition:
     interval_rule: str
 
     def document(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema": PROJECTION_SCHEMA,
             "countedProfile": COUNTED_PROFILE,
             "indexId": self.index_id,
@@ -105,6 +109,15 @@ class _Definition:
             "partitionFraming": "u64be-length/every-frame-including-domain",
             "keySuffix": "BusinessKey/v1-lowercase-SHA256-hex",
         }
+        if self.order_codec.endswith(_CHALLENGE_ORDER_SUFFIX):
+            # Keep every older descriptor byte-for-byte unchanged. Only the
+            # fresh challenge family declares the stricter source ID domain.
+            result["keyBytes"] = [32, 8, 1, 32, 7]
+            result["keySuffix"] = "UUID36-class0-padded16-or-sha256-class1/zero7/exact-text-order"
+            result["challengeIdAdmission"] = "fresh-only/canonical-lowercase-UUID36-or-sha256/no-legacy-adoption"
+            if any(kind == "challenge-direction" for _, kind in self.selector_fields):
+                result["textEnums"]["challenge-direction"] = list(_CHALLENGE_DIRECTION)
+        return result
 
 
 # These immutable definitions are source data, not a caller configuration
@@ -201,6 +214,44 @@ _DEFINITIONS = (
         for field in ("session_id", "old_token_digest", "new_token_digest",
                       "assertion_digest", "challenge_id")
     ),
+    *tuple(
+        _Definition(
+            "webauthn_challenge_" + kind + "_" + scope, "webauthn_challenges",
+            (("id", "challenge-id"), (time_field, "utc-expiry"))
+                + ((("used_at", "nullable-utc-expiry"),) if kind == "unused" else ())
+                + ((("user_id", "text"),) if scope == "user" else ()),
+            ((("user_id", "text"),) if scope == "user" else ())
+                + (("cutoff_us", "int64"), ("direction", "challenge-direction")),
+            "used_at-is-null" if kind == "unused" else "all-rows-including-terminal",
+            ("user_id",) if scope == "user" else (),
+            "signed64-" + time_field + _CHALLENGE_ORDER_SUFFIX,
+            "source-direction-timestamp-cutoff",
+        )
+        for kind, time_field in (("unused", "expires_at"), ("created", "created_at"))
+        for scope in ("global", "user")
+    ),
+    _Definition(
+        "webauthn_challenge_terminal_unreferenced_global", "webauthn_challenges",
+        (("id", "challenge-id"), ("used_at", "nullable-utc-expiry"),
+         ("retention_reference_mask", "reference-mask")),
+        (("cutoff_us", "int64"), ("direction", "challenge-direction")),
+        "used_at-is-nonnull/authenticated-reference-mask-zero", (),
+        "signed64-used_at" + _CHALLENGE_ORDER_SUFFIX, "source-direction-timestamp-cutoff",
+    ),
+    _Definition(
+        "webauthn_challenge_scope_unused", "webauthn_challenges",
+        (("id", "challenge-id"), ("challenge_type", "text"), ("user_id", "text"),
+         ("scope_key", "nullable-text"), ("used_at", "nullable-utc-expiry")),
+        (("challenge_type", "text"), ("user_id", "text"), ("scope_key", "nullable-text")),
+        "used_at-is-null/no-expiry-filter", ("challenge_type", "user_id", "scope_key"),
+        "zero8" + _CHALLENGE_ORDER_SUFFIX, "whole-equality-partition",
+    ),
+    _Definition(
+        "webauthn_challenge_value", "webauthn_challenges",
+        (("id", "challenge-id"), ("challenge", "text")), (("challenge", "text"),),
+        "all-rows-including-terminal", ("challenge",),
+        "zero8" + _CHALLENGE_ORDER_SUFFIX, "whole-equality-partition",
+    ),
 )
 INDEX_IDS = tuple(definition.index_id for definition in _DEFINITIONS)
 
@@ -249,7 +300,7 @@ def profile_for(index_id: str) -> IndexProfile:
 
 
 def projection_manifest_digest() -> str:
-    """Explicitly hash the eleven fixed descriptors; no hidden registry IO.
+    """Explicitly hash the fixed source descriptors; no hidden registry IO.
 
     This one hash is not performed by profile/query/row calls and is not an
     installed operation manifest, checkpoint, or caller authorization.
@@ -291,13 +342,24 @@ def _expiry_micros(value: Any) -> int:
 
 
 def _primitive(value: Any, kind: str) -> Any:
-    if kind == "nullable-text" and value is None:
+    if kind in ("nullable-text", "nullable-utc-expiry") and value is None:
         return None
+    if kind == "challenge-id":
+        try:
+            return challenge_ids.require_generated(value)
+        except ValueError as exc:
+            raise IndexProjectionError(str(exc)) from exc
+    if kind == "reference-mask":
+        return _integer(value, 0, 7)
+    if kind == "challenge-direction":
+        if type(value) is not str or value not in _CHALLENGE_DIRECTION:
+            raise IndexProjectionError("challenge count direction is not source admitted")
+        return value
     if kind == "int32":
         return _integer(value, _I32_MIN, _I32_MAX)
     if kind == "int64":
         return _integer(value, I64_MIN, I64_MAX)
-    if kind == "utc-expiry":
+    if kind in ("utc-expiry", "nullable-utc-expiry"):
         return _expiry_micros(value)
     value = _text(value)
     choices = dict(_ENUM_CHOICES)
@@ -365,6 +427,15 @@ def query_interval(index_id: str, selector: dict[str, Any]) -> KeyInterval:
     elif definition.order_codec == "signed64-rollback-epoch/signed64-sequence":
         lower = (prefix + _signed_order(owned["minimum_rollback_epoch"])
                  + _signed_order(owned["minimum_sequence"]) + _ZERO_SUFFIX)
+    elif definition.interval_rule == "source-direction-timestamp-cutoff":
+        cutoff, direction = owned["cutoff_us"], owned["direction"]
+        following = upper if cutoff == I64_MAX else prefix + _signed_order(cutoff + 1) + "0" * 80
+        if direction == "at-or-before":
+            upper = following
+        elif direction == "strictly-after":
+            if cutoff == I64_MAX:
+                return KeyInterval(lower, lower)
+            lower = following
     return KeyInterval(lower, upper)
 
 
@@ -384,6 +455,21 @@ def project_row(
     owned = _snapshot(row, definition.row_fields, closed=False)
     partition = {name: owned[name] for name in definition.partition_fields if name in owned}
     order = _ZERO_ORDER
+    if definition.order_codec.endswith(_CHALLENGE_ORDER_SUFFIX):
+        if index_id in ("webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+                        "webauthn_challenge_scope_unused") and owned["used_at"] is not None:
+            return None
+        if index_id == "webauthn_challenge_terminal_unreferenced_global" and (
+                owned["used_at"] is None or owned["retention_reference_mask"] != 0):
+            return None
+        time_key = "0" * 16
+        if definition.order_codec.startswith("signed64-"):
+            time_field = definition.order_codec.split("/", 1)[0][len("signed64-"):]
+            time_key = _signed_order(owned[time_field])
+        profile = profile_for(index_id)
+        prefix = _partition(profile, partition)
+        return IndexLeaf(prefix + time_key + challenge_ids.order_suffix(owned["id"]),
+                         primary_key_digest, primary_row_digest)
     if index_id == "webauthn_credential_live_trust":
         if owned["revoked_at"] is not None or owned["attestation_trusted"] == 0:
             return None

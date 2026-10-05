@@ -1156,6 +1156,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_transition_live.py \
 	serverware/authority_webauthn_transition_actions.py \
 	serverware/authority_webauthn_transition_retention.py \
+	serverware/authority_recovery_invalidation_retention.py \
+	serverware/authority_recovery_invalidation_execution_replay.py \
 	serverware/authority_webauthn_transition_persistence.py \
 	serverware/authority_webauthn_transition_writer_configuration.py \
 	serverware/authority_webauthn_transition_custody_wire.py \
@@ -4224,6 +4226,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_transition_live.py \
 				serverware/authority_webauthn_transition_actions.py \
 				serverware/authority_webauthn_transition_retention.py \
+				serverware/authority_recovery_invalidation_retention.py \
+				serverware/authority_recovery_invalidation_execution_replay.py \
 				serverware/authority_webauthn_transition_persistence.py \
 				serverware/authority_webauthn_transition_writer_configuration.py \
 				serverware/authority_webauthn_transition_custody_wire.py \

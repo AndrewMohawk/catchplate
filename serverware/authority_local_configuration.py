@@ -352,10 +352,12 @@ class IssuedConfigurationCustody:
     not possession of TLS files, a database connection, or currentness. This
     owner has no signing key, issuer reference/callback, or signing operation.
     It neither reopens an expired approval nor authorizes a retained restart.
+    Complete original authentication occurs at the one-shot transfer. Later
+    checks retain its immutable bytes and fixed bounds, not a mutable verdict.
     """
 
     __slots__ = ("_fd", "_identity", "_raw", "_issued", "_boot", "_pid",
-                 "_last_boot", "_last_unix", "_closed")
+                 "_last_boot", "_last_unix", "_closed", "_admitted", "_admitted_pin")
 
     def __init__(self):
         raise TypeError("public configuration custody requires a successful issuer transfer")
@@ -375,10 +377,12 @@ class IssuedConfigurationCustody:
         self._raw, self._issued, self._boot = issuer._raw, issuer._issued_original, issuer._boot
         self._pid = os.getpid()
         self._last_boot, self._last_unix = issuer._previous_boot, issuer._previous_unix
+        self._admitted = self._admitted_pin = None
         try:
             with _owning():
                 self._fd = fcntl.fcntl(issuer._fd, fcntl.F_DUPFD_CLOEXEC, 3)
             _require(io._input(self._fd, io.MAX_PUBLIC) == issuer._identity == self._identity)
+            self._admit()
             self.check()
             issuer.check()
             _require(io.read_public(issuer._fd, io.MAX_PUBLIC) == self._raw)
@@ -387,15 +391,19 @@ class IssuedConfigurationCustody:
             self.close()
             raise
 
-    def check(self):
+    def _admit(self):
+        """Authenticate this owner's actual originals once, without a cache API."""
         io._process()
         _require(type(self) is IssuedConfigurationCustody and not self._closed
+            and self._admitted is None and self._admitted_pin is None
             and os.getpid() == self._pid and launcher._boot_identity_digest() == self._boot)
+        original = self._fd, self._identity, self._raw, self._issued, self._boot, self._pid
         now_boot, now_unix = io._clock(), time.time_ns()
         _require(self._last_boot <= now_boot and self._last_unix <= now_unix
             and io._input(self._fd, io.MAX_PUBLIC) == self._identity
             and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
-        # Revalidate the actual approved originals, not a retained mutable DTO.
+        # Retain the full existing admission, including every credential's
+        # actual certificate/CA signatures and the issued service signature.
         prepared = prepare(self._raw, boot=self._boot, now_boottime_ns=now_boot, now_unix_ns=now_unix)
         _require(prepared["selected"]["role"] == "authority-service")
         issued = document(self._issued, MAX_CONFIGURATION)
@@ -408,7 +416,42 @@ class IssuedConfigurationCustody:
         after_boot, after_unix = io._clock(), time.time_ns()
         _require(now_boot <= after_boot < prepared["deadline"]
             and now_unix <= after_unix < prepared["epochLimit"]
-            and launcher._boot_identity_digest() == self._boot
+            and os.getpid() == self._pid and launcher._boot_identity_digest() == self._boot
+            and io._input(self._fd, io.MAX_PUBLIC) == self._identity
+            and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
+        _require(all(current is held for current, held in zip(
+            (self._fd, self._identity, self._raw, self._issued, self._boot, self._pid), original, strict=True)))
+        selected = prepared["selected"]
+        # prepare proves approval expiry <= generation expiry and every
+        # credential expiry, and all lower bounds hold at this actual sample.
+        # Nondecreasing later epochs preserve those lower bounds. Nothing from
+        # the mutable selected/payload/identity graphs escapes into custody.
+        admitted = (*original, selected["issuedAtBoottimeNs"], prepared["deadline"],
+            selected["issuedAtUnixNanos"], prepared["epochLimit"],
+            selected["databaseIssuanceOriginals"]["verifier"].encode("ascii"))
+        self._admitted = self._admitted_pin = admitted
+        self._last_boot, self._last_unix = after_boot, after_unix
+
+    def check(self):
+        io._process()
+        admitted = self._admitted
+        _require(type(self) is IssuedConfigurationCustody and not self._closed
+            and type(admitted) is tuple and len(admitted) == 11 and admitted is self._admitted_pin
+            and all(current is held for current, held in zip(
+                (self._fd, self._identity, self._raw, self._issued, self._boot, self._pid), admitted[:6], strict=True))
+            and os.getpid() == self._pid and launcher._boot_identity_digest() == self._boot)
+        now_boot, now_unix = io._clock(), time.time_ns()
+        _require(admitted[6] <= self._last_boot <= now_boot < admitted[7]
+            and admitted[8] <= self._last_unix <= now_unix < admitted[9]
+            and io._input(self._fd, io.MAX_PUBLIC) == self._identity
+            and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
+        after_boot, after_unix = io._clock(), time.time_ns()
+        _require(now_boot <= after_boot < admitted[7]
+            and now_unix <= after_unix < admitted[9]
+            and admitted is self._admitted is self._admitted_pin
+            and all(current is held for current, held in zip(
+                (self._fd, self._identity, self._raw, self._issued, self._boot, self._pid), admitted[:6], strict=True))
+            and os.getpid() == self._pid and launcher._boot_identity_digest() == self._boot
             and io._input(self._fd, io.MAX_PUBLIC) == self._identity
             and io.read_public(self._fd, io.MAX_PUBLIC) == self._raw)
         self._last_boot, self._last_unix = after_boot, after_unix
@@ -423,7 +466,7 @@ class IssuedConfigurationCustody:
 
     def verifier_issuance_original(self):
         self.check()
-        return document(self._raw, io.MAX_PUBLIC)["databaseIssuanceOriginals"]["verifier"].encode("ascii")
+        return self._admitted[10]
 
     def close(self):
         """Release only our duplicate, including after expiry or content refusal."""

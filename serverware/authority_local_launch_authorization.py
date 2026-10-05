@@ -246,8 +246,12 @@ def prepare(approval_raw, observation_raw, *, boot, now_boottime_ns, now_unix_ns
 
 def certificate_payload(request, public, kwargs):
     generation, role, host = request["generation"], request["role"], request["hostEvidence"]
+    # Reuse only this invocation's fully validated request digest. The final
+    # certificate validator still independently checks the complete payload.
+    request_digest = stage.stage_zero_request_digest(request, **kwargs)
+    public_key = stage._base64url(public, name="launch public key", decoded_size=32)
     result = dict(schema=stage.LOCAL_LAUNCH_IDENTITY_PAYLOAD_SCHEMA,
-        launchId=stage.derive_launch_id(request, public, **kwargs), generationSequence=generation["sequence"],
+        launchId=stage._launch_id_from_request_digest(request, request_digest, public_key), generationSequence=generation["sequence"],
         generationDigest=generation["digest"], roleManifestDigest=role["sha256"], publicKeyAlgorithm="Ed25519",
         launchPublicKeyBase64Url=public, issuedAt=request["launch"]["validFrom"], expiresAt=request["launch"]["validUntil"],
         trustMode="trusted-host-local", coLocated=True, hardwareBacked=False)
@@ -269,7 +273,7 @@ def certificate_payload(request, public, kwargs):
             ("cwdDigest", stage.working_directory_digest, request["execution"]["cwd"])):
         result[field] = function(value)
     result["executableDigest"] = request["execution"]["executableDigest"]
-    result["requestDigest"] = stage.stage_zero_request_digest(request, **kwargs)
+    result["requestDigest"] = request_digest
     stage.validate_launch_identity_payload(result, request=request, **kwargs)
     return result
 

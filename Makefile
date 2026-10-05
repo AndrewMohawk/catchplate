@@ -676,6 +676,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \
 	scripts/test_oidc_activation_request_issuance.py \
+	scripts/test_oidc_activation_resource_bootstrap.py \
 	scripts/test_oidc_session_absolute_expiry.py \
 	scripts/test_authority_radix_proof.py \
 	scripts/test_authority_radix_batch.py \

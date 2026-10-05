@@ -18,6 +18,7 @@ SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v2"
 V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v3"
 V4_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v4"
+V5_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v5"
 CALLER_KEY_FD = 206
 AUTHORIZER_SOCKET_PATH = "/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock"
 RESERVATION_SOCKET_PATH = "/run/serverware/oidc-session-activation-delivery-execution/reserver.sock"
@@ -27,6 +28,7 @@ _FIELDS = frozenset({"schema", "callerPrivateKeyFd", "grantEnrollment",
     "authorizationEnrollment", "authorizerEndpoint"})
 _V2_FIELDS = _FIELDS | frozenset({"reservationEndpoint", "reservationPredecessor", "sqlEndpoint"})
 _V3_FIELDS = _V2_FIELDS | frozenset({"completionEndpoint"})
+_V5_FIELDS = _V3_FIELDS - frozenset({"reservationPredecessor"})
 _PREDECESSOR_FIELDS = frozenset({"sequence", "headDigest", "nextFence"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ORIGINAL_LIMITS = (("grantEnrollment", caller.enrollments.MAX_ENROLLMENT_BYTES),
@@ -60,6 +62,9 @@ class _ConsumeExecutionMaterial:
     sql_endpoint: tuple | None = None
     completion_endpoint: tuple | None = None
     release_hints: bool = False
+    # Output metadata for the explicit resource-only version, not permission
+    # to consume a caller-selected future predecessor or reservation.
+    request_bound: bool = False
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
@@ -90,9 +95,10 @@ def _shape(value):
     if value is None:
         return
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA)):
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, V5_SCHEMA)):
         raise OidcSessionActivationConsumeExecutionBootstrapError("consume caller purpose version differs")
-    fields = _V3_FIELDS if value["schema"] in (V3_SCHEMA, V4_SCHEMA) else _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS
+    fields = (_V5_FIELDS if value["schema"] == V5_SCHEMA else _V3_FIELDS
+        if value["schema"] in (V3_SCHEMA, V4_SCHEMA) else _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS)
     shape._object(value, fields,
         "control-plane consume caller purpose")
     shape._integer(value["callerPrivateKeyFd"], 1023, minimum=32)
@@ -106,18 +112,71 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
         _endpoint(value["reservationEndpoint"], _path=RESERVATION_SOCKET_PATH)
         _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
-        _predecessor(value["reservationPredecessor"])
-    if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
+        if value["schema"] != V5_SCHEMA:
+            _predecessor(value["reservationPredecessor"])
+    if value["schema"] in (V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
         _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
+
+
+def _request_policy_on_work(*, planned, parent, configured, launch, runtime,
+        digest, root, work, live_window, transport_deadline_ns):
+    """Reverify genuine static originals, never substitute a future planner.
+
+    Shared by the two explicit resource-only cold versions. None/None is cold
+    policy freshness; a supplied processing pair retains its actual original
+    bounds. Neither branch manufactures a request vector, nonce or state head.
+    """
+    from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
+
+    if (type(planned) is not requested._RequestPlanningMaterial
+            or type(parent) is not activation._ActivationExecutionMaterial
+            or (live_window is None) != (transport_deadline_ns is None)):
+        raise OidcSessionActivationConsumeExecutionBootstrapError(
+            "resource-only consume requires genuine request planning and complete original bounds")
+    requested.transport._endpoint(planned.issuance_endpoint)
+    endpoint = planned.planner_endpoint
+    if type(endpoint) is not tuple or len(endpoint) != 4:
+        raise OidcSessionActivationConsumeExecutionBootstrapError("request planner endpoint is not exact")
+    # Fixed endpoint projection and the nine bounded original/key/cohort joins;
+    # all actual policy decoding, cryptography and comparisons charge separately.
+    work.charge(input_bytes=8192, json_nodes=256)
+    endpoint = planning._endpoint(dict(zip(("socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"), endpoint)))
+    admitted = requested.policy._verify_on_work(policy_bytes=planned.policy_bytes,
+        root_public_key=root, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work)
+    configured_policy, generation_policy, runtime_policy, public, current_raw, _pin, _reader = admitted.resource_facts
+    for actual, expected in ((configured_policy, configured), (generation_policy, launch),
+            (runtime_policy, runtime)):
+        planning._same_configuration(actual, expected, work, "resource-only parent configuration cohort")
+    plan._same(admitted.payload["plannerResources"]["configurationDigest"], digest,
+        work, "resource-only parent configuration identity")
+    for actual, expected in ((current_raw, parent.current_root_enrollment_bytes),
+            (admitted.authorization_enrollment, parent.authorization_enrollment_bytes),
+            (admitted.grant_enrollment, parent.grant_enrollment_bytes)):
+        work.charge(input_bytes=len(actual) + len(expected))
+        if actual != expected:
+            raise OidcSessionActivationConsumeExecutionBootstrapError(
+                "resource-only planning changed an actual parent enrollment")
+    for actual, expected in ((public, parent.planner_public_key),
+            (admitted.caller.caller_public_key, parent.caller_public_key),
+            (root, parent.operation_public_key)):
+        plan._same(requested.policy.keys._spki_on_work(actual, work),
+            requested.policy.keys._spki_on_work(expected, work), work,
+            "resource-only planning changed an actual parent purpose key")
+    if endpoint[1] > admitted.payload["plannerResources"]["launch"]["requestTimeoutSeconds"]:
+        raise OidcSessionActivationConsumeExecutionBootstrapError("request planner endpoint widens its original timeout")
+    admitted.live()
+    return admitted
 
 
 def _admit_on_work(*, consume_execution, configuration_payload, configuration_digest,
         generation, runtime_role_identities, runtime_root_public_key,
         activation_execution, activation_planning, issuer_public_key,
-        execution_caller_public_key, finalization_caller_public_key, work):
+        execution_caller_public_key, finalization_caller_public_key, work,
+        live_window=None, transport_deadline_ns=None):
     """Compose genuine cold original admission; no carrier grants permission."""
     try:
         ledger = capture._SharedLedger(work)
@@ -127,8 +186,19 @@ def _admit_on_work(*, consume_execution, configuration_payload, configuration_di
         _shape(consume_execution)
         if consume_execution is None:
             return None
+        if (live_window is None) != (transport_deadline_ns is None):
+            raise OidcSessionActivationConsumeExecutionBootstrapError("consume requires the complete original processing pair")
+        processing = (None if live_window is None else
+            planning.planner._processing(live_window, transport_deadline_ns, work))
+        if processing is not None:
+            processing()
+        request_bound = consume_execution["schema"] == V5_SCHEMA
+        planning_type = planning._PlanningMaterial
+        if request_bound:
+            from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
+            planning_type = requested._RequestPlanningMaterial
         if (type(parent) is not activation._ActivationExecutionMaterial
-                or type(planned) is not planning._PlanningMaterial
+                or type(planned) is not planning_type
                 or parent.consume_planner_public_key is None
                 or parent.consume_planner_endpoint is None
                 or parent.consume_planner_measurement_digest is None):
@@ -152,9 +222,14 @@ def _admit_on_work(*, consume_execution, configuration_payload, configuration_di
         configured, launch = configuration._capture_configuration_on_work(
             payload=owned["configuration"], configuration_digest=digest,
             generation=owned["generation"], work=work)
-        configuration._capture_runtime_role_identities_on_work(
+        identities = configuration._capture_runtime_role_identities_on_work(
             runtime_role_identities=owned["runtime"], owned_payload=configured,
             configuration_digest=digest, launch=launch, work=work)
+        resources = None
+        if request_bound:
+            resources = _request_policy_on_work(planned=planned, parent=parent,
+                configured=configured, launch=launch, runtime=identities, digest=digest,
+                root=root, work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns)
         grant_raw, caller_raw = tuple(caller.authorization.transport._decode(
             value[name]["base64Url"], value[name]["byteCount"], maximum, work)
             for name, maximum in _ORIGINAL_LIMITS)
@@ -174,7 +249,7 @@ def _admit_on_work(*, consume_execution, configuration_payload, configuration_di
                 raise OidcSessionActivationConsumeExecutionBootstrapError(
                     "consume caller key reuses another independently configured purpose")
         reservation_endpoint = reservation_predecessor = sql_endpoint = completion_endpoint = None
-        if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
             current = caller.authorization._admit_enrollment_on_work(
                 enrollment_bytes=current_raw, root_public_key=root, work=work)
             for actual, expected in (
@@ -182,23 +257,29 @@ def _admit_on_work(*, consume_execution, configuration_payload, configuration_di
                     (current.payload["generationDigest"], launch["digest"]),
                     (current.payload["databaseId"], policy["databaseId"])):
                 plan._same(actual, expected, work, "consume predecessor original enrollment")
-            reservation_predecessor = _predecessor(value["reservationPredecessor"])
-            sequence, head, fence = reservation_predecessor
-            if sequence + 2 > current.payload["maxRecords"]:
-                raise OidcSessionActivationConsumeExecutionBootstrapError(
-                    "consume predecessor lacks enrolled reserve and completion capacity")
-            if sequence == 0:
-                plan._same(head, current.enrollment_digest, work, "consume independent genesis head")
+            if not request_bound:
+                reservation_predecessor = _predecessor(value["reservationPredecessor"])
+                sequence, head, fence = reservation_predecessor
+                if sequence + 2 > current.payload["maxRecords"]:
+                    raise OidcSessionActivationConsumeExecutionBootstrapError(
+                        "consume predecessor lacks enrolled reserve and completion capacity")
+                if sequence == 0:
+                    plan._same(head, current.enrollment_digest, work, "consume independent genesis head")
             reservation_endpoint = _endpoint(value["reservationEndpoint"], _path=RESERVATION_SOCKET_PATH)
             sql_endpoint = _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
-        if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
+        if value["schema"] in (V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
             completion_endpoint = _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
-        return _ConsumeExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, planner_key, root,
+        result = _ConsumeExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, planner_key, root,
             current_raw, grant_raw, caller_raw, admitted.enrollment_digest, policy["callerId"],
             policy["callerKey"]["measurementDigest"], policy["maximumAgeNs"],
             policy["maximumClockSkewNs"], _endpoint(value["authorizerEndpoint"]),
             reservation_endpoint, reservation_predecessor, sql_endpoint, completion_endpoint,
-            value["schema"] == V4_SCHEMA)
+            value["schema"] in (V4_SCHEMA, V5_SCHEMA), request_bound)
+        if processing is not None:
+            processing()
+        if resources is not None:
+            resources.live()
+        return result
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationConsumeExecutionBootstrapError):
             raise

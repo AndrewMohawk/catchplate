@@ -14,6 +14,7 @@ from serverware import oidc_session_activation_release_intent_enrollment as enro
 
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseIntent/v1"
+V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseIntent/v2"
 CALLER_KEY_FD = 207
 MAX_BYTES = enrollment.authorization.authority.MAX_REQUEST_BYTES
 _FIELDS = frozenset({"schema", "callerPrivateKeyFd", "intentEnrollment", "expectedScope"})
@@ -40,7 +41,8 @@ def _shape(value):
     if value is None:
         return
     shape._object(value, _FIELDS, "control-plane release intent configuration")
-    shape._literal(value["schema"], SCHEMA)
+    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA):
+        raise OidcSessionActivationReleaseIntentBootstrapError("release intent purpose version differs")
     shape._integer(value["callerPrivateKeyFd"], 1023, minimum=32)
     if value["callerPrivateKeyFd"] != CALLER_KEY_FD:
         raise OidcSessionActivationReleaseIntentBootstrapError("release intent requires dedicated FD207")
@@ -85,14 +87,16 @@ def _unique_keys(values, work):
 def _admit_on_work(*, release_intent, configuration_payload, configuration_digest,
         generation, runtime_role_identities, runtime_root_public_key,
         activation_execution, activation_planning, consume_execution,
-        issuer_public_key, execution_caller_public_key, finalization_caller_public_key, work):
+        issuer_public_key, execution_caller_public_key, finalization_caller_public_key, work,
+        live_window=None, transport_deadline_ns=None):
     return _admit(release_intent=release_intent, configuration_payload=configuration_payload,
         configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,
         activation_execution=activation_execution, activation_planning=activation_planning,
         consume_execution=consume_execution, issuer_public_key=issuer_public_key,
         execution_caller_public_key=execution_caller_public_key,
-        finalization_caller_public_key=finalization_caller_public_key, work=work)
+        finalization_caller_public_key=finalization_caller_public_key, work=work,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns)
 
 
 def _admit_historical_on_work(*, release_intent, configuration_payload, configuration_digest,
@@ -131,19 +135,33 @@ def _admit(*, release_intent, configuration_payload, configuration_digest,
         _shape(release_intent)
         if release_intent is None:
             return None
+        if (live_window is None) != (transport_deadline_ns is None):
+            raise OidcSessionActivationReleaseIntentBootstrapError("release intent requires the complete original processing pair")
+        request_bound = release_intent["schema"] == V2_SCHEMA
+        planning_type = planning._PlanningMaterial
+        if request_bound:
+            from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
+            planning_type = requested._RequestPlanningMaterial
+            if historical_interval is not None:
+                raise OidcSessionActivationReleaseIntentBootstrapError(
+                    "historical request-bound policy admission is not provisioned")
         processing = None
-        if historical_interval is not None:
+        if live_window is not None:
             processing = planning.planner._processing(live_window, transport_deadline_ns, work,
                 _continuity=_continuity)
             processing()
         if (type(activated) is not activation._ActivationExecutionMaterial
-                or type(planned) is not planning._PlanningMaterial
+                or type(planned) is not planning_type
                 or type(consumed) is not consume._ConsumeExecutionMaterial
+                or consumed.request_bound is not request_bound
                 or consumed.release_hints is not True or consumed.completion_endpoint is None):
             raise OidcSessionActivationReleaseIntentBootstrapError(
-                "release intent requires actual activation planning and consume v4")
+                "release intent requires matching actual activation planning and consume resources")
         current_raw, grant_raw = consumed.current_root_enrollment_bytes, consumed.grant_enrollment_bytes
-        planner_raw = planned.planner_bootstrap_bytes
+        if request_bound and consumed.reservation_predecessor is not None:
+            raise OidcSessionActivationReleaseIntentBootstrapError(
+                "request-bound consume cannot supply a future reservation predecessor")
+        planner_raw = None if request_bound else planned.planner_bootstrap_bytes
         held_keys = (activated.planner_public_key, consumed.planner_public_key,
             activated.caller_public_key, consumed.caller_public_key, *other_keys)
         enrollment.authorization._public(root)
@@ -167,11 +185,24 @@ def _admit(*, release_intent, configuration_payload, configuration_digest,
         granted = consume.caller.enrollments._admit_enrollment_on_work(
             grant_enrollment_bytes=grant_raw, current_root_enrollment_bytes=current_raw,
             root_public_key=root, work=work)
-        # This repeats genuine cold planner-original admission on the same work;
-        # its static freshness is not a request-time permission or new allowance.
-        if historical_interval is None:
+        # Static v1 preserves genuine full-planner admission, including its
+        # historical path. V2 reauthenticates the actual resource policy; no
+        # complete vector or successful future planner carrier is invented.
+        resources = None
+        if request_bound:
+            resources = consume._request_policy_on_work(planned=planned, parent=activated,
+                configured=configured, launch=launch, runtime=identities, digest=digest,
+                root=root, work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns)
+            original_current = resources.resource_facts[4]
+            work.charge(input_bytes=len(original_current) + len(current_raw))
+            if original_current != current_raw:
+                raise OidcSessionActivationReleaseIntentBootstrapError(
+                    "release intent resource policy changed the original current-root enrollment")
+            runtime_closure_digest = resources.payload["plannerResources"]["runtimeClosureDigest"]
+        elif historical_interval is None:
             planner = planning.planner._verify_on_work(
-                bootstrap_bytes=planner_raw, root_public_key=root, work=work)
+                bootstrap_bytes=planner_raw, root_public_key=root, work=work,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns)
         else:
             planner = planning.planner._verify_historical_on_work(
                 bootstrap_bytes=planner_raw, root_public_key=root, live_window=live_window,
@@ -181,14 +212,16 @@ def _admit(*, release_intent, configuration_payload, configuration_digest,
                 raise OidcSessionActivationReleaseIntentBootstrapError(
                     "historical intent planner exceeds its independently admitted snapshot")
             processing()
-        for actual, wanted in ((planner.configuration_payload, configured),
-                (planner.generation, launch), (planner.runtime_role_identities, identities)):
-            planning._same_configuration(actual, wanted, work, "release intent parent planner cohort")
+        if not request_bound:
+            for actual, wanted in ((planner.configuration_payload, configured),
+                    (planner.generation, launch), (planner.runtime_role_identities, identities)):
+                planning._same_configuration(actual, wanted, work, "release intent parent planner cohort")
+            runtime_closure_digest = planner.runtime_closure_digest
         for actual, wanted in ((expected["configurationDigest"], digest),
                 (expected["generationDigest"], launch["digest"]),
                 (expected["databaseId"], current.payload["databaseId"]),
                 (current.payload["generationDigest"], launch["digest"]),
-                (expected["runtimeClosureDigest"], planner.runtime_closure_digest)):
+                (expected["runtimeClosureDigest"], runtime_closure_digest)):
             plan._same(actual, wanted, work, "release intent independent parent scope")
         forbidden = _unique_keys((*held_keys, current.computation_public_key,
             current.completion_public_key, current.state_public_key, granted.authorizer_public_key), work)
@@ -207,10 +240,13 @@ def _admit(*, release_intent, configuration_payload, configuration_digest,
                     "release intent key reuses another configured purpose")
         scope_bytes = enrollment.capability._wire(expected, ledger, enrollment.MAX_BYTES, enrollment.MAX_NODES)
         _scope_on_work(scope_bytes, work)
+        result = _ReleaseIntentMaterial(CALLER_KEY_FD, admitted.caller_public_key, raw,
+            admitted.enrollment_digest, scope_bytes, forbidden)
         if processing is not None:
             processing()
-        return _ReleaseIntentMaterial(CALLER_KEY_FD, admitted.caller_public_key, raw,
-            admitted.enrollment_digest, scope_bytes, forbidden)
+        if resources is not None:
+            resources.live()
+        return result
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationReleaseIntentBootstrapError):
             raise

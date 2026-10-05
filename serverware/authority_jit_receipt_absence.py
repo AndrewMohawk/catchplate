@@ -127,6 +127,10 @@ class _JitReceiptAbsence:
             self._roots = tuple(roots)
             contracts = source.primary_contract.primary_table_contracts(source.OPERATION)
             _require(tuple(item.table for item in self._roots) == tuple(item.table for item in contracts))
+            by_class = {item.table: item.root_class for item in contracts}
+            self._business = tuple(item for item in self._roots if by_class[item.table] == "business")
+            self._authorization = tuple(item for item in self._roots if by_class[item.table] == "authorization")
+            _require(len(self._business) == len(self._authorization) == 4)
             self._contract = next(item for item in contracts if item.table == source.receipt.RECEIPT_TABLE)
             self._root = next(item for item in self._roots if item.table == self._contract.table)
             digest = receipt_owner._receipt["assertion_receipt_digest"]
@@ -224,8 +228,8 @@ class _JitReceiptAbsence:
             work.charge(input_bytes=512, json_nodes=32)
             selected = (*self._selected, self._absence)
             size, _ = work.measure(selected)
-            # All eight are business rows: the generic extra 8192 bytes do not
-            # authorize borrowing framework capacity for this operation.
+            # All eight are non-framework selections (four business and four
+            # authorization roots). The extra 8192 bytes are not their credit.
             _require(size <= source.authority.MAX_REQUEST_BYTES
                 and size <= source.authority.MAX_PLAN_SELECTED_BYTES)
             queries = (*self._queries, self._query)
@@ -235,7 +239,7 @@ class _JitReceiptAbsence:
             selected = tuple(sorted(selected, key=lambda item: (item["table"], item["keyDigest"])))
             context = core.KernelContext(source.OPERATION, self._request["arguments"], selected,
                 self._now, self._request["requestDigest"], query_reads=records)
-            result = _ReceiptAbsenceOriginals(self._request, context, self._roots, (),
+            result = _ReceiptAbsenceOriginals(self._request, context, self._business, self._authorization,
                 (*self._proofs, self._absence_proof), queries)
         self._closed = True
         return result

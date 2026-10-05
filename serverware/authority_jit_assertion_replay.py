@@ -148,9 +148,7 @@ def _source_bindings(work):
         domain_size = work.prepare_utf8(domain)
         work.charge(hashes=1, input_bytes=16 + domain_size + size)
         values[field] = source.primary_contract._manifest_digest(domain, manifest)
-    work.prepare_encoding(spec)
-    work.charge(hashes=1, input_bytes=128)
-    values["handlerContractDigest"] = source.authority.handler_contract_digest(OPERATION)
+    values["handlerContractDigest"] = source._handler_contract_on_work(work)
     return values, spec
 
 

@@ -71,6 +71,23 @@ def _policy(value):
         and 1 <= value["maximum_assertion_age_seconds"] <= 30)
 
 
+def _handler_contract_on_work(work):
+    """Meter the actual source JSON projection, not its read-only spec map.
+
+    The fixed source projector constructs two bounded JSON graphs and hashes
+    its genuine handler material internally. Reserve that construction before
+    calling it, then measure the exact returned projection on the same work.
+    No generic Mapping object is treated as caller-admitted lossless JSON.
+    """
+    _require(type(work) is _ValidationWork)
+    work.charge(hashes=1, input_bytes=4 * 16384, json_nodes=4 * 2048)
+    entry = authority._operation_manifest_entry(OPERATION, authority.operation_spec(OPERATION))
+    size, nodes = work.measure(entry)
+    _require(size <= 16384 and nodes <= 2048)
+    shape._digest(entry["handlerDigest"])
+    return entry["handlerDigest"]
+
+
 def _request(request, work):
     shape._object(request, shape.TYPED_REQUEST_FIELDS, "JIT typed request")
     _require(request["operation"] == OPERATION and type(request["operation"]) is str)
@@ -272,12 +289,12 @@ def _acquire_on_work(cursor, *, request, assertion_policy, manifest, manifest_di
         auth_source = primary_contract.source_authorization_manifest()
         work.prepare_copy(auth_source)
         work.prepare_encoding(auth_source)
-        work.prepare_encoding(spec)
-        work.charge(hashes=2, input_bytes=256)
+        handler_digest = _handler_contract_on_work(work)
+        work.charge(hashes=1, input_bytes=256)
         document = {"schema": SCHEMA, "sourceRevision": authority.SOURCE_REVISION, "operation": OPERATION,
             "operationManifestDigest": authority.OPERATION_MANIFEST_DIGEST, "queryManifestDigest": manifest_digest,
             "authorizationManifestDigest": primary_contract.source_authorization_manifest_digest(),
-            "handlerContractDigest": authority.handler_contract_digest(OPERATION), "request": request,
+            "handlerContractDigest": handler_digest, "request": request,
             "assertionPolicy": assertion_policy, "databaseCutoffUs": cutoff // 1000,
             "businessBeforeRoots": business, "authorizationBeforeRoots": authorization,
             "countedBeforeHeads": actual_heads, "selectedRows": selected, "beforeProofs": proofs,

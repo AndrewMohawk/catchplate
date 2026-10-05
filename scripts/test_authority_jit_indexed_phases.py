@@ -81,6 +81,11 @@ class JitIndexedPhaseControls(unittest.TestCase):
         self.assertEqual(actual.result.metrics.new_row_hashes, 2)
         self.assertEqual(actual.result.metrics.primary.mutations, 3)
         self.assertEqual(tuple(head.index_id for head in actual.result.after_heads), source.heads._jit_receipt_ids())
+        self.assertEqual(len(actual.result.primary.business_after_roots), 4)
+        self.assertEqual(len(actual.result.primary.authorization_after_roots), 4)
+        self.assertEqual(actual.result.primary.authorization_after_roots, anchors["authorization_before_roots"])
+        for root in actual.result.primary.authorization_after_roots:
+            self.assertEqual(root, trees[root.table].root)
         before = {root.table: root for root in anchors["business_before_roots"]}
         for root in actual.result.primary.business_after_roots:
             if root.table not in mutations:
@@ -168,12 +173,25 @@ class JitIndexedPhaseControls(unittest.TestCase):
 
     def test_independent_anchor_rosters_cannot_be_shortened_reordered_or_alias_typed(self):
         anchors, *_rest = fixture()
-        for defect in ("primary-short", "primary-order", "head-short", "head-order", "bool"):
+        for defect in ("primary-short", "primary-order", "authorization-short", "authorization-order",
+                "root-class-swap", "authorization-bool", "head-short", "head-order", "bool"):
             values = copy.deepcopy(anchors)
             if defect == "primary-short":
                 values["business_before_roots"] = values["business_before_roots"][:-1]
             elif defect == "primary-order":
                 values["business_before_roots"] = tuple(reversed(values["business_before_roots"]))
+            elif defect == "authorization-short":
+                values["authorization_before_roots"] = values["authorization_before_roots"][:-1]
+            elif defect == "authorization-order":
+                values["authorization_before_roots"] = tuple(reversed(values["authorization_before_roots"]))
+            elif defect == "root-class-swap":
+                business, authorization = values["business_before_roots"], values["authorization_before_roots"]
+                values["business_before_roots"] = tuple(sorted((authorization[0], *business[1:]),
+                    key=lambda root: root.table))
+                values["authorization_before_roots"] = tuple(sorted((business[0], *authorization[1:]),
+                    key=lambda root: root.table))
+            elif defect == "authorization-bool":
+                object.__setattr__(values["authorization_before_roots"][0], "root_revision", True)
             elif defect == "head-short":
                 values["counted_before_heads"] = values["counted_before_heads"][:-1]
             elif defect == "head-order":
@@ -240,7 +258,7 @@ class JitIndexedPhaseControls(unittest.TestCase):
         self.assertFalse(owner._busy)
 
     def test_acquisition_cannot_replace_metadata_reenter_reuse_or_leave_changed_limits(self):
-        for defect in ("head", "change", "count", "limits", "reenter", "repeat", "reuse"):
+        for defect in ("head", "authorization-root", "change", "count", "limits", "reenter", "repeat", "reuse"):
             anchors, rows, proofs, mutations, inputs, _trees = fixture()
             works = [meter() for _ in range(30)]
             owner = source._JitIndexedPhases(**anchors, work=works[0])
@@ -252,6 +270,8 @@ class JitIndexedPhaseControls(unittest.TestCase):
                     item, _profile, changes, _delta, _allowance, prepared = binding
                     if defect == "head":
                         object.__setattr__(item.index_root, "count", bool(item.index_root.count))
+                    elif defect == "authorization-root":
+                        object.__setattr__(owner._authorization[0], "root_revision", True)
                     elif defect == "change":
                         object.__setattr__(changes[0].after, "primary_row_digest", "sha256:" + "a" * 64)
                     elif defect == "count":

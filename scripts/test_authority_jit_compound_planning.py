@@ -58,6 +58,26 @@ def trace():
         tuple(f"synthetic_index_{i}" for i in range(12)))
 
 
+def initial_rows():
+    """Source-shaped synthetic metadata, not enrolled or current anchors."""
+    contracts = source.acquisition.primary_contract.primary_table_contracts(source.OPERATION)
+    manifest = source.acquisition.primary_contract.source_query_manifest_digest()
+    held = source._SetupTrace(tuple(item.table for item in contracts), source.heads._jit_receipt_ids())
+    primary = [{"table_name": item.table, "root_revision": 1, "root_digest": digest("4"),
+        "leaf_count": 1, "tree_depth": 64, "tree_radix": 16,
+        "manifest_digest": manifest, "updated_at_epoch_ns": 1} for item in contracts]
+    projection_manifest = source.heads.projection.projection_manifest_digest()
+    counted = []
+    for identity in held.identities:
+        profile = source.heads.projection.profile_for(identity)
+        counted.append({"index_id": identity, "table_name": profile.table,
+            "counted_profile": source.heads.counted.PROFILE,
+            "projection_digest": profile.projection_digest,
+            "projection_manifest_digest": projection_manifest,
+            "index_revision": 1, "root_digest": digest("5"), "leaf_count": 1})
+    return contracts, manifest, held, primary, counted
+
+
 class Cursor:
     """Only literal read/result framing; never a native connection double."""
 
@@ -91,6 +111,7 @@ class JitCompoundPlanningControls(unittest.TestCase):
                 source.JitCompoundReadPlanner(**{**configuration(), **changes})
 
     def test_exact_twelve_read_order_and_marker_types(self):
+        self.assertEqual(source.existing._CATALOG_ROWS, (1, 1, 4, 4))
         held = trace()
         for table, key in schedule(held):
             held.read(table, key)
@@ -110,6 +131,53 @@ class JitCompoundPlanningControls(unittest.TestCase):
         key = {**key, "setupOrdinal": False}
         with self.assertRaises(ValueError):
             held.read(table, key)
+
+    def test_actual_eight_root_read_preserves_both_source_classes(self):
+        contracts, manifest, held, primary, counted = initial_rows()
+        cursor, meter = Cursor([primary, counted]), work()
+        for call in schedule(held)[:5]:
+            held.read(*call)
+        collector = source.reader._ReadAcquisitionBudget(cursor, held, work=meter, limits=source._SETUP_LIMITS)
+        with collector.read_phase(cursor, held, meter):
+            business, authorization, observed_heads = source._initial_roots(
+                cursor, held, collector, manifest, contracts, meter)
+        self.assertEqual(tuple(root.table for root in business), (
+            "approval_requests", "jit_webauthn_assertion_receipts",
+            "webauthn_challenges", "webauthn_credentials"))
+        self.assertEqual(tuple(root.table for root in authorization), (
+            "policy_high_water", "rbac_role_bindings",
+            "webauthn_trust_publication_high_water", "webauthn_trust_publications"))
+        self.assertEqual(tuple(head.index_id for head in observed_heads), held.identities)
+        self.assertEqual((collector.sql_reads, collector.returned_rows, held.position), (2, 20, 7))
+        self.assertEqual(cursor.executed[0][1], (*held.tables, 9))
+        self.assertEqual(cursor.executed[1][1], (*held.identities, 13))
+        self.assertGreater(collector.transport_bytes, 0)
+        self.assertGreater(meter.input_bytes, collector.transport_bytes)
+        primary[0]["root_digest"] = digest("6")
+        self.assertEqual(business[0].root_digest, digest("4"))
+
+    def test_root_metadata_still_requires_global_query_manifest_and_exact_roster(self):
+        for changed in ("authorization_manifest", "missing", "extra", "order"):
+            contracts, manifest, held, primary, counted = initial_rows()
+            if changed == "authorization_manifest":
+                authorization_manifest = source.acquisition.primary_contract.source_authorization_manifest_digest()
+                self.assertNotEqual(manifest, authorization_manifest)
+                ordinal = next(i for i, item in enumerate(contracts) if item.root_class == "authorization")
+                primary[ordinal]["manifest_digest"] = authorization_manifest
+            elif changed == "missing":
+                primary.pop()
+            elif changed == "extra":
+                primary.append(primary[-1].copy())
+            else:
+                primary[0], primary[1] = primary[1], primary[0]
+            cursor, meter = Cursor([primary, counted]), work()
+            for call in schedule(held)[:5]:
+                held.read(*call)
+            collector = source.reader._ReadAcquisitionBudget(cursor, held, work=meter, limits=source._SETUP_LIMITS)
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                with collector.read_phase(cursor, held, meter):
+                    source._initial_roots(cursor, held, collector, manifest, contracts, meter)
+            self.assertEqual(len(cursor.executed), 1)
 
     def test_actual_currentness_sql_is_retained_and_physically_accounted(self):
         module = Path(source.__file__).with_name("control_plane_rbac_currentness.py")
@@ -200,9 +268,14 @@ class JitCompoundPlanningControls(unittest.TestCase):
         self.assertIn("wrapped.execute(physical._SET_TRANSACTION)", text)
         self.assertLess(text.index("wrapped.execute(physical._SET_TRANSACTION)"),
             text.index("original_transaction ="))
-        self.assertIn("rbac.require_roots(business_wire", text)
+        self.assertIn("len(business_before_roots) == 4", text)
+        self.assertIn("len(authorization_before_roots) == 4", text)
+        self.assertIn("len(manifest) == 4 and len(authorization) == 4", text)
+        self.assertIn("acquisition._same(authorization_wire, owned['authorization'], work)", text)
+        self.assertIn("rbac.require_roots(business_wire + authorization_wire", text)
         self.assertIn("rbac_cursor.ordinal == 2", text)
         self.assertIn("roots._callback(work, compound.run_pass", text)
+        self.assertIn("authorization_before_roots=authorization", text)
         self.assertIn("read_original=None", text)
         self.assertIn("type(result) is compound.JitPassObservation", text)
         self.assertLess(text.index("connection.closed is True"), text.index("return result"))

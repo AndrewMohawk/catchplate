@@ -99,8 +99,9 @@ def connected_fixture():
     delta = values["verified_at"] - primary._EPOCH
     cutoff = (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
     return dict(request=request, assertion_policy=configuration()["assertion_policy"],
-        business_before_roots=tuple(trees[item.table].root for item in contracts),
-        authorization_before_roots=(), counted_before_heads=tuple(heads),
+        business_before_roots=tuple(trees[item.table].root for item in contracts if item.root_class == "business"),
+        authorization_before_roots=tuple(trees[item.table].root for item in contracts
+            if item.root_class == "authorization"), counted_before_heads=tuple(heads),
         database_cutoff_us=cutoff, queries=queries, trees=trees, index_inputs=tuple(inputs))
 
 
@@ -150,6 +151,10 @@ class JitConnectedOriginalControls(unittest.TestCase):
         case = connected_fixture()
         rows, captured, retained_chunks = capture_seven(case)
         receipt, first_digest = first_receipt(captured, case["assertion_policy"])
+        self.assertEqual(len(case["business_before_roots"]), 4)
+        self.assertEqual(len(case["authorization_before_roots"]), 4)
+        self.assertEqual(captured.business_before_roots, case["business_before_roots"])
+        self.assertEqual(captured.authorization_before_roots, case["authorization_before_roots"])
         self.assertEqual(len(captured.context.selected_rows), 7)
         self.assertEqual(len(captured.context.query_reads), 7)
         self.assertIn(b"[]", retained_chunks)  # Real independent absent RBAC row.
@@ -166,6 +171,8 @@ class JitConnectedOriginalControls(unittest.TestCase):
         proof = raw.decode_proof(raw.encode_proof(case["trees"][query.table].proof(selected), work=work), work=work)
         eighth.admit(selected_row=selected, before_proof=proof, work=work)
         full = eighth.finish(meter())
+        self.assertEqual(full.business_before_roots, case["business_before_roots"])
+        self.assertEqual(full.authorization_before_roots, case["authorization_before_roots"])
         self.assertEqual(tuple(item.query_id for item in full.context.query_reads),
             tuple(item.query_id for item in (*case["queries"], query)))
         transition = semantics._JitAssertionTransition(full.context,
@@ -214,12 +221,16 @@ class JitConnectedOriginalControls(unittest.TestCase):
         self.assertEqual(len(actual.stage_work), 30)
         self.assertEqual(actual.result.metrics.primary.mutations, 3)
         self.assertEqual(actual.result.metrics.new_row_hashes, 2)
+        self.assertEqual(len(actual.result.primary.business_after_roots), 4)
+        self.assertEqual(actual.result.primary.authorization_after_roots, case["authorization_before_roots"])
+        for root in actual.result.primary.authorization_after_roots:
+            self.assertEqual(root, case["trees"][root.table].root)
         after_trees = {}
         for root in actual.result.primary.business_after_roots:
             tree = case["trees"][root.table]
             mutation = mutations.get(root.table)
             if mutation is None:
-                self.assertEqual(root, tree.root)  # All five read-only roots remain exact.
+                self.assertEqual(root, tree.root)  # The read-only approval business root stays exact.
                 continue
             remaining = [row for row in tree.rows.values() if tree.key(row) != mutation["key"]]
             after_trees[root.table] = IndependentTree([*remaining, mutation["row"]], table=tree.table,

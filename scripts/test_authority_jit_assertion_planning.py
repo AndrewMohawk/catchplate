@@ -218,6 +218,10 @@ class JitAssertionPlanningControls(unittest.TestCase):
             planner.PlannerTrace(operation="webauthn.challenge.maintain", _jit_successor=True)
 
     def test_setup_trace_is_fixed_four_catalog_plus_six_real_transaction_queries(self):
+        spec = acquisition.authority.operation_spec(acquisition.OPERATION)
+        self.assertEqual(source._CATALOG_ROWS, (1, 1, 4, 4))
+        self.assertEqual(len(set(spec["businessReads"]) | set(spec["businessWrites"])), 4)
+        self.assertEqual(len(spec["authorizationReads"]), 4)
         trace = source._SetupTrace()
         transaction = (source.transaction_source._TRANSACTION_TABLE,
             {"profile": source.transaction_source._TRANSACTION_PROFILE, "rowLimit": 2})
@@ -241,6 +245,8 @@ class JitAssertionPlanningControls(unittest.TestCase):
         self.assertLess(body.index("original_transaction ="), body.index("planner._validate_database_identity"))
         self.assertLess(body.index("connection.closed is True"), body.index("return raw"))
         self.assertIn("planner._load_authorization_manifest", body)
+        self.assertIn("len(manifest) == len(authorization) == 4", body)
+        self.assertIn("manifest=read_manifest", body)
         self.assertIn("current_snapshot()", body)
         self.assertNotIn("_open_on_work", native_text)
         functions = [node for node in raw_tree.body if isinstance(node, ast.FunctionDef)]

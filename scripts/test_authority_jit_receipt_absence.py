@@ -59,8 +59,11 @@ def fixture(*, almost_full=False):
         trees[item.table].root.leaf_count) for item in contracts)
     delta = values["verified_at"] - source.primary_rows._EPOCH
     cutoff = (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
-    row_owner = source.primary_rows._JitPrimaryRows(request=request, business_before_roots=roots,
-        authorization_before_roots=(), database_cutoff_us=cutoff, work=meter())
+    classes = {item.table: item.root_class for item in contracts}
+    row_owner = source.primary_rows._JitPrimaryRows(request=request,
+        business_before_roots=tuple(root for root in roots if classes[root.table] == "business"),
+        authorization_before_roots=tuple(root for root in roots if classes[root.table] == "authorization"),
+        database_cutoff_us=cutoff, work=meter())
     for query in queries:
         selected = trees[query.table].selected(query.absent_key)
         row_owner.begin_row(meter())
@@ -109,8 +112,8 @@ class JitReceiptAbsenceControls(unittest.TestCase):
         self.assertEqual(len(result.context.selected_rows), 8)
         self.assertEqual(len(result.context.query_reads), 8)
         self.assertEqual(len(result.before_proofs), 8)
-        self.assertEqual(len(result.business_before_roots), 8)
-        self.assertEqual(result.authorization_before_roots, ())
+        self.assertEqual(len(result.business_before_roots), 4)
+        self.assertEqual(len(result.authorization_before_roots), 4)
         self.assertEqual(result.context.database_now, receipt._context.database_now)
         self.assertEqual(result.context.request_digest, rows._request["requestDigest"])
         self.assertEqual(tuple(item.query_id for item in result.context.query_reads),

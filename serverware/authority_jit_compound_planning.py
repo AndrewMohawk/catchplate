@@ -140,9 +140,10 @@ class _RbacCursor:
         return rows[0]
 
 
-def _initial_roots(cursor, trace, budget, manifest_digest, work):
+def _initial_roots(cursor, trace, budget, manifest_digest, contracts, work):
     # Reserve fixed inventory/SQL/result scaffolding before constructing it.
     work.charge(input_bytes=16384, json_nodes=512)
+    _require(tuple(item.table for item in contracts) == trace.tables)
     empty = roots._primary_empty_root(work)
     sql = (f"SELECT {roots._PRIMARY_SELECT} FROM serverware_metadata.{roots.PRIMARY_TABLE} AS root "
         f"WHERE root.table_name IN ({', '.join('%s' for _ in trace.tables)}) "
@@ -153,6 +154,9 @@ def _initial_roots(cursor, trace, budget, manifest_digest, work):
             {"profile": _PRIMARY_PROFILE, "tableNames": list(trace.tables), "rowLimit": 9},
             sql, (*trace.tables, 9), 8)
         _require(len(rows) == 8)
+        # The actual metadata producer binds every primary root to the global
+        # QUERY manifest, including authorization-class roots. The separate
+        # authorization manifest is admitted above, not substituted here.
         observed = tuple(roots._owned_primary_row(row, table, manifest_digest, empty, budget, work)
             for table, row in zip(trace.tables, rows, strict=True))
     counted = heads.read_operation_index_heads(cursor, operation=OPERATION, trace=trace,
@@ -160,11 +164,15 @@ def _initial_roots(cursor, trace, budget, manifest_digest, work):
     _require(tuple(head.index_id for head in counted) == trace.identities)
     by_table = {row.table_name: row.leaf_count for row in observed}
     _require(all(head.index_root.count <= by_table[head.table] for head in counted))
-    business = tuple(acquisition.indexed.primary.PrimaryRoot(row.table_name, row.root_revision,
+    primary = tuple(acquisition.indexed.primary.PrimaryRoot(row.table_name, row.root_revision,
         row.root_digest, row.leaf_count) for row in observed)
+    business = tuple(root for item, root in zip(contracts, primary, strict=True)
+        if item.root_class == "business")
+    authorization = tuple(root for item, root in zip(contracts, primary, strict=True)
+        if item.root_class == "authorization")
     write_heads = tuple(acquisition.read_write.CompleteReadWriteHead(head.index_id,
         head.index_revision, head.index_root) for head in counted)
-    return business, write_heads
+    return business, authorization, write_heads
 
 
 def _cutoff_value(row, now, deadline, skew):
@@ -196,7 +204,7 @@ class JitCompoundReadPlanner:
         dsn, timeout, identity, policy = configured
         _require(type(request) is dict and type(business_before_roots) is tuple
             and type(authorization_before_roots) is tuple and type(expected_counted_heads) is tuple
-            and len(business_before_roots) == 8 and not authorization_before_roots
+            and len(business_before_roots) == 4 and len(authorization_before_roots) == 4
             and len(expected_counted_heads) == 12)
         owned = acquisition.reads._CopyBudget(work).copy({"request": request,
             "business": business_before_roots, "authorization": authorization_before_roots,
@@ -205,7 +213,9 @@ class JitCompoundReadPlanner:
         work.prepare_copy(policy)
         selected_policy = dict(zip(acquisition._POLICY_FIELDS, policy))
         contracts = acquisition.primary_contract.primary_table_contracts(OPERATION)
-        _require(len(contracts) == 8 and all(item.root_class == "business" for item in contracts))
+        _require(len(contracts) == 8
+            and sum(item.root_class == "business" for item in contracts) == 4
+            and sum(item.root_class == "authorization" for item in contracts) == 4)
         tables = tuple(item.table for item in contracts)
         identities = heads._jit_receipt_ids()
         _require(len(identities) == 12)
@@ -247,17 +257,20 @@ class JitCompoundReadPlanner:
                             manifest, digest = planner._load_manifest(catalog, operation=OPERATION, trace=proof_trace)
                             authorization = planner._load_authorization_manifest(catalog,
                                 operation=OPERATION, trace=proof_trace)
-                            _require(len(manifest) == 8 and not authorization and catalog.pending is None)
-                            business, counted = _initial_roots(wrapped, trace, budget, digest, work)
+                            _require(len(manifest) == 4 and len(authorization) == 4 and catalog.pending is None)
+                            business, authorization, counted = _initial_roots(
+                                wrapped, trace, budget, digest, contracts, work)
                             work.charge(input_bytes=16384, json_nodes=512)
                             business_wire = tuple(root.json_projection() for root in business)
+                            authorization_wire = tuple(root.json_projection() for root in authorization)
                             counted_wire = tuple({"indexId": head.index_id, "indexRevision": head.index_revision,
                                 "rootDigest": head.index_root.digest, "leafCount": head.index_root.count} for head in counted)
                             acquisition._same(business_wire, owned["business"], work)
+                            acquisition._same(authorization_wire, owned["authorization"], work)
                             acquisition._same(counted_wire, owned["heads"], work)
                             rbac_cursor = _RbacCursor(wrapped, trace, budget, work)
                             held.check()
-                            rbac.require_roots(business_wire, cursor=rbac_cursor,
+                            rbac.require_roots(business_wire + authorization_wire, cursor=rbac_cursor,
                                 deadline_epoch_ns=deadline_epoch_ns, deadline_ns=guard._original[4])
                             _require(rbac_cursor.ordinal == 2 and rbac_cursor.pending is None)
                             held.check()
@@ -278,7 +291,7 @@ class JitCompoundReadPlanner:
                             # work; no operation callback or supplied verdict.
                             result = roots._callback(work, compound.run_pass,
                                 request=owned["request"], assertion_policy=selected_policy,
-                                business_before_roots=business, authorization_before_roots=(),
+                                business_before_roots=business, authorization_before_roots=authorization,
                                 counted_before_heads=counted, database_cutoff_us=cutoff,
                                 original_deadline_ns=guard._original[4], cursor=wrapped,
                                 trace=proof_trace, check=current, retain_original=retain_original,

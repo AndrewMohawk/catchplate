@@ -139,7 +139,8 @@ class JitPrimaryRowReaderControls(unittest.TestCase):
         self.assertEqual((physical_reads, returned), (7 * 66, 6))
         self.assertEqual(len(cursor.calls), len(trace.records))
         self.assertEqual(result.request, request)
-        self.assertEqual(result.business_before_roots, roots)
+        self.assertEqual(tuple(sorted((*result.business_before_roots, *result.authorization_before_roots),
+            key=lambda item: item.table)), roots)
         self.assertEqual((len(result.context.selected_rows), len(result.before_proofs)), (7, 7))
         self.assertEqual(result.data_chunks, 6)
 

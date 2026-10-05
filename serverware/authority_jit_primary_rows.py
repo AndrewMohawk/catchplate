@@ -74,8 +74,8 @@ class _JitPrimaryRows:
     def __init__(self, *, request, business_before_roots, authorization_before_roots,
             database_cutoff_us, work):
         _require(type(work) is _ValidationWork and type(request) is dict
-            and type(business_before_roots) is tuple and len(business_before_roots) == 8
-            and type(authorization_before_roots) is tuple and not authorization_before_roots
+            and type(business_before_roots) is tuple and len(business_before_roots) == 4
+            and type(authorization_before_roots) is tuple and len(authorization_before_roots) == 4
             and type(database_cutoff_us) is int and 0 <= database_cutoff_us < 2**63)
         self._process = os.getpid(), threading.get_ident()
         self._failed = self._busy = self._closed = False
@@ -96,16 +96,22 @@ class _JitPrimaryRows:
             self._queries = source.reads._snapshot_queries(source.OPERATION,
                 source.receipt.queries(self._request["arguments"]), work=work)
             self._contracts = source.primary_contract.primary_table_contracts(source.OPERATION)
-            _require(len(self._queries) == 7 and len(self._contracts) == 8
-                and all(item.root_class == "business" for item in self._contracts))
-            owned_roots = []
-            for actual in business_before_roots:
-                _require(type(actual) is primary_reader.primary.PrimaryRoot)
-                values = source.reads._CopyBudget(work).copy((actual.table, actual.root_revision,
-                    actual.root_digest, actual.leaf_count))
-                work.charge(hashes=66, json_nodes=5)
-                owned_roots.append(primary_reader.primary.PrimaryRoot(*values))
-            self._roots = tuple(owned_roots)
+            _require(len(self._queries) == 7 and len(self._contracts) == 8)
+            partitions = []
+            for supplied, root_class in ((business_before_roots, "business"),
+                    (authorization_before_roots, "authorization")):
+                owned_roots = []
+                for actual in supplied:
+                    _require(type(actual) is primary_reader.primary.PrimaryRoot)
+                    values = source.reads._CopyBudget(work).copy((actual.table, actual.root_revision,
+                        actual.root_digest, actual.leaf_count))
+                    work.charge(hashes=66, json_nodes=5)
+                    owned_roots.append(primary_reader.primary.PrimaryRoot(*values))
+                _require(tuple(item.table for item in owned_roots)
+                    == tuple(item.table for item in self._contracts if item.root_class == root_class))
+                partitions.append(tuple(owned_roots))
+            self._business, self._authorization = partitions
+            self._roots = tuple(sorted((*self._business, *self._authorization), key=lambda item: item.table))
             _require(tuple(item.table for item in self._roots)
                 == tuple(item.table for item in self._contracts))
             try:
@@ -129,6 +135,8 @@ class _JitPrimaryRows:
                     query.require_absence, query.proof_primitive, query.exact_page, query.page_size,
                     query.secondary_index_name, query.continuation_token_digest)))
         return (id(self._request), id(self._queries), id(self._contracts), id(self._roots), id(self._now),
+            id(self._business), id(self._authorization),
+            tuple(id(root) for root in (*self._business, *self._authorization)),
             self._request_digest, tuple(queries),
             tuple((id(root), _pins(root.table, root.root_revision, root.root_digest, root.leaf_count))
                 for root in self._roots),
@@ -346,7 +354,7 @@ class _JitPrimaryRows:
             work.charge(input_bytes=512, json_nodes=32)
             context = source.core.KernelContext(source.OPERATION, self._request["arguments"],
                 ordered, self._now, self._request["requestDigest"], query_reads=records)
-            result = _OriginalRows(self._request, context, self._roots, (), tuple(self._proofs),
+            result = _OriginalRows(self._request, context, self._business, self._authorization, tuple(self._proofs),
                 self._queries, self._native_bytes, self._data_chunks, self._selected_bytes)
         self._closed = True
         return result

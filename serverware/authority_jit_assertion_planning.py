@@ -26,7 +26,7 @@ _SETUP_LIMITS = acquisition.reader._ReadAcquisitionLimits(max_sql_reads=10,
     max_parameter_bytes=4096, max_transport_bytes=1024 * 1024)
 _CATALOG = ("pg_catalog.pg_stat_ssl", "pg_catalog.pg_class",
     "policy_authority_query_dependency_manifests", "policy_authority_authorization_dependency_manifests")
-_CATALOG_ROWS = (1, 1, 8, 1)
+_CATALOG_ROWS = (1, 1, 4, 4)
 _require = acquisition._require
 
 
@@ -194,7 +194,7 @@ class JitAssertionReadPlanner:
         dsn, timeout, identity, policy = configured
         _require(type(request) is dict and type(business_before_roots) is tuple
             and type(authorization_before_roots) is tuple and type(expected_counted_heads) is tuple
-            and len(business_before_roots) == 8 and not authorization_before_roots
+            and len(business_before_roots) == len(authorization_before_roots) == 4
             and len(expected_counted_heads) == 12)
         # The caller's mutable request/root graphs are detached BEFORE callbacks.
         owned = acquisition.reads._CopyBudget(work).copy({"request": request,
@@ -242,7 +242,13 @@ class JitAssertionReadPlanner:
                                 operation=acquisition.OPERATION, trace=proof_trace)
                             authorization = planner._load_authorization_manifest(catalog,
                                 operation=acquisition.OPERATION, trace=proof_trace)
-                            _require(len(manifest) == 8 and not authorization and catalog.pending is None)
+                            _require(len(manifest) == len(authorization) == 4 and catalog.pending is None)
+                            # Both manifests were independently checked by their
+                            # genuine source validators. Exact-key acquisition
+                            # needs their combined table/key roster, without
+                            # relabelling either root class or manifest digest.
+                            work.prepare_copy((manifest, authorization))
+                            read_manifest = tuple(sorted((*manifest, *authorization), key=lambda item: item["table"]))
 
                             def current_snapshot():
                                 held.check()
@@ -253,7 +259,7 @@ class JitAssertionReadPlanner:
                                 held.check()
 
                             raw = acquisition._acquire_on_work(wrapped, request=owned["request"],
-                                assertion_policy=selected_policy, manifest=manifest,
+                                assertion_policy=selected_policy, manifest=read_manifest,
                                 manifest_digest=digest, business_before_roots=owned["business"],
                                 authorization_before_roots=owned["authorization"],
                                 expected_counted_heads=owned["heads"], now_epoch_ns=now_epoch_ns,

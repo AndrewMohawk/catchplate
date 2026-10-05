@@ -102,7 +102,7 @@ def _prepared_pins(prepared):
                 mutation["keyDigest"], mutation["key"]["id"],
                 mutation["expectedRow"]["id"], mutation["row"]["id"])))
     counts = []
-    for mapping, size in ((prepared.primary_before_counts, 2), (prepared.primary_after_counts, 8)):
+    for mapping, size in ((prepared.primary_before_counts, 2), (prepared.primary_after_counts, 4)):
         _require(type(mapping) is dict and len(mapping) == size)
         counts.append((id(mapping), tuple(_pins(key, value) for key, value in mapping.items())))
     digests = []
@@ -171,24 +171,32 @@ class _JitIndexedPhases:
         self._selected_bytes = self._mutation_bytes = self._engine_bytes = 0
         self._context_hashes = self._projection_hashes = 0
         with self._stage(0, work):
-            _require(type(business_before_roots) is tuple and len(business_before_roots) == 8
-                and type(authorization_before_roots) is tuple and not authorization_before_roots
+            _require(type(business_before_roots) is tuple and len(business_before_roots) == 4
+                and type(authorization_before_roots) is tuple and len(authorization_before_roots) == 4
                 and type(counted_before_heads) is tuple and len(counted_before_heads) == 12)
             self._contracts = primary_contract.primary_table_contracts(OPERATION)
-            _require(len(self._contracts) == 8 and all(item.root_class == "business" for item in self._contracts)
+            _require(len(self._contracts) == 8
+                and sum(item.root_class == "business" for item in self._contracts) == 4
+                and sum(item.root_class == "authorization" for item in self._contracts) == 4
+                and all(not item.write_access or item.root_class == "business" for item in self._contracts)
                 and tuple(item.table for item in self._contracts if item.write_access)
                     == PRIMARY_TABLES)
             # Exact constructors recheck scalar types, genesis/empty roots and
             # source complete ordering; no boolean/integer alias is accepted.
             work.charge(hashes=contract.TREE_DEPTH + 2)
-            copied = []
-            for root in business_before_roots:
-                _require(type(root) is indexed.primary.PrimaryRoot)
-                work.prepare_copy((root.table, root.root_revision, root.root_digest, root.leaf_count))
-                copied.append(indexed.primary._root_snapshot(root))
-            self._business, self._authorization = tuple(copied), ()
-            _require(tuple(root.table for root in self._business)
-                == tuple(item.table for item in self._contracts))
+            inventories = []
+            for root_class, originals in (("business", business_before_roots),
+                    ("authorization", authorization_before_roots)):
+                copied = []
+                for root in originals:
+                    _require(type(root) is indexed.primary.PrimaryRoot)
+                    work.prepare_copy((root.table, root.root_revision, root.root_digest, root.leaf_count))
+                    copied.append(indexed.primary._root_snapshot(root))
+                owned = tuple(copied)
+                _require(tuple(root.table for root in owned)
+                    == tuple(item.table for item in self._contracts if item.root_class == root_class))
+                inventories.append(owned)
+            self._business, self._authorization = inventories
             self._ids = heads._jit_receipt_ids()
             _require(len(self._ids) == 12)
             copied, by_table = [], {root.table: root for root in self._business}
@@ -215,6 +223,8 @@ class _JitIndexedPhases:
     def _anchor_pins(self):
         return (tuple((id(root), _pins(root.table, root.root_revision, root.root_digest, root.leaf_count))
                 for root in self._business),
+            tuple((id(root), _pins(root.table, root.root_revision, root.root_digest, root.leaf_count))
+                for root in self._authorization),
             tuple((id(head), id(head.index_root), _pins(*_head_values(head))) for head in self._heads),
             tuple((id(value), id(value.key_columns), _pins(value.table, *value.key_columns,
                 value.write_access, value.root_class)) for value in self._contracts), self._ids)

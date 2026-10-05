@@ -36,13 +36,16 @@ def fixture(*, large=None, absent=()):
             value[field] = "x" * size
         rows[query.table] = [] if query.table in absent else [value]
     rows[source.source.receipt.RECEIPT_TABLE] = []
+    contracts = source.source.primary_contract.primary_table_contracts(source.source.OPERATION)
     trees = {contract.table: IndependentTree(rows[contract.table], table=contract.table,
-        columns=contract.key_columns) for contract in source.source.primary_contract.primary_table_contracts(
-            source.source.OPERATION)}
+        columns=contract.key_columns) for contract in contracts}
     roots = tuple(source.primary_reader.primary.PrimaryRoot(table, trees[table].root.root_revision,
         trees[table].root.root_digest, trees[table].root.leaf_count) for table in sorted(trees))
-    owner = source._JitPrimaryRows(request=request, business_before_roots=roots,
-        authorization_before_roots=(), database_cutoff_us=1_700_000_000_000_000, work=meter())
+    classes = {item.table: item.root_class for item in contracts}
+    owner = source._JitPrimaryRows(request=request,
+        business_before_roots=tuple(root for root in roots if classes[root.table] == "business"),
+        authorization_before_roots=tuple(root for root in roots if classes[root.table] == "authorization"),
+        database_cutoff_us=1_700_000_000_000_000, work=meter())
     return owner, request, roots, trees, queries
 
 
@@ -78,7 +81,9 @@ class JitPrimaryRowsControls(unittest.TestCase):
         self.assertEqual(owner.next_stage, ("finish", 7))
         result = owner.finish(meter())
         self.assertEqual(result.request, request)
-        self.assertEqual(result.business_before_roots, roots)
+        self.assertEqual(tuple(sorted((*result.business_before_roots, *result.authorization_before_roots),
+            key=lambda item: item.table)), roots)
+        self.assertEqual((len(result.business_before_roots), len(result.authorization_before_roots)), (4, 4))
         self.assertEqual(len(result.context.selected_rows), 7)
         self.assertEqual(len(result.context.query_reads), 7)
         self.assertEqual(len(result.before_proofs), 7)
@@ -101,6 +106,17 @@ class JitPrimaryRowsControls(unittest.TestCase):
         trust = next(item for item in result.context.selected_rows
             if item["table"] == "webauthn_trust_publications")
         self.assertEqual(len(trust["row"]["bundle_json"]), 2 * 1024 * 1024)
+
+    def test_independent_root_classes_are_exact_and_cannot_be_relabelled(self):
+        owner, request, roots, _trees, _queries = fixture()
+        business, authorization = owner._business, owner._authorization
+        for wrong_business, wrong_authorization in ((roots, ()),
+                (authorization, business),
+                ((authorization[0], *business[1:]), (business[0], *authorization[1:]))):
+            with self.subTest(tables=tuple(root.table for root in wrong_business)), self.assertRaises(ValueError):
+                source._JitPrimaryRows(request=request, business_before_roots=wrong_business,
+                    authorization_before_roots=wrong_authorization,
+                    database_cutoff_us=1_700_000_000_000_000, work=meter())
 
     def test_bad_proof_or_changed_exposed_original_never_advances(self):
         for defect in ("proof", "row"):

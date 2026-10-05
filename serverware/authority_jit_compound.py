@@ -324,7 +324,7 @@ def _heads(values, work):
     return tuple(copied)
 
 
-def _context(request, policy, business, heads, cutoff, deadline, work):
+def _context(request, policy, business, authorization, heads, cutoff, deadline, work):
     # Fixed source-manifest generation and scalar roster construction are
     # reserved before the genuine helpers allocate their source documents.
     work.charge(input_bytes=1024 * 1024, json_nodes=32768)
@@ -332,7 +332,8 @@ def _context(request, policy, business, heads, cutoff, deadline, work):
     document.update(schema=CONTEXT_SCHEMA, requestDigest=request["requestDigest"],
         operationId=request["operationId"], assertionPolicy=policy, databaseCutoffUs=cutoff,
         originalDeadlineNs=deadline, businessBeforeRoots=[root.json_projection() for root in business],
-        authorizationBeforeRoots=[], countedBeforeHeads=[{"indexId": head.index_id,
+        authorizationBeforeRoots=[root.json_projection() for root in authorization],
+        countedBeforeHeads=[{"indexId": head.index_id,
             "indexRevision": head.index_revision, "rootDigest": head.index_root.digest,
             "leafCount": head.index_root.count} for head in heads], schedule=schedule_binding())
     return work.wire(document)
@@ -363,7 +364,7 @@ def run_pass(*, request, assertion_policy, business_before_roots, authorization_
             primary = rows._JitPrimaryRows(request=request, business_before_roots=business_before_roots,
                 authorization_before_roots=authorization_before_roots,
                 database_cutoff_us=database_cutoff_us, work=work)
-            invocation._context = _context(primary._request, policy, primary._roots, held_heads,
+            invocation._context = _context(primary._request, policy, primary._business, primary._authorization, held_heads,
                 database_cutoff_us, original_deadline_ns, work)
             context_digest = _framed(CONTEXT_DOMAIN, invocation._context, work=work)
             invocation._chain = _framed(SEED_DOMAIN, context_digest.encode("ascii"), work=work)
@@ -500,7 +501,8 @@ def run_pass(*, request, assertion_policy, business_before_roots, authorization_
                 "originalChainDigest": invocation._chain, "originalCount": len(invocation._descriptors),
                 "originalBytes": invocation._original_bytes, "originals": invocation._descriptors,
                 "businessAfterRoots": [root.json_projection() for root in result.primary.business_after_roots],
-                "authorizationAfterRoots": [], "countedAfterHeads": [{"indexId": head.index_id,
+                "authorizationAfterRoots": [root.json_projection() for root in result.primary.authorization_after_roots],
+                "countedAfterHeads": [{"indexId": head.index_id,
                     "indexRevision": head.index_revision, "rootDigest": head.index_root.digest,
                     "leafCount": head.index_root.count} for head in result.after_heads],
                 "result": transition.result}

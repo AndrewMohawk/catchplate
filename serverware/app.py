@@ -1703,6 +1703,9 @@ _SPECIALIZED_AUTHORITY_OPERATIONS = frozenset(
 )
 _INTERNAL_ONLY_AUTHORITY_OPERATIONS = frozenset(
     {
+        # These successor/disabled families have no generic operator route.
+        # Classifying their source contracts does not admit execution.
+        "jit.assertion.issue",
         "release.audit-drain",
         "credential-nonce.reserve",
         "webauthn.registration.evidence.admit",
@@ -1710,6 +1713,13 @@ _INTERNAL_ONLY_AUTHORITY_OPERATIONS = frozenset(
         "webauthn.counter.cas",
         "webauthn.challenge.claim",
         "webauthn.challenge.consume",
+        "webauthn.challenge.maintain",
+        "webauthn.recovery.create",
+        "webauthn.recovery.candidate",
+        "webauthn.recovery.finalize",
+        "webauthn.recovery.expire",
+        "webauthn.recovery.prune",
+        "webauthn.recovery.invalidate",
     }
 )
 # These operations use dedicated workflow/custody handlers, including their

@@ -461,7 +461,9 @@ class AuthorityIndexRangeTests(unittest.TestCase):
         for interval in (bypassed(self.all, lower=True), bypassed(self.all, upper="f"),
                          bypassed(self.all, lower=key("8"), upper=key("1"))):
             with self.assertRaises(contract.IndexRangeError):
-                self.verify(interval=interval)
+                # Exercise production admission, not the fixture's integer
+                # parser on deliberately malformed interval fields.
+                self.verify(interval=interval, frontier=valid["frontier"])
 
     def test_each_explicit_budget_matches_independent_cost_and_one_less_rejects(self):
         interval = contract.KeyInterval(key("0f"), key("8"))

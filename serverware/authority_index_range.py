@@ -213,6 +213,41 @@ def _open_prefixes(
     return opened
 
 
+def _fold_frontier(
+    *, profile: IndexProfile, frontier: tuple[IndexLeaf | OpaqueSubtree, ...],
+    budget: _Budget,
+) -> tuple[CountedNode, int]:
+    """Fold an already detached/admitted frontier; not query admission.
+
+    Enumeration and cardinality admit different terminal coverage, but use
+    exactly the same counted hashes and cumulative work accounting. Callers
+    must admit their interval semantics and compare the returned root.
+    """
+    opened = _open_prefixes(frontier, budget.limits)
+    work = budget.work
+    nodes: dict[str, CountedNode] = {}
+    for record in frontier:
+        if type(record) is IndexLeaf:
+            budget.hash_work(1)
+            if work is not None:
+                _prepare_hash_frames(profile, LEAF_DOMAIN,
+                                     (str(KEY_NIBBLES), record.key, "1",
+                                      record.primary_key_digest, record.primary_row_digest), work)
+            nodes[record.key] = leaf_node(profile, record)
+        else:
+            nodes[record.prefix] = CountedNode(record.digest, record.count)
+    # Iterative bottom-up folding keeps stack depth independent of hostile
+    # input. Each proper ancestor opens precisely sixteen positional slots.
+    for prefix in sorted(opened, key=lambda value: (-len(value), value)):
+        children = tuple(nodes.get(prefix + nibble) for nibble in _NIBBLES)
+        nonempty = sum(child is not None for child in children)
+        budget.hash_work(1 if nonempty == 0 else 17 - nonempty)
+        if work is not None:
+            _prepare_branch_encoding(profile, prefix, children, work)
+        nodes[prefix] = branch_node(profile, prefix, children)
+    return nodes[""], len(opened)
+
+
 def reconstruct_complete_index_range(
     *, profile: IndexProfile, expected_root: CountedNode, interval: KeyInterval,
     frontier: tuple[IndexLeaf | OpaqueSubtree, ...], limits: IndexRangeLimits,
@@ -261,36 +296,14 @@ def _reconstruct_complete_index_range(
                   "top" if interval.upper is None else interval.upper,
                   str(len(frontier)))
     frontier, leaves = _frontier_snapshot(frontier, interval=interval, budget=budget)
-    opened = _open_prefixes(frontier, limits)
-
-    nodes: dict[str, CountedNode] = {}
-    for record in frontier:
-        if type(record) is IndexLeaf:
-            budget.hash_work(1)
-            if work is not None:
-                _prepare_hash_frames(profile, LEAF_DOMAIN,
-                                     (str(KEY_NIBBLES), record.key, "1",
-                                      record.primary_key_digest, record.primary_row_digest), work)
-            nodes[record.key] = leaf_node(profile, record)
-        else:
-            nodes[record.prefix] = CountedNode(record.digest, record.count)
-    # Iterative bottom-up folding keeps stack depth independent of hostile
-    # input. Each proper ancestor opens precisely sixteen positional slots.
-    for prefix in sorted(opened, key=lambda value: (-len(value), value)):
-        children = tuple(nodes.get(prefix + nibble) for nibble in _NIBBLES)
-        nonempty = sum(child is not None for child in children)
-        budget.hash_work(1 if nonempty == 0 else 17 - nonempty)
-        if work is not None:
-            _prepare_branch_encoding(profile, prefix, children, work)
-        nodes[prefix] = branch_node(profile, prefix, children)
-    root = nodes[""]
+    root, opened = _fold_frontier(profile=profile, frontier=frontier, budget=budget)
     if root != expected_root:
         raise IndexRangeError("index range reconstructed root or count differs from its anchor")
     return IndexRangeObservation(
         profile=profile, interval=interval, leaves=leaves, root=root,
         metrics=IndexRangeMetrics(
-            entries=len(frontier), leaves=len(leaves), opened_nodes=len(opened),
-            child_slots=16 * len(opened), hashes=budget.hashes,
+            entries=len(frontier), leaves=len(leaves), opened_nodes=opened,
+            child_slots=16 * opened, hashes=budget.hashes,
             input_bytes=budget.input_bytes,
         ),
     )

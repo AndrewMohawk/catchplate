@@ -129,6 +129,7 @@ from serverware import authority_revocation_custody_read_transport as custody_re
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_recovery_history_transport as retained_page_transport
+from serverware import authority_jit_original_transport as jit_original_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
@@ -10668,6 +10669,7 @@ class AuthorityServer:
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
                 retained_page_transport.REQUEST_MAGIC,
+                jit_original_transport.REQUEST_MAGIC,
                 *custody_caller_transport.REQUEST_MAGICS,
                 *custody_reconcile_transport.REQUEST_MAGICS,
                 custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
@@ -10708,6 +10710,15 @@ class AuthorityServer:
                 detached = True
                 authority_public_revocation_service.serve_process(
                     self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix == jit_original_transport.REQUEST_MAGIC:
+                # The writer's verifier-only reservation exception is denied
+                # above. JIT raw custody keeps verifier -> planner -> writer;
+                # this transport is not the application's jit.decide route.
+                from serverware import authority_jit_original_service
+
+                authority_jit_original_service.serve_process(self.process, connection,
+                    deadline_ns=deadline_ns, prefix=prefix)
                 return
             if prefix == retained_page_transport.REQUEST_MAGIC:
                 # The writer's verifier exception was refused above. This

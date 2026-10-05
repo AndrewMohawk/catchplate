@@ -39,6 +39,10 @@ DELIVERY_HEAD_QUERY_REQUEST_MAGIC = b"SWDHQR01"
 DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWDHST01"
 REVOCATION_HEAD_QUERY_REQUEST_MAGIC = b"SWRHQR01"
 REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWRHST01"
+REGISTRATION_EXECUTION_HEAD_QUERY_REQUEST_MAGIC = b"SWREQR01"
+REGISTRATION_EXECUTION_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWREST01"
+REGISTRATION_FINALIZATION_HEAD_QUERY_REQUEST_MAGIC = b"SWRFQR01"
+REGISTRATION_FINALIZATION_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWRFST01"
 REQUEST_MAGICS = (RESERVE_REQUEST_MAGIC, COMPLETE_REQUEST_MAGIC)
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
@@ -146,6 +150,21 @@ def _recv_revocation_head_query(connection, *, prefix, deadline_ns):
         deadline_ns=deadline_ns)
 
 
+def _registration_head_magics(purpose):
+    if type(purpose) is str and purpose == "execution":
+        return (REGISTRATION_EXECUTION_HEAD_QUERY_REQUEST_MAGIC,
+            REGISTRATION_EXECUTION_HEAD_OBSERVATION_RESPONSE_MAGIC)
+    if type(purpose) is str and purpose == "finalization":
+        return (REGISTRATION_FINALIZATION_HEAD_QUERY_REQUEST_MAGIC,
+            REGISTRATION_FINALIZATION_HEAD_OBSERVATION_RESPONSE_MAGIC)
+    raise AuthorityTransportError("registration head transport purpose is not source fixed")
+
+
+def _recv_registration_head_query(connection, *, prefix, deadline_ns, purpose):
+    return _recv_head_body(connection, prefix=prefix,
+        expected_magic=_registration_head_magics(purpose)[0], deadline_ns=deadline_ns)
+
+
 def _recv_head_body(connection, *, prefix, expected_magic, deadline_ns):
     if type(prefix) is not bytes or prefix != expected_magic:
         raise AuthorityTransportError("current-root head query magic is invalid")
@@ -170,6 +189,11 @@ def _send_delivery_head_observation(connection, observation_bytes, *, deadline_n
 def _send_revocation_head_observation(connection, observation_bytes, *, deadline_ns):
     return _send_head_body(connection, observation_bytes,
         response_magic=REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC, deadline_ns=deadline_ns)
+
+
+def _send_registration_head_observation(connection, observation_bytes, *, deadline_ns, purpose):
+    return _send_head_body(connection, observation_bytes,
+        response_magic=_registration_head_magics(purpose)[1], deadline_ns=deadline_ns)
 
 
 def _send_head_body(connection, observation_bytes, *, response_magic, deadline_ns):
@@ -273,8 +297,15 @@ def _revocation_head_on_work(config, *, query_bytes, deadline_ns, work, current)
         work=work, current=current, revocation=True)
 
 
-def _guarded_head_on_work(config, *, query_bytes, deadline_ns, work, current, revocation):
-    """One fixed delivery-head query retaining the actual original guard.
+def _registration_head_on_work(config, *, query_bytes, deadline_ns, work, current, purpose):
+    _registration_head_magics(purpose)
+    return _guarded_head_on_work(config, query_bytes=query_bytes, deadline_ns=deadline_ns,
+        work=work, current=current, revocation=False, registration=purpose)
+
+
+def _guarded_head_on_work(config, *, query_bytes, deadline_ns, work, current, revocation,
+        registration=None):
+    """One source-fixed head query retaining the actual original guard.
 
     This direct metered path is not invoked inside a stable-metrics callback.
     It owns only its one nonblocking socket and returns unverified originals.
@@ -284,9 +315,14 @@ def _guarded_head_on_work(config, *, query_bytes, deadline_ns, work, current, re
 
     if type(revocation) is not bool:
         raise AuthorityTransportError("current-root head transport requires a source-fixed purpose")
-    request_magic, response_magic = ((REVOCATION_HEAD_QUERY_REQUEST_MAGIC,
-        REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC) if revocation else
-        (DELIVERY_HEAD_QUERY_REQUEST_MAGIC, DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC))
+    if registration is not None:
+        if revocation:
+            raise AuthorityTransportError("registration head cannot alias revocation")
+        request_magic, response_magic = _registration_head_magics(registration)
+    else:
+        request_magic, response_magic = ((REVOCATION_HEAD_QUERY_REQUEST_MAGIC,
+            REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC) if revocation else
+            (DELIVERY_HEAD_QUERY_REQUEST_MAGIC, DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC))
     configured = _validate_configuration(config)
     request = _original(query_bytes, MAX_HEAD_QUERY_BYTES, "delivery head query")
     chunks._guard(work, current, deadline_ns)

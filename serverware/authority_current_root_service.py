@@ -23,6 +23,9 @@ owner checks both signed fields before historical receipt return or mutation;
 neither planner's head observation becomes reservation authority.
 V9 separately admits consume completion and lookup of known consume complete
 originals; it grants neither reservation nor either planner head protocol.
+Only that fixed V9 profile also admits the local root provisioner to two
+separate registration nonce-head reads. This peer cannot reserve, complete,
+look up receipts or request any other head purpose through those routes.
 All reach genuine owner paths without a service parser or allowance.
 No independent signer, SQL, success substitute or automatic retry exists here.
 Failure after publication or send is not evidence of rollback/absence.
@@ -261,6 +264,9 @@ class CurrentRootDecisionService:
             delivery_complete_peer = configured[13] if len(configured) >= 14 else None
             revocation_head_peer, revocation_reserve_peer, revocation_complete_peer = (
                 configured[14:] if len(configured) == 17 else (None, None, None))
+            # Exactly the independently admitted V9 profile, not a configurable
+            # peer list or an implicit extension of legacy/V10 service modes.
+            registration_head_peer = (0, 0) if len(configured) == 14 else None
             deadline_ns = io._deadline_ns(timeout)
             if transport_deadline_ns is not None:
                 if type(transport_deadline_ns) is not int or transport_deadline_ns < 1:
@@ -274,7 +280,7 @@ class CurrentRootDecisionService:
                     finalization_complete_peer, activation_planner_peer, activation_reserve_peer,
                     activation_complete_peer, delivery_planner_peer, delivery_reserve_peer,
                     delivery_complete_peer, revocation_head_peer, revocation_reserve_peer,
-                    revocation_complete_peer):
+                    revocation_complete_peer, registration_head_peer):
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
             expected_operation = None
@@ -333,13 +339,33 @@ class CurrentRootDecisionService:
             elif (prefix == transport.REVOCATION_HEAD_QUERY_REQUEST_MAGIC
                     and revocation_head_peer is not None):
                 action, required_peer = "revocation-head", revocation_head_peer
+            elif (prefix == transport.REGISTRATION_EXECUTION_HEAD_QUERY_REQUEST_MAGIC
+                    and registration_head_peer is not None):
+                action, required_peer = "registration-execution-head", registration_head_peer
+            elif (prefix == transport.REGISTRATION_FINALIZATION_HEAD_QUERY_REQUEST_MAGIC
+                    and registration_head_peer is not None):
+                action, required_peer = "registration-finalization-head", registration_head_peer
             else:
                 raise CurrentRootServiceError("current-root socket purpose is not source fixed")
             if peer != required_peer:
                 raise CurrentRootServiceError("current-root socket peer is not admitted for this purpose")
             # Exact class dispatch excludes instance method overrides. No
             # branch parses signed data or creates a second work allowance.
-            if action == "revocation-head":
+            if action in ("registration-execution-head", "registration-finalization-head"):
+                purpose = "execution" if action == "registration-execution-head" else "finalization"
+                original = transport._recv_registration_head_query(connection,
+                    prefix=prefix, deadline_ns=deadline_ns, purpose=purpose)
+                transport._check_deadline(deadline_ns)
+                if purpose == "execution":
+                    observation = decisions.CurrentRootDecisionOwner.observe_registration_execution_head(
+                        owner, original, transport_deadline_ns=deadline_ns)
+                else:
+                    observation = decisions.CurrentRootDecisionOwner.observe_registration_finalization_head(
+                        owner, original, transport_deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                transport._send_registration_head_observation(connection, observation,
+                    deadline_ns=deadline_ns, purpose=purpose)
+            elif action == "revocation-head":
                 original = transport._recv_revocation_head_query(connection,
                     prefix=prefix, deadline_ns=deadline_ns)
                 transport._check_deadline(deadline_ns)

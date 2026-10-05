@@ -30,8 +30,7 @@ import time
 
 from serverware import authority_current_root_authorization as authorization
 from serverware import authority_current_root_head as head_wire
-from serverware import authority_current_root_delivery_head as delivery_head_wire
-from serverware import authority_current_root_revocation_head as revocation_head_wire
+from serverware import authority_registration_current_root_head as registration_head_wire
 from serverware import authority_current_root_journal as storage
 from serverware import authority_current_root_lookup as lookup_wire
 from serverware import authority_current_root_vector as vector
@@ -468,10 +467,29 @@ class CurrentRootDecisionOwner:
         return CurrentRootDecisionOwner._observe_head(self, query_bytes,
             transport_deadline_ns=transport_deadline_ns, delivery=False, revocation=True)
 
-    def _observe_head(self, query_bytes, *, transport_deadline_ns, delivery, revocation=False):
+    def observe_registration_execution_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Fixed registration evidence head; no receipt or journal mutation."""
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=False, registration="execution")
+
+    def observe_registration_finalization_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Fixed registration finalization head; never an evidence-head alias."""
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=False, registration="finalization")
+
+    def _observe_head(self, query_bytes, *, transport_deadline_ns, delivery, revocation=False,
+            registration=None):
         if type(delivery) is not bool or type(revocation) is not bool or delivery and revocation:
             raise CurrentRootDecisionError("current-root head purpose is not source fixed")
-        protocol = revocation_head_wire if revocation else delivery_head_wire if delivery else head_wire
+        if registration is not None:
+            if delivery or revocation:
+                raise CurrentRootDecisionError("registration head cannot alias another purpose")
+            operation = registration_head_wire._operation(registration)
+        else:
+            operation = (head_wire.REVOCATION_OPERATION if revocation else
+                head_wire.DELIVERY_OPERATION if delivery else head_wire.OPERATION)
+        protocol = head_wire
+        payload_schema = protocol._profile(operation)[3]
         if type(self) is not CurrentRootDecisionOwner:
             raise CurrentRootDecisionError("head observation requires the actual decision owner")
         if type(query_bytes) is not bytes or not 2 <= len(query_bytes) <= protocol.MAX_QUERY_BYTES:
@@ -523,23 +541,24 @@ class CurrentRootDecisionOwner:
                 return instant
 
             live()
-            query = protocol._decode_query_on_work(original, work=work)
+            query = protocol._decode_query_on_work(original, work=work, operation=operation)
             evidence.plan._same(query["enrollmentDigest"], pins[0], work,
                 "current-root head query names another enrollment")
             evidence.plan._same(query["expectedVectorDigest"], state[2], work,
                 "current-root head differs from the independently expected planning vector")
-            query_digest = protocol._query_digest_on_work(original, work)
-            payload = {"schema": protocol.PAYLOAD_SCHEMA,
+            query_digest = protocol._query_digest_on_work(original, work, operation=operation)
+            payload = {"schema": payload_schema,
                 "sourceRevision": vector.authority.SOURCE_REVISION,
                 "enrollmentDigest": pins[0], "databaseId": pins[1], "generationDigest": pins[2],
-                "producerMeasurementDigest": pins[3], "operation": protocol.OPERATION,
+                "producerMeasurementDigest": pins[3], "operation": operation,
                 "queryDigest": query_digest, "challenge": query["challenge"],
                 "contextDigest": query["contextDigest"],
                 "issuedAtEpochNs": window[0], "expiresAtEpochNs": window[3],
                 "sequence": state[0], "headDigest": state[1], "vectorDigest": state[2], "fence": state[3],
                 "pendingRequestDigest": pending_request, "pendingDecisionDigest": pending_decision}
             encoded = protocol._sign_on_work(payload=payload, enrollment_bytes=enrollment,
-                root_public_key=root_key, state_private_key=state_key, now_epoch_ns=live(), work=work)
+                root_public_key=root_key, state_private_key=state_key, now_epoch_ns=live(), work=work,
+                operation=operation)
             live()
             return encoded
 

@@ -58,6 +58,20 @@ _REVOCATION_PROFILE = (
     "serverware.signedPolicyAuthorityCurrentRootRevocationHeadObservation/v1",
     "serverware.policyAuthorityCurrentRootRevocationHeadObservation/v1",
 )
+REGISTRATION_EXECUTION_OPERATION = "webauthn.registration.evidence.admit"
+_REGISTRATION_EXECUTION_PROFILE = (
+    "serverware.policyAuthorityCurrentRootRegistrationExecutionHeadQuery/v1",
+    "serverware.policyAuthorityCurrentRootRegistrationExecutionHeadQueryIdentity/v1",
+    "serverware.signedPolicyAuthorityCurrentRootRegistrationExecutionHeadObservation/v1",
+    "serverware.policyAuthorityCurrentRootRegistrationExecutionHeadObservation/v1",
+)
+REGISTRATION_FINALIZATION_OPERATION = "webauthn.registration.finalize"
+_REGISTRATION_FINALIZATION_PROFILE = (
+    "serverware.policyAuthorityCurrentRootRegistrationFinalizationHeadQuery/v1",
+    "serverware.policyAuthorityCurrentRootRegistrationFinalizationHeadQueryIdentity/v1",
+    "serverware.signedPolicyAuthorityCurrentRootRegistrationFinalizationHeadObservation/v1",
+    "serverware.policyAuthorityCurrentRootRegistrationFinalizationHeadObservation/v1",
+)
 
 
 def _profile(operation):
@@ -70,6 +84,10 @@ def _profile(operation):
         return _DELIVERY_PROFILE
     if type(operation) is str and operation == REVOCATION_OPERATION:
         return _REVOCATION_PROFILE
+    if type(operation) is str and operation == REGISTRATION_EXECUTION_OPERATION:
+        return _REGISTRATION_EXECUTION_PROFILE
+    if type(operation) is str and operation == REGISTRATION_FINALIZATION_OPERATION:
+        return _REGISTRATION_FINALIZATION_PROFILE
     raise CurrentRootHeadError("current-root head operation is not source fixed")
 
 

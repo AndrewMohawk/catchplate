@@ -43,7 +43,7 @@ ORIGINALS = ("serviceConfiguration", "cohort", "initialVector")
 OUTPUTS = ("currentRootEnrollment", "grantEnrollment", "executionAuthorizationEnrollment",
            "finalizationAuthorizationEnrollment", "controlPlaneBootstrap")
 WORK_STAGES = ("acquire-public-inputs", "recheck-public-inputs", *OUTPUTS)
-# Seven source-fixed, separately bounded operations: two public admissions and
+# Seven source-fixed, separately bounded operations: public admission, custody recheck and
 # five distinct signed originals (the last includes its full consumer check).
 # Never refill a producer's allowance or retry a failed stage. Aggregate maxima
 # are 56M hashes, 448MiB metered bytes and 7M JSON nodes; all seven operations
@@ -196,6 +196,60 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns, work):
         deadline=value["deadlineBoottimeNs"], epochLimit=value["expiresAtUnixNanos"])
 
 
+def _capture_prepared(value, work):
+    """Retain actual admitted entries, never an aliased mutable verdict.
+
+    The immutable tree pins each original container and scalar/key object.
+    Text is measured once without encoding; its exact canonical size is held
+    for the later comparison/copy reservation. Floats are immutable leaves,
+    not fed into the generic lossless-JSON encoder or normalized to integers.
+    """
+    kind = type(value)
+    if kind is dict:
+        work.charge(json_nodes=1 + 2 * len(value))
+        entries = []
+        for name, child in value.items():
+            require(type(name) is str)
+            size, _ = work.measure(name)
+            entries.append((name, size, _capture_prepared(child, work)))
+        return kind, value, tuple(entries), 0
+    if kind in (list, tuple):
+        work.charge(json_nodes=1 + len(value))
+        return kind, value, tuple(_capture_prepared(child, work) for child in value), 0
+    require(kind in (str, int, float, bool, type(None)) or isinstance(value, Ed25519PublicKey))
+    if kind is str:
+        size, _ = work.measure(value)
+    else:
+        work.charge(json_nodes=1)
+        size = 0
+    return kind, value, None, size
+
+
+def _copy_prepared(binding, value, work):
+    """Compare original identity and reconstruct only held immutable entries."""
+    kind, original, entries, size = binding
+    require(value is original and type(value) is kind)
+    if kind is dict:
+        work.charge(json_nodes=1 + 2 * len(entries))
+        require(len(value) == len(entries))
+        result = {}
+        for (name, child), (held_name, key_size, held_child) in zip(value.items(), entries, strict=True):
+            work.charge(input_bytes=key_size, json_nodes=1)
+            require(name is held_name)
+            result[held_name] = _copy_prepared(held_child, child, work)
+        return result
+    if kind in (list, tuple):
+        work.charge(json_nodes=1 + len(entries))
+        require(len(value) == len(entries))
+        result = [_copy_prepared(held, child, work) for child, held in zip(value, entries, strict=True)]
+        return tuple(result) if kind is tuple else result
+    # Immutable strings and public-key objects are retained, not re-encoded or
+    # read from a caller-supplied replacement. Charge the held text size even
+    # though an identity comparison can itself avoid a full character walk.
+    work.charge(input_bytes=size, json_nodes=1)
+    return original
+
+
 def _compose(context, key, work_plan, check):
     """Five distinct outputs on fixed one-use ledgers, in dependency order."""
     value, rows, root = context["selected"], context["chain"], context["root"]
@@ -246,7 +300,8 @@ class LocalRegistrationEnrollment:
     def __init__(self, *, approval_fd, approval_sha256, signing_key_fd, context_directory_fd):
         io._process()
         from serverware import config
-        require(not config.PRODUCTION_IMAGE and os.environ.get("SERVERWARE_RELEASE_CHANNEL") == "dev"
+        require(type(self) is LocalRegistrationEnrollment and not config.PRODUCTION_IMAGE
+            and os.environ.get("SERVERWARE_RELEASE_CHANNEL") == "dev"
             and os.environ.get("SERVERWARE_PROCESS_MODE") == "metadata-bootstrap")
         require(all(type(fd) is int and fd >= 3 for fd in (approval_fd, signing_key_fd, context_directory_fd))
             and len({approval_fd, signing_key_fd, context_directory_fd}) == 3)
@@ -258,38 +313,91 @@ class LocalRegistrationEnrollment:
         spec._require_digest(approval_sha256, name="registration enrollment approval")
         require(sha(self.raw) == approval_sha256)
         self.boot = local.launcher._boot_identity_digest()
+        self._process_identity = local.launcher._process_identity(os.getpid())
         self.last_boot, self.last_unix = io._clock(), time.time_ns()
         self.work_plan = _WorkPlan()
+        acquisition = self.work_plan.take("acquire-public-inputs")
         self.context = prepare(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_unix,
-            work=self.work_plan.take("acquire-public-inputs"))
+            work=acquisition)
+        self._prepared = _capture_prepared(self.context, acquisition)
+        selected = self.context["selected"]
+        self._window = (selected["issuedAtBoottimeNs"], selected["deadlineBoottimeNs"],
+            selected["issuedAtUnixNanos"], selected["expiresAtUnixNanos"])
+        directory = selected["contextDirectory"]
+        self._directory = (directory["device"], directory["inode"])
+        self._retained = self._retained_pin = (self.fd, self.key_fd, self.directory_fd,
+            self.identity, self.key_identity, self.raw, self.boot, self.origin,
+            self.context, self.work_plan, self._prepared, self._window, self._directory, self._process_identity,
+            selected, directory, self.context["root"], self.context["planner"], self.context["evidence"])
+        self._previous = self._previous_pin = (self.last_boot, self.last_unix)
         self.used, self.closed = False, False
         self.check()
 
+    def _held(self):
+        retained = self._retained
+        require(type(self) is LocalRegistrationEnrollment and type(retained) is tuple
+            and len(retained) == 19 and retained is self._retained_pin
+            and all(value is held for value, held in zip((self.fd, self.key_fd, self.directory_fd,
+                self.identity, self.key_identity, self.raw, self.boot, self.origin,
+                self.context, self.work_plan, self._prepared, self._window, self._directory,
+                self._process_identity), retained[:14], strict=True)))
+        selected = self.context.get("selected")
+        require(selected is retained[14])
+        directory = selected.get("contextDirectory")
+        require(directory is retained[15]
+            and all(self.context.get(name) is held for name, held in zip(
+                ("root", "planner", "evidence"), retained[16:], strict=True)))
+        require(self.context.get("deadline") is self._window[1] and self.context.get("epochLimit") is self._window[3]
+            and all(selected.get(name) is held for name, held in zip(
+                ("issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"), self._window, strict=True))
+            and directory.get("device") is self._directory[0] and directory.get("inode") is self._directory[1])
+        previous = self._previous
+        require(type(previous) is tuple and len(previous) == 2 and previous is self._previous_pin
+            and self.last_boot is previous[0] and self.last_unix is previous[1])
+        return previous
+
     def check(self):
         io._process()
+        previous = self._held()
         require(not self.closed and self.origin == (os.getpid(), tuple(sorted(os.environ.items())))
+            and local.launcher._process_identity(os.getpid()) == self._process_identity
             and local.launcher._boot_identity_digest() == self.boot
             and io._input(self.fd, io.MAX_PUBLIC) == self.identity
-            and io._input(self.key_fd, 32, private=True) == self.key_identity
-            and io.read_public(self.fd, io.MAX_PUBLIC) == self.raw)
+            and io._input(self.key_fd, 32, private=True) == self.key_identity)
         now_boot, now_unix = io._clock(), time.time_ns()
-        require(self.last_boot <= now_boot < self.context["deadline"]
-            and self.last_unix <= now_unix < self.context["epochLimit"])
-        self.last_boot, self.last_unix = now_boot, now_unix
-        selected = self.context["selected"]["contextDirectory"]
+        require(self._window[0] <= previous[0] <= now_boot < self._window[1]
+            and self._window[2] <= previous[1] <= now_unix < self._window[3]
+            and io.read_public(self.fd, io.MAX_PUBLIC) == self.raw)
         held, named = os.fstat(self.directory_fd), os.stat(DIRECTORY, follow_symlinks=False)
         require(stat.S_ISDIR(held.st_mode) and stat.S_ISDIR(named.st_mode)
             and (held.st_uid, held.st_gid, stat.S_IMODE(held.st_mode)) == (0, 65532, 0o750)
             and (named.st_uid, named.st_gid, stat.S_IMODE(named.st_mode)) == (0, 65532, 0o750)
-            and (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino) == (selected["device"], selected["inode"])
+            and (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino) == self._directory
             and os.path.realpath(DIRECTORY) == DIRECTORY)
+        require(self._held() is previous
+            and self.origin == (os.getpid(), tuple(sorted(os.environ.items())))
+            and local.launcher._process_identity(os.getpid()) == self._process_identity
+            and local.launcher._boot_identity_digest() == self.boot
+            and io._input(self.fd, io.MAX_PUBLIC) == self.identity
+            and io._input(self.key_fd, 32, private=True) == self.key_identity)
+        after_boot, after_unix = io._clock(), time.time_ns()
+        require(now_boot <= after_boot < self._window[1] and now_unix <= after_unix < self._window[3]
+            and self._held() is previous)
+        self.last_boot, self.last_unix = after_boot, after_unix
+        self._previous = self._previous_pin = (after_boot, after_unix)
 
     def issue(self):
         self.check(); require(not self.used); self.used = True
-        # Re-authenticate the same originals/current cohort before private access.
-        context = prepare(self.raw, boot=self.boot, now_boottime_ns=self.last_boot, now_unix_ns=self.last_unix,
-            work=self.work_plan.take("recheck-public-inputs"))
-        outputs = _compose(context, io.signing_key(self.key_fd), self.work_plan, self.check)
+        # Constructor admission proves the whole approval interval lies inside
+        # every signed cohort receipt. The unchanged current clocks/FDs plus
+        # exact held entries preserve that admission without fresh signatures.
+        # A fresh detached graph, never self.context, enters the real producers.
+        context = _copy_prepared(self._prepared, self.context,
+            self.work_plan.take("recheck-public-inputs"))
+        self.check()
+        key = io.signing_key(self.key_fd)
+        self.check()
+        outputs = _compose(context, key, self.work_plan, self.check)
         raw = canonical(dict(schema=BUNDLE_SCHEMA, approvalSha256=sha(self.raw),
             configurationDigest=context["configurationDigest"], generationDigest=context["generation"]["digest"],
             cohortDigest=context["runtime"]["cohortDigest"],
@@ -302,7 +410,7 @@ class LocalRegistrationEnrollment:
         return raw
 
     def publish(self):
-        io.write_public(self.issue(), deadline_boottime_ns=self.context["deadline"], check=self.check)
+        io.write_public(self.issue(), deadline_boottime_ns=self._window[1], check=self.check)
         self.check()
 
     def close(self):

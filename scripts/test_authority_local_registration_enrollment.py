@@ -43,7 +43,7 @@ def fixture():
         configurationBindingDigest=payload["generationBindingDigest"], roleBindingDigests=payload["roleBindingDigests"])
     selected_times = {name: base[name] for name in ("bootIdDigest", "issuedAtBoottimeNs", "deadlineBoottimeNs",
         "issuedAtUnixNanos", "expiresAtUnixNanos")}
-    context = dict(selected=selected_times,
+    context = dict(selected=dict(schema=cohort_issuer.SCHEMA, **selected_times),
         rootPublic=root.public_key().public_bytes(local.Encoding.Raw, local.PublicFormat.Raw),
         service=payload, static=local.cohort._static_configuration(payload), configurationDigest=digest,
         generationDigest=PIN, generationSequence=0, packageDigest=PIN,

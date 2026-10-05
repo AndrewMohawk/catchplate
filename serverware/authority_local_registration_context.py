@@ -73,7 +73,13 @@ def directory(value):
 def _cold_profile(material, original):
     """After genuine parent admission, prohibit mixing local and later history."""
     from serverware import control_plane_enrollment_bootstrap as bootstrap
-    require(document(original, bootstrap.MAX_BYTES)["schema"] == bootstrap.V4_SCHEMA
+    from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as request_planning
+    schema = document(original, bootstrap.MAX_BYTES)["schema"]
+    request_bound = (schema == bootstrap.V24_SCHEMA
+        and type(material.activation_planning) is request_planning._RequestPlanningMaterial
+        and material.activation_execution is not None and material.activation_execution.request_bound is True
+        and material.consume_execution is not None and material.consume_execution.request_bound is True)
+    require((schema == bootstrap.V4_SCHEMA or request_bound)
         and material.execution is not None and material.finalization is not None
         and material.execution.context_directory is not None
         and material.finalization.context_directory == material.execution.context_directory

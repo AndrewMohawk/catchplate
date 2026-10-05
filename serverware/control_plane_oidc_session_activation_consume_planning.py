@@ -17,6 +17,7 @@ from serverware import control_plane_oidc_session_activation_consume_records as 
 from serverware import control_plane_oidc_session_activation_execution as execution
 from serverware import control_plane_oidc_session_activation_planning as activation
 from serverware import oidc_session_activation_delivery_planner_bootstrap as bootstrap
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 
 
 caller, plan, production = execution.caller, execution.plan, execution.production
@@ -118,6 +119,9 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
             or type(continuation) is not tuple or len(continuation) != 3
             or policy.consume_planner_endpoint is None or policy.consume_planner_public_key is None):
         execution._fail("consume planning is not the source-fixed completed continuation")
+    planning_policy = parent.activation_planning
+    planner_original = (request_dispatch._planner_original_on_permission(permission)
+        if policy.request_bound else planning_policy.planner_bootstrap_bytes)
     before, guard, narrow = continuation
     endpoint = transport._endpoint(policy.consume_planner_endpoint)
     root = permission._scope.common["root_public_key"]
@@ -137,7 +141,7 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
     cookie = old.decode("ascii")
     held_bytes = sum(map(len, (root_original, history_original, *activation_originals, old, before, expectations_original,
         policy.current_root_enrollment_bytes, permission._original,
-        parent.activation_planning.planner_bootstrap_bytes))) + activation.MAX_ASSERTION_BYTES + _additional_original_bytes
+        planner_original))) + activation.MAX_ASSERTION_BYTES + _additional_original_bytes
     if held_bytes >= consume.MAX_ORIGINAL_BYTES:
         execution._fail("consume planning original inventory exceeds its aggregate bound")
     material = signed = None
@@ -146,11 +150,14 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
     def current():
         if (owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or parent.activation_execution is not policy or policy.consume_planner_endpoint != endpoint
+                or parent.activation_planning is not planning_policy
                 or permission._sql_originals is not raw or permission._completion_originals is not completed
                 or permission._completion_context is not continuation
                 or permission._dispatch_phase not in _CONTINUATION_PHASES
                 or permission._request.cookies.get(application.OIDC_SESSION_COOKIE_NAME) != cookie):
             execution._fail("consume planning replaced its actual original context or possession")
+        if policy.request_bound and request_dispatch._planner_original_on_permission(permission) is not planner_original:
+            execution._fail("consume planning changed its same-request activation original")
         now = guard()
         if _current is not None:
             observed = _current()
@@ -171,7 +178,7 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
         activation_execution=policy, live_window=window, transport_deadline_ns=bound, work=work)
     current()
     _same_bytes(material.history_material.planner.bootstrap_bytes,
-        parent.activation_planning.planner_bootstrap_bytes, work,
+        planner_original, work,
         "consume history original activation planner bootstrap")
     lifetimes = ((material.attestation_interval, material.opening_sample),
         (material.history_material.attestation_interval, material.history_material.opening_sample))
@@ -184,7 +191,8 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
     plan._same(material.payload["activationExpectations"], original_expectations, work,
         "consume root original activation expectations")
     authorization_digest = plan._frame(caller.REQUEST_IDENTITY_DOMAIN, (raw[0],), work)
-    predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
+    predecessor = (request_dispatch._predecessor_on_permission(permission) if policy.request_bound else
+        reservations._predecessor_scope(*policy.reservation_predecessor))
     reserve, reserve_digest, receipt, receipt_digest = reservations._verify_on_work(
         request_bytes=raw[5], snapshot_bytes=raw[6], receipt_bytes=raw[7],
         enrollment_bytes=policy.current_root_enrollment_bytes, root_public_key=root,

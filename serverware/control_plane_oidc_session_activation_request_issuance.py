@@ -10,13 +10,16 @@ class _Continuation:
     """Private originals only; this object cannot be supplied to an entrypoint."""
 
     __slots__ = ("_permission", "_owner", "_parent", "_policy", "_work", "_limits",
-        "_request", "_originals", "_pins", "_closed")
+        "_request", "_originals", "_pins", "_closed", "_predecessor", "_predecessor_seal",
+        "_consume_predecessor", "_consume_predecessor_seal")
 
     def __init__(self, permission, policy, request, originals):
         self._permission, self._owner = permission, permission._owner
         self._parent, self._policy = permission._owner._material, policy
         self._work, self._limits = permission._work, permission._work.limits
         self._request, self._originals, self._closed = request, originals, False
+        self._predecessor = self._predecessor_seal = None
+        self._consume_predecessor = self._consume_predecessor_seal = None
         self._pins = (permission, self._owner, self._parent, policy, self._work,
             self._limits, request, originals)
 
@@ -34,13 +37,17 @@ class _Continuation:
                 or self._parent.activation_planning is not self._policy
                 or permission._work is not self._work or self._work.limits is not self._limits
                 or permission._request_issuance is not self
-                or permission._request_issuance_spent is not True):
+                or permission._request_issuance_spent is not True
+                or self._predecessor is not self._predecessor_seal
+                or self._consume_predecessor is not self._consume_predecessor_seal):
             execution._fail("request issuance continuation changed its original custody")
         return self._originals
 
     def _close(self):
         self._closed = True
         self._originals = self._request = self._pins = None
+        self._predecessor = self._predecessor_seal = None
+        self._consume_predecessor = self._consume_predecessor_seal = None
 
 
 def _prepare_on_permission(permission, *, planner_originals, live_window, deadline_ns):

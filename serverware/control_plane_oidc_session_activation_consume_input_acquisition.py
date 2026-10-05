@@ -11,6 +11,7 @@ from serverware import authority_oidc_session_activation_consume_input_transport
 from serverware import control_plane_oidc_session_activation_consume_input_acquisition_bootstrap as configured
 from serverware import control_plane_oidc_session_activation_consume_planning as planning
 from serverware import oidc_session_activation_consume_input_admission as receiving
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 
 
 execution, caller, plan = planning.execution, planning.caller, planning.plan
@@ -59,6 +60,8 @@ def _configuration_on_target(owner, target):
                 or selected.planner_attestation_interval != authority.planner_attestation_interval
                 or any(getattr(selected, name) is not getattr(authority, name) for name in names)):
             execution._fail("consume input bridge does not select this exact historical target")
+    if policy.request_bound:
+        execution._fail("request-bound consume acquisition requires its original live permission, not a recovery target")
     original = authority.activation_planning.planner_bootstrap_bytes
     issuer.authorization._original(original, issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES,
         "selected original activation planner")
@@ -90,7 +93,9 @@ def _acquire_on_permission(permission):
     endpoint = transport._endpoint(policy.endpoint)
     policy_original = issuer.authorization._original(policy.issuer_policy_bytes,
         issuer.MAX_BYTES, "parent consume issuer policy")
-    activation_original = activation_policy.planner_bootstrap_bytes
+    activation_original = (request_dispatch._planner_original_on_permission(permission)
+        if policy.request_bound else activation_policy.planner_bootstrap_bytes)
+    resource_original = activation_policy.policy_bytes if policy.request_bound else None
     root = scope.common["root_public_key"]
     response_pin = owner._response_pin
     target_digest = target[2]["localDigest"]
@@ -111,7 +116,8 @@ def _acquire_on_permission(permission):
                 or parent.consume_input_acquisition is not policy or policy.endpoint != endpoint
                 or policy.issuer_policy_bytes is not policy_original
                 or parent.activation_planning is not activation_policy
-                or activation_policy.planner_bootstrap_bytes is not activation_original
+                or (activation_policy.policy_bytes is not resource_original if policy.request_bound
+                    else activation_policy.planner_bootstrap_bytes is not activation_original)
                 or parent.activation_execution is not execution_policy
                 or permission._sql_originals is not raw or permission._completion_originals is not completed
                 or permission._completion_context is not context
@@ -121,6 +127,8 @@ def _acquire_on_permission(permission):
                 or target[0].OIDC_SESSION_COOKIE_NAME != cookie_name
                 or claim is not None and permission._consume_claim is not claim):
             execution._fail("consume input acquisition replaced its original owner or possession")
+        if policy.request_bound and request_dispatch._planner_original_on_permission(permission) is not activation_original:
+            execution._fail("consume input acquisition changed its same-request planner original")
 
     def continuity(epoch, monotonic):
         identity()

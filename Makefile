@@ -676,6 +676,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \
 	scripts/test_oidc_activation_request_issuance.py \
+	scripts/test_oidc_activation_request_dispatch.py \
 	scripts/test_oidc_activation_resource_bootstrap.py \
 	scripts/test_oidc_activation_release_proof_resources.py \
 	scripts/test_oidc_session_absolute_expiry.py \
@@ -2309,6 +2310,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_request_issuance_transport.py \
 	serverware/authority_oidc_session_activation_request_staging_transport.py \
 	serverware/control_plane_oidc_session_activation_request_issuance.py \
+	serverware/control_plane_oidc_session_activation_request_dispatch.py \
+	serverware/control_plane_enrollment_request_bootstrap.py \
+	serverware/oidc_session_activation_consume_input_resources.py \
 	serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
 	serverware/oidc_session_activation_request_dynamic_entrypoint.py \
 	serverware/oidc_session_activation_request_dynamic_launcher.py \
@@ -5394,6 +5398,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_request_issuance_transport.py \
 				serverware/authority_oidc_session_activation_request_staging_transport.py \
 				serverware/control_plane_oidc_session_activation_request_issuance.py \
+				serverware/control_plane_oidc_session_activation_request_dispatch.py \
+				serverware/control_plane_enrollment_request_bootstrap.py \
+				serverware/oidc_session_activation_consume_input_resources.py \
 				serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
 				serverware/oidc_session_activation_request_dynamic_entrypoint.py \
 				serverware/oidc_session_activation_request_dynamic_launcher.py \

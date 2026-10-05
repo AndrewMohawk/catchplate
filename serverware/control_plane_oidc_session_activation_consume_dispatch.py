@@ -18,6 +18,7 @@ from serverware import control_plane_oidc_session_activation_consume_execution_b
 from serverware import control_plane_oidc_session_activation_consume_planning as planning
 from serverware import control_plane_oidc_session_activation_consume_records as retained
 from serverware import control_plane_oidc_session_activation_execution as execution
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 
 
 plan, production = caller.plan, caller.production
@@ -128,7 +129,8 @@ def _dispatch_on_permission(permission):
     if (permission._state != "active" or permission._dispatch_phase != "consume-dispatching"
             or permission._consume_dispatch_spent is not True
             or type(policy) is not configured._ConsumeExecutionMaterial
-            or policy.reservation_endpoint is None or policy.reservation_predecessor is None or policy.sql_endpoint is None
+            or policy.reservation_endpoint is None or policy.sql_endpoint is None
+            or (policy.reservation_predecessor is None and policy.request_bound is not True)
             or originals is not permission._consume_originals_seal or continuation is not permission._consume_context_seal
             or authorization is not permission._consume_authorization_seal
             or activation_raw is not permission._sql_seal or signing is not permission._consume_signing_seal):
@@ -138,7 +140,11 @@ def _dispatch_on_permission(permission):
     grant_endpoint = grant_io._endpoint(policy.authorizer_endpoint)
     reserve_endpoint = reserve_io._endpoint(policy.reservation_endpoint)
     sql_endpoint = sql_io._endpoint(policy.sql_endpoint)
-    predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
+    dynamic = policy.request_bound is True
+    guard()
+    predecessor = (request_dispatch._consume_prepared_on_permission(permission, before_vector_bytes=before)
+        if dynamic else reservations._predecessor_scope(*policy.reservation_predecessor))
+    guard()
     target = permission._target[2]["localDigest"]
     caller.shape._digest(target)
     common = {"authorization_enrollment_bytes": policy.authorization_enrollment_bytes,
@@ -154,7 +160,9 @@ def _dispatch_on_permission(permission):
                 or permission._consume_context is not continuation or permission._consume_authorization is not authorization
                 or permission._sql_originals is not activation_raw or permission._consume_signing is not signing
                 or policy.authorizer_endpoint != grant_endpoint or policy.reservation_endpoint != reserve_endpoint
-                or policy.sql_endpoint != sql_endpoint or policy.reservation_predecessor != predecessor):
+                or policy.sql_endpoint != sql_endpoint
+                or policy.reservation_predecessor != (None if dynamic else predecessor)
+                or (dynamic and request_dispatch._consume_predecessor_on_permission(permission) is not predecessor)):
             execution._fail("consume dispatch changed its original authority or cold resources")
         return guard()
 

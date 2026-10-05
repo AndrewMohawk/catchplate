@@ -41,7 +41,9 @@ def _admit_on_work(*, planning, configuration_payload, configuration_digest,
         activation_execution, work, live_window, transport_deadline_ns):
     from serverware import control_plane_oidc_session_activation_planning_bootstrap as old
     execution = old.execution
-    if type(activation_execution) is not execution._ActivationExecutionMaterial:
+    if (type(activation_execution) is not execution._ActivationExecutionMaterial
+            or activation_execution.request_bound is not True
+            or activation_execution.reservation_predecessor is not None):
         raise policy.RequestIssuancePolicyError("request planning requires its actual separately admitted caller")
     _shape(planning)
     owned = policy._capture({"planning": planning, "configuration": configuration_payload,

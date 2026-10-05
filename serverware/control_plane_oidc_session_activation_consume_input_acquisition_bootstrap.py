@@ -18,6 +18,7 @@ from serverware import oidc_session_activation_consume_input_issuer_policy as is
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v2"
+V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v3"
 SOCKET_PATH = transport.LISTENER_PATH
 V1_MAX_BYTES = 128 * 1024
 MAX_BYTES, MAX_NODES, MAX_DEPTH = 4 * 1024 * 1024, 64, 4
@@ -43,6 +44,7 @@ class _ConsumeInputAcquisitionMaterial:
     issuer_policy_bytes: bytes
     historical_scope: object | None = None
     bridge_interval: tuple | None = None
+    request_bound: bool = False
 
 
 class _Capture(capture._JSONCapture):
@@ -73,7 +75,7 @@ def _shape(value):
     if value is None:
         return
     shape._object(value, _FIELDS, "control-plane consume input acquisition")
-    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA):
+    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA):
         _fail("consume input acquisition requires an explicit supported version")
     _endpoint(value["endpoint"])
     original = value["issuerPolicy"]
@@ -106,6 +108,10 @@ def _admit_on_work(*, consume_input_acquisition, activation_planning,
         _shape(consume_input_acquisition)
         if consume_input_acquisition is None:
             return None
+        if consume_input_acquisition["schema"] == V3_SCHEMA:
+            return _admit_resources_on_work(consume_input_acquisition=consume_input_acquisition,
+                activation_planning=activation_planning, activation_execution=activation_execution,
+                runtime_root_public_key=runtime_root_public_key, work=work)
         shape._literal(consume_input_acquisition["schema"], SCHEMA)
         held_planning, held_execution, root = (
             activation_planning, activation_execution, runtime_root_public_key)
@@ -171,6 +177,40 @@ def _admit_on_work(*, consume_input_acquisition, activation_planning,
             raise
         raise OidcSessionActivationConsumeInputAcquisitionBootstrapError(
             "consume input acquisition cold configuration failed") from exc
+
+
+def _admit_resources_on_work(*, consume_input_acquisition, activation_planning,
+        activation_execution, runtime_root_public_key, work):
+    from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
+    from serverware import oidc_session_activation_consume_input_resources as resources
+
+    planned, parent = activation_planning, activation_execution
+    if (type(planned) is not requested._RequestPlanningMaterial
+            or type(parent) is not execution._ActivationExecutionMaterial
+            or parent.request_bound is not True or parent.reservation_predecessor is not None
+            or parent.consume_planner_endpoint is None or parent.consume_planner_public_key is None):
+        _fail("consume resource acquisition requires the actual request-bound parent")
+    owned = _Capture(capture._SharedLedger(work), maximum_bytes=MAX_BYTES).visit(consume_input_acquisition)
+    _shape(owned)
+    shape._literal(owned["schema"], V3_SCHEMA)
+    wrapped = owned["issuerPolicy"]
+    raw = issuer.authorization.transport._decode(wrapped["base64Url"], wrapped["byteCount"], issuer.MAX_BYTES, work)
+    admitted = resources._verify_on_work(policy_bytes=raw, root_public_key=runtime_root_public_key, work=work)
+    work.charge(input_bytes=len(admitted.issuance_policy_bytes) + len(planned.policy_bytes))
+    if admitted.issuance_policy_bytes != planned.policy_bytes:
+        _fail("consume resources changed the actual parent issuance policy original")
+    original_state = admitted.policy.resource_facts[4]
+    work.charge(input_bytes=len(original_state) + len(parent.current_root_enrollment_bytes))
+    if original_state != parent.current_root_enrollment_bytes:
+        _fail("consume resources changed the actual parent state enrollment")
+    plan._same(issuer.keys._spki_on_work(admitted.consume_public_key, work),
+        issuer.keys._spki_on_work(parent.consume_planner_public_key, work), work,
+        "consume resource actual parent planner key")
+    payload = issuer._read(raw, work)["payload"]
+    plan._same(payload["consumePlanner"]["planner"]["identity"]["measurementDigest"],
+        parent.consume_planner_measurement_digest, work, "consume resource actual planner measurement")
+    admitted.live()
+    return _ConsumeInputAcquisitionMaterial(_endpoint(owned["endpoint"]), raw, None, None, True)
 
 
 def _admit_historical_on_work(*, consume_input_acquisition, activation_history,

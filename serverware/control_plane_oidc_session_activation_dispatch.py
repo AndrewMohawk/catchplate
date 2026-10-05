@@ -15,6 +15,8 @@ from serverware import authority_current_root_computation as computation
 from serverware import control_plane_oidc_session_activation_execution as execution
 from serverware import control_plane_oidc_session_activation_planning as planning
 from serverware import control_plane_oidc_session_activation_records as retained
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
+from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as request_planning
 
 
 caller, production, plan = execution.caller, execution.production, execution.plan
@@ -142,8 +144,12 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
     owner, work = permission._owner, permission._work
     parent, binding, custody_owner = owner._material, owner._binding, owner._custody
     policy, planning_policy = parent.activation_execution, parent.activation_planning
-    if (policy.reservation_endpoint is None or policy.reservation_predecessor is None
-            or policy.sql_endpoint is None):
+    dynamic = policy.request_bound is True
+    if (policy.reservation_endpoint is None or policy.sql_endpoint is None
+            or dynamic and (policy.reservation_predecessor is not None
+                or type(planning_policy) is not request_planning._RequestPlanningMaterial)
+            or not dynamic and (policy.reservation_predecessor is None
+                or type(planning_policy) is not planning.configured._PlanningMaterial)):
         execution._fail("activation downstream dispatch is not independently configured")
     grant_endpoint = grant_io._endpoint(policy.authorizer_endpoint)
     reserve_endpoint = reserve_io._endpoint(policy.reservation_endpoint)
@@ -155,12 +161,18 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
         if policy.completion_endpoint is None:
             execution._fail("activation completion dispatch is not independently configured")
         completion_endpoint = completion_io._endpoint(policy.completion_endpoint)
-    predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
+    predecessor = (None if dynamic else
+        reservations._predecessor_scope(*policy.reservation_predecessor))
     finalization_digest = permission._target[2]["localDigest"]
     caller.shape._digest(finalization_digest)
     permission._current()
     raw2, expectations, before, authorization = execution._ActivationPermission.prepare_authorization(
         permission, assertion_bytes=assertion_original, expected_challenge_id=challenge_id)
+    if dynamic:
+        planner_original, predecessor = request_dispatch._prepared_on_permission(
+            permission, before_vector_bytes=before)
+    else:
+        planner_original = planning_policy.planner_bootstrap_bytes
     window, bound = permission._planning_bounds
     # The result above is genuine same-call output, but every control is still
     # admitted from its original bytes below, never accepted as proof by type.
@@ -168,7 +180,7 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
         expectations=expectations, before_vector_bytes=before, live_window=window,
         transport_deadline_ns=bound, work=work,
         extra_originals=(authorization, assertion_original, permission._original,
-            planning_policy.planner_bootstrap_bytes))
+            planner_original))
     clock = caller._clock(held, work, continuity=permission._continuity)
     authorized = caller._verify_held_on_work(held, authorization, work, current=clock)
     window, bound = authorized.window, authorized.deadline_ns
@@ -186,9 +198,12 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
                 or parent.activation_planning is not planning_policy
                 or policy.authorizer_endpoint != grant_endpoint
                 or policy.reservation_endpoint != reserve_endpoint
-                or policy.sql_endpoint != sql_endpoint or policy.reservation_predecessor != predecessor
+                or policy.sql_endpoint != sql_endpoint or policy.request_bound is not dynamic
+                or policy.reservation_predecessor != (None if dynamic else predecessor)
                 or include_completion and policy.completion_endpoint != completion_endpoint):
             execution._fail("activation dispatch changed its original cold configuration")
+        if dynamic and request_dispatch._planner_original_on_permission(permission) is not planner_original:
+            execution._fail("activation dispatch changed its same-request planner original")
         permission._narrow_planning(window, bound)
         now, monotonic = authorized.live()
         now, monotonic = permission._continuity(now, monotonic)
@@ -224,7 +239,7 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
     # before any new response body may be allocated by the fixed transports.
     base_bytes = sum(len(raw) for raw in (*prepared, held.caller_enrollment,
         held.current_enrollment, held.grant_enrollment, assertion_original,
-        permission._original, planning_policy.planner_bootstrap_bytes))
+        permission._original, planner_original))
     reserved_bytes = base_bytes + grant_io.MAX_RESPONSE_BYTES + reserve_io.MAX_RESPONSE_BYTES + sql_io.MAX_RESPONSE_BYTES
     reserved_bytes += sum(module.REQUEST_HEADER_BYTES + module.RESPONSE_HEADER_BYTES
         for module in (grant_io, reserve_io, sql_io))

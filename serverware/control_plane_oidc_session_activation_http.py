@@ -46,6 +46,7 @@ def _unknown_response(local_digest=None):
 def _require_complete_configuration(permission):
     """Refusal-only preflight, not readiness or replacement original admission."""
     from serverware import control_plane_oidc_session_activation_execution as execution
+    from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as request_planning
 
     if type(permission) is not execution._ActivationPermission:
         execution._fail("activation HTTP requires the actual live permission")
@@ -55,9 +56,12 @@ def _require_complete_configuration(permission):
         execution._fail("activation HTTP requires its complete independently configured continuation")
     for policy in (parent.activation_execution, parent.consume_execution):
         if any(getattr(policy, name, None) is None for name in (
-                "authorizer_endpoint", "reservation_endpoint", "reservation_predecessor",
+                "authorizer_endpoint", "reservation_endpoint",
                 "sql_endpoint", "completion_endpoint")):
             execution._fail("activation HTTP requires all fixed execution and completion endpoints")
+        if policy.reservation_predecessor is None and not (policy.request_bound is True
+                and type(parent.activation_planning) is request_planning._RequestPlanningMaterial):
+            execution._fail("activation HTTP requires the exact source predecessor profile")
     if (parent.consume_execution.release_hints is not True
             or any(getattr(parent.activation_execution, name, None) is None for name in (
                 "consume_planner_endpoint", "consume_planner_public_key", "consume_planner_measurement_digest"))

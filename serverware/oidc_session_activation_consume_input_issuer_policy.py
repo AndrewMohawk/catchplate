@@ -30,6 +30,8 @@ SCHEMA = "serverware.signedOidcSessionActivationConsumeInputIssuerPolicy/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerPolicy/v1"
 V2_SCHEMA = "serverware.signedOidcSessionActivationConsumeInputIssuerPolicy/v2"
 V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerPolicy/v2"
+V3_SCHEMA = "serverware.signedOidcSessionActivationConsumeInputIssuerPolicy/v3"
+V3_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerPolicy/v3"
 SIGNATURE_DOMAIN = SCHEMA
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationConsumeInputIssuerPolicyIdentity/v1"
 ACTIVATION_PLANNER_BOOTSTRAP_IDENTITY_DOMAIN = "serverware.oidcSessionActivationConsumeInputIssuerActivationPlannerBootstrapIdentity/v1"
@@ -47,6 +49,8 @@ PREDECESSOR_FIELDS = frozenset({"sequence", "headDigest", "fence"})
 PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "trustMode",
     "activationPlannerBootstrapDigest", "history", "consumePlanner", "activationPredecessor",
     "issuedAtEpochNs", "expiresAtEpochNs"})
+V3_PAYLOAD_FIELDS = (PAYLOAD_FIELDS - frozenset({"activationPlannerBootstrapDigest", "activationPredecessor"})
+    | frozenset({"activationIssuancePolicy"}))
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 
 
@@ -77,6 +81,7 @@ class _IssuerPolicyMaterial:
     historical_root_public_key: object = None
     current_planner: object = None
     bridge: object = None
+    request_bound: bool = False
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -112,11 +117,19 @@ def _payload_shape(payload, work):
     if type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA:
         from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
         return bridge._payload_shape(payload, work)
-    shape._object(payload, PAYLOAD_FIELDS, "consume input issuer policy")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    resource = type(payload) is dict and payload.get("schema") == V3_PAYLOAD_SCHEMA
+    shape._object(payload, V3_PAYLOAD_FIELDS if resource else PAYLOAD_FIELDS, "consume input issuer policy")
+    for name, expected in (("schema", V3_PAYLOAD_SCHEMA if resource else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
-    shape._digest(payload["activationPlannerBootstrapDigest"])
+    if resource:
+        from serverware import oidc_session_activation_request_issuance_policy as resources
+        original = payload["activationIssuancePolicy"]
+        shape._object(original, frozenset({"base64Url", "byteCount", "bytesDigest"}), "consume static issuance policy")
+        authorization.transport._transport_shape(original["base64Url"], original["byteCount"], resources.MAX_BYTES)
+        shape._digest(original["bytesDigest"])
+    else:
+        shape._digest(payload["activationPlannerBootstrapDigest"])
     selected_history = payload["history"]
     shape._object(selected_history, HISTORY_FIELDS, "consume input history pins")
     shape.validate_identity_shape(selected_history["receiverIdentity"])
@@ -124,9 +137,10 @@ def _payload_shape(payload, work):
         shape._digest(selected_history[name])
     if selected_history["bundleKeyDigest"] == selected_history["deliveryKeyDigest"]:
         _fail("consume input history bundle and delivery keys are not separate")
-    predecessor = payload["activationPredecessor"]
-    shape._object(predecessor, PREDECESSOR_FIELDS, "independent activation predecessor")
-    reservation._predecessor_scope(predecessor["sequence"], predecessor["headDigest"], predecessor["fence"])
+    if not resource:
+        predecessor = payload["activationPredecessor"]
+        shape._object(predecessor, PREDECESSOR_FIELDS, "independent activation predecessor")
+        reservation._predecessor_scope(predecessor["sequence"], predecessor["headDigest"], predecessor["fence"])
     selected = payload["consumePlanner"]
     shape._object(selected, CONSUME_PLANNER_FIELDS, "consume input planner resources")
     planner = selected["planner"]
@@ -153,7 +167,7 @@ def _payload_shape(payload, work):
     for name in ("journalKeyDigest", "executionBundleKeyDigest"):
         shape._digest(selected[name])
     consume._launch(selected["launch"], work)
-    authorization._interval(payload, MAX_RECEIPT_AGE_NS)
+    authorization._interval(payload, resources.MAX_POLICY_AGE_NS if resource else MAX_RECEIPT_AGE_NS)
 
 
 def _read(original, work):
@@ -163,13 +177,13 @@ def _read(original, work):
         maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
     owned = _capture(decoded, work)
     shape._object(owned, _ENVELOPE_FIELDS, "signed consume input issuer policy")
-    if type(owned["schema"]) is not str or owned["schema"] not in (SCHEMA, V2_SCHEMA):
+    if type(owned["schema"]) is not str or owned["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA):
         _fail("consume input issuer policy schema is not supported")
-    maximum = V2_MAX_BYTES if owned["schema"] == V2_SCHEMA else V1_MAX_BYTES
+    maximum = V1_MAX_BYTES if owned["schema"] == SCHEMA else V2_MAX_BYTES
     authorization._original(raw, maximum, "versioned consume input issuer policy")
     shape._base64url(owned["signatureBase64Url"], signature=True)
     shape._literal(owned["payload"]["schema"],
-        V2_PAYLOAD_SCHEMA if owned["schema"] == V2_SCHEMA else PAYLOAD_SCHEMA)
+        V3_PAYLOAD_SCHEMA if owned["schema"] == V3_SCHEMA else V2_PAYLOAD_SCHEMA if owned["schema"] == V2_SCHEMA else PAYLOAD_SCHEMA)
     _payload_shape(owned["payload"], work)
     _canonical(raw, owned, work)
     return owned
@@ -265,7 +279,7 @@ class _Lifetime:
 
 def _signature(envelope, root, work):
     unsigned = _wire(envelope["payload"], work)
-    domain = V2_SCHEMA if envelope["schema"] == V2_SCHEMA else SIGNATURE_DOMAIN
+    domain = V3_SCHEMA if envelope["schema"] == V3_SCHEMA else V2_SCHEMA if envelope["schema"] == V2_SCHEMA else SIGNATURE_DOMAIN
     try:
         capability._signature(root, envelope["signatureBase64Url"], domain,
             unsigned, capture._SharedLedger(work))
@@ -276,10 +290,19 @@ def _signature(envelope, root, work):
 
 def _consume_key(selected, planner, root, work, current):
     """Use actual configured purposes; no synthetic history result is passed."""
-    configured, chosen = planner.configuration_payload, selected["planner"]
+    return _consume_resource_key(selected, configured=planner.configuration_payload,
+        planner_spki_digest=planner.planner_spki_digest, maximum_plan_age_ns=planner.maximum_plan_age_ns,
+        state_enrollment_bytes=planner.state_enrollment_bytes,
+        state_enrollment_digest=planner.state_enrollment_digest, root=root, work=work, current=current)
+
+
+def _consume_resource_key(selected, *, configured, planner_spki_digest, maximum_plan_age_ns,
+        state_enrollment_bytes, state_enrollment_digest, root, work, current):
+    """Shared original resource checks; no successful planner DTO is invented."""
+    chosen = selected["planner"]
     roles = configured["roles"]
     shape._object(roles, frozenset(configuration._ROLE_NAMES), "consume configured roles")
-    forbidden = [keys._spki_on_work(root, work), planner.planner_spki_digest]
+    forbidden = [keys._spki_on_work(root, work), planner_spki_digest]
     current()
     for name in configuration._ROLE_NAMES:
         role = roles[name]
@@ -294,7 +317,7 @@ def _consume_key(selected, planner, root, work, current):
             configuration._key(role["signingPublicKeyBase64Url"], work, expected_spki=role["signingSpkiDigest"])
             forbidden.append(role["signingSpkiDigest"])
             shape._integer(role["maximumInternalAgeNs"], minimum=1)
-            if planner.maximum_plan_age_ns > role["maximumInternalAgeNs"]:
+            if maximum_plan_age_ns > role["maximumInternalAgeNs"]:
                 _fail("consume planner lifetime widens configured policy")
         current()
     activation.enabled._require_enabled_operation(roles["planner"], consume.OPERATION, work)
@@ -312,10 +335,10 @@ def _consume_key(selected, planner, root, work, current):
             configured_policy, payload=configured, work=work)
         forbidden.append(policy["signingSpkiDigest"])
     current()
-    state = authorization._admit_enrollment_on_work(enrollment_bytes=planner.state_enrollment_bytes,
+    state = authorization._admit_enrollment_on_work(enrollment_bytes=state_enrollment_bytes,
         root_public_key=root, work=work)
     current()
-    plan._same(state.enrollment_digest, planner.state_enrollment_digest, work,
+    plan._same(state.enrollment_digest, state_enrollment_digest, work,
         "consume input state enrollment differs from genuinely admitted activation original")
     forbidden.extend(state.payload[name]["spkiDigest"] for name in ("state", "computation", "completion"))
     work.prepare_scan(forbidden)
@@ -439,12 +462,17 @@ def _verify_original_on_work(*, policy_bytes, activation_planner_bootstrap_bytes
     lifetime.current()
     payload = envelope["payload"]
     historical = expected_policy_interval is not None
+    resource_live = None
     if historical:
         if envelope["schema"] != V2_SCHEMA:
             _fail("historical consume policy admission requires the explicit v2 bridge")
         from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
         planner, public, historical_root, current_planner, bridge_material = bridge._join_historical_on_work(
             payload, original, root, lifetime, work, expected_policy_interval=expected_policy_interval)
+    elif envelope["schema"] == V3_SCHEMA:
+        from serverware import oidc_session_activation_consume_input_resources as resources
+        planner, public, resource_live = resources._late_on_work(payload, original, root, lifetime, work)
+        historical_root, current_planner, bridge_material = root, planner, None
     elif envelope["schema"] == V2_SCHEMA:
         from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
         planner, public, historical_root, current_planner, bridge_material = bridge._join_on_work(
@@ -459,18 +487,29 @@ def _verify_original_on_work(*, policy_bytes, activation_planner_bootstrap_bytes
     owned = _capture(payload, work)
     selected_history = _capture(owned["history"], work)
     selected = _capture(owned["consumePlanner"], work)
-    predecessor = owned["activationPredecessor"]
-    predecessor = reservation._predecessor_scope(predecessor["sequence"], predecessor["headDigest"], predecessor["fence"])
+    predecessor = None
+    if resource_live is None:
+        predecessor = owned["activationPredecessor"]
+        predecessor = reservation._predecessor_scope(predecessor["sequence"], predecessor["headDigest"], predecessor["fence"])
     lifetime.current()
+    live = lifetime.current if resource_live is None else resource_live
+    live()
     material_type = _HistoricalIssuerPolicyMaterial if historical else _IssuerPolicyMaterial
     return material_type(raw, original, identity, owned, planner, selected_history,
-        selected, predecessor, public, lifetime.window, lifetime.bound, lifetime.current,
-        historical_root, current_planner, bridge_material)
+        selected, predecessor, public, lifetime.window, lifetime.bound, live,
+        historical_root, current_planner, bridge_material, resource_live is not None)
 
 
 def _produce_on_work(*, payload, activation_planner_bootstrap_bytes, root_private_key,
         root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
     """Sign only after genuine historical admission and static purpose joins."""
+    if type(payload) is dict and payload.get("schema") == V3_PAYLOAD_SCHEMA:
+        from serverware import oidc_session_activation_consume_input_resources as resources
+        if activation_planner_bootstrap_bytes is not None:
+            _fail("static consume resources cannot select a future activation planner")
+        return resources._produce_on_work(payload=payload, root_private_key=root_private_key,
+            root_public_key=root_public_key, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
     original = authorization._original(activation_planner_bootstrap_bytes,

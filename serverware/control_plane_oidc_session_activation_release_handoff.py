@@ -21,6 +21,7 @@ from serverware import control_plane_oidc_session_activation_release_attempt as 
 from serverware import control_plane_oidc_session_activation_release_handoff_bootstrap as configured
 from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent_config
 from serverware import control_plane_oidc_session_activation_release_proof_bootstrap as proof_config
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 from serverware import oidc_session_activation_release_client_authorization as clients
 from serverware import oidc_session_activation_release_outcome as outcomes
 from serverware import oidc_session_activation_release_transport as transport
@@ -78,9 +79,12 @@ def _release_on_permission(permission, *, client_authorization_bytes, server_boo
     intent_scope_raw, intent_enrollment = intent_policy.expected_scope_bytes, intent_policy.enrollment_bytes
     intent_forbidden = intent_policy.forbidden_public_keys
     state_enrollment = consume_policy.current_root_enrollment_bytes
-    predecessor = consume_policy.reservation_predecessor
+    dynamic = consume_policy.request_bound is True
+    predecessor = (request_dispatch._consume_predecessor_on_permission(permission)
+        if dynamic else consume_policy.reservation_predecessor)
     activation_planner = parent.activation_planning
-    planner_raw = activation_planner.planner_bootstrap_bytes
+    planner_raw = (request_dispatch._planner_original_on_permission(permission)
+        if dynamic else activation_planner.planner_bootstrap_bytes)
     cookie = permission._request.cookies.get(possession[0])
     if (cookie != possession[1] or type(cookie) is not str or len(cookie) != delivery.TOKEN_BYTES
             or any(ord(character) > 127 for character in cookie)):
@@ -113,9 +117,11 @@ def _release_on_permission(permission, *, client_authorization_bytes, server_boo
                 or intent_policy.enrollment_bytes is not intent_enrollment
                 or intent_policy.forbidden_public_keys is not intent_forbidden
                 or consume_policy.current_root_enrollment_bytes is not state_enrollment
-                or consume_policy.reservation_predecessor is not predecessor
+                or consume_policy.reservation_predecessor is not (None if dynamic else predecessor)
+                or (dynamic and request_dispatch._consume_predecessor_on_permission(permission) is not predecessor)
                 or parent.activation_planning is not activation_planner
-                or activation_planner.planner_bootstrap_bytes is not planner_raw
+                or (request_dispatch._planner_original_on_permission(permission) if dynamic
+                    else activation_planner.planner_bootstrap_bytes) is not planner_raw
                 or permission._release_proof_originals is not proof_raw or permission._release_proof_context is not context
                 or permission._release_intent_original is not intent_raw
                 or permission._consume_completion_originals is not completed

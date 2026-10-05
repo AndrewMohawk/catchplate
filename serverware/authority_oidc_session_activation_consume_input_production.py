@@ -243,7 +243,15 @@ def _activation_controls(raw, expected, before, policy, root, lifetime, work):
     current()
     state_material, reserve, reserve_digest = state._verify_historical_request_on_work(
         request_bytes=raw[6], enrollment_bytes=enrollment, root_public_key=root, work=work)
-    predecessor = reservations._predecessor_scope(*policy.activation_predecessor)
+    # The resource-only profile has no guessed cold predecessor. This value
+    # is derived only after the genuine signed reserve above, and remains
+    # provisional until the actual state ACK and COMPLETE ancestry below are
+    # verified. No output or state change occurs in between those checks.
+    predecessor = (reservations._predecessor_scope(reserve["predecessorSequence"],
+        reserve["predecessorHeadDigest"], reserve["fence"]) if policy.request_bound else
+        reservations._predecessor_scope(*policy.activation_predecessor))
+    if predecessor[0] + 2 > state_material.payload["maxRecords"]:
+        _fail("consume input original activation exceeds enrolled reserve/completion capacity")
     for name, value in (("action", "reserve"), ("operation", caller.OPERATION),
             ("requestDigest", authorized.request_digest), ("operationId", authorized.operation_id),
             ("capabilityDigest", grant_digest), ("predecessorSequence", predecessor[0]),
@@ -380,9 +388,12 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planne
     if total + embedded + 2 * len(activation_raw) > reservation:
         _fail("consume input decoded and wrapped originals exceed the held inventory")
     work.charge(input_bytes=embedded)
-    issued = policy.payload["issuedAtEpochNs"]
+    issued = (max(policy.payload["issuedAtEpochNs"], material.attestation_interval[0])
+        if policy.request_bound else policy.payload["issuedAtEpochNs"])
     expires = min(policy.payload["expiresAtEpochNs"],
         issued + min(output.maximum_plan_age_ns, activation.MAX_RECEIPT_AGE_NS))
+    if policy.request_bound:
+        expires = min(expires, material.attestation_interval[1])
     if issued >= expires:
         _fail("consume input deterministic output interval is empty")
     lifetime.narrow(expires, min(material.maximum_plan_age_ns, output.maximum_plan_age_ns),

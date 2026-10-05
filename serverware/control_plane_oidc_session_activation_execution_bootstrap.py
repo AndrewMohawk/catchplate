@@ -18,6 +18,7 @@ SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v2"
 V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v3"
 V4_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v4"
+V5_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v5"
 CALLER_KEY_FD = 205
 AUTHORIZER_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/authorizer.sock"
 RESERVER_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/reserver.sock"
@@ -29,6 +30,7 @@ _FIELDS = frozenset({"schema", "activationCallerPrivateKeyFd", "plannerKey",
 _V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "sqlEndpoint", "statePredecessor"})
 _V3_FIELDS = _V2_FIELDS | frozenset({"completionEndpoint"})
 _V4_FIELDS = _V3_FIELDS | frozenset({"consumePlannerEndpoint", "consumePlannerKey"})
+_V5_FIELDS = _V4_FIELDS - frozenset({"statePredecessor"})
 _PLANNER_FIELDS = frozenset({"publicKeyBase64Url", "spkiDigest"})
 _CONSUME_PLANNER_FIELDS = _PLANNER_FIELDS | frozenset({"measurementDigest"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
@@ -65,6 +67,7 @@ class _ActivationExecutionMaterial:
     consume_planner_endpoint: tuple | None = None
     consume_planner_public_key: object | None = None
     consume_planner_measurement_digest: str | None = None
+    request_bound: bool = False
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
@@ -87,9 +90,10 @@ def _shape(value):
     if value is None:
         return
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA)):
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, V5_SCHEMA)):
         raise OidcSessionActivationExecutionBootstrapError("activation execution purpose version differs")
-    fields = (_V4_FIELDS if value["schema"] == V4_SCHEMA else
+    fields = (_V5_FIELDS if value["schema"] == V5_SCHEMA else
+        _V4_FIELDS if value["schema"] == V4_SCHEMA else
         _V3_FIELDS if value["schema"] == V3_SCHEMA else
         _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS)
     shape._object(value, fields,
@@ -107,9 +111,10 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
         _endpoint(value["reserverEndpoint"], _path=RESERVER_SOCKET_PATH)
         _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
         predecessor = value["statePredecessor"]
         shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
             "independent activation reservation predecessor")
@@ -118,9 +123,9 @@ def _shape(value):
         shape._integer(predecessor["nextFence"], minimum=1)
         if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
             raise OidcSessionActivationExecutionBootstrapError("activation genesis requires fence one")
-    if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
+    if value["schema"] in (V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
         _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
-    if value["schema"] == V4_SCHEMA:
+    if value["schema"] in (V4_SCHEMA, V5_SCHEMA):
         _endpoint(value["consumePlannerEndpoint"], _path=CONSUME_PLANNER_SOCKET_PATH)
         selected = value["consumePlannerKey"]
         shape._object(selected, _CONSUME_PLANNER_FIELDS, "dedicated consume planner public key")
@@ -213,7 +218,7 @@ def _admit_on_work(*, activation_execution, configuration_payload, configuration
                         "activation caller or planner key reuses another configured purpose")
         reservation_endpoint = reservation_predecessor = sql_endpoint = completion_endpoint = None
         consume_endpoint = consume_key = consume_measurement = None
-        if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
             current = caller.authorization._admit_enrollment_on_work(
                 enrollment_bytes=current_raw, root_public_key=root, work=work)
             for actual, expected in (
@@ -222,20 +227,21 @@ def _admit_on_work(*, activation_execution, configuration_payload, configuration
                     (current.payload["databaseId"], policy["databaseId"])):
                 plan._same(actual, expected, work,
                     "activation predecessor differs from its actual original enrollment")
-            predecessor = value["statePredecessor"]
-            if predecessor["sequence"] + 2 > current.payload["maxRecords"]:
-                raise OidcSessionActivationExecutionBootstrapError(
-                    "activation predecessor lacks enrolled reserve and completion capacity")
-            if predecessor["sequence"] == 0:
-                plan._same(predecessor["headDigest"], current.enrollment_digest, work,
-                    "activation independent genesis head differs")
+            if value["schema"] != V5_SCHEMA:
+                predecessor = value["statePredecessor"]
+                if predecessor["sequence"] + 2 > current.payload["maxRecords"]:
+                    raise OidcSessionActivationExecutionBootstrapError(
+                        "activation predecessor lacks enrolled reserve and completion capacity")
+                if predecessor["sequence"] == 0:
+                    plan._same(predecessor["headDigest"], current.enrollment_digest, work,
+                        "activation independent genesis head differs")
+                reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
+                    predecessor["nextFence"])
             reservation_endpoint = _endpoint(value["reserverEndpoint"], _path=RESERVER_SOCKET_PATH)
-            reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
-                predecessor["nextFence"])
             sql_endpoint = _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
-        if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
+        if value["schema"] in (V3_SCHEMA, V4_SCHEMA, V5_SCHEMA):
             completion_endpoint = _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
-        if value["schema"] == V4_SCHEMA:
+        if value["schema"] in (V4_SCHEMA, V5_SCHEMA):
             consume = value["consumePlannerKey"]
             consume_key = configuration._key(consume["publicKeyBase64Url"], work,
                 expected_spki=consume["spkiDigest"])
@@ -254,7 +260,7 @@ def _admit_on_work(*, activation_execution, configuration_payload, configuration
             policy["callerKey"]["measurementDigest"], policy["maximumAgeNs"],
             policy["maximumClockSkewNs"], _endpoint(value["authorizerEndpoint"]),
             reservation_endpoint, reservation_predecessor, sql_endpoint, completion_endpoint,
-            consume_endpoint, consume_key, consume_measurement)
+            consume_endpoint, consume_key, consume_measurement, value["schema"] == V5_SCHEMA)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationExecutionBootstrapError):
             raise

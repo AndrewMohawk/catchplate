@@ -17,6 +17,7 @@ from serverware import authority_oidc_session_activation_reservation_records as 
 from serverware import authority_registration_completion_response as neutral
 from serverware import control_plane_oidc_session_activation_execution as execution
 from serverware import control_plane_oidc_session_activation_records as retained
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 
 
 caller, plan, production = execution.caller, execution.plan, execution.production
@@ -74,7 +75,8 @@ def _complete_on_permission(permission, *, before_vector_bytes, current, narrow,
             or any(type(raw) is not bytes for raw in originals) or policy.completion_endpoint is None):
         execution._fail("activation completion is not the sealed one-use SQL continuation")
     endpoint = transport._endpoint(policy.completion_endpoint)
-    predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
+    predecessor = (request_dispatch._predecessor_on_permission(permission) if policy.request_bound
+        else reservations._predecessor_scope(*policy.reservation_predecessor))
     finalization_digest = permission._target[2]["localDigest"]
     selected = transport._originals((transport.PURPOSE, originals[0]), response=False)
     permission._identity()

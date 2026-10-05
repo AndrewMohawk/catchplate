@@ -79,6 +79,8 @@ V22_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v22"
 V22_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v22"
 V23_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v23"
 V23_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v23"
+V24_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v24"
+V24_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v24"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -1191,6 +1193,23 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
             raise EnrollmentBootstrapError("bootstrap requires the independently admitted Ed25519 runtime root")
         capability.shape._digest(expected)
         envelope = _decode(original, work)
+        # Separate explicit resource-only profile. Signature admission still
+        # precedes actual child/key/configuration use; no old profile widens.
+        if type(envelope) is dict and envelope.get("schema") == V24_SCHEMA:
+            from serverware import control_plane_enrollment_request_bootstrap as requested
+
+            requested._shape(envelope)
+            _canonical(original, envelope, work)
+            payload = envelope["payload"]
+            payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
+            capability._signature(key, envelope["signatureBase64Url"], V24_SCHEMA,
+                payload_bytes, capture._SharedLedger(work))
+            _canonical(original, envelope, work)
+            material, current = requested._material(payload, expected, key, work,
+                live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns)
+            _canonical(original, envelope, work)
+            current()
+            return material
         is_v3 = type(envelope) is dict and envelope.get("schema") == V3_SCHEMA
         is_v4 = type(envelope) is dict and envelope.get("schema") == V4_SCHEMA
         is_v5 = type(envelope) is dict and envelope.get("schema") == V5_SCHEMA
@@ -1312,6 +1331,16 @@ def _encode(value):
     # reservation; unlike proof canonicalization this preserves finite floats.
     return json.dumps(value, ensure_ascii=True, sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode("ascii")
+
+
+def _produce_v24_on_work(*, payload, runtime_root_private_key, runtime_root_public_key,
+        live_window, transport_deadline_ns, work):
+    """Sign only the complete explicit request-bound nine-lane parent."""
+    from serverware import control_plane_enrollment_request_bootstrap as requested
+
+    return requested._produce_on_work(payload=payload,
+        runtime_root_private_key=runtime_root_private_key, runtime_root_public_key=runtime_root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
 
 def _produce_on_work(*, configuration_payload, generation, runtime_role_identities,

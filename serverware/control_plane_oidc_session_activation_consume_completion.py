@@ -18,6 +18,7 @@ from serverware import control_plane_oidc_session_activation_consume_dispatch as
 from serverware import control_plane_oidc_session_activation_consume_execution_bootstrap as configured
 from serverware import control_plane_oidc_session_activation_consume_records as retained
 from serverware import control_plane_oidc_session_activation_execution as execution
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 
 
 caller, planning, computation, reservations = (
@@ -115,7 +116,9 @@ def _complete_on_permission(permission):
         execution._fail("consume completion release-hint profile is not source fixed")
     exchange = release_transport if release_hints else transport
     endpoint = exchange._endpoint(policy.completion_endpoint)
-    predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
+    dynamic = policy.request_bound is True
+    predecessor = (request_dispatch._consume_predecessor_on_permission(permission)
+        if dynamic else reservations._predecessor_scope(*policy.reservation_predecessor))
     selected = exchange._originals((exchange.PURPOSE, originals[0]), response=False)
     target = permission._target[2]["localDigest"]
     caller.shape._digest(target)
@@ -134,7 +137,9 @@ def _complete_on_permission(permission):
         if (owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or parent.consume_execution is not policy or policy.completion_endpoint != endpoint
                 or policy.release_hints is not release_hints
-                or policy.reservation_predecessor != predecessor or permission._consume_sql_originals is not originals
+                or policy.reservation_predecessor != (None if dynamic else predecessor)
+                or (dynamic and request_dispatch._consume_predecessor_on_permission(permission) is not predecessor)
+                or permission._consume_sql_originals is not originals
                 or permission._consume_sql_context is not continuation or permission._consume_sql_outcome is not sql_outcome
                 or permission._sql_originals is not activation_raw or permission._consume_signing is not signing
                 or permission._consume_authorization is not authorization or permission._dispatch_phase not in (

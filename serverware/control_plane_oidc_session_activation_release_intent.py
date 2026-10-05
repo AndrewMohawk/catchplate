@@ -17,6 +17,7 @@ from serverware import control_plane_oidc_session_activation_consume_completion 
 from serverware import control_plane_oidc_session_activation_consume_records as retained
 from serverware import control_plane_oidc_session_activation_execution as execution
 from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as configured
+from serverware import control_plane_oidc_session_activation_request_dispatch as request_dispatch
 
 
 planning, caller = completion.planning, completion.caller
@@ -166,7 +167,8 @@ def _authorize_on_permission(permission):
     plan._same(intent.delivery._token_digest(old, work, current), arguments["old_token_digest"], work,
         "release intent current old-token possession")
     envelope_digest = planning.assertion._digest(envelope, work)
-    predecessor = completion.reservations._predecessor_scope(*consume_policy.reservation_predecessor)
+    predecessor = (request_dispatch._consume_predecessor_on_permission(permission) if consume_policy.request_bound
+        else completion.reservations._predecessor_scope(*consume_policy.reservation_predecessor))
     reserve, reserve_digest, receipt, receipt_digest = completion.reservations._verify_on_work(
         request_bytes=consume_raw[5], snapshot_bytes=consume_raw[6], receipt_bytes=consume_raw[7],
         enrollment_bytes=consume_policy.current_root_enrollment_bytes, root_public_key=root,

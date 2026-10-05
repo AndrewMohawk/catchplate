@@ -1,4 +1,4 @@
-"""Guarded caller I/O for seventeen source-fixed activation/consume wire profiles.
+"""Guarded caller I/O for eighteen source-fixed activation/consume wire profiles.
 
 These private adapters preserve the actual caller's work and current guard;
 they do not admit requests, replies, socket peers or callback results as proof.
@@ -29,6 +29,7 @@ from serverware import authority_oidc_session_activation_release_proof_input_tra
 from serverware import authority_oidc_session_activation_release_recovery_grant_transport as recovery_grants
 from serverware import authority_oidc_session_activation_release_recovery_delivery_transport as recovery_delivery
 from serverware import authority_oidc_session_activation_request_issuance_transport as request_issuance
+from serverware import authority_oidc_session_activation_execution_issuance_transport as execution_issuance
 
 
 AuthorityTransportError = authority_transport.AuthorityTransportError
@@ -37,7 +38,7 @@ capture = production.capability.capture
 
 def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, current,
         maximum_response_bytes=None):
-    # The seventeen literal entry functions below choose this closed source set.
+    # The eighteen literal entry functions below choose this closed source set.
     # No path, framing callback or caller-selected profile is accepted instead.
     if not (profile is authorizer or profile is reservation or profile is sql
             or profile is completion or profile is completion_dispatch
@@ -45,7 +46,7 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
             or profile is consume_completion_dispatch or profile is consume_completion_release
             or profile is release_proof or profile is release_grants or profile is consume_inputs
             or profile is proof_inputs or profile is recovery_grants or profile is recovery_delivery
-            or profile is request_issuance):
+            or profile is request_issuance or profile is execution_issuance):
         raise AuthorityTransportError("activation caller transport profile is not source fixed")
     # Completion's MAX_BYTES intentionally means only its fixed raw2 request;
     # its separate source exchange ceiling covers the bounded raw4/raw6 response.
@@ -54,7 +55,7 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
             or profile is consume_completion_dispatch or profile is consume_completion_release
             or profile is release_proof or profile is release_grants or profile is consume_inputs
             or profile is proof_inputs or profile is recovery_grants or profile is recovery_delivery
-            or profile is request_issuance
+            or profile is request_issuance or profile is execution_issuance
         else profile.MAX_BYTES)
     if (maximum_response_bytes is not None
             and profile is not proof_inputs and profile is not recovery_grants
@@ -178,7 +179,7 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
                 or profile is consume_sql or profile is consume_completion_dispatch or profile is consume_completion_release
                 or profile is release_proof or profile is release_grants or profile is consume_inputs
                 or profile is proof_inputs or profile is recovery_grants or profile is recovery_delivery
-                or profile is request_issuance):
+                or profile is request_issuance or profile is execution_issuance):
             profile._response_lengths(lengths)
         else:
             profile._lengths(lengths, response=True)
@@ -219,6 +220,11 @@ def _authorizer_on_work(endpoint, *, originals, deadline_ns, work, current):
 
 def _request_issuance_on_work(endpoint, *, originals, deadline_ns, work, current):
     return _exchange_on_work(request_issuance, endpoint, originals=originals,
+        deadline_ns=deadline_ns, work=work, current=current)
+
+
+def _execution_issuance_on_work(endpoint, *, originals, deadline_ns, work, current):
+    return _exchange_on_work(execution_issuance, endpoint, originals=originals,
         deadline_ns=deadline_ns, work=work, current=current)
 
 

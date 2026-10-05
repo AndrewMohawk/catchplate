@@ -124,6 +124,13 @@ COPY --from=verified-production-source /source/serverware/registration_execution
 COPY --from=verified-production-source /source/serverware/registration_finalization_completion_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_request_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_request_dynamic_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_dynamic_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_input_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_sealed_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_sealed_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_sealed_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_sealed_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_sealed_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_request_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_request_issuer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_planner_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_launcher.py
@@ -251,6 +258,13 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/registration_finalization_completion_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_request_dynamic_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_execution_dynamic_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_sealed_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_sealed_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_request_issuer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_delivery_planner_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py \

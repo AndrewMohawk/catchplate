@@ -208,6 +208,11 @@ def _complete_on_permission(permission):
     narrow(min(reserve["expiresAtEpochNs"], reserve["issuedAtEpochNs"] + reserve_age),
         reserve_age, state_material.payload["maxClockSkewNs"])
     current()
+    if dynamic:
+        from serverware import authority_oidc_session_activation_execution_issuance_transport as issuance_io
+        issuance_io._request_on_work(b"consume-completion", originals=(*originals, *sql_outcome),
+            deadline_ns=bound, work=work, current=current)
+        current()
     returned = exchange._socket_request_on_work(endpoint, originals=selected,
         deadline_ns=bound, work=work, current=current)
     current()

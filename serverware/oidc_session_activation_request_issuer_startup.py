@@ -214,6 +214,13 @@ class _IssuerOwner:
             root_private_key=self.private, root_public_key=self.root, live_window=self.lifetime.window,
             transport_deadline_ns=self.lifetime.bound, work=self.work, _continuity=self.continuity)
         self.current()
+        from serverware import authority_oidc_session_activation_execution_issuance_transport as execution_staging
+        channel = object.__new__(_StagingChannel)
+        channel.owner, channel.opened, channel.closed = self, False, False
+        self.channel = channel
+        execution_staging._stage_planning_on_work(channel, originals=originals,
+            deadline_ns=self.lifetime.bound, work=self.work, current=self.current)
+        self.current()
         channel = object.__new__(_StagingChannel)
         channel.owner, channel.opened, channel.closed = self, False, False
         self.channel = channel

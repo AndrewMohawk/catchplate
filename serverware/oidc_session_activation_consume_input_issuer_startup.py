@@ -558,9 +558,14 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
                 _fail("consume input issuer v1 changed its original same-root context")
             policy_contexts = (policy, historical, output_context,
                 policy.historical_root_public_key, policy.bridge)
-            issued = policy.payload["issuedAtEpochNs"]
+            issued = (max(policy.payload["issuedAtEpochNs"], historical.attestation_interval[0])
+                if policy.request_bound else policy.payload["issuedAtEpochNs"])
             expiry = min(policy.payload["expiresAtEpochNs"],
                 issued + min(output_context.maximum_plan_age_ns, producer.activation.MAX_RECEIPT_AGE_NS))
+            if policy.request_bound:
+                expiry = min(expiry, historical.attestation_interval[1])
+            if issued >= expiry:
+                _fail("consume input issuer actual output interval is empty")
             timeout_ns = launch["requestTimeoutSeconds"] * 1_000_000_000
             # Original execution constraints remain restrictive, but fresh
             # output derives from the independently admitted current context.

@@ -52,9 +52,9 @@ _MATERIAL[KEY_PATH] = (MAX_KEY_BYTES, True)
 # Only the recovery reader's TLS resources enter this issuer. The separate
 # completion/proof worker retains its own UID65497 checks and commit TLS pair.
 _TLS_FILES = (
-    ("ca", "/run/serverware/oidc-session-activation-delivery-completion-tls/ca.pem", 64 * 1024, False),
-    ("custodyCertificate", "/run/serverware/oidc-session-activation-delivery-completion-tls/custody.crt", 64 * 1024, False),
-    ("custodyKey", "/run/serverware/oidc-session-activation-delivery-completion-tls/custody.key", 16 * 1024, True),
+    ("ca", "/run/serverware/oidc-session-activation-release-proof-input-issuer-tls/ca.pem", 64 * 1024, False),
+    ("custodyCertificate", "/run/serverware/oidc-session-activation-release-proof-input-issuer-tls/custody.crt", 64 * 1024, False),
+    ("custodyKey", "/run/serverware/oidc-session-activation-release-proof-input-issuer-tls/custody.key", 16 * 1024, True),
 )
 _TLS_FIELDS = frozenset({"ca", "custodyCertificate", "custodyKey", "commitCertificate", "commitKey"})
 _HEX = frozenset("0123456789abcdef")
@@ -409,7 +409,7 @@ def _retained_bytes_on_work(delivery_current, work, *, live_window=None, transpo
     return selected._retained_bytes
 
 
-def main():
+def main(*, _sealed_sources=False):
     global _used, _continuation
     if _used or os.getpid() != _PID or os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("proof input issuer delivery must start once in its original root PID")
@@ -417,10 +417,16 @@ def main():
     if (os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME):
         raise RuntimeError("proof input issuer requires one exact activated listener")
-    _require_inventory({3})
-    owned, reservations, status = {3: None}, {}, 1
+    from serverware import oidc_session_activation_follow_on_originals as originals
+    if type(_sealed_sources) is not bool:
+        raise RuntimeError("proof issuer source profile differs")
+    sources = originals.roster('proof-issuer') if _sealed_sources else ()
+    _require_inventory({3, *(row[0] for row in sources)})
+    owned, reservations, status = {3: None, **{row[0]: None for row in sources}}, {}, 1
     try:
         _claim(3, owned)
+        supplied = originals._Originals('proof-issuer', owned) if _sealed_sources else None
+        opening = supplied.open if supplied is not None else _open_material
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from serverware import oidc_session_activation_release_proof_input_issuer_bootstrap as bootstrap
@@ -443,7 +449,7 @@ def main():
             reservations[target] = owned[descriptor]
         sealed_bytes = 0
         for path, target, maximum in _TRUST_FILES:
-            source = _open_material(path, maximum, work=work, current=current,
+            source = opening(path, maximum, work=work, current=current,
                 retained_bytes=8 * sealed_bytes + resource_reserve + 128 * 1024)
             _claim(source, owned)
             sealed_bytes += os.fstat(source).st_size
@@ -496,7 +502,7 @@ def main():
             raise RuntimeError("proof input issuer actual retained inventory exceeds capacity")
         # First private access follows genuine root launch, independent policy,
         # completion and both enrollment original admissions.
-        source = _open_material(KEY_PATH, MAX_KEY_BYTES, work=work, current=current,
+        source = opening(KEY_PATH, MAX_KEY_BYTES, work=work, current=current,
             private=True, expected_size=material.root_signing_key_byte_count, retained_bytes=retained)
         _claim(source, owned)
         _retain(source, KEY_FD, reservations, owned)

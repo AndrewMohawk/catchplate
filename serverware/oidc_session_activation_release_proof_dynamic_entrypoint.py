@@ -329,18 +329,28 @@ def _policy_bytes_on_work(policy, work, current):
     return total
 
 
-def main():
+def main(*, _sealed_sources=False):
     global _used, _continuation
     if _used or os.getpid() != _PID or os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("dynamic proof delivery must start once in its original root PID")
     _used = True
     staging_fd, proof_fd = _activated_descriptors()
-    fixed._require_inventory({3, 4})
-    owned, reservations = {3: None, 4: None}, {}
+    from serverware import oidc_session_activation_follow_on_originals as originals
+    if type(_sealed_sources) is not bool:
+        raise RuntimeError("proof dynamic source profile differs")
+    sources = originals.roster('proof-worker') if _sealed_sources else ()
+    output = (originals.OUTPUT_FD,) if _sealed_sources else ()
+    fixed._require_inventory({3, 4, *output, *(row[0] for row in sources)})
+    owned, reservations = {3: None, 4: None, **{fd: None for fd in output},
+        **{row[0]: None for row in sources}}, {}
     staging = connection = None
     try:
         ownership._claim(3, owned)
         ownership._claim(4, owned)
+        for descriptor in output:
+            ownership._claim(descriptor, owned)
+        supplied = originals._Originals('proof-worker', owned) if _sealed_sources else None
+        reading = supplied.read if supplied is not None else _read_public
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from serverware import authority_oidc_session_activation_consume_input_production as bookkeeping
@@ -368,7 +378,7 @@ def main():
             if descriptor != target:
                 raise RuntimeError("dynamic proof inherited descriptor slot is occupied")
             reservations[target] = owned[descriptor]
-        public = tuple(_read_public(path, maximum, owned=owned, work=work, current=current)
+        public = tuple(reading(path, maximum, owned=owned, work=work, current=current)
             for path, maximum in _PUBLIC_FILES)
         root_raw, policy_raw, completion_raw, proof_enrollment, intent_enrollment = public
         if (issuer.MAX_BYTES != MAX_POLICY_BYTES or issuer.MAX_COMPLETION_BOOTSTRAP_BYTES != MAX_COMPLETION_BYTES
@@ -487,6 +497,8 @@ def main():
         if identity != delivered.bootstrap_identity:
             raise RuntimeError("dynamic proof staged identity differs from genuine admission")
         fixed._require_inventory(tuple(owned))
+        if _sealed_sources:
+            originals._return_originals('proof-worker', owned=owned, work=work, current=current)
         transport._send_response(connection, (transport.ACK_STATUS, identity),
             deadline_ns=lifetime.bound, work=work, current=continuation.current)
         continuation.current()

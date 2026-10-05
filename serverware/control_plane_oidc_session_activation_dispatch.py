@@ -288,6 +288,11 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
     # accepts a boolean phase, socket outcome or success DTO to reach it.
     permission._sql_originals = permission._sql_seal = sql_originals
     permission._dispatch_phase = "sql-completion" if include_completion else "sql"
+    if dynamic:
+        from serverware import authority_oidc_session_activation_execution_issuance_transport as issuance_io
+        issuance_io._request_on_work(b"activation-sql", originals=sql_originals,
+            deadline_ns=bound, work=work, current=current)
+        current()
     response = sql_io._socket_request_on_work(sql_endpoint, originals=sql_originals,
         deadline_ns=bound, work=work, current=current)
     current()
@@ -299,6 +304,11 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
     current()
     if include_completion:
         from serverware import control_plane_oidc_session_activation_completion as completion
+
+        if dynamic:
+            issuance_io._request_on_work(b"activation-completion", originals=(*sql_originals, *response),
+                deadline_ns=bound, work=work, current=current)
+            current()
 
         complete_originals = completion._complete_on_permission(permission,
             before_vector_bytes=held.before, current=current, narrow=narrow_completion,

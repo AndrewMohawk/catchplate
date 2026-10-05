@@ -28,7 +28,8 @@ STAGING_PATH = "/run/serverware/oidc-session-activation/consume-bootstrap.sock"
 STAGING_NAME = "serverware-oidc-session-activation-consume-bootstrap"
 PLANNER_NAME = fixed.LISTENER_NAME
 STAGING_UID, STAGING_GID = 0, 65495
-MAX_ROOT_BYTES, MAX_POLICY_BYTES = 16 * 1024, 64 * 1024
+MAX_ROOT_BYTES, MAX_POLICY_BYTES = 16 * 1024, 6 * 1024 * 1024
+LEGACY_MAX_POLICY_BYTES = 64 * 1024
 MAX_ACTIVATION_BYTES, MAX_ORIGINAL_BYTES = 4 * 1024 * 1024, 64 * 1024 * 1024
 PYTHON = "/runtime/python/bin/python3"
 LAUNCHER = "/runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_launcher.py"
@@ -298,18 +299,28 @@ def _retained_inventory_on_work(raws, policy, delivered, work, current, admissio
     return total
 
 
-def main():
+def main(*, _sealed_sources=False):
     global _used, _continuation
     if _used or os.getpid() != _PID or os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("dynamic consume delivery must begin once in its original root PID")
     _used = True
     staging_fd, planner_fd = _activated_descriptors()
-    inventory._require_inventory({3, 4})
-    owned, reservations = {3: None, 4: None}, {}
+    from serverware import oidc_session_activation_follow_on_originals as originals
+    if type(_sealed_sources) is not bool:
+        raise RuntimeError("consume dynamic source profile differs")
+    sources = originals.roster('consume-worker') if _sealed_sources else ()
+    output = (originals.OUTPUT_FD,) if _sealed_sources else ()
+    inventory._require_inventory({3, 4, *output, *(row[0] for row in sources)})
+    owned, reservations = {3: None, 4: None, **{fd: None for fd in output},
+        **{row[0]: None for row in sources}}, {}
     staging = connection = None
     try:
         ownership._claim(3, owned)
         ownership._claim(4, owned)
+        for descriptor in output:
+            ownership._claim(descriptor, owned)
+        supplied = originals._Originals('consume-worker', owned) if _sealed_sources else None
+        reading = supplied.read if supplied is not None else _read_public
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from serverware import authority_oidc_session_activation_consume_input_delivery_transport as transport
@@ -332,8 +343,17 @@ def main():
             if descriptor != target:
                 raise RuntimeError("dynamic consume inherited descriptor slot is occupied")
             reservations[target] = owned[descriptor]
-        root_raw, policy_raw, activation_raw = tuple(_read_public(path, maximum,
+        root_raw, policy_raw, activation_raw = tuple(reading(path, maximum,
             owned=owned, work=work, current=current) for path, maximum in _PUBLIC_FILES)
+        # Intake can contain the explicit static v3 original. Old launch
+        # profiles retain their exact original 64 KiB limit; this is not an
+        # admission of arbitrary larger policies or a replacement work cap.
+        policy_shape = admission.issuer._read(policy_raw, work)
+        version = policy_shape["schema"]
+        if (version not in (admission.issuer.SCHEMA, admission.issuer.V2_SCHEMA, admission.issuer.V3_SCHEMA)
+                or len(policy_raw) > (MAX_POLICY_BYTES if version == admission.issuer.V3_SCHEMA
+                    else LEGACY_MAX_POLICY_BYTES)):
+            raise RuntimeError("dynamic consume policy exceeds its explicit versioned source limit")
         work.charge(input_bytes=len(root_raw))
         current()
         root = production._callback(work, lambda: serialization.load_pem_public_key(root_raw))
@@ -452,6 +472,8 @@ def main():
             raise RuntimeError("dynamic consume staged identities differ from genuine admission")
         inventory._require_inventory(tuple(owned))
         # The ACK precedes permanent drop and genuine worker construction.
+        if _sealed_sources:
+            originals._return_originals('consume-worker', owned=owned, work=work, current=continuation.current)
         transport._send_response(connection, (b"staged", *identities),
             deadline_ns=lifetime.bound, work=work, current=continuation.current)
         continuation.current()

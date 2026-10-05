@@ -203,14 +203,17 @@ def _journal_directory(device, inode):
         os.close(parent)
 
 
-def main():
+def main(*, _sealed_originals=False):
     if os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("activation reserver delivery must begin as root")
     if (os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME):
         raise RuntimeError("activation reserver requires one exact activated listener")
-    _require_inventory({3})
-    owned, reservations, retained = {3}, {}, {}
+    from serverware import oidc_session_activation_execution_dynamic_entrypoint as original_delivery
+    incoming = original_delivery._incoming("oidc_session_activation_execution_reserver_entrypoint", _sealed_originals)
+    inherited = {3, *(item[0] for item in incoming.values())}
+    _require_inventory(inherited)
+    owned, reservations, retained = inherited, {}, {}
     try:
         os.set_blocking(3, False)
         _listener(3)
@@ -221,7 +224,8 @@ def main():
                 raise RuntimeError("activation reserver fixed descriptor slot is occupied")
             reservations[target] = delivery._material_identity(os.fstat(reserved))
         for path, target, maximum in _TRUST_FILES:
-            source = _open_material(path, maximum)
+            source = (original_delivery._source(path, maximum, incoming)
+                if _sealed_originals else _open_material(path, maximum))
             owned.add(source)
             _retain(source, target, reservations, owned)
             retained[target] = delivery._material_identity(os.fstat(target))

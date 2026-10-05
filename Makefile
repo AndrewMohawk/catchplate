@@ -2316,6 +2316,18 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
 	serverware/oidc_session_activation_request_dynamic_entrypoint.py \
 	serverware/oidc_session_activation_request_dynamic_launcher.py \
+	serverware/oidc_session_activation_execution_dynamic_entrypoint.py \
+	serverware/authority_oidc_session_activation_execution_issuance_transport.py \
+	serverware/authority_oidc_session_activation_execution_request_issuance.py \
+	serverware/authority_oidc_session_activation_consume_execution_request_issuance.py \
+	serverware/oidc_session_activation_execution_dynamic_launcher.py \
+	serverware/oidc_session_activation_follow_on_originals.py \
+	serverware/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
+	serverware/oidc_session_activation_consume_dynamic_sealed_launcher.py \
+	serverware/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
+	serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
+	serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
+	serverware/oidc_session_activation_release_dynamic_sealed_launcher.py \
 	serverware/oidc_session_activation_request_issuance_policy.py \
 	serverware/oidc_session_activation_request_issuer_launcher.py \
 	serverware/oidc_session_activation_request_issuer_startup.py \
@@ -5404,6 +5416,18 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
 				serverware/oidc_session_activation_request_dynamic_entrypoint.py \
 				serverware/oidc_session_activation_request_dynamic_launcher.py \
+				serverware/oidc_session_activation_execution_dynamic_entrypoint.py \
+				serverware/authority_oidc_session_activation_execution_issuance_transport.py \
+				serverware/authority_oidc_session_activation_execution_request_issuance.py \
+				serverware/authority_oidc_session_activation_consume_execution_request_issuance.py \
+				serverware/oidc_session_activation_execution_dynamic_launcher.py \
+				serverware/oidc_session_activation_follow_on_originals.py \
+				serverware/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
+				serverware/oidc_session_activation_consume_dynamic_sealed_launcher.py \
+				serverware/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
+				serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
+				serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
+				serverware/oidc_session_activation_release_dynamic_sealed_launcher.py \
 				serverware/oidc_session_activation_request_issuance_policy.py \
 				serverware/oidc_session_activation_request_issuer_launcher.py \
 				serverware/oidc_session_activation_request_issuer_startup.py \

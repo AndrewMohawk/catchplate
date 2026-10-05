@@ -251,6 +251,11 @@ def _dispatch_on_permission(permission):
     permission._consume_sql_originals = permission._consume_sql_seal = sql_originals
     permission._consume_sql_context = permission._consume_sql_context_seal = (before, current, narrow, reserved_bytes)
     permission._dispatch_phase = "consume-sql"
+    if dynamic:
+        from serverware import authority_oidc_session_activation_execution_issuance_transport as issuance_io
+        issuance_io._request_on_work(b"consume-sql", originals=sql_originals,
+            deadline_ns=bound, work=work, current=current)
+        current()
     response = sql_io._socket_request_on_work(sql_endpoint, originals=sql_originals,
         deadline_ns=bound, work=work, current=current)
     response = sql_io._originals(response, response=True)

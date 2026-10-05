@@ -205,16 +205,22 @@ def _listener(descriptor):
         os.close(parent)
 
 
-def main():
+def main(*, _sealed_sources=False):
     if os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("consume issuer delivery must start as root")
     if (os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME):
         raise RuntimeError("consume issuer requires one exact activated listener")
-    _require_inventory({3})
-    owned, reservations, status = {3: None}, {}, 1
+    from serverware import oidc_session_activation_follow_on_originals as originals
+    if type(_sealed_sources) is not bool:
+        raise RuntimeError("consume issuer source profile differs")
+    sources = originals.roster('consume-issuer') if _sealed_sources else ()
+    _require_inventory({3, *(row[0] for row in sources)})
+    owned, reservations, status = {3: None, **{row[0]: None for row in sources}}, {}, 1
     try:
         _claim(3, owned)
+        supplied = originals._Originals('consume-issuer', owned) if _sealed_sources else None
+        opening = supplied.open if supplied is not None else _open_material
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from serverware import oidc_session_activation_consume_input_issuer_bootstrap as bootstrap
@@ -237,7 +243,7 @@ def main():
                 raise RuntimeError("consume issuer descriptor slot is already occupied")
             reservations[target] = owned[descriptor]
         for path, target, maximum in _TRUST_FILES:
-            source = _open_material(path, maximum, work=work, current=current)
+            source = opening(path, maximum, work=work, current=current)
             _claim(source, owned)
             _retain(source, target, reservations, owned)
             if not _close_owned_descriptor(source, owned):
@@ -286,7 +292,7 @@ def main():
         # First private access: exact launch, independent policy and historical
         # activation root originals have all passed genuine admission already.
         current()
-        source = _open_material(KEY_PATH, MAX_KEY_BYTES, work=work, current=current,
+        source = opening(KEY_PATH, MAX_KEY_BYTES, work=work, current=current,
             private=True, expected_size=material.root_signing_key_byte_count)
         _claim(source, owned)
         _retain(source, KEY_FD, reservations, owned)

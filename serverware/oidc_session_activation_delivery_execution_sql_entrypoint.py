@@ -318,14 +318,17 @@ def _tls_unchanged(expected_identity):
             os.close(parent)
 
 
-def main():
+def main(*, _sealed_originals=False):
     if os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("consume SQL delivery must begin as root")
     if (os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME):
         raise RuntimeError("consume SQL requires one exact activated listener")
-    _require_inventory({3})
-    owned, reservations, retained = {3}, {}, {}
+    from serverware import oidc_session_activation_execution_dynamic_entrypoint as original_delivery
+    incoming = original_delivery._incoming("oidc_session_activation_delivery_execution_sql_entrypoint", _sealed_originals)
+    inherited = {3, *(item[0] for item in incoming.values())}
+    _require_inventory(inherited)
+    owned, reservations, retained = inherited, {}, {}
     try:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -348,7 +351,8 @@ def main():
         capture_remaining = bootstrap.receiving.MAX_ORIGINALS_BYTES - bootstrap.receiving.INTAKE_METADATA_BYTES
         for path, target, maximum in _TRUST_FILES:
             current()
-            source = _open_material(path, maximum, work=work, maximum_capture_bytes=capture_remaining)
+            source = (original_delivery._source(path, maximum, incoming, work=work, maximum_capture_bytes=capture_remaining)
+                if _sealed_originals else _open_material(path, maximum, work=work, maximum_capture_bytes=capture_remaining))
             owned.add(source)
             current()
             _retain(source, target, reservations, owned)

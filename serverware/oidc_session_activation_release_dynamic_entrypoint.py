@@ -203,17 +203,23 @@ def _held_public_bytes(root_raw, policy_raw, proof_raw, policy):
     return sum(map(len, (root_raw, policy_raw, proof_raw, *embedded)))
 
 
-def main():
+def main(*, _sealed_sources=False):
     if os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("dynamic release delivery must begin as root")
     staging_fd, release_fd = _activated_descriptors()
-    inventory._require_inventory({3, 4})
-    owned, reservations = {3: None, 4: None}, {}
+    from serverware import oidc_session_activation_follow_on_originals as originals
+    if type(_sealed_sources) is not bool:
+        raise RuntimeError('release dynamic source profile differs')
+    sources = originals.roster('release-worker') if _sealed_sources else ()
+    inventory._require_inventory({3, 4, *(row[0] for row in sources)})
+    owned, reservations = {3: None, 4: None, **{row[0]: None for row in sources}}, {}
     staging = connection = resource_owner = None
     transferred = False
     try:
         fixed._claim(3, owned)
         fixed._claim(4, owned)
+        supplied = originals._Originals('release-worker', owned) if _sealed_sources else None
+        reading = supplied.read if supplied is not None else _read_public
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from serverware import authority_oidc_session_activation_release_grant_delivery_transport as transport
@@ -240,7 +246,7 @@ def main():
             if descriptor != target:
                 raise RuntimeError("dynamic release inherited descriptor slot is occupied")
             reservations[target] = owned[descriptor]
-        root_raw, policy_raw, proof_raw = tuple(_read_public(path, maximum,
+        root_raw, policy_raw, proof_raw = tuple(reading(path, maximum,
             owned=owned, work=work, current=current) for path, maximum in _PUBLIC_FILES)
         work.charge(input_bytes=len(root_raw))
         current()

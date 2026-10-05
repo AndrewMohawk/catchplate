@@ -96,9 +96,12 @@ def _verify_on_work(*, planner_bootstrap_bytes, history_custody_bytes, issuer_po
     activation, output = policy.activation_planner, policy.current_planner
     if type(activation) is not issuer.activation._PlannerMaterial:
         _fail("consume staging lacks the genuine policy-bound historical activation original")
-    issued = policy.payload["issuedAtEpochNs"]
+    issued = (max(policy.payload["issuedAtEpochNs"], activation.attestation_interval[0])
+        if policy.request_bound else policy.payload["issuedAtEpochNs"])
     expires = min(policy.payload["expiresAtEpochNs"],
         issued + min(output.maximum_plan_age_ns, issuer.activation.MAX_RECEIPT_AGE_NS))
+    if policy.request_bound:
+        expires = min(expires, activation.attestation_interval[1])
     if issued >= expires:
         _fail("consume staging deterministic policy-derived interval is empty")
     lifetime.narrow(expires, min(activation.maximum_plan_age_ns, output.maximum_plan_age_ns),
@@ -154,8 +157,16 @@ def _verify_on_work(*, planner_bootstrap_bytes, history_custody_bytes, issuer_po
             activation.generation["digest"], output.state_enrollment_digest), work,
         "consume staging independently enrolled database and generation")
     predecessor = policy.activation_predecessor
-    plan._same((payload["activationScope"]["pendingSequence"], payload["activationScope"]["fence"]),
-        (predecessor[0] + 1, predecessor[2]), work, "consume staging independently pinned activation sequence and fence")
+    if policy.request_bound:
+        # This delivery gate authenticates root-original worker inputs, not
+        # activation replay. The real issuer and consume worker verify the
+        # actual signed reserve/ACK/COMPLETE; static resources cannot pin a
+        # future predecessor. Never replace it with a guessed genesis head.
+        if predecessor is not None or policy.payload["schema"] != issuer.V3_PAYLOAD_SCHEMA:
+            _fail("request-bound consume staging supplied a cold predecessor")
+    else:
+        plan._same((payload["activationScope"]["pendingSequence"], payload["activationScope"]["fence"]),
+            (predecessor[0] + 1, predecessor[2]), work, "consume staging independently pinned activation sequence and fence")
     expected_scope = {"configurationDigest": activation.configuration_digest,
         "plannerIdentity": activation.planner_identity, "plannerSpkiDigest": activation.planner_spki_digest,
         "rpId": activation.rp_id, "origin": activation.origin,

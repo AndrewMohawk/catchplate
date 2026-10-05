@@ -318,14 +318,17 @@ def _tls_unchanged(expected_identity):
             os.close(parent)
 
 
-def main():
+def main(*, _sealed_originals=False):
     if os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0):
         raise RuntimeError("consume completion delivery must begin as root")
     if (os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME):
         raise RuntimeError("consume completion requires one exact activated listener")
-    _require_inventory({3})
-    owned, reservations, retained = {3}, {}, {}
+    from serverware import oidc_session_activation_execution_dynamic_entrypoint as original_delivery
+    incoming = original_delivery._incoming("oidc_session_activation_delivery_completion_entrypoint", _sealed_originals)
+    inherited = {3, *(item[0] for item in incoming.values())}
+    _require_inventory(inherited)
+    owned, reservations, retained = inherited, {}, {}
     try:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -347,7 +350,8 @@ def main():
             reservations[target] = delivery._material_identity(os.fstat(reserved))
         for path, target, maximum in _TRUST_FILES:
             current()
-            source = _open_material(path, maximum, work=work)
+            source = (original_delivery._source(path, maximum, incoming, work=work)
+                if _sealed_originals else _open_material(path, maximum, work=work))
             owned.add(source)
             current()
             _retain(source, target, reservations, owned)

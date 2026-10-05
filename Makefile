@@ -29,6 +29,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-verifier-read verify-authority-planner-writer
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
+.PHONY: verify-portal-registration-capture
 .PHONY: verify-local-activation-keys
 .PHONY: production-source-capture production-release-build production-release-publish production-release-sign production-release-deploy
 .NOTPARALLEL: production-release-build production-release-publish production-release-sign production-release-deploy production-release-proof
@@ -870,6 +871,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_portal_agent_enrollment_ui.py \
 	scripts/test_portal_static_credential_replacement.py \
 	scripts/test_portal_session_activation_entry.py \
+	scripts/test_portal_registration_capture.py \
 	scripts/test_prepare_aws_kms_materials.py \
 	scripts/test_production_handoff.py \
 	scripts/test_production_image_builds.py \
@@ -11095,6 +11097,9 @@ verify-portal-static-credential-replacement:
 
 verify-portal-session-activation-entry:
 	python3 -I -B scripts/test_portal_session_activation_entry.py
+
+verify-portal-registration-capture:
+	python3 -I -B scripts/test_portal_registration_capture.py
 
 # These protected-file controls need root only inside a private disposable
 # container, not the unprivileged generic Coder test profile. Keep the result

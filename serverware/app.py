@@ -97,6 +97,7 @@ from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_HTML,
     REGISTRATION_HANDOFF_SCRIPT,
 )
+from serverware.portal_registration_capture import REGISTRATION_CAPTURE_HTML, REGISTRATION_CAPTURE_SCRIPT
 from serverware.portal_session_activation import (
     SESSION_ACTIVATION_CSS,
     SESSION_ACTIVATION_HTML,
@@ -22966,6 +22967,7 @@ UI_HTML = r"""
       <input id="admin-token" class="token-field" type="password" placeholder="Admin token or OIDC JWT" autocomplete="off">
       <button id="operator-sign-in" class="secondary" type="button" onclick="runUiAction('Sign in', signInWithOIDC)" hidden>Sign in</button>
       <button id="operator-session-verify" type="button" onclick="runUiAction('Verify passkey', verifyOIDCSessionPasskey)" hidden>Verify passkey</button>
+      <button id="operator-session-enroll" class="secondary" type="button" onclick="openProtectedRegistrationCapture()" hidden>First key · protected workflow</button>
       <button id="operator-sign-out" class="secondary" type="button" onclick="runUiAction('Sign out', signOutOperator)" hidden>Sign out</button>
       <button class="secondary" type="button" onclick="runUiAction('Refresh', refresh)">Refresh</button>
       __SERVERWARE_DEMO_SEED_BUTTON__
@@ -23010,6 +23012,7 @@ UI_HTML = r"""
         <tbody id="webauthn-credentials"><tr class="empty-row"><td colspan="5" class="muted">No passkeys registered</td></tr></tbody>
       </table>
     </section>
+      __SERVERWARE_REGISTRATION_CAPTURE_HTML__
       __SERVERWARE_REGISTRATION_HANDOFF_HTML__
       __SERVERWARE_SESSION_ACTIVATION_HTML__
       __SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__
@@ -23645,6 +23648,7 @@ UI_HTML = r"""
     }
 
     function markOIDCSessionStatusUnknown() {
+      registrationCaptureInvalidate('Browser authentication became unknown.');
       discardCredentialReplacement('Browser authentication became unknown. Local replacement discarded.');
       sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
       workloadIssuanceInvalidate('Browser session state became unknown.');
@@ -23683,6 +23687,7 @@ UI_HTML = r"""
           !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated,
             status.roles, status.sessionActivationMode])) {
         discardCredentialReplacement('Browser authentication changed. Local replacement discarded.');
+        registrationCaptureInvalidate('Browser authentication changed.');
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
         workloadIssuanceInvalidate('Browser authentication changed.');
         setupEnrollmentClear();
@@ -23745,9 +23750,11 @@ UI_HTML = r"""
       renderAdminPublication();
       renderOAuthActivation();
       publicRevocationAuthChanged();
+      renderRegistrationCapture();
     }
 
     async function signInWithOIDC() {
+      registrationCaptureInvalidate('Sign-in started.');
       discardCredentialReplacement('Sign-in started. Local replacement discarded.');
       sessionActivationInvalidate('Sign-in started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-in started.');
@@ -23965,6 +23972,7 @@ UI_HTML = r"""
     }
 
     async function signOutOperator() {
+      registrationCaptureInvalidate('Sign-out started.');
       discardCredentialReplacement('Sign-out started. Local replacement discarded.');
       sessionActivationInvalidate('Sign-out started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-out started.');
@@ -26840,11 +26848,17 @@ UI_HTML = r"""
       });
       await refresh();
     }
-    function requestWebAuthnBootstrapToken() {
+    let webauthnBootstrapPrompt = null;
+    function requestWebAuthnBootstrapToken(signal = null) {
       const dialog = $('webauthn-bootstrap-dialog');
       const form = $('webauthn-bootstrap-form');
       const input = $('webauthn-bootstrap-token');
+      // The signal belongs to this invocation only. An overlapping caller
+      // cannot replace or cancel another workflow's open prompt.
+      if (signal?.aborted || webauthnBootstrapPrompt !== null || dialog.open) return Promise.resolve(null);
       return new Promise((resolve) => {
+        const owner = {};
+        webauthnBootstrapPrompt = owner;
         let settled = false;
         const finish = (value) => {
           if (settled) return;
@@ -26852,8 +26866,12 @@ UI_HTML = r"""
           form.removeEventListener('submit', submit);
           $('webauthn-bootstrap-cancel').removeEventListener('click', cancel);
           dialog.removeEventListener('cancel', cancel);
-          input.value = '';
-          if (dialog.open) dialog.close();
+          signal?.removeEventListener('abort', cancel);
+          if (webauthnBootstrapPrompt === owner) {
+            webauthnBootstrapPrompt = null;
+            input.value = '';
+            if (dialog.open) dialog.close();
+          }
           resolve(value);
         };
         const submit = (event) => {
@@ -26867,6 +26885,7 @@ UI_HTML = r"""
         form.addEventListener('submit', submit);
         $('webauthn-bootstrap-cancel').addEventListener('click', cancel);
         dialog.addEventListener('cancel', cancel);
+        signal?.addEventListener('abort', cancel, {once: true});
         dialog.showModal();
         input.focus();
       });
@@ -26903,6 +26922,7 @@ UI_HTML = r"""
     __SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__
     __SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__
     __SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__
+    __SERVERWARE_REGISTRATION_CAPTURE_SCRIPT__
     __SERVERWARE_SESSION_ACTIVATION_AUTHORIZATION_SCRIPT__
     __SERVERWARE_SESSION_ACTIVATION_CONFIRMATION_SCRIPT__
     __SERVERWARE_SESSION_ACTIVATION_SCRIPT__
@@ -26923,6 +26943,7 @@ UI_HTML = r"""
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
     initRegistrationHandoff();
+    initRegistrationCapture();
     initSessionActivation();
     initWorkloadIssuance();
     initAdminPublication();
@@ -26933,6 +26954,7 @@ UI_HTML = r"""
     initOAuthActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
+      registrationCaptureInvalidate('Entered operator credentials changed.');
       discardCredentialReplacement('Operator token changed. Local replacement discarded.');
       sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');
       workloadIssuanceInvalidate('Entered operator credentials changed.');
@@ -27025,6 +27047,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),
     ("__SERVERWARE_REGISTRATION_HANDOFF_HTML__", REGISTRATION_HANDOFF_HTML),
     ("__SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__", REGISTRATION_HANDOFF_SCRIPT),
+    ("__SERVERWARE_REGISTRATION_CAPTURE_HTML__", REGISTRATION_CAPTURE_HTML),
+    ("__SERVERWARE_REGISTRATION_CAPTURE_SCRIPT__", REGISTRATION_CAPTURE_SCRIPT),
     ("__SERVERWARE_SESSION_ACTIVATION_CSS__", SESSION_ACTIVATION_CSS),
     ("__SERVERWARE_SESSION_ACTIVATION_HTML__", SESSION_ACTIVATION_HTML),
     ("__SERVERWARE_SESSION_ACTIVATION_AUTHORIZATION_SCRIPT__", SESSION_ACTIVATION_AUTHORIZATION_SCRIPT),

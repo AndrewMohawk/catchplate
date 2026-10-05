@@ -619,7 +619,7 @@ def _query_trace_key(
 class PlannerTrace:
     def __init__(self, *, operation: str, _complete_queries: bool = False,
                  _counted_writes: bool = False, _challenge_successor: bool = False,
-                 _recovery_successor: bool = False) -> None:
+                 _recovery_successor: bool = False, _jit_successor: bool = False) -> None:
         if (type(_complete_queries) is not bool
                 or _complete_queries and operation not in (authority_complete_query.OPERATION,
                     authority_complete_query.REGISTRATION_OPERATION, authority_complete_query.STAGE_OPERATION,
@@ -631,8 +631,12 @@ class PlannerTrace:
                 or _challenge_successor and (operation not in authority_index_heads.CHALLENGE_OPERATIONS
                                              or _complete_queries or _counted_writes)
                 or type(_recovery_successor) is not bool
-                or _recovery_successor and (operation not in authority_index_heads.RECOVERY_HISTORY_OPERATIONS
-                    or _complete_queries or _counted_writes or _challenge_successor)):
+                or _recovery_successor and (operation not in (*authority_index_heads.RECOVERY_HISTORY_OPERATIONS,
+                    "webauthn.recovery.invalidate")
+                    or _complete_queries or _counted_writes or _challenge_successor)
+                or type(_jit_successor) is not bool
+                or _jit_successor and (operation != authority_index_heads.JIT_RECEIPT_OPERATION
+                    or _complete_queries or _counted_writes or _challenge_successor or _recovery_successor)):
             raise AuthorityPlannerError("complete trace scope is not source admitted")
         spec = authority_contract.operation_spec(operation)
         self.operation = operation
@@ -642,6 +646,7 @@ class PlannerTrace:
         # The public v3 planner still constructs the default-deny trace.
         self._challenge_successor = _challenge_successor
         self._recovery_successor = _recovery_successor
+        self._jit_successor = _jit_successor
         self.business_reads = frozenset(
             set(spec["businessReads"]) | set(spec["businessWrites"])
         )
@@ -656,7 +661,8 @@ class PlannerTrace:
             | set(spec["frameworkWrites"])
             | ({authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
                 authority_index_reader.NODE_TABLE}
-               if _complete_queries or _counted_writes or _challenge_successor or _recovery_successor else set())
+               if _complete_queries or _counted_writes or _challenge_successor or _recovery_successor
+                   or _jit_successor else set())
         )
         self.allowed_writes = frozenset(
             set(spec["businessWrites"]) | set(spec["frameworkWrites"])
@@ -676,7 +682,7 @@ class PlannerTrace:
                     "serverware.policyAuthorityChallengePrimaryRead/v1",
                     authority_index_trace.RECOVERY_HISTORY_PRIMARY_READ_PROFILE}):
             if not any((self._complete_queries, self._counted_writes,
-                        self._challenge_successor, self._recovery_successor)):
+                        self._challenge_successor, self._recovery_successor, self._jit_successor)):
                 raise AuthorityPlannerError("complete trace profile has no current planner admission")
             try:
                 if (type(key) is dict
@@ -696,7 +702,7 @@ class PlannerTrace:
                             self.operation, key, include_write_heads=True)
                     else:
                         authority_index_trace.validate_recovery_history_read_trace(self.operation, table, key)
-                elif self._counted_writes:
+                elif self._counted_writes or self._jit_successor:
                     if table != authority_index_heads.HEAD_TABLE:
                         raise AuthorityPlannerError("completion trace cannot admit complete-range reads")
                     authority_index_heads.validate_head_trace_key(
@@ -2787,6 +2793,10 @@ def _read_bounded_transition_rows(
             and (type(trace) is not PlannerTrace or trace.operation != operation
                  or trace._complete_queries is not False or trace._counted_writes is not False)):
         raise AuthorityPlannerError("evidence admission requires its ordinary source trace")
+    if (operation == authority_index_heads.JIT_RECEIPT_OPERATION
+            and (type(trace) is not PlannerTrace or trace.operation != operation
+                 or trace._jit_successor is not True)):
+        raise AuthorityPlannerError("JIT acquisition requires its private source trace")
     query_sources._require_query_work(query_work)
     queries = authority_query_reads._snapshot_queries(operation, queries, work=query_work)
     from serverware import authority_oauth_family_query_group as family_group
@@ -2879,7 +2889,8 @@ def _read_bounded_transition_rows(
             if (operation == authority_transition_webauthn_completion.OPERATION and trace._counted_writes
                     or operation in (authority_transition_webauthn_registration.OPERATION,
                         authority_transition_webauthn_trust_stage.OPERATION) and trace._complete_queries
-                    or operation in _EVIDENCE_ADMISSION_READ_OPERATIONS):
+                    or operation in _EVIDENCE_ADMISSION_READ_OPERATIONS
+                    or operation == authority_index_heads.JIT_RECEIPT_OPERATION and trace._jit_successor):
                 # Keep the successors' separately bounded ordinary SQL calls
                 # from changing the original proof/kernel allowance on either
                 # success or failure. Complete-range reads still use their

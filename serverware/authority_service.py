@@ -4639,6 +4639,26 @@ class AuthorityProcess:
 
         return challenges._verifier_on_work(self, operation=operation, work=work)
 
+    def _produce_challenge_maintenance(self, *, request_bytes, primary_root, index_heads,
+            live_window, original_deadline_ns, check, work):
+        """Real measured producer and retained pages; currentness remains upstream."""
+        from serverware import authority_challenge_service as challenges
+
+        return challenges._produce_on_work(self, request_bytes=request_bytes,
+            primary_root=primary_root, index_heads=index_heads, live_window=live_window,
+            original_deadline_ns=original_deadline_ns, check=check, work=work)
+
+    def _verify_challenge_maintenance_vector(self, *, envelope_bytes, request_bytes,
+            manifest_bytes, context, before_vector_bytes, now_epoch_ns,
+            deadline_epoch_ns, live_window, check, work):
+        """Independent genuine raw-page replay, no current-root or execution grant."""
+        from serverware import authority_challenge_service as challenges
+
+        return challenges._verify_vector_on_work(self, envelope_bytes=envelope_bytes,
+            request_bytes=request_bytes, manifest_bytes=manifest_bytes, context=context,
+            before_vector_bytes=before_vector_bytes, now_epoch_ns=now_epoch_ns,
+            deadline_epoch_ns=deadline_epoch_ns, live_window=live_window, check=check, work=work)
+
     def _webauthn_transition_planner(self, *, operation, work):
         """Construct a fixed configured successor reader without opening SQL."""
         from serverware import authority_webauthn_transition_service as transitions

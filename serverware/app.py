@@ -22973,6 +22973,7 @@ UI_HTML = r"""
       __SERVERWARE_DEMO_SEED_BUTTON__
     </div>
   </header>
+  <div id="operator-sign-in-help" class="operator-status" role="status" aria-live="polite">To load portal data, sign in to Serverware using an administrator token above, or choose Sign in when OIDC is available. Access through Authelia does not sign you in to Serverware.</div>
   <nav class="workspace-nav" aria-label="Portal workspaces">
     <a href="#setup-workspace">Setup</a>
     <a href="#credential-workspace">Credentials</a>
@@ -23712,6 +23713,7 @@ UI_HTML = r"""
       const pendingWebAuthn = Boolean(state.authStatus?.webauthnRequired);
       const hasBrowserSession = ['pending_webauthn', 'active'].includes(state.authStatus?.sessionState);
       const tokenAuthenticated = Boolean(adminToken());
+      $('operator-sign-in-help').hidden = authenticated || hasBrowserSession || tokenAuthenticated;
       const label = oidcSessionStatusUnknown
         ? 'Session state unknown'
         : authenticated

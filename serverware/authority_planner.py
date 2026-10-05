@@ -675,7 +675,16 @@ class PlannerTrace:
             raise AuthorityPlannerError(
                 "planner read escaped the generated operation manifest"
             )
-        if (table in {authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
+        if (isinstance(key, Mapping)
+                and key.get("profile") == "serverware.policyAuthorityJitPrimaryChunkRead/v1"):
+            if self._jit_successor is not True:
+                raise AuthorityPlannerError("JIT chunk trace has no private source admission")
+            from serverware import authority_jit_primary_chunk_reader
+            try:
+                authority_jit_primary_chunk_reader.validate_chunk_read_trace(self.operation, table, key)
+            except (authority_index_reader.IndexReadError, UnicodeError) as exc:
+                raise AuthorityPlannerError("JIT chunk trace differs from its fixed source query") from exc
+        elif (table in {authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
                       authority_index_reader.NODE_TABLE}
                 or isinstance(key, Mapping) and key.get("profile") in {
                     authority_index_trace.PRIMARY_READ_PROFILE,

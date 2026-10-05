@@ -54,13 +54,18 @@ class _Guard:
         self._held = self._original
         self._process = os.getpid(), threading.get_ident()
         self._metrics = work.hash_work, work.input_bytes, work.json_nodes
+        self._reservation = acquisition.reservations._MutationReservationGuard(work)
+        self._reservation_held = self._reservation
         self._last = 0
         self._busy = self._failed = False
 
     def local(self):
         owner, configured, window, deadline, mono, _check, work, limits = self._original
         _require(self._original is self._held and not self._failed and owner._configured is configured
-            and self._process == (os.getpid(), threading.get_ident()) and work.limits is limits)
+            and self._process == (os.getpid(), threading.get_ident())
+            and self._reservation is self._reservation_held
+            and type(self._reservation) is acquisition.reservations._MutationReservationGuard
+            and work.limits is self._reservation.current_limits())
         acquisition.batch._SharedLedger(work)
         values = work.hash_work, work.input_bytes, work.json_nodes
         _require(all(type(value) is int and value >= prior for value, prior in zip(values, self._metrics)))
@@ -75,7 +80,9 @@ class _Guard:
             _require(not self._busy)
             self._busy = True
             self.local()
+            reservation = self._reservation._snapshot()
             _require(physical.roots._callback(self._original[6], self._original[5]) is None)
+            self._reservation._unchanged(reservation, self._reservation._snapshot())
             self.local()
         except BaseException:
             self._failed = True
@@ -252,7 +259,8 @@ class JitAssertionReadPlanner:
                                 expected_counted_heads=owned["heads"], now_epoch_ns=now_epoch_ns,
                                 deadline_epoch_ns=deadline_epoch_ns,
                                 deadline_monotonic_ns=guard._original[4], maximum_clock_skew_ns=live_window[6],
-                                trace=proof_trace, check_snapshot=current_snapshot, work=work)
+                                trace=proof_trace, check_snapshot=current_snapshot, work=work,
+                                reservation_guard=guard._reservation)
                             current_snapshot()
                             _require(trace.catalog == 4 and trace.transactions == 6 and budget.sql_reads == 10)
                             held.check()

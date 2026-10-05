@@ -10,6 +10,10 @@ No connection, allowance, unmetered radix SQL, signing or authority DTO exists.
 The unchanged 1 MiB row and 4 MiB aggregate physical ceilings are independent:
 several individually allowed large rows may exhaust one original collector.
 This module does not claim worst-case whole-operation capacity or reset it.
+The proof-only entrypoint instead owns an already reconstructed selected row
+under the existing selected-envelope limit. Its 65 physical proof reads still
+use the caller's original phase/collector; it does not reacquire or charge a
+detached row as if that row had been returned by those SQL reads.
 """
 from __future__ import annotations
 
@@ -25,7 +29,9 @@ from serverware.authority_query_read_work import _ValidationWork
 
 OPERATIONS = frozenset({"jit.assertion.issue", "webauthn.recovery.invalidate"})
 SQL_READS_PER_ORIGINAL = 66
+SQL_READS_PER_PROOF = 65
 _HEX = frozenset("0123456789abcdef")
+_SELECTED_FIELDS = frozenset({"table", "key", "keyDigest", "present", "row", "contractSelector"})
 _LEAF_FIELDS = ("key_json", "row_digest", "leaf_digest", "root_revision")
 _NODE_FIELDS = ("path_prefix", "node_digest", "root_revision")
 
@@ -207,6 +213,102 @@ def _before_proof(cursor, *, selected, root, trace, work, acquisition):
     return proof
 
 
+def _membership(selected, proof, root, contract, work):
+    """The same genuine engine for row acquisition and detached proof reads.
+
+    Its historical input metric charges the complete canonical input once,
+    not every internal scalar SQL-JSON encoding, ownership walk, row/proof
+    serialization or hash-material byte. Reserve those real hidden operations
+    before invoking the unchanged engine. Canonical ASCII S/P safely upper
+    bound their SQL UTF-8 representations. S/P are measured originals, never
+    caller sizes, and there is no additional proof or selected-row cap here.
+
+    Including the two sizing walks, this extra reservation is exactly
+    7*S + 8*P + 2 MiB bytes and 3*(Ns+Np) + 16384 nodes. It covers the input
+    snapshot/scalar encodings, row normalization/encoding/hash, proof framing,
+    fixed-depth cold-empty/branch JSON and bounded root/key scaffolding. The
+    engine still debits its own actual metrics afterward; no credit/refund or
+    fresh work object is introduced. This is canonical work, not RSS/SQL cost.
+    """
+    _require(type(work) is _ValidationWork)
+    selected_size, selected_nodes = work.measure(selected)
+    proof_size, proof_nodes = work.measure(proof)
+    work.charge(input_bytes=6 * selected_size + 7 * proof_size + 2 * 1024 * 1024,
+        json_nodes=2 * (selected_nodes + proof_nodes) + 16384)
+    business = (root,) if contract.root_class == "business" else ()
+    authorization = (root,) if contract.root_class == "authorization" else ()
+    limits = primary.PrimaryRadixLimits(1, 1, 64, 1024,
+        min(136, work.limits.max_hashes - work.hash_work),
+        work.limits.max_input_bytes - work.input_bytes, 128,
+        work.limits.max_json_nodes - work.json_nodes)
+    observed = primary.evaluate_primary_radix_memberships(table_contracts=(contract,),
+        business_before_roots=business, authorization_before_roots=authorization,
+        selected_rows=(selected,), before_proofs=(proof,), limits=limits)
+    metrics = observed.result.metrics
+    work.charge(hashes=metrics.hash_work, input_bytes=metrics.input_bytes, json_nodes=metrics.json_nodes)
+    _require(observed.result.business_after_roots == business
+        and observed.result.authorization_after_roots == authorization and metrics.mutations == 0
+        and metrics.recomputed_ancestors == 0)
+    return observed
+
+
+def _selected_inputs(operation, selected, root, work):
+    _require(type(operation) is str and operation in OPERATIONS and type(root) is primary.PrimaryRoot
+        and type(selected) is dict and len(selected) == len(_SELECTED_FIELDS)
+        and set(selected) == _SELECTED_FIELDS and type(selected["table"]) is str
+        and type(selected["key"]) is dict and type(selected["present"]) is bool
+        and selected["contractSelector"] is None
+        and (type(selected["row"]) is dict if selected["present"] else selected["row"] is None))
+    # Measure the actual single-entry selected envelope before copying it.
+    # The compound owner separately closes the complete operation envelope;
+    # this bound neither creates a fresh allowance nor proves that closure.
+    work.charge(input_bytes=2, json_nodes=1)
+    size, _ = work.measure((selected,))
+    _require(size <= authority.MAX_PLAN_SELECTED_BYTES)
+    selected = reads._CopyBudget(work).copy(selected)
+    table, key = selected["table"], selected["key"]
+    matches = tuple(item for item in contracts.primary_table_contracts(operation) if item.table == table)
+    _require(len(matches) == 1)
+    contract = matches[0]
+    _require(set(key) == set(contract.key_columns)
+        and all(type(value) is str and 1 <= len(value) <= 4096 and "\x00" not in value
+            for value in key.values()))
+    # Reuse the exact source business-key digest and selected PK/row joins.
+    reads._address(selected, reads._CopyBudget(work))
+    values = reads._CopyBudget(work).copy((root.table, root.root_revision, root.root_digest, root.leaf_count))
+    work.charge(hashes=66)
+    root = primary.PrimaryRoot(*values)
+    _require(root.table == table)
+    return selected, root, contract
+
+
+def acquire_primary_proof(cursor, *, operation, selected_row,
+        primary_root: primary.PrimaryRoot, trace, work, acquisition):
+    """Own an untrusted selection, read 65 originals, then replay membership.
+
+    This returns only the raw proof. The selected row is not an admission
+    token, and source query completeness/currentness remain caller obligations.
+    No row SELECT, phase, work allowance or connection is created here.
+    """
+    if type(work) is not _ValidationWork or type(acquisition) is not reader._ReadAcquisitionBudget:
+        if type(acquisition) is reader._ReadAcquisitionBudget:
+            acquisition.failed = True
+        raise reader.IndexReadError("exact primary reader requires the original work/physical collector")
+    try:
+        acquisition.require_idle(cursor, trace, work)
+        _require(acquisition._read_phase_active is True and getattr(trace, "operation", None) == operation)
+        selected, root, contract = _selected_inputs(operation, selected_row, primary_root, work)
+        started = acquisition.sql_reads
+        proof = _before_proof(cursor, selected=selected, root=root, trace=trace, work=work, acquisition=acquisition)
+        observed = _membership(selected, proof, root, contract, work)
+        _require(acquisition.sql_reads - started == SQL_READS_PER_PROOF)
+        acquisition.require_idle(cursor, trace, work)
+        return observed.before_proofs[0]
+    except BaseException:
+        acquisition.failed = True
+        raise
+
+
 def acquire_exact_primary(cursor, *, operation, query, manifest,
         primary_root: primary.PrimaryRoot, trace, work, acquisition):
     """Return owned raw (selected, proof), after actual membership replay."""
@@ -221,20 +323,8 @@ def acquire_exact_primary(cursor, *, operation, query, manifest,
         started = acquisition.sql_reads
         selected = _row(cursor, query=query, trace=trace, work=work, acquisition=acquisition)
         proof = _before_proof(cursor, selected=selected, root=root, trace=trace, work=work, acquisition=acquisition)
-        business = (root,) if contract.root_class == "business" else ()
-        authorization = (root,) if contract.root_class == "authorization" else ()
-        limits = primary.PrimaryRadixLimits(1, 1, 64, 1024,
-            min(136, work.limits.max_hashes - work.hash_work),
-            work.limits.max_input_bytes - work.input_bytes, 128,
-            work.limits.max_json_nodes - work.json_nodes)
-        observed = primary.evaluate_primary_radix_memberships(table_contracts=(contract,),
-            business_before_roots=business, authorization_before_roots=authorization,
-            selected_rows=(selected,), before_proofs=(proof,), limits=limits)
-        metrics = observed.result.metrics
-        work.charge(hashes=metrics.hash_work, input_bytes=metrics.input_bytes, json_nodes=metrics.json_nodes)
-        _require(observed.result.business_after_roots == business
-            and observed.result.authorization_after_roots == authorization and metrics.mutations == 0
-            and metrics.recomputed_ancestors == 0 and acquisition.sql_reads - started == SQL_READS_PER_ORIGINAL)
+        observed = _membership(selected, proof, root, contract, work)
+        _require(acquisition.sql_reads - started == SQL_READS_PER_ORIGINAL)
         acquisition.require_idle(cursor, trace, work)
         return observed.selected_rows[0], observed.before_proofs[0]
     except BaseException:

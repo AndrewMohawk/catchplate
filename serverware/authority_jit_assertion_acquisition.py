@@ -13,6 +13,8 @@ physical accounting for supported sizes; it is not complete JIT capacity parity.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from serverware import authority_audit_capacity as capacity
 from serverware import authority_complete_query_batch as batch
 from serverware import authority_complete_read_write as read_write
@@ -22,6 +24,7 @@ from serverware import authority_index_mutation_reader as mutation_reader
 from serverware import authority_index_reader as reader
 from serverware import authority_indexed_mutation as indexed
 from serverware import authority_jit_assertion_receipt as receipt
+from serverware import authority_mutation_reservation_guard as reservations
 from serverware import authority_primary_contract as primary_contract
 from serverware import authority_primary_original_reader as primary_reader
 from serverware import authority_query_reads as reads
@@ -187,12 +190,13 @@ def _encode_frontiers(inputs, captured, work):
 def _acquire_on_work(cursor, *, request, assertion_policy, manifest, manifest_digest,
         business_before_roots, authorization_before_roots, expected_counted_heads,
         now_epoch_ns, deadline_epoch_ns, deadline_monotonic_ns, maximum_clock_skew_ns,
-        trace, check_snapshot, work):
+        trace, check_snapshot, work, reservation_guard=None):
     """One genuine native owner's acquisition; no connection or new allowance."""
     from serverware import authority_planner as planner
 
     _require(type(work) is _ValidationWork and type(trace) is planner.PlannerTrace
         and trace.operation == OPERATION and trace._jit_successor is True)
+    _require(reservation_guard is None or type(reservation_guard) is reservations._MutationReservationGuard)
     _request(request, work)
     _policy(assertion_policy)
     spec = authority.operation_spec(OPERATION)
@@ -248,12 +252,14 @@ def _acquire_on_work(cursor, *, request, assertion_policy, manifest, manifest_di
         work.charge(json_nodes=12 * 5)
         before_heads = tuple(indexed.IndexedMutationHead(head.index_id, head.index_revision, head.index_root)
             for head in captured)
-        actual = mutation_reader._acquire_indexed_primary_batch(cursor,
-            table_contracts=primary_contract.primary_table_contracts(OPERATION),
-            business_before_roots=batch._roots(business), authorization_before_roots=batch._roots(authorization),
-            selected_rows=selected, before_proofs=proofs, mutations=mutations, index_before_heads=before_heads,
-            limits=read_write._write_limits(spec, batch._SharedLedger(work)), trace=trace,
-            acquisition_budget=mutation_reader._AcquisitionBudget(shared_acquisition=acquisition, work=work))
+        mutation_acquisition = mutation_reader._AcquisitionBudget(shared_acquisition=acquisition, work=work)
+        with (nullcontext() if reservation_guard is None else reservation_guard.hold(mutation_acquisition)):
+            actual = mutation_reader._acquire_indexed_primary_batch(cursor,
+                table_contracts=primary_contract.primary_table_contracts(OPERATION),
+                business_before_roots=batch._roots(business), authorization_before_roots=batch._roots(authorization),
+                selected_rows=selected, before_proofs=proofs, mutations=mutations, index_before_heads=before_heads,
+                limits=read_write._write_limits(spec, batch._SharedLedger(work)), trace=trace,
+                acquisition_budget=mutation_acquisition)
         acquisition.require_idle(cursor, trace, work)
         check_snapshot()
         for mutation in mutations:

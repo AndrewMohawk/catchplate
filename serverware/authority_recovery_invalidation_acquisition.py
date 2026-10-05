@@ -13,9 +13,12 @@ The independent consumer must replay those bytes against its own context.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from serverware import authority_index_mutation_reader as mutation_reader
 from serverware import authority_index_reader as reader
 from serverware import authority_primary_original_reader as physical
+from serverware import authority_mutation_reservation_guard as reservations
 from serverware import authority_recovery_invalidation as proof
 from serverware import authority_request_commitment as commitment
 from serverware import authority_revocation_plan_contract as shape
@@ -100,7 +103,7 @@ def _frontier_originals(inputs, *, expected_ids, captured, work):
 
 def acquire_originals(cursor, *, request, manifest, business_before_roots,
         authorization_before_roots, expected_counted_heads, database_now,
-        terminal_retention_seconds, maximum_retained, trace, work, acquisition):
+        terminal_retention_seconds, maximum_retained, trace, work, acquisition, reservation_guard=None):
     """Read genuine originals once using the caller's original paired ledgers.
 
     Roots are exact tuples of root documents; counted heads are an exact tuple
@@ -121,6 +124,7 @@ def acquire_originals(cursor, *, request, manifest, business_before_roots,
     try:
         _require(type(trace) is planner.PlannerTrace and trace.operation == OPERATION
             and trace._recovery_successor is True)
+        _require(reservation_guard is None or type(reservation_guard) is reservations._MutationReservationGuard)
         # Copy every variable caller graph before the first cursor callback.
         request, manifest, business, authorization, expected = _own((request, manifest,
             business_before_roots, authorization_before_roots, expected_counted_heads), work)
@@ -173,15 +177,15 @@ def acquire_originals(cursor, *, request, manifest, business_before_roots,
             write_heads = tuple(proof.indexed.IndexedMutationHead(
                 head.index_id, head.index_revision, head.index_root)
                 for head in captured if head.index_id in expected_ids)
-            actual = mutation_reader._acquire_indexed_primary_batch(cursor,
-                table_contracts=proof.terminal.contracts.primary_table_contracts(OPERATION),
-                business_before_roots=business, authorization_before_roots=authorization,
-                selected_rows=selected, before_proofs=before, mutations=effects.mutations,
-                index_before_heads=write_heads,
-                limits=proof.read_write._write_limits(proof.contract.operation_spec(OPERATION),
-                    proof.batch._SharedLedger(work)), trace=trace,
-                acquisition_budget=mutation_reader._AcquisitionBudget(
-                    shared_acquisition=acquisition, work=work))
+            mutation_acquisition = mutation_reader._AcquisitionBudget(shared_acquisition=acquisition, work=work)
+            with (nullcontext() if reservation_guard is None else reservation_guard.hold(mutation_acquisition)):
+                actual = mutation_reader._acquire_indexed_primary_batch(cursor,
+                    table_contracts=proof.terminal.contracts.primary_table_contracts(OPERATION),
+                    business_before_roots=business, authorization_before_roots=authorization,
+                    selected_rows=selected, before_proofs=before, mutations=effects.mutations,
+                    index_before_heads=write_heads,
+                    limits=proof.read_write._write_limits(proof.contract.operation_spec(OPERATION),
+                        proof.batch._SharedLedger(work)), trace=trace, acquisition_budget=mutation_acquisition)
             acquisition.require_idle(cursor, trace, work)
             originals = _frontier_originals(actual.index_inputs, expected_ids=expected_ids,
                 captured=captured, work=work)

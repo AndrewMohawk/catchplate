@@ -519,6 +519,12 @@ def derive_receipt(*, approval, approver_id, policy, policy_digest, assertion,
 
 def receipt_from_context(context, *, assertion_policy, work):
     """Actual reader and independent kernel each recompute, never trust a DTO."""
+    inputs = _receipt_inputs_from_context(context, assertion_policy=assertion_policy, work=work)
+    return derive_receipt(**inputs, work=work)
+
+
+def _receipt_inputs_from_context(context, *, assertion_policy, work):
+    """Private actual actor/policy lookup body; never a successful receipt."""
     from serverware import authority_transition_quota as quota
 
     _work(work)
@@ -554,11 +560,11 @@ def receipt_from_context(context, *, assertion_policy, work):
                 or trust["bundle_digest"] != head["publication_digest"]
                 or trust["payload_digest"] != head["metadata_blob_digest"]):
             raise core.TransitionKernelError("JIT trust publication differs from current high water")
-    return derive_receipt(approval=approval, approver_id=args["approver_id"],
+    return dict(approval=approval, approver_id=args["approver_id"],
         policy=policy, policy_digest=policy_digest, assertion=args["assertion"],
         challenge_id=args["challenge_id"], credential_record_id=args["credential_record_id"],
         challenge=challenge, credential=credential, trust=trust,
-        verified_at=now, decision=args["decision"], work=work)
+        verified_at=now, decision=args["decision"])
 
 
 def transition(context, *, assertion_policy, work):
@@ -566,13 +572,20 @@ def transition(context, *, assertion_policy, work):
     from serverware import authority_challenge_retention as retention
 
     row = receipt_from_context(context, assertion_policy=assertion_policy, work=work)
+    mutations = _base_mutations(context, row)
+    mutations = retention.expand_mutations(context, mutations, work=work)
+    return _transition_result(row, mutations, work=work)
+
+
+def _base_mutations(context, row):
+    """Private mechanical body; callers must derive the receipt themselves."""
     receipt = context.exact(RECEIPT_TABLE,
         {"assertion_receipt_digest": row["assertion_receipt_digest"]})
     if receipt["present"] or receipt["row"] is not None:
         raise core.TransitionKernelError("JIT assertion receipt is not genuinely absent")
     challenge = context.exact("webauthn_challenges", {"id": row["challenge_id"]})
     credential = context.exact("webauthn_credentials", {"id": row["credential_record_id"]})
-    mutations = (
+    return (
         core.mutation(operation=OPERATION, selected=challenge,
             row={**challenge["row"], "used_at": row["verified_at"]}),
         core.mutation(operation=OPERATION, selected=credential,
@@ -580,7 +593,10 @@ def transition(context, *, assertion_policy, work):
                  "last_used_at": row["verified_at"], "updated_at": row["verified_at"]}),
         core.mutation(operation=OPERATION, selected=receipt, row=row),
     )
-    mutations = retention.expand_mutations(context, mutations, work=work)
+
+
+def _transition_result(row, mutations, *, work):
+    """Private result construction shared by the same-call staged owner."""
     work.prepare_copy(mutations)
     return core.KernelTransition(mutations=mutations, result={
         "assertion_receipt_digest": row["assertion_receipt_digest"],

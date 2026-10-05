@@ -1596,10 +1596,25 @@ def install_authority_v9_executor(
                     AND authorization_projection.
                         assertion_evidence_digest IS NULL
                 )
-                OR (
-                    authorization_projection.assertion_evidence_digest
-                        IS NOT NULL
-                    AND NOT EXISTS (
+                OR operation_handlers->>capability.operation
+                    IS DISTINCT FROM capability.handler_name
+                OR root_set_before_digest <>
+                    planner.authority_root_set_before_digest
+                OR root_set_before_digest <>
+                    capability.authority_root_set_digest
+            THEN
+                RAISE EXCEPTION
+                    'authority v9 closed preconditions changed';
+            END IF;
+
+            -- A SQL boolean guard does not prevent PL/pgSQL from preparing
+            -- references to an unassigned RECORD. Only assertion-bearing
+            -- operations populated trust_publication above; enter a separate
+            -- statement before evaluating any of its fields.
+            IF authorization_projection.assertion_evidence_digest
+                    IS NOT NULL
+            THEN
+                IF NOT EXISTS (
                         SELECT 1
                         FROM {namespace}.
                             policy_authority_webauthn_assertion_evidence
@@ -1677,16 +1692,10 @@ def install_authority_v9_executor(
                           AND now_epoch_ns <
                                 evidence.expires_at_epoch_ns
                     )
-                )
-                OR operation_handlers->>capability.operation
-                    IS DISTINCT FROM capability.handler_name
-                OR root_set_before_digest <>
-                    planner.authority_root_set_before_digest
-                OR root_set_before_digest <>
-                    capability.authority_root_set_digest
-            THEN
-                RAISE EXCEPTION
-                    'authority v9 closed preconditions changed';
+                THEN
+                    RAISE EXCEPTION
+                        'authority v9 closed preconditions changed';
+                END IF;
             END IF;
 
             IF (

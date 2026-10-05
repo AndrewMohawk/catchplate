@@ -157,6 +157,13 @@ def _inventory(operation: str, selected_rows: Any, mutations: Any, work: _Valida
         raise ChallengeRetentionError("retention mutation inventory is not bounded")
     selected = _copy(list(selected_rows), work)
     entries = _copy(list(mutations), work)
+    return _validate_inventory(operation, selected, entries)
+
+
+def _validate_inventory(operation: str, selected: Any, entries: Any):
+    """Private body after actual ownership; not a caller inventory verdict."""
+    from serverware import authority_contract as contract
+
     originals = {}
     for item in selected:
         if type(item) is not dict or set(item) != _SELECTED_FIELDS:
@@ -231,11 +238,21 @@ def expand_mutations(context: Any, mutations: Any, *, work: _ValidationWork | No
 
 
 def _expand(*, operation: str, selected_rows: Any, mutations: Any, work: _ValidationWork):
+    # Preserve the original public path's import and validation order.
     from serverware import authority_contract as contract
     from serverware import authority_transition_core as core
 
     meter = _meter(work)
     originals, entries = _inventory(operation, selected_rows, mutations, meter)
+    return _expand_inventory(operation, originals, entries, work=meter)
+
+
+def _expand_inventory(operation: str, originals: Any, entries: Any, *, work: _ValidationWork):
+    """Private body after this invocation's genuine inventory validation."""
+    from serverware import authority_contract as contract
+    from serverware import authority_transition_core as core
+
+    meter = work
     challenge_entries = {entry["key"]["id"]: entry for entry in entries
                          if entry["table"] == CHALLENGE_TABLE}
     changes: dict[str, dict[str, tuple[Any, Any]]] = {}

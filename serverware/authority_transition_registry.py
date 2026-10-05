@@ -46,8 +46,8 @@ WEBAUTHN_CHALLENGE_OPERATIONS: Final[frozenset[str]] = frozenset(
         "webauthn.challenge.consume",
     }
 )
-INTENTIONALLY_DISABLED_OPERATIONS: Final[frozenset[str]] = frozenset(
-    {"jit.consume"}
+INTENTIONALLY_DISABLED_OPERATIONS: Final[frozenset[str]] = (
+    authority_contract.INTENTIONALLY_DISABLED_OPERATIONS
 )
 
 
@@ -120,7 +120,29 @@ INTENTIONALLY_DISABLED_MANIFEST: Final[
                     "the source commits grant use only with release outcome",
                 ),
             }
-        )
+        ),
+        **{
+            operation: MappingProxyType(
+                {
+                    "schema": "serverware.policyAuthorityDisabledOperation/v1",
+                    "operation": operation,
+                    "status": "intentionally-disabled",
+                    "admissionDisposition": "deny",
+                    "kernelRegistered": False,
+                    "code": "recovery-not-implemented",
+                    "externalAuthorityRequired": False,
+                    "details": (
+                        "recovery is unavailable until its complete configured "
+                        "successor planning and execution path is implemented",
+                    ),
+                }
+            )
+            for operation in (
+                "webauthn.recovery.create", "webauthn.recovery.candidate",
+                "webauthn.recovery.finalize", "webauthn.recovery.expire",
+                "webauthn.recovery.prune", "webauthn.recovery.invalidate",
+            )
+        },
     }
 )
 LEGACY_PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(
@@ -152,6 +174,14 @@ _EXPECTED_TRANSITION_OPERATIONS = (
 
 def _registry_closure_errors() -> tuple[str, ...]:
     errors: list[str] = []
+    if set(INTENTIONALLY_DISABLED_MANIFEST) != set(INTENTIONALLY_DISABLED_OPERATIONS):
+        errors.append("disabled operation manifest coverage differs")
+    for operation, manifest in INTENTIONALLY_DISABLED_MANIFEST.items():
+        if (manifest.get("operation") != operation
+                or manifest.get("status") != "intentionally-disabled"
+                or manifest.get("admissionDisposition") != "deny"
+                or manifest.get("kernelRegistered") is not False):
+            errors.append(f"invalid disabled operation manifest=[{operation}]")
     for label, operations in (
         (
             "missing transition kernels",

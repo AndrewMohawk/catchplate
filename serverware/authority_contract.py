@@ -345,13 +345,18 @@ _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS = frozenset(
         "webauthn.challenge.consume",
     }
 )
+INTENTIONALLY_DISABLED_OPERATIONS = frozenset({
+    "jit.consume",
+    # Recovery computation components are not complete configured successor
+    # programs. Keep their source footprints, but admit none of these paths.
+    "webauthn.recovery.create", "webauthn.recovery.candidate",
+    "webauthn.recovery.finalize", "webauthn.recovery.expire",
+    "webauthn.recovery.prune", "webauthn.recovery.invalidate",
+})
 _TYPED_SUCCESSOR_PLANNING_OPERATIONS = frozenset(
     {
         "jit.assertion.issue",
         "webauthn.challenge.maintain",
-        "webauthn.recovery.create", "webauthn.recovery.candidate",
-        "webauthn.recovery.finalize", "webauthn.recovery.expire",
-        "webauthn.recovery.prune", "webauthn.recovery.invalidate",
         "oidc.session.activate",
         "oidc.session.activation-delivery.consume",
         "webauthn.credential.revoke",
@@ -1079,7 +1084,7 @@ class AuthorityOperation:
                     _transition_program_id(operation, self.handler),
                 "planningMode": (
                     "intentionally-disabled"
-                    if operation == "jit.consume"
+                    if operation in INTENTIONALLY_DISABLED_OPERATIONS
                     else "typed-webauthn-challenge"
                     if operation
                         in _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS

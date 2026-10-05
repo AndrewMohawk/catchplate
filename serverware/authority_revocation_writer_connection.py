@@ -18,6 +18,8 @@ which the real manager has already completed.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from serverware import authority_revocation_root_reader as reader
 from serverware.authority_store.planner_writer_sql import planner_writer_privilege_check
 
@@ -54,6 +56,69 @@ def _callback(work, callback, *args):
         raise RevocationWriterConnectionError(str(exc)) from exc
 
 
+def _live(work, check):
+    if check is not None and _callback(work, check) is not None:
+        raise RevocationWriterConnectionError("writer continuity guard is not neutral")
+
+
+def _checked(work, check, callback, *args):
+    _live(work, check)
+    try:
+        result = _callback(work, callback, *args)
+    except BaseException:
+        try:
+            _live(work, check)
+        except BaseException:
+            pass
+        raise
+    _live(work, check)
+    return result
+
+
+@contextmanager
+def _context(manager, work, check):
+    """Guard real enter/exit; expiry must never prevent rollback or close.
+
+    Once successful exit is dispatched, a later refusal is indeterminate.
+    Do not repeat that exit, infer rollback or return the saved store result.
+    """
+    entered = False
+
+    def enter():
+        nonlocal entered
+        value = manager.__enter__()
+        entered = True
+        return value
+
+    try:
+        value = _checked(work, check, enter)
+        yield value
+    except BaseException as exc:
+        if entered:
+            try:
+                manager.__exit__(type(exc), exc, exc.__traceback__)
+            except BaseException:
+                pass
+        raise
+    else:
+        dispatched = False
+
+        def leave():
+            nonlocal dispatched
+            dispatched = True
+            return manager.__exit__(None, None, None)
+
+        try:
+            _checked(work, check, leave)
+        except BaseException as exc:
+            if not dispatched:
+                try:
+                    manager.__exit__(type(exc), exc, exc.__traceback__)
+                except BaseException:
+                    pass
+            raise
+
+
 def _admit_identity(row, identity):
     if (type(row) is not dict or len(row) != len(reader._IDENTITY_FIELDS)
             or any(type(name) is not str for name in row) or set(row) != reader._IDENTITY_FIELDS):
@@ -78,34 +143,45 @@ def _same_slots(actual, expected):
 class _Connection:
     """Narrow active-transaction proxy; no commit, reconnect or fallback access."""
 
-    __slots__ = ("_connection", "_original", "_work", "_binding")
+    __slots__ = ("_connection", "_original", "_work", "_binding", "_continuity", "_held_continuity")
 
-    def __init__(self, connection, original, work):
+    def __init__(self, connection, original, work, check=None):
+        if check is not None and not callable(check):
+            raise RevocationWriterConnectionError("writer continuity guard is not callable")
         self._connection, self._original, self._work = connection, original, work
         self._binding = connection, original, work
+        self._continuity = self._held_continuity = (check,)
 
-    def _require(self, binding):
-        if (self._binding is not binding
+    def _require(self, binding, continuity=None):
+        if continuity is None:
+            continuity = self._held_continuity
+        if (self._binding is not binding or self._continuity is not continuity
+                or self._held_continuity is not continuity
                 or not _same_slots((self._connection, self._original, self._work), binding)):
             raise RevocationWriterConnectionError("revocation writer connection binding changed")
 
     def _call(self, callback):
         binding = self._binding
+        continuity = self._held_continuity
         if type(binding) is not tuple or len(binding) != 3:
             raise RevocationWriterConnectionError("revocation writer connection binding is invalid")
+        if type(continuity) is not tuple or len(continuity) != 1:
+            raise RevocationWriterConnectionError("revocation writer continuity binding is invalid")
         connection, original, work = binding
 
         def invoke():
-            self._require(binding)
+            self._require(binding, continuity)
             _callback(work, reader._require_connection, connection, original, 2)
-            self._require(binding)
+            self._require(binding, continuity)
             result = callback()
-            self._require(binding)
+            self._require(binding, continuity)
             _callback(work, reader._require_connection, connection, original, 2)
-            self._require(binding)
+            self._require(binding, continuity)
             return result
 
-        return _callback(work, invoke)
+        result = _checked(work, continuity[0], invoke)
+        self._require(binding, continuity)
+        return result
 
     @property
     def info(self):
@@ -348,25 +424,28 @@ class _Result:
         return value
 
 
-def _run_on_connection(connection, *, database_identity, work, operation, arguments, expectations):
+def _run_on_connection(connection, *, database_identity, work, operation, arguments, expectations,
+        check=None):
     """Own an already-open handle through real admission, custody and cleanup."""
     try:
         _validate_database_identity(database_identity)
+        if check is not None and not callable(check):
+            raise RevocationWriterConnectionError("writer continuity guard is not callable")
         reader.roots.batch._SharedLedger(work)
         from serverware import db
 
-        original = _callback(work, reader._connection_identity, connection, 0)
-        with reader._context(connection, work) as active:
+        original = _checked(work, check, reader._connection_identity, connection, 0)
+        with _context(connection, work, check) as active:
             if active is not connection:
                 raise RevocationWriterConnectionError("revocation writer connection context replaced its handle")
-            _callback(work, reader._require_connection, connection, original, 0)
-            transaction = _callback(work, lambda: connection.transaction())
-            _callback(work, reader._require_connection, connection, original, 0)
-            with reader._context(transaction, work) as entered:
+            _checked(work, check, reader._require_connection, connection, original, 0)
+            transaction = _checked(work, check, lambda: connection.transaction())
+            _checked(work, check, reader._require_connection, connection, original, 0)
+            with _context(transaction, work, check) as entered:
                 if entered is not transaction:
                     raise RevocationWriterConnectionError("revocation writer outer transaction replaced its handle")
-                _callback(work, reader._require_connection, connection, original, 2)
-                guarded = _Connection(connection, original, work)
+                _checked(work, check, reader._require_connection, connection, original, 2)
+                guarded = _Connection(connection, original, work, check=check)
                 with guarded.cursor() as cursor:
                     cursor.execute(_SET_TRANSACTION)
                     _admit_identity(cursor.execute(_IDENTITY_SQL).fetchone(), database_identity)
@@ -377,9 +456,10 @@ def _run_on_connection(connection, *, database_identity, work, operation, argume
                 result = operation(connection=db.PostgresMetadataConnection(guarded),
                     work=work, **arguments, **expectations)
                 guarded._call(lambda: None)
-            _callback(work, reader._require_connection, connection, original, 0)
-        if _callback(work, lambda: connection.closed) is not True:
+            _checked(work, check, reader._require_connection, connection, original, 0)
+        if _checked(work, check, lambda: connection.closed) is not True:
             raise RevocationWriterConnectionError("revocation writer connection was not closed")
+        _live(work, check)
         return result
     except reader.roots.RevocationRootReadError as exc:
         reader._close_after_failure(connection)

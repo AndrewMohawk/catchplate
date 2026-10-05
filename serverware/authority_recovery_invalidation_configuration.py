@@ -28,6 +28,48 @@ def _require(value):
         raise RecoveryInvalidationConfigurationError("invalidation producer configuration differs")
 
 
+def _persistence_from_configuration_on_work(*, payload, configuration_digest, generation,
+        runtime_role_identities, writer_dsn, work):
+    """Select one public-key-only custody owner from real admitted writer pins.
+
+    Signed recovery policy is required only here; ordinary configuration and
+    other persistence families are unchanged. No execution gate is enabled.
+    """
+    from serverware import authority_recovery_invalidation_persistence as persistence
+    from serverware import authority_webauthn_evidence_plan_writer_configuration as database
+
+    owned, launch = configuration._capture_configuration_on_work(payload=payload,
+        configuration_digest=configuration_digest, generation=generation, work=work)
+    runtime = configuration._capture_runtime_role_identities_on_work(
+        runtime_role_identities=runtime_role_identities, owned_payload=owned,
+        configuration_digest=configuration_digest, launch=launch, work=work)
+    dsn, timeout, identity = database._database_from_owned_configuration_on_work(
+        owned_payload=owned, writer_dsn=writer_dsn, work=work)
+    planner = role_mapping._role(owned, "planner")
+    enabled._require_enabled_operation(planner, OPERATION, work)
+    selected = recovery.configuration(owned.get(recovery.FIELD), webauthn=owned["webauthn"])
+    _require(selected is not None)
+    policy = recovery.retention.capture_policy(selected[recovery.retention.FIELD], work=work)
+    encoded, spki, measurement, attestation = role_mapping._key_material(
+        planner, runtime["roles"]["planner"], work)
+    planner_identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
+        "measurementDigest": measurement, "attestationReceiptDigest": attestation}
+    evidence._identity(planner_identity)
+    ages = tuple(role_mapping._role(owned, name)["maximumInternalAgeNs"]
+        for name in ("planner", "planner-writer", "verifier"))
+    for age in ages:
+        configuration.capability.shape._integer(age, minimum=1)
+    maximum_age = min(*ages, evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS)
+    # Every scalar and role alias is captured before the actual key callback.
+    arguments = dict(writer_dsn=dsn, connect_timeout_seconds=timeout, database_identity=identity,
+        planner_identity=planner_identity, planner_spki_digest=spki,
+        configuration_digest=configuration_digest, maximum_plan_age_ns=maximum_age,
+        maximum_clock_skew_ns=evidence.authority.VERIFIER_MAX_CLOCK_SKEW_NS,
+        terminal_retention_seconds=policy["terminalRetentionSeconds"], maximum_retained=policy["maximumRetained"])
+    public = configuration._key(encoded, work, expected_spki=spki)
+    return persistence.RecoveryInvalidationPlanPersistence(planner_public_key=public, **arguments)
+
+
 def _producer_from_configuration_on_work(*, payload, configuration_digest, generation,
         runtime_role_identities, read_dsn, planner_private_key, work):
     """Select the genuine inert owner; all invocation windows stay upstream.

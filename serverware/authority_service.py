@@ -4674,6 +4674,22 @@ class AuthorityProcess:
             before_vector_bytes=before_vector_bytes, now_epoch_ns=now_epoch_ns,
             deadline_epoch_ns=deadline_epoch_ns, live_window=live_window, check=check, work=work)
 
+    def _persist_recovery_invalidation_plan(self, *, originals, expectations,
+            live_window, check, work):
+        """Dedicated raw4 custody only; no generic invalidation admission."""
+        from serverware import authority_recovery_invalidation_service as invalidation
+
+        return invalidation._persist_on_work(self, originals=originals,
+            expectations=expectations, live_window=live_window, check=check, work=work)
+
+    def _read_recovery_invalidation_plan(self, *, retained_record_digest, expectations,
+            live_window, check, work):
+        """Replay durable originals within the unchanged original live window."""
+        from serverware import authority_recovery_invalidation_service as invalidation
+
+        return invalidation._read_on_work(self, retained_record_digest=retained_record_digest,
+            expectations=expectations, live_window=live_window, check=check, work=work)
+
     def _webauthn_transition_planner(self, *, operation, work):
         """Construct a fixed configured successor reader without opening SQL."""
         from serverware import authority_webauthn_transition_service as transitions

@@ -556,6 +556,36 @@ WEBAUTHN_TRANSITION_RETENTION_CONTRACT = MappingProxyType({
         "logical-attempt-reservation", "capability", "outer-commit", "execution", "witness"),
 })
 
+RECOVERY_INVALIDATION_RETAINED_TABLE = "policy_authority_recovery_invalidation_retained_plans"
+RECOVERY_INVALIDATION_RETAINED_COLUMNS = (
+    "retained_record_digest", "plan_protocol", "operation", "operation_id", "request_digest",
+    "configuration_digest", "planner_key_digest", "plan_digest", "envelope_bytes_digest",
+    "envelope_byte_count", "request_bytes_digest", "request_byte_count", "proof_bytes_digest",
+    "proof_byte_count", "context_bytes_digest", "context_byte_count", "issued_at_epoch_ns",
+    "expires_at_epoch_ns", "original_deadline_ns", "source_revision", "envelope_bytes",
+    "request_bytes", "proof_bytes", "context_bytes", "retained_at_epoch_ns",
+)
+RECOVERY_INVALIDATION_RETENTION_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityRecoveryInvalidationRetention/v1",
+    "planProtocol": "recovery-invalidation-v1", "operation": "webauthn.recovery.invalidate",
+    "retainedTable": RECOVERY_INVALIDATION_RETAINED_TABLE,
+    "retainedColumns": RECOVERY_INVALIDATION_RETAINED_COLUMNS,
+    "primaryKey": ("retained_record_digest",),
+    "recordSchema": "serverware.policyAuthorityRecoveryInvalidationRetainedPlan/v1",
+    "maximumOriginalBytes": (32768, MAX_REQUEST_BYTES, MAX_RESULT_BYTES, MAX_REQUEST_BYTES + 16384),
+    "maximumAggregateBytes": 32768 + MAX_REQUEST_BYTES + MAX_RESULT_BYTES + MAX_REQUEST_BYTES + 16384,
+    "postgresOnly": True, "sqliteAdmission": False,
+    "plannerWriterPrivileges": ("SELECT", "INSERT"), "executorPrivileges": (),
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "retry": "no-automatic-retry-original-equality-preserves-first-timestamp",
+    "transactionOwnership": "configured-serializable-writer-commit-and-close-before-return",
+    "liveBounds": "unchanged-original-window-and-signed-interval-through-commit-and-close",
+    "freshInstallation": "locked-empty-source-only-no-existing-store-adoption",
+    "publicExecutionEnabled": False,
+    "authorityExclusions": ("stored-context", "key-enrollment", "currentness", "reservation",
+        "capability", "witness", "execution", "rollback-after-uncertain-exit"),
+})
+
 # PostgreSQL-only immutable raw pages. Retention is not proof admission,
 # independent currentness, or permission to execute the parent plan.
 RECOVERY_HISTORY_PAGE_TABLE = "policy_authority_recovery_history_pages"
@@ -643,6 +673,7 @@ JIT_ORIGINAL_PAGE_CONTRACT = MappingProxyType({
 })
 POSTGRES_IMMUTABLE_CUSTODY_TABLES = (
     RECOVERY_HISTORY_PAGE_TABLE, CHALLENGE_MAINTENANCE_PAGE_TABLE, JIT_ORIGINAL_PAGE_TABLE,
+    RECOVERY_INVALIDATION_RETAINED_TABLE,
 )
 
 # Protected transaction evidence, deliberately not an authenticated business
@@ -872,6 +903,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         REVOCATION_RETAINED_CAPABILITY_TABLE,
         WEBAUTHN_EVIDENCE_RETAINED_TABLE,
         WEBAUTHN_TRANSITION_RETAINED_TABLE,
+        RECOVERY_INVALIDATION_RETAINED_TABLE,
         RECOVERY_HISTORY_PAGE_TABLE,
         CHALLENGE_MAINTENANCE_PAGE_TABLE,
         JIT_ORIGINAL_PAGE_TABLE,
@@ -3772,6 +3804,7 @@ def operation_contract_document() -> dict[str, Any]:
         "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
         "webauthnEvidenceRetention": dict(WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
         "webauthnTransitionRetention": dict(WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
+        "recoveryInvalidationRetention": dict(RECOVERY_INVALIDATION_RETENTION_CONTRACT),
         "recoveryHistoryPageCustody": dict(RECOVERY_HISTORY_PAGE_CONTRACT),
         "challengeMaintenancePageCustody": dict(CHALLENGE_MAINTENANCE_PAGE_CONTRACT),
         "jitOriginalPageCustody": dict(JIT_ORIGINAL_PAGE_CONTRACT),

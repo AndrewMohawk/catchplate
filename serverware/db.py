@@ -7383,6 +7383,50 @@ def _successor_installation_pins(kind: str) -> tuple[str, ...]:
     return pins
 
 
+def _policy_authority_recovery_invalidation_retention_ddl(namespace: str) -> str:
+    from serverware.authority_store import recovery_invalidation_retention
+
+    if (namespace not in ('"serverware_metadata"', '"serverware_candidate_authority_expected_v9"')
+            or recovery_invalidation_retention.TABLE != "serverware_metadata." + authority_contract.RECOVERY_INVALIDATION_RETAINED_TABLE
+            or recovery_invalidation_retention.COLUMNS != authority_contract.RECOVERY_INVALIDATION_RETAINED_COLUMNS):
+        raise PolicyCandidateAuthorityError("invalidation custody source/namespace is not exact")
+    ddl = recovery_invalidation_retention.installation_sql()
+    if ddl.count(recovery_invalidation_retention.TABLE) != 1:
+        raise PolicyCandidateAuthorityError("invalidation custody declaration is not source exact")
+    return ddl.replace(recovery_invalidation_retention.TABLE,
+        namespace + '."' + authority_contract.RECOVERY_INVALIDATION_RETAINED_TABLE + '"')
+
+
+def _install_policy_authority_recovery_invalidation_retention(conn: Any) -> None:
+    """Fresh locked PG custody only; never adopt or migrate an existing store."""
+    if not isinstance(conn, PostgresMetadataConnection) or conn.in_transaction is not True:
+        raise PolicyCandidateAuthorityError("invalidation custody installation requires the original PostgreSQL transaction")
+    row = conn.execute("SELECT pg_catalog.current_schema() AS schema_name").fetchone()
+    if row is None or row["schema_name"] not in (
+            "serverware_metadata", "serverware_candidate_authority_expected_v9"):
+        raise PolicyCandidateAuthorityError("invalidation custody namespace is not source admitted")
+    namespace = _policy_candidate_authority_identifier(row["schema_name"])
+    ddl = _policy_authority_recovery_invalidation_retention_ddl(namespace)
+    if _metadata_table_exists(conn, authority_contract.RECOVERY_INVALIDATION_RETAINED_TABLE):
+        if row["schema_name"] != "serverware_metadata":
+            raise PolicyCandidateAuthorityError("invalidation custody scratch table is not pristine")
+        _validate_policy_candidate_authority_structure(conn, require_recorded_contract=True)
+        return
+    if _policy_candidate_authority_migration_version(conn) != 0:
+        raise PolicyCandidateAuthorityError("invalidation custody requires fresh source; no legacy adoption")
+    sources = (
+        "policy_authority_planner_transactions", "policy_authority_schema_contracts",
+        "webauthn_challenges", "webauthn_credentials", "webauthn_recovery_ceremonies",
+        "webauthn_recovery_revocations", "webauthn_recovery_root_state",
+    )
+    for table in sources:
+        conn.execute(f'LOCK TABLE ONLY {namespace}."{table}" IN SHARE ROW EXCLUSIVE MODE')
+    for table in sources:
+        if conn.execute(f'SELECT 1 AS present FROM ONLY {namespace}."{table}" LIMIT 1').fetchone() is not None:
+            raise PolicyCandidateAuthorityError("invalidation custody requires locked empty sources; no adoption")
+    conn.execute(ddl)
+
+
 def _policy_authority_recovery_history_page_ddl(namespace: str) -> str:
     from serverware.authority_store import recovery_history_pages
 
@@ -7724,6 +7768,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 "policy-authority capability issuer requires a distinct "
                 "pinned mTLS client certificate identity"
             )
+        _install_policy_authority_recovery_invalidation_retention(conn)
         _install_policy_authority_recovery_history_pages(conn)
         _install_policy_authority_challenge_maintenance_pages(conn)
         _install_policy_authority_jit_original_pages(conn)

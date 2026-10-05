@@ -219,6 +219,8 @@ def _policy_candidate_authority_source_contract_digest(*, database_configuration
             "revocationRetention": dict(authority_contract.REVOCATION_RETENTION_CONTRACT),
             "webauthnEvidenceRetention": dict(authority_contract.WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
             "webauthnTransitionRetention": dict(authority_contract.WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
+            "recoveryInvalidationRetention": dict(authority_contract.RECOVERY_INVALIDATION_RETENTION_CONTRACT),
+            "recoveryInvalidationRetentionDdl": _policy_authority_recovery_invalidation_retention_ddl('"serverware_metadata"'),
             "recoveryHistoryPageCustody": dict(authority_contract.RECOVERY_HISTORY_PAGE_CONTRACT),
             "recoveryHistoryPageDdl": _policy_authority_recovery_history_page_ddl('"serverware_metadata"'),
             "challengeMaintenancePageCustody": dict(authority_contract.CHALLENGE_MAINTENANCE_PAGE_CONTRACT),
@@ -1634,6 +1636,12 @@ def _validate_policy_candidate_authority_structure(
                 raise PolicyCandidateAuthorityError(
                     "counted custody columns are not source exact: " + table
                 )
+        invalidation = table_manifests[authority_contract.RECOVERY_INVALIDATION_RETAINED_TABLE]
+        if (tuple(column["name"] for column in invalidation["columns"])
+                != authority_contract.RECOVERY_INVALIDATION_RETAINED_COLUMNS
+                or any(column["nullable"] for column in invalidation["columns"])
+                or tuple(invalidation["primaryKey"]) != ("retained_record_digest",)):
+            raise PolicyCandidateAuthorityError("invalidation custody columns/key are not source exact")
         history = table_manifests[authority_contract.RECOVERY_HISTORY_PAGE_TABLE]
         if (tuple(column["name"] for column in history["columns"])
                 != authority_contract.RECOVERY_HISTORY_PAGE_COLUMNS

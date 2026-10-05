@@ -29,6 +29,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-verifier-read verify-authority-planner-writer
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
+.PHONY: verify-local-activation-keys
 .PHONY: production-source-capture production-release-build production-release-publish production-release-sign production-release-deploy
 .NOTPARALLEL: production-release-build production-release-publish production-release-sign production-release-deploy production-release-proof
 
@@ -818,6 +819,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_audit_anchor.sh \
 	scripts/test_audit_export.py \
 	scripts/test_audit_search.py \
+	scripts/test_authority_local_activation_keys.py \
 	scripts/test_aws_kms_recipient_release.py \
 	scripts/test_aws_nitro_kms_unseal.py \
 	scripts/test_break_glass_grants.py \
@@ -930,6 +932,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_registration_enrollment.py \
 	serverware/authority_local_database_credentials.py \
 	serverware/authority_local_keys.py \
+	serverware/authority_local_activation_keys.py \
 	serverware/authority_local_provenance.py \
 	serverware/authority_local_closure.py \
 	serverware/authority_local_composition.py \
@@ -950,6 +953,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/local_registration_enrollment.py \
 	scripts/authority/local_database_credentials.py \
 	scripts/authority/local_keys.py \
+	scripts/authority/local_activation_keys.py \
 	scripts/authority/local_provenance.py \
 	scripts/authority/local_closure.py \
 	scripts/authority/local_composition.py \
@@ -4033,6 +4037,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_registration_enrollment.py \
 				serverware/authority_local_database_credentials.py \
 				serverware/authority_local_keys.py \
+				serverware/authority_local_activation_keys.py \
 				serverware/authority_local_provenance.py \
 				serverware/authority_local_closure.py \
 				serverware/authority_local_composition.py \
@@ -4053,6 +4058,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/local_registration_enrollment.py \
 				scripts/authority/local_database_credentials.py \
 				scripts/authority/local_keys.py \
+				scripts/authority/local_activation_keys.py \
 				scripts/authority/local_provenance.py \
 				scripts/authority/local_closure.py \
 				scripts/authority/local_composition.py \
@@ -11089,6 +11095,24 @@ verify-portal-static-credential-replacement:
 
 verify-portal-session-activation-entry:
 	python3 -I -B scripts/test_portal_session_activation_entry.py
+
+# These protected-file controls need root only inside a private disposable
+# container, not the unprivileged generic Coder test profile. Keep the result
+# container on success or failure; the selected dependency image must be local.
+verify-local-activation-keys:
+	@set -eu; \
+		key_test_image="$${SERVERWARE_ACTIVATION_KEY_TEST_IMAGE:?set a local sha256 image ID}"; \
+		printf '%s\n' "$$key_test_image" | LC_ALL=C grep -Eq '^sha256:[0-9a-f]{64}$$'; \
+		timeout 60s docker run --pull never \
+			--name "serverware-activation-key-check-$$$$" \
+			--network none --read-only --cap-drop ALL \
+			--security-opt no-new-privileges --user 0:0 \
+			--cpus 1 --memory 768m --memory-swap 768m --pids-limit 64 --ulimit core=0 \
+			--tmpfs /run:rw,noexec,nosuid,size=16m,mode=755 \
+			--env TMPDIR=/run --env SERVERWARE_TEST_LOCAL_ACTIVATION_KEYS_SANDBOX=1 \
+			--workdir /source --mount "type=bind,src=$(CURDIR),dst=/source,readonly" \
+			--entrypoint /usr/local/bin/python3 "$$key_test_image" \
+			-I -B /source/scripts/test_authority_local_activation_keys.py
 
 verify-control-plane-two-person:
 	docker compose up -d --build serverware

@@ -17,7 +17,6 @@ import time
 from cryptography.hazmat.primitives import serialization
 
 from scripts.authority import native_pilot_authority_io as io
-from scripts.authority.generate_artifact_bundle import _verification_key
 from serverware import authority_artifact_spec as spec
 from serverware import authority_local_artifact_measure as measure
 from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
@@ -147,6 +146,10 @@ class LocalSnapshotIssuer:
         self.check()
 
     def issue(self):
+        # Issuance retains the generator's complete admission checks. Importing
+        # shared clock/document helpers must not initialize the release registry.
+        from scripts.authority.generate_artifact_bundle import _verification_key
+
         _require(not self.used)
         self.used = True  # A failed invocation never retries signing.
         self.check()

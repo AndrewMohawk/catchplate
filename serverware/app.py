@@ -237,6 +237,7 @@ from serverware.operator_oidc import (
     OperatorOIDCError,
     browser_login_configured,
     complete_operator_login,
+    oidc_session_cookie_options,
     start_operator_login,
 )
 from serverware.policy_bundle import (
@@ -3807,10 +3808,14 @@ def operator_oidc_callback(
     state_hash = "sha256:" + hashlib.sha256(state.encode("ascii")).hexdigest()
     return_target = _operator_oidc_consumed_return_target(state_hash)
     response = RedirectResponse(url=return_target, status_code=303)
+    try:
+        cookie_options = oidc_session_cookie_options(completed["session"])
+    except OperatorOIDCError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     response.set_cookie(
         OIDC_SESSION_COOKIE_NAME,
         completed["session_token"],
-        max_age=completed["cookie_max_age"],
+        **cookie_options,
         httponly=True,
         secure=request.url.scheme == "https",
         samesite="strict",
@@ -4577,20 +4582,17 @@ def operator_session_webauthn_verify(
                 or active_session.get("bound_webauthn_credential_id")
                     != evidence["session"].get("bound_webauthn_credential_id")):
             raise OIDCAuthError("OIDC browser session delivery scope changed")
-    except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError) as exc:
+        cookie_options = oidc_session_cookie_options(active_session)
+    except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError, OperatorOIDCError) as exc:
         raise HTTPException(status_code=503, detail={
             "error": "oidc_session_activation_delivery_unavailable",
             "message": "Activation may have committed; current session delivery is unavailable",
             "automaticRetryAllowed": False,
         }) from exc
-    active_expires_at = datetime.fromisoformat(str(active_session["expires_at"]))
-    active_max_age = max(
-        1, int((active_expires_at - datetime.now(timezone.utc)).total_seconds())
-    )
     response.set_cookie(
         OIDC_SESSION_COOKIE_NAME,
         active_token,
-        max_age=active_max_age,
+        **cookie_options,
         httponly=True,
         secure=request.url.scheme == "https",
         samesite="strict",

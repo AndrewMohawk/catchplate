@@ -64725,6 +64725,7 @@ def create_oidc_browser_session(
     provider_expires_at_epoch: int,
     require_webauthn: bool,
     pending_ttl_seconds: int | None = None,
+    absolute_not_after_epoch: int | None = None,
 ) -> dict[str, Any]:
     token_hash = _oidc_browser_session_digest("token_digest", token_digest)
     oidc_hash = _oidc_browser_session_digest("oidc_token_digest", oidc_token_digest)
@@ -64765,6 +64766,13 @@ def create_oidc_browser_session(
     ):
         raise MetadataStoreError(
             "OIDC browser session provider expiry must be an absolute epoch"
+        )
+    if absolute_not_after_epoch is not None and (
+        type(absolute_not_after_epoch) is not int
+        or not 1 <= absolute_not_after_epoch <= 253402300799
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session absolute not-after must be a positive UTC epoch second"
         )
     session_id = str(uuid.uuid4())
     with connect() as conn:
@@ -64826,9 +64834,18 @@ def create_oidc_browser_session(
         )
         if provider_expires_at <= now:
             raise MetadataStoreError("OIDC provider token is already expired")
-        expires_at = min(
+        session_expiry = min(
             now + timedelta(seconds=ttl_seconds), provider_expires_at
-        ).isoformat()
+        )
+        if absolute_not_after_epoch is not None:
+            session_expiry = min(session_expiry, datetime.fromtimestamp(
+                absolute_not_after_epoch, tz=timezone.utc
+            ))
+        if session_expiry <= now:
+            raise MetadataStoreError("OIDC browser session absolute not-after has elapsed")
+        # Keep the actual provider lifetime distinct. Activation and recovery
+        # retain this clipped session expiry; neither may restart its TTL.
+        expires_at = session_expiry.isoformat()
         effective_pending_ttl = min(
             ttl_seconds,
             pending_ttl_seconds
@@ -64838,7 +64855,7 @@ def create_oidc_browser_session(
         pending_expires_at = (
             min(
                 now + timedelta(seconds=effective_pending_ttl),
-                datetime.fromisoformat(expires_at),
+                session_expiry,
             ).isoformat()
             if require_webauthn
             else None

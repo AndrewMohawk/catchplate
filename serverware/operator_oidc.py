@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from serverware import db
@@ -27,6 +27,7 @@ from serverware.config import (
     OIDC_SESSION_WEBAUTHN_REQUIRED,
     OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS,
     OIDC_SESSION_TTL_SECONDS,
+    OIDC_SESSION_NOT_AFTER_EPOCH,
     OIDC_TOKEN_AUTH_METHOD,
     OIDC_TOKEN_ENDPOINT,
 )
@@ -139,6 +140,49 @@ def _token_request(code: str, code_verifier: str) -> urllib.request.Request:
     )
 
 
+def _oidc_session_cookie_lifetime(session: dict[str, Any]) -> tuple[int, int, datetime]:
+    """Remaining original row lifetime, not a renewal or session admission."""
+    try:
+        active_expiry = datetime.fromisoformat(session["expires_at"])
+        cookie_expiry = active_expiry
+        if session["status"] == "pending_webauthn":
+            cookie_expiry = min(cookie_expiry, datetime.fromisoformat(session["pending_expires_at"]))
+        elif session["status"] != "active":
+            raise ValueError("session is not live")
+        if active_expiry.utcoffset() != timezone.utc.utcoffset(None) or cookie_expiry.utcoffset() != timezone.utc.utcoffset(None):
+            raise ValueError("session expiry is not UTC")
+        now = time.time()
+        active_age = int(active_expiry.timestamp() - now)
+        cookie_age = int(cookie_expiry.timestamp() - now)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise OperatorOIDCError("OIDC browser session cookie lifetime is invalid") from exc
+    if min(active_age, cookie_age) < 1:
+        raise OperatorOIDCError("OIDC browser session expired before cookie delivery")
+    return active_age, cookie_age, cookie_expiry
+
+
+def oidc_session_cookie_attributes(*, expires_at: datetime, max_age: int) -> dict[str, Any]:
+    """Format an already checked lifetime; protected callers retain their clocks.
+
+    Max-Age overrides Expires in browsers. A configured absolute ceiling must
+    therefore omit Max-Age, including after protected activation/recovery.
+    This helper does not authenticate a row or replace any final-send guard.
+    """
+    if (type(max_age) is not int or max_age < 1 or type(expires_at) is not datetime
+            or expires_at.utcoffset() != timezone.utc.utcoffset(None)):
+        raise OperatorOIDCError("OIDC browser session cookie lifetime is invalid")
+    if OIDC_SESSION_NOT_AFTER_EPOCH is None:
+        return {"max_age": max_age}
+    if expires_at.timestamp() > OIDC_SESSION_NOT_AFTER_EPOCH:
+        raise OperatorOIDCError("OIDC browser session exceeds the configured absolute lifetime")
+    return {"expires": expires_at}
+
+
+def oidc_session_cookie_options(session: dict[str, Any]) -> dict[str, Any]:
+    _, cookie_age, cookie_expiry = _oidc_session_cookie_lifetime(session)
+    return oidc_session_cookie_attributes(expires_at=cookie_expiry, max_age=cookie_age)
+
+
 def complete_operator_login(
     *,
     state: str,
@@ -199,25 +243,16 @@ def complete_operator_login(
             provider_expires_at_epoch=expires_at,
             pending_ttl_seconds=OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS,
             require_webauthn=OIDC_SESSION_WEBAUTHN_REQUIRED,
+            absolute_not_after_epoch=OIDC_SESSION_NOT_AFTER_EPOCH,
         )
     except (db.MetadataStoreError, ValueError) as exc:
         raise OperatorOIDCError("OIDC browser session could not be persisted") from exc
-    max_age = max(
-        1,
-        int(
-            datetime.fromisoformat(str(session["expires_at"])).timestamp()
-            - time.time()
-        ),
-    )
+    max_age, cookie_max_age, _ = _oidc_session_cookie_lifetime(session)
     return {
         "session_token": session_token,
         "session": session,
         "identity": identity,
         "max_age": max_age,
-        "cookie_max_age": (
-            min(max_age, OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS)
-            if OIDC_SESSION_WEBAUTHN_REQUIRED
-            else max_age
-        ),
+        "cookie_max_age": cookie_max_age,
         "expires_at": expires_at,
     }

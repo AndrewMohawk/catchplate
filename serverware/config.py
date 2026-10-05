@@ -472,6 +472,25 @@ if not 60 <= OIDC_LOGIN_STATE_TTL_SECONDS <= 900:
 OIDC_SESSION_TTL_SECONDS = int(os.getenv("SERVERWARE_OIDC_SESSION_TTL_SECONDS", "3600"))
 if not 300 <= OIDC_SESSION_TTL_SECONDS <= 43_200:
     raise RuntimeError("SERVERWARE_OIDC_SESSION_TTL_SECONDS must be between 300 and 43200 seconds")
+
+
+def _oidc_session_not_after_epoch(value: str | None) -> int | None:
+    # Optional server configuration, never a browser-relative TTL. Reject
+    # alternate spellings and epochs outside Python's canonical UTC range.
+    if value is None:
+        return None
+    if (type(value) is not str or not 1 <= len(value) <= 12
+            or not value.isascii() or not value.isdecimal()
+            or value.startswith("0") or int(value) > 253402300799):
+        raise RuntimeError(
+            "SERVERWARE_OIDC_SESSION_NOT_AFTER_EPOCH must be a canonical positive UTC epoch second"
+        )
+    return int(value)
+
+
+OIDC_SESSION_NOT_AFTER_EPOCH = _oidc_session_not_after_epoch(
+    os.getenv("SERVERWARE_OIDC_SESSION_NOT_AFTER_EPOCH")
+)
 OIDC_SESSION_WEBAUTHN_REQUIRED = (
     os.getenv("SERVERWARE_OIDC_SESSION_WEBAUTHN_REQUIRED", "0") == "1"
 )

@@ -7,6 +7,7 @@ ordinary actor, input, proof and exchange guards are never reused.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 import threading
 import time
@@ -21,6 +22,7 @@ from serverware import control_plane_oidc_session_activation_completion_recovery
 from serverware import control_plane_oidc_session_activation_completion_recovery_proof as proof_source
 from serverware import control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap as recovery_config
 from serverware import oidc_session_activation_release_recovery_grant_admission as recovery_grants
+from serverware.operator_oidc import oidc_session_cookie_attributes
 
 
 actor, execution = actors.actor, actors.execution
@@ -545,7 +547,10 @@ def _response_on_active(active):
                 "schema": staged._schema, "purpose": staged._purpose, "status": staged._success_status,
                 "sessionState": "active", "automaticRetryAllowed": False}))
         permission._native(staged._current, work, lambda: response.set_cookie(
-            application.OIDC_SESSION_COOKIE_NAME, active_token, max_age=max_age, httponly=True,
+            application.OIDC_SESSION_COOKIE_NAME, active_token,
+            **oidc_session_cookie_attributes(
+                expires_at=datetime.fromtimestamp(staged._session_expiry // 1_000_000_000, tz=timezone.utc),
+                max_age=max_age), httponly=True,
             secure=staged._request.url.scheme == "https", samesite="strict", path="/"))
         del active_token
         cookies = [value for name, value in response.raw_headers if name.lower() == b"set-cookie"]

@@ -6,6 +6,7 @@ survive cleanup and signed-response buffering on the same process/thread.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 import threading
 import time
@@ -17,6 +18,7 @@ from serverware import control_plane_oidc_session_activation_execution as execut
 from serverware import control_plane_oidc_session_activation_permission as permission_source
 from serverware import control_plane_registration_finalization_completion_pending as pending
 from serverware import oidc_session_activation_http_contract as contract
+from serverware.operator_oidc import oidc_session_cookie_attributes
 
 
 POST_PATH = "/api/auth/session/activation"
@@ -268,7 +270,10 @@ def _response_on_permission(permission):
     response = permission_source._native(staged._current, work,
         lambda: JSONResponse(status_code=200, headers=_HEADERS, content=dict(_SUCCESS)))
     permission_source._native(staged._current, work, lambda: response.set_cookie(
-        application.OIDC_SESSION_COOKIE_NAME, active_token, max_age=max_age, httponly=True,
+        application.OIDC_SESSION_COOKIE_NAME, active_token,
+        **oidc_session_cookie_attributes(
+            expires_at=datetime.fromtimestamp(staged._session_expiry // 1_000_000_000, tz=timezone.utc),
+            max_age=max_age), httponly=True,
         secure=request.url.scheme == "https", samesite="strict", path="/"))
     del active_token
     cookies = [value for name, value in response.raw_headers if name.lower() == b"set-cookie"]

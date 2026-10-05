@@ -6,6 +6,7 @@ guards remain unusable. No public input accepts a token or successful carrier.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 import threading
 import time
@@ -15,6 +16,7 @@ from fastapi.responses import JSONResponse
 from serverware import auth
 from serverware import control_plane_oidc_session_activation_recovery_acquisition as acquisition
 from serverware import oidc_session_activation_recovery_http_contract as contract
+from serverware.operator_oidc import oidc_session_cookie_attributes
 
 
 actor, execution = acquisition.actor, acquisition.execution
@@ -390,7 +392,10 @@ def _response_on_active(active):
         response = permission._native(staged._current, work,
             lambda: JSONResponse(status_code=200, headers=_HEADERS, content=dict(_SUCCESS)))
         permission._native(staged._current, work, lambda: response.set_cookie(
-            application.OIDC_SESSION_COOKIE_NAME, active_token, max_age=max_age, httponly=True,
+            application.OIDC_SESSION_COOKIE_NAME, active_token,
+            **oidc_session_cookie_attributes(
+                expires_at=datetime.fromtimestamp(staged._session_expiry // 1_000_000_000, tz=timezone.utc),
+                max_age=max_age), httponly=True,
             secure=staged._request.url.scheme == "https", samesite="strict", path="/"))
         del active_token
         cookies = [value for name, value in response.raw_headers if name.lower() == b"set-cookie"]

@@ -223,6 +223,8 @@ def _policy_candidate_authority_source_contract_digest(*, database_configuration
             "recoveryHistoryPageDdl": _policy_authority_recovery_history_page_ddl('"serverware_metadata"'),
             "challengeMaintenancePageCustody": dict(authority_contract.CHALLENGE_MAINTENANCE_PAGE_CONTRACT),
             "challengeMaintenancePageDdl": _policy_authority_challenge_maintenance_page_ddl('"serverware_metadata"'),
+            "jitOriginalPageCustody": dict(authority_contract.JIT_ORIGINAL_PAGE_CONTRACT),
+            "jitOriginalPageDdl": _policy_authority_jit_original_page_ddl('"serverware_metadata"'),
             "currentRootCommitMarker": dict(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
             "successorExecutionCustody": dict(authority_contract.SUCCESSOR_EXECUTION_CUSTODY_CONTRACT),
             "successorExecutionPrivilegeSqlDigest": SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST,
@@ -1646,6 +1648,13 @@ def _validate_policy_candidate_authority_structure(
                 or tuple(maintenance["primaryKey"])
                 != authority_contract.CHALLENGE_MAINTENANCE_PAGE_CONTRACT["primaryKey"]):
             raise PolicyCandidateAuthorityError("challenge maintenance page columns/key are not source exact")
+        jit = table_manifests[authority_contract.JIT_ORIGINAL_PAGE_TABLE]
+        if (tuple(column["name"] for column in jit["columns"])
+                != authority_contract.JIT_ORIGINAL_PAGE_COLUMNS
+                or any(column["nullable"] for column in jit["columns"])
+                or tuple(jit["primaryKey"])
+                != authority_contract.JIT_ORIGINAL_PAGE_CONTRACT["primaryKey"]):
+            raise PolicyCandidateAuthorityError("JIT original page columns/key are not source exact")
     marker_columns = table_manifests[
         authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE
     ]["columns"]

@@ -609,7 +609,36 @@ CHALLENGE_MAINTENANCE_PAGE_CONTRACT = MappingProxyType({
     "bodyAdmission": "independent-raw-page-group-chain-original-parent-manifest-and-proof-replay-required",
     "publicExecutionEnabled": False,
 })
-POSTGRES_IMMUTABLE_CUSTODY_TABLES = (RECOVERY_HISTORY_PAGE_TABLE, CHALLENGE_MAINTENANCE_PAGE_TABLE)
+JIT_ORIGINAL_PAGE_TABLE = "policy_authority_jit_original_pages"
+JIT_ORIGINAL_PAGE_COLUMNS = (
+    "parent_plan_digest", "original_manifest_digest", "source_revision",
+    "operation", "operation_id", "request_digest", "configuration_digest",
+    "page_kind", "page_ordinal", "body_digest", "body_byte_count",
+    "body_bytes", "retained_at_epoch_ns",
+)
+JIT_ORIGINAL_PAGE_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityJitOriginalPageCustody/v1",
+    "table": JIT_ORIGINAL_PAGE_TABLE, "columns": JIT_ORIGINAL_PAGE_COLUMNS,
+    "primaryKey": ("parent_plan_digest", "original_manifest_digest", "page_kind", "page_ordinal"),
+    "operations": ("jit.assertion.issue",),
+    "pageKinds": ("primary-chunk", "primary-proof", "index-frontier"),
+    "maximumChunkBytes": 2 * 128 * 1024 + 256,
+    "maximumProofBytes": 128 * 1024, "maximumBodyBytes": 4 * 1024 * 1024,
+    "maximumChunkOrdinal": 7 * 33 - 1, "maximumProofOrdinal": 7, "maximumIndexOrdinal": 11,
+    "postgresOnly": True, "sqliteAdmission": False,
+    "plannerWriterPrivileges": ("SELECT", "INSERT"), "executorPrivileges": ("SELECT",),
+    "verifierPrivileges": (), "runtimeWrites": (),
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "freshInstallation": "locked-empty-source-only-no-existing-store-adoption",
+    "existingStore": "full-recorded-source-and-structural-contract-required",
+    "transactionOwnership": "caller-owned-serializable-writer-with-nested-savepoint",
+    "contextOnlyRead": "untrusted-framing-and-context-only",
+    "bodyAdmission": "independent-original-parent-manifest-chain-and-complete-raw-replay-required",
+    "publicExecutionEnabled": False,
+})
+POSTGRES_IMMUTABLE_CUSTODY_TABLES = (
+    RECOVERY_HISTORY_PAGE_TABLE, CHALLENGE_MAINTENANCE_PAGE_TABLE, JIT_ORIGINAL_PAGE_TABLE,
+)
 
 # Protected transaction evidence, deliberately not an authenticated business
 # row. The postcommit receipt commits this marker; the marker must not depend
@@ -840,6 +869,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         WEBAUTHN_TRANSITION_RETAINED_TABLE,
         RECOVERY_HISTORY_PAGE_TABLE,
         CHALLENGE_MAINTENANCE_PAGE_TABLE,
+        JIT_ORIGINAL_PAGE_TABLE,
         CURRENT_ROOT_COMMIT_MARKER_TABLE,
         SUCCESSOR_EXECUTION_CUSTODY_TABLE,
         "policy_authority_query_dependency_manifests",
@@ -3738,6 +3768,7 @@ def operation_contract_document() -> dict[str, Any]:
         "webauthnTransitionRetention": dict(WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
         "recoveryHistoryPageCustody": dict(RECOVERY_HISTORY_PAGE_CONTRACT),
         "challengeMaintenancePageCustody": dict(CHALLENGE_MAINTENANCE_PAGE_CONTRACT),
+        "jitOriginalPageCustody": dict(JIT_ORIGINAL_PAGE_CONTRACT),
         "currentRootCommitMarker": dict(CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
         "revocationWriterRequestCustody": dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
         "revocationWriterAckCustody": dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),

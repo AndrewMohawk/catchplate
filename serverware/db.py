@@ -1833,7 +1833,8 @@ _POLICY_AUTHORITY_FRAMEWORK_CUSTODY_TABLES = frozenset(
         )
     } | set(authority_contract.POSTGRES_COUNTED_STORE_TABLES)
     | {authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
-       authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE}
+       authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+       authority_contract.JIT_ORIGINAL_PAGE_TABLE}
 )
 _POLICY_AUTHORITY_OPERATION_READ_TABLES = MappingProxyType(
     {
@@ -6751,6 +6752,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "challenge maintenance page storage requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.JIT_ORIGINAL_PAGE_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "JIT original page storage requires a separately reviewed migration"
+                )
             if _metadata_table_exists(conn, authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE):
                 raise PolicyCandidateAuthorityError(
                     "current-root commit marker storage requires a separately reviewed migration"
@@ -7138,6 +7143,10 @@ def _prepare_policy_candidate_authority_schema(
         raise PolicyCandidateAuthorityError(
             "challenge maintenance page storage requires a separately reviewed migration"
         )
+    if _metadata_table_exists(conn, authority_contract.JIT_ORIGINAL_PAGE_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "JIT original page storage requires a separately reviewed migration"
+        )
     if _metadata_table_exists(conn, authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE):
         raise PolicyCandidateAuthorityError(
             "current-root commit marker storage requires a separately reviewed migration"
@@ -7469,6 +7478,52 @@ def _install_policy_authority_challenge_maintenance_pages(conn: Any) -> None:
     conn.execute(ddl)
 
 
+def _policy_authority_jit_original_page_ddl(namespace: str) -> str:
+    from serverware.authority_store import jit_original_pages
+
+    if (namespace not in ('"serverware_metadata"', '"serverware_candidate_authority_expected_v9"')
+            or jit_original_pages.TABLE != "serverware_metadata." + authority_contract.JIT_ORIGINAL_PAGE_TABLE
+            or jit_original_pages.COLUMNS != authority_contract.JIT_ORIGINAL_PAGE_COLUMNS
+            or jit_original_pages._KEY_FIELDS != authority_contract.JIT_ORIGINAL_PAGE_CONTRACT["primaryKey"]):
+        raise PolicyCandidateAuthorityError("JIT original page source/namespace is not exact")
+    ddl = jit_original_pages.installation_sql()
+    if ddl.count(jit_original_pages.TABLE) != 1:
+        raise PolicyCandidateAuthorityError("JIT original page declaration is not source exact")
+    return ddl.replace(jit_original_pages.TABLE,
+        namespace + '."' + authority_contract.JIT_ORIGINAL_PAGE_TABLE + '"')
+
+
+def _install_policy_authority_jit_original_pages(conn: Any) -> None:
+    """Install only fresh locked PG sources; existing state must replay its contract."""
+    if not isinstance(conn, PostgresMetadataConnection) or conn.in_transaction is not True:
+        raise PolicyCandidateAuthorityError("JIT original installation requires the original PostgreSQL transaction")
+    row = conn.execute("SELECT pg_catalog.current_schema() AS schema_name").fetchone()
+    if row is None or row["schema_name"] not in (
+            "serverware_metadata", "serverware_candidate_authority_expected_v9"):
+        raise PolicyCandidateAuthorityError("JIT original installation namespace is not source admitted")
+    namespace = _policy_candidate_authority_identifier(row["schema_name"])
+    ddl = _policy_authority_jit_original_page_ddl(namespace)
+    if _metadata_table_exists(conn, authority_contract.JIT_ORIGINAL_PAGE_TABLE):
+        if row["schema_name"] != "serverware_metadata":
+            raise PolicyCandidateAuthorityError("JIT original scratch table is not pristine")
+        _validate_policy_candidate_authority_structure(conn, require_recorded_contract=True)
+        return
+    if _policy_candidate_authority_migration_version(conn) != 0:
+        raise PolicyCandidateAuthorityError("JIT original pages require fresh source; no legacy adoption")
+    sources = (
+        "policy_authority_planner_transactions", "policy_authority_schema_contracts",
+        "approval_requests", "webauthn_challenges", "webauthn_credentials",
+        "jit_webauthn_assertion_receipts", "policy_high_water", "rbac_role_bindings",
+        "webauthn_trust_publication_high_water", "webauthn_trust_publications",
+    )
+    for table in sources:
+        conn.execute(f'LOCK TABLE ONLY {namespace}."{table}" IN SHARE ROW EXCLUSIVE MODE')
+    for table in sources:
+        if conn.execute(f'SELECT 1 AS present FROM ONLY {namespace}."{table}" LIMIT 1').fetchone() is not None:
+            raise PolicyCandidateAuthorityError("JIT original pages require locked empty sources; no adoption")
+    conn.execute(ddl)
+
+
 def _install_policy_candidate_authority_guards(conn: Any) -> None:
     immutable_tables = (_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
         + (authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES
@@ -7671,6 +7726,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
             )
         _install_policy_authority_recovery_history_pages(conn)
         _install_policy_authority_challenge_maintenance_pages(conn)
+        _install_policy_authority_jit_original_pages(conn)
         conn.execute(
             """
             CREATE OR REPLACE FUNCTION serverware_reject_policy_authority_mutation()

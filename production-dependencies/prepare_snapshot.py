@@ -512,12 +512,26 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
 
 
 def main() -> None:
+    # A separate offline mode augments retained evidence without regenerating
+    # dependencies or rewriting the original candidate/consumer manifests.
+    if sys.argv[1:2] == ["--prepare-native-source-companion"]:
+        spec = importlib.util.spec_from_file_location(
+            "native_source_companion", ROOT / "production-dependencies/prepare_native_source_companion.py"
+        )
+        if spec is None or spec.loader is None:
+            raise ValueError("could not load native source companion preparer")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.main(sys.argv[2:])
+        return
     # Internal fixed phases are entered only in the disposable container. They
     # have no Docker operations and accept no caller-provided commands or paths.
     if len(sys.argv) == 3 and sys.argv[1] == "--container-phase" and sys.argv[2] in {"download", "verify"}:
         container_phase(sys.argv[2])
         return
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog=(
+        "Offline companion mode: --prepare-native-source-companion --candidate DIR "
+        "--source-directory DIR --output DIR (no download, rebuild or publication)."))
     parser.add_argument("--expected-commit", required=True)
     parser.add_argument("--existing-cache", required=True, type=Path)
     parser.add_argument("--snapshot-id", required=True)

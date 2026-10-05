@@ -871,6 +871,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_oauth_http_flow.py \
 	scripts/test_policy_activation_evidence.py \
 	scripts/test_policy_canary_workflow.py \
+	scripts/test_policy_preview.py \
 	scripts/test_policy_publish_workflow.py \
 	scripts/test_portal_agent_enrollment_ui.py \
 	scripts/test_portal_static_credential_replacement.py \

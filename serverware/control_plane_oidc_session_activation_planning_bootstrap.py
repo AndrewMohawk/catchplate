@@ -47,6 +47,9 @@ def _endpoint(value):
 def _shape(value):
     if value is None:
         return
+    if type(value) is dict and value.get("schema") == "serverware.controlPlaneOidcSessionActivationPlanning/v2":
+        from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as request_issuance
+        return request_issuance._shape(value)
     shape._object(value, _FIELDS, "control-plane activation planning")
     shape._literal(value["schema"], SCHEMA)
     original = value["plannerBootstrap"]
@@ -70,6 +73,13 @@ def _same_configuration(actual, expected, work, label):
 def _admit_on_work(*, planning, configuration_payload, configuration_digest,
         generation, runtime_role_identities, runtime_root_public_key,
         activation_execution, work, live_window=None, transport_deadline_ns=None):
+    if type(planning) is dict and planning.get("schema") == "serverware.controlPlaneOidcSessionActivationPlanning/v2":
+        from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as request_issuance
+        return request_issuance._admit_on_work(planning=planning, configuration_payload=configuration_payload,
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,
+            activation_execution=activation_execution, work=work, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns)
     return _admit(planning=planning, configuration_payload=configuration_payload,
         configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,

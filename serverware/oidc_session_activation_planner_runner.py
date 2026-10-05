@@ -5,6 +5,29 @@ import os
 import signal
 
 
+def _run_on_work(*, work, live_window, transport_deadline_ns, delivery_current):
+    """Fresh same-PID cold owner; staging is not readiness or permission."""
+    from serverware import authority_oidc_session_activation_planner_service as startup
+
+    status = 1
+    try:
+        delivery_current()
+        startup._initialize_from_delivery_on_work(work=work, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, delivery_current=delivery_current)
+        while True:
+            if startup.require_started().serve_once():
+                status = 0
+                break
+    except BaseException:
+        status = 1
+    finally:
+        try:
+            startup.close()
+        except BaseException:
+            status = 1
+    return status
+
+
 def main():
     from serverware import authority_oidc_session_activation_planner_service as startup
 

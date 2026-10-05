@@ -163,6 +163,7 @@ class _ActivationPermission:
         "_pid", "_thread", "_state", "_locked", "_trust", "_scope", "_target", "_spent",
         "_permission_epoch", "_session_expiry", "_inputs", "_seal", "_normal_exit",
         "_planning_spent", "_planning_bounds", "_planning_observed",
+        "_request_issuance_spent", "_request_issuance",
         "_dispatch_phase", "_sql_originals", "_sql_seal", "_completion_originals", "_completion_seal",
         "_completion_context", "_completion_context_seal", "_consume_spent",
         "_consume_claim", "_consume_claim_seal",
@@ -198,6 +199,7 @@ class _ActivationPermission:
         self._session_expiry = None
         self._planning_spent, self._planning_bounds = False, None
         self._planning_observed = None
+        self._request_issuance_spent, self._request_issuance = False, None
         self._dispatch_phase, self._sql_originals, self._sql_seal = "new", None, None
         self._completion_originals = self._completion_seal = None
         self._completion_context = self._completion_context_seal = None
@@ -474,6 +476,12 @@ class _ActivationPermission:
         self._target, self._scope = None, None
         self._planning_bounds = None
         self._planning_observed = None
+        self._request_issuance_spent = True
+        if self._request_issuance is not None:
+            from serverware import control_plane_oidc_session_activation_request_issuance as issuance
+            if type(self._request_issuance) is issuance._Continuation:
+                issuance._Continuation._close(self._request_issuance)
+            self._request_issuance = None
         self._dispatch_phase, self._sql_originals, self._sql_seal = "closed", None, None
         self._completion_originals = self._completion_seal = None
         self._completion_context = self._completion_context_seal = None

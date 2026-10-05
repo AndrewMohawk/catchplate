@@ -80,7 +80,8 @@ class _PlannerOwner:
         "_journal_pins", "_plan_owner", "_plan_configuration", "_listener", "_listener_pins",
         "_execution_store", "_store_fd", "_store_pins", "_store_configuration",
         "_sealed", "_tls", "_opening", "_interval", "_deadline", "_last_epoch", "_last_monotonic",
-        "_closed", "_failed", "_accepted", "_spent", "_connection")
+        "_closed", "_failed", "_accepted", "_spent", "_connection",
+        "_work", "_limits", "_window", "_delivery_current", "_retained_bytes", "_request_digest")
 
     def __init__(self):
         raise ActivationPlannerStartupError("activation planner requires genuine cold original admission")
@@ -93,6 +94,16 @@ class _PlannerOwner:
                     or _environment() != _namespace):
                 raise ActivationPlannerStartupError("activation planner singleton or original lifetime changed")
             _process(_namespace)
+            if self._delivery_current is not None:
+                from serverware import oidc_session_activation_request_dynamic_entrypoint as dynamic
+                if self._work.limits is not self._limits:
+                    raise ActivationPlannerStartupError("activation dynamic ledger was replaced")
+                retained, digest, original = dynamic._binding_on_work(self._delivery_current,
+                    self._work, self._window, self._deadline)
+                self._work.charge(input_bytes=len(original) + len(self._bootstrap_bytes))
+                if (retained > self._retained_bytes or digest != self._request_digest
+                        or original != self._bootstrap_bytes):
+                    raise ActivationPlannerStartupError("activation dynamic original binding changed")
             for descriptor, maximum, private, original in self._sealed:
                 if delivery._sealed_identity(descriptor, maximum, private=private) != original:
                     raise ActivationPlannerStartupError("activation planner sealed original changed")
@@ -134,6 +145,11 @@ class _PlannerOwner:
                     or not opened_epoch + before - opened_after <= epoch <= opened_epoch + after - opened_before):
                 raise ActivationPlannerStartupError("activation planner original launch clocks expired or reversed")
             self._last_epoch, self._last_monotonic = epoch, after
+            if self._delivery_current is not None:
+                final = self._delivery_current()
+                if not epoch <= final < self._interval[1]:
+                    raise ActivationPlannerStartupError("activation dynamic final epoch expired or reversed")
+                self._last_epoch = final
         except BaseException as exc:
             self._failed, _state = True, "failed"
             if isinstance(exc, ActivationPlannerStartupError):
@@ -179,6 +195,8 @@ class _PlannerOwner:
         from serverware import authority_webauthn_evidence_plan_clock as clock
         from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
+        if self._delivery_current is not None:
+            return self._serve_dynamic_connection(connection)
         self._live()
         work = _ValidationWork(QueryReadValidationLimits())
         window = clock._open_on_work(deadline_epoch_ns=self._interval[1],
@@ -216,6 +234,47 @@ class _PlannerOwner:
         clock._check_on_work(window, work=work)
         transport._check_deadline(response_deadline)
 
+    def _serve_dynamic_connection(self, connection):
+        """Use the delivered ledger/window once; no new allowance after staging."""
+        from serverware import authority_oidc_session_activation_planner_transport as transport
+        from serverware import authority_oidc_session_activation_request_issuance as issuance
+        from serverware import authority_successor_execution_window as processing
+
+        self._live()
+        work, window, bound = self._work, self._window, self._deadline
+        transport._prepare_dynamic_connection_on_work(connection, deadline_ns=bound,
+            work=work, current=self._live)
+        headers = transport.BOUNDED_REQUEST_HEADER_BYTES + transport.BOUNDED_RESPONSE_HEADER_BYTES
+        maximum_request = min(sum(transport.BOUNDED_REQUEST_LIMITS),
+            transport.MAX_BYTES - self._retained_bytes - headers - len(b"uncertain"))
+        originals, ceiling = transport._recv_bounded_request_on_work(connection,
+            deadline_ns=bound, work=work, current=self._live,
+            maximum_request_bytes=maximum_request)
+        self._window = window = processing._narrow(window, deadline_epoch_ns=ceiling,
+            maximum_lifetime_ns=window[5], maximum_clock_skew_ns=window[6])
+        self._deadline = bound = min(bound, window[4])
+        observed = issuance.plan._frame(issuance.PLANNER_REQUEST_DOMAIN, originals, work)
+        issuance.plan._same(observed, self._request_digest, work,
+            "activation dynamic planner differs from the caller-signed staged request")
+        self._live()
+        if self._spent:
+            raise ActivationPlannerStartupError("activation dynamic request was already spent")
+        self._spent = True
+        response, response_deadline = self._prepare_on_work(originals,
+            live_window=window, deadline=bound, work=work)
+        self._deadline = min(bound, response_deadline)
+        self._window = processing._narrow(window,
+            deadline_epoch_ns=min(window[3], window[0] + self._deadline - window[1]),
+            maximum_lifetime_ns=window[5], maximum_clock_skew_ns=window[6])
+        self._live()
+        maximum_response = min(transport.MAX_BOUNDED_RESPONSE_BYTES,
+            transport.MAX_BYTES - self._retained_bytes - headers
+                - sum(map(len, originals)) - len(str(ceiling)))
+        transport._send_bounded_response_on_work(connection, response,
+            deadline_ns=self._deadline, work=work, current=self._live,
+            maximum_response_bytes=maximum_response)
+        self._live()
+
     def serve_once(self):
         """Return False on an idle poll; one accepted connection ends the launch."""
         _require_pid()
@@ -252,10 +311,22 @@ class _PlannerOwner:
 
 
 def initialize_from_environment():
+    return _initialize()
+
+
+def _initialize_from_delivery_on_work(*, work, live_window, transport_deadline_ns, delivery_current):
+    from serverware import oidc_session_activation_request_dynamic_entrypoint as dynamic
+    binding = dynamic._binding_on_work(delivery_current, work, live_window, transport_deadline_ns)
+    return _initialize((work, live_window, transport_deadline_ns, delivery_current, binding))
+
+
+def _initialize(continuation=None):
     global _state, _owner, _namespace
     _require_pid()
     with _LOCK:
         if _state == "started":
+            if continuation is not None:
+                raise ActivationPlannerStartupError("activation dynamic cold admission cannot repeat")
             return require_started()
         if _state != "new":
             raise ActivationPlannerStartupError("activation planner cannot repeat cold admission")
@@ -264,8 +335,6 @@ def initialize_from_environment():
         try:
             _process(_namespace)
             delivery._require_inventory(delivery.INHERITED_DESCRIPTORS)
-            root_raw, root_identity = delivery._read_original(delivery.ROOT_FD, delivery.MAX_ROOT_BYTES)
-            bootstrap_raw, bootstrap_identity = delivery._read_original(delivery.BOOTSTRAP_FD, delivery.MAX_BOOTSTRAP_BYTES)
             from cryptography.hazmat.primitives import serialization
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
             from serverware import oidc_session_activation_planner_bootstrap as bootstrap
@@ -277,12 +346,32 @@ def initialize_from_environment():
 
             if bootstrap.MAX_BYTES != delivery.MAX_BOOTSTRAP_BYTES:
                 raise ActivationPlannerStartupError("activation planner bootstrap size contract changed")
-            work = _ValidationWork(QueryReadValidationLimits())
+            if continuation is None:
+                work = _ValidationWork(QueryReadValidationLimits())
+                inherited_window = inherited_bound = delivery_current = None
+                retained, request_digest, issued_original = 0, None, None
+            else:
+                work, inherited_window, inherited_bound, delivery_current, original_binding = continuation
+                retained, request_digest, issued_original = original_binding
+                delivery_current()
+                # Readback storage is reserved before the native copies.
+                work.charge(input_bytes=delivery.MAX_ROOT_BYTES + len(issued_original))
+            root_raw, root_identity = delivery._read_original(delivery.ROOT_FD, delivery.MAX_ROOT_BYTES)
+            bootstrap_raw, bootstrap_identity = delivery._read_original(delivery.BOOTSTRAP_FD, delivery.MAX_BOOTSTRAP_BYTES)
+            if continuation is not None:
+                delivery_current()
+                work.charge(input_bytes=len(bootstrap_raw) + len(issued_original))
+                if bootstrap_raw != issued_original:
+                    raise ActivationPlannerStartupError("activation inherited bootstrap differs from actual staging")
+                retained += len(root_raw) + len(bootstrap_raw)
             work.charge(input_bytes=len(root_raw))
             root = owners.evidence.production._callback(work, lambda: serialization.load_pem_public_key(root_raw))
             if not isinstance(root, Ed25519PublicKey):
                 raise ActivationPlannerStartupError("activation planner root must be Ed25519")
-            material = bootstrap._verify_on_work(bootstrap_bytes=bootstrap_raw, root_public_key=root, work=work)
+            material = bootstrap._verify_on_work(bootstrap_bytes=bootstrap_raw, root_public_key=root, work=work,
+                live_window=inherited_window, transport_deadline_ns=inherited_bound)
+            if delivery_current is not None:
+                delivery_current()
             launch = material.launch
             if ((launch["processMode"], launch["serviceUid"], launch["serviceGid"], launch["peerUid"], launch["peerGid"],
                     launch["rootPublicKeyFd"], launch["bootstrapFd"], launch["listenerFd"], launch["signingKeyFd"],
@@ -316,6 +405,14 @@ def initialize_from_environment():
             window = _construction_window(material, owners.clock)
             cold_deadline = material.opening_sample[0] + material.attestation_interval[1] - material.opening_sample[1]
             bound = min(cold_deadline, window[4])
+            if continuation is not None:
+                from serverware import authority_successor_execution_window as processing
+                window = processing._narrow(inherited_window,
+                    deadline_epoch_ns=material.attestation_interval[1],
+                    maximum_lifetime_ns=material.maximum_plan_age_ns,
+                    maximum_clock_skew_ns=material.maximum_clock_skew_ns)
+                cold_deadline = bound = min(inherited_bound, window[4])
+                delivery_current()
             listener = socket.fromfd(delivery.LISTENER_FD, socket.AF_UNIX, socket.SOCK_STREAM)
             journal = storage.ActivationOriginalJournal(directory_fd=delivery.JOURNAL_FD,
                 expected_device=journal_pins[0], expected_inode=journal_pins[1], expected_uid=delivery.SERVICE_UID,
@@ -353,6 +450,9 @@ def initialize_from_environment():
                 (delivery.BOOTSTRAP_FD, delivery.MAX_BOOTSTRAP_BYTES, False, bootstrap_identity), *key_pins)
             owner._opening, owner._interval, owner._deadline = material.opening_sample, material.attestation_interval, cold_deadline
             owner._last_epoch, owner._last_monotonic = final_sample[1], final_sample[2]
+            owner._work, owner._limits, owner._window = work, work.limits, window
+            owner._delivery_current, owner._retained_bytes = delivery_current, retained
+            owner._request_digest = request_digest
             owner._closed, owner._failed, owner._accepted, owner._spent, owner._connection = False, False, False, False, None
             _owner, _state = owner, "started"
             owner._live()

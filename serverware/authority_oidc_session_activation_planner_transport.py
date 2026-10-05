@@ -249,6 +249,67 @@ def _send_bounded_response(connection, originals, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
+def _prepare_dynamic_connection_on_work(connection, *, deadline_ns, work, current):
+    """Make only this accepted Unix stream nonblocking under its held guard."""
+    from serverware import oidc_session_activation_release_transport as chunks
+
+    if type(connection) is not socket.socket:
+        raise AuthorityTransportError("activation dynamic connection is not an actual socket")
+    kwargs = {"deadline_ns": deadline_ns, "work": work, "current": current}
+    kind = chunks._native(lambda: (connection.family, connection.type), **kwargs)
+    if kind != (socket.AF_UNIX, socket.SOCK_STREAM):
+        raise AuthorityTransportError("activation dynamic connection is not a Unix stream")
+    chunks._native(lambda: (connection.setblocking(False), connection.set_inheritable(False)), **kwargs)
+    chunks._connection(connection, **kwargs)
+
+
+def _recv_bounded_request_on_work(connection, *, deadline_ns, work, current,
+        maximum_request_bytes):
+    """Dynamic cold owner intake: original ledger, v3 only, cap before bodies."""
+    from serverware import oidc_session_activation_release_transport as chunks
+
+    if (type(maximum_request_bytes) is not int
+            or not 1 <= maximum_request_bytes <= sum(BOUNDED_REQUEST_LIMITS)):
+        raise AuthorityTransportError("activation dynamic request cap is not an original tightening")
+    kwargs = {"deadline_ns": deadline_ns, "work": work, "current": current}
+    chunks._connection(connection, **kwargs)
+    chunks._peer(connection, (65532, 65532), **kwargs)
+    if chunks._recv_exact(connection, 8, **kwargs) != BOUNDED_REQUEST_MAGIC:
+        raise AuthorityTransportError("activation dynamic request requires the bounded original profile")
+    header = chunks._recv_exact(connection, 72, **kwargs)
+    work.charge(input_bytes=len(header))
+    lengths = tuple(int.from_bytes(header[offset:offset + 8], "big") for offset in range(0, 72, 8))
+    _bounded_request_lengths(lengths)
+    if sum(lengths) > maximum_request_bytes:
+        raise AuthorityTransportError("activation request exceeds remaining retained-original capacity")
+    work.charge(input_bytes=2 * sum(lengths))
+    values = tuple(chunks._recv_precharged(connection, size, **kwargs) for size in lengths)
+    chunks._eof(connection, **kwargs)
+    held, epoch = _originals(values[:8], response=False), _deadline_epoch(values[8])
+    chunks._guard(work, current, deadline_ns)
+    return held, epoch
+
+
+def _send_bounded_response_on_work(connection, originals, *, deadline_ns, work, current,
+        maximum_response_bytes):
+    """Send the actual cold output under its already narrowed original allowance."""
+    from serverware import oidc_session_activation_release_transport as chunks
+
+    held = _originals(originals, response=True)
+    if (type(maximum_response_bytes) is not int
+            or not 1 <= maximum_response_bytes <= MAX_BOUNDED_RESPONSE_BYTES
+            or sum(map(len, held)) > maximum_response_bytes):
+        raise AuthorityTransportError("activation response exceeds remaining retained-original capacity")
+    kwargs = {"deadline_ns": deadline_ns, "work": work, "current": current}
+    chunks._connection(connection, **kwargs)
+    chunks._peer(connection, (65532, 65532), **kwargs)
+    work.charge(input_bytes=2 * BOUNDED_RESPONSE_HEADER_BYTES + sum(map(len, held)))
+    header = BOUNDED_RESPONSE_MAGIC + b"".join(len(raw).to_bytes(8, "big") for raw in held)
+    for raw in (header, *held):
+        chunks._send_precharged(connection, raw, **kwargs)
+    chunks._guard(work, current, deadline_ns)
+
+
 def _socket_request_bounded(endpoint, *, originals, deadline_epoch_ns, deadline_ns,
         work, current, maximum_response_bytes=None):
     """One guarded v3 exchange; returned originals are still unverified.

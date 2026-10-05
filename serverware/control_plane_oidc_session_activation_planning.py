@@ -53,10 +53,13 @@ def _prepare_on_permission(permission, *, assertion_bytes, expected_challenge_id
     parent, binding, custody_owner = owner._material, owner._binding, owner._custody
     policy = parent.activation_planning
     caller_policy = parent.activation_execution
-    if type(policy) is not configured._PlanningMaterial:
+    from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as request_configuration
+    dynamic = type(policy) is request_configuration._RequestPlanningMaterial
+    if not dynamic and type(policy) is not configured._PlanningMaterial:
         execution._fail("activation planning is not independently root configured")
-    original_bootstrap, endpoint = policy.planner_bootstrap_bytes, policy.planner_endpoint
-    if type(original_bootstrap) is not bytes or not 2 <= len(original_bootstrap) <= planner.MAX_BYTES:
+    original_bootstrap = None if dynamic else policy.planner_bootstrap_bytes
+    endpoint = policy.planner_endpoint
+    if not dynamic and (type(original_bootstrap) is not bytes or not 2 <= len(original_bootstrap) <= planner.MAX_BYTES):
         execution._fail("activation planning lacks its bounded original root bootstrap")
     endpoint = transport._endpoint(endpoint)
     application, session_scope, target, credential, _count = permission._target
@@ -64,9 +67,11 @@ def _prepare_on_permission(permission, *, assertion_bytes, expected_challenge_id
     if type(token) is not str or len(token) != 64 or any(ord(point) > 127 for point in token):
         execution._fail("activation planning requires the actual pending cookie original")
     old = assertion._token(token.encode("ascii"), work)
-    originals = (original_bootstrap, original_assertion, old, permission._original,
+    originals = (original_assertion, old, permission._original,
         caller_policy.current_root_enrollment_bytes, caller_policy.grant_enrollment_bytes,
         caller_policy.authorization_enrollment_bytes)
+    if not dynamic:
+        originals = (original_bootstrap, *originals)
     maximum = caller.grants.replay.MAX_ORIGINAL_BYTES
     if sum(len(raw) for raw in originals) + caller.MAX_AUTHORIZATION_BYTES >= maximum:
         execution._fail("activation planning original inventory exceeds its source bound")
@@ -96,6 +101,14 @@ def _prepare_on_permission(permission, *, assertion_bytes, expected_challenge_id
         deadline_epoch_ns=permission._session_expiry,
         maximum_lifetime_ns=scope.window[5], maximum_clock_skew_ns=scope.window[6])
     bound = min(scope.deadline_ns, window[4])
+    if dynamic:
+        from serverware import control_plane_oidc_session_activation_request_issuance as request_issuance
+        original_bootstrap, window, bound = request_issuance._prepare_on_permission(permission,
+            planner_originals=request_originals, live_window=window, deadline_ns=bound)
+        work.charge(input_bytes=len(original_bootstrap))
+        originals = (original_bootstrap, *originals)
+        if sum(map(len, originals)) + caller.MAX_AUTHORIZATION_BYTES >= maximum:
+            execution._fail("request-issued planner exceeds the original aggregate inventory")
     material = None
     last_epoch, last_monotonic = window[0], window[2]
 
@@ -104,9 +117,15 @@ def _prepare_on_permission(permission, *, assertion_bytes, expected_challenge_id
         if (owner._material is not parent or owner._binding is not binding
                 or owner._custody is not custody_owner or parent.activation_planning is not policy
                 or parent.activation_execution is not caller_policy
-                or policy.planner_bootstrap_bytes is not original_bootstrap
+                or not dynamic and policy.planner_bootstrap_bytes is not original_bootstrap
                 or policy.planner_endpoint != endpoint):
             execution._fail("activation planning changed its original cold configuration")
+        if dynamic:
+            from serverware import control_plane_oidc_session_activation_request_issuance as request_issuance
+            continuation = permission._request_issuance
+            if (type(continuation) is not request_issuance._Continuation
+                    or request_issuance._Continuation._check(continuation, permission)[3] is not original_bootstrap):
+                execution._fail("activation planning changed its actual issued original")
         permission._narrow_planning(window, bound)
         last_epoch, last_monotonic = permission._continuity(last_epoch, last_monotonic)
         if material is not None:

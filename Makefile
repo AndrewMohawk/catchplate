@@ -675,6 +675,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_control_plane_optional_startup.py \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \
+	scripts/test_oidc_activation_request_issuance.py \
 	scripts/test_oidc_session_absolute_expiry.py \
 	scripts/test_authority_radix_proof.py \
 	scripts/test_authority_radix_batch.py \
@@ -2302,6 +2303,16 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_planner_entrypoint.py \
 	serverware/oidc_session_activation_planner_launcher.py \
 	serverware/oidc_session_activation_planner_runner.py \
+	serverware/authority_oidc_session_activation_request_issuance.py \
+	serverware/authority_oidc_session_activation_request_issuance_transport.py \
+	serverware/authority_oidc_session_activation_request_staging_transport.py \
+	serverware/control_plane_oidc_session_activation_request_issuance.py \
+	serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
+	serverware/oidc_session_activation_request_dynamic_entrypoint.py \
+	serverware/oidc_session_activation_request_dynamic_launcher.py \
+	serverware/oidc_session_activation_request_issuance_policy.py \
+	serverware/oidc_session_activation_request_issuer_launcher.py \
+	serverware/oidc_session_activation_request_issuer_startup.py \
 	serverware/authority_transition_oidc_session_activation.py \
 	serverware/oidc_session_activation_delivery.py \
 	serverware/authority_transition_webauthn.py \
@@ -5377,6 +5388,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_planner_entrypoint.py \
 				serverware/oidc_session_activation_planner_launcher.py \
 				serverware/oidc_session_activation_planner_runner.py \
+				serverware/authority_oidc_session_activation_request_issuance.py \
+				serverware/authority_oidc_session_activation_request_issuance_transport.py \
+				serverware/authority_oidc_session_activation_request_staging_transport.py \
+				serverware/control_plane_oidc_session_activation_request_issuance.py \
+				serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
+				serverware/oidc_session_activation_request_dynamic_entrypoint.py \
+				serverware/oidc_session_activation_request_dynamic_launcher.py \
+				serverware/oidc_session_activation_request_issuance_policy.py \
+				serverware/oidc_session_activation_request_issuer_launcher.py \
+				serverware/oidc_session_activation_request_issuer_startup.py \
 				serverware/authority_transition_oidc_session_activation.py \
 				serverware/oidc_session_activation_delivery.py \
 				serverware/authority_transition_webauthn.py \

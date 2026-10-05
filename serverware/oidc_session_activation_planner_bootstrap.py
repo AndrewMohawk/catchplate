@@ -182,6 +182,28 @@ def _launch_shape(value, work):
 
 def _payload_shape(value, work):
     shape._object(value, _PAYLOAD_FIELDS, "activation planner bootstrap")
+    _resource_shape(value, work)
+    _original_shape(value["completeRootVector"], vector.MAX_BYTES, "completeRootVector")
+    for field in ("issuedAtEpochNs", "expiresAtEpochNs"):
+        shape._integer(value[field], minimum=1)
+    if not 0 < value["expiresAtEpochNs"] - value["issuedAtEpochNs"] <= MAX_RECEIPT_AGE_NS:
+        _fail("activation original launch lifetime exceeds its source bound")
+
+
+def _original_shape(original, maximum, label):
+    shape._object(original, _ORIGINAL_FIELDS, "activation " + label + " original")
+    authorization.transport._transport_shape(original["base64Url"], original["byteCount"], maximum)
+    for digest_field in ("bytesDigest", "identityDigest"):
+        shape._digest(original[digest_field])
+
+
+def _resource_shape(value, work):
+    """Fixed resource grammar shared with root-delegated request issuance.
+
+    This private body makes no vector, interval or launch admission. Each
+    caller first admits its own exact closed field inventory; the existing v3
+    entrypoint above still requires every original vector and time field.
+    """
     for field, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("role", ROLE), ("operation", OPERATION), ("trustMode", "trusted-host-local")):
         shape._literal(value[field], expected)
@@ -221,18 +243,8 @@ def _payload_shape(value, work):
         shape._object(record, frozenset({"byteCount", "bytesDigest"}), "activation TLS original")
         shape._integer(record["byteCount"], maximum, minimum=MIN_TLS_BYTES)
         shape._digest(record["bytesDigest"])
-    for field, maximum in (("completeRootVector", vector.MAX_BYTES),
-            ("stateEnrollment", authorization.MAX_ENROLLMENT_BYTES)):
-        original = value[field]
-        shape._object(original, _ORIGINAL_FIELDS, "activation " + field + " original")
-        authorization.transport._transport_shape(original["base64Url"], original["byteCount"], maximum)
-        for digest_field in ("bytesDigest", "identityDigest"):
-            shape._digest(original[digest_field])
+    _original_shape(value["stateEnrollment"], authorization.MAX_ENROLLMENT_BYTES, "stateEnrollment")
     _state_endpoint(value["stateEndpoint"])
-    for field in ("issuedAtEpochNs", "expiresAtEpochNs"):
-        shape._integer(value[field], minimum=1)
-    if not 0 < value["expiresAtEpochNs"] - value["issuedAtEpochNs"] <= MAX_RECEIPT_AGE_NS:
-        _fail("activation original launch lifetime exceeds its source bound")
     if any(value[field] is not False for field in _FALSE_FIELDS):
         _fail("activation launch claims unsupported hardware or witness assurance")
     _launch_shape(value["launch"], work)
@@ -464,7 +476,8 @@ def _state_enrollment(payload, generation, root, work):
     return original, admitted.enrollment_digest
 
 
-def _material(payload, root, opening, original, work, current):
+def _resource_material(payload, root, work, current):
+    """Authenticate actual static resources without inventing a vector."""
     configured, generation = configuration._capture_configuration_on_work(payload=payload["configurationPayload"],
         configuration_digest=payload["configurationDigest"], generation=payload["generation"], work=work)
     runtime = configuration._capture_runtime_role_identities_on_work(
@@ -482,6 +495,12 @@ def _material(payload, root, opening, original, work, current):
     state_original, state_digest = _state_enrollment(payload, generation, root, work)
     current()
     reader = _reader_configuration(payload, configured, work)
+    return configured, generation, runtime, planner, state_original, state_digest, reader
+
+
+def _material(payload, root, opening, original, work, current):
+    configured, generation, runtime, planner, state_original, state_digest, reader = (
+        _resource_material(payload, root, work, current))
     record = payload["completeRootVector"]
     raw = authorization.transport._decode(record["base64Url"], record["byteCount"], vector.MAX_BYTES, work)
     work.charge(hashes=1, input_bytes=len(raw))

@@ -676,6 +676,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_index_count_reader.py \
 	scripts/test_authority_recovery_history.py \
 	scripts/test_authority_recovery_history_pages.py \
+	scripts/test_authority_recovery_history_transport.py \
 	scripts/test_authority_index_join.py \
 	scripts/test_authority_index_frontier.py \
 	scripts/test_authority_index_heads.py \
@@ -973,6 +974,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_authority_index_count_reader.py \
 	scripts/test_authority_recovery_history.py \
 	scripts/test_authority_recovery_history_pages.py \
+	scripts/test_authority_recovery_history_transport.py \
 	scripts/test_authority_index_trace.py \
 	scripts/test_authority_primary_tree_postgres.py \
 	scripts/test_authority_query_reads.py \

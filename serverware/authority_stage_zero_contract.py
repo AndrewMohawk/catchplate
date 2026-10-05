@@ -1806,6 +1806,12 @@ def stage_zero_request_digest(
         expected_peer_start_ticks=expected_peer_start_ticks,
         validation_time=validation_time,
     )
+    return _stage_zero_request_digest(request)
+
+
+def _stage_zero_request_digest(request: Mapping[str, Any]) -> str:
+    # Pure encoding only, after this invocation's public validator. This is
+    # not a retained admission result or an alternative public entrypoint.
     return domain_digest(
         LOCAL_STAGE_ZERO_REQUEST_DIGEST_DOMAIN if request["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else STAGE_ZERO_REQUEST_DIGEST_DOMAIN,
         canonical_json_bytes(request),
@@ -1985,16 +1991,16 @@ def derive_launch_id(
         name="launch public key",
         decoded_size=32,
     )
+    return _launch_id_from_request_digest(request, _stage_zero_request_digest(request), public_key)
+
+
+def _launch_id_from_request_digest(
+    request: Mapping[str, Any], request_digest: str, public_key: bytes,
+) -> str:
+    # The digest and decoded key are local facts from the caller's validation.
     return domain_digest(
         LOCAL_LAUNCH_ID_DOMAIN if request["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else LAUNCH_ID_DOMAIN,
-        stage_zero_request_digest(
-            request,
-            verified_package=verified_package,
-            expected_listen_pid=expected_listen_pid,
-            expected_peer_pid=expected_peer_pid,
-            expected_peer_start_ticks=expected_peer_start_ticks,
-            validation_time=validation_time,
-        ).encode("ascii"),
+        request_digest.encode("ascii"),
         public_key,
     )
 
@@ -2141,7 +2147,7 @@ def validate_launch_identity_payload(
         )
     if value["publicKeyAlgorithm"] != "Ed25519":
         raise StageZeroContractError("launch key algorithm changed")
-    _base64url(
+    public_key = _base64url(
         value["launchPublicKeyBase64Url"],
         name="launch public key",
         decoded_size=32,
@@ -2173,16 +2179,9 @@ def validate_launch_identity_payload(
     role = request["role"]
     host = request["hostEvidence"]
     generation = request["generation"]
+    request_digest = _stage_zero_request_digest(request)
     expected = {
-        "launchId": derive_launch_id(
-            request,
-            value["launchPublicKeyBase64Url"],
-            verified_package=verified_package,
-            expected_listen_pid=expected_listen_pid,
-            expected_peer_pid=expected_peer_pid,
-            expected_peer_start_ticks=expected_peer_start_ticks,
-            validation_time=validation_time,
-        ),
+        "launchId": _launch_id_from_request_digest(request, request_digest, public_key),
         "generationSequence": generation["sequence"],
         "generationDigest": generation["digest"],
         "packageDigest": generation["packageDigest"],
@@ -2233,14 +2232,7 @@ def validate_launch_identity_payload(
         "cwdDigest": working_directory_digest(
             request["execution"]["cwd"]
         ),
-        "requestDigest": stage_zero_request_digest(
-            request,
-            verified_package=verified_package,
-            expected_listen_pid=expected_listen_pid,
-            expected_peer_pid=expected_peer_pid,
-            expected_peer_start_ticks=expected_peer_start_ticks,
-            validation_time=validation_time,
-        ),
+        "requestDigest": request_digest,
         "issuedAt": request["launch"]["validFrom"],
         "expiresAt": request["launch"]["validUntil"],
         "trustMode": request["trustMode"],
@@ -2332,15 +2324,7 @@ def validate_signed_launch_identity(
         verify_ed25519_signature(
             issuer.public_key,
             value["signatureBase64Url"],
-            launch_certificate_signature_message(
-                value["payload"],
-                request=request,
-                verified_package=verified_package,
-                expected_listen_pid=expected_listen_pid,
-                expected_peer_pid=expected_peer_pid,
-                expected_peer_start_ticks=expected_peer_start_ticks,
-                validation_time=validation_time,
-            ),
+            _launch_certificate_signature_message(value["payload"], request=request),
             name="launch identity certificate",
         )
     except ArtifactContractError as exc:
@@ -2435,6 +2419,14 @@ def launch_certificate_signature_message(
         expected_peer_start_ticks=expected_peer_start_ticks,
         validation_time=validation_time,
     )
+    return _launch_certificate_signature_message(payload, request=request)
+
+
+def _launch_certificate_signature_message(
+    payload: Mapping[str, Any], *, request: Mapping[str, Any],
+) -> bytes:
+    # Both callers validate the payload in the same invocation before encoding;
+    # signed validation additionally preserves its issuer/time/signature checks.
     return domain_digest(
         LOCAL_LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN if request["schema"] == LOCAL_STAGE_ZERO_REQUEST_SCHEMA else LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN,
         canonical_json_bytes(payload),

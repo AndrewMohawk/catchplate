@@ -186,6 +186,31 @@ class ChallengeIndexTests(unittest.TestCase):
         with self.assertRaises(trace.IndexTraceError):
             trace.validate_count_read_trace("webauthn.challenge.claim", "policy_authority_counted_index_nodes", key)
 
+    def test_deferred_retention_guard_uses_source_owner_without_table_grants(self):
+        from serverware.authority_store import challenge_retention_sql as retention_sql
+
+        statements = retention_sql.challenge_retention_installation_sql('"fixture"')
+        guard = statements[1]
+        self.assertIn("RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER", guard)
+        self.assertNotIn("SECURITY INVOKER", guard)
+        self.assertIn('SET search_path = pg_catalog, "fixture", pg_temp', guard)
+        self.assertIn('TG_TABLE_SCHEMA COLLATE "C" <> \'fixture\' COLLATE "C"', guard)
+        self.assertIn("OR TG_WHEN <> 'AFTER' OR TG_LEVEL <> 'ROW' OR TG_NARGS <> 0", guard)
+        self.assertEqual(retention_sql.SOURCE_TABLES, (
+            "jit_webauthn_assertion_receipts", "policy_activation_webauthn_assertions",
+            "webauthn_challenges", "webauthn_recovery_ceremonies"))
+        for ordinal, table in enumerate(retention_sql.SOURCE_TABLES):
+            self.assertIn(f'FROM "fixture".{table} AS source_row', guard)
+            self.assertIn(f'CREATE CONSTRAINT TRIGGER serverware_retention_{ordinal} '
+                f'AFTER INSERT OR UPDATE OR DELETE ON "fixture".{table} '
+                'DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION '
+                '"fixture".serverware_policy_authority_challenge_retention_guard()', statements)
+        for field in retention_sql.INLINE_FIELDS:
+            self.assertIn(f"actual->'{field}' IS DISTINCT FROM expected->'{field}'", guard)
+        self.assertIn("RAISE EXCEPTION 'challenge retention original join differs'", guard)
+        self.assertIn("RAISE EXCEPTION 'challenge retention source survives its challenge'", guard)
+        self.assertNotIn("GRANT ", "\n".join(statements))
+
     def test_private_head_inventories_are_exact_not_caller_subsets(self):
         self.assertEqual(len(heads.required_index_ids("webauthn.challenge.create")), 5)
         challenge = heads.required_index_ids("webauthn.challenge.create", include_write_heads=True)

@@ -37,9 +37,12 @@ def challenge_retention_function_sql(namespace: str) -> str:
         f"actual->'{field}' IS DISTINCT FROM expected->'{field}'" for field in INLINE_FIELDS
     )
     sources = ", ".join(f"'{table}'" for table in SOURCE_TABLES)
+    # Deferred firing occurs after the admitted writer has returned to its
+    # restricted caller. Read the fixed reference originals as the existing
+    # source-owned, non-login function owner, without granting callers SELECT.
     return f"""
         CREATE OR REPLACE FUNCTION {namespace}.{FUNCTION_NAME}()
-        RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER
+        RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER
         SET search_path = pg_catalog, {namespace}, pg_temp
         AS $challenge_retention_guard$
         DECLARE

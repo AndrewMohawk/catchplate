@@ -365,7 +365,9 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/authority/native_pilot_authority_io.py /authority-runtime-root/authority/app/scripts/authority/native_pilot_authority_io.py; \
     install -m 0444 /source/scripts/authority/issue_native_activation_receiver.py /authority-runtime-root/authority/app/scripts/authority/issue_native_activation_receiver.py; \
     install -m 0444 /source/scripts/authority/sign_static_credential_assignment.py /authority-runtime-root/authority/app/scripts/authority/sign_static_credential_assignment.py; \
+    install -m 0444 /source/scripts/authority/sign_currentness_assignment.py /authority-runtime-root/authority/app/scripts/authority/sign_currentness_assignment.py; \
     install -m 0444 /source/scripts/prepare_static_credential_portal.py /authority-runtime-root/authority/app/scripts/prepare_static_credential_portal.py; \
+    install -m 0444 /source/scripts/prepare_currentness_assignment.py /authority-runtime-root/authority/app/scripts/prepare_currentness_assignment.py; \
     install -m 0444 /source/scripts/collect_native_public_identity.py /authority-runtime-root/authority/app/scripts/collect_native_public_identity.py; \
     install -m 0444 /source/scripts/send_native_configuration.py /authority-runtime-root/authority/app/scripts/send_native_configuration.py; \
     install -m 0444 /source/scripts/send_native_activation_receiver.py /authority-runtime-root/authority/app/scripts/send_native_activation_receiver.py; \

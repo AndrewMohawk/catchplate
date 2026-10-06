@@ -50,10 +50,12 @@ def absent(targets):
 
 def main():
     assert os.getresuid() == os.getresgid() == (0, 0, 0), "run isolated as root"
-    slots = {"creation": (80, 81, 82), "rotation": (84, 85, 86)}
-    absent((*slots["creation"], *slots["rotation"]))
+    slots = {"creation": (80, 81, 82), "rotation": (84, 85, 86), "currentness": (90, 91, 92, 93)}
+    profiles = {**entry.STATIC_PORTAL_SOURCES, "currentness": entry.CURRENTNESS_ASSIGNMENT_SOURCE}
+    absent(tuple(fd for targets in slots.values() for fd in targets))
     actual_open, paths, rows, output = entry._open_source, {}, {}, []
     root, authority = b"public root fixture; not authority\n", b"public full-A fixture; not authority\n"
+    assignment = b"already-provisioned public S fixture; not authority\n"
     with tempfile.TemporaryDirectory(prefix="static-portal-entry-") as temporary:
         def store(path, raw):
             local = Path(temporary) / path.rsplit("/", 1)[1]
@@ -64,13 +66,16 @@ def main():
             paths[path] = str(local)
 
         for purpose, targets in slots.items():
-            _, schema, name = entry.STATIC_PORTAL_SOURCES[purpose]
+            _, schema, name = profiles[purpose]
             prefix = "/run/serverware/authority-trust/" + name
             row = {"schema": schema, "sourceRevision": "inert-test",
                 "controlPlaneConfigurationDigest": digest(authority), "authorityRootFd": targets[1],
                 "authorityRootSha256": digest(root), "authorityRootSpkiSha256": digest(b"public-spki-fixture"),
                 "authorityConfigurationFd": targets[2], "authorityConfigurationSha256": digest(authority),
                 "authorityConfigurationDigest": digest(authority)}
+            if purpose == "currentness":
+                row.update(assignmentFd=targets[3], assignmentSha256=digest(assignment))
+                store(prefix + "-original.json", assignment)
             rows[purpose] = row
             store(prefix + ".json", canonical(row))
             store(prefix + "-root-public-key", root)
@@ -81,7 +86,7 @@ def main():
             return actual_open(paths[path], **keywords)
 
         def selector(purpose, row):
-            name = entry.STATIC_PORTAL_SOURCES[purpose][2]
+            name = profiles[purpose][2]
             store("/run/serverware/authority-trust/" + name + ".json", canonical(row))
 
         def snapshots(targets):
@@ -103,9 +108,19 @@ def main():
                 rotated = entry._open_static_portal_material("rotation", 84, occupied_descriptors=set(created))
                 assert rotated == slots["rotation"]
                 output.extend(rotated)
+                six_before = snapshots(output)
+                selector("currentness", dict(rows["currentness"], assignmentFd=81))
+                refused(lambda: entry._open_currentness_assignment_material(90, occupied_descriptors=set(output)))
+                assert snapshots(output) == six_before
+                absent(slots["currentness"])
+                selector("currentness", rows["currentness"])
+                delivered = entry._open_currentness_assignment_material(90, occupied_descriptors=set(output))
+                assert delivered == slots["currentness"]
+                output.extend(delivered)
                 seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
                 for purpose, targets in slots.items():
-                    assert [os.pread(fd, 16385, 0) for fd in targets] == [canonical(rows[purpose]), root, authority]
+                    expected = [canonical(rows[purpose]), root, authority] + ([assignment] if purpose == "currentness" else [])
+                    assert [os.pread(fd, 16385, 0) for fd in targets] == expected
                     for fd in targets:
                         assert os.get_inheritable(fd) and fcntl.fcntl(fd, fcntl.F_GET_SEALS) == seals
                         assert os.fstat(fd).st_mode & 0o777 == 0o400
@@ -136,25 +151,44 @@ def main():
             finally:
                 os.close(81)
                 os.close(original)
+            for changed in (dict(rows["currentness"], assignmentSha256=digest(b"wrong")),
+                    {name: item for name, item in rows["currentness"].items() if name != "assignmentFd"}):
+                selector("currentness", changed)
+                refused(lambda: entry._open_currentness_assignment_material(90, occupied_descriptors=set()))
+                absent(slots["currentness"])
+            selector("currentness", rows["currentness"])
+            store("/run/serverware/authority-trust/currentness-assignment-original.json", b"x" * 16385)
+            refused(lambda: entry._open_currentness_assignment_material(90, occupied_descriptors=set()))
+            absent(slots["currentness"])
     # Only the final role dispatch is replaced; no service is started.
     arguments = ["entry", "control-plane", "--policy-canary-intake", "--setup-native-observation",
-        "--static-credential-creation-fd", "80", "--static-credential-rotation-fd", "84"]
+        "--static-credential-creation-fd", "80", "--static-credential-rotation-fd", "84", "--currentness-assignment-fd", "90"]
     with patch.object(sys, "argv", arguments), patch.object(entry, "_normal_main", return_value=7) as dispatch:
         assert entry.main() == 7
         dispatch.assert_called_once_with("control-plane", policy_canary_intake=True,
-            setup_native_observation=True, static_credential_creation_fd=80, static_credential_rotation_fd=84)
+            setup_native_observation=True, static_credential_creation_fd=80, static_credential_rotation_fd=84,
+            currentness_assignment_fd=90)
+    with patch.object(sys, "argv", ["entry", "control-plane", "--currentness-assignment-fd", "90"]), \
+            patch.object(entry, "_normal_main", return_value=8) as dispatch:
+        assert entry.main() == 8
+        dispatch.assert_called_once_with("control-plane", currentness_assignment_fd=90)
     for tail in (["control-plane", "--static-credential-creation-fd", "080"],
             ["control-plane", "--static-credential-creation-fd", "31"],
             ["control-plane", "--static-credential-creation-fd", "80", "--arbitrary", "value"],
             ["control-plane", "--static-credential-rotation-fd", "84", "--static-credential-creation-fd", "80"],
             ["executor", "--static-credential-creation-fd", "80"],
-            ["control-plane", "--policy-file-genesis-maintenance", "--static-credential-creation-fd", "80"]):
+            ["control-plane", "--policy-file-genesis-maintenance", "--static-credential-creation-fd", "80"],
+            ["control-plane", "--currentness-assignment-fd", "090"],
+            ["control-plane", "--currentness-assignment-fd", "90", "--currentness-assignment-fd", "94"],
+            ["executor", "--currentness-assignment-fd", "90"]):
         with patch.object(sys, "argv", ["entry", *tail]):
             refused(entry.main)
     refused(lambda: entry._normal_main("executor", static_credential_creation_fd=80))
     refused(lambda: entry._normal_main("control-plane", genesis_maintenance=True, static_credential_creation_fd=80))
     refused(lambda: entry._normal_main("control-plane", static_credential_creation_fd=80, static_credential_rotation_fd=80))
-    print("PASS real six-FD delivery, seals/pins, cross-purpose and occupied-slot refusals, closed dispatch; no cold admission/launch")
+    refused(lambda: entry._normal_main("control-plane", static_credential_rotation_fd=84, currentness_assignment_fd=84))
+    refused(lambda: entry._normal_main("control-plane", genesis_maintenance=True, currentness_assignment_fd=90))
+    print("PASS real ten-FD static/currentness delivery, seals/pins/16KiB bound, cross-purpose and occupied-slot refusals, closed dispatch; no cold admission/launch")
 
 
 if __name__ == "__main__":

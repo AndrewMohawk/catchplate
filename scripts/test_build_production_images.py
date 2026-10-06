@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -333,6 +334,95 @@ def assert_production_artifact_build_contract() -> None:
         raise AssertionError("production artifact helper accepted an unapproved Dockerfile/target pair")
 
 
+def assert_native_bootstrap_client_artifact_contract() -> None:
+    """Inert selector/readback controls only; no Docker or native execution."""
+    build = build_production_images
+    metadata = build_metadata_fixture()
+    dockerfile = "data-plane/decision-gate-rs/Dockerfile.production"
+    target = "native-bootstrap-client-artifact"
+    source = (ROOT / dockerfile).read_text(encoding="utf-8")
+    if (f"FROM scratch AS {target}\n"
+            "COPY --from=launcher-build /src/target/release/serverware-native-bootstrap-client /serverware-native-bootstrap-client\n") not in source:
+        raise AssertionError("bootstrap export no longer matches its source-owned Docker stage")
+    with tempfile.TemporaryDirectory(prefix="serverware-bootstrap-export-") as raw_tmp:
+        base = Path(raw_tmp).resolve()
+        destination = base / "artifact"
+        output = "type=local,dest=" + str(destination)
+        arguments = dict(network="none", platform="linux/amd64", metadata=metadata,
+                         context=Path("/private/serverware-build-context"))
+        command = build.artifact_build_command(dockerfile, target, output, **arguments)
+        if (command[command.index("--target") + 1] != target
+                or command[command.index("--output") + 1] != output
+                or "--network=none" not in command
+                or f"SERVERWARE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}" not in command):
+            raise AssertionError("bootstrap export lost its exact target/output/source binding")
+        for wrong_file, wrong_target, wrong_output, overrides in (
+            ("Dockerfile.production", target, output, {}),
+            (dockerfile, target + "-other", output, {}),
+            (dockerfile, target, "type=tar,dest=" + str(base / "artifact.tar"), {}),
+            (dockerfile, target, "type=local,dest=relative", {}),
+            (dockerfile, target, output, {"network": "host"}),
+            (dockerfile, target, output, {"platform": "linux/arm64"}),
+            (dockerfile, target, output, {"engineering_bounded_build": True}),
+        ):
+            try:
+                build.artifact_build_command(wrong_file, wrong_target, wrong_output, **{**arguments, **overrides})
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("bootstrap export accepted an unapproved selector")
+        destination.mkdir()
+        try:
+            build.artifact_build_command(dockerfile, target, output, **arguments)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("bootstrap export accepted an existing destination")
+        binary = destination / "serverware-native-bootstrap-client"
+        original = b"public inert artifact fixture, never executed"
+        binary.write_bytes(original)
+        binary.chmod(0o755)
+        receipt = build.native_bootstrap_client_artifact_receipt(output, metadata)
+        expected = {
+            "apiVersion": "serverware.nativeBootstrapClientBuildArtifact/v1",
+            "path": str(binary), "sha256": "sha256:" + hashlib.sha256(original).hexdigest(),
+            "size": len(original), "mode": 0o755, "sourceCommit": metadata["revision"],
+            "sourceTreeSha256": metadata["source_tree_digest"],
+            "sourceArchiveSha256": metadata["source_archive_digest"], "runtimeAdmission": False,
+        }
+        if receipt != expected:
+            raise AssertionError("bootstrap readback receipt does not describe the actual public bytes")
+
+        def refuses(selected_metadata=metadata, selected_output=output):
+            try:
+                build.native_bootstrap_client_artifact_receipt(selected_output, selected_metadata)
+            except (RuntimeError, OSError):
+                return
+            raise AssertionError("bootstrap readback accepted an unapproved export")
+
+        refuses({**metadata, "production_release_eligible": False})
+        refuses({**metadata, "source_identity_mode": "development-dirty-tree"})
+        extra = destination / "extra"
+        extra.write_bytes(b"extra")
+        refuses()
+        extra.unlink()
+        binary.chmod(0o777)
+        refuses()
+        binary.chmod(0o755)
+        alias = base / "symlink"
+        alias.symlink_to(destination, target_is_directory=True)
+        refuses(selected_output="type=local,dest=" + str(alias))
+        saved = base / "saved"
+        binary.rename(saved)
+        binary.symlink_to(saved)
+        refuses()
+        binary.unlink()
+        saved.rename(binary)
+        with binary.open("r+b") as stream:
+            stream.truncate(64 * 1024 * 1024 + 1)
+        refuses()
+
+
 def assert_deploy_receives_runtime_artifact() -> None:
     with tempfile.TemporaryDirectory(prefix="serverware-deploy-runtime-") as raw_tmp:
         temporary = Path(raw_tmp).resolve()
@@ -483,6 +573,7 @@ def main() -> None:
     assert_dockerfile_copies_trust_into_rust_builds()
     assert_python_runtime_docker_contract()
     assert_production_artifact_build_contract()
+    assert_native_bootstrap_client_artifact_contract()
     assert_deploy_receives_runtime_artifact()
     assert_exported_python_runtime()
     print(json.dumps({"ok": True, "build_production_images": "pass"}, sort_keys=True))

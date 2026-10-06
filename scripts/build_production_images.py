@@ -49,6 +49,8 @@ LAUNCH_AUTHORITY_METADATA_FIELDS = (
 NATIVE_DELIVERY_TARGET = "native-enclave-delivery"
 NATIVE_ROTATION_DELIVERY_TARGET = "native-enclave-rotation-delivery"
 NATIVE_DELIVERY_DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
+NATIVE_BOOTSTRAP_CLIENT_TARGET = "native-bootstrap-client-artifact"
+NATIVE_BOOTSTRAP_CLIENT_FILE = "serverware-native-bootstrap-client"
 NATIVE_DELIVERY_CONTEXT_KEY = "production-native-delivery/authority.pem"
 NATIVE_DELIVERY_IMAGE_KEY = "/usr/share/serverware/native-delivery-authority.pem"
 PRIVATE_CONTEXT_FILES = (
@@ -68,6 +70,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
         "data-plane/decision-gate-rs/Dockerfile.production",
         "production-launcher-artifact",
     ),
+    (NATIVE_DELIVERY_DOCKERFILE, NATIVE_BOOTSTRAP_CLIENT_TARGET),
     (
         "data-plane/decision-gate-rs/Dockerfile.production",
         "native-broker-runtime-artifact",
@@ -727,6 +730,12 @@ def artifact_build_command(
         raise RuntimeError("production artifact builds require network=none")
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
+    if target == NATIVE_BOOTSTRAP_CLIENT_TARGET:
+        if engineering_bounded_build or native_pilot_bounded_build:
+            raise RuntimeError("bootstrap client export requires the existing strict source/dependency profile")
+        if not output.startswith("type=local,dest="):
+            raise RuntimeError("bootstrap client export requires a fresh local directory")
+        _engineering_artifact_destination(output)
     if not engineering_bounded_build:
         if output.startswith("type=tar,dest="):
             if (not native_pilot_bounded_build
@@ -789,6 +798,69 @@ def artifact_build_command(
         *extra,
         str(context),
     ]
+
+
+def native_bootstrap_client_artifact_receipt(output: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Read back the fixed public export; not installation or runtime admission."""
+    prefix = "type=local,dest="
+    if (not output.startswith(prefix)
+            or metadata["source_identity_mode"] != serverware_source_tree.PRODUCTION_IDENTITY_MODE
+            or metadata["production_release_eligible"] is not True):
+        raise RuntimeError("bootstrap client receipt requires the strict local source build")
+    raw = output[len(prefix):]
+    destination = Path(raw)
+    if (not destination.is_absolute() or str(destination) != raw or destination == Path("/")
+            or any(part in {".", ".."} for part in destination.parts) or "," in raw
+            or any(ord(character) < 32 or ord(character) == 127 for character in raw)):
+        raise RuntimeError("bootstrap client export path is not canonical")
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    directory = os.open("/", flags | os.O_DIRECTORY)
+    descriptor = None
+    try:
+        for component in destination.parts[1:]:
+            child = os.open(component, flags | os.O_DIRECTORY, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        directory_before = os.fstat(directory)
+        if os.listdir(directory) != [NATIVE_BOOTSTRAP_CLIENT_FILE]:
+            raise RuntimeError("bootstrap client export contains unexpected files")
+        descriptor = os.open(NATIVE_BOOTSTRAP_CLIENT_FILE, flags, dir_fd=directory)
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_uid not in {0, os.geteuid()}
+                or stat.S_IMODE(before.st_mode) not in {0o555, 0o755}
+                or not 0 < before.st_size <= 64 * 1024 * 1024):
+            raise RuntimeError("bootstrap client export is not the bounded executable artifact")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, min(1024 * 1024, before.st_size + 1 - size)):
+            size += len(chunk)
+            if size > before.st_size:
+                raise RuntimeError("bootstrap client export grew during readback")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        named = os.stat(NATIVE_BOOTSTRAP_CLIENT_FILE, dir_fd=directory, follow_symlinks=False)
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (size != before.st_size
+                or any(getattr(before, field) != getattr(after, field) or getattr(before, field) != getattr(named, field)
+                       for field in fields)
+                or os.listdir(directory) != [NATIVE_BOOTSTRAP_CLIENT_FILE]
+                or any(getattr(directory_before, field) != getattr(os.fstat(directory), field) for field in fields)):
+            raise RuntimeError("bootstrap client export changed during readback")
+        return {
+            "apiVersion": "serverware.nativeBootstrapClientBuildArtifact/v1",
+            "path": str(destination / NATIVE_BOOTSTRAP_CLIENT_FILE),
+            "sha256": "sha256:" + digest.hexdigest(), "size": size,
+            "mode": stat.S_IMODE(before.st_mode),
+            "sourceCommit": metadata["revision"],
+            "sourceTreeSha256": metadata["source_tree_digest"],
+            "sourceArchiveSha256": metadata["source_archive_digest"],
+            "runtimeAdmission": False,
+        }
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory)
 
 
 def verify_no_shell(image_ids: list[str]) -> dict[str, Any]:
@@ -1049,6 +1121,8 @@ def main() -> None:
                     "target": args.target,
                     "output": args.output,
                     "source_tree_digest": metadata["source_tree_digest"],
+                    **({"bootstrap_client_artifact": native_bootstrap_client_artifact_receipt(args.output, metadata)}
+                       if args.target == NATIVE_BOOTSTRAP_CLIENT_TARGET else {}),
                     **engineering_result,
                 }
             )

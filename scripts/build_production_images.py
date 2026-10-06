@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 import hashlib
 import json
@@ -45,6 +46,10 @@ LAUNCH_AUTHORITY_METADATA_FIELDS = (
     "launch_authority_key_id",
     "launch_authority_root_sha256",
 )
+NATIVE_DELIVERY_TARGET = "native-enclave-delivery"
+NATIVE_DELIVERY_DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
+NATIVE_DELIVERY_CONTEXT_KEY = "production-native-delivery/authority.pem"
+NATIVE_DELIVERY_IMAGE_KEY = "/usr/share/serverware/native-delivery-authority.pem"
 PRIVATE_CONTEXT_FILES = (
     "Dockerfile.production",
     "data-plane/decision-gate-rs/Dockerfile.production",
@@ -324,6 +329,78 @@ def build_metadata(*, development_dirty_tree: bool = False) -> dict[str, Any]:
     }
 
 
+def native_delivery_authority(path: Path, expected_sha256: str) -> tuple[bytes, dict[str, str]]:
+    """Snapshot only an independently supplied, pinned public SPKI original."""
+    if (not isinstance(expected_sha256, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256) is None
+            or expected_sha256 == "sha256:" + "0" * 64):
+        raise RuntimeError("native delivery requires an explicit public PEM SHA-256")
+    if not path.is_absolute() or path.resolve(strict=True) != path:
+        raise RuntimeError("native delivery public key requires an absolute nonsymlink path")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    # Walk with held directory FDs, so replacing an ancestor with a symlink
+    # after the path check cannot redirect the public input acquisition.
+    directory = os.open("/", flags | os.O_DIRECTORY)
+    try:
+        for component in path.parts[1:-1]:
+            child = os.open(component, flags | os.O_DIRECTORY, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(path.name, flags, dir_fd=directory)
+    finally:
+        os.close(directory)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid not in {0, os.geteuid()}
+                or before.st_nlink != 1 or before.st_mode & 0o022
+                or not 0 < before.st_size <= 4096):
+            raise RuntimeError("native delivery public key is not a protected bounded regular original")
+        raw = os.pread(descriptor, 4097, 0)
+        after = os.fstat(descriptor)
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+                  "st_size", "st_mtime_ns", "st_ctime_ns")
+        if len(raw) != before.st_size or any(getattr(before, name) != getattr(after, name) for name in fields):
+            raise RuntimeError("native delivery public key changed during acquisition")
+    finally:
+        os.close(descriptor)
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise RuntimeError("native delivery public PEM differs from its independent pin")
+    matched = re.fullmatch(rb"-----BEGIN PUBLIC KEY-----\n([A-Za-z0-9+/]{59}=)\n-----END PUBLIC KEY-----\n", raw)
+    if matched is None:
+        raise RuntimeError("native delivery accepts only canonical Ed25519 public SPKI PEM")
+    der = base64.b64decode(matched[1], validate=True)
+    if (len(der) != len(ED25519_SPKI_DER_PREFIX) + 32
+            or not der.startswith(ED25519_SPKI_DER_PREFIX)
+            or base64.b64encode(der) != matched[1]):
+        raise RuntimeError("native delivery public key is not canonical Ed25519 SPKI")
+    _validate_ed25519_public_key(der[len(ED25519_SPKI_DER_PREFIX):])
+    return raw, {"public_key_pem_sha256": expected_sha256,
+                 "public_key_spki_sha256": "sha256:" + hashlib.sha256(der).hexdigest()}
+
+
+def copy_native_delivery_authority(raw: bytes, binding: dict[str, str], context: Path,
+                                   source_date_epoch: str) -> None:
+    # External public build input is separate from the authenticated source
+    # archive. Never rewrite its source manifest or copy N, launch, or seeds.
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != binding["public_key_pem_sha256"]:
+        raise RuntimeError("native delivery public snapshot differs")
+    destination = context / NATIVE_DELIVERY_CONTEXT_KEY
+    destination.parent.mkdir(mode=0o700)
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o400)
+    try:
+        if os.write(descriptor, raw) != len(raw):
+            raise RuntimeError("native delivery public snapshot copy was incomplete")
+        epoch_ns = int(source_date_epoch) * 1_000_000_000
+        if epoch_ns < 0:
+            raise RuntimeError("native delivery public snapshot epoch is invalid")
+        os.utime(descriptor, ns=(epoch_ns, epoch_ns))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if destination.read_bytes() != raw:
+        raise RuntimeError("native delivery public snapshot copy differs")
+
+
 def _copy_context_file(source: Path, destination: Path, expected_sha256: str | None,
                        *, maximum_bytes: int | None = None) -> None:
     try:
@@ -481,6 +558,7 @@ def build_command(
     context: Path,
     engineering_bounded_build: bool = False,
     native_pilot_bounded_build: bool = False,
+    native_delivery_binding: dict[str, str] | None = None,
 ) -> list[str]:
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
@@ -509,6 +587,15 @@ def build_command(
         for resource in ENGINEERING_BUILD_RESOURCES:
             command.extend(("--resource", resource))
     command.extend(pilot_resources)
+    if native_delivery_binding is not None:
+        if (dockerfile != NATIVE_DELIVERY_DOCKERFILE
+                or set(native_delivery_binding) != {"public_key_pem_sha256", "public_key_spki_sha256"}
+                or any(re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+                       or value == "sha256:" + "0" * 64 for value in native_delivery_binding.values())):
+            raise RuntimeError("native delivery requires its fixed Dockerfile and public key binding")
+        command.extend(("--target", NATIVE_DELIVERY_TARGET,
+            "--build-arg", "NATIVE_DELIVERY_AUTHORITY_SHA256=" + native_delivery_binding["public_key_pem_sha256"],
+            "--build-arg", "NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256=" + native_delivery_binding["public_key_spki_sha256"]))
     component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
     image_title = f"Serverware {component} {metadata['image_title_suffix']}"
     command.extend(source_build_arguments(metadata, image_title=image_title))
@@ -730,6 +817,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build local shell-free Serverware production image candidates.")
     parser.add_argument("--control-tag")
     parser.add_argument("--decision-gate-tag")
+    parser.add_argument("--native-enclave-delivery-tag")
+    parser.add_argument("--native-delivery-authority", type=Path)
+    parser.add_argument("--native-delivery-authority-sha256")
     parser.add_argument("--platform", default=PRODUCTION_PLATFORM, choices=(PRODUCTION_PLATFORM,))
     parser.add_argument("--out")
     parser.add_argument("--dockerfile")
@@ -752,6 +842,19 @@ def main() -> None:
     args = parser.parse_args()
     if args.engineering_bounded_build and not args.development_dirty_tree:
         parser.error("--engineering-bounded-build requires --development-dirty-tree")
+
+    delivery_inputs = (args.native_enclave_delivery_tag, args.native_delivery_authority,
+                       args.native_delivery_authority_sha256)
+    delivery_binding: dict[str, str] | None = None
+    delivery_raw: bytes | None = None
+    if any(value is not None for value in delivery_inputs):
+        if not all(delivery_inputs):
+            parser.error("native delivery requires its explicit image tag, public key path and PEM pin together")
+        if any(value is not None for value in (args.control_tag, args.decision_gate_tag, args.dockerfile,
+                args.target, args.output, args.network, args.shadow_custody_inputs, args.shadow_custody_inputs_sha256)):
+            parser.error("native delivery image mode cannot be combined with ordinary images or artifact mode")
+        delivery_raw, delivery_binding = native_delivery_authority(
+            args.native_delivery_authority, args.native_delivery_authority_sha256)
 
     guest_inputs = (args.shadow_custody_inputs, args.shadow_custody_inputs_sha256)
     if args.target == NATIVE_PILOT_TARGET:
@@ -882,7 +985,13 @@ def main() -> None:
         ("serverware-control", "Dockerfile.production", control_tag),
         ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", decision_gate_tag),
     ]
+    if delivery_binding is not None:
+        image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_enclave_delivery_tag)]
+        output = args.out or (".tmp/development-native-enclave-delivery-build.json" if args.development_dirty_tree
+                              else ".tmp/native-enclave-delivery-build.json")
     metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
+    if delivery_binding is not None:
+        metadata["native_delivery_authority"] = {**delivery_binding, "image_path": NATIVE_DELIVERY_IMAGE_KEY}
     resource_profile: dict[str, Any] = {}
     if args.engineering_bounded_build:
         resource_profile = {
@@ -910,6 +1019,7 @@ def main() -> None:
                     metadata=metadata,
                     context=placeholder_context,
                     engineering_bounded_build=args.engineering_bounded_build,
+                    native_delivery_binding=delivery_binding,
                 ),
             }
             for service, dockerfile, tag in image_specs
@@ -934,6 +1044,10 @@ def main() -> None:
     images: list[dict[str, Any]] = []
     verify_dependency_cache()
     with private_build_context(metadata) as context:
+        if delivery_binding is not None:
+            if delivery_raw is None:
+                raise RuntimeError("native delivery public snapshot is absent")
+            copy_native_delivery_authority(delivery_raw, delivery_binding, context, metadata["source_date_epoch"])
         commands = [
             {
                 "service": service,
@@ -946,6 +1060,7 @@ def main() -> None:
                     metadata=metadata,
                     context=context,
                     engineering_bounded_build=args.engineering_bounded_build,
+                    native_delivery_binding=delivery_binding,
                 ),
             }
             for service, dockerfile, tag in image_specs
@@ -958,6 +1073,13 @@ def main() -> None:
             binary_digests: dict[str, str] = {}
             if spec["service"] == "serverware-decision-gate":
                 binary_digests = decision_gate_binary_digests(built_image_id)
+            delivery_result: dict[str, Any] = {}
+            if delivery_binding is not None:
+                installed_pin = image_file_sha256(built_image_id, NATIVE_DELIVERY_IMAGE_KEY)
+                if installed_pin != delivery_binding["public_key_pem_sha256"]:
+                    raise RuntimeError("built native delivery image contains a different public authority")
+                delivery_result = {"target": NATIVE_DELIVERY_TARGET,
+                                   "native_delivery_authority": dict(delivery_binding)}
             images.append(
                 {
                     "service": spec["service"],
@@ -965,6 +1087,7 @@ def main() -> None:
                     "dockerfile": spec["dockerfile"],
                     "image_id": built_image_id,
                     **binary_digests,
+                    **delivery_result,
                     **image_launch_authority_binding(spec["service"], metadata),
                 }
             )

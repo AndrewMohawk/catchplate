@@ -5,6 +5,8 @@ use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+#[path = "../native_preboot_delivery/mod.rs"]
+mod native_preboot_delivery;
 
 fn device(directory: &File, name: &str, expected: Option<(u32, u32)>) -> Result<(), String> {
     let name = CString::new(name).map_err(|_| "invalid fixed device name")?;
@@ -45,7 +47,12 @@ fn main() -> Result<(), String> {
     // acquires protected originals. Selectors are fixed cold profiles, never
     // inferred from a returned configuration or an incoming request.
     let mut arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let receive_configuration = arguments.first().is_some_and(|arg| arg == "--receive-configuration-v1");
+    if receive_configuration && arguments.len() != 1 {
+        return Err("native configuration delivery accepts no caller-selected paths, commands or overrides".into());
+    }
     let mode = match arguments.first().and_then(|v| v.to_str()) {
+        Some("--receive-configuration-v1") => { arguments.clear(); "--native-postboot-static-startup-v24" },
         Some("--measured-refresh-v7") => { arguments.remove(0); "--native-measured-refresh-startup" },
         Some("--guest-inspector-v8") => { arguments.remove(0); "--native-startup-inspector-v8" },
         Some("--measured-issuance-v9") => { arguments.remove(0); "--native-measured-issuance-startup-v9" },
@@ -71,7 +78,7 @@ fn main() -> Result<(), String> {
     // retain the previous ceilings and unchanged role-3 output contract.
     let maximum_arguments = (if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 })
         + usize::from(arguments.iter().any(|arg| arg == "--response-proof-identity-stdout"));
-    if arguments.is_empty() || arguments.len() > maximum_arguments {
+    if !receive_configuration && (arguments.is_empty() || arguments.len() > maximum_arguments) {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
     }
     let fd = unsafe {
@@ -85,6 +92,11 @@ fn main() -> Result<(), String> {
     device(&directory, "nsm", None)?;
     device(&directory, "loop-control", Some((10, 237)))?;
     drop(directory);
+    let mut delivery = if receive_configuration { Some(native_preboot_delivery::receive()?) } else { None };
+    if let Some(owner) = &mut delivery {
+        arguments = owner.arguments();
+        owner.recheck()?;
+    }
     let error = Command::new("/usr/local/bin/serverware-decision-gate")
         .arg(mode)
         .args(arguments)

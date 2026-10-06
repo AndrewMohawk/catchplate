@@ -514,7 +514,7 @@ COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverwa
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /native-install/opt/serverware/native-shadow-custody-runtime.squashfs
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /native-install/usr/share/serverware/native-shadow-custody-runtime.json
 
-FROM production-decision-gate AS native-enclave
+FROM production-decision-gate AS native-enclave-base
 COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.squashfs /opt/serverware/native-broker-runtime.squashfs
 COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.json /usr/share/serverware/native-broker-runtime.json
 COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.squashfs /opt/serverware/native-role-key-provisioner-runtime.squashfs
@@ -527,3 +527,24 @@ COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/serverware-native
 USER 0:0
 ENTRYPOINT ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
 CMD []
+
+# Separately approved public delivery trust, packaged before EIF measurement.
+# This is not a source-archive input or a runtime N/launch/seed original.
+FROM source-preparation AS native-delivery-authority-input
+ARG NATIVE_DELIVERY_AUTHORITY_SHA256
+COPY production-native-delivery/authority.pem /native-delivery/authority.pem
+RUN --network=none set -eu; \
+    test "${#NATIVE_DELIVERY_AUTHORITY_SHA256}" -eq 71; \
+    case "${NATIVE_DELIVERY_AUTHORITY_SHA256}" in sha256:*) ;; *) exit 1 ;; esac; \
+    printf '%s  %s\n' "${NATIVE_DELIVERY_AUTHORITY_SHA256#sha256:}" /native-delivery/authority.pem | sha256sum -c -
+
+FROM native-enclave-base AS native-enclave-delivery
+ARG NATIVE_DELIVERY_AUTHORITY_SHA256
+ARG NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256
+LABEL dev.serverware.native_delivery_authority_pem_sha256="${NATIVE_DELIVERY_AUTHORITY_SHA256}" \
+      dev.serverware.native_delivery_authority_spki_sha256="${NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256}"
+COPY --from=native-delivery-authority-input --chown=0:0 --chmod=0444 /native-delivery/authority.pem /usr/share/serverware/native-delivery-authority.pem
+CMD ["--receive-configuration-v1"]
+
+# Preserve both the named legacy target and the Dockerfile's default target.
+FROM native-enclave-base AS native-enclave

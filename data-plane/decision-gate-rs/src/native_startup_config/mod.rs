@@ -13,6 +13,7 @@ mod canary_heartbeat;
 mod canary_readiness;
 mod workload_trust;
 mod static_credential;
+mod static_credential_rotation;
 mod gate;
 mod originals;
 mod parameters;
@@ -410,7 +411,7 @@ struct ConfigurationParts {
 fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, String> {
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
     let version = value.get("apiVersion").and_then(Value::as_str);
-    ensure(version != Some("serverware.nativeStartupConfiguration/v24"),
+    ensure(!matches!(version, Some("serverware.nativeStartupConfiguration/v24" | "serverware.nativeStartupConfiguration/v25")),
         "postboot static configuration requires its explicit successor owner")?;
     ensure(match mode {
         cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15" | "serverware.nativeStartupConfiguration/v16" | "serverware.nativeStartupConfiguration/v17" | "serverware.nativeStartupConfiguration/v18" | "serverware.nativeStartupConfiguration/v19" | "serverware.nativeStartupConfiguration/v20" | "serverware.nativeStartupConfiguration/v21" | "serverware.nativeStartupConfiguration/v22" | "serverware.nativeStartupConfiguration/v23")),
@@ -434,6 +435,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
         cli::Mode::WorkloadTrustV22 => false, // decoded only by the explicit successor owner
         cli::Mode::StaticCredentialV23 => version == Some("serverware.nativeStartupConfiguration/v23"),
         cli::Mode::PostbootStaticV24 => false, // decoded by the explicit postboot owner
+        cli::Mode::StaticCredentialRotationV25 => false, // separate closed rotation owner
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
         Some("serverware.nativeStartupConfiguration/v23") => static_credential::configuration(value),
@@ -850,28 +852,39 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
         HeldOriginal::read(configuration, MAX_CONFIGURATION_BYTES)?;
     let raw_configuration = zeroize::Zeroizing::new(raw_configuration);
     configuration_original.require_private()?;
-    let (configuration, trust_authorizer, postboot_audit_port) = match mode {
+    let (configuration, trust_authorizer, postboot_audit_port, rotation) = match mode {
         cli::Mode::WorkloadTrustV22 => {
             let (parts, key) = workload_trust::configuration(&raw_configuration)?;
-            (parts, Some(key), None)
+            (parts, Some(key), None, None)
         },
         cli::Mode::PostbootStaticV24 => {
             ensure(response_proof_identity_export != ResponseProofIdentityExport::None,
                 "postboot static startup requires its public identity export")?;
             let (parts, port) = static_credential::postboot_configuration(&raw_configuration)?;
-            (parts, None, Some(port))
+            (parts, None, Some(port), None)
         },
-        mode => (self::configuration(&raw_configuration, mode)?, None, None),
+        cli::Mode::StaticCredentialRotationV25 => {
+            ensure(response_proof_identity_export != ResponseProofIdentityExport::None,
+                "postboot rotation startup requires its public identity export")?;
+            let (parts, port, rotation) = static_credential_rotation::configuration(&raw_configuration)?;
+            (parts, None, Some(port), Some(rotation))
+        },
+        mode => (self::configuration(&raw_configuration, mode)?, None, None, None),
     };
     ensure(trust_authorizer.is_some() == trust_artifact.is_some(), "native trust selection differs")?;
     ensure(configuration.measured_audit.as_ref().is_some_and(|v| v.requires_postboot_assignment())
         == postboot_audit_port.is_some(), "postboot audit cannot enter a legacy startup mode")?;
     if response_proof_identity_export == ResponseProofIdentityExport::Vsock {
         let port = super::native_public_identity_transport::PORT;
+        let browser_port = match (&configuration.measured_static_credential, &rotation) {
+            (Some(value), None) => Some(value.browser_vsock_port),
+            (None, Some(value)) => Some(value.browser_vsock_port),
+            _ => None,
+        };
         ensure(postboot_audit_port.is_some() && postboot_audit_port != Some(port)
             && configuration.native.listener_port() != port
-            && configuration.measured_static_credential.as_ref().is_some_and(|v| v.browser_vsock_port != port),
-            "public identity export requires v24 and cannot share an ingress, enrollment or audit listener")?;
+            && browser_port.is_some_and(|selected| selected != port),
+            "public identity export requires one postboot purpose and distinct listeners")?;
     }
     let deployment = configuration.credential_currentness.as_ref().map(|v| v.deployment_id.clone());
     // Only explicit gate-cgroup profiles retain the actual producer and bind
@@ -890,6 +903,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     inputs.measured_issuance = configuration.measured_issuance;
     inputs.measured_setup = configuration.measured_setup;
     inputs.measured_static_credential = configuration.measured_static_credential;
+    inputs.measured_static_credential_rotation = rotation;
     inputs.measured_reconnect = configuration.measured_reconnect;
     inputs.measured_succession = configuration.measured_succession;
     inputs.measured_canary_delivery = configuration.measured_canary_delivery;

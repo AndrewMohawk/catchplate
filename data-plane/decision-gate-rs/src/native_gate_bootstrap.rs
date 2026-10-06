@@ -146,7 +146,7 @@ pub(super) fn prepare_native_tls_gate_state(
         Some(config) => Some(native_canary_delivery::prepare(config,&inputs,control_plane_config,&relays,&mut identity,deadline)?),
         None => None,
     };
-    if [inputs.measured_static_credential.is_some(), inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
+    if [inputs.measured_static_credential.is_some(), inputs.measured_static_credential_rotation.is_some(), inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {
         return Err("native browser/helper purpose must be selected once at cold startup".to_owned());
     }
@@ -165,6 +165,12 @@ pub(super) fn prepare_native_tls_gate_state(
     let measured_static_credential = match inputs.measured_static_credential.take() {
         Some(config) => Some(native_static_credential::prepare(config, &inputs,
             secret_broker.as_mut().ok_or("native static credential broker absent")?, &mut identity,
+            signer, &binary_digest, deadline)?),
+        None => None,
+    };
+    let measured_static_credential_rotation = match inputs.measured_static_credential_rotation.take() {
+        Some(config) => Some(native_static_credential_rotation::prepare(config, &inputs,
+            secret_broker.as_mut().ok_or("native static rotation broker absent")?, &mut identity,
             signer, &binary_digest, deadline)?),
         None => None,
     };
@@ -218,6 +224,7 @@ pub(super) fn prepare_native_tls_gate_state(
     state.measured_issuance = measured_issuance.map(Mutex::new);
     state.measured_setup = measured_setup.map(Mutex::new);
     state.measured_static_credential = measured_static_credential.map(Mutex::new);
+    state.measured_static_credential_rotation = measured_static_credential_rotation.map(Mutex::new);
     state.measured_reconnect = measured_reconnect.map(Mutex::new);
     state.measured_succession = measured_succession.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);

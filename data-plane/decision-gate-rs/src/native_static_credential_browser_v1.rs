@@ -20,22 +20,44 @@ const MAX_ORIGINAL: usize = 2 * 1024 * 1024;
 const MAX_SECRET: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose { Creation, Rotation }
+
+impl Purpose {
+    fn channel(self) -> &'static str {
+        match self { Self::Creation => CHANNEL,
+            Self::Rotation => "serverware.nativeStaticCredentialRotationChannel/v1" }
+    }
+    fn path(self) -> &'static str {
+        match self { Self::Creation => "/credentials/static", Self::Rotation => "/credentials/static/rotate" }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind { Page, Intake, Prepare }
 
 pub struct Accepted {
     stream: StreamOwned<ServerConnection, VsockStreamV1>,
     ingress: Arc<BrowserTls>, deadline: u64, kind: Kind, body: Vec<u8>,
     cookies: BTreeMap<String, String>, challenge: Option<String>, responded: bool,
+    purpose: Purpose,
 }
 
 impl Accepted {
-    pub fn accept(mut stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self, String> {
+    pub fn accept(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self, String> {
+        Self::accept_for(stream, ingress, deadline, Purpose::Creation)
+    }
+
+    pub(crate) fn accept_rotation(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self, String> {
+        Self::accept_for(stream, ingress, deadline, Purpose::Rotation)
+    }
+
+    fn accept_for(mut stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64, purpose: Purpose) -> Result<Self, String> {
         ingress.check(deadline)?;
         stream.narrow_deadline(deadline).map_err(|_| "static browser cannot renew its socket interval")?;
         stream.verify_connected_original(deadline).map_err(|_| "static browser accepted socket changed")?;
         let connection = ServerConnection::new(ingress.config()).map_err(|_| "static browser TLS unavailable")?;
         let mut owner = Self { stream: StreamOwned::new(connection, stream), ingress, deadline,
-            kind: Kind::Page, body: Vec::new(), cookies: BTreeMap::new(), challenge: None, responded: false };
+            kind: Kind::Page, body: Vec::new(), cookies: BTreeMap::new(), challenge: None, responded: false, purpose };
         while owner.stream.conn.is_handshaking() {
             owner.check()?;
             owner.stream.conn.complete_io(&mut owner.stream.sock).map_err(|_| "static browser TLS handshake failed")?;
@@ -56,10 +78,13 @@ impl Accepted {
         let mut lines = raw[..raw.len() - 4].split("\r\n");
         let first: Vec<_> = lines.next().ok_or("static browser request line")?.split(' ').collect();
         wire::ensure(first.len() == 3 && first[2] == "HTTP/1.1", "static browser request line differs")?;
-        owner.kind = match (first[0], first[1]) {
-            ("GET", "/credentials/static") => Kind::Page,
-            ("POST", "/credentials/static/intake") => Kind::Intake,
-            ("POST", "/credentials/static/prepare") => Kind::Prepare,
+        owner.kind = match (purpose, first[0], first[1]) {
+            (Purpose::Creation, "GET", "/credentials/static")
+                | (Purpose::Rotation, "GET", "/credentials/static/rotate") => Kind::Page,
+            (Purpose::Creation, "POST", "/credentials/static/intake")
+                | (Purpose::Rotation, "POST", "/credentials/static/rotate/intake") => Kind::Intake,
+            (Purpose::Creation, "POST", "/credentials/static/prepare")
+                | (Purpose::Rotation, "POST", "/credentials/static/rotate/prepare") => Kind::Prepare,
             _ => return Err("static browser route is not fixed".to_owned()),
         };
         let mut headers = BTreeMap::new();
@@ -136,16 +161,16 @@ impl Accepted {
                 let intent = original(&value["intentOriginal"])?;
                 let secret = value["secret"].as_str().ok_or("static UTF-8 secret absent")?;
                 wire::ensure(!secret.is_empty() && secret.len() <= MAX_SECRET, "static secret bound")?;
-                json!({"apiVersion": CHANNEL, "phase": "intake", "intentOriginal": intent,
+                json!({"apiVersion": self.purpose.channel(), "phase": "intake", "intentOriginal": intent,
                     "secretBase64url": URL_SAFE_NO_PAD.encode(secret.as_bytes()), "deadlineBoottimeNs": self.deadline})
             },
             Kind::Prepare => {
                 wire::fields(&value, &["credentialId", "argumentsOriginal"])?;
                 let id = value["credentialId"].as_str().ok_or("static credential identity absent")?;
-                let name = cookie_name(id)?;
+                let name = cookie_name(id, self.purpose)?;
                 let cookie = self.cookies.get(&name).ok_or("original static browser cookie absent")?;
                 current::bytes32(cookie)?;
-                json!({"apiVersion": CHANNEL, "phase": "prepare-execution", "credentialId": id,
+                json!({"apiVersion": self.purpose.channel(), "phase": "prepare-execution", "credentialId": id,
                     "argumentsOriginal": original(&value["argumentsOriginal"])?, "browserNonce": cookie,
                     "challenge": self.challenge.as_deref().ok_or("static native challenge absent")?,
                     "deadlineBoottimeNs": self.deadline})
@@ -200,13 +225,23 @@ fn nonce() -> Result<String, String> {
     Ok(URL_SAFE_NO_PAD.encode(raw))
 }
 
-fn cookie_name(id: &str) -> Result<String, String> {
+fn cookie_name(id: &str, purpose: Purpose) -> Result<String, String> {
     wire::ensure(current::uuid(id), "static cookie credential identity")?;
-    Ok(format!("__Host-serverware-native-static-{}", id.replace('-', "")))
+    let prefix = match purpose { Purpose::Creation => "__Host-serverware-native-static-",
+        Purpose::Rotation => "__Host-serverware-native-static-rotate-" };
+    Ok(format!("{prefix}{}", id.replace('-', "")))
 }
 
 pub fn cookie(id: &str, value: &str, expires: u64) -> Result<String, String> {
-    let name = cookie_name(id)?;
+    cookie_for(id, value, expires, Purpose::Creation)
+}
+
+pub(crate) fn rotation_cookie(id: &str, value: &str, expires: u64) -> Result<String, String> {
+    cookie_for(id, value, expires, Purpose::Rotation)
+}
+
+fn cookie_for(id: &str, value: &str, expires: u64, purpose: Purpose) -> Result<String, String> {
+    let name = cookie_name(id, purpose)?;
     current::bytes32(value)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "static cookie clock")?.as_nanos();
     wire::ensure(now < u128::from(expires) && u128::from(expires) - now <= 3_600_000_000_000,
@@ -219,11 +254,29 @@ pub fn cookie(id: &str, value: &str, expires: u64) -> Result<String, String> {
 /// off public originals. JavaScript never re-encodes their nanosecond integers
 /// or metadata. The optional manual fragment likewise contains no secret.
 pub fn page(portal_origin: &str) -> Result<(Vec<u8>, String), String> {
+    page_for(portal_origin, Purpose::Creation)
+}
+
+pub(crate) fn rotation_page(portal_origin: &str) -> Result<(Vec<u8>, String), String> {
+    page_for(portal_origin, Purpose::Rotation)
+}
+
+fn page_for(portal_origin: &str, purpose: Purpose) -> Result<(Vec<u8>, String), String> {
     wire::origin(portal_origin)?;
     let portal = serde_json::to_string(portal_origin).map_err(|_| "static portal origin encoding")?
         .replace('<', "\\u003c");
     let nonce = nonce()?;
-    let body = PAGE.replace("__SCRIPT_NONCE__", &nonce)
+    let (title, effect, action, completed, prefix, intent, operation) = match purpose {
+        Purpose::Creation => ("Native static credential intake", "create a credential", "Create", "create a credential",
+            "serverware.nativeStaticCredential", "serverware.staticCredentialCreationIntent/v1", "credential.static.create"),
+        Purpose::Rotation => ("Native static credential rotation", "replace the current credential", "Rotate", "rotate a credential",
+            "serverware.nativeStaticCredentialRotation", "serverware.staticCredentialRotationIntent/v1", "credential.static.rotate"),
+    };
+    let body = PAGE.replace("__PURPOSE_TITLE__", title).replace("__EFFECT__", effect)
+        .replace("__ACTION__", action).replace("__COMPLETED__", completed)
+        .replace("__MESSAGE_PREFIX__", prefix).replace("__INTENT_SCHEMA__", intent)
+        .replace("__OPERATION__", operation).replace("__BASE_PATH__", purpose.path())
+        .replace("__SCRIPT_NONCE__", &nonce)
         .replace("__PORTAL_ORIGIN_JSON__", &portal).into_bytes();
     let csp = format!("default-src 'none'; script-src 'nonce-{nonce}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
     Ok((body, csp))
@@ -231,16 +284,16 @@ pub fn page(portal_origin: &str) -> Result<(Vec<u8>, String), String> {
 
 const PAGE: &str = r##"<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Native static credential intake</title>
-<h1>Native static credential intake</h1>
-<p>Enter a secret only on this native TLS page. The portal receives encrypted candidate material, never this secret. Sealing and preparation do not create a credential or prove approval.</p>
+<title>__PURPOSE_TITLE__</title>
+<h1>__PURPOSE_TITLE__</h1>
+<p>Enter a secret only on this native TLS page. The portal receives encrypted candidate material, never this secret. Sealing and preparation do not __EFFECT__ or prove approval.</p>
 <p id="status" role="status">Waiting for the original portal's public intent…</p>
 <pre id="selection"></pre>
 <form id="intake" hidden><label for="secret">Secret (exact UTF-8; whitespace is preserved)</label><br>
 <textarea id="secret" rows="5" cols="64" autocomplete="off" autocapitalize="off" spellcheck="false" required></textarea><br>
 <button id="seal" type="submit">Seal this candidate once</button></form>
 <button id="prepare" type="button" hidden>Prepare fresh evidence once</button>
-<p>Only public encrypted candidate material and fresh evidence return to the original portal. Create there is a separate explicit hardware-approved action. No insertion or retry occurs on this page. The literal public result is also shown below.</p>
+<p>Only public encrypted candidate material and fresh evidence return to the original portal. __ACTION__ there is a separate explicit hardware-approved action. No database change or retry occurs on this page. The literal public result is also shown below.</p>
 <textarea id="result" rows="14" cols="90" readonly aria-label="Public candidate or evidence"></textarea>
 <script nonce="__SCRIPT_NONCE__">
 (() => {
@@ -254,11 +307,11 @@ const PAGE: &str = r##"<!doctype html>
   const result = document.getElementById('result');
   const portalOrigin = __PORTAL_ORIGIN_JSON__;
   const originalOpener = window.opener;
-  const prefix = 'serverware.nativeStaticCredential';
+  const prefix = '__MESSAGE_PREFIX__';
   let original = '', mode = '', id = '', selected = false;
   let intakeAttempted = false, preparationAttempted = false, sealedCandidate = null;
   const fragment = location.hash.slice(1);
-  history.replaceState(null, '', '/credentials/static');
+  history.replaceState(null, '', '__BASE_PATH__');
   const fields = (value, names) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).length === names.length && names.every(name => Object.hasOwn(value, name));
   const literal = value => typeof value === 'string' && value.length > 0
@@ -278,8 +331,8 @@ const PAGE: &str = r##"<!doctype html>
     const request = view.request;
     if (!request || !identity(request.credentialId) || typeof request.name !== 'string'
         || typeof request.kind !== 'string') throw new Error();
-    if (phase === 'intake' && (view.apiVersion !== 'serverware.staticCredentialCreationIntent/v1'
-        || view.operation !== 'credential.static.create')) throw new Error();
+    if (phase === 'intake' && (view.apiVersion !== '__INTENT_SCHEMA__'
+        || view.operation !== '__OPERATION__')) throw new Error();
     original = value; mode = phase; id = request.credentialId;
     selection.textContent = `Credential: ${id}\nActor: ${mode === 'intake' ? view.actorId : view.actor_id}\nName: ${request.name}\nKind: ${request.kind}`;
     intake.hidden = mode !== 'intake'; prepare.hidden = mode !== 'prepare';
@@ -292,7 +345,7 @@ const PAGE: &str = r##"<!doctype html>
   async function post(phase, payload) {
     // Originals remain strings: only this outer transport wrapper is encoded.
     const body = JSON.stringify(payload);
-    const response = await fetch(`/credentials/static/${phase}`, {method: 'POST',
+    const response = await fetch(`__BASE_PATH__/${phase}`, {method: 'POST',
       credentials: 'same-origin', cache: 'no-store', redirect: 'error',
       headers: {'Content-Type': 'application/json'}, body});
     if (!response.ok || response.redirected || response.headers.get('content-type') !== 'application/json') throw new Error();
@@ -321,7 +374,7 @@ const PAGE: &str = r##"<!doctype html>
       sealedCandidate = reply.candidate;
       // Display and transfer the literal response, never parsed timestamps.
       result.value = raw;
-      status.textContent = 'Encrypted candidate retained. Return to the original portal for independent approval and explicit Create. Keep this page open.';
+      status.textContent = 'Encrypted candidate retained. Return to the original portal for independent approval and explicit __ACTION__. Keep this page open.';
       send({apiVersion: prefix + 'CandidateMessage/v1', candidateOriginal: raw});
     } catch (_) {
       sealedCandidate = null; refused();
@@ -343,7 +396,7 @@ const PAGE: &str = r##"<!doctype html>
           || reply.apiVersion !== prefix + 'PreparationResponse/v1'
           || reply.argumentsOriginal !== argumentsOriginal || !reply.evidence) throw new Error();
       result.value = raw;
-      status.textContent = 'Fresh evidence prepared once. The original portal must independently authorize insertion; this page did not create a credential.';
+      status.textContent = 'Fresh evidence prepared once. The original portal must independently authorize the database change; this page did not __COMPLETED__.';
       if (fromPortal) send({apiVersion: prefix + 'PreparedMessage/v1', preparationOriginal: raw});
     } catch (_) {
       refused();

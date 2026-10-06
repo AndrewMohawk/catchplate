@@ -5,7 +5,7 @@ use crate::native_public_identity::ResponseProofIdentityExport;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23, PostbootStaticV24 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23, PostbootStaticV24, StaticCredentialRotationV25 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     -> Result<Option<(ArtifactV1, ArtifactV1, bool, ResponseProofIdentityExport, Mode, Option<ArtifactV1>)>, String>
@@ -32,6 +32,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-workload-trust-startup-v22" { Mode::WorkloadTrustV22 }
         else if argument == "--native-static-credential-startup-v23" { Mode::StaticCredentialV23 }
         else if argument == "--native-postboot-static-startup-v24" { Mode::PostbootStaticV24 }
+        else if argument == "--native-static-credential-rotation-startup-v25" { Mode::StaticCredentialRotationV25 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;
@@ -57,8 +58,8 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             response_proof_identity_export = if flag == "--response-proof-identity-stdout" {
                 ResponseProofIdentityExport::Stdout
             } else {
-                if !matches!(&mode, Mode::PostbootStaticV24) {
-                    return Err("response-proof identity vsock requires explicit postboot v24 startup".into());
+                if !matches!(&mode, Mode::PostbootStaticV24 | Mode::StaticCredentialRotationV25) {
+                    return Err("response-proof identity vsock requires explicit postboot startup".into());
                 }
                 ResponseProofIdentityExport::Vsock
             };
@@ -82,7 +83,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             _ => return Err("native startup received an unknown or repeated flag".to_owned()),
         }
     }
-    if matches!(&mode, Mode::PostbootStaticV24)
+    if matches!(&mode, Mode::PostbootStaticV24 | Mode::StaticCredentialRotationV25)
         && response_proof_identity_export == ResponseProofIdentityExport::None {
         return Err("postboot static startup requires a response-proof identity export".into());
     }

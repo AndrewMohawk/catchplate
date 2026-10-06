@@ -192,13 +192,28 @@ fn run_owned(
     {
         return Err("postboot audit requires its explicit startup mode and actual public identity export".into());
     }
+    if let Some(rotation) = &inputs.measured_static_credential_rotation {
+        let browser = rotation.browser_vsock_port;
+        if parameters.postboot_audit_port.is_none()
+            || response_proof_identity_export == ResponseProofIdentityExport::None
+            || browser == parameters.listener_port
+            || parameters.postboot_audit_port == Some(browser)
+            || parameters.enrollment_authorizer.as_ref().is_some_and(|v| v.listener_port() == browser) {
+            return Err("rotation startup requires postboot identity and distinct browser listeners".into());
+        }
+    }
     if response_proof_identity_export == ResponseProofIdentityExport::Vsock {
         let port = super::native_public_identity_transport::PORT;
+        let browser_port = match (&inputs.measured_static_credential, &inputs.measured_static_credential_rotation) {
+            (Some(value), None) => Some(value.browser_vsock_port),
+            (None, Some(value)) => Some(value.browser_vsock_port),
+            _ => None,
+        };
         if parameters.postboot_audit_port.is_none() || parameters.postboot_audit_port == Some(port)
             || parameters.listener_port == port
             || parameters.enrollment_authorizer.as_ref().is_some_and(|v| v.listener_port() == port)
-            || inputs.measured_static_credential.as_ref().is_none_or(|v| v.browser_vsock_port == port) {
-            return Err("public identity export requires v24 and a distinct fixed listener".into());
+            || browser_port.is_none_or(|selected| selected == port) {
+            return Err("public identity export requires one postboot purpose and a distinct fixed listener".into());
         }
     }
     if let Some(authorizer) = &parameters.enrollment_authorizer {

@@ -85,12 +85,12 @@ def signature_message(role, payload):
     raise ValueError("configuration purpose refused")
 
 
-def _validate_payload(payload, role, generation, bindings):
+def _validate_payload(payload, role, generation, bindings, *, root_key=None):
     return generator.validate_configuration_payload(payload, role=role,
         source_revision=generator.authority_contract.SOURCE_REVISION,
         expected_generation_binding=spec.configuration_generation_binding(generation),
         expected_generation_binding_digest=spec.configuration_generation_binding_digest(generation),
-        expected_role_bindings=bindings)
+        expected_role_bindings=bindings, root_key=root_key)
 
 
 def _service(payload, selected, *, now_unix):
@@ -227,7 +227,8 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
     _require(sha(payload_raw) == selected["payloadSha256"])
     payload = document(payload_raw, MAX_CONFIGURATION)
     role = selected["role"]
-    payload_schema, payload_digest = _validate_payload(payload, role, generation, bindings)
+    root_key = Ed25519PublicKey.from_public_bytes(root_public)
+    payload_schema, payload_digest = _validate_payload(payload, role, generation, bindings, root_key=root_key)
     envelope_schema = (generator.SERVICE_CONFIGURATION_SCHEMA if role == "authority-service"
                        else generator.WITNESS_CONFIGURATION_SCHEMA)
     # A raw64 Ed25519 signature has exactly 86 canonical base64url characters.
@@ -243,10 +244,11 @@ def prepare(raw, *, boot, now_boottime_ns, now_unix_ns):
         service = document(selected["serviceConfigurationOriginal"].encode("ascii"), MAX_CONFIGURATION)
         _require(set(service) == {"schema", "payload", "signature"}
                  and service["schema"] == generator.SERVICE_CONFIGURATION_SCHEMA)
-        Ed25519PublicKey.from_public_bytes(root_public).verify(
+        root_key.verify(
             spec.strict_base64url_decode(service["signature"], name="service signature", decoded_size=64),
             signature_message("authority-service", service["payload"]))
-        _, service_digest = _validate_payload(service["payload"], "authority-service", generation, bindings)
+        _, service_digest = _validate_payload(service["payload"], "authority-service", generation, bindings,
+            root_key=root_key)
         expiry = min(expiry, _service(service["payload"], selected, now_unix=now_unix_ns))
         _require(payload["authorityConfigurationDigests"] == [service_digest]
             and payload["signingSpkiDigest"] == _spki(keys["witness"])

@@ -40,6 +40,9 @@ from serverware import authority_oauth_measured_cleanup_policy as oauth_measured
 from serverware import authority_oauth_measured_pending_retirement_policy as oauth_pending_retirement_policy
 from serverware import authority_oauth_measured_capture_retirement_policy as oauth_capture_retirement_policy
 from serverware import authority_credential_currentness_policy as credential_currentness_policy
+from serverware import authority_static_credential_create as static_create
+from serverware import authority_static_credential_rotate as static_rotate
+from serverware import authority_static_credential_custody as static_custody
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
 from serverware import authority_recovery_configuration as recovery_configuration
 from serverware import authority_challenge_policy as challenge_maintenance_policy
@@ -762,6 +765,9 @@ def validate_configuration_payload(
             for optional_field in (genesis_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD):
                 if optional_field in value:
                     expected_fields = expected_fields | {optional_field}
+            for optional_field in (static_create.FIELD, static_rotate.FIELD, static_custody.FIELD):
+                if optional_field in value:
+                    expected_fields = expected_fields | {optional_field}
     payload = _closed(
         value,
         name=f"{role} configuration payload",
@@ -994,6 +1000,9 @@ def validate_configuration_payload(
                 serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
             genesis_policy.configuration(payload.get(genesis_policy.FIELD), root_digest=root_digest)
             setup_policy_admission.validate_policy(payload.get(setup_policy_admission.FIELD), payload=payload, root_key=root_key)
+            static_create.validate_policy(payload.get(static_create.FIELD), payload=payload, root_key=root_key)
+            static_rotate.validate_policy(payload.get(static_rotate.FIELD), payload=payload, root_key=root_key)
+            static_custody.validate_policy(payload.get(static_custody.FIELD), payload=payload, root_key=root_key)
             policy_canary_policy.validate_policy(payload.get(policy_canary_policy.FIELD), payload=payload, root_key=root_key)
             heartbeat_policy.validate_policy(payload.get(heartbeat_policy.FIELD), payload=payload, root_key=root_key)
             finalization_policy.validate_policy(payload.get(finalization_policy.FIELD), payload=payload, root_key=root_key)

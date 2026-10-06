@@ -26580,33 +26580,64 @@ UI_HTML = r"""
     }
 
     async function cancelPolicyCanary() {
-      const canary = state.policyCanary?.canary;
+      const payload = state.policyCanary, canary = payload?.canary;
       const terminal = new Set(['completed', 'indeterminate', 'failed', 'cancelled', 'expired', 'superseded']);
       if (!canary || terminal.has(canary.status)) throw new Error('No cancellable policy candidate is available');
-      const preparationDigest = state.policyCandidate?.authorityPreparation?.preparation_digest;
+      const candidate = state.policyCandidate, preparation = candidate?.authorityPreparation;
+      const preparationDigest = preparation?.preparation_digest, activationAttemptId = preparation?.activation_attempt_id;
       if (!preparationDigest) throw new Error('Cancellation requires a durable authority preparation');
-      if (!window.confirm(`Cancel staged policy candidate ${canary.id}?`)) return cancelledAction('Policy candidate cancellation');
+      const canaryId = canary.id, canaryOriginal = JSON.stringify(canary), preparationOriginal = JSON.stringify(preparation);
+      const session = state.setupSession, sessionOriginal = JSON.stringify(session ?? null), sessionId = session?.id || null;
+      const authScope = policyAuthoringScope(), selectionGeneration = setupLoadGeneration;
+      const selectionOriginal = JSON.stringify(currentSetupSelection()), packageText = $('policy-authority-package').value;
+      const checkNavigation = () => {
+        if (!hasOperatorAuth() || policyAuthoringScope() !== authScope || setupLoadGeneration !== selectionGeneration
+            || JSON.stringify(currentSetupSelection()) !== selectionOriginal || $('policy-authority-package').value !== packageText
+            || (state.setupSession?.id || null) !== sessionId) {
+          throw new Error('Cancellation context changed. Inspect the original canary and preparation before another action.');
+        }
+      };
+      const checkContext = () => {
+        checkNavigation();
+        if (state.policyCanary !== payload || payload.canary !== canary || JSON.stringify(canary) !== canaryOriginal
+            || state.policyCandidate !== candidate || candidate.authorityPreparation !== preparation
+            || JSON.stringify(preparation) !== preparationOriginal || state.setupSession !== session
+            || JSON.stringify(session ?? null) !== sessionOriginal || session?.phase === 'policy_staged'
+              && (session.canaryId !== canaryId || session.policyHash !== canary.candidatePolicyHash)) {
+          throw new Error('The original canary, preparation or Setup binding changed. No follow-up cancellation is authorized.');
+        }
+      };
+      checkContext();
+      if (!window.confirm(`Cancel staged policy candidate ${canaryId}?`)) return cancelledAction('Policy candidate cancellation');
+      checkContext();
+      const suppliedPackage = policyAuthorityPackage(), requestId = authorityRequestId();
+      if (suppliedPackage.handoff?.canaryId !== canaryId) throw new Error('Abort package does not name the selected canary');
       const importedPackage = await api('/api/policy/authority/candidates/package', {
-        method: 'POST',
+        method: 'POST', checkContext,
         body: JSON.stringify({
           apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
-          requestId: authorityRequestId(),
+          requestId,
           purpose: 'abort',
-          package: policyAuthorityPackage()
+          package: suppliedPackage
         })
       });
-      const abort = policyActivationPackage(
-        importedPackage.portalPackage.activation
-      ).abort;
+      checkContext();
+      if (importedPackage?.ok !== true || importedPackage.apiVersion !== 'serverware.policyAuthorityPortalPackageImportAck/v1'
+          || importedPackage.requestId !== requestId || importedPackage.purpose !== 'abort'
+          || importedPackage.portalPackage?.handoff?.canaryId !== canaryId) {
+        throw new Error('Abort package response differs from the original cancellation');
+      }
+      const abort = policyAuthorityStep(policyActivationPackage(importedPackage.portalPackage.activation).abort, ['policy.activation.abort']);
       if (abort.arguments.preparationDigest !== preparationDigest) {
         throw new Error('Abort package does not name the durable authority preparation');
       }
-      const result = await executePolicyAuthorityStep(
-        abort,
-        ['policy.activation.abort', 'policy.canary.cancel']
-      );
-      if (state.policyCandidate) state.policyCandidate.abort = result;
+      const result = await executePolicyAuthorityStep(abort, ['policy.activation.abort'], checkContext);
+      checkContext();
+      if (result?.ok !== true || result.status !== 'aborted' || result.preparation_digest !== preparationDigest
+          || result.activation_attempt_id !== activationAttemptId) throw new Error('Cancellation result differs from the original durable preparation; inspect without retry');
+      candidate.abort = result;
       await refresh();
+      checkNavigation();
       return result;
     }
 

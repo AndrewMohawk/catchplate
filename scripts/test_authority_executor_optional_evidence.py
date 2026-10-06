@@ -265,6 +265,26 @@ $component_checks$;
 
 
 class OptionalEvidenceSourceControls(unittest.TestCase):
+    def test_mutation_template_lookup_disambiguates_the_executor_local(self):
+        tree = _read("serverware/authority_store/executor_v9.py")
+        installer = _one([node for node in tree.body if type(node) is ast.FunctionDef
+            and node.name == "install_authority_v9_executor"])
+        template = _one([_template(node) for node in ast.walk(installer)
+            if type(node) is ast.JoinedStr and any(type(part) is ast.Constant
+                and type(part.value) is str and "AS $serverware_execute_v9$" in part.value
+                for part in node.values)])
+        self.assertRegex(template, r"AS \$serverware_execute_v9\$\s+<<executor_state>>\s+DECLARE")
+        lookup = _one(re.findall(
+            r"FROM \{namespace\}\.\s+policy_authority_operation_mutation_templates\s+"
+            r"AS template\s+WHERE template\.operation = capability\.operation.*?"
+            r"AND template\.source_revision =\s+'\{source_revision\}'", template, re.S))
+        self.assertEqual(lookup.count("executor_state.mutation->>"), 3)
+        self.assertNotRegex(lookup, r"(?<![a-z_.])mutation\s*->")
+        self.assertIn("template.mutation =", lookup)
+        self.assertIn("template.cardinality = 1", lookup)
+        self.assertIn("'exact-primary-key-and-full-row-cas-v1'", lookup)
+        self.assertNotIn("#variable_conflict", template)
+
     def test_complete_original_predicates_only_move_to_outer_statement(self):
         guard, old_term = _guard_parts()
         self.assertRegex(guard, r"^IF authorization_projection\.assertion_evidence_digest\s+IS NOT NULL\s+THEN\s+IF NOT EXISTS")

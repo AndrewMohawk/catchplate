@@ -791,6 +791,7 @@ def install_authority_v9_executor(
         VOLATILE
         SET search_path = pg_catalog, {namespace}, pg_temp
         AS $serverware_execute_v9$
+        <<executor_state>>
         DECLARE
             fence_head record;
             capability record;
@@ -1912,10 +1913,10 @@ def install_authority_v9_executor(
                             AS template
                         WHERE template.operation = capability.operation
                           AND template.template_id =
-                                mutation->>'templateId'
-                          AND template.table_name = mutation->>'table'
+                                executor_state.mutation->>'templateId'
+                          AND template.table_name = executor_state.mutation->>'table'
                           AND template.mutation =
-                                mutation->>'operation'
+                                executor_state.mutation->>'operation'
                           AND template.predicate_kind =
                                 'exact-primary-key-and-full-row-cas-v1'
                           AND template.cardinality = 1

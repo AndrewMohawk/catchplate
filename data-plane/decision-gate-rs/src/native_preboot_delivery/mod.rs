@@ -228,7 +228,7 @@ impl Delivered {
     pub(super) fn arguments(&self) -> Vec<OsString> {
         ["--configuration", "/run/serverware-preboot/configuration.json", "--configuration-sha256",
             &self.configuration_pin, "--launch", "/run/serverware-preboot/launch.json", "--launch-sha256",
-            &self.launch_pin, "--response-proof-identity-stdout"].into_iter().map(OsString::from).collect()
+            &self.launch_pin, "--response-proof-identity-vsock"].into_iter().map(OsString::from).collect()
     }
     pub(super) fn recheck(&mut self) -> Result<(), String> {
         self.trust.check()?;

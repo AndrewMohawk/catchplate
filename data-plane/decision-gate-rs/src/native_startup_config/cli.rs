@@ -1,13 +1,14 @@
 //! Closed opt-in native mode; no arguments retains the legacy entrypoint.
 
 use super::originals::ArtifactV1;
+use crate::native_public_identity::ResponseProofIdentityExport;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23, PostbootStaticV24 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
-    -> Result<Option<(ArtifactV1, ArtifactV1, bool, bool, Mode, Option<ArtifactV1>)>, String>
+    -> Result<Option<(ArtifactV1, ArtifactV1, bool, ResponseProofIdentityExport, Mode, Option<ArtifactV1>)>, String>
 {
     let Some(argument) = arguments.next() else { return Ok(None); };
     let mode = if argument == "--native-startup" { Mode::Legacy }
@@ -37,7 +38,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     let mut launch = None;
     let mut launch_pin = None;
     let mut public_identity_stdout = false;
-    let mut response_proof_identity_stdout = false;
+    let mut response_proof_identity_export = ResponseProofIdentityExport::None;
     let mut trust_authorization = None;
     let mut trust_pin = None;
     while let Some(flag) = arguments.next() {
@@ -49,11 +50,18 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             public_identity_stdout = true;
             continue;
         }
-        if flag == "--response-proof-identity-stdout" {
-            if response_proof_identity_stdout {
+        if matches!(flag, "--response-proof-identity-stdout" | "--response-proof-identity-vsock") {
+            if response_proof_identity_export != ResponseProofIdentityExport::None {
                 return Err("native startup received an unknown or repeated flag".to_owned());
             }
-            response_proof_identity_stdout = true;
+            response_proof_identity_export = if flag == "--response-proof-identity-stdout" {
+                ResponseProofIdentityExport::Stdout
+            } else {
+                if !matches!(&mode, Mode::PostbootStaticV24) {
+                    return Err("response-proof identity vsock requires explicit postboot v24 startup".into());
+                }
+                ResponseProofIdentityExport::Vsock
+            };
             continue;
         }
         let value = arguments.next().ok_or("native startup flag requires a value")?;
@@ -74,8 +82,9 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             _ => return Err("native startup received an unknown or repeated flag".to_owned()),
         }
     }
-    if matches!(&mode, Mode::PostbootStaticV24) && !response_proof_identity_stdout {
-        return Err("postboot static startup requires --response-proof-identity-stdout".into());
+    if matches!(&mode, Mode::PostbootStaticV24)
+        && response_proof_identity_export == ResponseProofIdentityExport::None {
+        return Err("postboot static startup requires a response-proof identity export".into());
     }
     let trust = if matches!(&mode, Mode::WorkloadTrustV22) {
         Some(ArtifactV1 {
@@ -89,5 +98,5 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     }, ArtifactV1 {
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
-    }, public_identity_stdout, response_proof_identity_stdout, mode, trust)))
+    }, public_identity_stdout, response_proof_identity_export, mode, trust)))
 }

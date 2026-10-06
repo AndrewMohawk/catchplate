@@ -49,6 +49,7 @@ mod native_runtime;
 mod native_startup;
 mod native_startup_config;
 mod native_public_identity;
+mod native_public_identity_transport;
 mod native_ingress_attestation;
 mod native_target_principal_preflight;
 mod native_enrollment_authorizer;

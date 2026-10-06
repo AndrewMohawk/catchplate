@@ -24,6 +24,7 @@ mod json;
 
 use super::*;
 use originals::{ArtifactV1, HeldOriginal};
+use crate::native_public_identity::ResponseProofIdentityExport;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Component;
 
@@ -841,7 +842,7 @@ fn decode<T: DeserializeOwned>(raw: &[u8], maximum: usize) -> Result<T, String> 
 }
 
 fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool,
-    response_proof_identity_stdout: bool, mode: cli::Mode,
+    response_proof_identity_export: ResponseProofIdentityExport, mode: cli::Mode,
     trust_artifact: Option<ArtifactV1>) -> Result<(), String> {
     let configuration_pin = configuration.sha256.clone();
     let launch_pin = launch.sha256.clone();
@@ -855,7 +856,8 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
             (parts, Some(key), None)
         },
         cli::Mode::PostbootStaticV24 => {
-            ensure(response_proof_identity_stdout, "postboot static startup requires its public identity export")?;
+            ensure(response_proof_identity_export != ResponseProofIdentityExport::None,
+                "postboot static startup requires its public identity export")?;
             let (parts, port) = static_credential::postboot_configuration(&raw_configuration)?;
             (parts, None, Some(port))
         },
@@ -864,6 +866,13 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     ensure(trust_authorizer.is_some() == trust_artifact.is_some(), "native trust selection differs")?;
     ensure(configuration.measured_audit.as_ref().is_some_and(|v| v.requires_postboot_assignment())
         == postboot_audit_port.is_some(), "postboot audit cannot enter a legacy startup mode")?;
+    if response_proof_identity_export == ResponseProofIdentityExport::Vsock {
+        let port = super::native_public_identity_transport::PORT;
+        ensure(postboot_audit_port.is_some() && postboot_audit_port != Some(port)
+            && configuration.native.listener_port() != port
+            && configuration.measured_static_credential.as_ref().is_some_and(|v| v.browser_vsock_port != port),
+            "public identity export requires v24 and cannot share an ingress, enrollment or audit listener")?;
+    }
     let deployment = configuration.credential_currentness.as_ref().map(|v| v.deployment_id.clone());
     // Only explicit gate-cgroup profiles retain the actual producer and bind
     // its owner before serving. A nested marker cannot supply that custody.
@@ -920,13 +929,13 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     super::native_startup::run(inputs, parameters, shadow, v2,
         configuration.guest_inspector, configuration.guest_cohort,
         configuration.guest_role_key_provisioner, configuration.gate_cgroup, public_identity_stdout,
-        response_proof_identity_stdout)
+        response_proof_identity_export)
 }
 
 pub(super) fn run_from_process_arguments() -> Result<Option<()>, String> {
     match cli::arguments(std::env::args_os().skip(1))? {
         None => Ok(None),
-        Some((configuration, launch, public_identity_stdout, response_proof_identity_stdout, mode, trust)) =>
-            run(configuration, launch, public_identity_stdout, response_proof_identity_stdout, mode, trust).map(Some),
+        Some((configuration, launch, public_identity_stdout, response_proof_identity_export, mode, trust)) =>
+            run(configuration, launch, public_identity_stdout, response_proof_identity_export, mode, trust).map(Some),
     }
 }

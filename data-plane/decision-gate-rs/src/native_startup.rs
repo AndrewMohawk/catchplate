@@ -8,6 +8,7 @@
 
 use super::*;
 use super::policy_shadow_generation::PolicyShadowGenerationConfig;
+use super::native_public_identity::ResponseProofIdentityExport;
 use serverware_decision_gate::enclave_runtime_identity_v1::RuntimeScopeCommitmentsV1;
 use serverware_decision_gate::native_upstream_relays_v1::NativeRelayAssignmentV1;
 use std::os::unix::ffi::OsStrExt;
@@ -144,14 +145,14 @@ pub(super) fn run(
     guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
     gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
-    response_proof_identity_stdout: bool,
+    response_proof_identity_export: ResponseProofIdentityExport,
 ) -> Result<(), String> {
     // Retain the original unshared lifetime through every cold error as well
     // as serving. Attachments finish before any Arc clone is given to runtime.
     let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     let result = run_owned(&mut startup, inputs, parameters, shadow_config, v2_config,
         guest_inspector, guest_cohort, guest_role_key_provisioner, gate_cgroup, public_identity_stdout,
-        response_proof_identity_stdout);
+        response_proof_identity_export);
     startup.stop();
     let cleanup = startup.finish_guest_inspector();
     result?;
@@ -169,7 +170,7 @@ fn run_owned(
     guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
     gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
-    response_proof_identity_stdout: bool,
+    response_proof_identity_export: ResponseProofIdentityExport,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
     // later retains this SAME cancellation owner and original absolute bound.
@@ -186,9 +187,19 @@ fn run_owned(
     validate_parameters(&parameters)?;
     if inputs.measured_audit.as_ref().is_some_and(|v| v.requires_postboot_assignment())
         != parameters.postboot_audit_port.is_some()
-        || parameters.postboot_audit_port.is_some() && !response_proof_identity_stdout
+        || parameters.postboot_audit_port.is_some()
+            && response_proof_identity_export == ResponseProofIdentityExport::None
     {
         return Err("postboot audit requires its explicit startup mode and actual public identity export".into());
+    }
+    if response_proof_identity_export == ResponseProofIdentityExport::Vsock {
+        let port = super::native_public_identity_transport::PORT;
+        if parameters.postboot_audit_port.is_none() || parameters.postboot_audit_port == Some(port)
+            || parameters.listener_port == port
+            || parameters.enrollment_authorizer.as_ref().is_some_and(|v| v.listener_port() == port)
+            || inputs.measured_static_credential.as_ref().is_none_or(|v| v.browser_vsock_port == port) {
+            return Err("public identity export requires v24 and a distinct fixed listener".into());
+        }
     }
     if let Some(authorizer) = &parameters.enrollment_authorizer {
         authorizer.check()?;
@@ -313,6 +324,13 @@ fn run_owned(
             parameters.ca_not_before, parameters.ca_not_after, parameters.deadline_boottime_ns)?,
     };
     startup.check()?;
+    // The operator's one empty/EOF connection precedes the actual role-4 key
+    // and original NSM quote. Waiting consumes only the original startup life;
+    // it does not renew a setup timer or provide a later re-quote operation.
+    let identity_output = if response_proof_identity_export == ResponseProofIdentityExport::Vsock {
+        Some(super::native_public_identity_transport::Exporter::bind(startup.as_ref())?.accept()?)
+    } else { None };
+    startup.check()?;
     let custody = CustodyRuntime::generate_native_with_control_plane_response_public_key(
         &mut identity, parameters.control_plane_response_key,
         &parameters.control_plane_response_key_id, parameters.proof_nonce,
@@ -323,9 +341,17 @@ fn run_owned(
     startup.check()?;
     let postboot_receiver = parameters.postboot_audit_port
         .map(|port| native_postboot_assignment::Receiver::bind(port, startup.as_ref())).transpose()?;
-    if response_proof_identity_stdout {
-        super::native_public_identity::write_startup_response_proof_identity(
-            &proof, &mut identity, startup.as_ref(), parameters.deadline_boottime_ns)?;
+    match response_proof_identity_export {
+        ResponseProofIdentityExport::None => {},
+        ResponseProofIdentityExport::Stdout => {
+            super::native_public_identity::write_startup_response_proof_identity(
+                &proof, &mut identity, startup.as_ref(), parameters.deadline_boottime_ns)?;
+        },
+        ResponseProofIdentityExport::Vsock => {
+            super::native_public_identity::write_startup_response_proof_identity_vsock(
+                &proof, &mut identity, startup.as_ref(), parameters.deadline_boottime_ns,
+                identity_output.ok_or("native public identity output owner absent")?)?;
+        },
     }
     if let Some(receiver) = postboot_receiver {
         let original = receiver.receive()?;

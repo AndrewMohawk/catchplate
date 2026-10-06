@@ -1453,6 +1453,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/send_native_audit_assignment.py \
 	scripts/send_native_configuration.py \
 	scripts/prepare_native_configuration_delivery.py \
+	scripts/collect_native_public_identity.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/native_pilot_runtime_artifacts.py \
 	scripts/native_pilot_tar_export.py \
@@ -4613,6 +4614,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/send_native_audit_assignment.py \
 				scripts/send_native_configuration.py \
 				scripts/prepare_native_configuration_delivery.py \
+				scripts/collect_native_public_identity.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/native_pilot_runtime_artifacts.py \
 				scripts/native_pilot_tar_export.py \
@@ -5551,6 +5553,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_audit_transport.rs \
 				data-plane/decision-gate-rs/src/native_audit_assignment.rs \
 				data-plane/decision-gate-rs/src/native_postboot_assignment.rs \
+				data-plane/decision-gate-rs/src/native_public_identity.rs \
+				data-plane/decision-gate-rs/src/native_public_identity_transport.rs \
 				data-plane/decision-gate-rs/src/native_preboot_delivery/mod.rs \
 				data-plane/decision-gate-rs/src/native_preboot_delivery/closure.rs \
 				data-plane/decision-gate-rs/src/native_preboot_delivery/materialize.rs \

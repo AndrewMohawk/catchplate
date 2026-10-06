@@ -77,7 +77,8 @@ fn main() -> Result<(), String> {
     // The new explicit role-4 export adds exactly one slot. Without that flag,
     // retain the previous ceilings and unchanged role-3 output contract.
     let maximum_arguments = (if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 })
-        + usize::from(arguments.iter().any(|arg| arg == "--response-proof-identity-stdout"));
+        + usize::from(arguments.iter().any(|arg| arg == "--response-proof-identity-stdout"
+            || arg == "--response-proof-identity-vsock"));
     if !receive_configuration && (arguments.is_empty() || arguments.len() > maximum_arguments) {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
     }

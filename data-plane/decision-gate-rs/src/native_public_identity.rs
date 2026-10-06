@@ -1,20 +1,22 @@
 //! Opt-in public startup originals, not a readiness or enrollment receipt.
 //!
-//! Publication precedes listener binding. The exact startup quote is not a
+//! Publication precedes native ingress listener binding. The startup quote is not a
 //! new client challenge or TLS-session proof, and output never installs trust.
-//! An incomplete write can leave public bytes on stdout; startup then fails.
+//! An incomplete write can leave public bytes on its selected output; startup fails.
 //! Stdout locking and OS writes can block, so the owner still needs a watchdog.
 
 use super::*;
 use serverware_decision_gate::enclave_public_identity_v1::
     encode_native_ingress_public_evidence_v1;
 
-/// A separate role-4 startup record, available before CP trust/ingress setup.
-/// The actual original lifetime brackets IO; a partial or late output grants
-/// nothing and fails startup. Blocking stdout still requires an outer watchdog.
-pub(super) fn write_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(super) enum ResponseProofIdentityExport { None, Stdout, Vsock }
+
+/// Encode the exact existing role-4 startup original once. Transport selection
+/// never changes its fields, quote, key, canonical encoding or sole framing LF.
+fn encode_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
     identity: &mut EnclaveRuntimeIdentityV1, startup: &NativeRuntimeLifetimeV1,
-    deadline: u64) -> Result<(), String> {
+    deadline: u64) -> Result<Vec<u8>, String> {
     startup.check()?;
     if identity.deadline() != deadline || startup.deadline() != deadline {
         return Err("startup role-4 public owner deadlines differ".to_owned());
@@ -62,6 +64,35 @@ pub(super) fn write_startup_response_proof_identity(proof: &ResponseProofSigning
     bytes.push(b'\n');
     startup.check()?;
     signer.transport.verify_native_identity(identity, deadline)?;
+    Ok(bytes)
+}
+
+fn recheck_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
+    identity: &mut EnclaveRuntimeIdentityV1, startup: &NativeRuntimeLifetimeV1,
+    deadline: u64) -> Result<(), String> {
+    startup.check()?;
+    if identity.deadline() != deadline || startup.deadline() != deadline {
+        return Err("startup role-4 public owner deadlines differ".to_owned());
+    }
+    let ResponseProofSigner::Custody(signer) = &proof.signer else {
+        return Err("startup role-4 public identity requires actual custody".to_owned());
+    };
+    if !signer.release_profile.is_native() || proof.key_id != signer.key_id
+        || proof.public_key_pem != signer.public_key_pem {
+        return Err("startup role-4 public signer metadata differs".to_owned());
+    }
+    signer.transport.require_native()?;
+    signer.transport.verify_native_identity(identity, deadline)?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    startup.check()
+}
+
+/// A separate role-4 startup record, available before CP trust/ingress setup.
+/// Stdout preserves the exact original bytes and existing blocking-IO boundary.
+pub(super) fn write_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
+    identity: &mut EnclaveRuntimeIdentityV1, startup: &NativeRuntimeLifetimeV1,
+    deadline: u64) -> Result<(), String> {
+    let bytes = encode_startup_response_proof_identity(proof, identity, startup, deadline)?;
     {
         let stdout = std::io::stdout();
         let mut output = stdout.lock();
@@ -69,10 +100,17 @@ pub(super) fn write_startup_response_proof_identity(proof: &ResponseProofSigning
         output.write_all(&bytes).and_then(|_| output.flush())
             .map_err(|_| "startup role-4 public stdout publication failed".to_owned())?;
     }
-    startup.check()?;
-    signer.transport.verify_native_identity(identity, deadline)?;
-    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
-    startup.check()
+    recheck_startup_response_proof_identity(proof, identity, startup, deadline)
+}
+
+pub(super) fn write_startup_response_proof_identity_vsock(proof: &ResponseProofSigningMaterial,
+    identity: &mut EnclaveRuntimeIdentityV1, startup: &NativeRuntimeLifetimeV1,
+    deadline: u64, output: super::native_public_identity_transport::OutputOwner<'_>) -> Result<(), String> {
+    output.require_lifetime(startup)?;
+    let bytes = encode_startup_response_proof_identity(proof, identity, startup, deadline)?;
+    recheck_startup_response_proof_identity(proof, identity, startup, deadline)?;
+    output.publish(&bytes)?;
+    recheck_startup_response_proof_identity(proof, identity, startup, deadline)
 }
 
 pub(super) fn write_startup_public_identity(prepared: &NativeTlsGateV1) -> Result<(), String> {

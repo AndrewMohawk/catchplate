@@ -1,10 +1,10 @@
-"""UNREGISTERED public formats for purpose-fixed native static creation.
+"""Public formats and root-selected purpose policy for native static creation.
 
-The native generation wrapper below is a planned owner output, not signed
+The native generation wrapper below is an owner output, not signed
 evidence or a producer identity. Matching its intent, KEK label and ciphertext
-shape proves neither native custody nor approval. Before registration, a real
-broker owner and an independently admitted signer/TEE/configuration assignment
-must authenticate this original. A protected kernel must then re-read current
+shape proves neither native custody nor approval. The actual broker owner and
+independently admitted signer/TEE/configuration assignment must authenticate
+this original. The protected kernel must then re-read current
 roles/hardware, prove fresh credential/generation/currentness identities and
 atomically consume any required distinct-person approval with the insert.
 Retaining an immutable candidate does not renew a prior execution or resolve
@@ -190,8 +190,14 @@ def approval_payload_digest(value):
     return sha256(canonical({"action": ACTION, **candidate}))
 
 
-def validate_policy(value):
-    """Validate a planned independently signed selection, not admit authority."""
+def validate_policy(value, *, payload=None, root_key=None):
+    """Validate the selected policy; this is not native custody verification."""
+    del root_key
+    if value is None and payload is not None:
+        selected_operations = OPERATIONS | {"credential.static.approval-request", "credential.static.approval-decide"}
+        require(not any(set(role.get("enabledOperations", ())) & selected_operations
+            for role in payload["roles"].values()), "Static creation requires explicit signed purpose admission")
+        return None
     require(type(value) is dict and set(value) == POLICY_FIELDS and value["schema"] == SCHEMA)
     digest(value["controlPlaneConfigurationDigest"])
     policy(value["credentialPolicy"])
@@ -202,19 +208,45 @@ def validate_policy(value):
         and type(value["intentMaxSeconds"]) is int
         and 1 <= value["intentMaxSeconds"] <= MAX_RETAINED_INTENT_SECONDS
         and type(value["twoPersonRequired"]) is bool)
+    if payload is not None and any(set(role.get("enabledOperations", ()))
+            & {"credential.static.approval-request", "credential.static.approval-decide"}
+            for role in payload["roles"].values()):
+        require(value["twoPersonRequired"] is True,
+            "Static approval operations require the signed two-person creation policy")
     return value
 
 
+def request_digest(operation, value):
+    from serverware import authority_contract as contract
+    from serverware import authority_request_commitment as commitment
+
+    values = arguments(operation, value, typed="businessIntent" in value)
+    typed = {**values, "businessIntent": contract.synthesize_business_intent(operation, values)}
+    return commitment.framed_digest("serverware.policyAuthorityV9Request/v1", canonical({
+        "schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+        "handler": contract.operation_spec(operation)["handler"],
+        "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": commitment._authorization_arguments(typed)}))
+
+
+def verify_original(operation, arguments_value, *, configuration_payload, root_key, now_epoch_ns):
+    """Check the actual selected policy; the owner separately verifies custody."""
+    selected = validate_policy(configuration_payload.get(FIELD),
+        payload=configuration_payload, root_key=root_key)
+    require(selected is not None, "Static credential creation purpose is not selected")
+    verify_request_context(operation, arguments_value, selected_policy=selected, now_epoch_ns=now_epoch_ns)
+
+
 def verify_request_context(operation, arguments_value, *, selected_policy, now_epoch_ns):
-    """Preliminary context check, deliberately not a registration verifier.
+    """Selected request context, deliberately not native custody verification.
 
     The caller must select twoPersonRequired from the actual configured global
     credential.create policy, never HTTP input. An approval ID is only a
     locator: current roles, distinct actors, hardware provenance, exact payload,
-    unconsumed row and atomic consumption remain the future kernel's work.
+    unconsumed row and atomic consumption remain the protected kernel's work.
     Its approval expiry must be clipped to the retained intent expiry, and its
     actual execution deadline must also be clipped to that original approval.
-    Neither the KEK label nor this planned wrapper supplies native provenance.
+    Neither the KEK label nor this wrapper supplies native provenance.
     A historical producer proof must not be treated as current assignment
     authority. Retained validity cannot extend its original interval or permit
     retry/renewal of a prior uncertain execution.

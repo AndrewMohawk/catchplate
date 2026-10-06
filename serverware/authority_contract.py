@@ -278,6 +278,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "setup.session.create-audit-settle",
     "setup.session.bind-credential",
     "setup.session.bind-credential-audit-settle",
+    "credential.static.create", "credential.static.approval-request", "credential.static.approval-decide",
     "policy.candidate.generation-claim", "policy.candidate.generation-publish",
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
     "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
@@ -1862,6 +1863,29 @@ _OPERATIONS = {
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=64, maximum_mutations=10, maximum_work_units=8192,
         ) for phase in ("prepare", "complete", "settle")
+    },
+    "credential.static.create": _spec(
+        "serverware_policy_authority_credential_static_create",
+        reads=("credentials", "credential_generations", "credential_currentness_roots",
+            "control_plane_approvals", "rbac_role_bindings", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+        writes=("credentials", "credential_generations", "credential_currentness_roots",
+            "control_plane_approvals", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+        mutation_kinds={"credentials": ("INSERT",), "credential_generations": ("INSERT",),
+            "credential_currentness_roots": ("INSERT",), "control_plane_approvals": ("UPDATE",)},
+        webauthn="bound-verified-assertion-receipt",
+        proof_primitives=("primary-key-row", "aggregate-high-water", "capacity-reservation"),
+        maximum_query_rows=32, maximum_mutations=12, maximum_work_units=8192,
+    ),
+    **{
+        "credential.static.approval-" + phase: _spec(
+            "serverware_policy_authority_credential_static_approval_" + phase,
+            reads=("control_plane_approvals", "rbac_role_bindings", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            writes=("control_plane_approvals", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            mutation_kinds={"control_plane_approvals": (("INSERT",) if phase == "request" else ("UPDATE",))},
+            webauthn="bound-verified-assertion-receipt",
+            proof_primitives=("primary-key-row", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=32, maximum_mutations=12, maximum_work_units=8192,
+        ) for phase in ("request", "decide")
     },
     "setup.session.create": _spec(
         "serverware_policy_authority_setup_session_create",

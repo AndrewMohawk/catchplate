@@ -90,6 +90,9 @@ from serverware import authority_setup_policy as setup_policy
 from serverware import authority_setup_cancel as setup_cancel
 from serverware import authority_setup_create as setup_create
 from serverware import authority_setup_bind_credential as setup_bind_credential
+from serverware import authority_static_credential_create as static_create
+from serverware import authority_static_credential_approval as static_approval
+from serverware import authority_static_credential_custody as static_custody
 from serverware import authority_setup_policy_admission as setup_policy_admission
 from serverware import authority_setup_native_enrollment as setup_native_enrollment
 from serverware import authority_setup_native_enrollment_policy as setup_native_enrollment_policy
@@ -1268,7 +1271,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, setup_cancel.FIELD, setup_create.FIELD, setup_bind_credential.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
+            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, setup_cancel.FIELD, setup_create.FIELD, setup_bind_credential.FIELD, static_create.FIELD, static_custody.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1398,6 +1401,11 @@ class MeasuredConfiguration:
             setup_bind_credential.validate_policy(payload.get(setup_bind_credential.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority Setup credential binding admission is invalid") from exc
+        try:
+            static_create.validate_policy(payload.get(static_create.FIELD), payload=payload, root_key=root_key)
+            static_custody.validate_policy(payload.get(static_custody.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority native static credential admission is invalid") from exc
         try:
             setup_native_enrollment_policy.validate_policy(payload.get(setup_native_enrollment_policy.FIELD), payload=payload, root_key=root_key)
             setup_native_ca.validate_policy(payload.get(setup_native_ca.FIELD), payload=payload, root_key=root_key)
@@ -8593,7 +8601,7 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in (setup_native_final.ASSERTION_OPERATIONS | setup_native_hardware.ASSERTION_OPERATIONS | setup_native_runtime.ASSERTION_OPERATIONS | setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
+        if operation in (setup_native_final.ASSERTION_OPERATIONS | setup_native_hardware.ASSERTION_OPERATIONS | setup_native_runtime.ASSERTION_OPERATIONS | setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
             selected_profile = (setup_native_final if operation in setup_native_final.OPERATIONS else
@@ -8605,6 +8613,8 @@ class AuthorityProcess:
                 setup_policy if operation in setup_policy.OPERATIONS else
                 setup_cancel if operation in setup_cancel.OPERATIONS else
                 setup_create if operation in setup_create.OPERATIONS else
+                static_create if operation in static_create.OPERATIONS else
+                static_approval if operation in static_approval.OPERATIONS else
                 setup_bind_credential if operation in setup_bind_credential.OPERATIONS else
                 policy_candidate if operation in policy_candidate.OPERATIONS else
                 oauth_succession if operation in oauth_succession.OPERATIONS else
@@ -8670,6 +8680,9 @@ class AuthorityProcess:
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if operation in setup_bind_credential.OPERATIONS:
                 setup_bind_credential.verify_original(operation, values,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
+                selected_profile.verify_original(operation, values,
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if operation in policy_candidate.OPERATIONS:
                 policy_candidate_policy.verify_original(operation, values,
@@ -8847,6 +8860,17 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "typed authority handler binding changed"
             )
+        native_evidence = None
+        if operation == static_create.OPERATION:
+            if (set(runtime_input) != {"input", "webauthnAuthorization", "nativeEvidence"}
+                    or type(runtime_input.get("input")) is not dict
+                    or type(runtime_input.get("webauthnAuthorization")) is not dict):
+                raise AuthorityServiceError("Static creation requires its separate literal native proof channel")
+            native_evidence = json.loads(_canonical(static_custody.evidence(runtime_input["nativeEvidence"])))
+            # No native evidence is inserted into the business commitment or
+            # accepted as a verifier-produced verdict. Own the literal original.
+            runtime_input = {"input": runtime_input["input"],
+                "webauthnAuthorization": runtime_input["webauthnAuthorization"]}
         if (
             set(runtime_input)
             == {
@@ -8902,6 +8926,18 @@ class AuthorityProcess:
         )
         from serverware import authority_publication_approval as publication_approval
         from serverware import authority_policy_file_approval
+        if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
+            static_profile = static_create if operation == static_create.OPERATION else static_approval
+            static_originals = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            static_profile.verify_original(operation, static_originals,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                now_epoch_ns=time.time_ns())
+            if static_profile.request_digest(operation, static_originals) != request_digest:
+                raise AuthorityServiceError("Static credential request commitment differs")
+            if operation == static_create.OPERATION:
+                static_custody.verify_original(operation, static_originals, evidence=native_evidence,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                    now_epoch_ns=time.time_ns())
         if operation in canary_delivery.OPERATIONS:
             canary_delivery_policy.verify_original(operation, arguments, configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
@@ -9090,6 +9126,17 @@ class AuthorityProcess:
         issued_monotonic_ns = time.monotonic_ns()
         issued_at_epoch_ns = time.time_ns()
         remaining_ns = deadline_monotonic_ns - issued_monotonic_ns
+        if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
+            original_request = static_originals["request"]
+            expires_field = "executionExpiresAtEpochNs" if operation == static_create.OPERATION else "expiresAtEpochNs"
+            issued_field = "executionIssuedAtEpochNs" if operation == static_create.OPERATION else "issuedAtEpochNs"
+            static_expiry = original_request[expires_field]
+            if operation == static_create.OPERATION:
+                static_expiry = min(static_expiry, native_evidence["statement"]["expiresAtEpochNs"])
+            if issued_at_epoch_ns < original_request[issued_field]:
+                raise AuthorityServiceError("Static credential clock precedes its approved original")
+            remaining_ns = min(remaining_ns, static_expiry - issued_at_epoch_ns)
+            deadline_monotonic_ns = min(deadline_monotonic_ns, issued_monotonic_ns + remaining_ns)
         if operation in {setup_cancel.OPERATION, setup_create.OPERATION, setup_bind_credential.OPERATION}:
             tracking_profile = (setup_cancel if operation == setup_cancel.OPERATION else
                 setup_create if operation == setup_create.OPERATION else setup_bind_credential)
@@ -9170,13 +9217,14 @@ class AuthorityProcess:
             webauthn_trust_high_water_digest = (
                 webauthn_receipt["trustHighWaterDigest"]
             )
-        if operation in {setup_cancel.OPERATION, setup_create.OPERATION, setup_bind_credential.OPERATION}:
+        if operation in ({setup_cancel.OPERATION, setup_create.OPERATION, setup_bind_credential.OPERATION}
+                | static_create.OPERATIONS | static_approval.OPERATIONS):
             # The executor's capability must expire with this exact assertion,
             # even when its challenge expires before the request's own bound.
             deadline_epoch_ns = min(deadline_epoch_ns, webauthn_evidence["expiresAtEpochNs"])
             assertion_mono, assertion_epoch = time.monotonic_ns(), time.time_ns()
             if assertion_epoch < issued_at_epoch_ns or assertion_epoch >= deadline_epoch_ns:
-                raise AuthorityServiceError(f"Setup {tracking_name} assertion expired before planning")
+                raise AuthorityServiceError("Original assertion expired before planning")
             deadline_monotonic_ns = min(deadline_monotonic_ns,
                 issued_monotonic_ns + deadline_epoch_ns - issued_at_epoch_ns,
                 assertion_mono + deadline_epoch_ns - assertion_epoch)
@@ -9213,6 +9261,8 @@ class AuthorityProcess:
             "fence": reservation["fence"],
             "reservedAtEpochNs": issued_at_epoch_ns,
         }
+        if operation == static_create.OPERATION:
+            planner_request["staticCredentialCustodyEvidence"] = native_evidence
         planner_config = self.configuration.role("planner")
         planned = _socket_request(
             str(planner_config["socketPath"]),
@@ -9369,6 +9419,32 @@ class AuthorityProcess:
                     now_epoch_ns=binding_now, work=_ValidationWork(QueryReadValidationLimits()))
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
                 raise AuthorityServiceError("Setup credential binding plan differs from its admitted originals") from exc
+        if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
+            from serverware import authority_transition_static_credential_create as static_kernel
+            from serverware import authority_transition_static_credential_approval as static_approval_kernel
+            from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+            static_now = time.time_ns()
+            static_profile.verify_original(operation, static_originals,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                now_epoch_ns=static_now)
+            creation_policy = static_create.validate_policy(self.configuration.payload.get(static_create.FIELD),
+                payload=self.configuration.payload, root_key=self.configuration.root_key)
+            replay_arguments = dict(payload=plan_payload, arguments=static_originals,
+                verified_webauthn_evidence=webauthn_evidence, creation_policy=creation_policy,
+                deadline_ns=deadline_monotonic_ns, now_epoch_ns=static_now,
+                work=_ValidationWork(QueryReadValidationLimits()))
+            if operation == static_create.OPERATION:
+                if _canonical(plan_payload["staticCredentialCustodyEvidence"]) != _canonical(native_evidence):
+                    raise AuthorityServiceError("Signed plan substituted the original static custody evidence")
+                static_custody.verify_original(operation, static_originals, evidence=native_evidence,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                    now_epoch_ns=static_now)
+                static_kernel.verify_static_create_plan(verified_native_evidence=native_evidence, **replay_arguments)
+            else:
+                static_approval_kernel.verify_static_approval_plan(operation=operation, **replay_arguments)
+            if time.monotonic_ns() >= deadline_monotonic_ns or time.time_ns() >= deadline_epoch_ns:
+                raise AuthorityServiceError("Static credential original expired during independent replay")
         if operation in canary_delivery.OPERATIONS:
             canary_delivery_completion.preflight_bounds(operation, request_original=_delivery_request_original,
                 signed_plan=signed_plan, configuration_original=self.configuration.original_bytes,
@@ -9703,6 +9779,14 @@ class AuthorityProcess:
         if planner_request["operation"] in setup_bind_credential.OPERATIONS:
             setup_bind_credential.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in static_create.OPERATIONS | static_approval.OPERATIONS:
+            static_profile = static_create if planner_request["operation"] == static_create.OPERATION else static_approval
+            static_profile.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if planner_request["operation"] == static_create.OPERATION:
+                static_custody.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                    evidence=planner_request["staticCredentialCustodyEvidence"],
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in native_activation.OPERATIONS:
             native_activation.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
@@ -9808,10 +9892,15 @@ class AuthorityProcess:
                 self.configuration.payload.get(setup_bind_credential.FIELD), payload=self.configuration.payload,
                 root_key=self.configuration.root_key)["maximumEvents"]
                 if set(self.role_config["enabledOperations"]) & setup_bind_credential.OPERATIONS else None),
+            static_credential_configuration=(self.configuration.payload
+                if set(self.role_config["enabledOperations"]) & (static_create.OPERATIONS | static_approval.OPERATIONS) else None),
+            static_credential_root_key=(self.configuration.root_key
+                if set(self.role_config["enabledOperations"]) & (static_create.OPERATIONS | static_approval.OPERATIONS) else None),
         )
         # Check the pinned embedded receipt even on a durable-plan replay, and
         # before asking another process for stored planning data.
         planner.verify_assertion_evidence(planner_request)
+        planner.verify_static_evidence(planner_request)
         writer = self.configuration.role("planner-writer")
         replay = _socket_request(
             str(writer["socketPath"]),
@@ -9901,6 +9990,9 @@ class AuthorityProcess:
                 or planner_request["operation"] == "webauthn.credential.revoke"
                 and _canonical(derived["webauthnEvidence"])
                     != _canonical(planner_request["webauthnEvidence"])
+                or planner_request["operation"] == static_create.OPERATION
+                and _canonical(derived["staticCredentialCustodyEvidence"])
+                    != _canonical(planner_request["staticCredentialCustodyEvidence"])
             ):
                 raise AuthorityServiceError(
                     "durable planner payload identity changed"

@@ -1705,6 +1705,9 @@ _INTERNAL_ONLY_AUTHORITY_OPERATIONS = frozenset(
     {
         # These successor/disabled families have no generic operator route.
         # Classifying their source contracts does not admit execution.
+        "credential.static.create",
+        "credential.static.approval-request",
+        "credential.static.approval-decide",
         "jit.assertion.issue",
         "release.audit-drain",
         "credential-nonce.reserve",

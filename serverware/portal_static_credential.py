@@ -427,3 +427,14 @@ STATIC_CREDENTIAL_PAGE = r"""<!doctype html><html lang="en"><meta charset="utf-8
 <p id="static-status" role="status" aria-live="polite">No intake or creation has started.</p>
 <p><a href="/approvals" target="_blank" rel="noopener">Approval queue</a> · <a href="/">Return to Setup</a></p>
 <script>""" + STATIC_CREDENTIAL_SCRIPT + STATIC_CREDENTIAL_PAGE_SCRIPT + "</script></html>"
+
+
+def render_static_credential_page(*, rotation_selected=False):
+    """A navigation link only; the caller supplies actual cold selection."""
+    if type(rotation_selected) is not bool:
+        raise ValueError("Static rotation selection is not a boolean")
+    if not rotation_selected:
+        return STATIC_CREDENTIAL_PAGE
+    return STATIC_CREDENTIAL_PAGE.replace("<h1>Create protected static credential</h1>",
+        '<h1>Create protected static credential</h1><p><a href="/credentials/static/rotation">'
+        'Rotate an existing protected static credential</a></p>', 1)

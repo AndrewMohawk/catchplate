@@ -75,7 +75,11 @@ from serverware.portal_static_credential_replacement import (
     STATIC_CREDENTIAL_REPLACEMENT_HTML,
     STATIC_CREDENTIAL_REPLACEMENT_SCRIPT,
 )
-from serverware.portal_static_credential import STATIC_CREDENTIAL_PAGE, STATIC_CREDENTIAL_SCRIPT
+from serverware.portal_static_credential import STATIC_CREDENTIAL_SCRIPT, render_static_credential_page
+from serverware.portal_static_credential_rotation import (
+    STATIC_CREDENTIAL_ROTATION_PAGE,
+    STATIC_CREDENTIAL_ROTATION_SCRIPT,
+)
 from serverware.portal_public_revocation import PUBLIC_REVOCATION_HTML, PUBLIC_REVOCATION_SCRIPT
 from serverware.portal_oauth_consent import OAUTH_CONSENT_HTML, OAUTH_CONSENT_SCRIPT, enrolled_oauth_profile
 from serverware.portal_oauth_measured_consent import (
@@ -1056,12 +1060,12 @@ def _control_plane_security_headers(
         headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
-    # This one dedicated page coordinates the independently terminated native
+    # These dedicated pages coordinate the independently terminated native
     # intake popup. Every other page retains same-origin opener isolation.
     # The selected header is part of the actual signed response bytes below;
     # neither a downstream header nor a query flag can request the exception.
     if (request_is_https and request_method in {"GET", "HEAD"}
-            and request_path == "/credentials/static/new" and not request_query
+            and request_path in {"/credentials/static/new", "/credentials/static/rotation"} and not request_query
             and response_status_code == 200 and response_is_html):
         headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     return headers
@@ -1746,6 +1750,9 @@ _INTERNAL_ONLY_AUTHORITY_OPERATIONS = frozenset(
 # own human-approval paths. Classification must not grant generic API access.
 _DEDICATED_WORKFLOW_AUTHORITY_OPERATIONS = frozenset(
     {
+        "credential.static.rotate",
+        "credential.static.rotation-approval-request",
+        "credential.static.rotation-approval-decide",
         "credential.currentness.ack",
         "credential.currentness.admit",
         "credential.currentness.challenge",
@@ -1893,6 +1900,12 @@ _DEDICATED_WORKFLOW_AUTHORITY_OPERATIONS = frozenset(
         "setup.native-runtime.complete",
         "setup.native-runtime.prepare",
         "setup.policy.bind-candidate",
+        "setup.session.audit-settle",
+        "setup.session.bind-credential",
+        "setup.session.bind-credential-audit-settle",
+        "setup.session.cancel",
+        "setup.session.create",
+        "setup.session.create-audit-settle",
     }
 )
 _KNOWN_AUTHORITY_OPERATION_CLASSIFICATIONS = (
@@ -3646,6 +3659,8 @@ def index() -> str:
 
 
 def _portal_document() -> str:
+    from serverware import control_plane_static_credential_rotation as rotation_owner
+
     marker = "__SERVERWARE_ENROLLED_OAUTH_PROFILE__"
     seed_marker = "__SERVERWARE_DEMO_SEED_BUTTON__"
     if UI_HTML.count(marker) != 1 or UI_HTML.count(seed_marker) != 1:
@@ -3658,6 +3673,9 @@ def _portal_document() -> str:
         'After creation, explicitly select and bind its exact ID in Setup.</p>' if protected_static else
         '<label for="credential-secret">Secret</label>'
         '<textarea id="credential-secret" name="secret" required autocomplete="off"></textarea>')
+    if rotation_owner.selected():
+        secret_field += ('<p><a href="/credentials/static/rotation">'
+            'Rotate an existing protected static credential</a>.</p>')
     return (UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
         .replace("__SERVERWARE_STATIC_SECRET_FIELD__", secret_field)
         .replace("__SERVERWARE_STATIC_PROTECTED__", json.dumps(protected_static)))
@@ -3673,10 +3691,23 @@ def _protected_static_credentials() -> bool:
 def static_credential_page(request: Request,
         identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner"))) -> HTMLResponse:
     from serverware import control_plane_static_credential as owner
+    from serverware import control_plane_static_credential_rotation as rotation_owner
     if (request.query_params or request.url.scheme != "https" or identity.auth_method != "oidc-session"
             or not owner.selected()):
         raise HTTPException(status_code=409, detail="Protected static onboarding is unavailable for this session")
-    return HTMLResponse(STATIC_CREDENTIAL_PAGE, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(render_static_credential_page(rotation_selected=rotation_owner.selected()),
+        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/credentials/static/rotation", response_class=HTMLResponse)
+@app.head("/credentials/static/rotation", response_class=HTMLResponse)
+def static_credential_rotation_page(request: Request,
+        identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner"))) -> HTMLResponse:
+    from serverware import control_plane_static_credential_rotation as owner
+    if (request.query_params or request.url.scheme != "https" or identity.auth_method != "oidc-session"
+            or not owner.selected()):
+        raise HTTPException(status_code=409, detail="Protected static rotation is unavailable for this session")
+    return HTMLResponse(STATIC_CREDENTIAL_ROTATION_PAGE, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/approvals/{approval_id}", response_class=HTMLResponse)
@@ -8732,6 +8763,11 @@ def policy_file_publication_genesis_materialize(
     return execute(request, payload, genesis=True)
 
 
+def _is_static_rotation_approval(item: dict[str, Any]) -> bool:
+    return (item.get("action") == "credential.update" and isinstance(item.get("request"), dict)
+        and item["request"].get("apiVersion") == "serverware.staticCredentialRotationReview/v1")
+
+
 @app.get("/api/control-plane/approvals")
 def control_plane_approvals(
     status: str | None = None,
@@ -8756,8 +8792,9 @@ def control_plane_approvals(
         pending = item.get("status") == "pending"
         has_role = identity.has_any_role(required_roles)
         is_requester = item.get("requester_id") == identity.user_id
-        static_approval = (item.get("action") == "credential.create" and isinstance(item.get("request"), dict)
+        static_approval = ((item.get("action") == "credential.create" and isinstance(item.get("request"), dict)
             and item["request"].get("apiVersion") == "serverware.staticCredentialCreationApprovalRequest/v1")
+            or _is_static_rotation_approval(item))
         can_approve = pending and has_role and not is_requester
         can_deny = pending and has_role and (not static_approval or not is_requester)
         approve_block_reason = None
@@ -8799,6 +8836,8 @@ def control_plane_approval_approve(
     approval = db.get_control_plane_approval(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="control-plane approval not found")
+    if _is_static_rotation_approval(approval):
+        raise HTTPException(status_code=409, detail="Use the protected static rotation decision ceremony; no generic fallback")
     if approval["status"] != "pending":
         raise HTTPException(
             status_code=409,
@@ -8930,6 +8969,8 @@ def control_plane_approval_deny(
     approval = db.get_control_plane_approval(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="control-plane approval not found")
+    if _is_static_rotation_approval(approval):
+        raise HTTPException(status_code=409, detail="Use the protected static rotation decision ceremony; no generic fallback")
     if approval["status"] != "pending":
         raise HTTPException(
             status_code=409,
@@ -16801,6 +16842,43 @@ async def controlled_static_credential(request: Request) -> Response:
         raise
     except Exception:
         raise HTTPException(status_code=409, detail="Static credential action unavailable; do not retry an uncertain action") from None
+    return Response(original, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/credentials/static/rotation/assignment")
+@app.post("/api/credentials/static/rotation/intent")
+@app.post("/api/credentials/static/rotation/candidate")
+@app.post("/api/credentials/static/rotation/approval/status")
+@app.post("/api/credentials/static/rotation/approval/request/draft")
+@app.post("/api/credentials/static/rotation/approval/request/options")
+@app.post("/api/credentials/static/rotation/approval/request/execute")
+@app.post("/api/credentials/static/rotation/approval/decide/draft")
+@app.post("/api/credentials/static/rotation/approval/decide/options")
+@app.post("/api/credentials/static/rotation/approval/decide/execute")
+@app.post("/api/credentials/static/rotation/rotate/draft")
+@app.post("/api/credentials/static/rotation/rotate/options")
+@app.post("/api/credentials/static/rotation/rotate/execute")
+async def controlled_static_credential_rotation(request: Request) -> Response:
+    from serverware import control_plane_static_credential_rotation as owner
+    from starlette.concurrency import run_in_threadpool
+    raw = await _native_oauth_original(request, owner.MAX_REQUEST)
+    try:
+        result = await run_in_threadpool(owner.on_request, request, raw)
+        original = _canonical_json(result).encode("utf-8")
+        if len(original) > owner.MAX_RESPONSE:
+            raise ValueError("bounded response")
+    except owner.DrainUncertain as exc:
+        return JSONResponse({"ok": False, "code": "static_rotation_drain_uncertain", "retryAllowed": False,
+            "credentialId": exc.credential_id, "candidateSha256": exc.candidate_sha256}, status_code=409,
+            headers={"Cache-Control": "no-store"})
+    except owner.CommitUncertain as exc:
+        return JSONResponse({"ok": False, "code": "static_rotation_commit_uncertain", "retryAllowed": False,
+            "operation": exc.operation, "requestDigest": exc.request_digest}, status_code=409,
+            headers={"Cache-Control": "no-store"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Static rotation unavailable; do not retry an uncertain drain or action") from None
     return Response(original, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
@@ -26427,6 +26505,13 @@ UI_HTML = r"""
     }
 
     function safeControlPlaneRequest(request, action = null) {
+      if (action === 'credential.update' && request?.apiVersion === staticRotationReview) {
+        const fields = ['apiVersion', 'credentialId', 'previousCredentialVersion', 'credentialVersion',
+          'previousCredentialSha256', 'previousCurrentnessOriginRequestDigest', 'previousProvenanceSha256',
+          'name', 'kind', 'metadata', 'issuedAtEpochNs', 'expiresAtEpochNs', 'intentSha256',
+          'nativeGenerationSha256', 'candidateSha256'];
+        return Object.fromEntries(fields.filter(key => Object.hasOwn(request, key)).map(key => [key, request[key]]));
+      }
       if (action === 'credential.create' && request?.apiVersion === staticPortalReview) {
         const fields = ['apiVersion', 'credentialId', 'credentialVersion', 'name', 'kind', 'metadata',
           'issuedAtEpochNs', 'expiresAtEpochNs', 'intentSha256', 'nativeGenerationSha256', 'candidateSha256'];
@@ -26461,7 +26546,8 @@ UI_HTML = r"""
         const summary = safeControlPlaneRequest(item.request, item.action);
         const requiredRoles = (item.required_approver_roles || []).join(' or ');
         const enrolledActivation = item.action === oauthActivationAction && enrolledOAuthProfile !== 'development';
-        const staticApproval = item.action === 'credential.create' && item.request?.apiVersion === staticPortalReview;
+        const staticApproval = item.action === 'credential.create' && item.request?.apiVersion === staticPortalReview
+          || item.action === 'credential.update' && item.request?.apiVersion === staticRotationReview;
         const approveBlocked = item.can_approve !== true || enrolledActivation
           && (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || !(state.authStatus?.roles || []).includes('credential_owner'));
         const publicRevocation = item.action === publicRevocationAction;
@@ -26595,6 +26681,9 @@ UI_HTML = r"""
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
       const item = (state.controlPlaneApprovals || []).find(value => value.id === id);
+      if (item?.action === 'credential.update' && item.request?.apiVersion === staticRotationReview) {
+        return staticRotationDecide(id, decision);
+      }
       if (item?.action === 'credential.create' && item.request?.apiVersion === staticPortalReview) {
         return staticPortalDecide(id, decision);
       }
@@ -28629,6 +28718,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     __SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_SCRIPT__
     __SERVERWARE_STATIC_CREDENTIAL_SCRIPT__
+    __SERVERWARE_STATIC_CREDENTIAL_ROTATION_SCRIPT__
     initCredentialReplacement();
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
@@ -28716,6 +28806,7 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_HTML__", STATIC_CREDENTIAL_REPLACEMENT_HTML),
     ("__SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_SCRIPT__", STATIC_CREDENTIAL_REPLACEMENT_SCRIPT),
     ("__SERVERWARE_STATIC_CREDENTIAL_SCRIPT__", STATIC_CREDENTIAL_SCRIPT),
+    ("__SERVERWARE_STATIC_CREDENTIAL_ROTATION_SCRIPT__", STATIC_CREDENTIAL_ROTATION_SCRIPT),
     ("__SERVERWARE_PUBLIC_REVOCATION_HTML__", PUBLIC_REVOCATION_HTML),
     ("__SERVERWARE_PUBLIC_REVOCATION_SCRIPT__", PUBLIC_REVOCATION_SCRIPT),
     ("__SERVERWARE_OAUTH_CONSENT_HTML__", OAUTH_CONSENT_HTML),

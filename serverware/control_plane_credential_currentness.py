@@ -349,7 +349,7 @@ def _all_acknowledged(root, barrier, configuration_digest):
     return True
 
 
-def _coordinate(owner, credential, generation, parent):
+def _coordinate(owner, credential, generation, parent, *, static_provenance_original=None):
     parent.check()
     owner.check()
     credential_id, version = credential["id"], credential["credential_version"]
@@ -357,7 +357,8 @@ def _coordinate(owner, credential, generation, parent):
     profile.require(current == credential and head == generation and root["status"] == "open" and root["barrier_id"] is None)
     issued = time.time_ns()
     result = owner.dispatch(profile.OP_QUIESCE, credential_id, version, {
-        "barrierId": str(uuid.uuid4()), "issuedAtEpochNs": issued, "expiresAtEpochNs": owner.expires})
+        "barrierId": str(uuid.uuid4()), "issuedAtEpochNs": issued, "expiresAtEpochNs": owner.expires},
+        static_provenance_original=static_provenance_original)
     frozen = result["currentness"]["barrier"]
     profile.require(frozen is not None and frozen["status"] == "quiescing")
     while True:
@@ -372,13 +373,64 @@ def _coordinate(owner, credential, generation, parent):
         # Waiting is observation, never proof. The original deadline is not
         # renewed and an unreachable holder leaves this one-shot root blocked.
         time.sleep(min(0.025, max(0, owner.deadline - time.monotonic_ns()) / 1_000_000_000))
+    parent.check()
     result = owner.dispatch(profile.OP_ADMIT, credential_id, version,
-        {"barrierId": barrier["id"], "barrierSha256": barrier["original_sha256"]})
+        {"barrierId": barrier["id"], "barrierSha256": barrier["original_sha256"]},
+        static_provenance_original=static_provenance_original)
     profile.require(result["currentness"]["root"]["status"] == "admitted"
         and result["currentness"]["barrier"]["sha256"] == frozen["sha256"])
     parent.check()
     owner.check()
     return frozen["sha256"]
+
+
+def admit_static_rotation_barrier(opening, credential_row, generation_row):
+    """One source-owned drain; returned hashes are observations, not permission.
+
+    The final rotation kernel independently proves/consumes the retained rows.
+    This never adopts an old quiescing/admitted root or retries an uncertain
+    attempt. Fresh execution must fit the original barrier expiry returned here.
+    """
+    from serverware import control_plane_static_credential_rotation as http
+    from serverware import authority_static_credential_rotate as rotation
+    from serverware import authority_credential_currentness_policy as policy
+
+    profile.require(type(opening) is http._Owner and opening.drain_started is True
+        and opening.dispatched is False and type(opening.drain_original) is bytes
+        and type(opening.drain_values) is dict
+        and rotation.canonical(opening.drain_values) == opening.drain_original)
+    opening.check()
+    values = http._candidate(opening, opening.drain_original.decode("ascii"))
+    profile.require(rotation.canonical(values) == opening.drain_original)
+    values = rotation.arguments(rotation.OPERATION, values, candidate=True)
+    request = values["request"]
+    owner = _Owner(deadline=opening.deadline, expires=min(opening.expires, request["expiresAtEpochNs"]))
+    profile.require(opening.cold.custody is owner.custody and opening.cold.binding is owner.binding
+        and values["control_plane_configuration_digest"] == owner.configuration_digest)
+    owner.assignment = assignment_startup.require_selected()
+    profile.require(owner.assignment.binding is owner.binding
+        and owner.assignment.policy["schema"] == policy.ROTATION_POSTBOOT_SCHEMA)
+    owner.check()
+    item_id, version = request["credentialId"], request["previousCredentialVersion"]
+    credential, generation, root = _rows(item_id, version)
+    profile.require(credential == credential_row and generation == generation_row
+        and rotation.sha256(credential_currentness_rows.credential_original(credential)) == request["previousCredentialSha256"]
+        and root["origin_request_digest"] == request["previousCurrentnessOriginRequestDigest"]
+        and root["status"] == "open" and root["barrier_id"] is None)
+    original = request["previousProvenanceOriginal"]
+    profile.require(_static_rows(original, item_id, version, owner.configuration_digest, owner.epoch)
+        == owner.assignment.policy["deploymentId"])
+    barrier_sha = _coordinate(owner, credential, generation, opening, static_provenance_original=original)
+    current, head, admitted = _rows(item_id, version)
+    barrier = _barrier(admitted)
+    profile.require(current == credential and head == generation and admitted["status"] == "admitted"
+        and admitted["origin_request_digest"] == root["origin_request_digest"]
+        and barrier is not None and barrier["status"] == "admitted"
+        and barrier["original_sha256"] == barrier_sha)
+    interval = profile.public_barrier(barrier)["original"]
+    opening.check(); owner.check()
+    return {"barrierSha256": barrier_sha, "currentnessRootSha256": profile.root_digest(admitted),
+        "issuedAtEpochNs": interval["issuedAtEpochNs"], "expiresAtEpochNs": interval["expiresAtEpochNs"]}
 
 
 def admit_refresh_barrier(opening, credential_row, generation_row):

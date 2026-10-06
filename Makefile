@@ -1646,6 +1646,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_static_credential_owner.py \
 	serverware/control_plane_static_credential.py \
 	serverware/portal_static_credential.py \
+	serverware/control_plane_static_credential_rotation.py \
+	serverware/portal_static_credential_rotation.py \
 	serverware/authority_transition_oauth_setup.py \
 	serverware/authority_transition_oauth_setup_rows.py \
 	serverware/authority_oauth_measured_exchange_policy.py \
@@ -4816,6 +4818,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_static_credential_owner.py \
 				serverware/control_plane_static_credential.py \
 				serverware/portal_static_credential.py \
+				serverware/control_plane_static_credential_rotation.py \
+				serverware/portal_static_credential_rotation.py \
 				serverware/authority_transition_oauth_setup.py \
 				serverware/authority_transition_oauth_setup_rows.py \
 				serverware/authority_oauth_measured_exchange_policy.py \

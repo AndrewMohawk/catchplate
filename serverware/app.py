@@ -7826,6 +7826,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "publicUrl": canonical_control_plane_url(PUBLIC_URL),
         "policyPrincipals": policy_principals,
         "oauthProviders": provider_status_with_custody() if can_view_credentials else [],
+        "setupTrackingCancellationAvailable": _setup_tracking_cancellation_available(),
         "currentUserId": identity.user_id,
         "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
@@ -12851,6 +12852,13 @@ _SETUP_SESSION_MUTATION_ROLES = {
 }
 
 
+def _setup_tracking_cancellation_available() -> bool:
+    from serverware import oauth_application_owner
+
+    # The ordinary transition is direct metadata DML, not a native authority operation.
+    return not db.metadata_uses_postgres() and not oauth_application_owner.setup_profile_selected()
+
+
 def _setup_sha256_json(value: Any) -> str:
     return (
         "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
@@ -14422,6 +14430,8 @@ def setup_session_cancel(
         require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
     ),
 ) -> dict[str, Any]:
+    if not _setup_tracking_cancellation_available():
+        raise HTTPException(status_code=409, detail="Setup tracking cancellation is unavailable for the protected metadata profile")
     _load_setup_session_for_identity(session_id, identity, mutate=True)
     try:
         updated = db.cancel_setup_session(
@@ -23125,6 +23135,19 @@ UI_HTML = r"""
           <div><label for="setup-assignee">Next operator</label><input id="setup-assignee" maxlength="512" placeholder="user:operator"></div>
           <button id="setup-handoff-button" class="secondary" type="button" onclick="runUiAction('Hand off setup run', handoffSetupSession)" disabled>Hand off</button>
         </div>
+        <details>
+          <summary>Cancel this Setup's tracking</summary>
+          <p class="hint">This ends only the selected Setup run. It does not revoke a credential or certificate, abort a policy candidate, stop a workload, or resolve a previously uncertain action. Its bindings and evidence remain retained.</p>
+          <label for="setup-cancel-reason">Reason (optional, at most 2,000 characters)</label>
+          <input id="setup-cancel-reason" maxlength="2000" autocomplete="off">
+          <button id="setup-cancel-button" class="danger" type="button" onclick="runUiAction('Cancel Setup tracking', cancelSetupSession)" disabled>Cancel Setup tracking</button>
+          <p id="setup-cancel-status" class="hint" role="status" aria-live="polite"></p>
+        </details>
+        <details id="setup-cancel-retained" hidden>
+          <summary>Retained Setup bindings and evidence</summary>
+          <p class="hint">Readbacks below retain their original observation. The before-cancellation snapshot is not a fresh evidence or audit-completion claim. Reload this exact run to inspect its latest retained record.</p>
+          <pre id="setup-cancel-retained-record"></pre>
+        </details>
         <form id="setup-form">
           <div class="setup-form-grid">
             <div><label for="setup-template">Restriction template</label><select id="setup-template" name="template"></select></div>
@@ -23473,6 +23496,7 @@ UI_HTML = r"""
     let setupCredentialContext = null;
     let setupCredentialSequence = 0;
     let setupLoadGeneration = 0;
+    const setupCancellationAttempts = new Map();
     let setupLoadInFlight = null;
     let refreshInFlight = null;
     let auditSearchGeneration = 0;
@@ -25126,6 +25150,81 @@ UI_HTML = r"""
       return result;
     }
 
+    function canCancelSetupSession(session = state.setupSession) {
+      const roles = state.currentUserRoles || [];
+      return Boolean(hasOperatorAuth() && state.setupTrackingCancellationAvailable === true && session?.status === 'active'
+        && Number.isSafeInteger(session.revision) && session.revision >= 0 && session.revision < Number.MAX_SAFE_INTEGER
+        && roles.some(role => ['admin', 'attestation_operator', 'attestation_reviewer', 'credential_owner', 'policy_author', 'policy_publisher'].includes(role))
+        && (roles.includes('admin') || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId))
+        && !setupCancellationAttempts.has(session.id));
+    }
+
+    function renderSetupCancellation() {
+      const session = state.setupSession, attempt = setupCancellationAttempts.get(session?.id);
+      $('setup-cancel-button').disabled = !canCancelSetupSession(session);
+      $('setup-cancel-reason').disabled = !canCancelSetupSession(session);
+      const visibleAttempt = attempt?.authScope === policyAuthoringScope() ? attempt : null;
+      $('setup-cancel-status').textContent = visibleAttempt
+        ? visibleAttempt.outcome === 'confirmed'
+          ? 'Setup tracking cancellation confirmed. Other effects are unchanged; audit settlement is not inferred.'
+          : 'Cancellation submission was started; its outcome has not been adopted. Inspect this exact run before any other action. This page will not retry it.'
+        : session?.status === 'cancelled' ? 'This Setup run is cancelled. Its retained bindings are not revoked by cancellation.'
+        : state.setupTrackingCancellationAvailable !== true ? 'Tracking cancellation is unavailable for this protected or unknown profile. No native cancellation authority is supplied by this control.' : '';
+      const show = hasOperatorAuth() && session && (visibleAttempt || session.status === 'cancelled');
+      $('setup-cancel-retained').hidden = !show;
+      $('setup-cancel-retained-record').textContent = show ? JSON.stringify({
+        currentSessionReadback: session,
+        ...(visibleAttempt ? {beforeCancellationReadback: JSON.parse(visibleAttempt.original), cancellationAuditDispatch: visibleAttempt.audit ?? null} : {})
+      }, null, 2) : '';
+    }
+
+    async function cancelSetupSession() {
+      const session = state.setupSession;
+      if (!canCancelSetupSession(session)) throw new Error('Select an active Setup run you can cancel; a prior submission cannot be retried from this page');
+      const sessionId = session.id, revision = session.revision, original = JSON.stringify(session);
+      const authScope = policyAuthoringScope(), generation = setupLoadGeneration;
+      const selection = JSON.stringify(currentSetupSelection()), reasonText = $('setup-cancel-reason').value;
+      const reason = reasonText.trim();
+      if (Array.from(reasonText).length > 2000) throw new Error('Cancellation reason exceeds 2,000 characters');
+      const checkContext = () => {
+        if (!hasOperatorAuth() || state.setupTrackingCancellationAvailable !== true || policyAuthoringScope() !== authScope || setupLoadGeneration !== generation
+            || state.setupSession !== session || JSON.stringify(session) !== original
+            || $('setup-session').value !== sessionId || JSON.stringify(currentSetupSelection()) !== selection
+            || $('setup-cancel-reason').value !== reasonText) {
+          throw new Error('The selected Setup, reason or operator changed. Inspect the original run; no follow-up cancellation is authorized.');
+        }
+      };
+      checkContext();
+      if (!window.confirm(`Cancel only Setup tracking for ${sessionId}? Credentials, policy and workload effects will not be revoked or undone.`)) {
+        return cancelledAction('Setup tracking cancellation');
+      }
+      checkContext();
+      const attempt = {original, authScope, outcome: 'unresolved', audit: null};
+      setupCancellationAttempts.set(sessionId, attempt);
+      renderSetupCancellation();
+      try {
+        const result = await api(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+          method: 'POST', checkContext,
+          body: JSON.stringify({expectedRevision: revision, ...(reason ? {reason} : {})})
+        });
+        checkContext();
+        const returned = result?.session;
+        const mutable = new Set(['phase', 'status', 'revision', 'updatedAt', 'terminalAt', 'evidence', 'events']);
+        if (!returned || returned.apiVersion !== 'serverware.setupSession/v1' || returned.id !== sessionId
+            || returned.revision !== revision + 1 || returned.status !== 'cancelled' || returned.phase !== 'cancelled'
+            || Object.keys(session).some(key => !mutable.has(key) && JSON.stringify(returned[key]) !== JSON.stringify(session[key]))) {
+          throw new Error('Cancellation response does not match the original Setup bindings. Inspect the original run without retrying.');
+        }
+        attempt.outcome = 'confirmed'; attempt.audit = result.audit ?? null;
+        rememberSetupSession(returned);
+        renderSetupWorkflow();
+        setStatus('Setup tracking cancelled. Credentials, policy, workloads and unresolved effects were not changed.', 'success');
+        return {...result, uiHandled: true};
+      } finally {
+        renderSetupCancellation();
+      }
+    }
+
     async function ensureSetupSession(checkContext = undefined) {
       checkContext?.();
       if (setupSessionMatchesSelection()) return state.setupSession;
@@ -25280,6 +25379,7 @@ UI_HTML = r"""
       $('setup-session').innerHTML = '<option value="">New setup</option>' + setupSessions.map((item) => `<option value="${esc(item.id)}">${esc(item.phase)} / ${esc(item.routeId || item.id)}</option>`).join('');
       $('setup-session').value = setupSession?.id || '';
       $('setup-handoff-button').disabled = !setupSession || setupSession.status !== 'active' || !setupSession.ownerId;
+      renderSetupCancellation();
 
       const savedTemplate = setupSession?.templateId || controlState['id:setup-template']?.value || $('setup-template').value;
       $('setup-template').innerHTML = Object.entries(policyTemplates).map(([key, item]) => `<option value="${esc(key)}">${esc(item.label)}</option>`).join('');

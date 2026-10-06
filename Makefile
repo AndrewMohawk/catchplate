@@ -1457,6 +1457,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/send_native_configuration.py \
 	scripts/send_native_activation_receiver.py \
 	scripts/prepare_native_configuration_delivery.py \
+	scripts/prepare_static_credential_portal.py \
 	scripts/collect_native_public_identity.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/native_pilot_runtime_artifacts.py \
@@ -4636,6 +4637,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/send_native_configuration.py \
 				scripts/send_native_activation_receiver.py \
 				scripts/prepare_native_configuration_delivery.py \
+				scripts/prepare_static_credential_portal.py \
 				scripts/collect_native_public_identity.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/native_pilot_runtime_artifacts.py \

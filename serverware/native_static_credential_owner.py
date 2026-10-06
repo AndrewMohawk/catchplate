@@ -97,17 +97,26 @@ class _Candidate:
 
 
 class Owner:
+    # These selectors are trusted implementation constants, never channel or
+    # browser input. The rotation subclass has a separate closed wire/policy.
+    _profile = profile
+    _material = material
+    _channel_api = CHANNEL
+    _config_api = CONFIG
+
     def __init__(self, broker, value):
+        profile = self._profile
         broker.require_owner_configuration()
         _require(type(value) is dict and set(value) == {"apiVersion", "phase", "configuration"}
-            and value["apiVersion"] == CHANNEL and value["phase"] == "configure"
+            and value["apiVersion"] == self._channel_api and value["phase"] == "configure"
             and broker.kek is not None and broker.rsa is None and broker.service_tokens_opened)
         broker.channel.check()
         # Copy the closed public projection; retain the actual provisioned key
         # object and private channel rather than any supplied key or verdict.
         config = codec.document(profile.canonical(value["configuration"]), 32768)
-        _require(set(config) == _CONFIG_FIELDS and config["apiVersion"] == CONFIG)
-        selected = profile.validate_policy(config["staticCredentialCreationPolicy"])
+        fields = (_CONFIG_FIELDS - {"staticCredentialCreationPolicy"}) | {profile.FIELD}
+        _require(set(config) == fields and config["apiVersion"] == self._config_api)
+        selected = profile.validate_policy(config[profile.FIELD])
         profile.digest(config["controlPlaneConfigurationDigest"])
         _require(selected["nativeSecretKekId"] == broker.key_id)
         codec.integer(config["candidateCapacity"], maximum=MAX_CANDIDATES)
@@ -133,7 +142,7 @@ class Owner:
         self._poisoned = False
         self._last_wall, self._last_boot = time.time_ns(), time.clock_gettime_ns(time.CLOCK_BOOTTIME)
         self.check()
-        self._channel.send({"apiVersion": CHANNEL, "phase": "configured"})
+        self._channel.send({"apiVersion": self._channel_api, "phase": "configured"})
         self.check()
 
     def check(self, deadline=None):
@@ -162,7 +171,7 @@ class Owner:
     def handle(self, value):
         try:
             self.check()
-            _require(type(value) is dict and value.get("apiVersion") == CHANNEL and self.operation is None)
+            _require(type(value) is dict and value.get("apiVersion") == self._channel_api and self.operation is None)
             if value.get("phase") == "intake":
                 self._intake(value)
             else:
@@ -175,6 +184,7 @@ class Owner:
             raise
 
     def _intake(self, value):
+        profile, material = self._profile, self._material
         _require(set(value) == {"apiVersion", "phase", "intentOriginal", "secretBase64url", "deadlineBoottimeNs"}
             and len(self._candidates) < self.config["candidateCapacity"])
         intent = _original(value["intentOriginal"], profile.MAX_ARGUMENT_BYTES)
@@ -185,7 +195,7 @@ class Owner:
             credential_policy=intent["credentialPolicy"], request=intent["request"])
         _require(original == value["intentOriginal"].encode("ascii"))
         request = intent["request"]
-        selected = self.config["staticCredentialCreationPolicy"]
+        selected = self.config[profile.FIELD]
         _require(intent["controlPlaneConfigurationDigest"] == self.config["controlPlaneConfigurationDigest"]
             and intent["credentialPolicy"] == selected["credentialPolicy"]
             and request["expiresAtEpochNs"] - request["issuedAtEpochNs"] <= selected["intentMaxSeconds"] * 1_000_000_000
@@ -217,7 +227,7 @@ class Owner:
         self._candidates[request["credentialId"]] = candidate
         # This whole reply is private IPC. Only candidate may be published;
         # browserNonce goes solely to the actual TLS owner's __Host cookie.
-        self._channel.send({"apiVersion": CHANNEL, "phase": "retained", "candidate": {
+        self._channel.send({"apiVersion": self._channel_api, "phase": "retained", "candidate": {
             "credentialId": request["credentialId"], "intentOriginal": candidate.intent_original,
             "nativeGenerationOriginal": candidate.generation_original,
             "intentSha256": profile.sha256(original),
@@ -227,6 +237,7 @@ class Owner:
         self.operation = None
 
     def _prepare(self, value):
+        profile = self._profile
         _require(set(value) == {"apiVersion", "phase", "credentialId", "browserNonce", "argumentsOriginal",
             "challenge", "deadlineBoottimeNs"})
         identifier = profile.identifier(value["credentialId"])
@@ -250,28 +261,34 @@ class Owner:
         self.operation = window
         now, _ = self.check(window.deadline)
         profile.verify_request_context(profile.OPERATION, values,
-            selected_policy=self.config["staticCredentialCreationPolicy"],
+            selected_policy=self.config[profile.FIELD],
             expected_configuration_digest=self.config["controlPlaneConfigurationDigest"], now_epoch_ns=now)
         window.check()
         bindings = {"controlPlaneConfigurationDigest": intent["controlPlaneConfigurationDigest"],
             "deploymentId": self.config["deploymentId"], "instanceId": self.config["instanceId"],
-            "actorId": intent["actorId"], "credentialId": identifier, "credentialVersion": 1,
+            "actorId": intent["actorId"], "credentialId": identifier,
+            "credentialVersion": request["credentialVersion"],
             "intentSha256": profile.sha256(candidate.intent_original.encode("ascii")),
             "generationSha256": profile.sha256(candidate.generation_original.encode("ascii")),
             "inputSha256": profile.sha256(value["argumentsOriginal"].encode("ascii")),
             "secretKekId": self._key_id, "generationCreatedAtEpochNs": candidate.sealed_at,
             "challenge": value["challenge"], "issuedAtEpochNs": window.started,
             "expiresAtEpochNs": window.expires,
+            **self._predecessor_bindings(request),
             **{name: self.config[name] for name in ("intakeOrigin", "portalOrigin",
                 "ingressLeafCertificateSha256", "ingressLeafSpkiSha256")}}
         # A returned preparation may already be signed/dispatched. Fence before
         # the first byte of output; no later expiry or missing reply permits a
         # new attempt. Approval and current state remain the kernel's checks.
         self._spent.add(identifier)
-        self._channel.send({"apiVersion": CHANNEL, "phase": "prepared", "operation": profile.OPERATION,
+        self._channel.send({"apiVersion": self._channel_api, "phase": "prepared", "operation": profile.OPERATION,
             "argumentsOriginal": value["argumentsOriginal"], "statementBindings": bindings}, window.deadline)
         window.check()
         self.operation = None
+
+    def _predecessor_bindings(self, request):
+        # The create profile remains exactly version one and has no predecessor.
+        return {}
 
 
 class _Window:

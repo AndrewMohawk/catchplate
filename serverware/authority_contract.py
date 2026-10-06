@@ -279,6 +279,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "setup.session.bind-credential",
     "setup.session.bind-credential-audit-settle",
     "credential.static.create", "credential.static.approval-request", "credential.static.approval-decide",
+    "credential.static.rotate", "credential.static.rotation-approval-request", "credential.static.rotation-approval-decide",
     "policy.candidate.generation-claim", "policy.candidate.generation-publish",
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
     "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
@@ -1863,6 +1864,30 @@ _OPERATIONS = {
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=192 if phase == "settle" else 64, maximum_mutations=10, maximum_work_units=8192,
         ) for phase in ("prepare", "complete", "settle")
+    },
+    "credential.static.rotate": _spec(
+        "serverware_policy_authority_credential_static_rotate",
+        reads=("credentials", "credential_generations", "credential_currentness_roots", "credential_currentness_barriers",
+            "control_plane_approvals", "rbac_role_bindings", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+        writes=("credentials", "credential_generations", "credential_currentness_roots", "credential_currentness_barriers",
+            "control_plane_approvals", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+        mutation_kinds={"credentials": ("UPDATE",), "credential_generations": ("UPDATE",),
+            "credential_currentness_roots": ("INSERT", "UPDATE"), "credential_currentness_barriers": ("UPDATE",),
+            "control_plane_approvals": ("UPDATE",)},
+        webauthn="bound-verified-assertion-receipt",
+        proof_primitives=("primary-key-row", "aggregate-high-water", "capacity-reservation"),
+        maximum_query_rows=32, maximum_mutations=14, maximum_work_units=8192,
+    ),
+    **{
+        "credential.static.rotation-approval-" + phase: _spec(
+            "serverware_policy_authority_credential_static_rotation_approval_" + phase,
+            reads=("control_plane_approvals", "rbac_role_bindings", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            writes=("control_plane_approvals", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            mutation_kinds={"control_plane_approvals": (("INSERT",) if phase == "request" else ("UPDATE",))},
+            webauthn="bound-verified-assertion-receipt",
+            proof_primitives=("primary-key-row", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=32, maximum_mutations=12, maximum_work_units=8192,
+        ) for phase in ("request", "decide")
     },
     "credential.static.create": _spec(
         "serverware_policy_authority_credential_static_create",

@@ -200,7 +200,8 @@ def _trust(value):
 
 def validate_policy(value, *, payload, root_key=None):
     """Require this separate purpose in an already authenticated configuration."""
-    enabled = any(profile.OPERATION in role.get("enabledOperations", ()) for role in payload["roles"].values())
+    enabled = any({profile.OPERATION, "credential.static.rotate"} & set(role.get("enabledOperations", ()))
+        for role in payload["roles"].values())
     if value is None:
         require(not enabled, "Static creation requires explicit native custody policy")
         return None
@@ -210,9 +211,15 @@ def validate_policy(value, *, payload, root_key=None):
         and len(canonical(value)) <= MAX_POLICY_BYTES)
     require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30)
     _trust(value["trustRoots"])
-    creation = profile.validate_policy(payload.get(profile.FIELD))
     target = assignment.target(value["target"])
-    require(target["secretKekId"] == creation["nativeSecretKekId"])
+    from serverware import authority_static_credential_rotate as rotation
+    # This policy admits runtime identity, never an UPDATE permission. Each
+    # enabled mutation separately requires its own explicit purpose policy.
+    purposes = []
+    for selected_profile in (profile, rotation):
+        if payload.get(selected_profile.FIELD) is not None:
+            purposes.append(selected_profile.validate_policy(payload[selected_profile.FIELD]))
+    require(purposes and all(target["secretKekId"] == purpose["nativeSecretKekId"] for purpose in purposes))
     assignment.authorizer(value["assignmentAuthorizer"], configuration_payload=payload,
         root_key=root_key, response_key_id=target["controlPlaneResponseSigningKeyId"])
     return value

@@ -654,6 +654,8 @@ class KernelContext:
     static_credential_creation_policy: Mapping[str, Any] | None = None
     static_credential_configuration_digest: str | None = None
     verified_static_credential_custody_evidence: Mapping[str, Any] | None = None
+    static_credential_rotation_policy: Mapping[str, Any] | None = None
+    verified_static_credential_rotation_evidence: Mapping[str, Any] | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

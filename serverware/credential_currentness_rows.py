@@ -37,7 +37,9 @@ def credential_original(row):
         <= MAX_STATIC_ROW_BYTES)
     value["name"].encode("utf-8", errors="strict")
     static.require(len(static.canonical(value["name"])) <= static.MAX_ARGUMENT_BYTES)
-    static.material.envelope_fields({name: value[name] for name in static.material.ENVELOPE_FIELDS})
+    from serverware import native_static_credential_rotation as rotation_material
+    material = static.material if value["credential_version"] == 1 else rotation_material
+    material.envelope_fields({name: value[name] for name in material.ENVELOPE_FIELDS})
     metadata = credential_ciphertext.metadata(value["metadata"])
     static.metadata(metadata)
     static.require(metadata.get("oauth") is not True

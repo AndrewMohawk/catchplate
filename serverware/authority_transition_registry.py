@@ -14,6 +14,8 @@ from serverware import authority_transition_setup_create
 from serverware import authority_transition_setup_bind_credential
 from serverware import authority_transition_static_credential_create
 from serverware import authority_transition_static_credential_approval
+from serverware import authority_transition_static_credential_rotate
+from serverware import authority_transition_static_credential_rotation_approval
 from serverware import authority_transition_setup_native_enrollment
 from serverware import authority_transition_setup_native_ca
 from serverware import authority_transition_setup_native_canary
@@ -69,6 +71,8 @@ def _merge_kernels() -> dict[
         authority_transition_setup_bind_credential.KERNELS,
         authority_transition_static_credential_create.KERNELS,
         authority_transition_static_credential_approval.KERNELS,
+        authority_transition_static_credential_rotate.KERNELS,
+        authority_transition_static_credential_rotation_approval.KERNELS,
         authority_transition_setup_native_enrollment.KERNELS,
         authority_transition_setup_native_ca.KERNELS,
         authority_transition_setup_native_canary.KERNELS,

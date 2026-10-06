@@ -165,6 +165,10 @@ class CurrentnessKernel:
             from serverware import authority_static_credential_provenance as provenance
             queries.append(_query(self.operation, "static_creation_audit", "metadata_audit_outbox",
                 {"id": provenance.outbox_id(values["static_creation_provenance_original"])}))
+        if "static_generation_provenance_original" in values:
+            from serverware import authority_static_credential_provenance as provenance
+            queries.append(_query(self.operation, "static_rotation_audit", "metadata_audit_outbox",
+                {"id": provenance.generation_outbox_id(values["static_generation_provenance_original"])}))
         item = request["evidence"]["statement"] if self.operation in {profile.OP_REGISTER, profile.OP_ACK} else request
         if self.operation in {profile.OP_CHALLENGE, profile.OP_REGISTER, profile.OP_ACK}:
             queries.extend((_query(self.operation, "challenge", profile.CHALLENGE_TABLE, {"id": item["challengeId"]}, absent=self.operation == profile.OP_CHALLENGE),
@@ -199,6 +203,13 @@ class CurrentnessKernel:
             static_deployment = provenance.verify_rows(original, credential=current, generation=generation,
                 root=root, outbox=outbox, configuration_digest=values["control_plane_configuration_digest"],
                 now_epoch_ns=now)
+        elif "static_generation_provenance_original" in values:
+            from serverware import authority_static_credential_provenance as provenance
+            original = values["static_generation_provenance_original"]
+            outbox = shared._row(context.exact("metadata_audit_outbox", {"id": provenance.generation_outbox_id(original)}),
+                "authenticated completed static rotation audit")
+            static_deployment = provenance.verify_generation_rows(original, credential=current, generation=generation,
+                root=root, outbox=outbox, configuration_digest=values["control_plane_configuration_digest"], now_epoch_ns=now)
         else:
             profile.require(current["kind"] == "oauth2")
         mutations, challenge_public, holder_public, barrier_public = [], None, None, None

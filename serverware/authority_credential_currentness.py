@@ -128,11 +128,14 @@ def evidence(value):
 def arguments(operation, value, *, typed=False):
     assigned = isinstance(value, Mapping) and "assignment_original" in value
     static = isinstance(value, Mapping) and "static_creation_provenance_original" in value
+    successor = isinstance(value, Mapping) and "static_generation_provenance_original" in value
     require(operation in OPERATIONS and isinstance(value, Mapping)
+        and not (static and successor)
         and (not assigned or operation in ASSIGNMENT_OPERATIONS)
         and set(value) == {"credential_id", "credential_version", "control_plane_configuration_digest", "request"}
             | ({"businessIntent"} if typed else set()) | ({"assignment_original"} if assigned else set())
-            | ({"static_creation_provenance_original"} if static else set()))
+            | ({"static_creation_provenance_original"} if static else set())
+            | ({"static_generation_provenance_original"} if successor else set()))
     if assigned:
         from serverware import authority_credential_currentness_assignment as assignment
         assignment.original(value["assignment_original"])
@@ -142,6 +145,13 @@ def arguments(operation, value, *, typed=False):
         from serverware import authority_static_credential_provenance as provenance
         statement = provenance.evidence(value["static_creation_provenance_original"])["statement"]
         require(value["credential_version"] == 1 and statement["credentialId"] == value["credential_id"])
+    if successor:
+        from serverware import authority_static_credential_provenance as provenance
+        original = value["static_generation_provenance_original"]
+        require(provenance.generation_original(original)["apiVersion"] == provenance.ROTATION_SCHEMA)
+        statement = provenance.generation_evidence(original)["statement"]
+        require(value["credential_version"] >= 2 and statement["credentialId"] == value["credential_id"]
+            and statement["credentialVersion"] == value["credential_version"])
     digest(value["control_plane_configuration_digest"])
     request = value["request"]
     require(type(request) is dict)
@@ -165,8 +175,10 @@ def arguments(operation, value, *, typed=False):
         result["assignment_original"] = value["assignment_original"]
     if static:
         result["static_creation_provenance_original"] = value["static_creation_provenance_original"]
-    require(len(canonical(result)) <= (MAX_STATIC_ARGUMENT_BYTES if static else MAX_ARGUMENT_BYTES))
-    if static and typed:
+    if successor:
+        result["static_generation_provenance_original"] = value["static_generation_provenance_original"]
+    require(len(canonical(result)) <= (MAX_STATIC_ARGUMENT_BYTES if static or successor else MAX_ARGUMENT_BYTES))
+    if (static or successor) and typed:
         require(len(canonical(value)) <= MAX_STATIC_ARGUMENT_BYTES)
     return result
 

@@ -2973,7 +2973,14 @@ class StaticCredentialCurrentnessRequest(CredentialCurrentnessRequest):
         min_length=1, max_length=40 * 1024)
 
 
-class CredentialCurrentnessWireRequest(RootModel[CredentialCurrentnessRequest | StaticCredentialCurrentnessRequest]):
+class StaticSuccessorCurrentnessRequest(CredentialCurrentnessRequest):
+    api_version: Literal["serverware.credentialCurrentnessRequest/v3"] = Field(alias="apiVersion")
+    credential_version: int = Field(alias="credentialVersion", strict=True, ge=2, le=9_223_372_036_854_775_807)
+    static_generation_provenance_original: str = Field(alias="staticGenerationProvenanceOriginal",
+        min_length=1, max_length=40 * 1024)
+
+
+class CredentialCurrentnessWireRequest(RootModel[CredentialCurrentnessRequest | StaticCredentialCurrentnessRequest | StaticSuccessorCurrentnessRequest]):
     pass
 
 
@@ -4994,7 +5001,7 @@ async def _bounded_credential_lease_request(
     return wire.root
 
 
-async def _bounded_credential_currentness_request(request: Request) -> CredentialCurrentnessRequest | StaticCredentialCurrentnessRequest:
+async def _bounded_credential_currentness_request(request: Request) -> CredentialCurrentnessRequest | StaticCredentialCurrentnessRequest | StaticSuccessorCurrentnessRequest:
     wire = await _bounded_exact_data_plane_model(
         request,
         model_type=CredentialCurrentnessWireRequest,
@@ -5003,7 +5010,8 @@ async def _bounded_credential_currentness_request(request: Request) -> Credentia
         label="credential currentness request",
         capture_original_key=_CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY,
         version_byte_limits={"serverware.credentialCurrentnessRequest/v1": _CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES,
-            "serverware.credentialCurrentnessRequest/v2": _STATIC_CURRENTNESS_REQUEST_MAX_BYTES},
+            "serverware.credentialCurrentnessRequest/v2": _STATIC_CURRENTNESS_REQUEST_MAX_BYTES,
+            "serverware.credentialCurrentnessRequest/v3": _STATIC_CURRENTNESS_REQUEST_MAX_BYTES},
     )
     return wire.root
 

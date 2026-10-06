@@ -24,6 +24,7 @@ from serverware.control_plane_approval_verification import _request_pin
 
 REQUEST_SCHEMA = "serverware.credentialCurrentnessRequest/v1"
 STATIC_REQUEST_SCHEMA = "serverware.credentialCurrentnessRequest/v2"
+ROTATION_REQUEST_SCHEMA = "serverware.credentialCurrentnessRequest/v3"
 OBSERVATION_SCHEMA = "serverware.credentialCurrentnessObservation/v1"
 LEASE_DOMAIN = b"serverware.nativeCurrentCredentialLeaseBinding/v1\0"
 _PUBLIC = {"challenge": profile.OP_CHALLENGE, "register": profile.OP_REGISTER, "ack": profile.OP_ACK}
@@ -60,9 +61,9 @@ def _static_rows(original, credential_id, version, configuration_digest, now):
     credential, generation, root = _rows(credential_id, version)
     with db.connect() as connection:
         outbox = connection.execute("SELECT * FROM metadata_audit_outbox WHERE id = ?",
-            (provenance.outbox_id(original),)).fetchone()
+            (provenance.generation_outbox_id(original),)).fetchone()
     profile.require(outbox is not None)
-    return provenance.verify_rows(original, credential=credential, generation=generation,
+    return provenance.verify_generation_rows(original, credential=credential, generation=generation,
         root=root, outbox=dict(outbox), configuration_digest=configuration_digest, now_epoch_ns=now)
 
 
@@ -153,11 +154,12 @@ class _Owner:
             from serverware import authority_credential_currentness_policy as policy
             self.assignment = assignment_startup.require_selected()
             profile.require(self.assignment.binding is self.binding
-                and self.assignment.policy["schema"] == policy.STATIC_POSTBOOT_SCHEMA)
+                and self.assignment.policy["schema"] in ({policy.STATIC_POSTBOOT_SCHEMA, policy.ROTATION_POSTBOOT_SCHEMA}
+                    if version == 1 else {policy.ROTATION_POSTBOOT_SCHEMA}))
             deployment = _static_rows(static_provenance_original, credential_id, version,
                 self.configuration_digest, self.epoch)
             profile.require(deployment == self.assignment.policy["deploymentId"])
-            values["static_creation_provenance_original"] = static_provenance_original
+            values["static_creation_provenance_original" if version == 1 else "static_generation_provenance_original"] = static_provenance_original
             self.check()
         if operation in profile.ASSIGNMENT_OPERATIONS and assignment_startup.selected():
             self.assignment = assignment_startup.require_selected()
@@ -208,25 +210,28 @@ class _Owner:
 
 def on_request(request, payload):
     """Root route authenticates its existing DP token and signs this response."""
-    static = type(payload) is dict and payload.get("apiVersion") == STATIC_REQUEST_SCHEMA
+    static = type(payload) is dict and payload.get("apiVersion") in {STATIC_REQUEST_SCHEMA, ROTATION_REQUEST_SCHEMA}
+    successor = type(payload) is dict and payload.get("apiVersion") == ROTATION_REQUEST_SCHEMA
+    provenance_field = "staticGenerationProvenanceOriginal" if successor else "staticCreationProvenanceOriginal"
     profile.require(type(request) is Request and request.method == "POST"
         and request.url.path == "/api/data-plane/credential-currentness" and not request.url.query
         and type(payload) is dict and set(payload) == {"apiVersion", "credentialId", "credentialVersion", "request"}
-            | ({"staticCreationProvenanceOriginal"} if static else set())
-        and payload["apiVersion"] == (STATIC_REQUEST_SCHEMA if static else REQUEST_SCHEMA))
+            | ({provenance_field} if static else set())
+        and payload["apiVersion"] == (ROTATION_REQUEST_SCHEMA if successor else STATIC_REQUEST_SCHEMA if static else REQUEST_SCHEMA))
     owner, scope, pin, original = _Owner(), request.scope, _request_pin(request), profile.canonical(payload)
     profile.require(len(original) <= (profile.MAX_STATIC_ARGUMENT_BYTES if static else 64 * 1024))
     item = payload["request"]
     profile.require(type(item) is dict and set(item) == {"phase", "arguments"})
     credential_id, version = payload["credentialId"], payload["credentialVersion"]
     _rows(credential_id, version)
-    provenance_original = payload["staticCreationProvenanceOriginal"] if static else None
+    provenance_original = payload[provenance_field] if static else None
     if static:
         from serverware import authority_credential_currentness_policy as policy
-        profile.require(type(version) is int and version == 1)
+        profile.require(type(version) is int and (2 <= version <= 2**63 - 1 if successor else version == 1))
         owner.assignment = assignment_startup.require_selected()
         profile.require(owner.assignment.binding is owner.binding
-            and owner.assignment.policy["schema"] == policy.STATIC_POSTBOOT_SCHEMA)
+            and owner.assignment.policy["schema"] in ({policy.ROTATION_POSTBOOT_SCHEMA} if successor
+                else {policy.STATIC_POSTBOOT_SCHEMA, policy.ROTATION_POSTBOOT_SCHEMA}))
         deployment = _static_rows(provenance_original, credential_id, version, owner.configuration_digest, owner.epoch)
         profile.require(deployment == owner.assignment.policy["deploymentId"])
         owner.check()

@@ -41,7 +41,10 @@ from serverware import authority_setup_bind_credential as setup_bind_credential
 from serverware import authority_setup_native_final as setup_native_final
 from serverware import authority_static_credential_create as static_create
 from serverware import authority_static_credential_approval as static_approval
+from serverware import authority_static_credential_rotate as static_rotate
+from serverware import authority_static_credential_rotation_approval as static_rotation_approval
 from serverware import authority_static_credential_custody as static_custody
+from serverware import authority_static_credential_rotation_custody as static_rotation_custody
 from serverware import authority_transition_setup_bind_credential
 from serverware import authority_policy_canary
 from serverware import authority_policy_canary_tables
@@ -474,6 +477,8 @@ class PlanningState:
     static_credential_creation_policy: Mapping[str, Any] | None = None
     static_credential_configuration_digest: str | None = None
     verified_static_credential_custody_evidence: Mapping[str, Any] | None = None
+    static_credential_rotation_policy: Mapping[str, Any] | None = None
+    verified_static_credential_rotation_evidence: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -632,7 +637,7 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=self.operation)
         try:
-            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | static_rotate.ASSERTION_OPERATIONS | static_rotation_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
                 query_program = getattr(self.kernel, "queries_with_evidence", None)
                 if not callable(query_program) or verified_webauthn_evidence is None:
                     raise AuthorityPlannerError(
@@ -1193,7 +1198,7 @@ class TypedTransitionPlanningProgram:
             or self.kernel.program_id
                 != authority_contract.transition_program_id(operation)
             or state.database_now is None
-            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
+            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | static_rotate.ASSERTION_OPERATIONS | static_rotation_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
                 != (state.verified_webauthn_evidence is not None)
         ):
             raise AuthorityPlannerError(
@@ -1225,6 +1230,8 @@ class TypedTransitionPlanningProgram:
                 static_credential_creation_policy=state.static_credential_creation_policy,
                 static_credential_configuration_digest=state.static_credential_configuration_digest,
                 verified_static_credential_custody_evidence=state.verified_static_credential_custody_evidence,
+                static_credential_rotation_policy=state.static_credential_rotation_policy,
+                verified_static_credential_rotation_evidence=state.verified_static_credential_rotation_evidence,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -3329,6 +3336,9 @@ def validate_planner_request(request: Mapping[str, Any]) -> None:
     if request.get("operation") == static_create.OPERATION:
         required.add("staticCredentialCustodyEvidence")
         static_custody.authority_evidence(request.get("staticCredentialCustodyEvidence"))
+    if request.get("operation") == static_rotate.OPERATION:
+        required.add("staticCredentialRotationEvidence")
+        static_rotation_custody.authority_evidence(request.get("staticCredentialRotationEvidence"))
     if (
         set(request) != required
         or request.get("schema") != PLANNER_REQUEST_SCHEMA
@@ -3474,6 +3484,9 @@ def validate_measured_plan_payload(
     if isinstance(measured_plan, Mapping) and measured_plan.get("operation") == static_create.OPERATION:
         required.add("staticCredentialCustodyEvidence")
         static_custody.authority_evidence(payload.get("staticCredentialCustodyEvidence"))
+    if isinstance(measured_plan, Mapping) and measured_plan.get("operation") == static_rotate.OPERATION:
+        required.add("staticCredentialRotationEvidence")
+        static_rotation_custody.authority_evidence(payload.get("staticCredentialRotationEvidence"))
     typed_request = payload.get("typedRequest")
     selected = payload.get("selectedBusinessRows")
     mutations = payload.get("mutationPlan")
@@ -3828,7 +3841,7 @@ class MeasuredPlanner:
         self.connect_timeout_seconds = connect_timeout_seconds
         self.enabled_operations = frozenset(enabled_operations)
         self.programs = dict(programs)
-        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
+        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | static_rotate.ASSERTION_OPERATIONS | static_rotation_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
             if (
                 not isinstance(verifier_public_key, Ed25519PublicKey)
                 or not isinstance(verifier_identity, Mapping)
@@ -3889,38 +3902,45 @@ class MeasuredPlanner:
         self.static_credential_configuration = None
         self.static_credential_root_key = None
         self.static_credential_creation_policy = None
+        self.static_credential_rotation_policy = None
         self.static_credential_configuration_digest = None
-        if self.enabled_operations & (static_create.OPERATIONS | static_approval.OPERATIONS):
+        if self.enabled_operations & (static_create.OPERATIONS | static_approval.OPERATIONS | static_rotate.OPERATIONS | static_rotation_approval.OPERATIONS):
             from serverware.authority_policy_canary_policy import full_configuration_digest
 
             if not isinstance(static_credential_root_key, Ed25519PublicKey):
                 raise AuthorityPlannerError("Static creation planner has no admitted configuration root")
             owned_configuration = json.loads(canonical_bytes(static_credential_configuration))
-            selected = static_create.validate_policy(owned_configuration.get(static_create.FIELD),
-                payload=owned_configuration, root_key=static_credential_root_key)
-            if selected is None:
-                raise AuthorityPlannerError("Static creation planner lacks its signed purpose policy")
+            for purpose, approvals, attribute in ((static_create, static_approval, "static_credential_creation_policy"),
+                    (static_rotate, static_rotation_approval, "static_credential_rotation_policy")):
+                if self.enabled_operations & (purpose.OPERATIONS | approvals.OPERATIONS):
+                    selected = purpose.validate_policy(owned_configuration.get(purpose.FIELD),
+                        payload=owned_configuration, root_key=static_credential_root_key)
+                    if selected is None:
+                        raise AuthorityPlannerError("Static planner lacks its selected purpose policy")
+                    setattr(self, attribute, selected)
             static_custody.validate_policy(owned_configuration.get(static_custody.FIELD),
                 payload=owned_configuration, root_key=static_credential_root_key)
             self.static_credential_configuration = owned_configuration
             self.static_credential_root_key = static_credential_root_key
-            self.static_credential_creation_policy = selected
             self.static_credential_configuration_digest = full_configuration_digest(owned_configuration)
         elif static_credential_configuration is not None or static_credential_root_key is not None:
             raise AuthorityPlannerError("Static creation configuration cannot select another planner")
 
     def verify_static_evidence(self, request):
         operation = request["operation"]
-        if operation not in static_create.OPERATIONS | static_approval.OPERATIONS:
+        if operation not in static_create.OPERATIONS | static_approval.OPERATIONS | static_rotate.OPERATIONS | static_rotation_approval.OPERATIONS:
             return None
-        profile = static_create if operation == static_create.OPERATION else static_approval
+        profile = (static_create if operation == static_create.OPERATION else static_rotate if operation == static_rotate.OPERATION
+            else static_approval if operation in static_approval.OPERATIONS else static_rotation_approval)
         profile.verify_original(operation, request["typedRequest"]["arguments"],
             configuration_payload=self.static_credential_configuration,
             root_key=self.static_credential_root_key, now_epoch_ns=time.time_ns())
-        if operation != static_create.OPERATION:
+        if operation not in {static_create.OPERATION, static_rotate.OPERATION}:
             return None
-        original = json.loads(canonical_bytes(request["staticCredentialCustodyEvidence"]))
-        static_custody.verify_original(operation, request["typedRequest"]["arguments"], evidence=original,
+        evidence_field = "staticCredentialCustodyEvidence" if operation == static_create.OPERATION else "staticCredentialRotationEvidence"
+        native = static_custody if operation == static_create.OPERATION else static_rotation_custody
+        original = json.loads(canonical_bytes(request[evidence_field]))
+        native.verify_original(operation, request["typedRequest"]["arguments"], evidence=original,
             configuration_payload=self.static_credential_configuration,
             root_key=self.static_credential_root_key, now_epoch_ns=time.time_ns())
         expiry = original["statement"]["expiresAtEpochNs"]
@@ -3934,7 +3954,7 @@ class MeasuredPlanner:
         self, request: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
         verified_webauthn_evidence = None
-        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | setup_bind_credential.ASSERTION_OPERATIONS | static_create.ASSERTION_OPERATIONS | static_approval.ASSERTION_OPERATIONS | static_rotate.ASSERTION_OPERATIONS | static_rotation_approval.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
             # Independently pinned receipt verification precedes any proof SQL;
             # current hardware/trust/actor and raw challenge joins are repeated
             # by the purpose kernel over genuine selected originals.
@@ -4123,6 +4143,10 @@ class MeasuredPlanner:
                                 static_credential_creation_policy=self.static_credential_creation_policy,
                                 static_credential_configuration_digest=self.static_credential_configuration_digest,
                                 verified_static_credential_custody_evidence=verified_static_evidence)
+                        if operation in static_rotate.OPERATIONS | static_rotation_approval.OPERATIONS:
+                            planning_state = replace(planning_state, static_credential_rotation_policy=self.static_credential_rotation_policy,
+                                static_credential_configuration_digest=self.static_credential_configuration_digest,
+                                verified_static_credential_rotation_evidence=verified_static_evidence)
                         if operation == setup_bind_credential.OPERATION:
                             authority_transition_setup_bind_credential.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
@@ -4393,6 +4417,8 @@ class MeasuredPlanner:
         }
         if operation == static_create.OPERATION:
             payload["staticCredentialCustodyEvidence"] = verified_static_evidence
+        if operation == static_rotate.OPERATION:
+            payload["staticCredentialRotationEvidence"] = verified_static_evidence
         if time.monotonic_ns() >= request["deadlineMonotonicNs"]:
             raise AuthorityPlannerError(
                 "measured planner crossed its absolute deadline"

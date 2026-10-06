@@ -1630,7 +1630,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_setup_bind_credential.py \
 	serverware/control_plane_setup_bind_credential.py \
 	serverware/authority_static_credential_create.py \
+	serverware/authority_static_credential_rotate.py \
+	serverware/authority_static_credential_rotation_custody.py \
+	serverware/authority_static_credential_rotation_approval.py \
+	serverware/authority_transition_static_credential_rotate.py \
+	serverware/authority_transition_static_credential_rotation_approval.py \
 	serverware/native_static_credential.py \
+	serverware/native_static_credential_rotation.py \
+	serverware/native_static_credential_rotation_owner.py \
 	serverware/authority_static_credential_approval.py \
 	serverware/authority_static_credential_custody.py \
 	serverware/authority_static_credential_assignment.py \
@@ -4793,7 +4800,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_setup_bind_credential.py \
 				serverware/control_plane_setup_bind_credential.py \
 				serverware/authority_static_credential_create.py \
+				serverware/authority_static_credential_rotate.py \
+				serverware/authority_static_credential_rotation_custody.py \
+				serverware/authority_static_credential_rotation_approval.py \
+				serverware/authority_transition_static_credential_rotate.py \
+				serverware/authority_transition_static_credential_rotation_approval.py \
 				serverware/native_static_credential.py \
+				serverware/native_static_credential_rotation.py \
+				serverware/native_static_credential_rotation_owner.py \
 				serverware/authority_static_credential_approval.py \
 				serverware/authority_static_credential_custody.py \
 				serverware/authority_static_credential_assignment.py \

@@ -36,6 +36,7 @@ from serverware import native_oauth_reconnect_owner
 from serverware import native_oauth_succession_owner
 from serverware import native_secret_broker_history
 from serverware import native_static_credential_owner
+from serverware import native_static_credential_rotation_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
@@ -254,6 +255,7 @@ class _Broker:
         self.succession_owner = None
         self.historical_keys = None
         self.static_credential_owner = None
+        self.static_credential_rotation_owner = None
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
@@ -401,6 +403,7 @@ def main():
             pending_retirement_operation = None if broker.pending_retirement_owner is None else broker.pending_retirement_owner.operation
             capture_retirement_operation = None if broker.capture_retirement_owner is None else broker.capture_retirement_owner.operation
             static_credential_operation = None if broker.static_credential_owner is None else broker.static_credential_owner.operation
+            static_rotation_operation = None if broker.static_credential_rotation_owner is None else broker.static_credential_rotation_owner.operation
             active = [(purpose, operation) for purpose, operation in (
                 (native_oauth_refresh_owner.CHANNEL, refresh_operation),
                 (native_oauth_exchange_owner.CHANNEL, exchange_operation),
@@ -410,7 +413,8 @@ def main():
                 (native_oauth_cleanup_owner.CHANNEL, cleanup_operation),
                 (native_oauth_pending_retirement_owner.CHANNEL, pending_retirement_operation),
                 (native_oauth_capture_retirement_owner.CHANNEL, capture_retirement_operation),
-                (native_static_credential_owner.CHANNEL, static_credential_operation)) if operation is not None]
+                (native_static_credential_owner.CHANNEL, static_credential_operation),
+                (native_static_credential_rotation_owner.CHANNEL, static_rotation_operation)) if operation is not None]
             _require(len(active) <= 1)
             active_operation = active[0][1] if active else None
             value = channel.receive(None if active_operation is None else active_operation.deadline)
@@ -419,11 +423,19 @@ def main():
             if value.get("apiVersion") == native_static_credential_owner.CHANNEL:
                 _require(not active)
                 if value.get("phase") == "configure":
-                    _require(broker.static_credential_owner is None)
+                    _require(broker.static_credential_owner is None and broker.static_credential_rotation_owner is None)
                     broker.static_credential_owner = native_static_credential_owner.Owner(broker, value)
                 else:
                     _require(broker.static_credential_owner is not None)
                     broker.static_credential_owner.handle(value)
+            elif value.get("apiVersion") == native_static_credential_rotation_owner.CHANNEL:
+                _require(not active)
+                if value.get("phase") == "configure":
+                    _require(broker.static_credential_rotation_owner is None and broker.static_credential_owner is None)
+                    broker.static_credential_rotation_owner = native_static_credential_rotation_owner.Owner(broker, value)
+                else:
+                    _require(broker.static_credential_rotation_owner is not None)
+                    broker.static_credential_rotation_owner.handle(value)
             elif value.get("apiVersion") == native_secret_broker_history.CHANNEL:
                 _require(not active and broker.historical_configuration_pin is not None)
                 if value.get("phase") == "initialize":

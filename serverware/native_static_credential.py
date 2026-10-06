@@ -36,7 +36,7 @@ def secret_bytes(value):
 
 def _scope(item_id, version, secret_kek_id, kek):
     require(type(item_id) is str and len(item_id) == 36 and str(uuid.UUID(item_id)) == item_id
-        and type(version) is int and version == 1
+        and type(version) is int and 1 <= version <= 2**63 - 1
         and type(secret_kek_id) is str and secret_kek_id.startswith("attested-memory-kek:")
         and len(secret_kek_id) == 44
         and all(char in "0123456789abcdef" for char in secret_kek_id[-24:])
@@ -59,9 +59,17 @@ def _stamp(epoch_ns):
 
 def envelope_fields(envelope):
     """Validate bounded public ciphertext fields, never their provenance."""
+    require(type(envelope) is dict and type(envelope.get("credential_version")) is int
+        and envelope["credential_version"] == 1)
+    return _envelope_fields(envelope)
+
+
+def _envelope_fields(envelope):
+    """Shared private codec; public purpose wrappers constrain the generation."""
     require(type(envelope) is dict and set(envelope) == ENVELOPE_FIELDS
         and envelope["encrypted_secret"] == "envelope:v2"
-        and type(envelope["credential_version"]) is int and envelope["credential_version"] == 1)
+        and type(envelope["credential_version"]) is int
+        and 1 <= envelope["credential_version"] <= 2**63 - 1)
     kek_id = envelope["secret_kek_id"]
     require(type(kek_id) is str and kek_id.startswith("attested-memory-kek:") and len(kek_id) == 44
         and all(char in "0123456789abcdef" for char in kek_id[-24:]))
@@ -89,8 +97,13 @@ def envelope_fields(envelope):
 
 def open_original(item_id, envelope, version, secret_kek_id, kek):
     """Private readback only; this function is not a release authority."""
+    require(type(version) is int and version == 1)
+    return _open_original(item_id, envelope, version, secret_kek_id, kek)
+
+
+def _open_original(item_id, envelope, version, secret_kek_id, kek):
     _scope(item_id, version, secret_kek_id, kek)
-    key_nonce, encrypted_key, secret_nonce, secret_ciphertext = envelope_fields(envelope)
+    key_nonce, encrypted_key, secret_nonce, secret_ciphertext = _envelope_fields(envelope)
     require(envelope["credential_version"] == version and envelope["secret_kek_id"] == secret_kek_id)
     dek = kek.decrypt(key_nonce, encrypted_key, f"serverware:dek:{item_id}:v{version}".encode("utf-8"))
     require(len(dek) == 32)
@@ -100,6 +113,11 @@ def open_original(item_id, envelope, version, secret_kek_id, kek):
 
 def seal_original(item_id, raw, version, secret_kek_id, kek, epoch_ns):
     """Seal once with fresh entropy and verify the exact private readback."""
+    require(type(version) is int and version == 1)
+    return _seal_original(item_id, raw, version, secret_kek_id, kek, epoch_ns)
+
+
+def _seal_original(item_id, raw, version, secret_kek_id, kek, epoch_ns):
     _scope(item_id, version, secret_kek_id, kek)
     secret_bytes(raw)
     stamp = _stamp(epoch_ns)
@@ -110,7 +128,7 @@ def seal_original(item_id, raw, version, secret_kek_id, kek, epoch_ns):
     result = {"encrypted_secret": "envelope:v2", "encrypted_dek": "v1:" + encoded(key_nonce) + ":" + encoded(wrapped),
         "secret_nonce": "v1:" + encoded(secret_nonce), "secret_ciphertext": "v1:" + encoded(ciphertext),
         "secret_kek_id": secret_kek_id, "credential_version": version, "secret_updated_at": stamp}
-    require(open_original(item_id, result, version, secret_kek_id, kek) == raw)
+    require(_open_original(item_id, result, version, secret_kek_id, kek) == raw)
     return result
 
 

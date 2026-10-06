@@ -7770,6 +7770,7 @@ def key_release_verify(
 @app.get("/api/bootstrap")
 def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any]:
     snapshot = get_policy_snapshot()
+    setup_cancellation_profile = _setup_tracking_cancellation_profile()
     metadata = snapshot.raw.get("metadata") if snapshot else {}
     can_view_credentials = identity.has_any_role({"policy_author", "credential_owner"})
     can_view_routes = identity.has_any_role(
@@ -7826,7 +7827,8 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "publicUrl": canonical_control_plane_url(PUBLIC_URL),
         "policyPrincipals": policy_principals,
         "oauthProviders": provider_status_with_custody() if can_view_credentials else [],
-        "setupTrackingCancellationAvailable": _setup_tracking_cancellation_available(),
+        "setupTrackingCancellationAvailable": setup_cancellation_profile != "unavailable",
+        "setupTrackingCancellationProfile": setup_cancellation_profile,
         "currentUserId": identity.user_id,
         "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
@@ -12859,6 +12861,14 @@ def _setup_tracking_cancellation_available() -> bool:
     return not db.metadata_uses_postgres() and not oauth_application_owner.setup_profile_selected()
 
 
+def _setup_tracking_cancellation_profile() -> str:
+    if _setup_tracking_cancellation_available():
+        return "ordinary-v1"
+    from serverware import control_plane_setup_cancel
+
+    return "controlled-v1" if control_plane_setup_cancel.selected() else "unavailable"
+
+
 def _setup_sha256_json(value: Any) -> str:
     return (
         "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
@@ -13004,7 +13014,7 @@ def _setup_session_error(exc: db.SetupSessionError) -> None:
 
 def _drain_setup_session_audit_outbox(*, limit: int = 100) -> dict[str, Any]:
     from serverware import oauth_application_owner
-    if oauth_application_owner.setup_profile_selected():
+    if db.metadata_uses_postgres() or oauth_application_owner.setup_profile_selected():
         # Protected events are settled only from the actual completed authority
         # audit outbox. A count of zero here is not an audited/completion claim.
         return {"claimed": 0, "audited": 0, "failed": 0, "settlement": "protected-explicit-settle-required"}
@@ -14444,6 +14454,27 @@ def setup_session_cancel(
         _setup_session_error(exc)
         raise AssertionError("unreachable")
     return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/cancel/draft")
+@app.post("/api/setup/sessions/{session_id}/cancel/options")
+@app.post("/api/setup/sessions/{session_id}/cancel/execute")
+@app.post("/api/setup/sessions/{session_id}/cancel/settle")
+async def controlled_setup_cancel(session_id: str, request: Request) -> Response:
+    from serverware import control_plane_setup_cancel as controlled
+    from starlette.concurrency import run_in_threadpool
+
+    raw = await _native_oauth_original(request, controlled.MAX_REQUEST)
+    try:
+        result = await run_in_threadpool(controlled.on_request, request, session_id, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > controlled.MAX_RESPONSE:
+            raise ValueError("bounded Setup cancellation response")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Setup cancellation refused or outcome unknown; inspect the original run, never automatically resubmit") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/setup/sessions/{session_id}/credential")
@@ -23142,6 +23173,8 @@ UI_HTML = r"""
           <input id="setup-cancel-reason" maxlength="2000" autocomplete="off">
           <button id="setup-cancel-button" class="danger" type="button" onclick="runUiAction('Cancel Setup tracking', cancelSetupSession)" disabled>Cancel Setup tracking</button>
           <p id="setup-cancel-status" class="hint" role="status" aria-live="polite"></p>
+          <button id="setup-cancel-settle-button" class="secondary" type="button" onclick="runUiAction('Settle Setup cancellation audit', settleSetupCancellation)" disabled>Settle completed cancellation audit</button>
+          <p id="setup-cancel-settle-status" class="hint" role="status" aria-live="polite">Settlement requires the genuine completed audit outbox; it never cancels another run or changes its bindings.</p>
         </details>
         <details id="setup-cancel-retained" hidden>
           <summary>Retained Setup bindings and evidence</summary>
@@ -23497,6 +23530,7 @@ UI_HTML = r"""
     let setupCredentialSequence = 0;
     let setupLoadGeneration = 0;
     const setupCancellationAttempts = new Map();
+    const setupCancellationSettlements = new Map();
     let setupLoadInFlight = null;
     let refreshInFlight = null;
     let auditSearchGeneration = 0;
@@ -25150,13 +25184,29 @@ UI_HTML = r"""
       return result;
     }
 
-    function canCancelSetupSession(session = state.setupSession) {
+    function setupCancellationOperator(session = state.setupSession) {
       const roles = state.currentUserRoles || [];
-      return Boolean(hasOperatorAuth() && state.setupTrackingCancellationAvailable === true && session?.status === 'active'
-        && Number.isSafeInteger(session.revision) && session.revision >= 0 && session.revision < Number.MAX_SAFE_INTEGER
+      return Boolean(hasOperatorAuth() && state.setupTrackingCancellationAvailable === true && session
+        && ['ordinary-v1', 'controlled-v1'].includes(state.setupTrackingCancellationProfile)
+        && (state.setupTrackingCancellationProfile !== 'controlled-v1' || !adminToken()
+          && state.authStatus?.authMethod === 'oidc' && state.authStatus?.sessionState === 'active')
         && roles.some(role => ['admin', 'attestation_operator', 'attestation_reviewer', 'credential_owner', 'policy_author', 'policy_publisher'].includes(role))
-        && (roles.includes('admin') || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId))
+        && (roles.includes('admin') || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId)));
+    }
+
+    function canCancelSetupSession(session = state.setupSession) {
+      return Boolean(setupCancellationOperator(session) && session.status === 'active'
+        && Number.isSafeInteger(session.revision) && session.revision >= 0 && session.revision < Number.MAX_SAFE_INTEGER
         && !setupCancellationAttempts.has(session.id));
+    }
+
+    function setupCancellationEvent(session = state.setupSession) {
+      if (!session || session.status !== 'cancelled' || session.phase !== 'cancelled') return null;
+      const attempt = setupCancellationAttempts.get(session.id);
+      if (attempt?.outcome === 'confirmed' && attempt.audit?.settlement === 'controlled_pending') return attempt.audit.eventId;
+      const events = (session.events || []).filter(event => event.transition === 'cancel'
+        && event.audit_status === 'controlled_pending' && event.event?.details?.authorityOperation === 'setup.session.cancel');
+      return events.length === 1 ? events[0].id : null;
     }
 
     function renderSetupCancellation() {
@@ -25169,13 +25219,120 @@ UI_HTML = r"""
           ? 'Setup tracking cancellation confirmed. Other effects are unchanged; audit settlement is not inferred.'
           : 'Cancellation submission was started; its outcome has not been adopted. Inspect this exact run before any other action. This page will not retry it.'
         : session?.status === 'cancelled' ? 'This Setup run is cancelled. Its retained bindings are not revoked by cancellation.'
-        : state.setupTrackingCancellationAvailable !== true ? 'Tracking cancellation is unavailable for this protected or unknown profile. No native cancellation authority is supplied by this control.' : '';
+        : state.setupTrackingCancellationAvailable !== true ? 'Tracking cancellation is unavailable for this profile; no admitted controlled request path is available.'
+        : state.setupTrackingCancellationProfile === 'controlled-v1' ? 'Controlled cancellation requires an active OIDC cookie and a new hardware assertion. Request transport availability is not authority admission or completion.' : '';
       const show = hasOperatorAuth() && session && (visibleAttempt || session.status === 'cancelled');
       $('setup-cancel-retained').hidden = !show;
       $('setup-cancel-retained-record').textContent = show ? JSON.stringify({
         currentSessionReadback: session,
         ...(visibleAttempt ? {beforeCancellationReadback: JSON.parse(visibleAttempt.original), cancellationAuditDispatch: visibleAttempt.audit ?? null} : {})
       }, null, 2) : '';
+      const eventId = setupCancellationEvent(session), settlement = setupCancellationSettlements.get(eventId);
+      $('setup-cancel-settle-button').disabled = state.setupTrackingCancellationProfile !== 'controlled-v1'
+        || !setupCancellationOperator(session) || !eventId || Boolean(settlement);
+      const visibleSettlement = settlement?.authScope === policyAuthoringScope() ? settlement : null;
+      $('setup-cancel-settle-status').textContent = visibleSettlement
+        ? visibleSettlement.result ? `Cancellation event ${eventId} audit settled as ${visibleSettlement.result.auditEventHash}. Reload the retained record for a fresh observation.`
+          : `Settlement of cancellation event ${eventId} was started; outcome is not adopted. Inspect the exact event; this page will not retry.`
+        : 'Settlement requires the genuine completed audit outbox. It never changes Setup bindings or resolves other uncertain effects.';
+    }
+
+    async function settleSetupCancellation() {
+      const session = state.setupSession, eventId = setupCancellationEvent(session);
+      if (state.setupTrackingCancellationProfile !== 'controlled-v1' || !setupCancellationOperator(session)
+          || !eventId || setupCancellationSettlements.has(eventId)) throw new Error('Select an unsettled controlled cancellation event; no settlement retry is authorized');
+      const original = JSON.stringify(session), authScope = policyAuthoringScope(), generation = setupLoadGeneration;
+      const selection = JSON.stringify(currentSetupSelection());
+      const checkContext = () => {
+        if (state.setupTrackingCancellationProfile !== 'controlled-v1' || !setupCancellationOperator(session)
+            || policyAuthoringScope() !== authScope || setupLoadGeneration !== generation || state.setupSession !== session
+            || JSON.stringify(session) !== original || $('setup-session').value !== session.id
+            || JSON.stringify(currentSetupSelection()) !== selection || setupCancellationEvent(session) !== eventId) {
+          throw new Error('Cancellation audit context changed. Inspect the original run and event; no follow-up is authorized.');
+        }
+      };
+      checkContext();
+      if (!window.confirm(`Settle only cancellation audit event ${eventId} from its independently completed outbox?`)) return cancelledAction('Cancellation audit settlement');
+      checkContext();
+      const attempt = {authScope, result: null}; setupCancellationSettlements.set(eventId, attempt);
+      renderSetupCancellation();
+      try {
+        const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/cancel/settle`, {
+          method: 'POST', checkContext, body: oauthConsentCanonical({apiVersion: 'serverware.setupTrackingCancellationRequest/v1', eventId})
+        });
+        checkContext();
+        if (!oauthConsentClosed(result, ['ok', 'operation', 'requestDigest', 'auditEventDigest', 'idempotentReplay', 'eventId', 'auditState', 'auditEventHash'])
+            || result.ok !== true || result.operation !== 'setup.session.audit-settle' || result.eventId !== eventId
+            || result.idempotentReplay !== false || result.auditState !== 'audited'
+            || !['requestDigest', 'auditEventDigest', 'auditEventHash'].every(key => oauthConsentDigest(result[key]))) {
+          throw new Error('Cancellation settlement result differs from the selected event; inspect without retry');
+        }
+        attempt.result = result;
+        setStatus('The exact cancellation audit event was settled. Other effects are unchanged.', 'success');
+        return {...result, uiHandled: true};
+      } finally { renderSetupCancellation(); }
+    }
+
+    function setupCancellationSession(original) {
+      const parsed = oauthConsentParse(original, 65536).value;
+      if (oauthConsentCanonical(parsed) !== original) throw new Error('Setup cancellation row is not its exact canonical original');
+      const session = {apiVersion: 'serverware.setupSession/v1'};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key === 'attestation_challenge_value') continue;
+        let admitted = value;
+        if (value instanceof OAuthConsentNumber) {
+          const integer = oauthConsentInteger(value);
+          if (integer > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Setup integer exceeds exact browser representation');
+          admitted = Number(integer);
+        }
+        session[key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())] = admitted;
+      }
+      return session;
+    }
+
+    async function controlledSetupCancellation(session, reason, checkContext) {
+      const schema = 'serverware.setupTrackingCancellationRequest/v1';
+      const optionsSchema = 'serverware.setupTrackingCancellationOptions/v1';
+      const path = `/api/setup/sessions/${encodeURIComponent(session.id)}/cancel`;
+      const post = async (phase, body) => {
+        checkContext();
+        const result = await api(path + '/' + phase, {method: 'POST', checkContext,
+          body: oauthConsentCanonical({apiVersion: schema, ...body})});
+        checkContext(); return result;
+      };
+      if (reason !== null && (reason !== reason.trim() || !reason || /[\u0000-\u001f\u007f]/u.test(reason)
+          || new TextEncoder().encode(reason).byteLength > 2048)) throw new Error('Use an already trimmed reason without controls, at most 2,048 UTF-8 bytes');
+      const draft = await post('draft', {expectedRevision: session.revision, reason});
+      if (!oauthConsentClosed(draft, ['apiVersion', 'okForAction', 'argumentsOriginal', 'requestDigest'])
+          || draft.apiVersion !== schema || draft.okForAction !== false || !oauthConsentDigest(draft.requestDigest)) {
+        throw new Error('Cancellation draft does not match its closed request contract');
+      }
+      const original = draft.argumentsOriginal, args = oauthConsentParse(original, 128 * 1024).value;
+      if (oauthConsentCanonical(args) !== original || !oauthConsentClosed(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
+          || args.actor_id !== state.currentUserId || !oauthConsentClosed(args.request, ['sessionOriginal', 'reason', 'issuedAtEpochNs', 'expiresAtEpochNs'])
+          || args.request.reason !== reason) throw new Error('Cancellation draft differs from the selected operator or reason');
+      const retained = setupCancellationSession(args.request.sessionOriginal);
+      if (Object.keys(session).some(key => !['evidence', 'events'].includes(key) && JSON.stringify(retained[key]) !== JSON.stringify(session[key]))) {
+        throw new Error('Cancellation draft does not retain the selected Setup original');
+      }
+      checkContext();
+      const options = await post('options', {argumentsOriginal: original});
+      if (!oauthConsentClosed(options, ['publicKey', 'serverware']) || options.serverware?.schema !== optionsSchema
+          || options.serverware.operation !== 'setup.session.cancel' || options.serverware.requestDigest !== draft.requestDigest
+          || !options.publicKey || options.publicKey.userVerification !== 'required'
+          || !Array.isArray(options.publicKey.allowCredentials) || options.publicKey.allowCredentials.length !== 1
+          || !window.PublicKeyCredential || !navigator.credentials) throw new Error('Exact hardware cancellation options are unavailable');
+      const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+      checkContext();
+      const result = await post('execute', {argumentsOriginal: original,
+        mfa: {setupTrackingCancellationProfile: optionsSchema, assertion: credentialToJson(assertion)}});
+      if (!oauthConsentClosed(result, ['ok', 'operation', 'requestDigest', 'auditEventDigest', 'idempotentReplay', 'setupOriginal', 'setupEventId', 'auditState'])
+          || result.ok !== true || result.operation !== 'setup.session.cancel' || result.requestDigest !== draft.requestDigest
+          || result.idempotentReplay !== false || result.auditState !== 'controlled_pending' || !oauthConsentDigest(result.auditEventDigest)) {
+        throw new Error('Controlled cancellation outcome is not the exact durable result; inspect without retry');
+      }
+      return {session: setupCancellationSession(result.setupOriginal), audit: {settlement: result.auditState,
+        eventId: result.setupEventId, outboxEventDigest: result.auditEventDigest, requestDigest: result.requestDigest}};
     }
 
     async function cancelSetupSession() {
@@ -25183,11 +25340,13 @@ UI_HTML = r"""
       if (!canCancelSetupSession(session)) throw new Error('Select an active Setup run you can cancel; a prior submission cannot be retried from this page');
       const sessionId = session.id, revision = session.revision, original = JSON.stringify(session);
       const authScope = policyAuthoringScope(), generation = setupLoadGeneration;
+      const cancellationProfile = state.setupTrackingCancellationProfile;
       const selection = JSON.stringify(currentSetupSelection()), reasonText = $('setup-cancel-reason').value;
       const reason = reasonText.trim();
       if (Array.from(reasonText).length > 2000) throw new Error('Cancellation reason exceeds 2,000 characters');
       const checkContext = () => {
-        if (!hasOperatorAuth() || state.setupTrackingCancellationAvailable !== true || policyAuthoringScope() !== authScope || setupLoadGeneration !== generation
+        if (!hasOperatorAuth() || state.setupTrackingCancellationAvailable !== true || state.setupTrackingCancellationProfile !== cancellationProfile
+            || policyAuthoringScope() !== authScope || setupLoadGeneration !== generation
             || state.setupSession !== session || JSON.stringify(session) !== original
             || $('setup-session').value !== sessionId || JSON.stringify(currentSetupSelection()) !== selection
             || $('setup-cancel-reason').value !== reasonText) {
@@ -25203,7 +25362,9 @@ UI_HTML = r"""
       setupCancellationAttempts.set(sessionId, attempt);
       renderSetupCancellation();
       try {
-        const result = await api(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+        const result = cancellationProfile === 'controlled-v1'
+          ? await controlledSetupCancellation(session, reasonText === '' ? null : reasonText, checkContext)
+          : await api(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
           method: 'POST', checkContext,
           body: JSON.stringify({expectedRevision: revision, ...(reason ? {reason} : {})})
         });

@@ -645,6 +645,8 @@ class KernelContext:
     # Actual admitted configuration root, supplied only by the measured planner.
     genesis_root_digest: str | None = None
     genesis_policy: Mapping[str, str] | None = None
+    # Independently admitted Setup cancellation capacity, never HTTP arguments.
+    setup_cancel_maximum_events: int | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

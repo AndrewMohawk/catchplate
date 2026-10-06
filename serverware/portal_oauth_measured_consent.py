@@ -77,10 +77,28 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
       return nativeOAuthSelected() && nativeOAuthProvider()?.configured === true
         && (!nativeOAuthSetupSelected() || Boolean(state.oauthSetupSessionId
           && state.setupSession?.id === state.oauthSetupSessionId
-          && state.setupSession.phase === 'created' && state.setupSession.revision === 0));
+          && state.setupSession.status === 'active' && state.setupSession.phase === 'created' && state.setupSession.revision === 0
+          && state.setupSession.ownerId === state.authStatus?.userId
+          && [null, state.authStatus?.userId].includes(state.setupSession.currentAssigneeId)));
+    }
+    function nativeOAuthSetupContext() {
+      return nativeOAuthSetupSelected() ? JSON.stringify(state.setupSession) : null;
+    }
+    function nativeOAuthHoldContext(operation) {
+      const setupContext = nativeOAuthSetupContext(), returned = nativeOAuthReturned;
+      return {...operation, setupContext, current() {
+        operation.current(); oauthConsentNeed(nativeOAuthPreparationReady()
+          && setupContext === nativeOAuthSetupContext() && returned === nativeOAuthReturned);
+      }};
     }
     function renderNativeOAuth() {
       if (!$('native-oauth-controls')) return;
+      if (nativeOAuthPrepared && (!nativeOAuthPreparationReady() || Date.now() >= nativeOAuthPrepared.expires
+          || nativeOAuthPrepared.scope !== sessionActivationAuthScope() || nativeOAuthPrepared.form !== oauthConsentFormPin()
+          || nativeOAuthPrepared.setupContext !== nativeOAuthSetupContext())) {
+        nativeOAuthDiscard('Preparation expired or operator/Setup context changed. Nothing is replayed.');
+        return;
+      }
       const selected = nativeOAuthSelected(); $('native-oauth-controls').hidden = !selected && nativeOAuthReturned === null;
       if (!selected) {
         $('native-oauth-review').disabled = $('native-oauth-authorize').disabled = true;
@@ -88,15 +106,12 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
           nativeOAuthMessage('The returned preparation does not match the selected native provider profile. No review or authorization can be submitted.');
         return;
       }
-      let allowed = false; try { oauthConsentActor(); allowed = nativeOAuthProvider()?.configured === true; } catch (_) {}
+      let allowed = false; try { oauthConsentActor(); allowed = nativeOAuthPreparationReady(); } catch (_) {}
       $('oauth-consent-start').disabled = true;
       $('oauth-submit').textContent = 'Open confidential native preparation';
       $('oauth-submit').disabled = !allowed || !nativeOAuthPreparationReady() || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthReturned !== null || nativeOAuthPrepared !== null;
       $('native-oauth-review').disabled = !allowed || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthReturned === null || nativeOAuthPrepared !== null;
       $('native-oauth-authorize').disabled = !allowed || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthPrepared === null;
-      if (nativeOAuthPrepared && (Date.now() >= nativeOAuthPrepared.expires
-          || nativeOAuthPrepared.scope !== sessionActivationAuthScope() || nativeOAuthPrepared.form !== oauthConsentFormPin()))
-        nativeOAuthDiscard('Preparation expired or operator context changed. Nothing is replayed.');
       let prerequisite = '';
       if (!nativeOAuthBusy && !nativeOAuthBlocked && nativeOAuthReturned === null && nativeOAuthPrepared === null) {
         if (nativeOAuthProvider()?.configured !== true)
@@ -135,7 +150,8 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
       try {
         oauthConsentNeed(nativeOAuthPreparationReady() && !nativeOAuthBusy && !nativeOAuthBlocked
           && nativeOAuthReturned === null && nativeOAuthPrepared === null);
-        operation = oauthConsentBegin(); nativeOAuthBusy = true; await oauthConsentCookie(operation);
+        operation = nativeOAuthHoldContext(oauthConsentBegin()); nativeOAuthBusy = true;
+        operation.current(); await oauthConsentCookie(operation); operation.current();
         const metadata = oauthConsentParse($('oauth-metadata').value || '{}').value;
         oauthConsentNeed(metadata && typeof metadata === 'object' && !Array.isArray(metadata)
           && !Object.hasOwn(metadata, 'oauth_application_owner'));
@@ -161,8 +177,9 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
     async function nativeOAuthReview() {
       let operation = null;
       try {
-        oauthConsentNeed(nativeOAuthSelected() && nativeOAuthReturned !== null && !nativeOAuthBusy && !nativeOAuthBlocked);
-        operation = oauthConsentBegin(); nativeOAuthBusy = true; await oauthConsentCookie(operation);
+        oauthConsentNeed(nativeOAuthPreparationReady() && nativeOAuthReturned !== null && !nativeOAuthBusy && !nativeOAuthBlocked);
+        operation = nativeOAuthHoldContext(oauthConsentBegin()); nativeOAuthBusy = true;
+        operation.current(); await oauthConsentCookie(operation); operation.current();
         const returned = nativeOAuthReturned, args = returned.arguments, request = args?.request, provider = nativeOAuthProvider(), contract = nativeOAuthContract();
         oauthConsentNeed(oauthConsentClosed(returned, ['apiVersion', 'arguments', 'callbackOrigin', 'portalOrigin'])
           && returned.apiVersion === contract.draft && returned.portalOrigin === location.origin
@@ -187,9 +204,12 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
         if (nativeOAuthSetupSelected()) {
           nativeSetupBinding(request.setupBinding);
           oauthConsentNeed(request.setupBinding.sessionId === state.oauthSetupSessionId && request.setupBinding.ownerId === operation.actor
+            && request.setupBinding.ownerId === state.setupSession.ownerId
+            && request.setupBinding.currentAssigneeId === state.setupSession.currentAssigneeId
             && oauthConsentInteger(request.setupBinding.revision) === 0n
             && statement.setupBindingSha256 === await nativeOAuthHash(request.setupBinding));
         } else oauthConsentNeed(!Object.hasOwn(request, 'setupBinding'));
+        operation.current();
         const end = oauthConsentInteger(statement.expiresAtEpochNs), start = oauthConsentInteger(statement.issuedAtEpochNs);
         oauthConsentNeed(end > start && end - start <= 30000000000n && BigInt(Date.now()) * 1000000n < end);
         const options = await nativeOAuthRequest(contract.prefix + '/options', {apiVersion: contract.schema, arguments: args}, operation);
@@ -205,7 +225,7 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
           && oauthConsentClosed(key.allowCredentials[0], ['type', 'id']) && key.allowCredentials[0].type === 'public-key');
         const expires = Math.min(Number(end / 1000000n), Date.parse(binding.expiresAt)); oauthConsentNeed(Number.isFinite(expires) && Date.now() < expires);
         operation.current(); nativeOAuthPrepared = {args, contract, callbackOrigin: returned.callbackOrigin, options: {publicKey: {...key, timeout: 30000}},
-          expires, scope: sessionActivationAuthScope(), form: oauthConsentFormPin(), actor: operation.actor};
+          expires, scope: sessionActivationAuthScope(), form: oauthConsentFormPin(), actor: operation.actor, setupContext: operation.setupContext};
         nativeOAuthMessage('Review: ' + request.credentialName + ' via ' + provider.displayName + '; scopes: ' + request.scopes.join(', ')
           + '. Fresh passkey approval is still required before the native origin may open provider consent.');
       } catch (_) {nativeOAuthPrepared = null; nativeOAuthMessage('Returned preparation failed, expired or changed. No consent effect was submitted.');}
@@ -214,10 +234,12 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
     async function nativeOAuthAuthorize() {
       let operation = null, assertion = null;
       try {
-        const held = nativeOAuthPrepared; oauthConsentNeed(held && !nativeOAuthBusy && !nativeOAuthBlocked);
-        operation = oauthConsentBegin(); nativeOAuthBusy = true;
+        const held = nativeOAuthPrepared; oauthConsentNeed(nativeOAuthPreparationReady() && held && !nativeOAuthBusy && !nativeOAuthBlocked);
+        operation = nativeOAuthHoldContext(oauthConsentBegin()); nativeOAuthBusy = true;
         const current = () => {operation.current(); oauthConsentNeed(held === nativeOAuthPrepared && Date.now() < held.expires
-          && held.scope === sessionActivationAuthScope() && held.form === oauthConsentFormPin() && held.actor === operation.actor);};
+          && held.scope === sessionActivationAuthScope() && held.form === oauthConsentFormPin() && held.actor === operation.actor
+          && held.setupContext === operation.setupContext);};
+        current();
         await oauthConsentCookie(operation); current();
         const key = held.options.publicKey;
         const credential = await navigator.credentials.get({signal: operation.signal, publicKey: prepareRequestOptions({publicKey:

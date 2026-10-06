@@ -31532,6 +31532,9 @@ def _policy_shadow_assert_direct_record_binding(
         },
         "canary_assignment": {
             "assignment_id": ("assignmentId",),
+            # Assignment/v1 has one signed creation instant: its issuance.
+            # Do not require a field outside the closed assignment grammar.
+            "created_at_epoch_ns": ("issuedAtUnixNanos",),
             "generation_epoch": ("generationEpoch",),
             "minimum_generation_tombstone_epoch":
                 ("minimumGenerationTombstoneEpoch",),

@@ -29,6 +29,7 @@ HOLDER_DOMAIN = b"serverware/credential-currentness-holder/v1\0"
 ATTESTATION_DOMAIN = b"serverware/credential-currentness-attestation/v1\0"
 MAX_ROWS = 64
 MAX_ARGUMENT_BYTES = 64 * 1024
+MAX_STATIC_ARGUMENT_BYTES = 128 * 1024
 ROOT_FIELDS = frozenset({"id", "credential_id", "credential_version", "epoch", "profile", "status", "origin_request_digest", "predecessor_barrier_sha256", "barrier_id", "created_at", "updated_at"})
 HOLDER_FIELDS = frozenset({"id", "root_id", "credential_id", "credential_version", "epoch", "holder_id", "boot_id", "key_id", "control_plane_response_signing_key_id", "control_plane_configuration_digest", "registration_sha256", "registration_original_json", "acknowledgement_sha256", "acknowledgement_original_json", "status", "created_at", "updated_at"})
 CHALLENGE_FIELDS = frozenset({"id", "root_id", "credential_id", "credential_version", "epoch", "holder_id", "phase", "challenge", "barrier_id", "barrier_sha256", "issued_at_epoch_ns", "expires_at_epoch_ns", "status", "request_digest", "consumed_request_digest", "created_at", "updated_at"})
@@ -126,15 +127,21 @@ def evidence(value):
 
 def arguments(operation, value, *, typed=False):
     assigned = isinstance(value, Mapping) and "assignment_original" in value
+    static = isinstance(value, Mapping) and "static_creation_provenance_original" in value
     require(operation in OPERATIONS and isinstance(value, Mapping)
         and (not assigned or operation in ASSIGNMENT_OPERATIONS)
         and set(value) == {"credential_id", "credential_version", "control_plane_configuration_digest", "request"}
-            | ({"businessIntent"} if typed else set()) | ({"assignment_original"} if assigned else set()))
+            | ({"businessIntent"} if typed else set()) | ({"assignment_original"} if assigned else set())
+            | ({"static_creation_provenance_original"} if static else set()))
     if assigned:
         from serverware import authority_credential_currentness_assignment as assignment
         assignment.original(value["assignment_original"])
     identifier(value["credential_id"])
     version(value["credential_version"])
+    if static:
+        from serverware import authority_static_credential_provenance as provenance
+        statement = provenance.evidence(value["static_creation_provenance_original"])["statement"]
+        require(value["credential_version"] == 1 and statement["credentialId"] == value["credential_id"])
     digest(value["control_plane_configuration_digest"])
     request = value["request"]
     require(type(request) is dict)
@@ -156,7 +163,11 @@ def arguments(operation, value, *, typed=False):
     result = {name: value[name] for name in ("credential_id", "credential_version", "control_plane_configuration_digest", "request")}
     if assigned:
         result["assignment_original"] = value["assignment_original"]
-    require(len(canonical(result)) <= MAX_ARGUMENT_BYTES)
+    if static:
+        result["static_creation_provenance_original"] = value["static_creation_provenance_original"]
+    require(len(canonical(result)) <= (MAX_STATIC_ARGUMENT_BYTES if static else MAX_ARGUMENT_BYTES))
+    if static and typed:
+        require(len(canonical(value)) <= MAX_STATIC_ARGUMENT_BYTES)
     return result
 
 

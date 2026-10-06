@@ -1431,6 +1431,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_oauth_refresh.py \
 	serverware/control_plane_oauth_refresh.py \
 	serverware/authority_credential_currentness.py \
+	serverware/authority_static_credential_provenance.py \
 	serverware/authority_credential_currentness_policy.py \
 	serverware/authority_credential_currentness_assignment.py \
 	serverware/control_plane_credential_currentness_assignment.py \
@@ -4599,6 +4600,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_oauth_refresh.py \
 				serverware/control_plane_oauth_refresh.py \
 				serverware/authority_credential_currentness.py \
+				serverware/authority_static_credential_provenance.py \
 				serverware/authority_credential_currentness_policy.py \
 				serverware/authority_credential_currentness_assignment.py \
 				serverware/control_plane_credential_currentness_assignment.py \
@@ -6098,7 +6100,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/oauth-refresh-authority.v1.schema.json \
 				schemas/credential-currentness-authority.v1.schema.json \
 				schemas/credential-currentness-authority.v2.schema.json \
+				schemas/credential-currentness-authority.v4.schema.json \
 				schemas/credential-currentness-request.v1.schema.json \
+				schemas/credential-currentness-request.v2.schema.json \
+				schemas/static-credential-creation-provenance.v1.schema.json \
 				schemas/native-current-credential-lease-request.v1.schema.json \
 				schemas/native-current-credential-lease-envelope.v1.schema.json \
 				schemas/control-plane-custody-startup.v2.schema.json \

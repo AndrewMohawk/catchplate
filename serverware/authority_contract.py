@@ -2518,7 +2518,7 @@ _OPERATIONS = {
         "credential.currentness." + phase: _spec(
             "serverware_policy_authority_credential_currentness_" + phase,
             reads=("credentials", "credential_generations", "credential_currentness_roots", "credential_currentness_holders",
-                "credential_currentness_challenges", "credential_currentness_barriers") + _PHASE2_AGGREGATE,
+                "credential_currentness_challenges", "credential_currentness_barriers", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
             writes=("credential_currentness_roots", "credential_currentness_holders", "credential_currentness_challenges",
                 "credential_currentness_barriers", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
             webauthn="not-required",

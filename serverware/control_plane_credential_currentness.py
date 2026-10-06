@@ -23,6 +23,7 @@ from serverware import control_plane_credential_currentness_assignment as assign
 from serverware.control_plane_approval_verification import _request_pin
 
 REQUEST_SCHEMA = "serverware.credentialCurrentnessRequest/v1"
+STATIC_REQUEST_SCHEMA = "serverware.credentialCurrentnessRequest/v2"
 OBSERVATION_SCHEMA = "serverware.credentialCurrentnessObservation/v1"
 LEASE_DOMAIN = b"serverware.nativeCurrentCredentialLeaseBinding/v1\0"
 _PUBLIC = {"challenge": profile.OP_CHALLENGE, "register": profile.OP_REGISTER, "ack": profile.OP_ACK}
@@ -52,6 +53,17 @@ def _rows(credential_id, version):
         and root["credential_version"] == version and root["epoch"] == version
         and root["profile"] == profile.ROOT_SCHEMA)
     return credential, generation, root
+
+
+def _static_rows(original, credential_id, version, configuration_digest, now):
+    from serverware import authority_static_credential_provenance as provenance
+    credential, generation, root = _rows(credential_id, version)
+    with db.connect() as connection:
+        outbox = connection.execute("SELECT * FROM metadata_audit_outbox WHERE id = ?",
+            (provenance.outbox_id(original),)).fetchone()
+    profile.require(outbox is not None)
+    return provenance.verify_rows(original, credential=credential, generation=generation,
+        root=root, outbox=dict(outbox), configuration_digest=configuration_digest, now_epoch_ns=now)
 
 
 def _holder(root, holder_id, configuration_digest):
@@ -132,11 +144,21 @@ class _Owner:
     def __deepcopy__(self, memo):
         raise ValueError("currentness owner cannot be copied")
 
-    def dispatch(self, operation, credential_id, version, request):
+    def dispatch(self, operation, credential_id, version, request, *, static_provenance_original=None):
         self.check()
         values = {"credential_id": credential_id,
             "credential_version": version, "control_plane_configuration_digest": self.configuration_digest,
             "request": request}
+        if static_provenance_original is not None:
+            from serverware import authority_credential_currentness_policy as policy
+            self.assignment = assignment_startup.require_selected()
+            profile.require(self.assignment.binding is self.binding
+                and self.assignment.policy["schema"] == policy.STATIC_POSTBOOT_SCHEMA)
+            deployment = _static_rows(static_provenance_original, credential_id, version,
+                self.configuration_digest, self.epoch)
+            profile.require(deployment == self.assignment.policy["deploymentId"])
+            values["static_creation_provenance_original"] = static_provenance_original
+            self.check()
         if operation in profile.ASSIGNMENT_OPERATIONS and assignment_startup.selected():
             self.assignment = assignment_startup.require_selected()
             statement = request if operation == profile.OP_CHALLENGE else request["evidence"]["statement"]
@@ -148,6 +170,9 @@ class _Owner:
             values["assignment_original"] = self.assignment.assignment_original
             self.check()
         arguments = profile.arguments(operation, values)
+        if static_provenance_original is not None:
+            profile.arguments(operation, {**arguments,
+                "businessIntent": authority_contract.synthesize_business_intent(operation, arguments)}, typed=True)
         if operation == profile.OP_ACK or (operation == profile.OP_CHALLENGE and request["phase"] == "ack"):
             statement = request["evidence"]["statement"] if operation == profile.OP_ACK else request
             _, _, root = _rows(credential_id, version)
@@ -167,6 +192,8 @@ class _Owner:
             and result["idempotentReplay"] is False)
         profile.digest(result["auditEventDigest"])
         _, _, root = _rows(credential_id, version)
+        if static_provenance_original is not None:
+            _static_rows(static_provenance_original, credential_id, version, self.configuration_digest, self.epoch)
         holder_id, challenge = None, None
         if operation == profile.OP_CHALLENGE:
             challenge = request
@@ -181,16 +208,28 @@ class _Owner:
 
 def on_request(request, payload):
     """Root route authenticates its existing DP token and signs this response."""
+    static = type(payload) is dict and payload.get("apiVersion") == STATIC_REQUEST_SCHEMA
     profile.require(type(request) is Request and request.method == "POST"
         and request.url.path == "/api/data-plane/credential-currentness" and not request.url.query
         and type(payload) is dict and set(payload) == {"apiVersion", "credentialId", "credentialVersion", "request"}
-        and payload["apiVersion"] == REQUEST_SCHEMA)
+            | ({"staticCreationProvenanceOriginal"} if static else set())
+        and payload["apiVersion"] == (STATIC_REQUEST_SCHEMA if static else REQUEST_SCHEMA))
     owner, scope, pin, original = _Owner(), request.scope, _request_pin(request), profile.canonical(payload)
-    profile.require(len(original) <= 64 * 1024)
+    profile.require(len(original) <= (profile.MAX_STATIC_ARGUMENT_BYTES if static else 64 * 1024))
     item = payload["request"]
     profile.require(type(item) is dict and set(item) == {"phase", "arguments"})
     credential_id, version = payload["credentialId"], payload["credentialVersion"]
     _rows(credential_id, version)
+    provenance_original = payload["staticCreationProvenanceOriginal"] if static else None
+    if static:
+        from serverware import authority_credential_currentness_policy as policy
+        profile.require(type(version) is int and version == 1)
+        owner.assignment = assignment_startup.require_selected()
+        profile.require(owner.assignment.binding is owner.binding
+            and owner.assignment.policy["schema"] == policy.STATIC_POSTBOOT_SCHEMA)
+        deployment = _static_rows(provenance_original, credential_id, version, owner.configuration_digest, owner.epoch)
+        profile.require(deployment == owner.assignment.policy["deploymentId"])
+        owner.check()
     phase, arguments = item["phase"], item["arguments"]
     if phase == "poll":
         profile.require(type(arguments) is dict and set(arguments) == {"holderId"})
@@ -207,7 +246,8 @@ def on_request(request, payload):
             statement = profile.evidence(arguments["evidence"])["statement"]
             owner.expires = min(owner.expires, statement["expiresAtEpochNs"])
         owner.deadline = min(owner.deadline, owner.mono + owner.expires - owner.epoch)
-        result = owner.dispatch(_PUBLIC[phase], credential_id, version, arguments)
+        result = owner.dispatch(_PUBLIC[phase], credential_id, version, arguments,
+            static_provenance_original=provenance_original)
     owner.check()
     profile.require(request.scope is scope and _request_pin(request) == pin and profile.canonical(payload) == original)
     return result

@@ -343,6 +343,7 @@ _credential_lease_audit_last: dict[tuple[str, ...], float] = {}
 _CREDENTIAL_LEASE_AUDIT_INTERVAL_SECONDS = 60.0
 _CREDENTIAL_LEASE_REQUEST_MAX_BYTES = 96 * 1024
 _CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES = 64 * 1024
+_STATIC_CURRENTNESS_REQUEST_MAX_BYTES = 128 * 1024
 _CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY = "serverware.credential-lease-original"
 _CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY = "serverware.credential-currentness-original"
 _RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES = 512 * 1024
@@ -2965,6 +2966,17 @@ class CredentialCurrentnessRequest(BaseModel):
     request: CredentialCurrentnessPhase
 
 
+class StaticCredentialCurrentnessRequest(CredentialCurrentnessRequest):
+    api_version: Literal["serverware.credentialCurrentnessRequest/v2"] = Field(alias="apiVersion")
+    credential_version: int = Field(alias="credentialVersion", strict=True, ge=1, le=1)
+    static_creation_provenance_original: str = Field(alias="staticCreationProvenanceOriginal",
+        min_length=1, max_length=40 * 1024)
+
+
+class CredentialCurrentnessWireRequest(RootModel[CredentialCurrentnessRequest | StaticCredentialCurrentnessRequest]):
+    pass
+
+
 class DataPlaneGrantConsume(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -4892,6 +4904,7 @@ async def _bounded_exact_data_plane_model(
     maximum_bytes: int,
     label: str,
     capture_original_key: str | None = None,
+    version_byte_limits: dict[str, int] | None = None,
 ) -> BaseModel:
     _require_data_plane_token(
         request.headers.get("X-Serverware-Data-Plane-Token"),
@@ -4936,6 +4949,10 @@ async def _bounded_exact_data_plane_model(
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_non_finite_number,
         )
+        if version_byte_limits is not None and type(parsed) is dict:
+            version = parsed.get("apiVersion")
+            if type(version) is str and version in version_byte_limits and len(body) > version_byte_limits[version]:
+                raise HTTPException(status_code=413, detail=f"{label} exceeds its version byte bound")
         validated = model_type.model_validate(parsed)
         if capture_original_key is not None:
             if capture_original_key in request.scope:
@@ -4977,15 +4994,18 @@ async def _bounded_credential_lease_request(
     return wire.root
 
 
-async def _bounded_credential_currentness_request(request: Request) -> CredentialCurrentnessRequest:
-    return await _bounded_exact_data_plane_model(
+async def _bounded_credential_currentness_request(request: Request) -> CredentialCurrentnessRequest | StaticCredentialCurrentnessRequest:
+    wire = await _bounded_exact_data_plane_model(
         request,
-        model_type=CredentialCurrentnessRequest,
+        model_type=CredentialCurrentnessWireRequest,
         expected_token=DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
-        maximum_bytes=_CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES,
+        maximum_bytes=_STATIC_CURRENTNESS_REQUEST_MAX_BYTES,
         label="credential currentness request",
         capture_original_key=_CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY,
+        version_byte_limits={"serverware.credentialCurrentnessRequest/v1": _CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES,
+            "serverware.credentialCurrentnessRequest/v2": _STATIC_CURRENTNESS_REQUEST_MAX_BYTES},
     )
+    return wire.root
 
 
 def _original_data_plane_request(request: Request, scope_key: str, payload: BaseModel) -> dict[str, Any]:

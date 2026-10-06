@@ -161,6 +161,10 @@ class CurrentnessKernel:
         queries = [_query(self.operation, "credential", "credentials", {"id": credential}),
             _query(self.operation, "generation", "credential_generations", {"credential_id": credential}),
             root_query(self.operation, credential, version)]
+        if "static_creation_provenance_original" in values:
+            from serverware import authority_static_credential_provenance as provenance
+            queries.append(_query(self.operation, "static_creation_audit", "metadata_audit_outbox",
+                {"id": provenance.outbox_id(values["static_creation_provenance_original"])}))
         item = request["evidence"]["statement"] if self.operation in {profile.OP_REGISTER, profile.OP_ACK} else request
         if self.operation in {profile.OP_CHALLENGE, profile.OP_REGISTER, profile.OP_ACK}:
             queries.extend((_query(self.operation, "challenge", profile.CHALLENGE_TABLE, {"id": item["challengeId"]}, absent=self.operation == profile.OP_CHALLENGE),
@@ -182,18 +186,33 @@ class CurrentnessKernel:
         current = shared._row(context.exact("credentials", {"id": credential}), "current credential")
         generation = shared._row(context.exact("credential_generations", {"credential_id": credential}), "current generation")
         profile.require(current["id"] == credential and type(current["credential_version"]) is int and current["credential_version"] == version
-            and current["kind"] == "oauth2" and current["lifecycle_status"] == "active"
+            and current["lifecycle_status"] == "active"
             and generation["credential_id"] == credential and type(generation["last_version"]) is int and generation["last_version"] == version
             and current["revocation_error"] is None and current["revocation_requested_at"] is None)
         root_selected, root = require_root(context, credential, version)
+        static_deployment = None
+        if "static_creation_provenance_original" in values:
+            from serverware import authority_static_credential_provenance as provenance
+            original = values["static_creation_provenance_original"]
+            outbox = shared._row(context.exact("metadata_audit_outbox", {"id": provenance.outbox_id(original)}),
+                "authenticated completed static creation audit")
+            static_deployment = provenance.verify_rows(original, credential=current, generation=generation,
+                root=root, outbox=outbox, configuration_digest=values["control_plane_configuration_digest"],
+                now_epoch_ns=now)
+        else:
+            profile.require(current["kind"] == "oauth2")
         mutations, challenge_public, holder_public, barrier_public = [], None, None, None
         if self.operation in {profile.OP_CHALLENGE, profile.OP_REGISTER, profile.OP_ACK}:
             item = request["evidence"]["statement"] if self.operation != profile.OP_CHALLENGE else request
             if self.operation != profile.OP_CHALLENGE:
-                metadata = shared._canonical_stored_mapping(current["metadata"], "current enrolled credential metadata")
-                association = metadata.get("oauth_application_owner")
-                profile.require(type(association) is dict and association.get("deploymentId") == item["deploymentId"],
-                    "measured holder deployment differs from the actual credential association")
+                if static_deployment is not None:
+                    profile.require(static_deployment == item["deploymentId"],
+                        "measured holder deployment differs from authenticated static creation")
+                else:
+                    metadata = shared._canonical_stored_mapping(current["metadata"], "current enrolled credential metadata")
+                    association = metadata.get("oauth_application_owner")
+                    profile.require(type(association) is dict and association.get("deploymentId") == item["deploymentId"],
+                        "measured holder deployment differs from the actual credential association")
             holder_selected, holder = _holder(context, root, item["holderId"])
             if holder is not None:
                 profile.require(holder["control_plane_configuration_digest"] == values["control_plane_configuration_digest"],

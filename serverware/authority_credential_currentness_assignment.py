@@ -110,7 +110,7 @@ def verify_original(value, *, configuration_payload, root_key, now_epoch_ns):
     from serverware.authority_policy_canary_policy import full_configuration_digest
     profile.require(isinstance(root_key, Ed25519PublicKey))
     policy = native.validate_policy(configuration_payload.get(native.FIELD), payload=configuration_payload, root_key=root_key)
-    profile.require(policy is not None and policy["schema"] == native.POSTBOOT_SCHEMA)
+    profile.require(policy is not None and policy["schema"] in native.POSTBOOT_SCHEMAS)
     envelope = original(value); payload = envelope["payload"]; item = payload["assignment"]
     targets = [entry for entry in policy["targets"] if entry["targetId"] == payload["targetId"]]
     profile.require(len(targets) == 1 and type(now_epoch_ns) is int

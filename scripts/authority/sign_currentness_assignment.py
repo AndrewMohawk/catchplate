@@ -73,7 +73,7 @@ def _prepare(raw, now):
     root.verify(p.encoded(envelope["signature"], 64),
         commitment.framed_digest(SIGNED_CONFIGURATION, p.canonical(authority)).encode("ascii"))
     policy = native.validate_policy(authority.get(native.FIELD), payload=authority, root_key=root)
-    p.require(policy is not None and policy["schema"] == native.POSTBOOT_SCHEMA)
+    p.require(policy is not None and policy["schema"] in native.POSTBOOT_SCHEMAS)
 
     original = value["payloadOriginal"]
     p.require(type(original) is str and original.isascii() and 0 < len(original) <= assignment.MAX_ORIGINAL_BYTES)

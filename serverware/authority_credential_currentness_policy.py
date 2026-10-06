@@ -17,9 +17,12 @@ from serverware import authority_oauth_refresh as refresh
 FIELD = "credentialCurrentnessPolicy"
 SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v2"
 POSTBOOT_SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v3"
+STATIC_POSTBOOT_SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v4"
+POSTBOOT_SCHEMAS = frozenset({POSTBOOT_SCHEMA, STATIC_POSTBOOT_SCHEMA})
 TRUST_SCHEMA = "serverware.credentialCurrentnessNativeTrustRoots/v1"
 FIELDS = frozenset({"schema", "deploymentId", "operationMaxSeconds", "maximumHolders", "trustRoots", "holders"})
 POSTBOOT_FIELDS = (FIELDS - {"holders"}) | {"targets", "assignmentAuthorizer"}
+STATIC_POSTBOOT_FIELDS = POSTBOOT_FIELDS | {"staticCreationProvenance"}
 ASSIGNMENT_FIELDS = frozenset({"holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest", "expectedPcrs", "expectedEif", "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds"})
 _SCOPE_DIGESTS = ("releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest")
 
@@ -76,12 +79,16 @@ def validate_policy(value, *, payload, root_key=None):
         return None
     profile.require(type(value) is dict
         and ((set(value) == FIELDS and value["schema"] == SCHEMA)
-            or (set(value) == POSTBOOT_FIELDS and value["schema"] == POSTBOOT_SCHEMA))
+            or (set(value) == POSTBOOT_FIELDS and value["schema"] == POSTBOOT_SCHEMA)
+            or (set(value) == STATIC_POSTBOOT_FIELDS and value["schema"] == STATIC_POSTBOOT_SCHEMA))
         and type(value["deploymentId"]) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value["deploymentId"]) is not None)
     profile.require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30
         and type(value["maximumHolders"]) is int and value["maximumHolders"] == profile.MAX_ROWS)
     _trust(value["trustRoots"])
-    if value["schema"] == POSTBOOT_SCHEMA:
+    if value["schema"] == STATIC_POSTBOOT_SCHEMA:
+        from serverware import authority_static_credential_provenance as provenance
+        profile.require(value["staticCreationProvenance"] == provenance.SCHEMA)
+    if value["schema"] in POSTBOOT_SCHEMAS:
         from serverware import authority_credential_currentness_assignment as assignment
         targets = value["targets"]
         profile.require(type(targets) is list and 1 <= len(targets) <= value["maximumHolders"])
@@ -125,7 +132,16 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
         "actual custody configuration differs from the independently admitted currentness policy")
     request = values["request"]
     selected = None
-    if policy["schema"] == POSTBOOT_SCHEMA and operation in profile.ASSIGNMENT_OPERATIONS:
+    if "static_creation_provenance_original" in values:
+        from serverware import authority_static_credential_provenance as provenance
+        profile.require(policy["schema"] == STATIC_POSTBOOT_SCHEMA,
+            "Static creation provenance requires its explicit currentness policy v4")
+        historical = provenance.verify_native_signature(values["static_creation_provenance_original"])
+        profile.require(historical["deploymentId"] == policy["deploymentId"]
+            and historical["controlPlaneConfigurationDigest"] == values["control_plane_configuration_digest"])
+        # This is only a restriction. The kernel must prove the original
+        # creation outbox/root and current envelope, and live proof follows.
+    if policy["schema"] in POSTBOOT_SCHEMAS and operation in profile.ASSIGNMENT_OPERATIONS:
         from serverware import authority_credential_currentness_assignment as assignment
         profile.require("assignment_original" in values, "Postboot currentness assignment original is absent")
         selected = assignment.verify_original(values["assignment_original"],

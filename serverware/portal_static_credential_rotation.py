@@ -130,7 +130,7 @@ async function staticRotationCookie(operation) {
   operation.check(); return value;
 }
 async function staticRotationRequest(route, body, operation) {
-  staticRotationNeed(/^(assignment|predecessor|intent|candidate|approval\/status|(approval\/(request|decide)|rotate)\/(draft|options|execute))$/.test(route));
+  staticRotationNeed(/^(assignment|readiness|predecessor|intent|candidate|approval\/status|(approval\/(request|decide)|rotate)\/(draft|options|execute))$/.test(route));
   await staticRotationCookie(operation); operation.check();
   const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin',
     redirect: 'error', cache: 'no-store', signal: operation.controller.signal});
@@ -227,13 +227,45 @@ let rotationFlow = null;
 const sr = id => document.getElementById(id);
 function rotationPageMessage(value) { sr('rotation-status').textContent = value; }
 let rotationAssignmentBusy = false;
+let rotationPrerequisitesObserved = false;
+function rotationPagePrerequisiteControls() {
+  sr('rotation-assignment-admit').disabled = sr('rotation-readiness-check').disabled = rotationAssignmentBusy || Boolean(rotationFlow);
+  sr('rotation-start').disabled = rotationAssignmentBusy || Boolean(rotationFlow) || !rotationPrerequisitesObserved;
+}
+async function rotationPageObservePrerequisites(operation) {
+  rotationPrerequisitesObserved = false;
+  const result = await staticRotationRequest('readiness', {}, operation);
+  staticRotationNeed(staticRotationClosed(result, ['apiVersion', 'okForAction', 'nativeAssignmentState',
+    'currentnessAssignmentState', 'intakePrerequisitesMet', 'observedAtEpochNs', 'expiresAtEpochNs'])
+    && result.apiVersion === staticRotationSchema && result.okForAction === false
+    && ['missing', 'retained', 'expired'].includes(result.nativeAssignmentState)
+    && ['missing', 'retained', 'unavailable'].includes(result.currentnessAssignmentState)
+    && result.intakePrerequisitesMet === (result.nativeAssignmentState === 'retained' && result.currentnessAssignmentState === 'retained')
+    && staticRotationExpiry(result.observedAtEpochNs) < staticRotationExpiry(result.expiresAtEpochNs));
+  operation.clip(result.expiresAtEpochNs);
+  rotationPrerequisitesObserved = result.intakePrerequisitesMet;
+  sr('rotation-readiness-status').textContent = rotationPrerequisitesObserved
+    ? 'Both required assignments observed. Intake rechecks before starting. This is not native serving readiness or permission to drain or rotate.'
+    : 'Native assignment: ' + result.nativeAssignmentState + '; currentness startup assignment: ' + result.currentnessAssignmentState
+      + '. The deployment operator must resolve missing or unavailable originals. This page cannot provision or renew them. No intake or drain started.';
+  return rotationPrerequisitesObserved;
+}
+sr('rotation-readiness-check').addEventListener('click', () => {
+  if (rotationAssignmentBusy || rotationFlow) return;
+  rotationAssignmentBusy = true; rotationPrerequisitesObserved = false; rotationPagePrerequisiteControls();
+  const operation = staticRotationOperation(() => staticRotationNeed(!rotationFlow));
+  void (async () => {
+    try { await rotationPageObservePrerequisites(operation); }
+    catch (_) { sr('rotation-readiness-status').textContent = 'Prerequisites were not confirmed. No intake or drain started. Check again explicitly after the operator resolves them.'; }
+    finally { operation.close(); rotationAssignmentBusy = false; rotationPagePrerequisiteControls(); }
+  })();
+});
 sr('rotation-assignment-admit').addEventListener('click', () => {
   if (rotationAssignmentBusy || rotationFlow) return;
   const original = sr('rotation-assignment-original').value;
   const operation = staticRotationOperation(() => staticRotationNeed(!rotationFlow
     && sr('rotation-assignment-original').value === original));
-  rotationAssignmentBusy = true;
-  sr('rotation-assignment-admit').disabled = sr('rotation-start').disabled = true;
+  rotationAssignmentBusy = true; rotationPrerequisitesObserved = false; rotationPagePrerequisiteControls();
   void (async () => {
     try {
       staticRotationNeed(staticRotationText(original, 65536));
@@ -244,11 +276,12 @@ sr('rotation-assignment-admit').addEventListener('click', () => {
       operation.clip(result.expiresAtEpochNs);
       sr('rotation-assignment-status').textContent = 'Independent assignment retained: ' + result.assignmentSha256
         + '. Each rotation still requires fresh native proof and your passkey. No credential was changed.';
+      await rotationPageObservePrerequisites(operation);
     } catch (_) {
       sr('rotation-assignment-status').textContent = 'Assignment admission was not confirmed. The same signed original may be inspected again; a different assignment cannot replace it. No credential action was sent.';
     } finally {
       operation.close(); rotationAssignmentBusy = false;
-      sr('rotation-assignment-admit').disabled = sr('rotation-start').disabled = false;
+      rotationPagePrerequisiteControls();
     }
   })();
 });
@@ -324,23 +357,29 @@ async function rotationPageCandidate(flow, original) {
 }
 sr('rotation-form').addEventListener('submit', event => {
   event.preventDefault();
-  if (rotationFlow || rotationAssignmentBusy) return;
+  if (rotationFlow || rotationAssignmentBusy || !rotationPrerequisitesObserved) return;
+  const form = new FormData(event.target), requestedId = String(form.get('credentialId'));
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestedId)) {
+    rotationPageMessage('Correct the existing credential ID to its exact UUID. No request, intake or drain was started.'); return;
+  }
   // Open synchronously inside the user gesture. Never noopener: the two fixed
   // origins deliberately retain this exact WindowProxy, not a named window.
   const popup = window.open('about:blank', '_blank');
   if (!popup) { rotationPageMessage('Allow this page’s native intake popup, then start explicitly.'); return; }
-  const flow = {popup, origin: null, auth: null, ready: false, intentSent: false, candidateReceived: false,
-    failed: false, busy: true, lastWall: Date.now(), lastMono: performance.now(),
-    expires: Date.now() + 30000, deadline: performance.now() + 30000, requestAttempted: false, rotateAttempted: false};
-  rotationFlow = flow; sr('rotation-start').disabled = true;
-  const form = new FormData(event.target);
-  flow.requestedId = String(form.get('credentialId'));
-  flow.provenance = null;
+  let flow = null;
+  rotationAssignmentBusy = true; rotationPrerequisitesObserved = false; rotationPagePrerequisiteControls();
   for (const field of event.target.elements) field.disabled = true;
   void (async () => {
-    const operation = staticRotationOperation(() => rotationPageCheck(flow));
+    const operation = staticRotationOperation(() => flow ? rotationPageCheck(flow)
+      : staticRotationNeed(!rotationFlow && rotationAssignmentBusy && !popup.closed));
     try {
-      staticRotationNeed(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(flow.requestedId));
+      if (!await rotationPageObservePrerequisites(operation)) return;
+      // No flow or drain attempt exists until the read-only prerequisites pass.
+      flow = {popup, origin: null, auth: null, ready: false, intentSent: false, candidateReceived: false,
+        failed: false, busy: true, lastWall: Date.now(), lastMono: performance.now(),
+        expires: Date.now() + 30000, deadline: performance.now() + 30000, requestAttempted: false, rotateAttempted: false,
+        requestedId, provenance: null};
+      rotationFlow = flow;
       rotationPageMessage('Reading the current generation and its retained public provenance. No drain or rotation has started.');
       const previous = await staticRotationRequest('predecessor', {credentialId: flow.requestedId}, operation);
       staticRotationNeed(staticRotationClosed(previous, ['apiVersion', 'okForAction', 'credentialId', 'credentialVersion',
@@ -380,7 +419,15 @@ sr('rotation-form').addEventListener('submit', event => {
       flow.deadline = performance.now() + flow.expires - Date.now(); rotationPageCheck(flow);
       popup.location.replace(flow.origin + '/credentials/static/rotate');
       rotationPageMessage('Current predecessor and unchanged labels were read. Enter the NEW secret only in the native rotation window. No drain or rotation has started.');
-    } catch (error) { rotationPageFail(flow, error); } finally { flow.busy = false; operation.close(); }
+    } catch (error) {
+      if (flow) rotationPageFail(flow, error);
+      else { rotationPrerequisitesObserved = false; sr('rotation-readiness-status').textContent = 'Prerequisites were not confirmed. No intake or drain started. Check again explicitly.'; }
+    } finally {
+      operation.close(); rotationAssignmentBusy = false;
+      if (flow) flow.busy = false;
+      else { popup.close(); for (const field of event.target.elements) field.disabled = false; }
+      rotationPagePrerequisiteControls();
+    }
   })();
 });
 function rotationPageApprovalReady(flow) {
@@ -519,10 +566,12 @@ STATIC_CREDENTIAL_ROTATION_PAGE = r"""<!doctype html><html lang="en"><meta chars
 <label>Signed public assignment original<textarea id="rotation-assignment-original" autocomplete="off" spellcheck="false"></textarea></label>
 <button id="rotation-assignment-admit" type="button">Admit signed assignment</button>
 <p id="rotation-assignment-status" role="status" aria-live="polite">No assignment submitted from this page.</p></details>
+<button id="rotation-readiness-check" type="button">Check intake prerequisites</button>
+<p id="rotation-readiness-status" role="status" aria-live="polite">Check both retained assignments before opening intake. This does not check native serving liveness or authorize a drain or rotation.</p>
 <form id="rotation-form"><label>Existing credential ID<input name="credentialId" required autocomplete="off" spellcheck="false"></label>
 <p>The server retrieves and verifies the previous generation's retained public evidence. If its original evidence or completed audit is unavailable, rotation stays unavailable; this page never guesses or renews it.</p>
 <label>Candidate lifetime (seconds, maximum 3600)<input name="ttlSeconds" type="number" min="1" max="3600" value="900" required></label>
-<button id="rotation-start" type="submit">Open native secret intake</button></form>
+<button id="rotation-start" type="submit" disabled>Open native secret intake</button></form>
 <pre id="rotation-selection" aria-label="Actual selected predecessor"></pre>
 <button id="rotation-request" type="button" disabled>Passkey + request approval</button>
 <button id="rotation-approval-status" type="button" disabled>Check approval status</button>

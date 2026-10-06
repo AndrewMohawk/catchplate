@@ -23,7 +23,7 @@ from serverware import authority_policy_canary_policy as config_digest
 from serverware import oauth_application_owner as originals
 
 PREFIX = "/api/credentials/static"
-PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
+PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/readiness", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
     PREFIX + "/" + operation + "/" + phase
     for operation in ("approval/request", "approval/decide", "create")
     for phase in ("draft", "options", "execute")})
@@ -258,7 +258,7 @@ class _Owner:
         self.deadline = min(self.cold.deadline, self.started_mono + self.expires - self.started_epoch)
         self.policy = self.cold.policy
         self.assignment_original, self.assignment_payload = self.cold.assignment_original, self.cold.assignment_payload
-        if request.url.path != PREFIX + "/assignment":
+        if request.url.path not in {PREFIX + "/assignment", PREFIX + "/readiness"}:
             profile.require(self.assignment_original is not None, "Admit the independently signed native assignment first")
             admitted = assignment_profile.verify_original(self.assignment_original,
                 configuration_payload=self.cold.payload, root_key=self.cold.root, now_epoch_ns=self.started_epoch)
@@ -543,7 +543,32 @@ def on_request(request, raw):
         raise
 
 
+def _readiness(owner, value):
+    """Observe retained prerequisites only; no native serving or action verdict."""
+    profile.require(set(value) == {"apiVersion"})
+    owner.check()
+    state, expires = "missing", owner.expires
+    if owner.assignment_original is not None:
+        if owner.last_epoch >= owner.assignment_payload["expiresAtEpochNs"]:
+            # This exact original was admitted earlier. Do not pass historical
+            # time to a fresh verifier or turn its provenance into currentness.
+            state = "expired"
+        else:
+            admitted = assignment_profile.verify_original(owner.assignment_original,
+                configuration_payload=owner.cold.payload, root_key=owner.cold.root, now_epoch_ns=owner.last_epoch)
+            profile.require(profile.canonical(admitted) == owner.cold.assignment_payload_original)
+            state, expires = "retained", min(expires, admitted["expiresAtEpochNs"])
+    owner.check()
+    profile.require(owner.last_epoch < expires)
+    return {"apiVersion": HTTP_SCHEMA, "okForAction": False,
+        "nativeAssignmentState": state, "currentnessAssignmentState": "not_required",
+        "intakePrerequisitesMet": state == "retained", "observedAtEpochNs": str(owner.last_epoch),
+        "expiresAtEpochNs": str(expires)}
+
+
 def _handle(owner, route, value):
+    if route == "readiness":
+        return _readiness(owner, value)
     if route == "approval/status":
         return _approval_status(owner, value)
     if route == "assignment":

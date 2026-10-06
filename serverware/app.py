@@ -16813,6 +16813,7 @@ def oauth_issuance_uncertainty_resolve(
 
 
 @app.post("/api/credentials/static/assignment")
+@app.post("/api/credentials/static/readiness")
 @app.post("/api/credentials/static/intent")
 @app.post("/api/credentials/static/candidate")
 @app.post("/api/credentials/static/approval/status")
@@ -16846,6 +16847,7 @@ async def controlled_static_credential(request: Request) -> Response:
 
 
 @app.post("/api/credentials/static/rotation/assignment")
+@app.post("/api/credentials/static/rotation/readiness")
 @app.post("/api/credentials/static/rotation/predecessor")
 @app.post("/api/credentials/static/rotation/intent")
 @app.post("/api/credentials/static/rotation/candidate")

@@ -84,7 +84,7 @@ async function staticPortalCookie(operation) {
   operation.check(); return value;
 }
 async function staticPortalRequest(route, body, operation) {
-  staticPortalNeed(/^(assignment|intent|candidate|approval\/status|(approval\/(request|decide)|create)\/(draft|options|execute))$/.test(route));
+  staticPortalNeed(/^(assignment|readiness|intent|candidate|approval\/status|(approval\/(request|decide)|create)\/(draft|options|execute))$/.test(route));
   await staticPortalCookie(operation); operation.check();
   const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin',
     redirect: 'error', cache: 'no-store', signal: operation.controller.signal});
@@ -169,13 +169,44 @@ let staticFlow = null;
 const sc = id => document.getElementById(id);
 function staticPageMessage(value) { sc('static-status').textContent = value; }
 let staticAssignmentBusy = false;
+let staticPrerequisitesObserved = false;
+function staticPagePrerequisiteControls() {
+  sc('static-assignment-admit').disabled = sc('static-readiness-check').disabled = staticAssignmentBusy || Boolean(staticFlow);
+  sc('static-start').disabled = staticAssignmentBusy || Boolean(staticFlow) || !staticPrerequisitesObserved;
+}
+async function staticPageObservePrerequisites(operation) {
+  staticPrerequisitesObserved = false;
+  const result = await staticPortalRequest('readiness', {}, operation);
+  staticPortalNeed(staticPortalClosed(result, ['apiVersion', 'okForAction', 'nativeAssignmentState',
+    'currentnessAssignmentState', 'intakePrerequisitesMet', 'observedAtEpochNs', 'expiresAtEpochNs'])
+    && result.apiVersion === staticPortalSchema && result.okForAction === false
+    && ['missing', 'retained', 'expired'].includes(result.nativeAssignmentState)
+    && result.currentnessAssignmentState === 'not_required'
+    && result.intakePrerequisitesMet === (result.nativeAssignmentState === 'retained')
+    && staticPortalExpiry(result.observedAtEpochNs) < staticPortalExpiry(result.expiresAtEpochNs));
+  operation.clip(result.expiresAtEpochNs);
+  staticPrerequisitesObserved = result.intakePrerequisitesMet;
+  sc('static-readiness-status').textContent = staticPrerequisitesObserved
+    ? 'Required assignment observed. Intake rechecks before starting. This is not native serving readiness or permission to create.'
+    : 'Native assignment is ' + result.nativeAssignmentState + '. Ask the deployment operator to admit its unchanged signed original. No intake or creation started.';
+  return staticPrerequisitesObserved;
+}
+sc('static-readiness-check').addEventListener('click', () => {
+  if (staticAssignmentBusy || staticFlow) return;
+  staticAssignmentBusy = true; staticPrerequisitesObserved = false; staticPagePrerequisiteControls();
+  const operation = staticPortalOperation(() => staticPortalNeed(!staticFlow));
+  void (async () => {
+    try { await staticPageObservePrerequisites(operation); }
+    catch (_) { sc('static-readiness-status').textContent = 'Prerequisites were not confirmed. No intake or creation started. Check again explicitly after the operator resolves them.'; }
+    finally { operation.close(); staticAssignmentBusy = false; staticPagePrerequisiteControls(); }
+  })();
+});
 sc('static-assignment-admit').addEventListener('click', () => {
   if (staticAssignmentBusy || staticFlow) return;
   const original = sc('static-assignment-original').value;
   const operation = staticPortalOperation(() => staticPortalNeed(!staticFlow
     && sc('static-assignment-original').value === original));
-  staticAssignmentBusy = true;
-  sc('static-assignment-admit').disabled = sc('static-start').disabled = true;
+  staticAssignmentBusy = true; staticPrerequisitesObserved = false; staticPagePrerequisiteControls();
   void (async () => {
     try {
       staticPortalNeed(staticPortalText(original, 65536));
@@ -186,11 +217,12 @@ sc('static-assignment-admit').addEventListener('click', () => {
       operation.clip(result.expiresAtEpochNs);
       sc('static-assignment-status').textContent = 'Independent assignment retained: ' + result.assignmentSha256
         + '. Each creation still requires fresh native proof and your passkey. No credential was created.';
+      await staticPageObservePrerequisites(operation);
     } catch (_) {
       sc('static-assignment-status').textContent = 'Assignment admission was not confirmed. The same signed original may be inspected again; a different assignment cannot replace it. No credential action was sent.';
     } finally {
       operation.close(); staticAssignmentBusy = false;
-      sc('static-assignment-admit').disabled = sc('static-start').disabled = false;
+      staticPagePrerequisiteControls();
     }
   })();
 });
@@ -257,22 +289,32 @@ async function staticPageCandidate(flow, original) {
 }
 sc('static-form').addEventListener('submit', event => {
   event.preventDefault();
-  if (staticFlow || staticAssignmentBusy) return;
+  if (staticFlow || staticAssignmentBusy || !staticPrerequisitesObserved) return;
+  const form = new FormData(event.target);
+  let metadata;
+  try {
+    metadata = JSON.parse(form.get('metadata') || '{}');
+    staticPortalNeed(metadata && typeof metadata === 'object' && !Array.isArray(metadata) && metadata.oauth !== true);
+  } catch (_) {
+    staticPageMessage('Correct public metadata to a JSON object for a non-OAuth credential. No request or intake was started.'); return;
+  }
   // Open synchronously inside the user gesture. Never noopener: the two fixed
   // origins deliberately retain this exact WindowProxy, not a named window.
   const popup = window.open('about:blank', '_blank');
   if (!popup) { staticPageMessage('Allow this page’s native intake popup, then start explicitly.'); return; }
-  const flow = {popup, origin: null, auth: null, ready: false, intentSent: false, candidateReceived: false,
-    failed: false, busy: true, lastWall: Date.now(), lastMono: performance.now(),
-    expires: Date.now() + 30000, deadline: performance.now() + 30000, requestAttempted: false, createAttempted: false};
-  staticFlow = flow; sc('static-start').disabled = true;
-  const form = new FormData(event.target);
+  let flow = null;
+  staticAssignmentBusy = true; staticPrerequisitesObserved = false; staticPagePrerequisiteControls();
   for (const field of event.target.elements) field.disabled = true;
   void (async () => {
-    const operation = staticPortalOperation(() => staticPageCheck(flow));
+    const operation = staticPortalOperation(() => flow ? staticPageCheck(flow)
+      : staticPortalNeed(!staticFlow && staticAssignmentBusy && !popup.closed));
     try {
-      const metadata = JSON.parse(form.get('metadata') || '{}');
-      staticPortalNeed(metadata && typeof metadata === 'object' && !Array.isArray(metadata) && metadata.oauth !== true);
+      if (!await staticPageObservePrerequisites(operation)) return;
+      // A missing/failed observation never creates or spends a continuation.
+      flow = {popup, origin: null, auth: null, ready: false, intentSent: false, candidateReceived: false,
+        failed: false, busy: true, lastWall: Date.now(), lastMono: performance.now(),
+        expires: Date.now() + 30000, deadline: performance.now() + 30000, requestAttempted: false, createAttempted: false};
+      staticFlow = flow;
       const result = await staticPortalRequest('intent', {name: String(form.get('name')), kind: String(form.get('kind')),
         metadata, ttlSeconds: Number(form.get('ttlSeconds'))}, operation);
       staticPortalNeed(result.apiVersion === staticPortalSchema && result.okForAction === false
@@ -287,7 +329,15 @@ sc('static-form').addEventListener('submit', event => {
       flow.deadline = performance.now() + flow.expires - Date.now(); staticPageCheck(flow);
       popup.location.replace(flow.origin + '/credentials/static');
       staticPageMessage('Enter the secret only in the native intake window. Keep both pages open. Nothing is saved yet.');
-    } catch (_) { staticPageFail(flow); } finally { flow.busy = false; operation.close(); }
+    } catch (_) {
+      if (flow) staticPageFail(flow);
+      else { staticPrerequisitesObserved = false; sc('static-readiness-status').textContent = 'Prerequisites were not confirmed. No intake or creation started. Check again explicitly.'; }
+    } finally {
+      operation.close(); staticAssignmentBusy = false;
+      if (flow) flow.busy = false;
+      else { popup.close(); for (const field of event.target.elements) field.disabled = false; }
+      staticPagePrerequisiteControls();
+    }
   })();
 });
 function staticPageApprovalReady(flow) {
@@ -415,12 +465,14 @@ STATIC_CREDENTIAL_PAGE = r"""<!doctype html><html lang="en"><meta charset="utf-8
 <label>Signed public assignment original<textarea id="static-assignment-original" autocomplete="off" spellcheck="false"></textarea></label>
 <button id="static-assignment-admit" type="button">Admit signed assignment</button>
 <p id="static-assignment-status" role="status" aria-live="polite">No assignment submitted from this page.</p></details>
+<button id="static-readiness-check" type="button">Check intake prerequisites</button>
+<p id="static-readiness-status" role="status" aria-live="polite">Check retained prerequisites before opening intake. This does not check native serving liveness or authorize creation.</p>
 <form id="static-form"><label>Name<input name="name" required autocomplete="off"></label>
 <label>Kind<select name="kind"><option>bearer</option><option>basic</option><option>header</option><option>query</option><option>cookie</option></select></label>
 <label>Public metadata JSON<textarea name="metadata" required autocomplete="off">{}</textarea></label>
 <p>Supply the provider, provider_subject and secret_class required by your policy, plus username for basic or injection_name for header/query/cookie. Never put a secret in metadata. Provider labels do not verify account ownership.</p>
 <label>Candidate lifetime (seconds, maximum 3600)<input name="ttlSeconds" type="number" min="1" max="3600" value="900" required></label>
-<button id="static-start" type="submit">Open native secret intake</button></form>
+<button id="static-start" type="submit" disabled>Open native secret intake</button></form>
 <button id="static-request" type="button" disabled>Passkey + request approval</button>
 <button id="static-approval-status" type="button" disabled>Check approval status</button>
 <button id="static-create" type="button" disabled>Passkey + Create once</button>

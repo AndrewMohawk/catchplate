@@ -25,7 +25,7 @@ from serverware import authority_credential_currentness as currentness_profile
 from serverware import credential_currentness_rows
 
 PREFIX = "/api/credentials/static/rotation"
-PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/predecessor", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
+PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/readiness", PREFIX + "/predecessor", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
     PREFIX + "/" + operation + "/" + phase
     for operation in ("approval/request", "approval/decide", "rotate")
     for phase in ("draft", "options", "execute")})
@@ -317,7 +317,7 @@ class _Owner:
         self.deadline = min(self.cold.deadline, self.started_mono + self.expires - self.started_epoch)
         self.policy = self.cold.policy
         self.assignment_original, self.assignment_payload = self.cold.assignment_original, self.cold.assignment_payload
-        if request.url.path != PREFIX + "/assignment":
+        if request.url.path not in {PREFIX + "/assignment", PREFIX + "/readiness"}:
             profile.require(self.assignment_original is not None, "Admit the independently signed native assignment first")
             admitted = assignment_profile.verify_original(self.assignment_original,
                 configuration_payload=self.cold.payload, root_key=self.cold.root, now_epoch_ns=self.started_epoch)
@@ -647,7 +647,46 @@ def on_request(request, raw):
         raise
 
 
+def _readiness(owner, value):
+    """Observe both cold prerequisites, never a drain permit or native liveness."""
+    from serverware import control_plane_credential_currentness_assignment as currentness
+    from serverware import authority_credential_currentness_policy as currentness_policy
+    profile.require(set(value) == {"apiVersion"})
+    owner.check()
+    state, expires = "missing", owner.expires
+    if owner.assignment_original is not None:
+        if owner.last_epoch >= owner.assignment_payload["expiresAtEpochNs"]:
+            state = "expired"  # Retained provenance is not fresh authority.
+        else:
+            admitted = assignment_profile.verify_original(owner.assignment_original,
+                configuration_payload=owner.cold.payload, root_key=owner.cold.root, now_epoch_ns=owner.last_epoch)
+            profile.require(profile.canonical(admitted) == owner.cold.assignment_payload_original)
+            state, expires = "retained", min(expires, admitted["expiresAtEpochNs"])
+    current_state = "missing"
+    try:
+        if currentness.selected():
+            held = currentness.require_selected()
+            held.check()
+            profile.require(held.binding is owner.cold.binding
+                and held.configuration_digest == owner.cold.binding.configuration_digest
+                and held.policy["schema"] == currentness_policy.ROTATION_POSTBOOT_SCHEMA
+                and held.policy["deploymentId"] == owner.cold.payload[proof.FIELD]["deploymentId"])
+            current_state, expires = "retained", min(expires, held.expires)
+    except Exception:
+        # Expired, poisoned or differently bound cold selection is unavailable;
+        # this observation cannot reopen it or manufacture another assignment.
+        current_state = "unavailable"
+    owner.check()
+    profile.require(owner.last_epoch < expires)
+    return {"apiVersion": HTTP_SCHEMA, "okForAction": False,
+        "nativeAssignmentState": state, "currentnessAssignmentState": current_state,
+        "intakePrerequisitesMet": state == current_state == "retained",
+        "observedAtEpochNs": str(owner.last_epoch), "expiresAtEpochNs": str(expires)}
+
+
 def _handle(owner, route, value):
+    if route == "readiness":
+        return _readiness(owner, value)
     if route == "approval/status":
         return _approval_status(owner, value)
     if route == "predecessor":

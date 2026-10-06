@@ -139,6 +139,10 @@ def _affected(context, grant, *, journal=None):
         p.require(type(prior) is list and len(prior) == len(grant["affectedLineages"]))
     originals = []
     for index, pin in enumerate(grant["affectedLineages"]):
+        root_id = roots.root_id(pin["credentialId"], pin["credentialVersion"])
+        p.require(sum(shared._row(item, "affected currentness barrier")["root_id"] == root_id
+            for item in context.present_rows(roots.BARRIER_TABLE)) <= 1,
+            "Affected lineage has more than one currentness barrier")
         row = shared._row(context.exact("credentials", {"id": pin["credentialId"]}), "actual affected provider credential")
         head = shared._row(context.exact("credential_generations", {"credential_id": pin["credentialId"]}), "actual provider generation")
         head_raw = refresh.generation_original(head)
@@ -199,7 +203,7 @@ class CaptureRetirementKernel:
             for table in POPULATIONS:
                 queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
                     table=table, predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=p.MAX_POPULATION + 1,
-                    proof_primitive="bounded-limit-plus-one", work_units=p.MAX_POPULATION + 1))
+                    proof_primitive="bounded-limit-plus-one", work_units=p.MAX_POPULATION + 1, page_size=p.MAX_POPULATION))
         for name, table, key in (("exchange", exchange.TABLE, {"id": grant["exchangeId"]}),
                 ("issuance_custody", contract.TABLE, {"id": grant["exchangeId"]}),
                 ("work", "oauth_revocation_work", {"id": grant["exchangeId"]}),
@@ -219,7 +223,7 @@ class CaptureRetirementKernel:
                 queries.append(shared._query(operation=self.operation, name=name + suffix, table=table, key=key))
             queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "barrier_" + suffix, roots.BARRIER_TABLE),
                 table=roots.BARRIER_TABLE, predicates=(core.QueryPredicate("root_id", "eq", roots.root_id(pin["credentialId"], pin["credentialVersion"])),),
-                order_by=(core.QueryOrder("id"),), maximum_rows=1, proof_primitive="bounded-limit-plus-one", work_units=1))
+                order_by=(core.QueryOrder("id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2, page_size=1))
         for purpose in grant["tokenPurposes"]:
             queries.append(shared._query(operation=self.operation, name="attempt_" + purpose, table=p.ATTEMPT_TABLE,
                 key={"id": p.attempt_id(grant["exchangeId"], purpose)}))

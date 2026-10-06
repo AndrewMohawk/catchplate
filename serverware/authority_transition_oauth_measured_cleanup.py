@@ -118,7 +118,7 @@ class MeasuredCleanupKernel:
             queries.append(succession.query(self.operation, grant["providerId"]))
         queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", "credentials"),
             table="credentials", predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.MAX_ROWS + 1,
-            proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1))
+            proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1, page_size=inventory.MAX_ROWS))
         queries.extend(currentness.effect_queries(self.operation, grant["credentialId"], grant["credentialVersion"]))
         if grant["credentialVersion"] != grant["refreshVersion"]:
             key = {"id": roots.root_id(grant["credentialId"], grant["refreshVersion"])}

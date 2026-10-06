@@ -171,7 +171,7 @@ class CurrentnessKernel:
             (profile.HOLDER_TABLE,) if self.operation in {profile.OP_REGISTER, profile.OP_QUIESCE, profile.OP_ADMIT} else ())
         queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
             predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=profile.MAX_ROWS + 1,
-            proof_primitive="bounded-limit-plus-one", work_units=profile.MAX_ROWS + 1) for table in tables)
+            proof_primitive="bounded-limit-plus-one", work_units=profile.MAX_ROWS + 1, page_size=profile.MAX_ROWS) for table in tables)
         queries.append(shared._audit_query(self.operation, request_digest))
         return tuple(queries)
 

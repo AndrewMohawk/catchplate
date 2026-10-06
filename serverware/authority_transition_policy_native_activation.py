@@ -117,7 +117,8 @@ class NativeActivationKernel:
         item_id = approval_id(self.operation, value, request_digest)
         queries = [core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
             predicates=(), order_by=tuple(core.QueryOrder(name) for name in primary.PRIMARY_KEY_COLUMNS[table]),
-            maximum_rows=len(snapshot[table]) + 1, proof_primitive="bounded-limit-plus-one", work_units=len(snapshot[table]) + 1)
+            maximum_rows=max(1, len(snapshot[table])) + 1, proof_primitive="bounded-limit-plus-one",
+            work_units=max(1, len(snapshot[table])) + 1, page_size=max(1, len(snapshot[table])))
             for table in tables.TABLES]
         for table, key in ((profile.READY_TABLE, {"canary_id": value["request"]["canaryId"]}),
                 (profile.HEAD_TABLE, {"canary_id": value["request"]["canaryId"]}),

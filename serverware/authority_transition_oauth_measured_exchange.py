@@ -97,7 +97,7 @@ class MeasuredExchangeKernel:
             for table in inventory.tables_for(self.operation):
                 queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
                     table=table, predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
-                    proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1))
+                    proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1, page_size=inventory.maximum_rows(table)))
         if self.operation in {profile.OP_STAGE, profile.OP_RECOVER}:
             queries.append(shared._query(operation=self.operation, name="pending", table="pending_oauth_credentials", key={"id": item_id}))
         if self.operation == profile.OP_STAGE:

@@ -19,7 +19,7 @@ def populations(operation):
     from serverware import authority_primary_contract as primary
     return tuple(core.BoundedQuery(query_id=core.query_program_id(operation, "complete_population", table),
         table=table, predicates=(), order_by=tuple(core.QueryOrder(field) for field in primary.PRIMARY_KEY_COLUMNS[table]),
-        maximum_rows=inventory.MAX_ROWS + 1, proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1)
+        maximum_rows=inventory.MAX_ROWS + 1, proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1, page_size=inventory.MAX_ROWS)
         for table in inventory.tables_for(operation))
 
 

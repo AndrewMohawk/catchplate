@@ -42,7 +42,7 @@ def check_acquired_credentials(operation, arguments, query, rows):
         return
     expected = core.BoundedQuery(query_id=core.query_program_id(operation, "complete_population", "credentials"),
         table="credentials", predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=65,
-        proof_primitive="bounded-limit-plus-one", work_units=65)
+        proof_primitive="bounded-limit-plus-one", work_units=65, page_size=64)
     profile.require(query == expected)
     grant = _grant(_values(operation, arguments))
     affected = []
@@ -119,6 +119,10 @@ def _affected(context, grant, *, journal=None):
         profile.require(len(retained) == len(current_rows))
     originals = []
     for index, (row, pin) in enumerate(zip(current_rows, grant["affectedLineages"])):
+        root_id = roots.root_id(pin["credentialId"], pin["credentialVersion"])
+        profile.require(sum(shared._row(item, "affected currentness barrier")["root_id"] == root_id
+            for item in context.present_rows(roots.BARRIER_TABLE)) <= 1,
+            "Affected lineage has more than one currentness barrier")
         head = shared._row(context.exact("credential_generations", {"credential_id": row["id"]}), "actual affected generation")
         generation_raw = profile.refresh.generation_original(head)
         profile.require(row["credential_version"] == head["last_version"] == pin["credentialVersion"]
@@ -240,7 +244,7 @@ class PendingRetirementKernel:
         for table in ("credentials", "pending_oauth_credentials"):
             queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
                 table=table, predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=65,
-                proof_primitive="bounded-limit-plus-one", work_units=65))
+                proof_primitive="bounded-limit-plus-one", work_units=65, page_size=64))
         for name, table, key, absent in (
                 ("exchange", exchange.TABLE, {"id": grant["exchangeId"]}, False),
                 ("measured_exchange", measured_exchange.TABLE, {"id": grant["exchangeId"]}, False),
@@ -258,7 +262,7 @@ class PendingRetirementKernel:
                 shared._query(operation=self.operation, name="root_" + suffix, table=roots.ROOT_TABLE, key=key),
                 core.BoundedQuery(query_id=core.query_program_id(self.operation, "barrier_" + suffix, roots.BARRIER_TABLE),
                     table=roots.BARRIER_TABLE, predicates=(core.QueryPredicate("root_id", "eq", key["id"]),),
-                    order_by=(core.QueryOrder("id"),), maximum_rows=1, proof_primitive="bounded-limit-plus-one", work_units=1)))
+                    order_by=(core.QueryOrder("id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2, page_size=1)))
         for purpose in grant["tokenPurposes"]:
             queries.append(shared._query(operation=self.operation, name="attempt_" + purpose, table=profile.ATTEMPT_TABLE,
                 key={"id": profile.attempt_id(grant["pendingId"], purpose)}, require_absence=self.operation == profile.OP_CLAIM))

@@ -97,7 +97,7 @@ class Kernel:
         # a caller-favoured canary from a potentially nonunique terminal set.
         queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "finalizations", p.activation.FINALIZATION_TABLE),
             table=p.activation.FINALIZATION_TABLE, predicates=(core.QueryPredicate("policy_hash", "eq", r["policyHash"]),),
-            order_by=(core.QueryOrder("canary_id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2))
+            order_by=(core.QueryOrder("canary_id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2, page_size=1))
         for index, identity in enumerate(r["auditIds"]):
             queries.append(exact("completed_audit_" + str(index), "metadata_audit_outbox", {"id": identity}))
         for name, table, field in (("request_key", "webauthn_credentials", "credentialRecordId"), ("challenge", "webauthn_challenges", "challengeId")):

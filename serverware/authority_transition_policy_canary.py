@@ -136,7 +136,8 @@ class CanaryIntakeKernel:
         state, _ = _program(values, database_now, request_digest, snapshot)
         queries = [core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
             predicates=(), order_by=tuple(core.QueryOrder(name) for name in primary.PRIMARY_KEY_COLUMNS[table]),
-            maximum_rows=len(snapshot[table]) + 1, proof_primitive="bounded-limit-plus-one", work_units=len(snapshot[table]) + 1)
+            maximum_rows=max(1, len(snapshot[table])) + 1, proof_primitive="bounded-limit-plus-one",
+            work_units=max(1, len(snapshot[table])) + 1, page_size=max(1, len(snapshot[table])))
             for table in tables.TABLES]
         for ordinal, ((table, identity), row) in enumerate(sorted(state.changed.items())):
             if table not in state.before or identity not in state.before[table]:

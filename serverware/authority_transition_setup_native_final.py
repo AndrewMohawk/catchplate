@@ -86,7 +86,7 @@ class Kernel:
             else:
                 queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation,"setup_events","setup_session_events"),
                     table="setup_session_events",predicates=(core.QueryPredicate("session_id","eq",sid),),order_by=(core.QueryOrder("sequence"),),
-                    maximum_rows=5,proof_primitive="bounded-limit-plus-one",work_units=5))
+                    maximum_rows=5,proof_primitive="bounded-limit-plus-one",work_units=5,page_size=4))
             queries.extend((exact("complete_audit","metadata_audit_outbox",{"id":core.SelectedRowFieldReference(p.TABLE,{"session_id":sid},"complete_audit_id")}),
                 exact("review_key","webauthn_credentials",{"id":core.SelectedRowFieldReference(p.TABLE,{"session_id":sid},"reviewer_credential_id")})))
         if evidence is not None:

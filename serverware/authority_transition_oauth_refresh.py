@@ -153,7 +153,7 @@ class OAuthRefreshKernel:
         if self.operation == profile.OP_CLAIM:
             queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
                 predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
-                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.tables_for(self.operation))
+                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1, page_size=inventory.maximum_rows(table)) for table in inventory.tables_for(self.operation))
         else:
             queries.extend(family_retirement.population_queries(self.operation))
         queries.append(shared._audit_query(self.operation, request_digest))

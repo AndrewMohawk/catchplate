@@ -44,7 +44,7 @@ class CreateKernel:
             shared._role_query(self.operation, "actor_role", values["actor_id"]),
             core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", "setup_sessions"),
                 table="setup_sessions", predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=65,
-                proof_primitive="bounded-limit-plus-one", work_units=65)]
+                proof_primitive="bounded-limit-plus-one", work_units=65, page_size=64)]
         queries.append(succession.query(self.operation, provider))
         for name, table, field in (("assertion_credential", "webauthn_credentials", "credentialRecordId"),
                 ("assertion_challenge", "webauthn_challenges", "challengeId")):

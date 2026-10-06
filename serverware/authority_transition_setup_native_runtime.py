@@ -54,7 +54,7 @@ class Kernel:
             queries.append(exact(table, table, {"canary_id": cid}))
         queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "finalizations", p.canary.activation.FINALIZATION_TABLE),
             table=p.canary.activation.FINALIZATION_TABLE, predicates=(core.QueryPredicate("policy_hash", "eq", a["policy_hash"]),),
-            order_by=(core.QueryOrder("canary_id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2))
+            order_by=(core.QueryOrder("canary_id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2, page_size=1))
         if evidence is not None:
             for label, table, field in (("request_key", "webauthn_credentials", "credentialRecordId"), ("challenge", "webauthn_challenges", "challengeId")):
                 p.enrollment.setup.text(evidence.get(field), 1024)

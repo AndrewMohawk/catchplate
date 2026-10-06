@@ -21,7 +21,7 @@ from serverware import authority_transition_oauth_reconnect_rows as rows
 def _population(operation, table):
     return core.BoundedQuery(query_id=core.query_program_id(operation, "complete_population", table), table=table,
         predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
-        proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1)
+        proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1, page_size=inventory.maximum_rows(table))
 
 
 def _approval_id(operation, values, request_digest):

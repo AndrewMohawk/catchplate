@@ -111,7 +111,7 @@ def source_queries(operation,v,request_digest):
         query.append(exact(table,table,{"canary_id":cid}))
     query.append(core.BoundedQuery(query_id=core.query_program_id(operation,"finalizations",p.runtime.canary.activation.FINALIZATION_TABLE),
         table=p.runtime.canary.activation.FINALIZATION_TABLE,predicates=(core.QueryPredicate("policy_hash","eq",a["policy_hash"]),),
-        order_by=(core.QueryOrder("canary_id"),),maximum_rows=2,proof_primitive="bounded-limit-plus-one",work_units=2))
+        order_by=(core.QueryOrder("canary_id"),),maximum_rows=2,proof_primitive="bounded-limit-plus-one",work_units=2,page_size=1))
     return query
 
 

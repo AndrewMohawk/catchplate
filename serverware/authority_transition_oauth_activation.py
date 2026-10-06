@@ -220,7 +220,7 @@ class OAuthActivationKernel:
             # planner must reconstruct all four entire roots before this kernel.
             queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
                 predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
-                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.TABLES)
+                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1, page_size=inventory.maximum_rows(table)) for table in inventory.TABLES)
         queries.append(shared._audit_query(self.operation, request_digest))
         return family_retirement.order_populations(self.operation, tuple(queries))
 

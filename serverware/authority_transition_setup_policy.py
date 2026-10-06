@@ -172,7 +172,7 @@ class BindCandidateKernel:
         from serverware import authority_primary_contract as primary
         queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
             table=table, predicates=(), order_by=tuple(core.QueryOrder(field) for field in primary.PRIMARY_KEY_COLUMNS[table]),
-            maximum_rows=inventory.MAX_ROWS + 1, proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1)
+            maximum_rows=inventory.MAX_ROWS + 1, proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1, page_size=inventory.MAX_ROWS)
             for table in inventory.TABLES)
         queries.extend((originals.exact(self.operation, "setup", "setup_sessions", {"id": sid}),
             originals.exact(self.operation, "setup_activation", "setup_session_events", event_key),

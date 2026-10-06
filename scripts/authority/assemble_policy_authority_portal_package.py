@@ -276,6 +276,17 @@ def _load_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+def _load_intake_record(path: Path, expected_kind: str) -> dict[str, Any]:
+    value = _load_object(path, expected_kind)
+    if "kind" not in value and "record" not in value:
+        return value
+    if (set(value) != {"kind", "record"} or value["kind"] != expected_kind
+        or not isinstance(value["record"], dict)):
+        raise AssemblyError(f"{expected_kind} intake wrapper must contain only its matching kind and record")
+    # Keep the original record and embedded signed JSON strings unchanged.
+    return value["record"]
+
+
 def _load_verification_trust(
     path: Path, expected_digest: str
 ) -> VerificationTrust:
@@ -890,8 +901,8 @@ def main() -> int:
                 )
             activation = _load_object(args.activation, "activation")
         package = assemble(
-            _load_object(args.artifact, "artifact"),
-            _load_object(args.assignment, "assignment"),
+            _load_intake_record(args.artifact, "artifact"),
+            _load_intake_record(args.assignment, "assignment"),
             _load_object(args.load_receipt, "load receipt"),
             _load_object(args.runtime_attestation, "runtime attestation"),
             activation,

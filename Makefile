@@ -1436,6 +1436,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_credential_currentness_assignment.py \
 	serverware/authority_transition_credential_currentness.py \
 	serverware/control_plane_credential_currentness.py \
+	serverware/credential_currentness_rows.py \
 	serverware/credential_ciphertext.py \
 	serverware/control_plane_broker_startup.py \
 	scripts/authority/sign_control_plane_broker_startup.py \
@@ -4597,6 +4598,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_credential_currentness_assignment.py \
 				serverware/authority_transition_credential_currentness.py \
 				serverware/control_plane_credential_currentness.py \
+				serverware/credential_currentness_rows.py \
 				serverware/credential_ciphertext.py \
 				serverware/control_plane_broker_startup.py \
 				scripts/authority/sign_control_plane_broker_startup.py \

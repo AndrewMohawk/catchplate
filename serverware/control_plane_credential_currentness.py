@@ -16,6 +16,7 @@ from fastapi import Request
 from serverware import authority_contract, db
 from serverware import authority_credential_currentness as profile
 from serverware import authority_oauth_refresh as refresh
+from serverware import credential_currentness_rows
 from serverware import control_plane_custody_client as custody_client
 from serverware import control_plane_custody_startup as startup
 from serverware import control_plane_credential_currentness_assignment as assignment_startup
@@ -43,7 +44,7 @@ def _rows(credential_id, version):
             (profile.root_id(credential_id, version),)).fetchone()
     profile.require(credential is not None and generation is not None and root is not None)
     credential, generation, root = dict(credential), dict(generation), dict(root)
-    refresh.credential_original(credential)
+    credential_currentness_rows.credential_original(credential)
     refresh.generation_original(generation)
     profile.root_original(root)
     profile.require(credential["lifecycle_status"] == "active" and credential["credential_version"] == version

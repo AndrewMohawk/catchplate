@@ -36,7 +36,8 @@ SETUP_NATIVE_POLICY_SCRIPT = r"""
         status.textContent = 'One fresh, read-only observation; no policy reload, enrollment, automatic retry or provider request.';
         await oauthConsentCookie(operation);
         const value = await setupPolicyPost('/native-installed', {
-          apiVersion: setupFileRequest, sessionId: operation.session, expectedRevision: 3,
+          apiVersion: setupFileRequest, sessionId: operation.session,
+          expectedRevision: new OAuthConsentNumber(operation.revision.toString()),
         }, operation);
         setupPolicyNeed(oauthConsentClosed(value, ['apiVersion', 'okForAction', 'automaticRetryAllowed',
           'proxyReady', 'setupSessionId', 'observationOriginal'])

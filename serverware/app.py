@@ -26144,8 +26144,12 @@ UI_HTML = r"""
       $('setup-connect-button').textContent = oauthProvider ? 'Connect credential' : 'Add credential';
       $('setup-connect-button').disabled = Boolean(setupSession?.credentialId) || Boolean(oauthProvider && !oauthProvider.configured);
       $('setup-preview-button').disabled = !selection.principalId || !selection.credentialId || !selection.routeId || (Boolean(template?.jit) && !selection.approvers);
-      $('setup-stage-button').disabled = !candidateReady || setupSession?.phase !== 'credential_activated'
-        || !$('policy-signed-bundle').value.trim() || !$('policy-authority-package').value.trim();
+      $('setup-stage-button').textContent = protectedStaticCredentials ? 'Review protected candidate' : 'Stage assignment';
+      $('setup-stage-button').disabled = protectedStaticCredentials
+        ? setupSession?.phase !== 'credential_activated' || setupSession?.ownerId !== state.authStatus?.userId
+          || !(state.authStatus?.roles || []).includes('credential_owner')
+        : !candidateReady || setupSession?.phase !== 'credential_activated'
+          || !$('policy-signed-bundle').value.trim() || !$('policy-authority-package').value.trim();
       $('setup-activate-button').disabled = !staged || setupSession?.phase !== 'policy_staged';
       $('setup-enroll-button').disabled = !active || setupSession?.phase !== 'policy_activated';
       $('setup-command-button').disabled = !packetMatches;
@@ -27193,6 +27197,7 @@ UI_HTML = r"""
     }
 
     async function stagePolicyCanary() {
+      if (protectedStaticCredentials && state.setupSession) return setupPolicySelectCurrent();
       const candidate = state.policyCandidate;
       if (!candidate || !candidate.report) throw new Error('Preview the policy draft first');
       candidate.checkContext();

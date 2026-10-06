@@ -1,4 +1,4 @@
-"""Exact successor to OAuth Setup revision three; never a proxy-ready receipt."""
+"""Exact successor to proved credential binding; never a proxy-ready receipt."""
 from collections.abc import Mapping
 
 from serverware import authority_oauth_setup as setup
@@ -16,6 +16,9 @@ MAX_ROW_BYTES = MAX_ARGUMENT_BYTES + setup.MAX_ROW_BYTES + 8192
 FIELDS = frozenset({"actor_id", "control_plane_configuration_digest", "credential_policy", "request"})
 REQUEST_FIELDS = frozenset({"setupBinding", "credentialId", "credentialVersion", "generationClaimOriginal",
     "routePolicyDigest", "assignmentDigest", "issuedAtEpochNs", "expiresAtEpochNs"})
+# The existing eight-field OAuth original is unchanged. This additional exact
+# spelling carries only a locator; the kernel must prove its actual provenance.
+STATIC_REQUEST_FIELDS = REQUEST_FIELDS | {"credentialBindingEventId"}
 ROW_FIELDS = frozenset({"session_id", "revision", "phase", "owner_id", "setup_original", "setup_sha256",
     "credential_id", "credential_version", "generation_request_id", "generation_claim_sha256",
     "generation_publication_digest", "candidate_id", "canary_id", "artifact_envelope_digest",
@@ -40,9 +43,14 @@ def arguments(operation, value, *, typed=False):
     digest(value["control_plane_configuration_digest"])
     assertions.policy(value["credential_policy"])
     request = value["request"]
-    require(type(request) is dict and set(request) == REQUEST_FIELDS)
+    require(type(request) is dict and set(request) in (REQUEST_FIELDS, STATIC_REQUEST_FIELDS))
     bound = setup.binding(request["setupBinding"])
-    require(bound["revision"] == 3 and bound["ownerId"] == value["actor_id"]
+    if set(request) == STATIC_REQUEST_FIELDS:
+        setup.identifier(request["credentialBindingEventId"])
+        require(bound["revision"] >= 1)
+    else:
+        require(bound["revision"] == 3)
+    require(bound["ownerId"] == value["actor_id"]
         and bound["currentAssigneeId"] in {None, value["actor_id"]})
     setup.identifier(request["credentialId"])
     require(type(request["credentialVersion"]) is int and request["credentialVersion"] == 1)
@@ -54,6 +62,15 @@ def arguments(operation, value, *, typed=False):
     original = {name: value[name] for name in FIELDS}
     require(len(canonical(original)) <= MAX_ARGUMENT_BYTES)
     return original
+
+
+def require_static_session(session):
+    """Structural restriction only; this is not binding-event admission."""
+    require(type(session["revision"]) is int and session["revision"] >= 1
+        and session["phase"] == "credential_activated" and session["status"] == "active"
+        and session["terminal_at"] is None and session["credential_version"] == 1
+        and all(session[name] is None for name in ("oauth_provider", "oauth_state_digest",
+            "oauth_pending_credential_id", "policy_hash", "assignment_digest", "canary_id", "enrollment_session_id")))
 
 
 def reviewed_assignment(session, management):
@@ -87,8 +104,12 @@ def row_original(value):
     session_raw = value["setup_original"].encode("ascii")
     session = setup.document(session_raw, setup.MAX_ROW_BYTES)
     require(setup.row_original(session) == session_raw and setup.row_binding(session) == args["request"]["setupBinding"]
-        and session["phase"] == "credential_activated" and session["revision"] == 3
+        and session["phase"] == "credential_activated"
         and session["status"] == "active" and session["terminal_at"] is None)
+    if set(args["request"]) == STATIC_REQUEST_FIELDS:
+        require_static_session(session)
+    else:
+        require(session["revision"] == 3)
     claim = claim_original(args["request"]["generationClaimOriginal"])
     bound = candidate.context(setup.document(claim["context_json"].encode("ascii"), 8192))
     assignment, assignment_digest = reviewed_assignment(session, candidate.management_original(claim["management_request_json"]))

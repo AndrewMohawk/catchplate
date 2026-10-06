@@ -1,4 +1,4 @@
-"""Atomic reviewed candidate association after genuine measured OAuth Setup.
+"""Atomic reviewed candidate association after proved controlled Setup binding.
 
 No legacy Setup row/event is changed. This successor neither activates policy
 nor produces filesystem, enrollment, canary readiness or proxy-ready evidence.
@@ -19,6 +19,8 @@ from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
 from serverware import authority_transition_webauthn as assertion
 from serverware import authority_transition_oauth_activation as hardware
+from serverware import authority_setup_bind_credential as binding
+from serverware import authority_static_credential_create as static_creation
 
 
 def _inputs(arguments):
@@ -69,6 +71,80 @@ def _activated_session(context, values):
     return session
 
 
+def _static_bound_session(context, values):
+    request, setup = values["request"], profile.setup
+    _, session = setup_rows.current(context, request["setupBinding"],
+        phase="credential_activated", actor=values["actor_id"])
+    profile.require_static_session(session)
+    profile.require(session["credential_id"] == request["credentialId"]
+        and session["credential_version"] == request["credentialVersion"] == 1)
+    key = {"id": request["credentialBindingEventId"]}
+    event = shared._row(context.exact("setup_session_events", key), "actual controlled static binding event")
+    link = shared._row(context.exact(binding.AUDIT_LINK_TABLE, key), "actual static binding audit link")
+    profile.digest(link["request_digest"])
+    profile.require(set(event) == binding.EVENT_FIELDS and set(link) == binding.AUDIT_LINK_FIELDS
+        and event["id"] == link["id"] == link["event_id"] == key["id"]
+        == core.deterministic_uuid(operation=binding.OPERATION, request_digest=link["request_digest"],
+            purpose="setup-bind-credential-event")
+        and event["session_id"] == link["session_id"] == session["id"]
+        and event["transition"] == "bind_credential"
+        and event["created_at"] == link["created_at"] == session["updated_at"]
+        and setup.epoch(event["created_at"]) <= shared._database_epoch_ns(context.database_now))
+    core.require_integer(event["sequence"], "actual binding sequence", minimum=1, maximum=2**63 - 1)
+    setup.text(event["actor_id"], 512)
+    profile.require(event["actor_id"].startswith("oidc:"))
+    document = shared._canonical_stored_mapping(event["event_json"], "original static binding event")
+    details, updates = document["details"], document["binding_updates"]
+    profile.require(set(document) == {"version", "setup_session_id", "transition", "from_phase", "to_phase",
+            "binding_updates", "evidence_digests", "details"}
+        and document["version"] == "serverware.setupTransition/v1"
+        and set(details) == {"authorityOperation", "authorityRequestDigest", "setupPreSha256", "setupPostSha256",
+            "credentialOriginalSha256", "currentnessRootSha256", "credential_lifecycle_status"}
+        and updates == {"credential_id": session["credential_id"], "credential_version": 1}
+        and type(updates["credential_version"]) is int
+        and event["payload_digest"] == profile.sha256(profile.canonical(document))
+        and document["setup_session_id"] == session["id"] and document["transition"] == "bind_credential"
+        and document["from_phase"] == "created" and document["to_phase"] == "credential_activated"
+        and document["evidence_digests"] == [] and details["credential_lifecycle_status"] == "active"
+        and details["authorityOperation"] == binding.OPERATION
+        and details["authorityRequestDigest"] == link["request_digest"]
+        and details["setupPostSha256"] == profile.sha256(setup.row_original(session))
+        and link["outbox_id"] == shared._audit_identity(binding.OPERATION, link["request_digest"]))
+    for field in ("setupPreSha256", "setupPostSha256", "credentialOriginalSha256", "currentnessRootSha256"):
+        profile.digest(details[field])
+    outbox = shared._row(context.exact("metadata_audit_outbox", {"id": link["outbox_id"]}), "completed static binding audit")
+    profile.require(outbox["id"] == link["outbox_id"] and outbox["status"] == "audited"
+        and outbox["event_type"] == binding.OPERATION and outbox["actor_type"] == "admin"
+        and outbox["actor_id"] == event["actor_id"] and outbox["event_digest"] == link["outbox_event_digest"]
+        and outbox["audited_at"] is not None and outbox["audit_event_hash"] is not None
+        and outbox["claim_id"] is None and outbox["claimed_at"] is None
+        and setup.epoch(event["created_at"]) <= setup.epoch(outbox["audited_at"])
+        <= shared._database_epoch_ns(context.database_now))
+    profile.digest(outbox["audit_event_hash"])
+    actual = shared._canonical_stored_mapping(outbox["event_json"], "completed static binding audit original")
+    expected = {"schema": "serverware.setupCredentialBindingAudit/v1", "operation": binding.OPERATION,
+        "requestDigest": link["request_digest"], "sessionId": session["id"],
+        "setupPreSha256": details["setupPreSha256"], "setupPostSha256": details["setupPostSha256"],
+        "credentialId": session["credential_id"], "credentialVersion": 1,
+        "credentialOriginalSha256": details["credentialOriginalSha256"], "currentnessRootSha256": details["currentnessRootSha256"]}
+    profile.require(profile.canonical(actual) == profile.canonical(expected)
+        and outbox["event_digest"] == core.framed_digest("serverware.metadataAuditOutboxEvent/v1", outbox["event_json"].encode("ascii")))
+    # Completion is the genuine outbox fact. The separate factual settlement
+    # may still be pending; neither state authorizes retry of the original bind.
+    profile.require(event["audit_status"] in {"controlled_pending", "audited"}
+        and type(event["audit_attempts"]) is int and event["audit_attempts"] == 0
+        and all(event[name] is None for name in ("audit_claim_id", "audit_claimed_at", "audit_last_error")))
+    profile.require((event["audited_at"] is None and event["audit_event_hash"] is None)
+        if event["audit_status"] == "controlled_pending" else
+        (event["audited_at"] == outbox["audited_at"] and event["audit_event_hash"] == outbox["audit_event_hash"]))
+    credential = shared._row(context.exact("credentials", {"id": session["credential_id"]}), "current bound static credential")
+    public = {name: credential[name] for name in binding.CREDENTIAL_FIELDS}
+    public["metadata"] = shared._canonical_stored_mapping(credential["metadata"], "current static credential metadata")
+    profile.require(credential["kind"] in static_creation.KINDS and public["metadata"].get("oauth") is not True
+        and profile.sha256(binding.credential_original(public)) == details["credentialOriginalSha256"])
+    return session
+
+
 @dataclass(frozen=True, slots=True)
 class BindCandidateKernel:
     operation: str = profile.OP_BIND
@@ -90,7 +166,8 @@ class BindCandidateKernel:
         values, claim, bound, management = _inputs(arguments)
         request = values["request"]
         sid, cid = request["setupBinding"]["sessionId"], request["credentialId"]
-        event_key = {"id": profile.setup.event_id(sid, 4)}
+        event_key = {"id": request["credentialBindingEventId"] if set(request) == profile.STATIC_REQUEST_FIELDS
+            else profile.setup.event_id(sid, 4)}
         queries = list(originals.queries(self.operation, bound, management))
         from serverware import authority_primary_contract as primary
         queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
@@ -128,7 +205,8 @@ class BindCandidateKernel:
         profile.require(evidence["rpId"] == values["credential_policy"]["rpId"]
             and evidence["origin"] in values["credential_policy"]["origins"]
             and evidence["expiresAtEpochNs"] - evidence["verifiedAtEpochNs"] <= values["credential_policy"]["maxAssertionAgeSeconds"] * 1_000_000_000)
-        session = _activated_session(context, values)
+        static_binding = set(request) == profile.STATIC_REQUEST_FIELDS
+        session = _static_bound_session(context, values) if static_binding else _activated_session(context, values)
         selected = context.exact(profile.TABLE, {"session_id": session["id"]})
         profile.require(not selected["present"], "Setup already has a candidate successor; inspect, never overwrite")
         credential = shared._row(context.exact("credentials", {"id": session["credential_id"]}), "actual active Setup credential")
@@ -136,6 +214,8 @@ class BindCandidateKernel:
         _, root = currentness.require_root(context, session["credential_id"], session["credential_version"])
         profile.require(credential["lifecycle_status"] == "active" and credential["credential_version"] == session["credential_version"]
             == generation["last_version"] and root["status"] == "open")
+        if static_binding:
+            profile.require(root["barrier_id"] is None)
         actual_claim = shared._row(context.exact(candidate.TABLE, {"request_id": claim["request_id"]}), "actual completed generation claim")
         profile.require(actual_claim == claim and claim["configuration_digest"] == values["control_plane_configuration_digest"])
         actual = originals.original_context(context, bound, management)

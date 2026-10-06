@@ -5,8 +5,11 @@ from serverware.portal_setup_native import SETUP_NATIVE_POLICY_HTML, SETUP_NATIV
 SETUP_POLICY_HTML = r"""
           <details id="setup-policy-controls">
             <summary>Associate an activated Setup with a protected candidate</summary>
-            <p class="hint">Requires the actual Setup owner with credential_owner, activated revision 3, completed activation audit, an active credential and a completed protected native generation. This binds review data only: it does not load policy, complete Setup or make a proxy ready.</p>
+            <p class="hint">Requires the actual Setup owner with credential_owner, an active version-1 credential, its completed controlled binding audit and a completed protected native generation. OAuth uses its original revision-3 activation; static Setup uses its exact current revision and binding event. This binds review data only: it does not load policy, complete Setup or make a proxy ready.</p>
+            <button type="button" class="secondary" onclick="runUiAction('Select current Setup candidate context', setupPolicySelectCurrent)">Use selected Setup — review only</button>
             <label>Setup session ID <input id="setup-policy-session" maxlength="36" autocomplete="off"></label>
+            <label>Exact current Setup revision <input id="setup-policy-revision" value="3" maxlength="19" inputmode="numeric" autocomplete="off"></label>
+            <label>Static credential binding event ID (blank only for OAuth activation) <input id="setup-policy-binding-event" maxlength="36" autocomplete="off"></label>
             <label>Completed generation request ID <input id="setup-policy-generation" maxlength="36" autocomplete="off"></label>
             <button type="button" onclick="runUiAction('Review Setup candidate', setupPolicyDraft)">Read originals + draft review</button>
             <pre id="setup-policy-review">No retained draft.</pre>
@@ -16,7 +19,7 @@ SETUP_POLICY_HTML = r"""
             <p id="setup-policy-status" class="hint" role="status" aria-live="polite">Keep the nonsecret session and generation IDs. An uncertain submission is not retried.</p>
             <hr>
             <h4>Separately approved policy-file publication</h4>
-            <p class="hint">The Setup owner also needs the literal policy_publisher role to request or consume publication. A DIFFERENT policy_publisher approves. credential_owner alone grants no publication authority. Setup remains revision 3.</p>
+            <p class="hint">The Setup owner also needs the literal policy_publisher role to request or consume publication. A DIFFERENT policy_publisher approves. credential_owner alone grants no publication authority. The exact reviewed Setup revision is retained, not advanced by this association.</p>
             <button type="button" onclick="runUiAction('Draft policy-file publication', setupPolicyFileDraft)">Read actual association + draft publication</button>
             <label>Exact data-only materialization draft or resolution binding for manual handoff (no passkeys or credentials)
               <textarea id="setup-policy-file-draft" class="policy-result" spellcheck="false" autocomplete="off"></textarea></label>
@@ -50,23 +53,62 @@ SETUP_POLICY_SCRIPT = r"""
     function setupPolicyNeed(value) { if (!value) throw new Error('Setup candidate original or authority changed; inspect without retry.'); }
     function setupPolicyMessage(text) { $('setup-policy-status').textContent = text; }
     function setupPolicyMarker(actor, session) { return 'serverware.setup-policy.submitted:' + actor + ':' + session; }
+    function setupPolicyRevision() {
+      const text = $('setup-policy-revision').value.trim();
+      setupPolicyNeed(/^[1-9][0-9]{0,18}$/.test(text));
+      const value = BigInt(text); setupPolicyNeed(value <= 9223372036854775803n); return value;
+    }
+    function setupPolicySelectCurrent() {
+      setupPolicyNeed(!setupPolicyBusy && !adminToken() && state.authStatus?.authenticated === true
+        && state.authStatus?.authMethod === 'oidc-session' && state.authStatus.roles.includes('credential_owner'));
+      const session = state.setupSession;
+      setupPolicyNeed(session && nativeSetupId(session.id) && session.ownerId === state.authStatus.userId
+        && [null, state.authStatus.userId].includes(session.currentAssigneeId)
+        && session.status === 'active' && session.phase === 'credential_activated'
+        && session.credentialVersion === 1 && Number.isSafeInteger(session.revision));
+      const revision = BigInt(session.revision);
+      setupPolicyNeed(revision >= 1n && revision <= 9223372036854775803n);
+      let eventId = '';
+      if (session.oauthProvider) {
+        setupPolicyNeed(revision === 3n && session.oauthPendingCredentialId === session.credentialId);
+      } else {
+        setupPolicyNeed(session.oauthStateDigest === null && session.oauthPendingCredentialId === null);
+        const events = (session.events || []).filter(event => event.session_id === session.id
+          && event.transition === 'bind_credential' && event.created_at === session.updatedAt
+          && event.event?.details?.authorityOperation === 'setup.session.bind-credential'
+          && event.event?.binding_updates?.credential_id === session.credentialId
+          && event.event?.binding_updates?.credential_version === 1);
+        setupPolicyNeed(events.length === 1 && nativeSetupId(events[0].id)); eventId = events[0].id;
+      }
+      $('setup-policy-session').value = session.id;
+      $('setup-policy-revision').value = revision.toString();
+      $('setup-policy-binding-event').value = eventId;
+      $('setup-policy-generation').value = '';
+      setupPolicyHeld = null; $('setup-policy-confirm').checked = false;
+      $('setup-policy-controls').open = true;
+      $('setup-policy-generation').focus();
+      setupPolicyMessage('Selected the actual Setup revision and binding locator only. Supply the completed protected generation request ID, then explicitly review; no binding or approval was submitted.');
+    }
     function setupPolicyBegin(held = null) {
       setupPolicyNeed(!setupPolicyBusy && !adminToken() && state.authStatus?.authMethod === 'oidc-session'
         && state.authStatus?.authenticated === true && state.authStatus.roles.includes('credential_owner'));
       const actor = state.authStatus.userId, scope = sessionActivationAuthScope();
       const session = $('setup-policy-session').value.trim(), generation = $('setup-policy-generation').value.trim();
+      const revision = setupPolicyRevision(), bindingEvent = $('setup-policy-binding-event').value.trim();
       setupPolicyNeed(nativeSetupId(session));
+      setupPolicyNeed(bindingEvent ? nativeSetupId(bindingEvent) : revision === 3n);
       const until = held ? held.until : performance.now() + 30000;
       const expires = held ? held.expires : Date.now() + 30000;
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.max(0, until - performance.now()));
-      const operation = {actor, scope, session, generation, until, expires, signal: controller.signal, current() {
+      const operation = {actor, scope, session, generation, revision, bindingEvent, until, expires, signal: controller.signal, current() {
         setupPolicyNeed(!controller.signal.aborted && performance.now() < until && Date.now() < expires
           && !adminToken() && state.authStatus?.authenticated === true && state.authStatus?.authMethod === 'oidc-session'
           && state.authStatus.userId === actor && state.authStatus.roles.includes('credential_owner')
           && sessionActivationAuthScope() === scope && $('setup-policy-session').value.trim() === session
-          && $('setup-policy-generation').value.trim() === generation);
+          && $('setup-policy-generation').value.trim() === generation && setupPolicyRevision() === revision
+          && $('setup-policy-binding-event').value.trim() === bindingEvent);
         if (held) setupPolicyNeed(setupPolicyHeld === held && held.actor === actor && held.scope === scope
-          && held.session === session && held.generation === generation
+          && held.session === session && held.generation === generation && held.revision === revision && held.bindingEvent === bindingEvent
           && BigInt(Date.now()) * 1000000n < held.epochExpiry);
       }, close() { clearTimeout(timer); controller.abort(); setupPolicyBusy = false; }};
       try { operation.current(); setupPolicyBusy = true; return operation; }
@@ -108,35 +150,39 @@ SETUP_POLICY_SCRIPT = r"""
       try {
         setupPolicyNeed(nativeSetupId(operation.generation)
           && sessionStorage.getItem(setupPolicyMarker(operation.actor, operation.session)) === null);
+        const staticBinding = operation.bindingEvent ? {credentialBindingEventId: operation.bindingEvent} : {};
         const result = await setupPolicyPost('/draft', {apiVersion: setupPolicyRequestSchema, sessionId: operation.session,
-          expectedRevision: 3, generationRequestId: operation.generation}, operation);
+          expectedRevision: new OAuthConsentNumber(operation.revision.toString()), generationRequestId: operation.generation, ...staticBinding}, operation);
         setupPolicyNeed(oauthConsentClosed(result, ['apiVersion', 'okForAction', 'argumentsOriginal', 'review'])
           && result.apiVersion === setupPolicyRequestSchema && result.okForAction === false && typeof result.argumentsOriginal === 'string');
         const args = oauthConsentParse(result.argumentsOriginal, 2 * 1024 * 1024).value;
         const request = args.request, binding = nativeSetupBinding(request?.setupBinding), review = result.review;
         setupPolicyNeed(oauthConsentClosed(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
           && oauthConsentClosed(request, ['setupBinding', 'credentialId', 'credentialVersion', 'generationClaimOriginal',
-            'routePolicyDigest', 'assignmentDigest', 'issuedAtEpochNs', 'expiresAtEpochNs'])
+            'routePolicyDigest', 'assignmentDigest', 'issuedAtEpochNs', 'expiresAtEpochNs', ...Object.keys(staticBinding)])
           && oauthConsentClosed(review, ['principalId', 'routeId', 'credentialId', 'credentialVersion', 'policyHash',
             'routePolicyDigest', 'assignmentDigest', 'sessionId', 'setupRevision', 'continuationRevision', 'ownerId',
-            'generationRequestId', 'generationPublicationDigest', 'candidateId', 'canaryId', 'expiresAtEpochNs']));
+            'generationRequestId', 'generationPublicationDigest', 'candidateId', 'canaryId', 'expiresAtEpochNs', ...Object.keys(staticBinding)]));
         const claim = oauthConsentParse(request.generationClaimOriginal, 2 * 1024 * 1024).value;
         setupPolicyNeed(args.actor_id === operation.actor && binding.sessionId === operation.session && binding.ownerId === operation.actor
-          && oauthConsentInteger(binding.revision) === 3n && oauthConsentInteger(request.credentialVersion) === 1n
+          && oauthConsentInteger(binding.revision) === operation.revision && oauthConsentInteger(request.credentialVersion) === 1n
           && claim.request_id === operation.generation && oauthConsentDigest(claim.publication_envelope_digest)
           && review.sessionId === operation.session && review.ownerId === operation.actor
           && review.generationRequestId === operation.generation && review.generationPublicationDigest === claim.publication_envelope_digest
           && review.credentialId === request.credentialId && oauthConsentInteger(review.credentialVersion) === 1n
           && review.routePolicyDigest === request.routePolicyDigest && review.assignmentDigest === request.assignmentDigest
-          && oauthConsentInteger(review.setupRevision) === 3n && oauthConsentInteger(review.continuationRevision) === 0n);
+          && oauthConsentInteger(review.setupRevision) === operation.revision && oauthConsentInteger(review.continuationRevision) === 0n
+          && (!operation.bindingEvent || request.credentialBindingEventId === operation.bindingEvent
+            && review.credentialBindingEventId === operation.bindingEvent));
         const epochExpiry = oauthConsentInteger(request.expiresAtEpochNs);
         setupPolicyNeed(epochExpiry === oauthConsentInteger(review.expiresAtEpochNs)
           && BigInt(Date.now()) * 1000000n < epochExpiry && epochExpiry <= oauthConsentInteger(binding.expiresAtEpochNs));
         setupPolicyHeld = {original: result.argumentsOriginal, actor: operation.actor, scope: operation.scope,
-          session: operation.session, generation: operation.generation, until: operation.until, expires: operation.expires, epochExpiry};
+          session: operation.session, generation: operation.generation, revision: operation.revision, bindingEvent: operation.bindingEvent,
+          until: operation.until, expires: operation.expires, epochExpiry};
         $('setup-policy-review').textContent = oauthConsentCanonical(review);
         setupPolicyMessage('Exact review retained briefly. Candidate binding still requires your fresh hardware passkey; original expiry is not renewed.');
-      } catch (error) { setupPolicyHeld = null; setupPolicyMessage('No binding submitted. Check activated revision 3, completed audit, current credential and completed generation. If a prior submission was uncertain, use lookup only.'); throw error; }
+      } catch (error) { setupPolicyHeld = null; setupPolicyMessage('No binding submitted. Check the exact current activated revision, real binding event/completed audit, version-1 credential and completed generation. If a prior submission was uncertain, use lookup only.'); throw error; }
       finally { operation.close(); }
     }
     async function setupPolicyBind() {
@@ -209,17 +255,19 @@ SETUP_POLICY_SCRIPT = r"""
         && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
         && state.authStatus.roles.includes('policy_publisher'));
       const actor = state.authStatus.userId, scope = sessionActivationAuthScope(), session = $('setup-policy-session').value.trim();
+      const revisionText = $('setup-policy-revision').value.trim(), revision = mode === 'materialize' ? setupPolicyRevision() : null;
       const draft = $('setup-policy-file-draft').value, approval = $('setup-policy-file-approval').value.trim();
       const resolutionSelection = JSON.stringify(['target', 'outcome', 'reason'].map(name => $('setup-policy-file-resolution-' + name).value));
       setupPolicyNeed(['materialize', 'resolve', 'inspect'].includes(mode)
         && (nativeSetupId(session) || mode !== 'materialize' && session === ''));
       const controller = new AbortController(), until = performance.now() + 30000, expires = Date.now() + 30000;
       const timer = setTimeout(() => controller.abort(), 30000); setupPolicyBusy = true;
-      return {actor, scope, session, approval, signal: controller.signal, current() {
+      return {actor, scope, session, revision, approval, signal: controller.signal, current() {
         setupPolicyNeed(!controller.signal.aborted && performance.now() < until && Date.now() < expires
           && !adminToken() && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
           && state.authStatus.userId === actor && state.authStatus.roles.includes('policy_publisher')
           && sessionActivationAuthScope() === scope && $('setup-policy-session').value.trim() === session
+          && $('setup-policy-revision').value.trim() === revisionText
           && $('setup-policy-file-draft').value === draft && $('setup-policy-file-approval').value.trim() === approval
           && JSON.stringify(['target', 'outcome', 'reason'].map(name => $('setup-policy-file-resolution-' + name).value)) === resolutionSelection);
         if (held) setupPolicyNeed(setupFileHeld === held && held.raw === draft && held.session === session
@@ -350,6 +398,8 @@ SETUP_POLICY_SCRIPT = r"""
           && setupFileBytes(draft[name]).length <= maximum);
       }
       const continuation = oauthConsentParse(draft.continuationOriginal, 2170880).value;
+      const setupOriginal = oauthConsentParse(continuation.setup_original, 65536).value;
+      setupPolicyNeed(setupOriginal.id === operation.session && oauthConsentInteger(setupOriginal.revision) === operation.revision);
       const body = oauthConsentParse(draft.requestOriginal, 1400000).value, binding = oauthConsentParse(draft.bindingOriginal, 8192).value;
       setupPolicyNeed(oauthConsentCanonical(body) === draft.requestOriginal && oauthConsentCanonical(binding) === draft.bindingOriginal
         && oauthConsentClosed(body, ['publicationId', 'policyOriginalBase64url', 'artifactEnvelopeSha256', 'expectedFileSha256', 'reason'])
@@ -384,7 +434,8 @@ SETUP_POLICY_SCRIPT = r"""
       try {
         setupPolicyNeed(state.authStatus.roles.includes('credential_owner') && setupFileHistory(operation.session).rows.length === 0);
         await setupFileCookie(operation);
-        const draft = await setupPolicyPost('/materialize-draft', {apiVersion: setupFileRequest, sessionId: operation.session, expectedRevision: 3}, operation);
+        const draft = await setupPolicyPost('/materialize-draft', {apiVersion: setupFileRequest, sessionId: operation.session,
+          expectedRevision: new OAuthConsentNumber(operation.revision.toString())}, operation);
         const raw = oauthConsentCanonical(draft), held = await setupFileAccept(raw, operation);
         setupPolicyNeed(held.continuation.owner_id === operation.actor); operation.current();
         $('setup-policy-file-draft').value = raw; setupFileHeld = held;
@@ -497,7 +548,8 @@ SETUP_POLICY_SCRIPT = r"""
       const operation = setupPolicyBegin();
       try {
         await oauthConsentCookie(operation);
-        const value = await setupPolicyPost('/installed', {apiVersion: setupFileRequest, sessionId: operation.session, expectedRevision: 3}, operation);
+        const value = await setupPolicyPost('/installed', {apiVersion: setupFileRequest, sessionId: operation.session,
+          expectedRevision: new OAuthConsentNumber(operation.revision.toString())}, operation);
         setupPolicyNeed(oauthConsentClosed(value, ['apiVersion', 'okForAction', 'automaticRetryAllowed', 'nativeGateVerified', 'observationOriginal'])
           && value.apiVersion === 'serverware.setupPolicyInstalledObservation/v1' && value.okForAction === false
           && value.automaticRetryAllowed === false && value.nativeGateVerified === false && typeof value.observationOriginal === 'string');

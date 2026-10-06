@@ -10,6 +10,9 @@ from serverware import authority_contract, db, webauthn
 from serverware import authority_oauth_setup as setup
 from serverware import authority_policy_candidate as candidate
 from serverware import authority_setup_policy as profile
+from serverware import authority_setup_bind_credential as binding
+from serverware import authority_transition_core as core
+from serverware.authority_transition_quota import _audit_identity
 from serverware import control_plane_custody_client as custody_client
 from serverware import control_plane_custody_startup as startup
 from serverware import control_plane_oauth_activation as activation
@@ -83,6 +86,47 @@ def _continuation(session_id):
     return row
 
 
+def _binding_original(event_id, session):
+    """Retain actual read-only provenance; the kernel independently proves it."""
+    setup.identifier(event_id)
+    profile.require_static_session(session)
+    with db.connect() as connection:
+        event = connection.execute("SELECT * FROM setup_session_events WHERE id = ?", (event_id,)).fetchone()
+        link = connection.execute("SELECT * FROM oauth_setup_audit_links WHERE id = ?", (event_id,)).fetchone()
+        profile.require(event is not None and link is not None, "actual controlled credential binding is required")
+        event, link = dict(event), dict(link)
+        profile.require(set(event) == binding.EVENT_FIELDS and set(link) == binding.AUDIT_LINK_FIELDS)
+        outbox = connection.execute("SELECT * FROM metadata_audit_outbox WHERE id = ?", (link["outbox_id"],)).fetchone()
+    profile.require(outbox is not None, "completed binding audit is required")
+    outbox = dict(outbox)
+    document = setup.document(event["event_json"].encode("ascii"), setup.MAX_EVENT_BYTES)
+    details = document["details"]
+    profile.require(event["id"] == link["id"] == link["event_id"] == event_id
+        == core.deterministic_uuid(operation=binding.OPERATION, request_digest=link["request_digest"],
+            purpose="setup-bind-credential-event")
+        and event["session_id"] == link["session_id"] == session["id"]
+        and event["transition"] == "bind_credential" and document["transition"] == "bind_credential"
+        and document["setup_session_id"] == session["id"]
+        and document["from_phase"] == "created" and document["to_phase"] == "credential_activated"
+        and document["binding_updates"] == {"credential_id": session["credential_id"], "credential_version": 1}
+        and details["authorityOperation"] == binding.OPERATION
+        and details["authorityRequestDigest"] == link["request_digest"]
+        and details["setupPostSha256"] == profile.sha256(setup.row_original(session))
+        and event["payload_digest"] == profile.sha256(profile.canonical(document))
+        and event["created_at"] == session["updated_at"]
+        and link["outbox_id"] == _audit_identity(binding.OPERATION, link["request_digest"])
+        and outbox["id"] == link["outbox_id"] and outbox["status"] == "audited"
+        and outbox["event_type"] == binding.OPERATION and outbox["actor_id"] == event["actor_id"]
+        and outbox["event_digest"] == link["outbox_event_digest"]
+        and outbox["audited_at"] is not None and outbox["audit_event_hash"] is not None
+        and outbox["claim_id"] is None and outbox["claimed_at"] is None
+        and setup.epoch(outbox["audited_at"]) <= time.time_ns(), "controlled binding provenance or completed audit differs")
+    profile.digest(outbox["audit_event_hash"])
+    raw = profile.canonical({"event": event, "link": link, "outbox": outbox})
+    profile.require(len(raw) <= MAX_RESPONSE)
+    return raw
+
+
 class _Owner:
     def __init__(self, request):
         self.request, self.scope, self.pin = request, request.scope, _request_pin(request)
@@ -98,6 +142,7 @@ class _Owner:
         self.deadline, self.expires = self.started_mono + 30_000_000_000, self.started_epoch + 30_000_000_000
         self.session, self.claim, self.credential = None, None, None
         self.session_original, self.claim_original, self.arguments_original = None, None, None
+        self.binding_event_id = self.binding_original = None
         self.dispatched = False
         self.check()
 
@@ -121,6 +166,8 @@ class _Owner:
                 and self.session["owner_id"] == self.identity.user_id)
         if self.claim is not None:
             profile.require(candidate.row_original(_claim(self.claim["request_id"])) == self.claim_original)
+        if self.binding_event_id is not None:
+            profile.require(_binding_original(self.binding_event_id, self.session) == self.binding_original)
         if self.credential is not None:
             current = db.get_webauthn_credential_by_record_id(self.credential["id"])
             profile.require(type(current) is dict and current.get("revoked_at") is None
@@ -131,14 +178,20 @@ class _Owner:
         profile.require(mono <= end_mono < self.deadline and epoch <= end_epoch < self.expires)
         self.last_mono, self.last_epoch = end_mono, end_epoch
 
-    def retain(self, session_id, generation_id):
+    def retain(self, session_id, generation_id, *, expected_revision=3, binding_event_id=None):
         profile.require(self.session is None and self.claim is None)
         self.session, self.claim = _session(session_id), _claim(generation_id)
         row = self.session
         profile.require(row["owner_id"] == self.identity.user_id and row["current_assignee_id"] in {None, self.identity.user_id}
-            and row["revision"] == 3 and row["phase"] == "credential_activated" and row["status"] == "active"
+            and type(expected_revision) is int and row["revision"] == expected_revision
+            and row["phase"] == "credential_activated" and row["status"] == "active"
             and row["terminal_at"] is None and row["credential_version"] == 1)
         self.session_original, self.claim_original = setup.row_original(row), candidate.row_original(self.claim)
+        if binding_event_id is None:
+            profile.require(expected_revision == 3)
+        else:
+            self.binding_event_id = setup.identifier(binding_event_id)
+            self.binding_original = _binding_original(binding_event_id, row)
         self.clip(setup.epoch(row["expires_at"]))
         profile.require(_continuation(session_id) is None, "candidate association exists; use read-only lookup")
         self.check()
@@ -151,7 +204,8 @@ class _Owner:
             and value["control_plane_configuration_digest"] == self.configuration and value["credential_policy"] == self.policy)
         bound = value["request"]
         claim = profile.claim_original(bound["generationClaimOriginal"])
-        self.retain(bound["setupBinding"]["sessionId"], claim["request_id"])
+        self.retain(bound["setupBinding"]["sessionId"], claim["request_id"],
+            expected_revision=bound["setupBinding"]["revision"], binding_event_id=bound.get("credentialBindingEventId"))
         assignment, assignment_digest = profile.reviewed_assignment(self.session, candidate.management_original(self.claim["management_request_json"]))
         profile.require(bound["setupBinding"] == setup.row_binding(self.session)
             and bound["generationClaimOriginal"].encode("ascii") == self.claim_original
@@ -199,9 +253,16 @@ class _Owner:
 
 
 def _draft(owner, value):
-    profile.require(set(value) == {"apiVersion", "sessionId", "expectedRevision", "generationRequestId"}
-        and value["apiVersion"] == profile.HTTP_SCHEMA and type(value["expectedRevision"]) is int and value["expectedRevision"] == 3)
-    owner.retain(value["sessionId"], value["generationRequestId"])
+    base_fields = {"apiVersion", "sessionId", "expectedRevision", "generationRequestId"}
+    profile.require(set(value) in (base_fields, base_fields | {"credentialBindingEventId"})
+        and value["apiVersion"] == profile.HTTP_SCHEMA and type(value["expectedRevision"]) is int)
+    binding_event = {}
+    if "credentialBindingEventId" in value:
+        binding_event = {"credentialBindingEventId": setup.identifier(value["credentialBindingEventId"])}
+    else:
+        profile.require(value["expectedRevision"] == 3)
+    owner.retain(value["sessionId"], value["generationRequestId"], expected_revision=value["expectedRevision"],
+        binding_event_id=binding_event.get("credentialBindingEventId"))
     assignment, digest = profile.reviewed_assignment(owner.session, candidate.management_original(owner.claim["management_request_json"]))
     context = candidate.context(setup.document(owner.claim["context_json"].encode("ascii"), 8192))
     now = time.time_ns() // 1000 * 1000
@@ -211,11 +272,11 @@ def _draft(owner, value):
         "request": {"setupBinding": setup.row_binding(owner.session), "credentialId": owner.session["credential_id"],
             "credentialVersion": owner.session["credential_version"], "generationClaimOriginal": owner.claim_original.decode("ascii"),
             "routePolicyDigest": assignment["routePolicyDigest"], "assignmentDigest": digest,
-            "issuedAtEpochNs": now, "expiresAtEpochNs": expires}})
-    review = {**assignment, "assignmentDigest": digest, "sessionId": owner.session["id"], "setupRevision": 3,
+            "issuedAtEpochNs": now, "expiresAtEpochNs": expires, **binding_event}})
+    review = {**assignment, "assignmentDigest": digest, "sessionId": owner.session["id"], "setupRevision": owner.session["revision"],
         "continuationRevision": 0, "ownerId": owner.identity.user_id, "generationRequestId": owner.claim["request_id"],
         "generationPublicationDigest": owner.claim["publication_envelope_digest"], "candidateId": context["candidateId"],
-        "canaryId": context["canaryId"], "expiresAtEpochNs": expires}
+        "canaryId": context["canaryId"], "expiresAtEpochNs": expires, **binding_event}
     owner.check()
     return {"apiVersion": profile.HTTP_SCHEMA, "okForAction": False,
         "argumentsOriginal": profile.canonical(arguments).decode("ascii"), "review": review}
@@ -241,15 +302,21 @@ class _PostBindOwner(_Owner):
         self.claim = _claim(self.continuation["generation_request_id"])
         self.session_original, self.claim_original = setup.row_original(self.session), candidate.row_original(self.claim)
         row = self.session
+        arguments = setup.document(self.continuation["request_original"].encode("ascii"), profile.MAX_ARGUMENT_BYTES)
+        if set(arguments["request"]) == profile.STATIC_REQUEST_FIELDS:
+            profile.require_static_session(row)
+            self.binding_event_id = arguments["request"]["credentialBindingEventId"]
+            self.binding_original = _binding_original(self.binding_event_id, row)
+        else:
+            profile.require(row["revision"] == 3)
         profile.require(row["owner_id"] == self.identity.user_id == self.continuation["owner_id"]
             and row["current_assignee_id"] in {None, self.identity.user_id}
-            and row["revision"] == 3 and row["phase"] == "credential_activated" and row["status"] == "active"
+            and row["phase"] == "credential_activated" and row["status"] == "active"
             and row["terminal_at"] is None and row["credential_version"] == 1
             and self.continuation["setup_original"].encode("ascii") == self.session_original
             and self.continuation["generation_claim_sha256"] == profile.sha256(self.claim_original)
             and self.continuation["generation_publication_digest"] == self.claim["publication_envelope_digest"]
             and self.continuation["configuration_digest"] == self.configuration == self.claim["configuration_digest"])
-        arguments = setup.document(self.continuation["request_original"].encode("ascii"), profile.MAX_ARGUMENT_BYTES)
         profile.require(arguments["request"]["generationClaimOriginal"].encode("ascii") == self.claim_original)
         self.clip(setup.epoch(row["expires_at"]))
         self.check()
@@ -400,10 +467,11 @@ def on_request(request, raw):
         value = setup.document(raw, MAX_MATERIALIZE_REQUEST)
         profile.require(type(value) is dict and set(value) == {"apiVersion", "sessionId", "expectedRevision"}
             and value["apiVersion"] == MATERIALIZE_REQUEST_SCHEMA
-            and type(value["expectedRevision"]) is int and value["expectedRevision"] == 3)
+            and type(value["expectedRevision"]) is int and value["expectedRevision"] >= 1)
         owner = _PostBindOwner(request)
         try:
             owner.retain_bound(value["sessionId"])
+            profile.require(owner.session["revision"] == value["expectedRevision"], "Setup revision changed")
             if path == NATIVE_INSTALLED_PATH:
                 from serverware import control_plane_setup_native_policy
                 result = control_plane_setup_native_policy.observe(owner)

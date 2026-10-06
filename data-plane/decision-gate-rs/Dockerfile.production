@@ -169,6 +169,10 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-native-setup-hardware --bin serverware-native-setup-proxy --bin serverware-native-setup-final \
         --bin serverware-setup-native-hardware --bin serverware-setup-native-proxy --bin serverware-setup-native-final \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
+        --bin serverware-native-activation-relay \
+    && test "$(readelf -l /src/target/release/serverware-native-activation-relay | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-activation-relay | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-activation-relay)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
     && test "$(readelf -l /src/target/release/serverware-native-response-verifier | grep -c INTERP)" -eq 0 \
@@ -515,6 +519,8 @@ FROM scratch AS native-pilot-artifacts
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-policy-shadow-custody-guest /native-install/usr/local/bin/serverware-policy-shadow-custody-guest
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-proof-cohort /native-install/opt/serverware/serverware-native-shadow-proof-cohort
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /native-install/opt/serverware/serverware-native-shadow-guest-supervisor
+# Parent utility only; never copied into the trusted claimant SquashFS.
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-activation-relay /native-install/opt/serverware/serverware-native-activation-relay
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-genesis-controller /native-install/opt/serverware/serverware-native-publication-genesis-controller
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-adoption-validator /native-install/opt/serverware/serverware-native-publication-adoption-validator
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /native-install/usr/local/bin/serverware-native-shadow-worker
@@ -554,6 +560,25 @@ LABEL dev.serverware.native_delivery_authority_pem_sha256="${NATIVE_DELIVERY_AUT
       dev.serverware.native_delivery_authority_spki_sha256="${NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256}"
 COPY --from=native-delivery-authority-input --chown=0:0 --chmod=0444 /native-delivery/authority.pem /usr/share/serverware/native-delivery-authority.pem
 CMD ["--receive-configuration-v1"]
+
+# Explicit outer receiver DATA packaging. No C9 delivery, service assignment,
+# key, launch original or journal state is accepted as an image input.
+FROM native-python-runtime-build AS native-activation-receiver-configuration
+ARG ACTIVATION_RECEIVER_INPUTS_SHA256
+ENV ACTIVATION_RECEIVER_INPUTS_SHA256=$ACTIVATION_RECEIVER_INPUTS_SHA256
+COPY production-activation-receiver/ /activation-receiver-inputs/
+RUN --network=none python -I -B /source/scripts/package_native_activation_receiver.py
+
+# Export only: this is not a standalone Nitro init or Docker entrypoint.
+# Its public manifest requires empty environment and genuine inherited0/1/2/6;
+# an external approved launcher must provide them and install late originals.
+FROM scratch AS native-activation-receiver-artifact
+COPY --from=native-activation-receiver-configuration --chown=0:0 /activation-receiver-root/ /
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /opt/serverware/serverware-native-shadow-guest-supervisor
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /opt/serverware/native-shadow-custody-runtime.squashfs
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /usr/share/serverware/native-shadow-custody-runtime.json
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/serverware/native-shadow-key-delivery-runtime.squashfs
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/serverware/native-shadow-key-delivery-runtime.json
 
 # Preserve both the named legacy target and the Dockerfile's default target.
 FROM native-enclave-base AS native-enclave

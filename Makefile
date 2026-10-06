@@ -1449,6 +1449,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_shadow_verifier_runtime.py \
 	scripts/package_native_shadow_time_runtime.py \
 	scripts/package_native_shadow_custody_runtime.py \
+	scripts/package_native_activation_receiver.py \
 	scripts/package_native_setup_issuers_runtime.py \
 	scripts/build_production_images.py \
 	scripts/send_native_audit_assignment.py \
@@ -4611,6 +4612,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_shadow_verifier_runtime.py \
 				scripts/package_native_shadow_time_runtime.py \
 				scripts/package_native_shadow_custody_runtime.py \
+				scripts/package_native_activation_receiver.py \
 				scripts/package_native_setup_issuers_runtime.py \
 				scripts/build_production_images.py \
 				scripts/send_native_audit_assignment.py \

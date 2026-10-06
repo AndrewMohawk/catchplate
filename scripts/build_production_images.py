@@ -72,6 +72,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
         "native-broker-runtime-artifact",
     ),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-artifacts"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-activation-receiver-artifact"),
     # Offline public-input preparation only; not part of the guest closure.
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-operator-artifact"),
     # Fixed Python conductor rootfs, separate from seccomp and native guests.
@@ -95,6 +96,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-generation-origin-issuer-runtime-artifact"),
 }
 NATIVE_PILOT_TARGET = "native-pilot-artifacts"
+NATIVE_ACTIVATION_RECEIVER_TARGET = "native-activation-receiver-artifact"
 NATIVE_PILOT_OPERATOR_TARGET = "native-pilot-operator-artifact"
 NATIVE_PILOT_CONDUCTOR_TARGET = "native-pilot-conductor-artifact"
 NATIVE_PILOT_AUTHORITY_TARGET = "native-pilot-authority-artifact"
@@ -482,6 +484,28 @@ def copy_native_pilot_public_inputs(directory: Path, expected_sha256: str,
         _copy_context_file(directory / filename, destination / filename, pin, maximum_bytes=maximum)
 
 
+def copy_activation_receiver_inputs(directory: Path, expected_sha256: str,
+                                    metadata: dict[str, Any], context: Path) -> None:
+    import package_native_activation_receiver as receiver
+    receiver.digest(expected_sha256)
+    if not directory.is_absolute() or directory.resolve() != directory:
+        raise RuntimeError("receiver inputs require an absolute non-symlink directory")
+    if set(path.name for path in directory.iterdir()) != set(receiver.FILES):
+        raise RuntimeError("receiver inputs contain unexpected artifacts")
+    destination = context / "production-activation-receiver"
+    _copy_context_file(directory / "inputs.json", destination / "inputs.json", expected_sha256,
+                       maximum_bytes=receiver.FILES["inputs.json"])
+    manifest_raw = (destination / "inputs.json").read_bytes()
+    manifest = receiver.document(manifest_raw, receiver.FIELDS, receiver.FILES["inputs.json"])
+    for filename, field in (("receiver.json", "receiverConfigurationSha256"),
+                            ("delivery-configuration.json", "deliveryConfigurationSha256")):
+        _copy_context_file(directory / filename, destination / filename, receiver.digest(manifest[field]),
+                           maximum_bytes=receiver.FILES[filename])
+    receiver.validate(manifest_raw, (destination / "receiver.json").read_bytes(),
+                      (destination / "delivery-configuration.json").read_bytes(),
+                      expected_sha256=expected_sha256, source_sha256=metadata["source_manifest_digest"])
+
+
 def _tracked_file_digests(metadata: dict[str, Any]) -> dict[str, str]:
     files = metadata["source_contract"]["sourceTreeManifest"]["files"]
     return {
@@ -672,6 +696,7 @@ def artifact_build_command(
     metadata: dict[str, Any],
     context: Path,
     public_inputs_sha256: str | None = None,
+    activation_receiver_inputs_sha256: str | None = None,
     native_pilot_bounded_build: bool = False,
     engineering_bounded_build: bool = False,
 ) -> list[str]:
@@ -706,10 +731,10 @@ def artifact_build_command(
     if native_pilot_bounded_build:
         if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET,
                           NATIVE_PILOT_AUTHORITY_TARGET, NATIVE_PILOT_SUPERVISOR_TARGET,
-                          NATIVE_WORKLOAD_SIDECAR_TARGET}:
+                          NATIVE_WORKLOAD_SIDECAR_TARGET, NATIVE_ACTIVATION_RECEIVER_TARGET}:
             raise RuntimeError("native pilot resource limits require a fixed pilot artifact target")
         pilot_resources = _native_pilot_resource_arguments(metadata)
-    if target == NATIVE_PILOT_TARGET:
+    if target in {NATIVE_PILOT_TARGET, NATIVE_ACTIVATION_RECEIVER_TARGET}:
         if not isinstance(public_inputs_sha256, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", public_inputs_sha256):
             raise RuntimeError("native pilot artifact requires its independent public guest input pin")
         extra = ["--build-arg", "SHADOW_CUSTODY_INPUTS_SHA256=" + public_inputs_sha256]
@@ -717,6 +742,14 @@ def artifact_build_command(
         if public_inputs_sha256 is not None:
             raise RuntimeError("public guest inputs are forbidden for this artifact target")
         extra = []
+    if target == NATIVE_ACTIVATION_RECEIVER_TARGET:
+        if (not isinstance(activation_receiver_inputs_sha256, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", activation_receiver_inputs_sha256)
+                or activation_receiver_inputs_sha256 == "sha256:" + "0" * 64):
+            raise RuntimeError("receiver artifact requires independently pinned cold inputs")
+        extra.extend(("--build-arg", "ACTIVATION_RECEIVER_INPUTS_SHA256=" + activation_receiver_inputs_sha256))
+    elif activation_receiver_inputs_sha256 is not None:
+        raise RuntimeError("receiver inputs are forbidden for this artifact target")
     return [
         "docker",
         "buildx",
@@ -829,6 +862,8 @@ def main() -> None:
     parser.add_argument("--network", choices=("none",))
     parser.add_argument("--shadow-custody-inputs", type=Path)
     parser.add_argument("--shadow-custody-inputs-sha256")
+    parser.add_argument("--activation-receiver-inputs", type=Path)
+    parser.add_argument("--activation-receiver-inputs-sha256")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--development-dirty-tree",
@@ -858,11 +893,18 @@ def main() -> None:
             args.native_delivery_authority, args.native_delivery_authority_sha256)
 
     guest_inputs = (args.shadow_custody_inputs, args.shadow_custody_inputs_sha256)
-    if args.target == NATIVE_PILOT_TARGET:
+    if args.target in {NATIVE_PILOT_TARGET, NATIVE_ACTIVATION_RECEIVER_TARGET}:
         if not all(guest_inputs):
-            parser.error("native-pilot-artifacts requires --shadow-custody-inputs and --shadow-custody-inputs-sha256")
+            parser.error("selected custody artifact requires --shadow-custody-inputs and --shadow-custody-inputs-sha256")
     elif any(guest_inputs):
-        parser.error("public guest inputs require the explicit native-pilot-artifacts target")
+        parser.error("public guest inputs require an explicit custody artifact target")
+
+    receiver_inputs = (args.activation_receiver_inputs, args.activation_receiver_inputs_sha256)
+    if args.target == NATIVE_ACTIVATION_RECEIVER_TARGET:
+        if not all(receiver_inputs):
+            parser.error("receiver artifact requires --activation-receiver-inputs and --activation-receiver-inputs-sha256")
+    elif any(value is not None for value in receiver_inputs):
+        parser.error("receiver inputs require the explicit native-activation-receiver-artifact target")
 
     artifact_values = (args.dockerfile, args.target, args.output, args.network)
     if any(value is not None for value in artifact_values):
@@ -914,6 +956,7 @@ def main() -> None:
                             metadata=metadata,
                             context=placeholder_context,
                             public_inputs_sha256=args.shadow_custody_inputs_sha256,
+                            activation_receiver_inputs_sha256=args.activation_receiver_inputs_sha256,
                             engineering_bounded_build=args.engineering_bounded_build,
                         ),
                         "metadata": metadata,
@@ -924,8 +967,10 @@ def main() -> None:
             return
         verify_dependency_cache()
         with private_build_context(metadata) as context:
-            if args.target == NATIVE_PILOT_TARGET:
+            if args.target in {NATIVE_PILOT_TARGET, NATIVE_ACTIVATION_RECEIVER_TARGET}:
                 copy_native_pilot_public_inputs(args.shadow_custody_inputs, args.shadow_custody_inputs_sha256, metadata, context)
+            if args.target == NATIVE_ACTIVATION_RECEIVER_TARGET:
+                copy_activation_receiver_inputs(args.activation_receiver_inputs, args.activation_receiver_inputs_sha256, metadata, context)
             command = artifact_build_command(
                 args.dockerfile,
                 args.target,
@@ -935,6 +980,7 @@ def main() -> None:
                 metadata=metadata,
                 context=context,
                 public_inputs_sha256=args.shadow_custody_inputs_sha256,
+                activation_receiver_inputs_sha256=args.activation_receiver_inputs_sha256,
                 engineering_bounded_build=args.engineering_bounded_build,
             )
             artifact_fd: int | None = None

@@ -17,6 +17,17 @@
         "deliveryConfiguration": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin" }
       }
     },
+    "imageInputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "sourceManifestSha256", "receiverConfigurationSha256", "deliveryConfigurationSha256"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeActivationReceiverImageInputs/v1" },
+        "sourceManifestSha256": { "$ref": "#/$defs/sha256" },
+        "receiverConfigurationSha256": { "$ref": "#/$defs/sha256" },
+        "deliveryConfigurationSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "$comment": "Explicit artifact-only build input. The input directory contains exactly inputs.json (this canonical document, no trailing LF), receiver.json and delivery-configuration.json. The receiver delivery pin must target /etc/serverware/native-activation-delivery.json and match the literal delivery configuration bytes. Zero digests are refused. No signed delivery, service assignment, launch, keys or journal state is packaged; the external enclave launcher must provide real inherited resources and late originals."
+    },
     "completion": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "observationSha256", "launchSha256"],

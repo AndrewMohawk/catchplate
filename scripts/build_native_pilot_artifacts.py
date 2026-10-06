@@ -44,6 +44,7 @@ NATIVE_FILES = {
     "usr/local/bin/serverware-policy-shadow-custody-guest": (0o555, 64 * 1024 * 1024),
     "opt/serverware/serverware-native-shadow-proof-cohort": (0o555, 64 * 1024 * 1024),
     "opt/serverware/serverware-native-shadow-guest-supervisor": (0o555, 64 * 1024 * 1024),
+    "opt/serverware/serverware-native-activation-relay": (0o555, 64 * 1024 * 1024),
     "opt/serverware/serverware-native-publication-genesis-controller": (0o555, 64 * 1024 * 1024),
     "opt/serverware/serverware-native-publication-adoption-validator": (0o555, 64 * 1024 * 1024),
     "usr/local/bin/serverware-native-shadow-worker": (0o555, 64 * 1024 * 1024),

@@ -41,7 +41,7 @@ fn main() -> Result<(), String> {
         return Err("native enclave startup requires its fixed initial privilege".into());
     }
     // Only startup artifact locations/pins and the optional public-identity
-    // output flag may follow. The gate's real CLI validates this exact list and
+    // output flags may follow. The gate's real CLI validates this exact list and
     // acquires protected originals. Selectors are fixed cold profiles, never
     // inferred from a returned configuration or an incoming request.
     let mut arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -65,9 +65,11 @@ fn main() -> Result<(), String> {
         Some("--static-credential-v23") => { arguments.remove(0); "--native-static-credential-startup-v23" },
         _ => "--native-encrypted-startup",
     };
-    // Only v22 adds the separately pinned trust original (two flag/value
-    // pairs). Older modes retain their exact nine-argument ceiling.
-    let maximum_arguments = if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 };
+    // v22 adds the separately pinned trust original (two flag/value pairs).
+    // The new explicit role-4 export adds exactly one slot. Without that flag,
+    // retain the previous ceilings and unchanged role-3 output contract.
+    let maximum_arguments = (if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 })
+        + usize::from(arguments.iter().any(|arg| arg == "--response-proof-identity-stdout"));
     if arguments.is_empty() || arguments.len() > maximum_arguments {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
     }

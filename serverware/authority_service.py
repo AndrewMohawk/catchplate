@@ -8866,7 +8866,7 @@ class AuthorityProcess:
                     or type(runtime_input.get("input")) is not dict
                     or type(runtime_input.get("webauthnAuthorization")) is not dict):
                 raise AuthorityServiceError("Static creation requires its separate literal native proof channel")
-            native_evidence = json.loads(_canonical(static_custody.evidence(runtime_input["nativeEvidence"])))
+            native_evidence = json.loads(_canonical(static_custody.authority_evidence(runtime_input["nativeEvidence"])))
             # No native evidence is inserted into the business commitment or
             # accepted as a verifier-produced verdict. Own the literal original.
             runtime_input = {"input": runtime_input["input"],

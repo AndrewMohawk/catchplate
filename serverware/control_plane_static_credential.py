@@ -18,11 +18,12 @@ from serverware import authority_request_commitment as commitment
 from serverware import authority_static_credential_create as profile
 from serverware import authority_static_credential_approval as approval
 from serverware import authority_static_credential_custody as proof
+from serverware import authority_static_credential_assignment as assignment_profile
 from serverware import authority_policy_canary_policy as config_digest
 from serverware import oauth_application_owner as originals
 
 PREFIX = "/api/credentials/static"
-PATHS = frozenset({PREFIX + "/intent", PREFIX + "/candidate"} | {
+PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/intent", PREFIX + "/candidate"} | {
     PREFIX + "/" + operation + "/" + phase
     for operation in ("approval/request", "approval/decide", "create")
     for phase in ("draft", "options", "execute")})
@@ -31,10 +32,10 @@ CREATE_OPTIONS_SCHEMA = "serverware.staticCredentialCreationOptions/v1"
 CREATE_MFA_FIELD = "staticCredentialCreationProfile"
 MAX_REQUEST = MAX_RESPONSE = 4 * 1024 * 1024
 CONFIG_ENVIRONMENT = "SERVERWARE_STATIC_CREDENTIAL_CONFIG_FD"
-CONFIG_SCHEMA = "serverware.staticCredentialPortalConfiguration/v1"
+CONFIG_SCHEMA = "serverware.staticCredentialPortalConfiguration/v2"
 CONFIG_FIELDS = frozenset({"schema", "sourceRevision", "controlPlaneConfigurationDigest",
     "authorityRootFd", "authorityRootSha256", "authorityRootSpkiSha256", "authorityConfigurationFd",
-    "authorityConfigurationSha256", "authorityConfigurationDigest", "holderId"})
+    "authorityConfigurationSha256", "authorityConfigurationDigest"})
 AUTHORITY_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
 SIGNED_AUTHORITY_SCHEMA = "serverware.signedPolicyAuthorityServiceConfiguration/v6"
 _PID, _LOCK = os.getpid(), threading.RLock()
@@ -94,7 +95,11 @@ class _Cold:
                     and startup.require_started() is self.custody and custody._snapshot(self.custody) is self.binding
                     and profile.canonical(self.payload) == self.payload_original
                     and self.policy is self.payload[profile.FIELD]
-                    and profile.canonical(self.assignment) == self.assignment_original)
+                    and profile.canonical(self.target) == self.target_original
+                    and (self.assignment_original is None and self.assignment_payload is None
+                        or self.assignment_original is not None
+                        and profile.canonical(self.assignment_payload) == self.assignment_payload_original
+                        and profile.sha256(self.assignment_original.encode("ascii")) == self.assignment_digest))
                 for original in self.originals:
                     original.check()
                 now, mono = custody._receipt_now(self.binding), time.monotonic_ns()
@@ -155,14 +160,17 @@ def initialize_from_environment():
             policy = profile.validate_policy(payload.get(profile.FIELD), payload=payload, root_key=root)
             native = proof.validate_policy(payload.get(proof.FIELD), payload=payload, root_key=root)
             profile.require(policy is not None and native is not None)
-            assignments = [item for item in native["assignments"] if item["holderId"] == config["holderId"]]
             enabled = set(payload["roles"]["planner"]["enabledOperations"])
             required = profile.OPERATIONS | (approval.OPERATIONS if policy["twoPersonRequired"] else set())
-            profile.require(len(assignments) == 1 and required <= enabled)
+            profile.require(required <= enabled)
             owner = _Cold()
             owner.custody, owner.binding, owner.payload, owner.root = actual, binding, payload, root
-            owner.policy, owner.assignment = policy, assignments[0]
-            owner.payload_original, owner.assignment_original = profile.canonical(payload), profile.canonical(assignments[0])
+            owner.policy, owner.target = policy, native["target"]
+            owner.payload_original, owner.target_original = profile.canonical(payload), profile.canonical(owner.target)
+            # Runtime boot/key/configuration commitments are admitted only after
+            # boot, outside both immutable configuration hashes. CP trust can
+            # serve before that explicit independent assignment is available.
+            owner.assignment_original = owner.assignment_payload = owner.assignment_payload_original = owner.assignment_digest = None
             owner.originals = (selector, root_original, authority_original)
             owner.now, owner.mono = custody._receipt_now(binding), time.monotonic_ns()
             owner.expires = binding.attestation_interval[1]
@@ -248,9 +256,17 @@ class _Owner:
         self.expires = min(self.started_epoch + 30_000_000_000, self.cold.expires)
         self.deadline = min(self.cold.deadline, self.started_mono + self.expires - self.started_epoch)
         self.policy = self.cold.policy
+        self.assignment_original, self.assignment_payload = self.cold.assignment_original, self.cold.assignment_payload
+        if request.url.path != PREFIX + "/assignment":
+            profile.require(self.assignment_original is not None, "Admit the independently signed native assignment first")
+            admitted = assignment_profile.verify_original(self.assignment_original,
+                configuration_payload=self.cold.payload, root_key=self.cold.root, now_epoch_ns=self.started_epoch)
+            profile.require(profile.canonical(admitted) == self.cold.assignment_payload_original)
+            self.expires = min(self.expires, admitted["expiresAtEpochNs"])
+            self.deadline = min(self.deadline, self.started_mono + self.expires - self.started_epoch)
         profile.require(self.policy["credentialPolicy"] == hardware._policy()
             and self.policy["twoPersonRequired"] == app._control_plane_two_person_required(profile.ACTION)
-            and self.cold.assignment["portalOrigin"] == webauthn.WEBAUTHN_ORIGIN)
+            and self.cold.target["portalOrigin"] == webauthn.WEBAUTHN_ORIGIN)
         self.values = self.arguments_original = self.operation = self.credential = self.mfa = self.mfa_original = None
         self.dispatched = False
         self.check()
@@ -264,9 +280,11 @@ class _Owner:
             and _cold is self.cold and self.request.scope is self.scope and _request_pin(self.request) == self.pin
             and _identity(self.request) == self.identity and self.last_epoch <= epoch < self.expires
             and self.last_mono <= mono < self.deadline
+            and self.assignment_original == self.cold.assignment_original
+            and self.assignment_payload is self.cold.assignment_payload
             and self.policy["credentialPolicy"] == hardware._policy()
             and self.policy["twoPersonRequired"] == app._control_plane_two_person_required(profile.ACTION)
-            and self.cold.assignment["portalOrigin"] == webauthn.WEBAUTHN_ORIGIN)
+            and self.cold.target["portalOrigin"] == webauthn.WEBAUTHN_ORIGIN)
         if self.arguments_original is not None:
             profile.require(profile.canonical(self.values) == self.arguments_original)
             if not self.dispatched and self.operation == approval.OP_DECIDE:
@@ -366,7 +384,8 @@ class _Owner:
                 and reply["apiVersion"] == "serverware.nativeStaticCredentialPreparationResponse/v1"
                 and reply["argumentsOriginal"].encode("ascii") == self.arguments_original)
             native = proof.evidence(reply["evidence"])
-            profile.require(native["statement"]["holderId"] == self.cold.assignment["holderId"])
+            profile.require(native["statement"]["holderId"] == self.assignment_payload["assignment"]["holderId"])
+            native = proof.authority_evidence({**native, "assignmentOriginal": self.assignment_original})
             self.clip(native["statement"]["expiresAtEpochNs"])
             proof.verify_original(self.operation, self.values, evidence=native,
                 configuration_payload=self.cold.payload, root_key=self.cold.root, now_epoch_ns=self.last_epoch)
@@ -488,18 +507,40 @@ def on_request(request, raw):
 
 
 def _handle(owner, route, value):
+    if route == "assignment":
+        profile.require(set(value) == {"apiVersion", "assignmentOriginal"})
+        original = value["assignmentOriginal"]
+        admitted = assignment_profile.verify_original(original, configuration_payload=owner.cold.payload,
+            root_key=owner.cold.root, now_epoch_ns=owner.last_epoch)
+        owner.check()
+        with _LOCK:
+            # Exact re-observation is allowed; replacement never renews this
+            # process's original native assignment or any in-flight action.
+            profile.require(owner.cold.assignment_original in (None, original),
+                "A different native assignment is already retained for this process")
+            if owner.cold.assignment_original is None:
+                owner.cold.assignment_original = original
+                owner.cold.assignment_payload = admitted
+                owner.cold.assignment_payload_original = profile.canonical(admitted)
+                owner.cold.assignment_digest = profile.sha256(original.encode("ascii"))
+            owner.assignment_original, owner.assignment_payload = owner.cold.assignment_original, owner.cold.assignment_payload
+        owner.clip(admitted["expiresAtEpochNs"])
+        return {"apiVersion": HTTP_SCHEMA, "okForAction": False,
+            "assignmentSha256": owner.cold.assignment_digest, "holderId": admitted["assignment"]["holderId"],
+            "expiresAtEpochNs": str(admitted["expiresAtEpochNs"])}
     if route == "intent":
         profile.require(set(value) == {"apiVersion", "name", "kind", "metadata", "ttlSeconds"}
             and type(value["ttlSeconds"]) is int and 1 <= value["ttlSeconds"] <= owner.policy["intentMaxSeconds"])
         issued = owner.last_epoch // 1000 * 1000
-        expires = min(issued + value["ttlSeconds"] * 1_000_000_000, owner.cold.expires // 1000 * 1000)
+        expires = min(issued + value["ttlSeconds"] * 1_000_000_000, owner.cold.expires // 1000 * 1000,
+            owner.assignment_payload["expiresAtEpochNs"] // 1000 * 1000)
         intent = {"credentialId": str(uuid.uuid4()), "credentialVersion": 1, "name": value["name"],
             "kind": value["kind"], "metadata": value["metadata"], "issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
         original = profile.intent_original(actor_id=owner.identity.user_id,
             configuration_digest=owner.cold.binding.configuration_digest, credential_policy=owner.policy["credentialPolicy"], request=intent)
         return {"apiVersion": HTTP_SCHEMA, "okForAction": False, "intentOriginal": original.decode("ascii"),
             "credentialId": intent["credentialId"], "expiresAtEpochNs": str(expires),
-            "intakeOrigin": owner.cold.assignment["intakeOrigin"], "portalOrigin": owner.cold.assignment["portalOrigin"],
+            "intakeOrigin": owner.cold.target["intakeOrigin"], "portalOrigin": owner.cold.target["portalOrigin"],
             "twoPersonRequired": owner.policy["twoPersonRequired"]}
     if route == "candidate":
         profile.require(set(value) == {"apiVersion", "candidateOriginal"})
@@ -526,8 +567,8 @@ def _handle(owner, route, value):
         _candidate(owner, original)
         return {"apiVersion": HTTP_SCHEMA, "okForAction": False, "candidateArgumentsOriginal": original,
             "candidateSha256": profile.approval_payload_digest(values), "credentialId": item["credentialId"],
-            "expiresAtEpochNs": str(item["expiresAtEpochNs"]), "intakeOrigin": owner.cold.assignment["intakeOrigin"],
-            "portalOrigin": owner.cold.assignment["portalOrigin"], "twoPersonRequired": owner.policy["twoPersonRequired"]}
+            "expiresAtEpochNs": str(item["expiresAtEpochNs"]), "intakeOrigin": owner.cold.target["intakeOrigin"],
+            "portalOrigin": owner.cold.target["portalOrigin"], "twoPersonRequired": owner.policy["twoPersonRequired"]}
     family, phase = route.rsplit("/", 1)
     operation = {"create": profile.OPERATION, "approval/request": approval.OP_REQUEST, "approval/decide": approval.OP_DECIDE}[family]
     if phase == "draft":

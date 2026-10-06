@@ -143,12 +143,14 @@ pub(super) fn run(
     guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
     gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
+    response_proof_identity_stdout: bool,
 ) -> Result<(), String> {
     // Retain the original unshared lifetime through every cold error as well
     // as serving. Attachments finish before any Arc clone is given to runtime.
     let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     let result = run_owned(&mut startup, inputs, parameters, shadow_config, v2_config,
-        guest_inspector, guest_cohort, guest_role_key_provisioner, gate_cgroup, public_identity_stdout);
+        guest_inspector, guest_cohort, guest_role_key_provisioner, gate_cgroup, public_identity_stdout,
+        response_proof_identity_stdout);
     startup.stop();
     let cleanup = startup.finish_guest_inspector();
     result?;
@@ -166,6 +168,7 @@ fn run_owned(
     guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
     gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
+    response_proof_identity_stdout: bool,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
     // later retains this SAME cancellation owner and original absolute bound.
@@ -310,6 +313,11 @@ fn run_owned(
     ).map_err(|_| "native startup custody key and ledger construction failed".to_owned())?;
     startup.check()?;
     let proof = super::native_proof_signer::initialize_native_response_proof_signer(custody)?;
+    startup.check()?;
+    if response_proof_identity_stdout {
+        super::native_public_identity::write_startup_response_proof_identity(
+            &proof, &mut identity, startup.as_ref(), parameters.deadline_boottime_ns)?;
+    }
     startup.check()?;
     let instance = inputs.server_instance_id.as_deref()
         .ok_or("native startup lost its canonical instance identity")?;

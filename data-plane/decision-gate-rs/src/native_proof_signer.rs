@@ -71,6 +71,40 @@ impl CustodySignerTransport {
         }
     }
 
+    /// Public originals from the unshared native startup owner only. No fresh
+    /// quote or signing operation is performed and no verifier verdict exists.
+    pub(super) fn startup_public_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        expected_boot_id: &str, deadline: u64) -> Result<Value, String> {
+        let Self::Native(owner) = self else {
+            return Err("startup key export refuses imported custody".to_owned());
+        };
+        self.verify_live()?;
+        if Arc::strong_count(owner) != 1 || Arc::weak_count(owner) != 0
+            || owner.active.load(Ordering::Acquire) != 0
+            || owner.runtime.boot_id() != expected_boot_id
+        {
+            return Err("startup key export requires its original unshared signer".to_owned());
+        }
+        self.verify_native_identity(identity, deadline)?;
+        let quote = owner.runtime.native_quote().ok_or("startup native key quote absent")?;
+        if quote.document().is_empty() || quote.document().len() > 12 * 1024
+            || quote.user_data().is_empty() || quote.user_data().len() > 1024
+            || quote.public_key().len() != 32
+        {
+            return Err("startup native key evidence exceeds its public bounds".to_owned());
+        }
+        let evidence = owner.runtime.native_key_evidence().map_err(|error| error.to_string())?
+            .ok_or("startup native key evidence absent")?;
+        let result = json!({
+            "nativeKeyEvidence": evidence,
+            "quoteNonceBase64url": general_purpose::URL_SAFE_NO_PAD.encode(quote.nonce()),
+            "quoteUserDataBase64url": general_purpose::URL_SAFE_NO_PAD.encode(quote.user_data()),
+        });
+        self.verify_native_identity(identity, deadline)?;
+        self.verify_live()?;
+        Ok(result)
+    }
+
     pub(super) fn quote_native_signed_statement(&self, identity: &mut EnclaveRuntimeIdentityV1,
         statement: &[u8], signature: &str, client_nonce: &[u8], deadline: u64)
         -> Result<Value, String> {

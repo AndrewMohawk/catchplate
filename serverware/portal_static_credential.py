@@ -84,7 +84,7 @@ async function staticPortalCookie(operation) {
   operation.check(); return value;
 }
 async function staticPortalRequest(route, body, operation) {
-  staticPortalNeed(/^(intent|candidate|(approval\/(request|decide)|create)\/(draft|options|execute))$/.test(route));
+  staticPortalNeed(/^(assignment|intent|candidate|(approval\/(request|decide)|create)\/(draft|options|execute))$/.test(route));
   await staticPortalCookie(operation); operation.check();
   const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin',
     redirect: 'error', cache: 'no-store', signal: operation.controller.signal});
@@ -168,6 +168,32 @@ STATIC_CREDENTIAL_PAGE_SCRIPT = r"""
 let staticFlow = null;
 const sc = id => document.getElementById(id);
 function staticPageMessage(value) { sc('static-status').textContent = value; }
+let staticAssignmentBusy = false;
+sc('static-assignment-admit').addEventListener('click', () => {
+  if (staticAssignmentBusy || staticFlow) return;
+  const original = sc('static-assignment-original').value;
+  const operation = staticPortalOperation(() => staticPortalNeed(!staticFlow
+    && sc('static-assignment-original').value === original));
+  staticAssignmentBusy = true;
+  sc('static-assignment-admit').disabled = sc('static-start').disabled = true;
+  void (async () => {
+    try {
+      staticPortalNeed(staticPortalText(original, 65536));
+      const result = await staticPortalRequest('assignment', {assignmentOriginal: original}, operation);
+      staticPortalNeed(staticPortalClosed(result, ['apiVersion', 'okForAction', 'assignmentSha256', 'holderId', 'expiresAtEpochNs'])
+        && result.apiVersion === staticPortalSchema && result.okForAction === false
+        && /^sha256:[0-9a-f]{64}$/.test(result.assignmentSha256) && /^sha256:[0-9a-f]{64}$/.test(result.holderId));
+      operation.clip(result.expiresAtEpochNs);
+      sc('static-assignment-status').textContent = 'Independent assignment retained: ' + result.assignmentSha256
+        + '. Each creation still requires fresh native proof and your passkey. No credential was created.';
+    } catch (_) {
+      sc('static-assignment-status').textContent = 'Assignment admission was not confirmed. The same signed original may be inspected again; a different assignment cannot replace it. No credential action was sent.';
+    } finally {
+      operation.close(); staticAssignmentBusy = false;
+      sc('static-assignment-admit').disabled = sc('static-start').disabled = false;
+    }
+  })();
+});
 function staticPageCheck(flow) {
   staticPortalNeed(staticFlow === flow && !flow.failed && flow.popup && !flow.popup.closed
     && Date.now() >= flow.lastWall && performance.now() >= flow.lastMono
@@ -231,7 +257,7 @@ async function staticPageCandidate(flow, original) {
 }
 sc('static-form').addEventListener('submit', event => {
   event.preventDefault();
-  if (staticFlow) return;
+  if (staticFlow || staticAssignmentBusy) return;
   // Open synchronously inside the user gesture. Never noopener: the two fixed
   // origins deliberately retain this exact WindowProxy, not a named window.
   const popup = window.open('about:blank', '_blank');
@@ -316,6 +342,11 @@ STATIC_CREDENTIAL_PAGE = r"""<!doctype html><html lang="en"><meta charset="utf-8
 <style>body{font:16px system-ui;max-width:48rem;margin:3rem auto;padding:0 1rem}label{display:block;margin-top:1rem}input,select,textarea{box-sizing:border-box;width:100%;padding:.5rem}button{margin:.8rem .5rem .8rem 0;padding:.6rem}pre,p{overflow-wrap:anywhere}</style>
 <h1>Create protected static credential</h1>
 <p>Use your active OIDC operator session. This page accepts public labels only. Enter the secret exclusively in the separately authenticated native intake window. Keep both tabs open; no candidate or assertion is saved to browser storage.</p>
+<details><summary>Deployment operator: admit the native assignment</summary>
+<p>After the enclave boots, the independent assignment service signs its actual public identity and immutable configuration. Admit that unchanged public original once for this server process. This does not authorize creation or replace fresh native proof. Never paste private keys or credentials here.</p>
+<label>Signed public assignment original<textarea id="static-assignment-original" autocomplete="off" spellcheck="false"></textarea></label>
+<button id="static-assignment-admit" type="button">Admit signed assignment</button>
+<p id="static-assignment-status" role="status" aria-live="polite">No assignment submitted from this page.</p></details>
 <form id="static-form"><label>Name<input name="name" required autocomplete="off"></label>
 <label>Kind<select name="kind"><option>bearer</option><option>basic</option><option>header</option><option>query</option><option>cookie</option></select></label>
 <label>Public metadata JSON<textarea name="metadata" required autocomplete="off">{}</textarea></label>

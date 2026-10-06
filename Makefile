@@ -1622,6 +1622,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_static_credential.py \
 	serverware/authority_static_credential_approval.py \
 	serverware/authority_static_credential_custody.py \
+	serverware/authority_static_credential_assignment.py \
 	serverware/authority_transition_static_credential_create.py \
 	serverware/authority_transition_static_credential_approval.py \
 	serverware/native_static_credential_owner.py \
@@ -4767,6 +4768,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_static_credential.py \
 				serverware/authority_static_credential_approval.py \
 				serverware/authority_static_credential_custody.py \
+				serverware/authority_static_credential_assignment.py \
 				serverware/authority_transition_static_credential_create.py \
 				serverware/authority_transition_static_credential_approval.py \
 				serverware/native_static_credential_owner.py \

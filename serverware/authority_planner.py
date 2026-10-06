@@ -3312,7 +3312,7 @@ def validate_planner_request(request: Mapping[str, Any]) -> None:
     verifier_identity = request.get("verifierIdentity")
     if request.get("operation") == static_create.OPERATION:
         required.add("staticCredentialCustodyEvidence")
-        static_custody.evidence(request.get("staticCredentialCustodyEvidence"))
+        static_custody.authority_evidence(request.get("staticCredentialCustodyEvidence"))
     if (
         set(request) != required
         or request.get("schema") != PLANNER_REQUEST_SCHEMA
@@ -3457,7 +3457,7 @@ def validate_measured_plan_payload(
     measured_plan = payload.get("measuredPlan")
     if isinstance(measured_plan, Mapping) and measured_plan.get("operation") == static_create.OPERATION:
         required.add("staticCredentialCustodyEvidence")
-        static_custody.evidence(payload.get("staticCredentialCustodyEvidence"))
+        static_custody.authority_evidence(payload.get("staticCredentialCustodyEvidence"))
     typed_request = payload.get("typedRequest")
     selected = payload.get("selectedBusinessRows")
     mutations = payload.get("mutationPlan")

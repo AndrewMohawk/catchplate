@@ -25,21 +25,22 @@ from scripts import verify_nitro_tee as nitro
 from serverware import authority_credential_currentness as current
 from serverware import authority_credential_currentness_policy as native
 from serverware import authority_static_credential_create as profile
+from serverware import authority_static_credential_assignment as assignment
 
 canonical, sha256, digest, require = profile.canonical, profile.sha256, profile.digest, profile.require
 FIELD = "staticCredentialCustodyPolicy"
-SCHEMA = "serverware.staticCredentialCustodyAuthorityPolicy/v1"
+SCHEMA = "serverware.staticCredentialCustodyAuthorityPolicy/v2"
 TRUST_SCHEMA = "serverware.staticCredentialNativeTrustRoots/v1"
 STATEMENT_SCHEMA = "serverware.nativeStaticCredentialGenerationStatement/v1"
 SIGN_OPERATION = "nativeStaticCredentialGeneration.sign/v1"
 SIGNATURE_DOMAIN = STATEMENT_SCHEMA.encode("ascii") + b"\0"
 ATTESTATION_DOMAIN = b"serverware/native-static-credential-generation-attestation/v1\0"
 MAX_EVIDENCE_BYTES = 32 * 1024
+MAX_AUTHORITY_EVIDENCE_BYTES = MAX_EVIDENCE_BYTES + 2 * assignment.MAX_ORIGINAL_BYTES + 256
 MAX_POLICY_BYTES = 512 * 1024
 POLICY_FIELDS = frozenset({"schema", "deploymentId",
-    "operationMaxSeconds", "trustRoots", "assignments"})
-ASSIGNMENT_FIELDS = native.ASSIGNMENT_FIELDS | {
-    "instanceId", "secretKekId", "intakeOrigin", "portalOrigin"}
+    "operationMaxSeconds", "trustRoots", "assignmentAuthorizer", "target"})
+ASSIGNMENT_FIELDS = assignment.ASSIGNMENT_FIELDS
 STATEMENT_FIELDS = frozenset({"apiVersion", "operation", "holderId", "bootId", "keyId",
     "controlPlaneResponseSigningKeyId", "deploymentId", "instanceId",
     "controlPlaneConfigurationDigest", "actorId", "credentialId", "credentialVersion",
@@ -119,6 +120,15 @@ def _evidence(value):
 evidence = _evidence
 
 
+def authority_evidence(value):
+    """Closed original transport; neither signature is verified by this parser."""
+    require(type(value) is dict and set(value) == {"statement", "signature", "nativeKeyEvidence", "assignmentOriginal"})
+    _evidence({name: value[name] for name in ("statement", "signature", "nativeKeyEvidence")})
+    assignment.original(value["assignmentOriginal"])
+    require(len(canonical(value)) <= MAX_AUTHORITY_EVIDENCE_BYTES)
+    return value
+
+
 def input_sha256(arguments):
     values = profile.arguments(profile.OPERATION, arguments, typed="businessIntent" in arguments)
     return sha256(canonical(values))
@@ -127,6 +137,12 @@ def input_sha256(arguments):
 def _bind(values, proof, now_epoch_ns):
     _integer(now_epoch_ns)
     item, request = proof["statement"], values["request"]
+    selected = assignment.original(proof["assignmentOriginal"])["payload"]
+    require(selected["controlPlaneConfigurationDigest"] == values["control_plane_configuration_digest"]
+        and selected["deploymentId"] == item["deploymentId"]
+        and selected["assignment"]["holderId"] == item["holderId"]
+        and selected["issuedAtEpochNs"] <= item["issuedAtEpochNs"]
+        < item["expiresAtEpochNs"] <= selected["expiresAtEpochNs"])
     original = request["nativeGenerationOriginal"].encode("ascii")
     generation = profile.generation(request["nativeGenerationOriginal"])
     stamp = datetime.fromisoformat(generation["envelope"]["secret_updated_at"])
@@ -154,7 +170,7 @@ def bind_originals(*, arguments, evidence, now_epoch_ns):
     issuing capability and clip its original deadline to the statement expiry.
     """
     values = profile.arguments(profile.OPERATION, arguments, typed="businessIntent" in arguments)
-    _bind(values, _evidence(evidence), now_epoch_ns)
+    _bind(values, authority_evidence(evidence), now_epoch_ns)
 
 
 def _trust(value):
@@ -195,29 +211,10 @@ def validate_policy(value, *, payload, root_key=None):
     require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30)
     _trust(value["trustRoots"])
     creation = profile.validate_policy(payload.get(profile.FIELD))
-    forbidden = set()
-    if root_key is not None:
-        forbidden.add(sha256(root_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)))
-    for role in payload["roles"].values():
-        forbidden.update(item for name, item in role.items()
-            if (name.endswith("SpkiDigest") or name.endswith("SpkiSha256")) and type(item) is str)
-    assignments = value["assignments"]
-    require(type(assignments) is list and 1 <= len(assignments) <= 32)
-    identities = []
-    for assignment in assignments:
-        require(type(assignment) is dict and set(assignment) == ASSIGNMENT_FIELDS)
-        # Reuse only the existing holder/PCR/EIF scalar contract, not its
-        # operation policy, receipt, enrollment or permission.
-        native._assignment({name: assignment[name] for name in native.ASSIGNMENT_FIELDS})
-        require(assignment["keyId"] not in forbidden
-            and assignment["keyId"] != assignment["controlPlaneResponseSigningKeyId"])
-        require(_text(assignment["instanceId"], 4096).startswith("spiffe://"))
-        profile._kek_id(assignment["secretKekId"])
-        require(assignment["secretKekId"] == creation["nativeSecretKekId"])
-        origin(assignment["intakeOrigin"]); origin(assignment["portalOrigin"])
-        require(assignment["intakeOrigin"] != assignment["portalOrigin"])
-        identities.append(assignment["holderId"])
-    require(identities == sorted(set(identities)))
+    target = assignment.target(value["target"])
+    require(target["secretKekId"] == creation["nativeSecretKekId"])
+    assignment.authorizer(value["assignmentAuthorizer"], configuration_payload=payload,
+        root_key=root_key, response_key_id=target["controlPlaneResponseSigningKeyId"])
     return value
 
 
@@ -237,12 +234,13 @@ def verify_original(operation, arguments, *, evidence, configuration_payload, ro
     require(selected is not None)
     profile.verify_request_context(operation, values, selected_policy=configuration_payload[profile.FIELD],
         expected_configuration_digest=configuration_digest, now_epoch_ns=now_epoch_ns)
-    proof = _evidence(evidence)
+    proof = authority_evidence(evidence)
+    selected_assignment = assignment.verify_original(proof["assignmentOriginal"],
+        configuration_payload=configuration_payload, root_key=root_key, now_epoch_ns=now_epoch_ns)
     _bind(values, proof, now_epoch_ns)
     item = proof["statement"]
-    assignments = [entry for entry in selected["assignments"] if entry["holderId"] == item["holderId"]]
-    require(len(assignments) == 1, "Static producer has no independently admitted current assignment")
-    expected = assignments[0]
+    expected = selected_assignment["assignment"]
+    require(expected["holderId"] == item["holderId"], "Static producer differs from its signed postboot assignment")
     require(item["deploymentId"] == selected["deploymentId"]
         and item["controlPlaneConfigurationDigest"] == configuration_digest
         and item["expiresAtEpochNs"] <= item["issuedAtEpochNs"] + selected["operationMaxSeconds"] * 1_000_000_000)

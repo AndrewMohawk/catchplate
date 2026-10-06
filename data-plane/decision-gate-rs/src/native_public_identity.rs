@@ -9,6 +9,72 @@ use super::*;
 use serverware_decision_gate::enclave_public_identity_v1::
     encode_native_ingress_public_evidence_v1;
 
+/// A separate role-4 startup record, available before CP trust/ingress setup.
+/// The actual original lifetime brackets IO; a partial or late output grants
+/// nothing and fails startup. Blocking stdout still requires an outer watchdog.
+pub(super) fn write_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
+    identity: &mut EnclaveRuntimeIdentityV1, startup: &NativeRuntimeLifetimeV1,
+    deadline: u64) -> Result<(), String> {
+    startup.check()?;
+    if identity.deadline() != deadline || startup.deadline() != deadline {
+        return Err("startup role-4 public owner deadlines differ".to_owned());
+    }
+    let ResponseProofSigner::Custody(signer) = &proof.signer else {
+        return Err("startup role-4 public identity requires actual custody".to_owned());
+    };
+    if !signer.release_profile.is_native() || proof.key_id != signer.key_id
+        || proof.public_key_pem != signer.public_key_pem
+    {
+        return Err("startup role-4 public signer metadata differs".to_owned());
+    }
+    signer.transport.require_native()?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    let evidence = signer.transport.startup_public_evidence(identity, &signer.boot_id, deadline)?;
+    if evidence["nativeKeyEvidence"]["responseProofPublicKey"].as_str()
+        != Some(general_purpose::URL_SAFE_NO_PAD.encode(signer.verifying_key.as_bytes()).as_str())
+    {
+        return Err("startup role-4 public key differs from actual hello".to_owned());
+    }
+    let scope = identity.refresh_scope(deadline)?;
+    let ca = identity.ca_certificate_der();
+    if ca.is_empty() || ca.len() > 16 * 1024 {
+        return Err("startup role-4 public CA exceeds its bound".to_owned());
+    }
+    let record = json!({
+        "apiVersion": "serverware.nativeResponseProofPublicIdentity/v1",
+        "purpose": "postboot-static-assignment-inputs",
+        "evidenceScope": "unverified-startup-role4-public-material",
+        "okForAction": false,
+        "bootId": signer.boot_id,
+        "keyId": signer.key_id,
+        "publicKeyPem": signer.public_key_pem,
+        "controlPlaneResponseSigningKeyId": signer.control_plane_response_signing_key_id,
+        "scope": scope,
+        "caCertificateDerBase64url": general_purpose::URL_SAFE_NO_PAD.encode(ca),
+        "nativeKeyEvidence": evidence["nativeKeyEvidence"],
+        "quoteNonceBase64url": evidence["quoteNonceBase64url"],
+        "quoteUserDataBase64url": evidence["quoteUserDataBase64url"],
+    });
+    let mut bytes = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&record)?;
+    if bytes.is_empty() || bytes.len() >= 64 * 1024 || bytes.contains(&b'\n') {
+        return Err("startup role-4 public output exceeds its framing bound".to_owned());
+    }
+    bytes.push(b'\n');
+    startup.check()?;
+    signer.transport.verify_native_identity(identity, deadline)?;
+    {
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        startup.check()?;
+        output.write_all(&bytes).and_then(|_| output.flush())
+            .map_err(|_| "startup role-4 public stdout publication failed".to_owned())?;
+    }
+    startup.check()?;
+    signer.transport.verify_native_identity(identity, deadline)?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    startup.check()
+}
+
 pub(super) fn write_startup_public_identity(prepared: &NativeTlsGateV1) -> Result<(), String> {
     // Check the creating process before touching an inherited mutex. This
     // startup-only path cannot export an imported or already-serving state.

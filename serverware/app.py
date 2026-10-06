@@ -16743,6 +16743,7 @@ def oauth_issuance_uncertainty_resolve(
     return {"ok": True, "resolved": result}
 
 
+@app.post("/api/credentials/static/assignment")
 @app.post("/api/credentials/static/intent")
 @app.post("/api/credentials/static/candidate")
 @app.post("/api/credentials/static/approval/request/draft")

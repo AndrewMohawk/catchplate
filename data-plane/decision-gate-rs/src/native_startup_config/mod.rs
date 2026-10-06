@@ -837,7 +837,8 @@ fn decode<T: DeserializeOwned>(raw: &[u8], maximum: usize) -> Result<T, String> 
         .map_err(|_| "native configuration does not match its closed JSON contract".to_owned())
 }
 
-fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool, mode: cli::Mode,
+fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool,
+    response_proof_identity_stdout: bool, mode: cli::Mode,
     trust_artifact: Option<ArtifactV1>) -> Result<(), String> {
     let configuration_pin = configuration.sha256.clone();
     let launch_pin = launch.sha256.clone();
@@ -907,13 +908,14 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     // retained parsed bytes; it does not periodically reopen the policy path.
     super::native_startup::run(inputs, parameters, shadow, v2,
         configuration.guest_inspector, configuration.guest_cohort,
-        configuration.guest_role_key_provisioner, configuration.gate_cgroup, public_identity_stdout)
+        configuration.guest_role_key_provisioner, configuration.gate_cgroup, public_identity_stdout,
+        response_proof_identity_stdout)
 }
 
 pub(super) fn run_from_process_arguments() -> Result<Option<()>, String> {
     match cli::arguments(std::env::args_os().skip(1))? {
         None => Ok(None),
-        Some((configuration, launch, public_identity_stdout, mode, trust)) =>
-            run(configuration, launch, public_identity_stdout, mode, trust).map(Some),
+        Some((configuration, launch, public_identity_stdout, response_proof_identity_stdout, mode, trust)) =>
+            run(configuration, launch, public_identity_stdout, response_proof_identity_stdout, mode, trust).map(Some),
     }
 }

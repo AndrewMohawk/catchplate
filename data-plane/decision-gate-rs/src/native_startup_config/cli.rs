@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
-    -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode, Option<ArtifactV1>)>, String>
+    -> Result<Option<(ArtifactV1, ArtifactV1, bool, bool, Mode, Option<ArtifactV1>)>, String>
 {
     let Some(argument) = arguments.next() else { return Ok(None); };
     let mode = if argument == "--native-startup" { Mode::Legacy }
@@ -36,6 +36,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     let mut launch = None;
     let mut launch_pin = None;
     let mut public_identity_stdout = false;
+    let mut response_proof_identity_stdout = false;
     let mut trust_authorization = None;
     let mut trust_pin = None;
     while let Some(flag) = arguments.next() {
@@ -45,6 +46,13 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
                 return Err("native startup received an unknown or repeated flag".to_owned());
             }
             public_identity_stdout = true;
+            continue;
+        }
+        if flag == "--response-proof-identity-stdout" {
+            if response_proof_identity_stdout {
+                return Err("native startup received an unknown or repeated flag".to_owned());
+            }
+            response_proof_identity_stdout = true;
             continue;
         }
         let value = arguments.next().ok_or("native startup flag requires a value")?;
@@ -77,5 +85,5 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     }, ArtifactV1 {
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
-    }, public_identity_stdout, mode, trust)))
+    }, public_identity_stdout, response_proof_identity_stdout, mode, trust)))
 }

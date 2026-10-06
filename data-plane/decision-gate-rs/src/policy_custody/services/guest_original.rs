@@ -45,6 +45,9 @@ impl Original {
     pub(super) fn native_launch() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-guest-launch.json",32768)
     }
+    pub(super) fn activation_receiver_configuration() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-activation-receiver.json",32768)
+    }
     pub(super) fn publication_genesis_parent() -> Result<Self,Error> {
         Self::fixed_native("native-publication-genesis-parent.json",32768)
     }

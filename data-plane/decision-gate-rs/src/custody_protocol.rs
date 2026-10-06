@@ -71,6 +71,8 @@ pub mod native_canary_heartbeat_v1;
 pub mod native_canary_finalization_v1;
 #[cfg(target_os="linux")]
 pub mod native_policy_activation_transport;
+#[cfg(target_os = "linux")]
+pub mod native_activation_relay;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 mod linux_statx;

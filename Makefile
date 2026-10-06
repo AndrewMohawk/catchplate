@@ -5669,6 +5669,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-activation-relay.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-proof-cohort.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-publication-genesis-controller.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-publication-adoption-validator.rs \
@@ -5679,6 +5680,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_seccomp_export.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/activation_receiver.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/activation_receiver_inputs.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_controller.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_parked.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/publication_adoption_validator.rs \
@@ -5796,6 +5799,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_policy_activation_transport.rs \
 				data-plane/decision-gate-rs/src/native_policy_activation_stream.rs \
 				data-plane/decision-gate-rs/src/native_policy_activation_parent.rs \
+				data-plane/decision-gate-rs/src/native_activation_relay.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/proof.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/completion.rs \
@@ -6212,6 +6216,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-publication-resources.v1.schema.json \
 				schemas/native-shadow-publication-resources.v2.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \
+				schemas/native-shadow-activation-receiver.v1.schema.json \
+				schemas/native-activation-relay.v1.schema.json \
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-custody-closure.v2.schema.json \
 				schemas/native-custody-closure.v3.schema.json \

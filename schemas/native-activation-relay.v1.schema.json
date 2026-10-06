@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-activation-relay.v1.schema.json",
+  "title": "Untrusted one-shot activation relay in the Nitro parent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "callerEnclaveCid", "serviceEnclaveCid", "deadlineBoottimeNs"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeActivationRelay/v1"},
+    "callerEnclaveCid": {"type": "integer", "minimum": 4, "maximum": 4294967294},
+    "serviceEnclaveCid": {"type": "integer", "minimum": 4, "maximum": 4294967294},
+    "deadlineBoottimeNs": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"}
+  },
+  "$comment": "CIDs must be distinct and the decimal deadline must fit u64 and be future in the actual parent BOOTTIME clock. Both ports are source-fixed 9102. One caller connection is forwarded to one service-enclave connection, with bounded BE32 framing and EOF in each direction. No TCP target, private key, descriptor transfer, retry or routing-as-identity claim. Existing native signatures, C9 delivery, NSM, journal and original signed expiry remain independently required."
+}

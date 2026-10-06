@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-activation-receiver.v1.schema.json",
+  "title": "Service-enclave activation connection acquisition",
+  "$ref": "#/$defs/configuration",
+  "$comment": "Acquisition only, not authorization. A receiver running inside the service enclave retains one actual parent-CID-3 connection on port 9102 and its journal directory. Its public BE32-framed observation precedes independent signing of existing C9/service originals. One canonical BE32-framed completion followed by EOF selects those exact originals. Existing signatures, NSM, keys, journal and signed time windows remain authoritative. No cross-kernel descriptor transfer or host-as-enclave claim.",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "ns": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "uint64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "positiveUint64": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "deliveryConfiguration"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverConfiguration/v1" },
+        "deliveryConfiguration": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin" }
+      }
+    },
+    "completion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "observationSha256", "launchSha256"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverCompletion/v1" },
+        "observationSha256": { "$ref": "#/$defs/sha256" },
+        "launchSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "$comment": "SHA256 values bind literal canonical observation and retained native launch bytes. Payload length is 1..1024 bytes. Completion grants no authority and cannot extend the independently signed C9 startup or lifetime deadlines."
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "okForAction", "configurationSha256", "deliveryConfigurationSha256", "processId", "processStartTicks", "processPidfdInode", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "observedAtBoottimeNs", "localCid", "localPort", "peerCid", "peerPort", "activation"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverObservation/v1" },
+        "okForAction": { "const": false },
+        "configurationSha256": { "$ref": "#/$defs/sha256" },
+        "deliveryConfigurationSha256": { "$ref": "#/$defs/sha256" },
+        "processId": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "processStartTicks": { "$ref": "#/$defs/positiveUint64" },
+        "processPidfdInode": { "$ref": "#/$defs/positiveUint64" },
+        "bootIdBase64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+        "timeNamespaceDevice": { "$ref": "#/$defs/positiveUint64" },
+        "timeNamespaceInode": { "$ref": "#/$defs/positiveUint64" },
+        "observedAtBoottimeNs": { "$ref": "#/$defs/ns" },
+        "localCid": { "type": "integer", "minimum": 4, "maximum": 4294967294 },
+        "localPort": { "const": 9102 },
+        "peerCid": { "const": 3 },
+        "peerPort": { "type": "integer", "minimum": 1024, "maximum": 4294967294 },
+        "activation": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            { "allOf": [
+              { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/activation" },
+              { "properties": { "name": { "const": "activation-channel" }, "fd": { "const": 6 } } }
+            ] },
+            { "allOf": [
+              { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/activation" },
+              { "properties": { "name": { "const": "activation-journal" }, "fd": { "const": 7 } } }
+            ] }
+          ],
+          "items": false
+        }
+      },
+      "$comment": "Public-only projection of retained real process, clock domain, socket and journal identities; 1..8192 canonical bytes. C9 issuance must not predate observedAtBoottimeNs. FD numbers are future child slots, not host descriptors to transfer into the enclave."
+    }
+  }
+}

@@ -16,6 +16,10 @@ mod genesis_controller;
 mod genesis_parked;
 #[path="genesis_endpoints.rs"]
 mod genesis_endpoints;
+#[path="activation_receiver.rs"]
+mod activation_receiver;
+#[path="activation_receiver_inputs.rs"]
+mod activation_receiver_inputs;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;
@@ -71,8 +75,11 @@ impl Watchdog {
     }
 }
 impl Drop for Watchdog {fn drop(&mut self){unsafe{libc::timer_delete(self.0);}}}
-fn inherited()->Result<BTreeSet<i32>,ShadowError> {
-    require(cfg!(target_arch="x86_64") && std::env::args_os().count()==1 && std::env::vars_os().next().is_none()
+fn inherited(activation_receiver:bool)->Result<BTreeSet<i32>,ShadowError> {
+    let arguments:Vec<_>=std::env::args_os().collect();
+    let selected=if activation_receiver {arguments.len()==2
+        && arguments[1]==std::ffi::OsStr::new("--activation-receiver")}else{arguments.len()==1};
+    require(cfg!(target_arch="x86_64") && selected && std::env::vars_os().next().is_none()
         && unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0)?;
     let core=libc::rlimit{rlim_cur:0,rlim_max:0};
     require(unsafe{libc::setrlimit(libc::RLIMIT_CORE,&core)}==0
@@ -105,6 +112,9 @@ struct Running {
     // same-PIDFD reap. Thus the image/originals cannot retire under a live child.
     child:child::Child,image:image::Image,files:FileAdmission,activation:BTreeMap<String,OwnedFd>,
     launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,inspector:Option<Inspection>,
+    // Retain the same service-enclave socket and observed journal through the
+    // real child's exit. The child is dropped/reaped before these owners.
+    activation_receiver:Option<(activation_receiver::Cold,Original)>,
 }
 enum Inspection {Server(retrieval_peer::Inspector),Client(retrieval_client::Inspector),ProofClient(proof_client::Inspector)}
 impl Inspection {
@@ -121,16 +131,27 @@ impl Running {
         Self::start_selected(false)
     }
     fn start_selected(require_genesis:bool)->Result<Self,ShadowError>{
-        let inherited=inherited()?;
-        let launch=Original::native_launch().map_err(fail)?;
-        let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
+        let receiver=!require_genesis && std::env::args_os().nth(1).as_deref()
+            ==Some(std::ffi::OsStr::new("--activation-receiver"));
+        let inherited=inherited(receiver)?;
+        let (launch,launch_bytes,files,received_activation,activation_receiver)=if receiver {
+            require(inherited==BTreeSet::from([0,1,2,6]))?;
+            let (cold,completed)=activation_receiver::receive()?;
+            let activation_receiver_inputs::Completed{launch,launch_bytes,files,activation,service_original}=completed;
+            (launch,launch_bytes,files,Some(activation),Some((cold,service_original)))
+        }else{
+            let launch=Original::native_launch().map_err(fail)?;
+            let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
+            let (selected,_)=selection(&launch_bytes)?;
+            let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
+                &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
+            (launch,launch_bytes,files,None,None)
+        };
         let (selected,service_selection)=selection(&launch_bytes)?;
         require(!require_genesis || matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(false)))?;
         // The successor requires a genuine precreated child and late originals.
         require(!matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(true)))?;
-        let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
-            &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
-        require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+files.payload.activation.len() as i32)
+        require((receiver || inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+files.payload.activation.len() as i32))
             && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::BindingDrift)?<files.lifetime())?;
         // Arm the ORIGINAL absolute deadline before image, loop or mount work.
         let watchdog=Watchdog::arm(&files)?;
@@ -143,7 +164,10 @@ impl Running {
             SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationGenesisRetrieval(_)=>Some(super::super::NativeLock::Ledger),
             _=>None,
         };
-        let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,false,false,native_lock).map_err(fail)?;
+        let activation=if let Some(activation)=received_activation {
+            require(matches!(&service_selection,SelectedService::Activation(_)))?;
+            activation
+        }else{take_activation(&files.payload.activation,false,false,false,false,false,false,native_lock).map_err(fail)?.0};
         let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(_));
         if genesis_coordinator{
             require(files.payload.activation.len()==10
@@ -253,7 +277,7 @@ impl Running {
         require(now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::BindingDrift)?<files.lifetime())?;
         let child=child::Child::spawn(image.executable(),&ordered,inspection.as_ref().map(AsFd::as_fd),files.lifetime())?;
         drop(inspection);
-        let mut owner=Self{child,image,files,activation,launch,launch_bytes,_watchdog:watchdog,inspector};
+        let mut owner=Self{child,image,files,activation,launch,launch_bytes,_watchdog:watchdog,inspector,activation_receiver};
         let admitted=owner.check_originals()
             .and_then(|()|owner.files.check_preparation().map_err(fail))
             .and_then(|()|owner.child.release());
@@ -270,6 +294,9 @@ impl Running {
     }
     fn check_originals(&self)->Result<(),ShadowError> {
         self.files.check().map_err(fail)?;self.image.check(&self.files)?;
+        if let Some((cold,service))=&self.activation_receiver {
+            cold.check()?;service.check().map_err(fail)?;
+        }
         require(self.launch.read(32768).map_err(fail)?.as_slice()==self.launch_bytes.as_slice())?;
         for entry in &self.files.payload.activation {
             let fd=self.activation.get(&entry.name).ok_or(ShadowError::BindingDrift)?;

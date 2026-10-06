@@ -24323,16 +24323,24 @@ UI_HTML = r"""
       return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
     }
 
-    async function executePolicyAuthorityStep(stepValue, expectedOperations) {
+    async function executePolicyAuthorityStep(stepValue, expectedOperations, checkContext = undefined) {
+      if (checkContext !== undefined && typeof checkContext !== 'function') throw new Error('Invalid authority-step context guard');
+      checkContext?.();
       const step = policyAuthorityStep(stepValue, expectedOperations);
       const requestId = await authorityStepRequestId(step);
-      const execute = (argumentsValue) => api('/api/authority/control-plane/execute', {
-        method: 'POST',
-        body: JSON.stringify({requestId, operation: step.operation, arguments: argumentsValue})
-      });
+      checkContext?.();
+      const execute = async (argumentsValue) => {
+        checkContext?.();
+        const result = await api('/api/authority/control-plane/execute', {
+          method: 'POST', checkContext,
+          body: JSON.stringify({requestId, operation: step.operation, arguments: argumentsValue})
+        });
+        checkContext?.(); return result;
+      };
       try {
         return await execute(step.arguments);
       } catch (error) {
+        checkContext?.();
         const detail = error instanceof ApiError ? error.detail : null;
         if (error.status !== 428 || !detail || detail.error !== 'authority_webauthn_required') throw error;
         if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
@@ -24341,16 +24349,18 @@ UI_HTML = r"""
         );
         if (!credential) throw new Error('No currently trusted passkey is available for this operator');
         const challenge = await api('/api/authority/webauthn/challenges', {
-          method: 'POST',
+          method: 'POST', checkContext,
           body: JSON.stringify({
             operation: step.operation,
             arguments: step.arguments,
             credentialRecordId: credential.id
           })
         });
+        checkContext?.();
         const assertion = await navigator.credentials.get({
           publicKey: prepareRequestOptions(challenge)
         });
+        checkContext?.();
         const continuedArguments = JSON.parse(JSON.stringify(step.arguments));
         delete continuedArguments.authn;
         delete continuedArguments.authn_evidence;
@@ -26457,32 +26467,61 @@ UI_HTML = r"""
     }
 
     async function activatePolicyCanary() {
-      const canary = state.policyCanary?.canary;
+      const payload = state.policyCanary, canary = payload?.canary;
       if (!canary || canary.status !== 'ready'
           || state.policyCanary?.monitoring?.candidateShadowEvaluationImplemented !== true) {
         throw new Error('Signed candidate evaluation evidence is not ready for activation');
       }
-      if (state.policyCanary?.decisionGateActivation?.publication != null) {
+      const candidate = state.policyCandidate, canaryId = canary.id, candidatePolicyHash = canary.candidatePolicyHash;
+      const session = state.setupSession, revision = session?.revision, sessionPhase = session?.phase;
+      const authScope = policyAuthoringScope(), selectionGeneration = setupLoadGeneration;
+      const selectionOriginal = JSON.stringify(currentSetupSelection()), packageText = $('policy-authority-package').value;
+      const publication = payload.decisionGateActivation?.publication, finalizationState = payload.authorityFinalizationState;
+      const checkNavigation = () => {
+        if (!hasOperatorAuth() || policyAuthoringScope() !== authScope || setupLoadGeneration !== selectionGeneration
+            || JSON.stringify(currentSetupSelection()) !== selectionOriginal || $('policy-authority-package').value !== packageText
+            || (state.setupSession?.id || null) !== (session?.id || null)) {
+          throw new Error('Activation context changed. Inspect the original canary before another action.');
+        }
+      };
+      const checkContext = () => {
+        checkNavigation();
+        if (state.policyCanary !== payload || payload.canary !== canary || canary.id !== canaryId
+            || canary.candidatePolicyHash !== candidatePolicyHash || canary.status !== 'ready'
+            || payload.monitoring?.candidateShadowEvaluationImplemented !== true
+            || payload.decisionGateActivation?.publication !== publication || payload.authorityFinalizationState !== finalizationState
+            || state.policyCandidate !== candidate || state.setupSession !== session || session?.revision !== revision
+            || session?.phase !== sessionPhase || sessionPhase === 'policy_staged'
+              && (session.canaryId !== canaryId || session.policyHash !== candidatePolicyHash)) {
+          throw new Error('The original canary or Setup binding changed. No follow-up activation is authorized.');
+        }
+      };
+      checkContext();
+      const suppliedPackage = policyAuthorityPackage();
+      if (publication != null) {
         const importedFinalization = await api('/api/policy/authority/candidates/package', {
-          method: 'POST',
+          method: 'POST', checkContext,
           body: JSON.stringify({
             apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
             requestId: authorityRequestId(),
             purpose: 'authority-finalization',
-            package: policyAuthorityPackage()
+            package: suppliedPackage
           })
         });
+        checkContext();
         const activation = policyActivationPackage(importedFinalization.portalPackage.activation);
-        const preparation = await executePolicyAuthorityStep(activation.prepare, ['policy.activation.prepare']);
+        const preparation = await executePolicyAuthorityStep(activation.prepare, ['policy.activation.prepare'], checkContext);
+        checkContext();
         if (!preparation?.preparation_digest) throw new Error('Authority prepare did not return a durable preparation digest');
-        if (state.policyCandidate) state.policyCandidate.authorityPreparation = preparation;
+        if (candidate) candidate.authorityPreparation = preparation;
         renderPolicyCanary();
         const inclusionDigests = [];
         for (const template of activation.recordInclusions || []) {
           const inclusion = JSON.parse(JSON.stringify(template));
           if (inclusion.arguments.preparationDigest !== null) throw new Error('Authority inclusion template asserted a preparation digest');
           inclusion.arguments.preparationDigest = preparation.preparation_digest;
-          const recorded = await executePolicyAuthorityStep(inclusion, ['policy.activation.record-inclusion']);
+          const recorded = await executePolicyAuthorityStep(inclusion, ['policy.activation.record-inclusion'], checkContext);
+          checkContext();
           for (const receipt of recorded.recorded_inclusion_receipts || []) {
             const digest = receipt.inclusion_receipt_envelope_digest;
             if (typeof digest !== 'string') throw new Error('Authority inclusion did not return its durable receipt digest');
@@ -26496,38 +26535,47 @@ UI_HTML = r"""
         }
         finalization.arguments.preparationDigest = preparation.preparation_digest;
         finalization.arguments.inclusionReceiptEnvelopeDigests = inclusionDigests;
-        const result = await executePolicyAuthorityStep(finalization, ['policy.activation.finalize']);
-        if (state.policyCandidate) state.policyCandidate.authorityFinalization = result;
-        if (state.setupSession?.phase === 'policy_staged') {
-          const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/policy`, {
-            method: 'POST',
-            body: JSON.stringify({expectedRevision: state.setupSession.revision})
+        const result = await executePolicyAuthorityStep(finalization, ['policy.activation.finalize'], checkContext);
+        checkContext();
+        if (candidate) candidate.authorityFinalization = result;
+        if (sessionPhase === 'policy_staged') {
+          const bound = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/policy`, {
+            method: 'POST', checkContext,
+            body: JSON.stringify({expectedRevision: revision})
           });
+          checkContext();
+          if (bound?.session?.id !== session.id || bound.session.revision !== revision + 1
+              || bound.session.phase !== 'policy_activated' || bound.session.canaryId !== canaryId
+              || bound.session.policyHash !== candidatePolicyHash) throw new Error('Activation binding response differs from the original Setup run');
           rememberSetupSession(bound.session);
         }
         await refresh();
+        checkNavigation();
         return result;
       }
       const importedPackage = await api('/api/policy/authority/candidates/package', {
-        method: 'POST',
+        method: 'POST', checkContext,
         body: JSON.stringify({
           apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
           requestId: authorityRequestId(),
           purpose: 'decision-gate-activation',
-          package: policyAuthorityPackage()
+          package: suppliedPackage
         })
       });
+      checkContext();
       const result = await api('/api/policy/authority/candidates/decision-gate-activate', {
-        method: 'POST',
+        method: 'POST', checkContext,
         body: JSON.stringify({
           apiVersion: 'serverware.policyAuthorityDecisionGateActivationRequest/v1',
-          canaryId: canary.id,
+          canaryId,
           generationId: importedPackage.generationId,
           generationPublicationEnvelopeDigest: importedPackage.generationPublicationEnvelopeDigest
         })
       });
-      if (state.policyCandidate) state.policyCandidate.decisionGateActivation = result;
+      checkContext();
+      if (candidate) candidate.decisionGateActivation = result;
       await refresh();
+      checkNavigation();
       return result;
     }
 
@@ -26756,8 +26804,23 @@ UI_HTML = r"""
       return result;
     }
 
-    async function generateEnrollmentFromForm() {
+    async function generateEnrollmentFromForm(checkContext = undefined) {
+      if (checkContext !== undefined && typeof checkContext !== 'function') throw new Error('Invalid enrollment context guard');
+      const authScope = policyAuthoringScope(), policyHash = state.activePolicy?.policy_hash;
+      const session = state.setupSession, revision = session?.revision, selectionGeneration = setupLoadGeneration;
+      const selection = JSON.stringify(currentSetupSelection());
       const form = new FormData($('agent-enrollment-form'));
+      const formOriginal = JSON.stringify(Array.from(form.entries()));
+      const current = () => {
+        checkContext?.();
+        if (!hasOperatorAuth() || policyAuthoringScope() !== authScope || state.activePolicy?.policy_hash !== policyHash
+            || state.setupSession !== session || session?.revision !== revision || setupLoadGeneration !== selectionGeneration
+            || JSON.stringify(currentSetupSelection()) !== selection
+            || JSON.stringify(Array.from(new FormData($('agent-enrollment-form')).entries())) !== formOriginal) {
+          throw new Error('Enrollment inputs or authentication changed. Inspect any submitted request before another action.');
+        }
+      };
+      current();
       assertWorkloadEnrollmentTransport(String(form.get('principalId') || ''), String(form.get('proxyUrl') || ''));
       const proxyEgressCidrs = parseProxyEgressCidrs(form.get('proxyEgressCidrs'));
       const enrollmentNonce = generateEnrollmentNonce();
@@ -26765,11 +26828,12 @@ UI_HTML = r"""
       state.enrollmentPacketText = null;
       state.enrollmentPacketFileSha256 = null;
       renderEnrollmentOutput();
-      const response = await api('/api/agents/enrollment', {method: 'POST', captureAuthenticatedResponse: true, body: JSON.stringify({
+      const response = await api('/api/agents/enrollment', {method: 'POST', checkContext: current, captureAuthenticatedResponse: true, body: JSON.stringify({
         principalId: form.get('principalId'), proxyUrl: form.get('proxyUrl'), proxyEgressCidrs,
         namespace: form.get('namespace') || 'serverware-agents', caMountPath: form.get('caMountPath') || '/etc/serverware/serverware-ca.pem', podSelector: JSON.parse(form.get('podSelector') || '{}'),
         nonce: enrollmentNonce, ttlSeconds: 300
       })});
+      current();
       if (response.contentType?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
         throw new Error('Enrollment response media type is not application/json');
       }
@@ -26777,6 +26841,7 @@ UI_HTML = r"""
         throw new Error('Enrollment response is missing its authenticated exact-byte digest');
       }
       const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(response.exactText));
+      current();
       const observedPacketSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
       if (observedPacketSha256 !== response.enrollmentPacketFileSha256) {
         throw new Error('Enrollment response bytes do not match the authenticated digest');
@@ -26792,21 +26857,50 @@ UI_HTML = r"""
     async function generateSetupEnrollment() {
       const selection = currentSetupSelection();
       if (!setupAssignmentIsActive(selection)) throw new Error('Activate the exact principal, route, and credential assignment first');
-      if (state.setupSession?.phase !== 'policy_activated') throw new Error('The durable setup run has not recorded policy activation');
+      const session = state.setupSession, revision = session?.revision, selectionGeneration = setupLoadGeneration;
+      if (session?.phase !== 'policy_activated' || !setupSessionMatchesSelection(session, selection)) {
+        throw new Error('The durable setup run has not recorded this exact policy activation');
+      }
+      const authScope = policyAuthoringScope(), policyHash = state.activePolicy?.policy_hash;
+      const selectionOriginal = JSON.stringify(selection);
+      const proxyOriginal = $('setup-proxy-url').value, egressOriginal = $('setup-proxy-egress-cidrs').value;
       $('enrollment-principal').value = selection.principalId;
-      $('enrollment-proxy-url').value = $('setup-proxy-url').value.trim();
-      $('enrollment-egress-cidrs').value = $('setup-proxy-egress-cidrs').value.trim();
-      const packet = await generateEnrollmentFromForm();
+      $('enrollment-proxy-url').value = proxyOriginal.trim();
+      $('enrollment-egress-cidrs').value = egressOriginal.trim();
+      const formOriginal = JSON.stringify(Array.from(new FormData($('agent-enrollment-form')).entries()));
+      const checkContext = () => {
+        if (!hasOperatorAuth() || policyAuthoringScope() !== authScope || state.activePolicy?.policy_hash !== policyHash
+            || state.setupSession !== session || session.revision !== revision || setupLoadGeneration !== selectionGeneration
+            || JSON.stringify(currentSetupSelection()) !== selectionOriginal
+            || $('setup-proxy-url').value !== proxyOriginal || $('setup-proxy-egress-cidrs').value !== egressOriginal
+            || JSON.stringify(Array.from(new FormData($('agent-enrollment-form')).entries())) !== formOriginal) {
+          throw new Error('Setup enrollment context changed. Inspect the original run before another action.');
+        }
+      };
+      checkContext();
+      const packet = await generateEnrollmentFromForm(checkContext);
+      checkContext();
       const enrollmentSessionId = packet?.ca?.installSession?.id;
       if (!enrollmentSessionId || !packet?.nonce) throw new Error('Enrollment packet is missing its setup bindings');
-      const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/enrollment`, {
+      const packetText = state.enrollmentPacketText, packetSha256 = state.enrollmentPacketFileSha256;
+      const checkPacket = () => {
+        checkContext();
+        if (state.enrollmentPacket !== packet || state.enrollmentPacketText !== packetText
+            || state.enrollmentPacketFileSha256 !== packetSha256) throw new Error('The original enrollment packet changed before Setup binding');
+      };
+      const bound = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/enrollment`, {
         method: 'POST',
+        checkContext: checkPacket,
         body: JSON.stringify({
-          expectedRevision: state.setupSession.revision,
+          expectedRevision: revision,
           enrollmentSessionId,
           verifierNonce: packet.nonce
         })
       });
+      checkPacket();
+      if (bound?.session?.id !== session.id || bound.session.revision !== revision + 1
+          || bound.session.phase !== 'enrollment_issued' || bound.session.enrollmentSessionId !== enrollmentSessionId
+          || bound.session.enrollmentPacketDigest !== packetSha256) throw new Error('Setup enrollment binding response differs from the original request');
       rememberSetupSession(bound.session);
       renderSetupWorkflow();
       return packet;

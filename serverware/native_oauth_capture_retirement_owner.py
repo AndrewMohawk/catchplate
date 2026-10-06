@@ -17,8 +17,8 @@ CHANNEL = wire.CHANNEL
 
 class Owner:
     def __init__(self, broker, value):
-        m.require(broker.kek is not None and broker.service_tokens_opened and not broker.operations
-            and set(value) == {"apiVersion", "phase", "configuration"} and value["apiVersion"] == CHANNEL and value["phase"] == "configure")
+        broker.require_owner_configuration()
+        m.require(set(value) == {"apiVersion", "phase", "configuration"} and value["apiVersion"] == CHANNEL and value["phase"] == "configure")
         config = value["configuration"]
         m.require(type(config) is dict and set(config) == {"apiVersion", "sourceRevision", "authorityRootPublicKey", "authorityRootSpkiSha256",
             "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "applications", "targets", "identity"}

@@ -242,6 +242,7 @@ class _Broker:
             "recipientPublicKey": _encoded(public), "recipientPublicKeySha256": self.public_digest})
         self.kek, self.operations = None, set()
         self.service_tokens_opened = False
+        self.completed_service_operation_id = None
         self.refresh_owner = None
         self.cleanup_owner = None
         self.pending_retirement_owner = None
@@ -287,6 +288,18 @@ class _Broker:
         self.channel.check(deadline)
         self.channel.send(result, deadline)
         self.channel.check(deadline)
+
+        # The attempt fence above remains one-use on every failure. Record
+        # completion only after the actual ciphertext send and channel check.
+        self.completed_service_operation_id = operation
+
+    def require_owner_configuration(self):
+        self.channel.check()
+        _require(self.kek is not None and self.rsa is None and self.service_tokens_opened
+            and self.completed_service_operation_id is not None
+            and self.operations == {self.completed_service_operation_id})
+        # Configuration follows the one completed service-token operation;
+        # any credential lease or uncertain service delivery still refuses it.
 
     def open_credential(self, value):
         _require(self.kek is not None and self.rsa is None and set(value) == {

@@ -24,8 +24,8 @@ WINDOWS = {"contactMaxSeconds": 600, "retentionMaxSeconds": 600, "pendingMaxSeco
 
 class Owner:
     def __init__(self, broker, value):
-        m.require(broker.kek is not None and broker.service_tokens_opened and not broker.operations
-            and type(value) is dict and set(value) == {"apiVersion", "phase", "configuration"}
+        broker.require_owner_configuration()
+        m.require(type(value) is dict and set(value) == {"apiVersion", "phase", "configuration"}
             and value["apiVersion"] == CHANNEL and value["phase"] == "configure"
             and len(m.canonical(value)) <= MAX_MESSAGE)
         config = value["configuration"]

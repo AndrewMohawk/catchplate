@@ -28,8 +28,8 @@ RECOVERY_FIELDS = frozenset({"apiVersion", "okForAction", "journalOriginal", "sc
 
 class Owner:
     def __init__(self, broker, value):
-        m.require(broker.kek is not None and broker.service_tokens_opened and not broker.operations
-            and broker.historical_keys is not None and broker.historical_keys.finished
+        broker.require_owner_configuration()
+        m.require(broker.historical_keys is not None and broker.historical_keys.finished
             and type(value) is dict and set(value) == {"apiVersion", "phase", "configuration"}
             and value["apiVersion"] == p.CHANNEL and value["phase"] == "configure" and len(m.canonical(value)) <= p.MAX_MESSAGE)
         config = value["configuration"]

@@ -26,6 +26,14 @@ MEASURED_AUDIT_CONFIG_NAME = "SERVERWARE_MEASURED_AUDIT_CONFIG_FD"
 MEASURED_AUDIT_CONFIG_MAX_BYTES = 3 * 1024 * 1024
 POLICY_CANARY_CONFIG_NAME = "SERVERWARE_POLICY_CANARY_INTAKE_CONFIG_FD"
 SETUP_NATIVE_CONFIG_NAME = "SERVERWARE_SETUP_NATIVE_OBSERVATION_CONFIG_FD"
+STATIC_PORTAL_SOURCES = {
+    "creation": ("SERVERWARE_STATIC_CREDENTIAL_CONFIG_FD", "serverware.staticCredentialPortalConfiguration/v2",
+        "static-credential-creation"),
+    "rotation": ("SERVERWARE_STATIC_ROTATION_CONFIG_FD", "serverware.staticCredentialRotationPortalConfiguration/v1",
+        "static-credential-rotation"),
+}
+STATIC_PORTAL_CONFIG_MAX_BYTES = 16384
+STATIC_PORTAL_AUTHORITY_MAX_BYTES = 4 * 1024 * 1024
 OAUTH_REFRESH_CLEANUP_CONFIG_NAME = "SERVERWARE_OAUTH_REFRESH_CLEANUP_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 RBAC_WITNESS_CONFIG_NAME = "SERVERWARE_RBAC_WITNESS_CONFIG_FD"
@@ -675,6 +683,97 @@ def _open_setup_native_material(config_fd, *, occupied_descriptors):
         for descriptor in opened:
             os.close(descriptor)
         raise
+
+
+def _open_static_portal_material(purpose, selector_fd, *, occupied_descriptors):
+    """Fixed public delivery only; the signed roster and cold owner admit it.
+
+    Reserve all three absent slots before opening either nested original. Never
+    repurpose an existing inherited descriptor, even for an identical public key.
+    """
+    if (purpose not in STATIC_PORTAL_SOURCES or type(selector_fd) is not int
+            or not 32 <= selector_fd <= 1023 or selector_fd in occupied_descriptors):
+        raise RuntimeError("static portal selection or descriptor differs")
+    _environment, schema, basename = STATIC_PORTAL_SOURCES[purpose]
+    prefix = "/run/serverware/authority-trust/" + basename
+    source = _open_source(prefix + ".json", expected_owner_uid=0,
+        maximum_bytes=STATIC_PORTAL_CONFIG_MAX_BYTES, required_mode=0o400)
+    opened = []
+    try:
+        raw = os.pread(source, STATIC_PORTAL_CONFIG_MAX_BYTES + 1, 0)
+        def pairs(items):
+            value = {}
+            for name, item in items:
+                if name in value:
+                    raise RuntimeError("static portal selector has duplicate members")
+                value[name] = item
+            return value
+        value = json.loads(raw.decode("ascii"), object_pairs_hook=pairs)
+        fields = {"schema", "sourceRevision", "controlPlaneConfigurationDigest", "authorityRootFd",
+            "authorityRootSha256", "authorityRootSpkiSha256", "authorityConfigurationFd",
+            "authorityConfigurationSha256", "authorityConfigurationDigest"}
+        if (not 2 <= len(raw) <= STATIC_PORTAL_CONFIG_MAX_BYTES or type(value) is not dict
+                or set(value) != fields or value["schema"] != schema
+                or type(value["sourceRevision"]) is not str or not value["sourceRevision"].isascii()
+                or not 1 <= len(value["sourceRevision"]) <= 128
+                or value["authorityConfigurationDigest"] != value["controlPlaneConfigurationDigest"]
+                or json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True,
+                    separators=(",", ":")).encode("ascii") != raw):
+            raise RuntimeError("static portal selector is not its closed original")
+        for name in fields - {"schema", "sourceRevision", "authorityRootFd", "authorityConfigurationFd"}:
+            pin = value[name]
+            if (type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
+                    or any(character not in "0123456789abcdef" for character in pin[7:])):
+                raise RuntimeError("static portal original pin differs")
+        targets = (selector_fd, value["authorityRootFd"], value["authorityConfigurationFd"])
+        if (any(type(target) is not int or not 32 <= target <= 1023 for target in targets)
+                or len(set(targets)) != 3 or set(targets) & set(occupied_descriptors)):
+            raise RuntimeError("static portal original descriptors overlap")
+        for target in targets:
+            if target == source:
+                continue  # This call owns the just-opened selector descriptor.
+            try:
+                os.fstat(target)
+            except OSError as exc:
+                if exc.errno != errno.EBADF:
+                    raise
+            else:
+                raise RuntimeError("static portal original descriptor is occupied")
+        identity = _material_identity(os.fstat(source))
+        for target in targets:
+            if source != target:
+                os.dup2(source, target, inheritable=False)
+            else:
+                os.set_inheritable(target, False)
+            opened.append(target)
+        if source not in targets:
+            os.close(source)
+        source = -1
+        for target, suffix, maximum, pin in (
+                (targets[1], "-root-public-key", 4096, value["authorityRootSha256"]),
+                (targets[2], "-authority-configuration.json", STATIC_PORTAL_AUTHORITY_MAX_BYTES,
+                    value["authorityConfigurationSha256"])):
+            descriptor = _open_source(prefix + suffix, expected_owner_uid=0,
+                maximum_bytes=maximum, required_mode=0o400)
+            try:
+                original = os.pread(descriptor, maximum + 1, 0)
+                if (not 0 < len(original) <= maximum or "sha256:" + hashlib.sha256(original).hexdigest() != pin
+                        or _material_identity(os.fstat(target)) != identity):
+                    raise RuntimeError("static portal original or reserved slot changed")
+                os.dup2(descriptor, target, inheritable=True)
+            finally:
+                os.close(descriptor)
+        if _material_identity(os.fstat(selector_fd)) != identity or os.pread(selector_fd, len(raw) + 1, 0) != raw:
+            raise RuntimeError("static portal selector changed during delivery")
+        os.set_inheritable(selector_fd, True)
+        return targets
+    except BaseException:
+        for descriptor in opened:
+            os.close(descriptor)
+        raise
+    finally:
+        if source >= 0 and source not in opened:
+            os.close(source)
 
 
 def _open_policy_canary_material(config_fd, *, occupied_descriptors):
@@ -2954,7 +3053,8 @@ def _local_admission_sources(role: str, selection: tuple[int, str, int]) -> tupl
 
 
 def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False, policy_canary_intake: bool = False,
-        setup_native_observation: bool = False, local_admission: tuple[int, str, int] | None = None) -> int:
+        setup_native_observation: bool = False, local_admission: tuple[int, str, int] | None = None,
+        static_credential_creation_fd: int | None = None, static_credential_rotation_fd: int | None = None) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise RuntimeError("public revocation cold selection requires its fixed measured roles")
     if type(genesis_maintenance) is not bool or genesis_maintenance and (role != "control-plane" or public_revocation):
@@ -2963,6 +3063,12 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         raise RuntimeError("canary intake cold selection requires the fixed normal control-plane role")
     if type(setup_native_observation) is not bool or setup_native_observation and (role != "control-plane" or genesis_maintenance or public_revocation):
         raise RuntimeError("native observation requires the fixed normal control-plane role")
+    static_portals = tuple((purpose, fd) for purpose, fd in (
+        ("creation", static_credential_creation_fd), ("rotation", static_credential_rotation_fd)) if fd is not None)
+    if static_portals and (role != "control-plane" or genesis_maintenance or public_revocation or local_admission is not None
+            or any(type(fd) is not int or not 32 <= fd <= 1023 for _, fd in static_portals)
+            or len({fd for _, fd in static_portals}) != len(static_portals)):
+        raise RuntimeError("static portal delivery requires distinct normal control-plane selectors")
     trusted_host_local = (
         os.environ.get("SERVERWARE_AUTHORITY_TRUST_MODE")
         == "trusted-host-local"
@@ -3037,7 +3143,8 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_", "SERVERWARE_POLICY_CANARY_INTAKE_", "SERVERWARE_SETUP_NATIVE_OBSERVATION_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_", "SERVERWARE_POLICY_CANARY_INTAKE_", "SERVERWARE_SETUP_NATIVE_OBSERVATION_",
+                "SERVERWARE_STATIC_CREDENTIAL_", "SERVERWARE_STATIC_ROTATION_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -3212,6 +3319,14 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
                 enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
             if revocation_key is not None:
                 descriptors.append(revocation_key)
+            # Explicit public delivery, after every existing purpose's slots
+            # are known. The runner still requires the independently signed
+            # exact runtime FD roster and each actual cold owner's admission.
+            for purpose, selector_fd in static_portals:
+                delivered = _open_static_portal_material(purpose, selector_fd,
+                    occupied_descriptors=set(descriptors))
+                descriptors.extend(delivered)
+                environment[STATIC_PORTAL_SOURCES[purpose][0]] = str(selector_fd)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(
@@ -3282,6 +3397,30 @@ def main() -> int:
         if str(setup_fd) != sys.argv[3] or str(channel_fd) != sys.argv[7]:
             raise RuntimeError("local admission descriptor is not canonical")
         return _normal_main(sys.argv[1], local_admission=(setup_fd, sys.argv[5], channel_fd))
+    static_flags = {"--static-credential-creation-fd": "static_credential_creation_fd",
+        "--static-credential-rotation-fd": "static_credential_rotation_fd"}
+    if len(sys.argv) > 2 and sys.argv[1] == "control-plane" and any(flag in sys.argv[2:] for flag in static_flags):
+        # Closed flags in one canonical order; no paths, arbitrary environment,
+        # maintenance purpose, duplicate selection or additional argv survives.
+        options, arguments, cursor = {}, sys.argv[2:], 0
+        for flag, option in (("--policy-canary-intake", "policy_canary_intake"),
+                ("--setup-native-observation", "setup_native_observation")):
+            if cursor < len(arguments) and arguments[cursor] == flag:
+                options[option] = True
+                cursor += 1
+        for flag, option in static_flags.items():
+            if cursor < len(arguments) and arguments[cursor] == flag:
+                text = arguments[cursor + 1] if cursor + 1 < len(arguments) else ""
+                if not text.isascii() or not text.isdecimal() or not 2 <= len(text) <= 4:
+                    raise RuntimeError("static portal selector descriptor is not canonical")
+                descriptor = int(text)
+                if str(descriptor) != text or not 32 <= descriptor <= 1023:
+                    raise RuntimeError("static portal selector descriptor exceeds its range")
+                options[option] = descriptor
+                cursor += 2
+        if cursor != len(arguments):
+            raise RuntimeError("static portal invocation is not closed")
+        return _normal_main("control-plane", **options)
     if sys.argv[1:] in (["control-plane", "--setup-native-observation"],
             ["control-plane", "--policy-canary-intake", "--setup-native-observation"]):
         return _normal_main("control-plane", setup_native_observation=True, policy_canary_intake=len(sys.argv) == 4)

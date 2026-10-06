@@ -364,6 +364,10 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/verify_nitro_tee.py /authority-runtime-root/authority/app/scripts/verify_nitro_tee.py; \
     install -m 0444 /source/scripts/authority/native_pilot_authority_io.py /authority-runtime-root/authority/app/scripts/authority/native_pilot_authority_io.py; \
     install -m 0444 /source/scripts/authority/issue_native_activation_receiver.py /authority-runtime-root/authority/app/scripts/authority/issue_native_activation_receiver.py; \
+    install -m 0444 /source/scripts/authority/sign_static_credential_assignment.py /authority-runtime-root/authority/app/scripts/authority/sign_static_credential_assignment.py; \
+    install -m 0444 /source/scripts/prepare_static_credential_portal.py /authority-runtime-root/authority/app/scripts/prepare_static_credential_portal.py; \
+    install -m 0444 /source/scripts/collect_native_public_identity.py /authority-runtime-root/authority/app/scripts/collect_native_public_identity.py; \
+    install -m 0444 /source/scripts/send_native_configuration.py /authority-runtime-root/authority/app/scripts/send_native_configuration.py; \
     install -m 0444 /source/scripts/send_native_activation_receiver.py /authority-runtime-root/authority/app/scripts/send_native_activation_receiver.py; \
     install -m 0444 /source/scripts/authority/prepare_native_pilot_closure_set.py /authority-runtime-root/authority/app/scripts/authority/prepare_native_pilot_closure_set.py; \
     test -z "$(find /authority-runtime-root -type l -print -quit)"; \

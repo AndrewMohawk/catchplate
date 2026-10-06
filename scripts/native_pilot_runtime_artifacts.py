@@ -40,6 +40,10 @@ AUTHORITY_FILES = (
     "scripts/verify_nitro_tee.py",
     "scripts/authority/native_pilot_authority_io.py",
     "scripts/authority/issue_native_activation_receiver.py",
+    "scripts/authority/sign_static_credential_assignment.py",
+    "scripts/prepare_static_credential_portal.py",
+    "scripts/collect_native_public_identity.py",
+    "scripts/send_native_configuration.py",
     "scripts/send_native_activation_receiver.py",
     "scripts/authority/prepare_native_pilot_closure_set.py",
 )

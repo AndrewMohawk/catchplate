@@ -27,7 +27,10 @@
         "custodyConfig":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
         "startupActiveAuthorization":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
         "workers":{"$ref":"#/$defs/configuration"},
-        "nativeActivation":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/client"}
+        "nativeActivation":{"oneOf":[
+          {"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/client"},
+          {"$ref":"native-policy-activation-custody.v2.schema.json#/$defs/client"}
+        ]}
       }
     }
   }

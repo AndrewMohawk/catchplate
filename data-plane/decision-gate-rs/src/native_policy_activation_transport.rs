@@ -8,6 +8,8 @@ use std::fs::File;
 use std::io::Write;
 use std::os::unix::fs::{FileExt,MetadataExt};
 use std::sync::Arc;
+#[path="native_policy_activation_stream.rs"]
+mod stream;
 const FD:i32=70;
 const MAXIMUM:usize=8*1024*1024;
 const MAX_PUBLICATION:usize=32768;
@@ -46,25 +48,49 @@ pub fn validate_channel(fd:BorrowedFd<'_>)->Result<(),String>{
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Configuration{api_version:String,channel:Identity}
-pub struct Prepared{channel:OwnedFd,identity:Identity,association:Association}
-pub struct Owner{channel:OwnedFd,identity:Identity,association:Association,serving:Arc<ServingOwner>,attempted:bool}
+#[derive(Clone,Copy,PartialEq,Eq)]
+pub enum ChannelVersion{UnixV1,VsockV2}
+impl ChannelVersion{
+    pub fn validate(self,fd:BorrowedFd<'_>)->Result<(),String>{match self{
+        Self::UnixV1=>validate_channel(fd),Self::VsockV2=>stream::Connection::capture(fd).map(|_|())}}
+}
+impl Configuration{
+    pub fn version(&self)->Result<ChannelVersion,String>{match self.api_version.as_str(){
+        "serverware.nativePolicyActivationChannel/v1"=>Ok(ChannelVersion::UnixV1),
+        "serverware.nativePolicyActivationChannel/v2"=>Ok(ChannelVersion::VsockV2),
+        _=>Err("native activation channel profile not selected".into()),
+    }}
+}
+enum Binding{Unix,Vsock(stream::Connection)}
+impl Binding{
+    fn capture(version:ChannelVersion,fd:BorrowedFd<'_>)->Result<Self,String>{match version{
+        ChannelVersion::UnixV1=>{validate_channel(fd)?;Ok(Self::Unix)},
+        ChannelVersion::VsockV2=>Ok(Self::Vsock(stream::Connection::capture(fd)?)),
+    }}
+    fn check(&self,fd:BorrowedFd<'_>)->Result<(),String>{match self{
+        Self::Unix=>validate_channel(fd),Self::Vsock(value)=>value.check(fd),
+    }}
+    fn is_stream(&self)->bool{matches!(self,Self::Vsock(_))}
+}
+pub struct Prepared{channel:OwnedFd,identity:Identity,association:Association,binding:Binding}
+pub struct Owner{channel:OwnedFd,identity:Identity,association:Association,serving:Arc<ServingOwner>,attempted:bool,binding:Binding}
 impl Prepared{
     pub fn take(configuration:Configuration,prepared:&ServingPreparation)->Result<Self,String>{
-        prepared.check()?;require(configuration.api_version=="serverware.nativePolicyActivationChannel/v1")?;
+        prepared.check()?;let version=configuration.version()?;
         require(unsafe{libc::fcntl(FD,libc::F_GETFD)}>=0)?;
-        let channel=unsafe{OwnedFd::from_raw_fd(FD)};validate_channel(channel.as_fd())?;
+        let channel=unsafe{OwnedFd::from_raw_fd(FD)};let binding=Binding::capture(version,channel.as_fd())?;
         require(identity(channel.as_fd())?==configuration.channel)?;
         let association=Association::capture(prepared)?;prepared.check()?;
-        Ok(Self{channel,identity:configuration.channel,association})
+        Ok(Self{channel,identity:configuration.channel,association,binding})
     }
     pub fn bind(self,serving:Arc<ServingOwner>)->Result<Owner,String>{
         self.association.require(&serving)?;
-        let owner=Owner{channel:self.channel,identity:self.identity,association:self.association,serving,attempted:false};owner.check()?;Ok(owner)
+        let owner=Owner{channel:self.channel,identity:self.identity,association:self.association,serving,attempted:false,binding:self.binding};owner.check()?;Ok(owner)
     }
 }
 impl Owner{
     pub fn check(&self)->Result<(),String>{self.association.require(&self.serving)?;
-        require(identity(self.channel.as_fd())?==self.identity)?;validate_channel(self.channel.as_fd())}
+        require(identity(self.channel.as_fd())?==self.identity)?;self.binding.check(self.channel.as_fd())}
     pub fn deadline(&self)->u64{self.serving.deadline()}
     /// One invocation, including uncertain outcomes. Request bytes are public;
     /// the caller must retain its verified preparation until receipt admission.
@@ -73,6 +99,7 @@ impl Owner{
         let value:serde_json::Value=parse(raw,MAXIMUM)?;
         require(value["apiVersion"]=="serverware.nativePolicyActivationRequest/v1")?;
         self.attempted=true;
+        if self.binding.is_stream(){return self.publish_stream(raw,deadline,&check);}
         let file=sealed(raw)?;
         let frame=Frame{api_version:API.into(),request_sha256:crate::sha256_prefixed(raw),request_byte_count:raw.len() as u64,
             deadline_boottime_ns:deadline.to_string()};let bytes=canonical(&frame)?;
@@ -88,6 +115,27 @@ impl Owner{
             unsafe{libc::poll(std::ptr::null_mut(),0,1);}
         }
     }
+    fn publish_stream(&self,raw:&[u8],deadline:u64,check:&impl Fn()->Result<(),String>)->Result<Vec<u8>,String>{
+        let mut output=stream::Writer::new(raw,MAXIMUM)?;
+        loop{
+            self.check()?;check()?;require(now()?<deadline)?;
+            let complete=output.poll(self.channel.as_fd())?;
+            self.check()?;check()?;require(now()?<deadline)?;
+            if complete{break;}
+            unsafe{libc::poll(std::ptr::null_mut(),0,1);}
+        }
+        let mut input=stream::Reader::new(MAX_PUBLICATION);
+        loop{
+            self.check()?;check()?;require(now()?<deadline)?;
+            let received=input.poll(self.channel.as_fd())?;
+            self.check()?;check()?;require(now()?<deadline)?;
+            if let Some(bytes)=received{
+                let _:serde_json::Value=parse(&bytes,MAX_PUBLICATION)?;
+                self.check()?;check()?;require(now()?<deadline)?;return Ok(bytes);
+            }
+            unsafe{libc::poll(std::ptr::null_mut(),0,1);}
+        }
+    }
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -95,23 +143,41 @@ struct Frame{api_version:String,request_sha256:String,request_byte_count:u64,dea
 pub struct Incoming{file:File,identity:Identity,raw:Vec<u8>,deadline:u64}
 impl Incoming{
     pub fn original(&self)->&[u8]{&self.raw}
+    /// Narrow only from the service's genuine verified original expiry. This
+    /// local bound is not wire evidence or an admission/verification result.
+    pub fn narrow_deadline(&mut self,deadline:u64)->Result<(),String>{
+        self.check()?;require(now()?<deadline && deadline<=self.deadline)?;
+        self.deadline=deadline;self.check()
+    }
     pub fn check(&self)->Result<(),String>{
         require(now()?<self.deadline && identity(self.file.as_fd())?==self.identity)?;
         require(read_sealed(&self.file)?==self.raw)
     }
 }
-pub struct ServiceChannel{channel:OwnedFd,identity:Identity,pid:u32,received:bool}
+pub struct ServiceChannel{channel:OwnedFd,identity:Identity,pid:u32,received:bool,binding:Binding,
+    input:Option<stream::Reader>,output:Option<stream::Writer>,receive_deadline:Option<u64>,failed:bool,sent:bool}
 impl ServiceChannel{
     /// Only the genuine C9 activation owner calls this with its consumed slot.
     /// The resulting object is a transport, never an authority/ready token.
     pub fn from_delivery(channel:OwnedFd)->Result<Self,String>{
-        require(unsafe{libc::geteuid()}!=0)?;validate_channel(channel.as_fd())?;
-        let original=identity(channel.as_fd())?;Ok(Self{channel,identity:original,pid:std::process::id(),received:false})
+        Self::from_delivery_version(channel,ChannelVersion::UnixV1)
+    }
+    pub fn from_delivery_version(channel:OwnedFd,version:ChannelVersion)->Result<Self,String>{
+        require(unsafe{libc::geteuid()}!=0)?;let binding=Binding::capture(version,channel.as_fd())?;
+        let input=if binding.is_stream(){Some(stream::Reader::new(MAXIMUM))}else{None};
+        let original=identity(channel.as_fd())?;Ok(Self{channel,identity:original,pid:std::process::id(),received:false,
+            binding,input,output:None,receive_deadline:None,failed:false,sent:false})
     }
     pub fn check(&self)->Result<(),String>{require(self.pid==std::process::id() && identity(self.channel.as_fd())?==self.identity)?;
-        validate_channel(self.channel.as_fd())}
+        self.binding.check(self.channel.as_fd())}
     pub fn receive(&mut self,lifetime:u64)->Result<Option<Incoming>,String>{
         self.check()?;require(!self.received && now()?<lifetime)?;
+        if self.binding.is_stream(){
+            require(!self.failed)?;
+            let result=self.receive_stream(lifetime);
+            if result.is_err(){self.failed=true;}
+            return result;
+        }
         let Some((bytes,mut rights))=receive(self.channel.as_fd(),4096)?else{return Ok(None)};
         self.received=true;require(rights.len()==1)?;
         let frame:Frame=parse(&bytes,4096)?;let deadline=frame.deadline_boottime_ns.parse::<u64>().map_err(|_|"activation original deadline")?;
@@ -121,11 +187,39 @@ impl ServiceChannel{
         require(raw.len() as u64==frame.request_byte_count && crate::sha256_prefixed(&raw)==frame.request_sha256)?;
         let owner=Incoming{identity:identity(file.as_fd())?,file,raw,deadline};owner.check()?;self.check()?;Ok(Some(owner))
     }
+    fn receive_stream(&mut self,lifetime:u64)->Result<Option<Incoming>,String>{
+        let deadline=*self.receive_deadline.get_or_insert(lifetime);
+        require(lifetime==deadline && now()?<deadline)?;
+        let result=self.input.as_mut().ok_or("activation stream reader absent")?.poll(self.channel.as_fd())?;
+        self.check()?;require(now()?<deadline)?;
+        let Some(raw)=result else{return Ok(None)};
+        self.received=true;
+        let value:serde_json::Value=parse(&raw,MAXIMUM)?;
+        require(value["apiVersion"]=="serverware.nativePolicyActivationRequest/v1")?;
+        // Retain immutable received bytes locally; this is not an imported FD
+        // or a replacement for genuine request/authority verification.
+        let file=sealed(&raw)?;
+        let owner=Incoming{identity:identity(file.as_fd())?,file,raw,deadline};
+        owner.check()?;self.check()?;require(now()?<deadline)?;Ok(Some(owner))
+    }
     pub fn send(&mut self,request:&Incoming,bytes:&[u8])->Result<bool,String>{
         self.check()?;request.check()?;require(self.received && !bytes.is_empty() && bytes.len()<=MAX_PUBLICATION)?;
         let value:serde_json::Value=parse(bytes,MAX_PUBLICATION)?;
         require(value["payload"]["apiVersion"]=="serverware.nativePolicyActivationPublication/v1"
             && value["payload"]["requestSha256"]==crate::sha256_prefixed(request.original()))?;
+        if self.binding.is_stream(){
+            require(!self.failed && !self.sent)?;
+            let result=(||{
+                if self.output.is_none(){self.output=Some(stream::Writer::new(bytes,MAX_PUBLICATION)?);}
+                let output=self.output.as_mut().ok_or("activation stream writer absent")?;
+                require(output.original()==bytes && now()?<request.deadline)?;
+                let complete=output.poll(self.channel.as_fd())?;
+                self.check()?;request.check()?;require(now()?<request.deadline)?;
+                self.sent=complete;Ok(complete)
+            })();
+            if result.is_err(){self.failed=true;}
+            return result;
+        }
         send(self.channel.as_fd(),bytes,None)
     }
 }

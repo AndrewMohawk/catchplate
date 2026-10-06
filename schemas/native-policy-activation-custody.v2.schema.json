@@ -1,0 +1,54 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-policy-activation-custody.v2.schema.json",
+  "$ref":"#/$defs/client",
+  "$defs":{
+    "channel":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","channel"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationChannel/v2"},
+        "channel":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/identity"}
+      },
+      "description":"Genuinely inherited connected AF_VSOCK SOCK_STREAM at fixed gate FD70. Each direction is one big-endian u32 byte length, literal canonical original, then EOF. Request <=8 MiB; signed publication <=32 KiB. No descriptor transfer, remote BOOTTIME, reconnect, CID-based authority or confidentiality claim."
+    },
+    "client":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","authority","channel"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationClient/v2"},
+        "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+        "channel":{"$ref":"#/$defs/channel"}
+      },
+      "description":"Explicit v2 client requires v2 channel. Existing authority, signed request and publication originals remain v1. This transport does not deliver durable-store or custody owners and does not enable v6 preboot delivery."
+    },
+    "serviceAssignment":{
+      "type":"object","additionalProperties":false,"required":["payload","signature"],
+      "properties":{
+        "payload":{"$ref":"#/$defs/servicePayload"},
+        "signature":{"$ref":"native-shadow-role-keys.v1.schema.json#/$defs/signature"}
+      }
+    },
+    "servicePayload":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","purpose","guest","assignmentPayloadSha256","keyAuthorizationSha256","authority","initialStateSha256","generationId","generationPublicationEnvelopeSha256","trustCheckpointId","revocationGeneration","revocationRootSha256","issuedAtUnixNanos","expiresAtUnixNanos","signingKeyId","signingKeySpkiSha256"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowActivationServiceAssignment/v2"},
+        "purpose":{"const":"native-policy-activation-publication"},
+        "guest":{"$ref":"native-custody-closure.v1.schema.json#/$defs/guest"},
+        "assignmentPayloadSha256":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "keyAuthorizationSha256":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+        "initialStateSha256":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "generationId":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "generationPublicationEnvelopeSha256":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "trustCheckpointId":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "revocationGeneration":{"type":"integer","minimum":0,"maximum":18446744073709551615},
+        "revocationRootSha256":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "issuedAtUnixNanos":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/epoch"},
+        "expiresAtUnixNanos":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/epoch"},
+        "signingKeyId":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"},
+        "signingKeySpkiSha256":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/sha"}
+      },
+      "description":"Independent CustodySupervisorCapability signature under serverware.nativeShadowActivationServiceAssignment.signature/v2 using signedEnvelope/canonicalJson framing. This signed version explicitly selects the genuinely delivered AF_VSOCK stream. V1 never selects it implicitly. The service derives its local deadline from the authenticated original expiry and its own trusted time, clipped to its existing local lifetime; durable journal and signing-key requirements remain unchanged."
+    }
+  }
+}

@@ -32,7 +32,10 @@
         "custodyConfig":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
         "startupActiveAuthorization":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
         "workers":{"$ref":"#/$defs/configuration"},
-        "nativeActivation":{"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/client"}
+        "nativeActivation":{"oneOf":[
+          {"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/client"},
+          {"$ref":"native-policy-activation-custody.v2.schema.json#/$defs/client"}
+        ]}
       },
       "$comment":"Explicit v4 selects worker-v2 and permits separately admitted native activation. Legacy shadow v2/v3 retain worker-v1; this does not widen those original profiles or grant runtime authority."
     }

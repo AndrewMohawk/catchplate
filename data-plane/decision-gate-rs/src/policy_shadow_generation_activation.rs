@@ -52,7 +52,12 @@ pub(crate) struct Owner{original:Original,channel:transport::Owner}
 impl Prepared{
     pub(crate) fn open(config:Configuration,prepared:&native_serving_privileges::Prepared)->Result<Self,String>{
         prepared.check()?;
-        if config.api_version!="serverware.nativePolicyActivationClient/v1"{return Err("native activation client not explicitly selected".into());}
+        let version=match config.api_version.as_str(){
+            "serverware.nativePolicyActivationClient/v1"=>transport::ChannelVersion::UnixV1,
+            "serverware.nativePolicyActivationClient/v2"=>transport::ChannelVersion::VsockV2,
+            _=>return Err("native activation client not explicitly selected".into()),
+        };
+        if config.channel.version()?!=version{return Err("native activation client/channel profile mismatch".into());}
         let original=Original::open(&config.authority)?;
         let channel=transport::Prepared::take(config.channel,prepared)?;prepared.check()?;Ok(Self{original,channel})
     }

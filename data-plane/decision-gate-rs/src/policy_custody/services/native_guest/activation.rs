@@ -4,9 +4,11 @@ use super::*;
 use crate::policy_shadow::native_activation as operation;
 use crate::policy_shadow::policy_custody::services as services;
 use services::guest::native_guest as guest;
+use serverware_decision_gate::native_policy_activation_transport::ChannelVersion;
 use std::os::fd::{AsFd,AsRawFd,OwnedFd};
 use ed25519_dalek::Signer;
 const DOMAIN:&str="serverware.nativeShadowActivationServiceAssignment.signature/v1";
+const DOMAIN_V2:&str="serverware.nativeShadowActivationServiceAssignment.signature/v2";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -20,11 +22,16 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    fn version(&self)->Result<ChannelVersion,ShadowError>{match self.payload.api_version.as_str(){
+        "serverware.nativeShadowActivationServiceAssignment/v1"=>Ok(ChannelVersion::UnixV1),
+        "serverware.nativeShadowActivationServiceAssignment/v2"=>Ok(ChannelVersion::VsockV2),
+        _=>Err(ShadowError::BindingDrift),
+    }}
     fn verify(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         keys.check(trust,time)?;require(keys.result.is_some())?;
+        let domain=match self.version()?{ChannelVersion::UnixV1=>DOMAIN,ChannelVersion::VsockV2=>DOMAIN_V2};
         let p=&self.payload;let checkpoint=trust.current_checkpoint()?;
-        require(p.api_version=="serverware.nativeShadowActivationServiceAssignment/v1"
-            && p.purpose=="native-policy-activation-publication" && p.guest==keys.association.binding()
+        require(p.purpose=="native-policy-activation-publication" && p.guest==keys.association.binding()
             && p.guest.service_role=="production-bridge" && p.assignment_payload_sha256==*keys.assignment.payload_sha256()
             && p.key_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&keys.configuration.authorization)?)
             && p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
@@ -38,7 +45,7 @@ impl Configuration {
         let public=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &supervisor.key_id,&supervisor.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&public)==supervisor.key_material_sha256)?;
-        public.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        public.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         let local=keys.keys.get(&AuthorityRole::CustodyActivationPublication).ok_or(ShadowError::SignerBindingMismatch)?;
         let binding=keys.assignment.payload().authority_key_independence.binding(AuthorityRole::CustodyActivationPublication,
@@ -63,7 +70,7 @@ impl Prepared {
         let authority=operation::Authority::admit(&authority_original.read(8*1024*1024).map_err(fail)?)?;
         let channel=delivery.activation.remove("activation-channel").ok_or(ShadowError::BindingDrift)?;
         let journal=delivery.activation.remove("activation-journal").ok_or(ShadowError::BindingDrift)?;
-        serverware_decision_gate::native_policy_activation_transport::validate_channel(channel.as_fd()).map_err(fail)?;
+        configuration.version()?.validate(channel.as_fd()).map_err(fail)?;
         Ok(Self{original,configuration,authority_original,authority,channel,journal})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
@@ -71,7 +78,8 @@ impl Prepared {
         require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;
         keys.association.check_startup().map_err(fail)?;self.configuration.verify(keys,trust,time)?;
         let journal=operation::store::Journal::open(self.journal,&self.configuration.payload.initial_state_sha256)?;
-        let channel=serverware_decision_gate::native_policy_activation_transport::ServiceChannel::from_delivery(self.channel).map_err(fail)?;
+        let channel=serverware_decision_gate::native_policy_activation_transport::ServiceChannel::from_delivery_version(
+            self.channel,self.configuration.version()?).map_err(fail)?;
         let value=Service{original:self.original,configuration:self.configuration,authority_original:self.authority_original,
             authority:self.authority,channel,journal};
         value.check(keys,trust,time)?;keys.association.check_startup().map_err(fail)?;Ok(value)
@@ -92,7 +100,7 @@ impl Service {
     pub(in crate::policy_shadow::policy_custody::services) fn serve(mut self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,
         time:&dyn TrustedTime,check:&impl Fn()->Result<(),ShadowError>)->Result<(),ShadowError>{
         self.check(keys,trust,time)?;check()?;
-        let request=loop{
+        let mut request=loop{
             self.check(keys,trust,time)?;check()?;
             if let Some(value)=self.channel.receive(keys.association.lifetime()).map_err(fail)?{break value;}
             unsafe{libc::poll(std::ptr::null_mut(),0,1);}
@@ -101,6 +109,20 @@ impl Service {
         require(operation::digest(prepared.prepared(),"generationId")?==self.configuration.payload.generation_id
             && operation::digest(prepared.prepared(),"generationPublicationEnvelopeSha256")?==self.configuration.payload.generation_publication_envelope_sha256
             && operation::integer(prepared.prepared(),"expiresAtUnixNanos")?<=self.configuration.payload.expires_at_unix_nanos)?;
+        if self.configuration.version()?==ChannelVersion::VsockV2{
+            // The other machine's BOOTTIME is never meaningful here. Derive
+            // once from the genuinely verified original expiry and the local
+            // trusted epoch interval, anchored before sampling that interval.
+            let before_time=guest::now()?;
+            let(earliest,latest)=time.now_interval_unix_nanos()?;
+            let after_time=guest::now()?;
+            let expires=operation::integer(prepared.prepared(),"expiresAtUnixNanos")?;
+            let remaining=u64::try_from(expires.checked_sub(latest).ok_or(ShadowError::BindingDrift)?).map_err(fail)?;
+            let deadline=keys.association.lifetime().min(
+                before_time.checked_add(remaining).ok_or(ShadowError::BindingDrift)?);
+            require(before_time<=after_time && earliest<=latest && after_time<deadline)?;
+            request.narrow_deadline(deadline).map_err(fail)?;
+        }
         // Split borrows deliberately: the journal remains exclusively held
         // across the effect, signing, durable receipt readback and emission.
         let configuration=&self.configuration;let original=&self.original;let authority=&self.authority;

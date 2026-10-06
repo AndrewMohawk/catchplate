@@ -409,6 +409,8 @@ struct ConfigurationParts {
 fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, String> {
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
     let version = value.get("apiVersion").and_then(Value::as_str);
+    ensure(version != Some("serverware.nativeStartupConfiguration/v24"),
+        "postboot static configuration requires its explicit successor owner")?;
     ensure(match mode {
         cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15" | "serverware.nativeStartupConfiguration/v16" | "serverware.nativeStartupConfiguration/v17" | "serverware.nativeStartupConfiguration/v18" | "serverware.nativeStartupConfiguration/v19" | "serverware.nativeStartupConfiguration/v20" | "serverware.nativeStartupConfiguration/v21" | "serverware.nativeStartupConfiguration/v22" | "serverware.nativeStartupConfiguration/v23")),
         cli::Mode::EnclaveV5 => version == Some("serverware.nativeStartupConfiguration/v5"),
@@ -430,6 +432,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
         cli::Mode::NativeReadinessV21 => version == Some("serverware.nativeStartupConfiguration/v21"),
         cli::Mode::WorkloadTrustV22 => false, // decoded only by the explicit successor owner
         cli::Mode::StaticCredentialV23 => version == Some("serverware.nativeStartupConfiguration/v23"),
+        cli::Mode::PostbootStaticV24 => false, // decoded by the explicit postboot owner
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
         Some("serverware.nativeStartupConfiguration/v23") => static_credential::configuration(value),
@@ -846,14 +849,21 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
         HeldOriginal::read(configuration, MAX_CONFIGURATION_BYTES)?;
     let raw_configuration = zeroize::Zeroizing::new(raw_configuration);
     configuration_original.require_private()?;
-    let (configuration, trust_authorizer) = match mode {
+    let (configuration, trust_authorizer, postboot_audit_port) = match mode {
         cli::Mode::WorkloadTrustV22 => {
             let (parts, key) = workload_trust::configuration(&raw_configuration)?;
-            (parts, Some(key))
+            (parts, Some(key), None)
         },
-        mode => (self::configuration(&raw_configuration, mode)?, None),
+        cli::Mode::PostbootStaticV24 => {
+            ensure(response_proof_identity_stdout, "postboot static startup requires its public identity export")?;
+            let (parts, port) = static_credential::postboot_configuration(&raw_configuration)?;
+            (parts, None, Some(port))
+        },
+        mode => (self::configuration(&raw_configuration, mode)?, None, None),
     };
     ensure(trust_authorizer.is_some() == trust_artifact.is_some(), "native trust selection differs")?;
+    ensure(configuration.measured_audit.as_ref().is_some_and(|v| v.requires_postboot_assignment())
+        == postboot_audit_port.is_some(), "postboot audit cannot enter a legacy startup mode")?;
     let deployment = configuration.credential_currentness.as_ref().map(|v| v.deployment_id.clone());
     // Only explicit gate-cgroup profiles retain the actual producer and bind
     // its owner before serving. A nested marker cannot supply that custody.
@@ -884,6 +894,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let (mut policy_original, policy_bytes) = HeldOriginal::read(configuration.policy, MAX_POLICY_BYTES)?;
     let mut parameters = configuration.native.into_parameters(launch, &configuration_pin,
         &inputs.policy_high_water, control_plane_tls, policy_bytes, configuration.enrollment)?;
+    parameters.postboot_audit_port = postboot_audit_port;
     let mut trust_original = None;
     if let (Some(authorizer), Some(artifact)) = (trust_authorizer, trust_artifact) {
         let (held, raw) = HeldOriginal::read(artifact, native_workload_identity_trust::MAX_AUTHORIZATION)?;

@@ -26,6 +26,25 @@ struct ConfigurationV23 {
 }
 
 pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> {
+    configuration_for_mode(value, false)
+}
+
+pub(super) fn postboot_configuration(raw: &[u8]) -> Result<(ConfigurationParts, u32), String> {
+    let mut value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
+    let fields = value.as_object_mut().ok_or("postboot static configuration must be an object")?;
+    let port = fields.remove("postbootAuditVsockPort").and_then(|v| v.as_u64())
+        .filter(|v| (1024..u32::MAX as u64).contains(v))
+        .ok_or("postboot static configuration requires a bounded audit input port")? as u32;
+    // This is only a typed projection. The caller retains and hashes the full
+    // original, including this port and v24, without any digest exclusions.
+    let parts = configuration_for_mode(value, true)?;
+    ensure(port != parts.native.listener_port()
+        && parts.measured_static_credential.as_ref().is_some_and(|v| port != v.browser_vsock_port),
+        "postboot audit input cannot share an ingress listener")?;
+    Ok((parts, port))
+}
+
+fn configuration_for_mode(value: Value, postboot: bool) -> Result<ConfigurationParts, String> {
     let gate = value.get("gate").and_then(Value::as_object).ok_or("static native gate must be closed")?;
     for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
         "releaseAuthorizationToken", "managementToken", "auditToken"] {
@@ -33,7 +52,9 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
     }
     let original: ConfigurationV23 = serde_json::from_value(value)
         .map_err(|_|"static native startup violates its closed contract")?;
-    ensure(original.api_version == "serverware.nativeStartupConfiguration/v23"
+    let version = if postboot { "serverware.nativeStartupConfiguration/v24" }
+        else { "serverware.nativeStartupConfiguration/v23" };
+    ensure(original.api_version == version
         && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
         && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
         "static native startup authorizer version differs")?;
@@ -44,6 +65,8 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
     original.guest_cohort.validate()?;
     original.guest_role_key_provisioner.validate()?;
     original.gate_cgroup.validate()?;
+    ensure(if postboot { original.measured_audit.requires_postboot_assignment() }
+        else { original.measured_audit.is_legacy() }, "static startup audit mode differs")?;
     ensure(original.measured_static_credential.deployment_id == original.credential_currentness.deployment_id,
         "static native deployment differs")?;
     Ok(ConfigurationParts {

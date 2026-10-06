@@ -15,7 +15,7 @@ struct Pending {
     queued_required:usize, recovered:bool,
 }
 pub(super) struct Owner {
-    config:native_audit_transport::Configuration, client:Client, url:String,
+    config:native_audit_transport::ResolvedConfiguration, client:Client, url:String,
     certificate:String, spki:String, uri:String, sequence:u64, previous:Option<String>,
     pending:Option<Pending>, ready:bool, poisoned:bool, pid:u32,
 }
@@ -31,7 +31,7 @@ fn now()->Result<u64,String> {
         .as_nanos().try_into().map_err(|_|"audit clock overflow".into())
 }
 impl Owner {
-    pub(super) fn new(config:native_audit_transport::Configuration,client:Client,url:String,
+    pub(super) fn new(config:native_audit_transport::ResolvedConfiguration,client:Client,url:String,
         certificate:String,spki:String,uri:String)->Self {
         Self{sequence:config.initial_sequence,previous:config.previous_batch_sha256.clone(),config,client,url,
             certificate,spki,uri,pending:None,ready:false,poisoned:false,pid:std::process::id()}
@@ -41,14 +41,17 @@ impl Owner {
             || state.audit_url.as_deref()!=Some(self.url.as_str()) || state.server_instance_id.as_deref()!=Some(self.config.instance_id.as_str()) {
             return Err("native audit owner, endpoint or legacy token changed".into());
         }
-        native_service_remaining(state)?; Ok(())
+        native_service_remaining(state)?;
+        if let Some(admission)=&self.config.admission { admission.check()?; }
+        Ok(())
     }
     fn command(&self,state:&GateState,action:&str,events:Option<&[u8]>,batch:Option<String>)->Result<Vec<u8>,String> {
         self.check(state)?;
         let ResponseProofSigner::Custody(signer)=&state.response_proof_signer else {return Err("audit requires native signer".into());};
         let epoch=now()?;
         let remaining=native_service_remaining(state)?.ok_or("audit requires native lifetime")?;
-        let expires=epoch.checked_add(remaining.as_nanos().min(30_000_000_000) as u64).ok_or("audit deadline overflow")?;
+        let mut expires=epoch.checked_add(remaining.as_nanos().min(30_000_000_000) as u64).ok_or("audit deadline overflow")?;
+        if let Some(admission)=&self.config.admission { expires=expires.min(admission.expires()); }
         let mut challenge=[0u8;32]; SystemRandom::new().fill(&mut challenge).map_err(|_|"audit challenge generation")?;
         if challenge==[0;32] {return Err("audit challenge is zero".into());}
         let snapshot=current_snapshot(state);
@@ -67,6 +70,7 @@ impl Owner {
         let evidence=signer.transport.audit_evidence(identity,&prepared,deadline)?;
         let raw=native_response_profile::canonical_ascii_bytes(&evidence)?;
         if raw.len()>wire::MAX_ENVELOPE {return Err("audit signed original exceeds bound".into());}
+        self.check(state)?;
         Ok(raw)
     }
     fn send(&self,state:&GateState,raw:&[u8])->Result<Ack,String> {

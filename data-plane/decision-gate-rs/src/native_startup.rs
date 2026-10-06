@@ -38,6 +38,7 @@ pub(super) struct NativeStartupParametersV1 {
     pub(super) control_plane_response_key_id: String,
     pub(super) enrollment_authorizer: Option<native_enrollment_authorizer::NativeEnrollmentAuthorizer>,
     pub(super) workload_trust: Option<native_workload_identity_trust::Pending>,
+    pub(super) postboot_audit_port: Option<u32>,
     pub(super) attempt_ledger_directory: PathBuf,
     pub(super) relay_assignments: Vec<NativeRelayAssignmentV1>,
     pub(super) listener_port: u32,
@@ -183,6 +184,12 @@ fn run_owned(
     }
     super::native_gate_inputs::validate_native_gate_static_inputs(&inputs)?;
     validate_parameters(&parameters)?;
+    if inputs.measured_audit.as_ref().is_some_and(|v| v.requires_postboot_assignment())
+        != parameters.postboot_audit_port.is_some()
+        || parameters.postboot_audit_port.is_some() && !response_proof_identity_stdout
+    {
+        return Err("postboot audit requires its explicit startup mode and actual public identity export".into());
+    }
     if let Some(authorizer) = &parameters.enrollment_authorizer {
         authorizer.check()?;
         authorizer.require_response_key(&parameters.control_plane_response_key)?;
@@ -314,9 +321,29 @@ fn run_owned(
     startup.check()?;
     let proof = super::native_proof_signer::initialize_native_response_proof_signer(custody)?;
     startup.check()?;
+    let postboot_receiver = parameters.postboot_audit_port
+        .map(|port| native_postboot_assignment::Receiver::bind(port, startup.as_ref())).transpose()?;
     if response_proof_identity_stdout {
         super::native_public_identity::write_startup_response_proof_identity(
             &proof, &mut identity, startup.as_ref(), parameters.deadline_boottime_ns)?;
+    }
+    if let Some(receiver) = postboot_receiver {
+        let original = receiver.receive()?;
+        startup.check()?;
+        let ResponseProofSigner::Custody(signer) = &proof.signer else {
+            return Err("postboot audit requires its actual native custody signer".into());
+        };
+        let actual_binary = current_binary_digest()?;
+        if inputs.binary_digest != actual_binary {
+            return Err("postboot audit binary differs from the current executable".into());
+        }
+        let scope = identity.refresh_scope(parameters.deadline_boottime_ns)?;
+        let configuration_digest = scope.get("configurationSha256").and_then(Value::as_str)
+            .ok_or("postboot audit native configuration commitment absent")?;
+        let pending = inputs.measured_audit.take().ok_or("postboot audit configuration absent")?;
+        inputs.measured_audit = Some(pending.admit_postboot(&original, &mut identity, signer,
+            configuration_digest, &actual_binary, parameters.deadline_boottime_ns)?);
+        startup.check()?;
     }
     startup.check()?;
     let instance = inputs.server_instance_id.as_deref()

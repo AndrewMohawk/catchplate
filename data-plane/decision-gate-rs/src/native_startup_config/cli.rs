@@ -4,7 +4,7 @@ use super::originals::ArtifactV1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23, PostbootStaticV24 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     -> Result<Option<(ArtifactV1, ArtifactV1, bool, bool, Mode, Option<ArtifactV1>)>, String>
@@ -30,6 +30,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-canary-readiness-startup-v21" { Mode::NativeReadinessV21 }
         else if argument == "--native-workload-trust-startup-v22" { Mode::WorkloadTrustV22 }
         else if argument == "--native-static-credential-startup-v23" { Mode::StaticCredentialV23 }
+        else if argument == "--native-postboot-static-startup-v24" { Mode::PostbootStaticV24 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;
@@ -72,6 +73,9 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             }
             _ => return Err("native startup received an unknown or repeated flag".to_owned()),
         }
+    }
+    if matches!(&mode, Mode::PostbootStaticV24) && !response_proof_identity_stdout {
+        return Err("postboot static startup requires --response-proof-identity-stdout".into());
     }
     let trust = if matches!(&mode, Mode::WorkloadTrustV22) {
         Some(ArtifactV1 {

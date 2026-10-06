@@ -14,6 +14,8 @@ mod control_plane_client_config;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
+mod native_audit_assignment;
+mod native_postboot_assignment;
 mod native_canary_transport;
 mod native_canary_delivery;
 mod native_canary_heartbeat;

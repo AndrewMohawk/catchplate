@@ -77,6 +77,7 @@ fn timestamp(seconds: i64) -> Result<OffsetDateTime, String> {
 }
 
 impl NativeSettingsV1 {
+    pub(super) fn listener_port(&self) -> u32 { self.listener_port }
     pub(super) fn into_parameters(self, launch: LaunchV1, configuration_pin: &str,
         checkpoint: &PolicyHighWater, control_plane_tls: ControlPlaneClientConfig,
         policy_bytes: Vec<u8>, enrollment: Option<super::EnrollmentParts>)
@@ -145,6 +146,7 @@ impl NativeSettingsV1 {
             control_plane_response_key_id: response_key_id,
             enrollment_authorizer,
             workload_trust: None,
+            postboot_audit_port: None,
             attempt_ledger_directory: self.attempt_ledger_directory,
             relay_assignments: self.relay_assignments.into_iter().map(|relay|
                 NativeRelayAssignmentV1 { host: relay.host, endpoint: relay.endpoint,

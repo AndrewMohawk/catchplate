@@ -23,7 +23,7 @@ pub(super) fn prepare(config: Configuration, inputs: &GateStateInputs, actual: &
     }
     signer.transport.verify_native_identity(identity, deadline)?;
     let ingress = identity.prepare_browser_ingress(&config.intake_origin, OffsetDateTime::now_utc(), deadline)?;
-    let listener = VsockListenerV1::bind(config.browser_vsock_port, 2, deadline)
+    let listener = VsockListenerV1::bind(config.browser_vsock_port, 3, deadline)
         .map_err(|_|"static intake fixed-parent listener unavailable")?;
     actual.configure_static_credential(config.clone(), Arc::clone(&ingress), identity,
         &signer.boot_id, &signer.key_id, &signer.control_plane_response_signing_key_id, binary, deadline)?;

@@ -9126,6 +9126,13 @@ class AuthorityProcess:
         issued_monotonic_ns = time.monotonic_ns()
         issued_at_epoch_ns = time.time_ns()
         remaining_ns = deadline_monotonic_ns - issued_monotonic_ns
+        if operation == setup_native_final.SETTLE and "continuation_original" in arguments:
+            final_values = setup_native_final.arguments(operation, arguments, typed="businessIntent" in arguments)
+            final_challenge = setup_native_final.challenge(final_values["challenge_original"])
+            if issued_at_epoch_ns < final_challenge["issuedAtEpochNs"]:
+                raise AuthorityServiceError("Static final settlement clock precedes its original challenge")
+            remaining_ns = min(remaining_ns, final_challenge["expiresAtEpochNs"] - issued_at_epoch_ns)
+            deadline_monotonic_ns = min(deadline_monotonic_ns, issued_monotonic_ns + remaining_ns)
         if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
             original_request = static_originals["request"]
             expires_field = "executionExpiresAtEpochNs" if operation == static_create.OPERATION else "expiresAtEpochNs"
@@ -9419,6 +9426,23 @@ class AuthorityProcess:
                     now_epoch_ns=binding_now, work=_ValidationWork(QueryReadValidationLimits()))
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
                 raise AuthorityServiceError("Setup credential binding plan differs from its admitted originals") from exc
+        if operation == setup_native_final.SETTLE and "continuation_original" in arguments:
+            from serverware import authority_transition_setup_native_final as final_kernel
+            from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+            final_originals = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            final_now = time.time_ns()
+            try:
+                setup_native_final_policy.verify_original(operation, final_originals,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                    now_epoch_ns=final_now)
+                final_limit = setup_native_final_policy.static_event_limit(final_originals,
+                    self.configuration.payload, self.configuration.root_key)
+                final_kernel.verify_static_settle_plan(payload=plan_payload, arguments=final_originals,
+                    maximum_events=final_limit, deadline_ns=deadline_monotonic_ns,
+                    now_epoch_ns=final_now, work=_ValidationWork(QueryReadValidationLimits()))
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise AuthorityServiceError("Static final settlement plan differs from its admitted originals") from exc
         if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
             from serverware import authority_transition_static_credential_create as static_kernel
             from serverware import authority_transition_static_credential_approval as static_approval_kernel
@@ -9892,7 +9916,9 @@ class AuthorityProcess:
             setup_bind_credential_maximum_events=(setup_bind_credential.validate_policy(
                 self.configuration.payload.get(setup_bind_credential.FIELD), payload=self.configuration.payload,
                 root_key=self.configuration.root_key)["maximumEvents"]
-                if set(self.role_config["enabledOperations"]) & setup_bind_credential.OPERATIONS else None),
+                if (set(self.role_config["enabledOperations"]) & setup_bind_credential.OPERATIONS
+                    or setup_native_final.SETTLE in self.role_config["enabledOperations"]
+                    and self.configuration.payload.get(setup_bind_credential.FIELD) is not None) else None),
             static_credential_configuration=(self.configuration.payload
                 if set(self.role_config["enabledOperations"]) & (static_create.OPERATIONS | static_approval.OPERATIONS) else None),
             static_credential_root_key=(self.configuration.root_key

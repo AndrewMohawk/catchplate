@@ -37,6 +37,7 @@ from serverware import authority_transition_setup_cancel
 from serverware import authority_setup_create as setup_create
 from serverware import authority_transition_setup_create
 from serverware import authority_setup_bind_credential as setup_bind_credential
+from serverware import authority_setup_native_final as setup_native_final
 from serverware import authority_static_credential_create as static_create
 from serverware import authority_static_credential_approval as static_approval
 from serverware import authority_static_credential_custody as static_custody
@@ -3860,12 +3861,12 @@ class MeasuredPlanner:
             raise AuthorityPlannerError("Setup creation policy cannot be supplied to another planner")
         else:
             self.setup_create_policy = None
-        if self.enabled_operations & setup_bind_credential.OPERATIONS:
+        if self.enabled_operations & setup_bind_credential.OPERATIONS or setup_bind_credential_maximum_events is not None:
+            if not self.enabled_operations & (setup_bind_credential.OPERATIONS | {setup_native_final.SETTLE}):
+                raise AuthorityPlannerError("Setup credential binding capacity cannot be supplied to another planner")
             if (type(setup_bind_credential_maximum_events) is not int
                     or not 1 <= setup_bind_credential_maximum_events <= setup_bind_credential.MAX_EVENTS):
                 raise AuthorityPlannerError("Setup credential binding planner lacks its signed event capacity")
-        elif setup_bind_credential_maximum_events is not None:
-            raise AuthorityPlannerError("Setup credential binding capacity cannot be supplied to another planner")
         self.setup_bind_credential_maximum_events = setup_bind_credential_maximum_events
         # These originals come only from the service's admitted root-signed
         # configuration. No input receipt, flag or caller-selected policy is
@@ -4108,6 +4109,14 @@ class MeasuredPlanner:
                                 static_credential_configuration_digest=self.static_credential_configuration_digest,
                                 verified_static_credential_custody_evidence=verified_static_evidence)
                         if operation == setup_bind_credential.OPERATION:
+                            authority_transition_setup_bind_credential.require_complete_populations(
+                                selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
+                                work=query_work, deadline_ns=request["deadlineMonotonicNs"],
+                                maximum_events=self.setup_bind_credential_maximum_events)
+                            planning_state = replace(planning_state,
+                                setup_bind_credential_maximum_events=self.setup_bind_credential_maximum_events)
+                        if operation == setup_native_final.SETTLE and setup_native_final.static_continuation(
+                                request["typedRequest"]["arguments"]) is not None:
                             authority_transition_setup_bind_credential.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"],

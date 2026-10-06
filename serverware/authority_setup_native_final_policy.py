@@ -21,8 +21,21 @@ def verify_source(values,payload,root_key,now):
     p.require(selected is not None and values["credential_policy"]==selected["credentialPolicy"]
         and values["maximum_final_nanos"]==selected["maximumChallengeNanos"]
         and values["control_plane_configuration_digest"]==row["configuration_digest"])
+    if p.static_continuation(values) is not None:
+        static_event_limit(values,payload,root_key)
     attempt=hardware.verify_original(p.hardware.COMPLETE,source,configuration_payload=payload,root_key=root_key,now_epoch_ns=now)
     return selected,row,source,attempt
+
+
+def static_event_limit(values,payload,root_key):
+    from serverware import authority_setup_bind_credential as binding
+    from serverware.authority_policy_canary_policy import full_configuration_digest
+    p.require(p.static_continuation(values) is not None)
+    selected=binding.validate_policy(payload.get(binding.FIELD),payload=payload,root_key=root_key)
+    p.require(selected is not None and selected["credentialPolicy"]==values["credential_policy"]
+        and values["control_plane_configuration_digest"]==full_configuration_digest(payload),
+        "Static native final settlement lacks its independently selected event capacity")
+    return selected["maximumEvents"]
 
 
 def computed_receipt(values,payload,root_key,now):

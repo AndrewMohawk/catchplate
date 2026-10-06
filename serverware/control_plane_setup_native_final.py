@@ -57,11 +57,19 @@ class _Owner:
         self.last_mono,self.last_epoch=self.started_mono,self.started_epoch
         self.deadline,self.expires=self.started_mono+30_000_000_000,self.started_epoch+30_000_000_000
         self.session=setup._session(sid);self.session_original=p.enrollment.setup.row_original(self.session)
+        self.continuation=setup._continuation(sid);p.require(self.continuation is not None)
+        self.continuation_original=p.enrollment.candidate.row_original(self.continuation).decode("ascii")
+        retained=p.original(self.continuation["request_original"],p.enrollment.candidate.MAX_ARGUMENT_BYTES)
+        self.static=set(retained["request"])==p.enrollment.candidate.STATIC_REQUEST_FIELDS
         self.hardware=hardware._row(sid);p.require(self.hardware is not None)
         self.hardware_original=p.hardware.row_original(self.hardware).decode("ascii")
         self.phase=phase;self.check()
         if phase!="lookup":
-            p.require(self.session["revision"]==3 and self.session["phase"]=="credential_activated" and self.session["status"]=="active" and self.session["terminal_at"] is None)
+            if self.static: p.enrollment.candidate.require_static_session(self.session)
+            else: p.require(self.session["revision"]==3)
+            p.require(self.session["phase"]=="credential_activated" and self.session["status"]=="active" and self.session["terminal_at"] is None
+                and self.continuation["setup_original"].encode("ascii")==self.session_original
+                and self.continuation["configuration_digest"]==self.configuration)
             self.clip(min(p.hardware.prepared(self.hardware["attempt_original"])["expiresAtEpochNs"],p.enrollment.setup.epoch(self.session["expires_at"])))
 
     def clip(self,expires):
@@ -75,6 +83,7 @@ class _Owner:
         actual,selected,_=cold.native_setup_final_owner();p.require(actual is self.cold and selected==self.selected
             and setup.startup.require_started() is self.custody and setup.custody_client._snapshot(self.custody) is self.binding
             and p.enrollment.setup.row_original(setup._session(self.session["id"]))==self.session_original
+            and p.enrollment.candidate.row_original(setup._continuation(self.session["id"])).decode("ascii")==self.continuation_original
             and p.hardware.row_original(hardware._row(self.session["id"])).decode("ascii")==self.hardware_original)
         actor=self.identity.user_id;owner=self.session["owner_id"]
         if self.phase=="prepare":p.require(actor==owner and {"credential_owner","policy_author"}<=self.identity.roles)
@@ -89,9 +98,11 @@ class _Owner:
         self.last_mono,self.last_epoch=mono,epoch
 
     def values(self,operation,row=None,receipt=None):
-        return p.arguments(operation,{"actor_id":self.identity.user_id,"control_plane_configuration_digest":self.configuration,
+        values={"actor_id":self.identity.user_id,"control_plane_configuration_digest":self.configuration,
             "credential_policy":self.policy,"maximum_final_nanos":self.selected["maximumChallengeNanos"],"hardware_original":self.hardware_original,
-            "challenge_original":None if row is None else row["challenge_original"],"receipt_original":receipt})
+            "challenge_original":None if row is None else row["challenge_original"],"receipt_original":receipt}
+        if operation==p.SETTLE and self.static: values["continuation_original"]=self.continuation_original
+        return p.arguments(operation,values)
 
     def assertion(self,value):return setup._Owner.assertion(self,value)
 
@@ -127,7 +138,7 @@ def _call(owner,operation,values,assertion_value=None):
     p.require(row is not None and p.row_original(row).decode("ascii")==result["finalOriginal"]
         and row[{p.PREPARE:"prepare_request_digest",p.COMPLETE:"complete_request_digest",p.SETTLE:"settle_request_digest"}[operation]]==result["requestDigest"])
     if operation==p.SETTLE:
-        observed=setup._session(owner.session["id"]);expected={**owner.session,"revision":4,"phase":"native_scoped_complete","status":"complete",
+        observed=setup._session(owner.session["id"]);expected={**owner.session,"revision":owner.session["revision"]+1,"phase":"native_scoped_complete","status":"complete",
             "updated_at":row["settled_at"],"terminal_at":row["settled_at"]}
         p.require(observed==expected);owner.session=observed;owner.session_original=p.enrollment.setup.row_original(observed)
     owner.check();return row

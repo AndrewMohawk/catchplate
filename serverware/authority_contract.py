@@ -1861,7 +1861,7 @@ _OPERATIONS = {
             mutation_kinds={"setup_native_final_attempts": ("INSERT", "UPDATE"), "setup_sessions": ("UPDATE",), "setup_session_events": ("INSERT",)},
             webauthn="bound-verified-assertion-receipt" if phase in ("prepare", "complete") else "not-required",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
-            maximum_query_rows=64, maximum_mutations=10, maximum_work_units=8192,
+            maximum_query_rows=192 if phase == "settle" else 64, maximum_mutations=10, maximum_work_units=8192,
         ) for phase in ("prepare", "complete", "settle")
     },
     "credential.static.create": _spec(

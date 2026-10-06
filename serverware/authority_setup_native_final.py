@@ -15,6 +15,7 @@ DOMAIN=b"serverware/setup-native-final-authority/v1\0"
 SCOPE="enclave-hardware-and-proxy-only"
 MAX_ARGUMENT_BYTES=MAX_ROW_BYTES=4*1024*1024
 FIELDS=frozenset({"actor_id","control_plane_configuration_digest","credential_policy","maximum_final_nanos","hardware_original","challenge_original","receipt_original"})
+STATIC_SETTLE_FIELDS=FIELDS|{"continuation_original"}
 CHALLENGE_FIELDS=frozenset({"apiVersion","challengeId","sessionId","ownerId","hardwareSha256","policyHash","configurationSha256",
     "nonce","issuedAtEpochNs","expiresAtEpochNs","resultScope","hostAssociationTrust"})
 RECEIPT_FIELDS=frozenset({"apiVersion","purpose","resultScope","hostAssociationTrust","challengeSha256","hardwareSha256","sessionId",
@@ -60,12 +61,16 @@ def receipt(text):
 
 
 def arguments(operation,value,*,typed=False):
-    require(operation in OPERATIONS and isinstance(value,Mapping) and FIELDS<=set(value)<=FIELDS|({"businessIntent","authn_evidence"} if typed else set())
+    require(isinstance(value,Mapping))
+    fields=STATIC_SETTLE_FIELDS if "continuation_original" in value else FIELDS
+    require(operation in OPERATIONS and isinstance(value,Mapping) and fields<=set(value)<=fields|({"businessIntent","authn_evidence"} if typed else set())
         and (not typed or "businessIntent" in value))
-    v={name:value[name] for name in FIELDS}; enrollment.setup.text(v["actor_id"],1024); require(v["actor_id"].startswith("oidc:"))
+    require(fields==FIELDS or operation==SETTLE)
+    v={name:value[name] for name in fields}; enrollment.setup.text(v["actor_id"],1024); require(v["actor_id"].startswith("oidc:"))
     row,prior=source(v["hardware_original"]); digest(v["control_plane_configuration_digest"])
     require(type(v["maximum_final_nanos"]) is int and 1_000_000_000<=v["maximum_final_nanos"]<=300_000_000_000)
     require(v["credential_policy"]==prior["credential_policy"] and v["control_plane_configuration_digest"]==row["configuration_digest"])
+    if fields==STATIC_SETTLE_FIELDS: static_continuation(v)
     if operation==PREPARE: require(v["challenge_original"] is None and v["receipt_original"] is None and v["actor_id"]==row["owner_id"])
     else:
         c=challenge(v["challenge_original"]); receipt(v["receipt_original"])
@@ -77,6 +82,27 @@ def arguments(operation,value,*,typed=False):
     draft={**v,"challenge_original":""};draft.pop("receipt_original")
     require(len(canonical({"issuerRequestOriginal":canonical(draft).decode("ascii")}))+524288<=MAX_ARGUMENT_BYTES)
     return v
+
+
+def static_continuation(values):
+    """Literal branch selection, bound to the already retained native chain."""
+    if "continuation_original" not in values: return None
+    text=values["continuation_original"]
+    retained=original(text,enrollment.candidate.MAX_ROW_BYTES)
+    require(enrollment.candidate.row_original(retained).decode("ascii")==text)
+    request=original(retained["request_original"],enrollment.candidate.MAX_ARGUMENT_BYTES)
+    require(set(request["request"])==enrollment.candidate.STATIC_REQUEST_FIELDS)
+    old,prior=source(values["hardware_original"])
+    enrolled=original(prior["enrollment_original"],enrollment.MAX_ROW_BYTES)
+    intent=enrollment.intent(enrolled["intent_original"])
+    require(retained["session_id"]==old["session_id"]==intent["sessionId"]
+        and retained["owner_id"]==old["owner_id"]==intent["ownerId"]
+        and retained["configuration_digest"]==values["control_plane_configuration_digest"]
+        and sha256(text.encode("ascii"))==intent["continuationSha256"]
+        and sha256(retained["setup_original"].encode("ascii"))==intent["setupSha256"]
+        and retained["credential_id"]==intent["credentialId"]
+        and retained["credential_version"]==intent["credentialVersion"]==1)
+    return retained
 
 
 def row_original(row):

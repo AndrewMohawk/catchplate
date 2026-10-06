@@ -7772,6 +7772,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     snapshot = get_policy_snapshot()
     setup_cancellation_profile = _setup_tracking_cancellation_profile()
     setup_creation_profile = _setup_tracking_creation_profile()
+    setup_binding_profile = _setup_credential_binding_profile()
     metadata = snapshot.raw.get("metadata") if snapshot else {}
     can_view_credentials = identity.has_any_role({"policy_author", "credential_owner"})
     can_view_routes = identity.has_any_role(
@@ -7831,6 +7832,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "setupTrackingCancellationAvailable": setup_cancellation_profile != "unavailable",
         "setupTrackingCancellationProfile": setup_cancellation_profile,
         "setupTrackingCreationProfile": setup_creation_profile,
+        "setupCredentialBindingProfile": setup_binding_profile,
         "currentUserId": identity.user_id,
         "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
@@ -12881,6 +12883,14 @@ def _setup_tracking_creation_profile() -> str:
     return "controlled-v1" if control_plane_setup_create.selected() else "unavailable"
 
 
+def _setup_credential_binding_profile() -> str:
+    if _setup_tracking_cancellation_available():
+        return "ordinary-v1"
+    from serverware import control_plane_setup_bind_credential
+
+    return "controlled-v1" if control_plane_setup_bind_credential.selected() else "unavailable"
+
+
 def _setup_sha256_json(value: Any) -> str:
     return (
         "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
@@ -14517,6 +14527,8 @@ def setup_session_bind_credential(
         require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
     ),
 ) -> dict[str, Any]:
+    if _setup_credential_binding_profile() != "ordinary-v1":
+        raise HTTPException(status_code=409, detail="use explicit protected Setup credential binding; direct protected metadata DML is unavailable")
     item = _load_setup_session_for_identity(session_id, identity, mutate=True)
     credential = db.get_credential(payload.credential_id)
     if credential is None:
@@ -14551,6 +14563,27 @@ def setup_session_bind_credential(
         _setup_session_error(exc)
         raise AssertionError("unreachable")
     return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/credential/draft")
+@app.post("/api/setup/sessions/{session_id}/credential/options")
+@app.post("/api/setup/sessions/{session_id}/credential/execute")
+@app.post("/api/setup/sessions/{session_id}/credential/settle")
+async def controlled_setup_bind_credential(session_id: str, request: Request) -> Response:
+    from serverware import control_plane_setup_bind_credential as controlled
+    from starlette.concurrency import run_in_threadpool
+
+    raw = await _native_oauth_original(request, controlled.MAX_REQUEST)
+    try:
+        result = await run_in_threadpool(controlled.on_request, request, session_id, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > controlled.MAX_RESPONSE:
+            raise ValueError("bounded Setup credential binding response")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Setup credential binding refused or outcome unknown; inspect the exact session, generation and event without retry. Signed purpose and retained event capacity still apply") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/setup/sessions/{session_id}/canary")
@@ -23230,6 +23263,7 @@ UI_HTML = r"""
           <div id="setup-template-summary" class="policy-effect" role="region" aria-label="Selected restriction effect" aria-live="polite"></div>
           <div class="setup-actions">
             <button id="setup-connect-button" class="secondary" type="button" onclick="runUiAction('Prepare provider login', prepareSetupProviderLogin)">Connect credential</button>
+            <button id="setup-bind-button" class="secondary" type="button" onclick="runUiAction('Bind selected Setup credential', bindSelectedSetupCredential)" disabled>Bind selected credential</button>
             <button id="setup-preview-button" class="secondary" type="button" onclick="runUiAction('Preview setup assignment', previewSetupAssignment)">Preview assignment</button>
             <button id="setup-stage-button" type="button" onclick="runUiAction('Stage setup assignment', stagePolicyCanary)" disabled>Stage assignment</button>
             <button id="setup-activate-button" type="button" onclick="runUiAction('Activate setup assignment', activatePolicyCanary)" disabled>Activate assignment</button>
@@ -23237,6 +23271,9 @@ UI_HTML = r"""
             <button id="setup-command-button" class="secondary" type="button" onclick="runUiAction('Download packet and copy verifier command', copyEnrollmentVerifier)" disabled>Copy verification command</button>
             <button id="setup-verify-button" class="secondary" type="submit">Verify server evidence</button>
           </div>
+          <p id="setup-bind-status" class="hint" role="status" aria-live="polite"></p>
+          <button id="setup-bind-settle-button" class="secondary" type="button" onclick="runUiAction('Settle Setup credential binding audit', settleSetupCredentialBinding)" disabled>Settle completed binding audit</button>
+          <p id="setup-bind-settle-status" class="hint" role="status" aria-live="polite"></p>
           <div class="setup-form-grid">
             <div><label for="setup-enrollment-receipt">Enrollment verifier receipt</label><input id="setup-enrollment-receipt" type="file" accept="application/json,.json"></div>
             <button id="setup-enrollment-receipt-button" class="secondary" type="button" onclick="runUiAction('Accept enrollment receipt', submitSetupEnrollmentReceipt)" disabled>Accept enrollment receipt</button>
@@ -23569,6 +23606,8 @@ UI_HTML = r"""
     const setupCancellationSettlements = new Map();
     let setupCreationAttempt = null;
     const setupCreationSettlements = new Map();
+    const setupBindingAttempts = new Map();
+    const setupBindingSettlements = new Map();
     let setupLoadInFlight = null;
     let refreshInFlight = null;
     let auditSearchGeneration = 0;
@@ -25607,20 +25646,218 @@ UI_HTML = r"""
       return result.session;
     }
 
-    async function bindSetupCredential() {
-      let session = await ensureSetupSession();
+    function setupBindingOperator(session = state.setupSession) {
+      const roles = state.currentUserRoles || [];
+      return Boolean(hasOperatorAuth() && session && ['ordinary-v1', 'controlled-v1'].includes(state.setupCredentialBindingProfile)
+        && roles.some(role => ['admin', 'attestation_operator', 'attestation_reviewer', 'credential_owner', 'policy_author', 'policy_publisher'].includes(role))
+        && (roles.includes('admin') || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId))
+        && (state.setupCredentialBindingProfile !== 'controlled-v1' || !adminToken()
+          && state.authStatus?.authMethod === 'oidc-session' && state.authStatus?.sessionState === 'active'));
+    }
+
+    function setupBindingPublic(credential) {
+      if (!credential || typeof credential.id !== 'string' || typeof credential.kind !== 'string'
+          || !Number.isSafeInteger(credential.credential_version) || credential.credential_version < 1
+          || credential.lifecycle_status !== 'active' || !credential.metadata || Array.isArray(credential.metadata)
+          || typeof credential.metadata !== 'object') throw new Error('Select an exact active stored credential generation');
+      return {id: credential.id, kind: credential.kind, credential_version: credential.credential_version,
+        metadata: credential.metadata, lifecycle_status: credential.lifecycle_status};
+    }
+
+    function setupBindingSame(original, observed) {
+      if (original instanceof OAuthConsentNumber) {
+        if (typeof observed !== 'number' || !Number.isFinite(observed)) return false;
+        if (/^-?(?:0|[1-9][0-9]*)$/.test(original.raw)) {
+          return Number.isSafeInteger(observed) && BigInt(original.raw) === BigInt(observed);
+        }
+        return Object.is(Number(original.raw), observed);
+      }
+      if (typeof original === 'number') return Number.isFinite(original) && Object.is(original, observed);
+      if (original && typeof original === 'object') return observed !== null && typeof observed === 'object'
+        && Array.isArray(original) === Array.isArray(observed) && Object.keys(original).length === Object.keys(observed).length
+        && Object.keys(original).every(key => Object.hasOwn(observed, key) && setupBindingSame(original[key], observed[key]));
+      return original === observed;
+    }
+
+    function setupBindingEvent(session = state.setupSession) {
+      if (!session) return null;
+      const attempt = setupBindingAttempts.get(session.id);
+      if (attempt?.outcome === 'confirmed' && attempt.audit?.settlement === 'controlled_pending') return attempt.audit.eventId;
+      const events = (session.events || []).filter(event => event.transition === 'bind_credential'
+        && event.audit_status === 'controlled_pending' && event.event?.details?.authorityOperation === 'setup.session.bind-credential');
+      return events.length === 1 ? events[0].id : null;
+    }
+
+    function renderSetupBinding() {
+      const session = state.setupSession, attempt = setupBindingAttempts.get(session?.id);
+      let credential = null;
+      try { credential = setupBindingPublic((state.credentials || []).find(item => item.id === currentSetupSelection().credentialId)); } catch (_) {}
+      $('setup-bind-button').disabled = !setupBindingOperator(session) || !credential || session?.status !== 'active'
+        || session?.phase !== 'created' || Boolean(session?.credentialId || session?.oauthProvider || attempt);
+      const visible = attempt?.authScope === policyAuthoringScope() ? attempt : null;
+      $('setup-bind-status').textContent = visible
+        ? visible.outcome === 'confirmed' ? 'The exact credential generation is bound. This does not stage a policy or issue enrollment; audit settlement is separate.'
+          : `Binding submission for credential ${visible.credentialId} generation ${visible.version} was started; outcome is not adopted. Inspect this exact run and event. This page will not retry.`
+        : session?.oauthProvider ? 'This run uses its separate native OAuth activation flow; generic tracking binding does not replace it.'
+        : session?.credentialId ? `Retained binding: ${session.credentialId}, generation ${session.credentialVersion}. This readback is not a new credential currentness proof.`
+        : state.setupCredentialBindingProfile === 'controlled-v1' ? 'Bind the selected stored generation explicitly with a new hardware assertion. Request transport availability is not signed purpose, currentness or capacity admission.'
+        : state.setupCredentialBindingProfile === 'ordinary-v1' ? 'Binding records only the selected existing credential generation in this Setup run.'
+        : 'Credential binding is unavailable for this profile; no controlled request transport is available.';
+      const eventId = setupBindingEvent(session), settlement = setupBindingSettlements.get(eventId);
+      $('setup-bind-settle-button').disabled = state.setupCredentialBindingProfile !== 'controlled-v1'
+        || !setupBindingOperator(session) || !eventId || Boolean(settlement);
+      const visibleSettlement = settlement?.authScope === policyAuthoringScope() ? settlement : null;
+      $('setup-bind-settle-status').textContent = visibleSettlement
+        ? visibleSettlement.result ? `Binding audit event ${eventId} settled as ${visibleSettlement.result.auditEventHash}. Reload this exact run for a fresh observation.`
+          : `Settlement of binding event ${eventId} was started; outcome is not adopted. Inspect that event without retry.`
+        : 'Explicit audit settlement requires the genuine completed outbox; it never binds another generation or repeats hardware approval.';
+    }
+
+    async function controlledSetupBinding(session, credential, checkContext) {
+      const schema = 'serverware.setupCredentialBindingRequest/v1', optionsSchema = 'serverware.setupCredentialBindingOptions/v1';
+      const path = `/api/setup/sessions/${encodeURIComponent(session.id)}/credential`;
+      const post = async (phase, body) => {
+        checkContext();
+        const value = await api(path + '/' + phase, {method: 'POST', checkContext,
+          body: oauthConsentCanonical({apiVersion: schema, ...body})});
+        checkContext(); return value;
+      };
+      const draft = await post('draft', {expectedRevision: session.revision, credentialId: credential.id,
+        expectedCredentialVersion: credential.credential_version});
+      if (!oauthConsentClosed(draft, ['apiVersion', 'okForAction', 'argumentsOriginal', 'requestDigest'])
+          || draft.apiVersion !== schema || draft.okForAction !== false || !oauthConsentDigest(draft.requestDigest)) {
+        throw new Error('Binding draft does not match its closed original contract');
+      }
+      const original = draft.argumentsOriginal, args = oauthConsentParse(original, 128 * 1024).value;
+      if (oauthConsentCanonical(args) !== original || !oauthConsentClosed(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
+          || args.actor_id !== state.currentUserId || !oauthConsentDigest(args.control_plane_configuration_digest)
+          || !oauthConsentClosed(args.request, ['sessionOriginal', 'credentialOriginal', 'issuedAtEpochNs', 'expiresAtEpochNs'])) {
+        throw new Error('Binding draft differs from the selected operator or original shape');
+      }
+      const retainedSession = setupCancellationSession(args.request.sessionOriginal);
+      const retainedCredential = oauthConsentParse(args.request.credentialOriginal, 32 * 1024).value;
+      if (Object.keys(session).some(key => !['evidence', 'events'].includes(key) && !setupBindingSame(retainedSession[key], session[key]))
+          || oauthConsentCanonical(retainedCredential) !== args.request.credentialOriginal
+          || !oauthConsentClosed(retainedCredential, ['id', 'kind', 'credential_version', 'metadata', 'lifecycle_status'])
+          || !setupBindingSame(retainedCredential, credential)) throw new Error('Binding draft does not retain the exact selected Setup and public credential generation');
+      const issued = oauthConsentInteger(args.request.issuedAtEpochNs), expires = oauthConsentInteger(args.request.expiresAtEpochNs);
+      if (issued <= 0n || expires <= issued || expires - issued > 30000000000n) throw new Error('Binding authority interval is invalid');
+      const options = await post('options', {argumentsOriginal: original});
+      if (!oauthConsentClosed(options, ['publicKey', 'serverware']) || options.serverware?.schema !== optionsSchema
+          || options.serverware.operation !== 'setup.session.bind-credential' || options.serverware.requestDigest !== draft.requestDigest
+          || options.publicKey?.userVerification !== 'required' || !Array.isArray(options.publicKey.allowCredentials)
+          || options.publicKey.allowCredentials.length !== 1 || !window.PublicKeyCredential || !navigator.credentials) {
+        throw new Error('Exact hardware binding options are unavailable');
+      }
+      const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+      checkContext();
+      const result = await post('execute', {argumentsOriginal: original,
+        mfa: {setupCredentialBindingProfile: optionsSchema, assertion: credentialToJson(assertion)}});
+      if (!oauthConsentClosed(result, ['ok', 'operation', 'requestDigest', 'auditEventDigest', 'idempotentReplay', 'setupOriginal', 'setupEventId', 'auditState'])
+          || result.ok !== true || result.operation !== 'setup.session.bind-credential' || result.requestDigest !== draft.requestDigest
+          || result.idempotentReplay !== false || result.auditState !== 'controlled_pending' || !oauthConsentDigest(result.auditEventDigest)
+          || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(result.setupEventId)) {
+        throw new Error('Binding outcome is not its exact durable result; inspect without retry');
+      }
+      return {session: setupCancellationSession(result.setupOriginal), audit: {settlement: result.auditState,
+        eventId: result.setupEventId, outboxEventDigest: result.auditEventDigest, requestDigest: result.requestDigest}};
+    }
+
+    async function bindSelectedSetupCredential() {
+      return bindSetupCredential(true);
+    }
+
+    async function bindSetupCredential(explicit = false) {
+      if (state.setupCredentialBindingProfile !== 'ordinary-v1' && !state.setupSession?.credentialId && !explicit) {
+        throw new Error('Use Bind selected credential explicitly before previewing; no hardware binding starts automatically');
+      }
       const selection = currentSetupSelection();
+      const selectedOriginal = JSON.stringify(selection), selectedAuth = policyAuthoringScope(), selectedProfile = state.setupCredentialBindingProfile;
+      const selectedSession = state.setupSession, selectedSessionOriginal = JSON.stringify(selectedSession), selectedGeneration = setupLoadGeneration;
+      const checkPreparation = () => {
+        if (JSON.stringify(currentSetupSelection()) !== selectedOriginal || policyAuthoringScope() !== selectedAuth
+            || state.setupCredentialBindingProfile !== selectedProfile || !hasOperatorAuth()
+            || selectedProfile !== 'ordinary-v1' && (state.setupSession !== selectedSession
+              || JSON.stringify(selectedSession) !== selectedSessionOriginal || setupLoadGeneration !== selectedGeneration)) {
+          throw new Error('The clicked Setup, selection or operator changed before binding preparation');
+        }
+      };
+      checkPreparation();
+      const session = await ensureSetupSession(checkPreparation);
+      checkPreparation();
       if (session.credentialId) {
         if (session.credentialId !== selection.credentialId) throw new Error('This setup run is bound to another credential');
         return session;
       }
-      if (session.phase !== 'created') throw new Error(`Setup run cannot bind a credential from ${session.phase}`);
-      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/credential`, {
-        method: 'POST',
-        body: JSON.stringify({expectedRevision: session.revision, credentialId: selection.credentialId})
-      });
-      session = rememberSetupSession(result.session);
-      return session;
+      if (!setupBindingOperator(session) || session.status !== 'active' || session.phase !== 'created' || session.oauthProvider
+          || !Number.isSafeInteger(session.revision) || session.revision < 0 || session.revision >= Number.MAX_SAFE_INTEGER
+          || setupBindingAttempts.has(session.id)) throw new Error('Select an active unbound ordinary Setup run; a prior binding cannot be retried');
+      const credential = structuredClone(setupBindingPublic((state.credentials || []).find(item => item.id === selection.credentialId)));
+      const bindingProfile = state.setupCredentialBindingProfile, authScope = policyAuthoringScope(), generation = setupLoadGeneration;
+      const sessionOriginal = JSON.stringify(session), selectionOriginal = JSON.stringify(selection);
+      const checkContext = () => {
+        if (!setupBindingOperator(session) || state.setupCredentialBindingProfile !== bindingProfile || policyAuthoringScope() !== authScope
+            || setupLoadGeneration !== generation || state.setupSession !== session || JSON.stringify(session) !== sessionOriginal
+            || $('setup-session').value !== session.id || JSON.stringify(currentSetupSelection()) !== selectionOriginal
+            || !setupBindingSame(credential, setupBindingPublic((state.credentials || []).find(item => item.id === credential.id)))) {
+          throw new Error('The original Setup, selected public generation or operator changed; no further binding dispatch is authorized');
+        }
+      };
+      checkContext();
+      if (bindingProfile === 'controlled-v1' && !window.confirm(`Bind credential ${credential.id} generation ${credential.credential_version} only to Setup ${session.id}? A new hardware assertion is required; no policy or enrollment is issued.`)) {
+        return cancelledAction('Setup credential binding');
+      }
+      checkContext();
+      const attempt = {authScope, credentialId: credential.id, version: credential.credential_version, outcome: 'unresolved', audit: null};
+      setupBindingAttempts.set(session.id, attempt); renderSetupBinding();
+      try {
+        const result = bindingProfile === 'controlled-v1' ? await controlledSetupBinding(session, credential, checkContext)
+          : await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/credential`, {method: 'POST', checkContext,
+            body: JSON.stringify({expectedRevision: session.revision, credentialId: credential.id})});
+        checkContext();
+        const returned = result?.session, changed = new Set(['credentialId', 'credentialVersion', 'phase', 'revision', 'updatedAt', 'evidence', 'events']);
+        if (!returned || returned.id !== session.id || returned.credentialId !== credential.id || returned.credentialVersion !== credential.credential_version
+            || returned.phase !== 'credential_activated' || returned.revision !== session.revision + 1
+            || Object.keys(session).some(key => !changed.has(key) && !setupBindingSame(returned[key], session[key]))) {
+          throw new Error('Binding response changed the original Setup or generation; inspect without retry');
+        }
+        attempt.outcome = 'confirmed'; attempt.audit = result.audit ?? null;
+        rememberSetupSession(returned); state.setupVerification = null; renderSetupWorkflow();
+        return returned;
+      } finally { renderSetupBinding(); }
+    }
+
+    async function settleSetupCredentialBinding() {
+      const session = state.setupSession, eventId = setupBindingEvent(session);
+      if (state.setupCredentialBindingProfile !== 'controlled-v1' || !setupBindingOperator(session)
+          || !eventId || setupBindingSettlements.has(eventId)) throw new Error('Select an unsettled binding event; no settlement retry is authorized');
+      const original = JSON.stringify(session), authScope = policyAuthoringScope(), generation = setupLoadGeneration;
+      const selection = JSON.stringify(currentSetupSelection());
+      const checkContext = () => {
+        if (state.setupCredentialBindingProfile !== 'controlled-v1' || !setupBindingOperator(session)
+            || policyAuthoringScope() !== authScope || setupLoadGeneration !== generation || state.setupSession !== session
+            || JSON.stringify(session) !== original || $('setup-session').value !== session.id
+            || JSON.stringify(currentSetupSelection()) !== selection || setupBindingEvent(session) !== eventId) {
+          throw new Error('Binding settlement context changed; inspect the original event without retry');
+        }
+      };
+      checkContext();
+      if (!window.confirm(`Settle only binding audit event ${eventId} from its independently completed outbox?`)) return cancelledAction('Binding audit settlement');
+      checkContext();
+      const attempt = {authScope, result: null}; setupBindingSettlements.set(eventId, attempt); renderSetupBinding();
+      try {
+        const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/credential/settle`, {
+          method: 'POST', checkContext, body: oauthConsentCanonical({apiVersion: 'serverware.setupCredentialBindingRequest/v1', eventId})});
+        checkContext();
+        if (!oauthConsentClosed(result, ['ok', 'operation', 'requestDigest', 'auditEventDigest', 'idempotentReplay', 'eventId', 'auditState', 'auditEventHash'])
+            || result.ok !== true || result.operation !== 'setup.session.bind-credential-audit-settle' || result.eventId !== eventId
+            || result.idempotentReplay !== false || result.auditState !== 'audited'
+            || !['requestDigest', 'auditEventDigest', 'auditEventHash'].every(key => oauthConsentDigest(result[key]))) {
+          throw new Error('Binding settlement differs from the original event; inspect without retry');
+        }
+        attempt.result = result;
+        return {...result, uiHandled: true};
+      } finally { renderSetupBinding(); }
     }
 
     function setupCredentialSelection() {
@@ -25668,6 +25905,15 @@ UI_HTML = r"""
         const injection = policyCredentialInjection(result, null, template);
         signedPolicyCredential(result, injection);
         if (!template.custom) policyCredentialBinding(result, {adapter: template.adapter});
+        if (state.setupCredentialBindingProfile !== 'ordinary-v1') {
+          checkContext(); setupBindingPublic(result);
+          state.credentials = [result, ...(state.credentials || []).filter(item => item.id !== credentialId)];
+          renderSetupWorkflow({'id:setup-credential': {value: credentialId}});
+          if ($('setup-credential').value !== credentialId) throw new Error('The created credential cannot be selected for this original Setup; inspect it without creating another');
+          setupCredentialContext = null;
+          setStatus(`Credential ${credentialId} generation ${result.credential_version} was created, but is not bound. Use Bind selected credential explicitly on the original Setup run; do not create it again.`, 'success');
+          return;
+        }
         context.bindAttempted = true;
         const bound = await api(`/api/setup/sessions/${encodeURIComponent(context.sessionId)}/credential`, {
           method: 'POST', checkContext,
@@ -25785,6 +26031,7 @@ UI_HTML = r"""
       $('setup-principal').disabled = bindingsLocked;
       $('setup-route-id').readOnly = bindingsLocked;
       $('setup-credential').disabled = Boolean(setupSession?.credentialId);
+      renderSetupBinding();
 
       const selection = currentSetupSelection();
       const verification = setupVerificationForSelection(selection);

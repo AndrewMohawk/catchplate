@@ -649,6 +649,8 @@ class KernelContext:
     setup_cancel_maximum_events: int | None = None
     # Independently admitted creation purpose and capacities, never HTTP input.
     setup_create_policy: Mapping[str, Any] | None = None
+    # Actual signed credential-binding capacity, never request-selected.
+    setup_bind_credential_maximum_events: int | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

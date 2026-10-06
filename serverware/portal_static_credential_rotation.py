@@ -228,6 +228,23 @@ const sr = id => document.getElementById(id);
 function rotationPageMessage(value) { sr('rotation-status').textContent = value; }
 let rotationAssignmentBusy = false;
 let rotationPrerequisitesObserved = false;
+function rotationPagePrefill() {
+  const fragment = window.location.hash;
+  if (!fragment) return;
+  try {
+    // Public editable navigation only, never an authority or retained version.
+    // Remove it before parsing or any network work; no query/storage fallback.
+    window.history.replaceState(null, '', '/credentials/static/rotation');
+    const match = fragment.length === 48
+      && /^#credential=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(fragment);
+    if (!match) throw new Error('Invalid rotation shortcut');
+    sr('rotation-credential-id').value = match[1];
+    rotationPageMessage('Credential ID copied from the inventory. Review it and check intake prerequisites. No predecessor read, intake or drain has started.');
+  } catch (_) {
+    rotationPageMessage('The rotation shortcut could not be used. Enter the existing credential ID manually. No request or drain was started.');
+  }
+}
+rotationPagePrefill();
 function rotationPagePrerequisiteControls() {
   sr('rotation-assignment-admit').disabled = sr('rotation-readiness-check').disabled = rotationAssignmentBusy || Boolean(rotationFlow);
   sr('rotation-start').disabled = rotationAssignmentBusy || Boolean(rotationFlow) || !rotationPrerequisitesObserved;
@@ -568,7 +585,7 @@ STATIC_CREDENTIAL_ROTATION_PAGE = r"""<!doctype html><html lang="en"><meta chars
 <p id="rotation-assignment-status" role="status" aria-live="polite">No assignment submitted from this page.</p></details>
 <button id="rotation-readiness-check" type="button">Check intake prerequisites</button>
 <p id="rotation-readiness-status" role="status" aria-live="polite">Check both retained assignments before opening intake. This does not check native serving liveness or authorize a drain or rotation.</p>
-<form id="rotation-form"><label>Existing credential ID<input name="credentialId" required autocomplete="off" spellcheck="false"></label>
+<form id="rotation-form"><label>Existing credential ID<input id="rotation-credential-id" name="credentialId" required autocomplete="off" spellcheck="false"></label>
 <p>The server retrieves and verifies the previous generation's retained public evidence. If its original evidence or completed audit is unavailable, rotation stays unavailable; this page never guesses or renews it.</p>
 <label>Candidate lifetime (seconds, maximum 3600)<input name="ttlSeconds" type="number" min="1" max="3600" value="900" required></label>
 <button id="rotation-start" type="submit" disabled>Open native secret intake</button></form>

@@ -1,4 +1,4 @@
-"""Development static-secret editor using the legacy mutation/MFA flow.
+"""Static rotation navigation and the development-only plaintext editor.
 
 Browser state is neither authorization nor durable custody. A pending secret is
 held only in this page's memory until explicit continuation or discard. Network
@@ -31,13 +31,23 @@ STATIC_CREDENTIAL_REPLACEMENT_SCRIPT = r"""
     let credentialReplacementEpoch = 0, credentialReplacement = null;
 
     function credentialReplacementEligible(item) {
-      return protectedStaticCredentials === false && item && typeof item.id === 'string' && item.id.length > 0
+      return protectedStaticCredentials === false && protectedStaticRotation === false
+        && item && typeof item.id === 'string' && item.id.length > 0
         && typeof item.kind === 'string' && item.kind !== 'oauth2'
         && item.metadata?.oauth !== true && (item.lifecycle_status || 'active') === 'active';
     }
     function credentialReplacementButton(item) {
+      if (protectedStaticRotation === true) {
+        const eligible = item && typeof item.id === 'string'
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(item.id)
+          && ['bearer', 'basic', 'header', 'query', 'cookie'].includes(item.kind)
+          && item.metadata?.oauth !== true && item.lifecycle_status === 'active';
+        // Navigation only: the destination reads the actual predecessor after
+        // explicit prerequisite checks. Never open the plaintext editor here.
+        return eligible ? `<a href="/credentials/static/rotation#credential=${item.id}">Review secret rotation</a> ` : '';
+      }
       if (protectedStaticCredentials !== false)
-        return '<span class="muted">Protected secret replacement is not yet available; no plaintext editor.</span>';
+        return '<span class="muted">Protected rotation is not selected for this deployment; no plaintext editor.</span>';
       return credentialReplacementEligible(item)
         ? `<button type="button" data-credential-replacement="${esc(item.id)}">Replace secret</button>` : '';
     }

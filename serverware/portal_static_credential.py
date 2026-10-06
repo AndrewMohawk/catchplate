@@ -23,6 +23,60 @@ function staticPortalText(value, limit = 4 * 1024 * 1024) {
 function staticPortalJson(value) {
   return JSON.stringify(value).replace(/[\u007f-\uffff]/g, ch => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
 }
+function staticPortalCreationPrefill(value) {
+  const requirePrefill = ok => {
+    if (!ok) throw new Error('Use a bounded name and supported public provider, account, secret-class and injection fields only. Correct the credential form; no request was sent.');
+  };
+  requirePrefill(staticPortalClosed(value, ['apiVersion', 'name', 'kind', 'metadata', 'setupId'])
+    && value.apiVersion === 'serverware.staticCredentialCreationPrefill/v1'
+    && staticPortalText(value.name, 512) && value.name.trim().length > 0 && !/[\u0000-\u001f\u007f]/.test(value.name)
+    && (value.setupId === null || (typeof value.setupId === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.setupId))));
+  const classes = {bearer: ['bearerToken', 'automationToken', 'granularAccessToken', 'legacyToken'],
+    basic: ['basicPassword'], header: ['customHeader'], query: ['queryToken'], cookie: ['cookie']};
+  requirePrefill(typeof value.kind === 'string' && Object.hasOwn(classes, value.kind));
+  const metadata = value.metadata;
+  const allowed = ['provider', 'provider_id', 'provider_subject', 'account_subject', 'secret_class',
+    'token_class', 'username', 'injection_name', 'injection_field', 'injection_prefix'];
+  requirePrefill(metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    && Object.keys(metadata).every(key => allowed.includes(key)));
+  const binding = names => {
+    const values = names.filter(key => Object.hasOwn(metadata, key)).map(key => metadata[key]);
+    requirePrefill(values.length > 0 && values.every(item => staticPortalText(item, 512)
+      && item === item.trim() && !/[\u0000-\u001f\u007f]/.test(item)
+      && !/^replace[-_ ]with(?:[-_ ]|$)/i.test(item) && item === values[0]));
+    return values[0];
+  };
+  const provider = binding(['provider', 'provider_id']);
+  requirePrefill(/^[a-z][a-z0-9.-]{0,63}$/.test(provider)
+    && !['twitter', 'x.oauth', 'x.oauth2', 'google.oauth', 'google.oauth2'].includes(provider));
+  binding(['provider_subject', 'account_subject']);
+  requirePrefill(classes[value.kind].includes(binding(['secret_class', 'token_class'])));
+  if (value.kind === 'basic') {
+    requirePrefill(staticPortalText(metadata.username, 1024) && metadata.username.length <= 256
+      && !/[\s:\u0000-\u001f\u007f]/.test(metadata.username));
+  } else requirePrefill(!Object.hasOwn(metadata, 'username'));
+  if (['header', 'query', 'cookie'].includes(value.kind)) {
+    requirePrefill(typeof metadata.injection_name === 'string' && metadata.injection_name.length <= 128
+      && /^[!#$%&'*+.^_`|~A-Za-z0-9-]+$/.test(metadata.injection_name));
+    if (value.kind === 'header') {
+      const name = metadata.injection_name.toLowerCase();
+      requirePrefill(!['authorization', 'proxy-authorization', 'cookie', 'host', 'content-length', 'connection',
+        'keep-alive', 'te', 'trailer', 'transfer-encoding', 'upgrade'].includes(name) && !name.startsWith('x-serverware-'));
+    }
+  } else requirePrefill(!Object.hasOwn(metadata, 'injection_name'));
+  if (Object.hasOwn(metadata, 'injection_field')) requirePrefill(typeof metadata.injection_field === 'string'
+    && metadata.injection_field.length <= 256
+    && /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(metadata.injection_field));
+  if (Object.hasOwn(metadata, 'injection_prefix')) requirePrefill(['bearer', 'header'].includes(value.kind)
+    && typeof metadata.injection_prefix === 'string' && metadata.injection_prefix.length <= 128
+    && !/[\u0000-\u001f\u007f]/.test(metadata.injection_prefix));
+  requirePrefill(staticPortalText(staticPortalJson(value), 8192));
+  return value;
+}
+function staticPortalCreationHref(value) {
+  return '/credentials/static/new#prefill=' + encodeURIComponent(staticPortalJson(staticPortalCreationPrefill(value)));
+}
 function staticPortalExpiry(value) {
   staticPortalNeed(typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value));
   const milliseconds = BigInt(value) / 1000000n;
@@ -168,6 +222,29 @@ STATIC_CREDENTIAL_PAGE_SCRIPT = r"""
 let staticFlow = null;
 const sc = id => document.getElementById(id);
 function staticPageMessage(value) { sc('static-status').textContent = value; }
+// Consume public editable hints once, before any asynchronous work. Never retain
+// a redirect, secret, auth context or authority in the URL or browser storage.
+function staticPageConsumePrefill() {
+  const fragment = window.location.hash;
+  if (!fragment) return;
+  try {
+    window.history.replaceState(null, '', window.location.pathname);
+    staticPortalNeed(fragment.startsWith('#prefill=') && fragment.length <= 9 + 3 * 8192);
+    const original = decodeURIComponent(fragment.slice(9));
+    staticPortalNeed(staticPortalText(original, 8192));
+    const value = staticPortalCreationPrefill(JSON.parse(original));
+    staticPortalNeed(staticPortalJson(value) === original);
+    const form = sc('static-form');
+    form.elements.namedItem('name').value = value.name;
+    form.elements.namedItem('kind').value = value.kind;
+    form.elements.namedItem('metadata').value = JSON.stringify(value.metadata, null, 2);
+    if (value.setupId !== null) sc('static-return').href = '/?setup=' + encodeURIComponent(value.setupId);
+    staticPageMessage('Public credential details copied for editing. They are not verified authority. Check prerequisites, create explicitly, then return to Setup and select and bind the exact created credential yourself.');
+  } catch (_) {
+    staticPageMessage('Public prefill could not be used and was ignored. Enter public details manually, or return to Setup to correct them. No request was sent.');
+  }
+}
+staticPageConsumePrefill();
 let staticAssignmentBusy = false;
 let staticPrerequisitesObserved = false;
 function staticPagePrerequisiteControls() {
@@ -477,7 +554,7 @@ STATIC_CREDENTIAL_PAGE = r"""<!doctype html><html lang="en"><meta charset="utf-8
 <button id="static-approval-status" type="button" disabled>Check approval status</button>
 <button id="static-create" type="button" disabled>Passkey + Create once</button>
 <p id="static-status" role="status" aria-live="polite">No intake or creation has started.</p>
-<p><a href="/approvals" target="_blank" rel="noopener">Approval queue</a> · <a href="/">Return to Setup</a></p>
+<p><a href="/approvals" target="_blank" rel="noopener">Approval queue</a> · <a id="static-return" href="/">Return to Setup</a></p>
 <script>""" + STATIC_CREDENTIAL_SCRIPT + STATIC_CREDENTIAL_PAGE_SCRIPT + "</script></html>"
 
 

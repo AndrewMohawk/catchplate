@@ -32,6 +32,8 @@ def literal(source: str, name: str) -> str:
 
 UI = literal(APP, "UI_HTML")
 SCRIPT = literal(FRAGMENT, "STATIC_CREDENTIAL_REPLACEMENT_SCRIPT")
+ROTATION_PAGE_SCRIPT = literal((ROOT / "serverware/portal_static_credential_rotation.py").read_text(),
+    "STATIC_CREDENTIAL_ROTATION_PAGE_SCRIPT")
 
 
 def helper(name: str, *, kind: str = "function") -> str:
@@ -76,7 +78,8 @@ const state={currentUserId:'user:requester',currentUserRoles:['credential_owner'
     authMethod:'oidc-session',sessionState:'active'},
   credentials:[{id,name:'Static fixture',kind:'bearer',metadata:{},lifecycle_status:'active'}],
   controlPlaneApprovals:[]};
-let pendingMutation=null, csrfToken=null, oidcSessionStatusUnknown=false, protectedStaticCredentials=false;
+let pendingMutation=null, csrfToken=null, oidcSessionStatusUnknown=false, protectedStaticCredentials=false,
+  protectedStaticRotation=false;
 const pendingMutationKey='synthetic-pending';
 $('admin-token').value='synthetic-operator';
 const calls=[], queue=[]; let refreshes=0, refreshHook=async()=>{};
@@ -128,6 +131,48 @@ class StaticCredentialReplacementControls(unittest.TestCase):
             text=True, capture_output=True, timeout=10, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_protected_rotation_inventory_navigation_and_one_shot_prefill(self) -> None:
+        prefill = ROTATION_PAGE_SCRIPT.split("rotationPagePrefill();", 1)[0]
+        self.javascript(r"""
+const selectedId='00000000-0000-4000-8000-000000000007';
+const selected={...state.credentials[0],id:selectedId};
+protectedStaticCredentials=true;protectedStaticRotation=true;
+assert.equal(credentialReplacementButton(selected),
+  `<a href="/credentials/static/rotation#credential=${selectedId}">Review secret rotation</a> `);
+for(const patch of [{id:'x\"<'},{id:selectedId+'?secret=x'},{kind:'oauth2'},
+    {metadata:{oauth:true}},{lifecycle_status:'retired'},{lifecycle_status:undefined}]){
+  assert.equal(credentialReplacementButton({...selected,...patch}),'');
+}
+protectedStaticCredentials=false;
+assert.equal(credentialReplacementEligible(selected),false);
+assert.throws(open);assert.equal(calls.length,0);assert.equal(hardware,0);
+protectedStaticRotation=false;
+assert.match(credentialReplacementButton(state.credentials[0]),/data-credential-replacement/);
+let clearedHashes=[];
+window.location={hash:''};
+window.history={replaceState(state,title,path){
+  assert.equal(state,null);assert.equal(title,'');assert.equal(path,'/credentials/static/rotation');
+  assert.equal($('rotation-credential-id').value,'');
+  clearedHashes.push(window.location.hash);window.location.hash='';
+}};
+document.getElementById=$;
+""" + prefill + r"""
+rotationPagePrefill();assert.equal(clearedHashes.length,0);
+window.location.hash='#credential='+selectedId;rotationPagePrefill();
+assert.equal($('rotation-credential-id').value,selectedId);
+assert.equal(window.location.hash,'');assert.match($('rotation-status').textContent,/No predecessor read/);
+assert.equal(rotationFlow,null);assert.equal(rotationPrerequisitesObserved,false);
+for(const fragment of ['#credential=bad','#credential='+selectedId+'&action=rotate',
+    '#credential=%30'+selectedId.slice(1),'#secret=private','#credential='+'a'.repeat(200)]){
+  $('rotation-credential-id').value='';window.location.hash=fragment;rotationPagePrefill();
+  assert.equal(window.location.hash,'');assert.equal($('rotation-credential-id').value,'');
+  assert.match($('rotation-status').textContent,/manually/);
+}
+assert.equal(calls.length,0);assert.equal(hardware,0);assert.equal(writes.length,0);
+assert.equal(credentialReplacement,null);assert.equal(rotationFlow,null);
+assert.equal(rotationPrerequisitesObserved,false);
+""")
 
     def test_protected_mode_refuses_legacy_replacement_before_side_effects(self) -> None:
         function = next(node for node in ast.parse(APP).body

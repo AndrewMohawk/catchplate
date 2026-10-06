@@ -3668,17 +3668,19 @@ def _portal_document() -> str:
     seed_button = ('<button type="button" onclick="runUiAction(\'Seed demo\', seedDemo)">Seed demo</button>'
         if _development_demo_seed_enabled() else "")
     protected_static = _protected_static_credentials()
+    protected_rotation = rotation_owner.selected()
     secret_field = ('<p>Protected creation accepts no secret on this origin. '
         '<a href="/credentials/static/new">Open protected static credential onboarding</a>. '
         'After creation, explicitly select and bind its exact ID in Setup.</p>' if protected_static else
         '<label for="credential-secret">Secret</label>'
         '<textarea id="credential-secret" name="secret" required autocomplete="off"></textarea>')
-    if rotation_owner.selected():
+    if protected_rotation:
         secret_field += ('<p><a href="/credentials/static/rotation">'
             'Rotate an existing protected static credential</a>.</p>')
     return (UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
         .replace("__SERVERWARE_STATIC_SECRET_FIELD__", secret_field)
-        .replace("__SERVERWARE_STATIC_PROTECTED__", json.dumps(protected_static)))
+        .replace("__SERVERWARE_STATIC_PROTECTED__", json.dumps(protected_static))
+        .replace("__SERVERWARE_STATIC_ROTATION_SELECTED__", json.dumps(protected_rotation)))
 
 
 def _protected_static_credentials() -> bool:
@@ -23812,6 +23814,7 @@ UI_HTML = r"""
     let policyPreviewGeneration = 0;
     const $ = (id) => document.getElementById(id);
     const protectedStaticCredentials = __SERVERWARE_STATIC_PROTECTED__;
+    const protectedStaticRotation = __SERVERWARE_STATIC_ROTATION_SELECTED__;
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
     const canonicalValue = (value) => Array.isArray(value) ? value.map(canonicalValue) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])])) : value;
@@ -27666,7 +27669,6 @@ UI_HTML = r"""
 
     $('credential-form').addEventListener('submit', (event) => {
       event.preventDefault();
-      if (protectedStaticCredentials) { window.location.assign('/credentials/static/new'); return; }
       runUiAction('Create credential', async () => {
         const form = new FormData(event.target);
         const kind = String(form.get('kind') || '');
@@ -27677,6 +27679,21 @@ UI_HTML = r"""
         const candidateCredential = {id: 'new credential', kind, metadata};
         const candidateInjection = storedCredentialInjection(candidateCredential);
         signedPolicyCredential(candidateCredential, candidateInjection);
+        if (protectedStaticCredentials) {
+          if (setupCredentialContext) {
+            setupCredentialMutationGuard({kind: 'credential-create', persist: false,
+              setupCredentialContextId: setupCredentialContext.id})();
+            if (setupCredentialContext.submitted) throw new Error('This Setup credential was already submitted. Inspect the original run; do not create it again.');
+            const template = policyTemplates[setupCredentialContext.template];
+            const injection = policyCredentialInjection(candidateCredential, null, template);
+            signedPolicyCredential(candidateCredential, injection);
+            if (!template.custom) policyCredentialBinding(candidateCredential, {adapter: template.adapter});
+          }
+          const href = staticPortalCreationHref({apiVersion: 'serverware.staticCredentialCreationPrefill/v1',
+            name: String(form.get('name') || ''), kind, metadata, setupId: setupCredentialContext?.sessionId || null});
+          window.location.assign(href);
+          return {uiHandled: true};
+        }
         const mutation = {
           kind: 'credential-create',
           label: `Create credential ${form.get('name')}`,

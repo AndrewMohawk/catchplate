@@ -1432,6 +1432,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oauth_refresh.py \
 	serverware/authority_credential_currentness.py \
 	serverware/authority_credential_currentness_policy.py \
+	serverware/authority_credential_currentness_assignment.py \
+	serverware/control_plane_credential_currentness_assignment.py \
 	serverware/authority_transition_credential_currentness.py \
 	serverware/control_plane_credential_currentness.py \
 	serverware/credential_ciphertext.py \
@@ -1448,6 +1450,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_shadow_custody_runtime.py \
 	scripts/package_native_setup_issuers_runtime.py \
 	scripts/build_production_images.py \
+	scripts/send_native_audit_assignment.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/native_pilot_runtime_artifacts.py \
 	scripts/native_pilot_tar_export.py \
@@ -2014,6 +2017,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/policy_bundle_issuer.py \
 	scripts/authority/sign_policy_candidate_artifact.py \
 	scripts/authority/sign_policy_shadow_assignment.py \
+	scripts/authority/sign_currentness_assignment.py \
+	scripts/authority/sign_measured_audit_assignment.py \
 	scripts/authority/sign_policy_bundle.py \
 	serverware/native_pilot_closure_set.py \
 	serverware/native_pilot_measured_configuration.py \
@@ -4584,6 +4589,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oauth_refresh.py \
 				serverware/authority_credential_currentness.py \
 				serverware/authority_credential_currentness_policy.py \
+				serverware/authority_credential_currentness_assignment.py \
+				serverware/control_plane_credential_currentness_assignment.py \
 				serverware/authority_transition_credential_currentness.py \
 				serverware/control_plane_credential_currentness.py \
 				serverware/credential_ciphertext.py \
@@ -4600,6 +4607,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_shadow_custody_runtime.py \
 				scripts/package_native_setup_issuers_runtime.py \
 				scripts/build_production_images.py \
+				scripts/send_native_audit_assignment.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/native_pilot_runtime_artifacts.py \
 				scripts/native_pilot_tar_export.py \
@@ -5160,6 +5168,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/policy_bundle_issuer.py \
 				scripts/authority/sign_policy_candidate_artifact.py \
 				scripts/authority/sign_policy_shadow_assignment.py \
+				scripts/authority/sign_currentness_assignment.py \
+				scripts/authority/sign_measured_audit_assignment.py \
 				scripts/authority/sign_policy_bundle.py \
 				serverware/native_pilot_closure_set.py \
 				serverware/native_pilot_measured_configuration.py \
@@ -5533,6 +5543,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_audit_batch_v1.rs \
 				data-plane/decision-gate-rs/src/native_audit_owner.rs \
 				data-plane/decision-gate-rs/src/native_audit_transport.rs \
+				data-plane/decision-gate-rs/src/native_audit_assignment.rs \
+				data-plane/decision-gate-rs/src/native_postboot_assignment.rs \
 				data-plane/decision-gate-rs/src/native_canary_evidence_v1.rs \
 				data-plane/decision-gate-rs/src/native_canary_tls_v1.rs \
 				data-plane/decision-gate-rs/src/native_canary_transport.rs \

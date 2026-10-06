@@ -9122,10 +9122,27 @@ class AuthorityProcess:
                 authority_contract.OPERATION_MANIFEST_DIGEST,
             "arguments": typed_arguments,
         }
-        authority_planner.reject_authoritative_input(typed_request)
+        if operation in {credential_currentness.OP_REGISTER, credential_currentness.OP_ACK}:
+            authority_planner.reject_authoritative_input({name: value for name, value in typed_request.items()
+                if name != "arguments"})
+            authority_planner.reject_typed_authoritative_input(operation, typed_arguments)
+        else:
+            authority_planner.reject_authoritative_input(typed_request)
         issued_monotonic_ns = time.monotonic_ns()
         issued_at_epoch_ns = time.time_ns()
         remaining_ns = deadline_monotonic_ns - issued_monotonic_ns
+        if operation in credential_currentness.ASSIGNMENT_OPERATIONS and "assignment_original" in arguments:
+            from serverware import authority_credential_currentness_assignment as currentness_assignment
+
+            assigned = currentness_assignment.original(arguments["assignment_original"])["payload"]
+            currentness_request = arguments["request"]
+            statement = (currentness_request if operation == credential_currentness.OP_CHALLENGE
+                else currentness_request["evidence"]["statement"])
+            if issued_at_epoch_ns < max(assigned["issuedAtEpochNs"], statement["issuedAtEpochNs"]):
+                raise AuthorityServiceError("Currentness clock precedes its original assignment or request")
+            remaining_ns = min(remaining_ns,
+                min(assigned["expiresAtEpochNs"], statement["expiresAtEpochNs"]) - issued_at_epoch_ns)
+            deadline_monotonic_ns = min(deadline_monotonic_ns, issued_monotonic_ns + remaining_ns)
         if operation == setup_native_final.SETTLE and "continuation_original" in arguments:
             final_values = setup_native_final.arguments(operation, arguments, typed="businessIntent" in arguments)
             final_challenge = setup_native_final.challenge(final_values["challenge_original"])

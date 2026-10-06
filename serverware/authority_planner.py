@@ -22,6 +22,7 @@ from serverware.authority_audit_trace import (
     audit_capacity_scan_key,
 )
 from serverware import authority_contract
+from serverware import authority_credential_currentness as credential_currentness
 from serverware import authority_publication_approval as publication_approval
 from serverware import authority_public_revocation_approval as public_revocation_approval
 from serverware import authority_oauth_activation as oauth_activation
@@ -404,7 +405,21 @@ def reject_authoritative_input(value: Any, *, path: str = "input") -> None:
 
 
 def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -> None:
-    if operation in oauth_measured_exchange.OPERATIONS:
+    if operation in {credential_currentness.OP_REGISTER, credential_currentness.OP_ACK}:
+        credential_currentness.arguments(operation, value, typed=True)
+        _business_intent({"arguments": value}, operation=operation)
+        request = dict(value["request"])
+        evidence = dict(request["evidence"])
+        # Omit only the closed raw COSE field from this name-guard projection.
+        # The original remains in the committed request and is independently
+        # verified by both actual authority roles before any mutation.
+        evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()
+            if name != "attestationDocumentB64"}
+        request["evidence"] = evidence
+        intent = dict(value["businessIntent"])
+        intent["arguments"] = {**intent["arguments"], "request": request}
+        reject_authoritative_input({**value, "request": request, "businessIntent": intent})
+    elif operation in oauth_measured_exchange.OPERATIONS:
         oauth_measured_exchange.arguments(operation, value, typed=True)
         evidence = dict(value["native_evidence"])
         evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()

@@ -16,8 +16,10 @@ from serverware import authority_oauth_refresh as refresh
 
 FIELD = "credentialCurrentnessPolicy"
 SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v2"
+POSTBOOT_SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v3"
 TRUST_SCHEMA = "serverware.credentialCurrentnessNativeTrustRoots/v1"
 FIELDS = frozenset({"schema", "deploymentId", "operationMaxSeconds", "maximumHolders", "trustRoots", "holders"})
+POSTBOOT_FIELDS = (FIELDS - {"holders"}) | {"targets", "assignmentAuthorizer"}
 ASSIGNMENT_FIELDS = frozenset({"holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest", "expectedPcrs", "expectedEif", "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds"})
 _SCOPE_DIGESTS = ("releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest")
 
@@ -72,11 +74,21 @@ def validate_policy(value, *, payload, root_key=None):
     if value is None:
         profile.require(not enabled, "strict currentness operations and refresh require an explicit measured-holder policy")
         return None
-    profile.require(type(value) is dict and set(value) == FIELDS and value["schema"] == SCHEMA
+    profile.require(type(value) is dict
+        and ((set(value) == FIELDS and value["schema"] == SCHEMA)
+            or (set(value) == POSTBOOT_FIELDS and value["schema"] == POSTBOOT_SCHEMA))
         and type(value["deploymentId"]) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value["deploymentId"]) is not None)
     profile.require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30
         and type(value["maximumHolders"]) is int and value["maximumHolders"] == profile.MAX_ROWS)
     _trust(value["trustRoots"])
+    if value["schema"] == POSTBOOT_SCHEMA:
+        from serverware import authority_credential_currentness_assignment as assignment
+        targets = value["targets"]
+        profile.require(type(targets) is list and 1 <= len(targets) <= value["maximumHolders"])
+        ids = [assignment.target(item)["targetId"] for item in targets]
+        profile.require(ids == sorted(set(ids)) and len(profile.canonical(value)) <= 512 * 1024)
+        assignment.authorizer(value["assignmentAuthorizer"], payload=payload, root_key=root_key, targets=targets)
+        return value
     holders = value["holders"]
     profile.require(type(holders) is list and 1 <= len(holders) <= value["maximumHolders"])
     ids = []
@@ -98,6 +110,7 @@ def validate_policy(value, *, payload, root_key=None):
 
 
 def _holder(policy, holder_id):
+    profile.require(policy["schema"] == SCHEMA, "Postboot currentness requires its separate signed original")
     matches = [item for item in policy["holders"] if item["holderId"] == holder_id]
     profile.require(len(matches) == 1, "holder has no independently admitted current assignment")
     return matches[0]
@@ -111,17 +124,34 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
         and values["control_plane_configuration_digest"] == full_configuration_digest(configuration_payload),
         "actual custody configuration differs from the independently admitted currentness policy")
     request = values["request"]
+    selected = None
+    if policy["schema"] == POSTBOOT_SCHEMA and operation in profile.ASSIGNMENT_OPERATIONS:
+        from serverware import authority_credential_currentness_assignment as assignment
+        profile.require("assignment_original" in values, "Postboot currentness assignment original is absent")
+        selected = assignment.verify_original(values["assignment_original"],
+            configuration_payload=configuration_payload, root_key=root_key, now_epoch_ns=now_epoch_ns)
+    else:
+        profile.require("assignment_original" not in values, "Legacy or drain-only currentness cannot accept a postboot original")
     if operation in {profile.OP_CHALLENGE, profile.OP_QUIESCE}:
         profile.require(request["issuedAtEpochNs"] <= now_epoch_ns < request["expiresAtEpochNs"]
             <= request["issuedAtEpochNs"] + policy["operationMaxSeconds"] * 1_000_000_000)
         if operation == profile.OP_CHALLENGE:
-            _holder(policy, request["holderId"])
+            if selected is None:
+                _holder(policy, request["holderId"])
+            else:
+                profile.require(request["holderId"] == selected["assignment"]["holderId"]
+                    and selected["issuedAtEpochNs"] <= request["issuedAtEpochNs"]
+                    < request["expiresAtEpochNs"] <= selected["expiresAtEpochNs"])
         return
     if operation == profile.OP_ADMIT:
         return
     envelope = profile.evidence(request["evidence"])
     statement = envelope["statement"]
-    expected = _holder(policy, statement["holderId"])
+    expected = _holder(policy, statement["holderId"]) if selected is None else selected["assignment"]
+    if selected is not None:
+        profile.require(statement["holderId"] == expected["holderId"]
+            and selected["issuedAtEpochNs"] <= statement["issuedAtEpochNs"]
+            < statement["expiresAtEpochNs"] <= selected["expiresAtEpochNs"])
     profile.require(statement["deploymentId"] == policy["deploymentId"]
         and statement["issuedAtEpochNs"] <= now_epoch_ns < statement["expiresAtEpochNs"]
         <= statement["issuedAtEpochNs"] + policy["operationMaxSeconds"] * 1_000_000_000)

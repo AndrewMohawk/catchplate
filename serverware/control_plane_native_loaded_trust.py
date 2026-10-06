@@ -20,6 +20,8 @@ from serverware import control_plane_custody_client as custody
 
 ENV = "SERVERWARE_SETUP_NATIVE_OBSERVATION_CONFIG_FD"
 CONFIG_SCHEMA = "serverware.setupNativePolicyObservationConfiguration/v1"
+POSTBOOT_CONFIG_SCHEMA = "serverware.setupNativePolicyObservationConfiguration/v2"
+POSTBOOT_CONFIG_FIELDS = frozenset({"schema", "sourceRevision", "controlPlaneConfigurationDigest", "assignmentSha256"})
 CONFIG_FIELDS = frozenset({"schema", "sourceRevision", "controlPlaneConfigurationDigest", "authorityRootFd",
     "authorityRootSha256", "authorityRootSpkiSha256", "authorityConfigurationFd", "authorityConfigurationSha256",
     "authorityConfigurationDigest", "holderId"})
@@ -31,6 +33,10 @@ STATEMENT_FIELDS = frozenset({"apiVersion", "request", "policyOriginalSha256", "
 
 
 def configuration(value):
+    if type(value) is dict and value.get("schema") == POSTBOOT_CONFIG_SCHEMA:
+        profile.require(set(value) == POSTBOOT_CONFIG_FIELDS and value["sourceRevision"] == contract.SOURCE_REVISION)
+        profile.digest(value["controlPlaneConfigurationDigest"]); profile.digest(value["assignmentSha256"])
+        return value
     profile.require(type(value) is dict and set(value) == CONFIG_FIELDS and value["schema"] == CONFIG_SCHEMA
         and value["sourceRevision"] == contract.SOURCE_REVISION)
     for name in CONFIG_FIELDS - {"schema", "sourceRevision", "authorityRootFd", "authorityConfigurationFd"}:
@@ -51,6 +57,22 @@ class Trust:
         profile.require(descriptor in self.binding.inherited_descriptors)
         config_original = originals._Original(descriptor, 16384)
         config = configuration(codec.document(config_original.raw, 16384))
+        self.postboot_selection = None
+        if config["schema"] == POSTBOOT_CONFIG_SCHEMA:
+            from serverware import control_plane_credential_currentness_assignment as selected
+            selection = selected.require_selected()
+            profile.require(selection.binding is self.binding
+                and selection.configuration_digest == config["controlPlaneConfigurationDigest"] == owner.configuration
+                and profile.sha256(selection.assignment_original.encode("ascii")) == config["assignmentSha256"]
+                and descriptor not in {item.fd for item in selection.originals})
+            self.postboot_selection = selection
+            self.root, self.payload, self.policy = selection.root_key, selection.configuration_payload, selection.policy
+            self.assignment = selection.payload["assignment"]
+            self.originals = (config_original, *selection.originals)
+            self.retained = profile.canonical({"payload": self.payload, "assignment": self.assignment})
+            owner.clip(min(self.binding.attestation_interval[1], selection.expires))
+            self.check()
+            return
         root_fd, payload_fd = config["authorityRootFd"], config["authorityConfigurationFd"]
         profile.require(len({descriptor, root_fd, payload_fd}) == 3
             and {root_fd, payload_fd} <= set(self.binding.inherited_descriptors)
@@ -85,6 +107,10 @@ class Trust:
 
     def check(self):
         self.owner.check()
+        if self.postboot_selection is not None:
+            from serverware import control_plane_credential_currentness_assignment as selected
+            profile.require(selected.require_selected() is self.postboot_selection)
+            self.postboot_selection.check()
         profile.require(os.environ.get(ENV, "") == self.environment and self.owner.binding is self.binding
             and custody._snapshot(self.owner.custody) is self.binding
             and profile.canonical({"payload": self.payload, "assignment": self.assignment}) == self.retained)
@@ -104,6 +130,10 @@ class Trust:
             and statement["routePolicyDigest"] == route_digest and request["policyHash"] == expected["policyHash"]
             and type(statement["observedAtEpochNs"]) is int
             and request["issuedAtEpochNs"] <= statement["observedAtEpochNs"] <= now < request["expiresAtEpochNs"])
+        if self.postboot_selection is not None:
+            selected = self.postboot_selection.payload
+            profile.require(selected["issuedAtEpochNs"] <= request["issuedAtEpochNs"]
+                < request["expiresAtEpochNs"] <= selected["expiresAtEpochNs"])
         for name in ("bootId", "keyId", "controlPlaneResponseSigningKeyId"):
             profile.require(statement[name] == expected[name])
         profile.require(statement["dataPlaneBinarySha256"] == expected["expectedBinaryDigest"])

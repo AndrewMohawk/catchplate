@@ -15,6 +15,7 @@ OP_QUIESCE = "credential.currentness.quiesce"
 OP_ACK = "credential.currentness.ack"
 OP_ADMIT = "credential.currentness.admit"
 OPERATIONS = frozenset({OP_CHALLENGE, OP_REGISTER, OP_QUIESCE, OP_ACK, OP_ADMIT})
+ASSIGNMENT_OPERATIONS = frozenset({OP_CHALLENGE, OP_REGISTER, OP_ACK})
 ROOT_TABLE = "credential_currentness_roots"
 HOLDER_TABLE = "credential_currentness_holders"
 CHALLENGE_TABLE = "credential_currentness_challenges"
@@ -124,8 +125,14 @@ def evidence(value):
 
 
 def arguments(operation, value, *, typed=False):
+    assigned = isinstance(value, Mapping) and "assignment_original" in value
     require(operation in OPERATIONS and isinstance(value, Mapping)
-        and set(value) == {"credential_id", "credential_version", "control_plane_configuration_digest", "request"} | ({"businessIntent"} if typed else set()))
+        and (not assigned or operation in ASSIGNMENT_OPERATIONS)
+        and set(value) == {"credential_id", "credential_version", "control_plane_configuration_digest", "request"}
+            | ({"businessIntent"} if typed else set()) | ({"assignment_original"} if assigned else set()))
+    if assigned:
+        from serverware import authority_credential_currentness_assignment as assignment
+        assignment.original(value["assignment_original"])
     identifier(value["credential_id"])
     version(value["credential_version"])
     digest(value["control_plane_configuration_digest"])
@@ -147,6 +154,8 @@ def arguments(operation, value, *, typed=False):
         identifier(request["barrierId"])
         digest(request["barrierSha256"])
     result = {name: value[name] for name in ("credential_id", "credential_version", "control_plane_configuration_digest", "request")}
+    if assigned:
+        result["assignment_original"] = value["assignment_original"]
     require(len(canonical(result)) <= MAX_ARGUMENT_BYTES)
     return result
 

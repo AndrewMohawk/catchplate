@@ -15,6 +15,7 @@ def main() -> None:
     policy_canary_startup = None
     rbac_currentness_startup = None
     static_credential_startup = None
+    currentness_assignment_startup = None
 
     try:
         custody_startup.initialize_from_environment()
@@ -40,6 +41,8 @@ def main() -> None:
         rbac_currentness_startup.initialize_from_environment()
         from serverware import control_plane_static_credential as static_credential_startup
         static_credential_startup.initialize_from_environment()
+        from serverware import control_plane_credential_currentness_assignment as currentness_assignment_startup
+        currentness_assignment_startup.initialize_from_environment()
 
         import uvicorn
         from serverware.config import WEB_HOST, WEB_PORT, WEB_TLS_CERT_FILE, WEB_TLS_KEY_FILE
@@ -66,7 +69,7 @@ def main() -> None:
         uvicorn.Server(configuration).run()
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        for owner in (static_credential_startup, rbac_currentness_startup, policy_canary_startup, measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
+        for owner in (currentness_assignment_startup, static_credential_startup, rbac_currentness_startup, policy_canary_startup, measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
             try:
                 if owner is not None:
                     owner.close()
@@ -74,7 +77,7 @@ def main() -> None:
                 pass
         raise
     else:
-        _close_remaining(static_credential_startup, rbac_currentness_startup, policy_canary_startup, measured_audit_startup,
+        _close_remaining(currentness_assignment_startup, static_credential_startup, rbac_currentness_startup, policy_canary_startup, measured_audit_startup,
             oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup,
             workload_identity_startup, enrollment_startup, custody_startup)
 

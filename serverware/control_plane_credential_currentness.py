@@ -18,6 +18,7 @@ from serverware import authority_credential_currentness as profile
 from serverware import authority_oauth_refresh as refresh
 from serverware import control_plane_custody_client as custody_client
 from serverware import control_plane_custody_startup as startup
+from serverware import control_plane_credential_currentness_assignment as assignment_startup
 from serverware.control_plane_approval_verification import _request_pin
 
 REQUEST_SCHEMA = "serverware.credentialCurrentnessRequest/v1"
@@ -103,6 +104,7 @@ class _Owner:
         self.binding = custody_client._snapshot(self.custody)
         self.configuration_digest = self.binding.configuration_digest
         profile.digest(self.configuration_digest)
+        self.assignment = None
         self.poisoned, self.attempts = False, set()
 
     def check(self):
@@ -113,6 +115,11 @@ class _Owner:
                 and startup.require_started() is self.custody
                 and custody_client._snapshot(self.custody) is self.binding
                 and self.binding.configuration_digest == self.configuration_digest)
+            if self.assignment is not None:
+                profile.require(assignment_startup.require_selected() is self.assignment
+                    and self.assignment.binding is self.binding
+                    and self.assignment.configuration_digest == self.configuration_digest)
+                self.assignment.check()
             self.mono, self.epoch = mono, epoch
         except BaseException:
             self.poisoned = True
@@ -126,9 +133,20 @@ class _Owner:
 
     def dispatch(self, operation, credential_id, version, request):
         self.check()
-        arguments = profile.arguments(operation, {"credential_id": credential_id,
+        values = {"credential_id": credential_id,
             "credential_version": version, "control_plane_configuration_digest": self.configuration_digest,
-            "request": request})
+            "request": request}
+        if operation in profile.ASSIGNMENT_OPERATIONS and assignment_startup.selected():
+            self.assignment = assignment_startup.require_selected()
+            statement = request if operation == profile.OP_CHALLENGE else request["evidence"]["statement"]
+            profile.require(self.assignment.binding is self.binding
+                and self.assignment.configuration_digest == self.configuration_digest
+                and self.assignment.payload["assignment"]["holderId"] == statement["holderId"])
+            self.expires = min(self.expires, self.assignment.expires)
+            self.deadline = min(self.deadline, self.assignment.deadline, self.mono + self.expires - self.epoch)
+            values["assignment_original"] = self.assignment.assignment_original
+            self.check()
+        arguments = profile.arguments(operation, values)
         if operation == profile.OP_ACK or (operation == profile.OP_CHALLENGE and request["phase"] == "ack"):
             statement = request["evidence"]["statement"] if operation == profile.OP_ACK else request
             _, _, root = _rows(credential_id, version)

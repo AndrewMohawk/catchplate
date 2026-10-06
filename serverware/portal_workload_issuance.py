@@ -425,9 +425,11 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
           cache: 'no-store', redirect: 'error', signal: controller.signal});
         const value = await workloadIssuanceRead(response, 32 * 1024, current);
         workloadIssuanceNeed(response.status === 200 && workloadIssuanceClosed(value, ['authenticated', 'userId',
-          'roles', 'authMethod', 'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured'])
+          'roles', 'authMethod', 'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured', 'sessionActivationMode'])
           && value.authenticated === true && value.userId === userId && value.authMethod === 'oidc-session'
           && value.sessionState === 'active' && value.webauthnRequired === false
+          && ['legacy', 'protected', 'unavailable'].includes(value.sessionActivationMode)
+          && value.sessionActivationMode === state.authStatus.sessionActivationMode
           && typeof value.oidcBrowserLoginConfigured === 'boolean' && Array.isArray(value.roles)
           && value.roles.length <= 64 && value.roles.every(role => workloadIssuanceText(role, 128))
           && new Set(value.roles).size === value.roles.length
@@ -571,7 +573,17 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
           && value.freshAuthorizationRequired === true && value.automaticRetryAllowed === false && !continuing) {
         return {pending: Object.freeze({approvalId: value.approvalId, resourceId: value.resourceId, payloadDigest: value.payloadDigest})};
       }
-      if (reply.status !== 200) return {unknown: true};
+      if (reply.status !== 200) {
+        if ([400, 401, 403, 405, 409, 412, 413, 415, 503].includes(reply.status)
+            && workloadIssuanceClosed(value, ['schema', 'status', 'automaticRetryAllowed',
+              'proxyAuthenticated', 'enrollmentComplete'])
+            && value.schema === workloadIssuanceSchema && value.status === 'refused'
+            && value.automaticRetryAllowed === false && value.proxyAuthenticated === false
+            && value.enrollmentComplete === false) {
+          current(); return {refused: true};
+        }
+        return {unknown: true};
+      }
       workloadIssuanceNeed(workloadIssuanceClosed(value, ['schema', 'status', 'association', 'certificate',
         'proxyAuthenticated', 'enrollmentComplete', 'automaticRetryAllowed'])
         && value.schema === workloadIssuanceSchema && value.status === 'certificate-issued'
@@ -633,6 +645,9 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
           workloadIssuanceMessage('Server returned a matching public certificate: ' + outcome.certificateDigest
             + '. Download and pin these exact bytes for local admission; enrollment and proxy authentication remain unconfirmed.'
             + (profile === workloadIssuanceProfiles.native ? ' On the workload host use --admit-native-workload-certificate with the retained request/key, independent issuer and explicit SANs.' : ''));
+        } else if (outcome.refused) {
+          workloadIssuanceContact = false;
+          workloadIssuanceMessage('The server reported issuance refusal. This attempt remains consumed; no certificate was admitted and no retry or approval continuation is authorized. This is not a rollback or noncommit proof.', true);
         } else { workloadIssuanceUncertain = true; workloadIssuanceMessage('No certificate result was admitted. Do not retry an uncertain issuance.', true); }
       } catch (_) {
         if (workloadIssuanceContact) workloadIssuanceUncertain = true;

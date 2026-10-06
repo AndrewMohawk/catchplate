@@ -215,12 +215,16 @@ pub fn cookie(id: &str, value: &str, expires: u64) -> Result<String, String> {
     Ok(format!("{name}={value}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={age}"))
 }
 
-/// The fragment contains public canonical originals only, never a secret.
-/// JavaScript keeps those strings intact; parsing labels does not re-encode
-/// nanosecond integers or metadata for the protected request.
-pub fn page() -> Result<(Vec<u8>, String), String> {
+/// Only the cold-configured portal and the retained original opener may hand
+/// off public originals. JavaScript never re-encodes their nanosecond integers
+/// or metadata. The optional manual fragment likewise contains no secret.
+pub fn page(portal_origin: &str) -> Result<(Vec<u8>, String), String> {
+    wire::origin(portal_origin)?;
+    let portal = serde_json::to_string(portal_origin).map_err(|_| "static portal origin encoding")?
+        .replace('<', "\\u003c");
     let nonce = nonce()?;
-    let body = PAGE.replace("__SCRIPT_NONCE__", &nonce).into_bytes();
+    let body = PAGE.replace("__SCRIPT_NONCE__", &nonce)
+        .replace("__PORTAL_ORIGIN_JSON__", &portal).into_bytes();
     let csp = format!("default-src 'none'; script-src 'nonce-{nonce}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
     Ok((body, csp))
 }
@@ -230,13 +234,13 @@ const PAGE: &str = r##"<!doctype html>
 <title>Native static credential intake</title>
 <h1>Native static credential intake</h1>
 <p>Enter a secret only on this native TLS page. The portal receives encrypted candidate material, never this secret. Sealing and preparation do not create a credential or prove approval.</p>
-<p id="status" role="status">Reading the selected public original…</p>
+<p id="status" role="status">Waiting for the original portal's public intent…</p>
 <pre id="selection"></pre>
 <form id="intake" hidden><label for="secret">Secret (exact UTF-8; whitespace is preserved)</label><br>
 <textarea id="secret" rows="5" cols="64" autocomplete="off" autocapitalize="off" spellcheck="false" required></textarea><br>
 <button id="seal" type="submit">Seal this candidate once</button></form>
 <button id="prepare" type="button" hidden>Prepare fresh evidence once</button>
-<p>Copy the public result back to the portal. No automatic staging, insertion, retry, or navigation occurs.</p>
+<p>Only public encrypted candidate material and fresh evidence return to the original portal. Create there is a separate explicit hardware-approved action. No insertion or retry occurs on this page. The literal public result is also shown below.</p>
 <textarea id="result" rows="14" cols="90" readonly aria-label="Public candidate or evidence"></textarea>
 <script nonce="__SCRIPT_NONCE__">
 (() => {
@@ -248,71 +252,138 @@ const PAGE: &str = r##"<!doctype html>
   const seal = document.getElementById('seal');
   const prepare = document.getElementById('prepare');
   const result = document.getElementById('result');
-  let original = '', mode = '', id = '', attempted = false;
+  const portalOrigin = __PORTAL_ORIGIN_JSON__;
+  const originalOpener = window.opener;
+  const prefix = 'serverware.nativeStaticCredential';
+  let original = '', mode = '', id = '', selected = false;
+  let intakeAttempted = false, preparationAttempted = false, sealedCandidate = null;
   const fragment = location.hash.slice(1);
   history.replaceState(null, '', '/credentials/static');
   const fields = (value, names) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).length === names.length && names.every(name => Object.hasOwn(value, name));
-  try {
-    const query = new URLSearchParams(fragment);
-    if ([...query.keys()].length !== 1 || !(query.has('intent') || query.has('prepare'))) throw new Error();
-    mode = query.has('intent') ? 'intake' : 'prepare';
-    original = query.get(mode === 'intake' ? 'intent' : 'prepare');
-    if (!original || original.length > 2097152 || !/^[\x00-\x7f]+$/.test(original)) throw new Error();
-    const view = JSON.parse(original);
+  const literal = value => typeof value === 'string' && value.length > 0
+    && value.length <= 2097152 && /^[\x00-\x7f]+$/.test(value);
+  const identity = value => typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  function send(value) {
+    if (!originalOpener || originalOpener.closed) return false;
+    originalOpener.postMessage(value, portalOrigin);
+    return true;
+  }
+  function select(value, phase) {
+    if (selected) throw new Error();
+    selected = true;
+    if (!literal(value)) throw new Error();
+    const view = JSON.parse(value);
     const request = view.request;
-    if (!request || typeof request.credentialId !== 'string'
-        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(request.credentialId)) throw new Error();
-    id = request.credentialId;
-    if (mode === 'intake' && (view.apiVersion !== 'serverware.staticCredentialCreationIntent/v1'
+    if (!request || !identity(request.credentialId) || typeof request.name !== 'string'
+        || typeof request.kind !== 'string') throw new Error();
+    if (phase === 'intake' && (view.apiVersion !== 'serverware.staticCredentialCreationIntent/v1'
         || view.operation !== 'credential.static.create')) throw new Error();
+    original = value; mode = phase; id = request.credentialId;
     selection.textContent = `Credential: ${id}\nActor: ${mode === 'intake' ? view.actorId : view.actor_id}\nName: ${request.name}\nKind: ${request.kind}`;
     intake.hidden = mode !== 'intake'; prepare.hidden = mode !== 'prepare';
     status.textContent = mode === 'intake' ? 'Review the selected intent, then enter the secret here.'
       : 'This prepares fresh evidence for the same retained candidate. Its approval and current state are verified separately.';
-  } catch (_) {
-    original = ''; status.textContent = 'A valid public intent or fresh execution original is required. Return to the portal; do not enter a secret.';
   }
-  async function submit(event) {
-    if (event) event.preventDefault();
-    if (!original || attempted) return;
-    let payload;
-    if (mode === 'intake') {
-      if (!secret.value || new TextEncoder().encode(secret.value).length > 1048576) {
-        status.textContent = 'Enter a nonempty UTF-8 secret of at most 1 MiB.'; return;
-      }
-      payload = {intentOriginal: original, secret: secret.value};
-    } else { payload = {credentialId: id, argumentsOriginal: original}; }
-    attempted = true; seal.disabled = true; prepare.disabled = true;
+  function refused() {
+    status.textContent = 'Outcome uncertain or refused. This page will not retry. Preserve the selected identity and resolve through the portal.';
+  }
+  async function post(phase, payload) {
+    // Originals remain strings: only this outer transport wrapper is encoded.
+    const body = JSON.stringify(payload);
+    const response = await fetch(`/credentials/static/${phase}`, {method: 'POST',
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      headers: {'Content-Type': 'application/json'}, body});
+    if (!response.ok || response.redirected || response.headers.get('content-type') !== 'application/json') throw new Error();
+    const raw = await response.text();
+    if (!raw || raw.length > 8388608) throw new Error();
+    return {raw, reply: JSON.parse(raw)};
+  }
+  async function sealOnce(event) {
+    event.preventDefault();
+    if (mode !== 'intake' || !original || intakeAttempted) return;
+    if (!secret.value || new TextEncoder().encode(secret.value).length > 1048576) {
+      status.textContent = 'Enter a nonempty UTF-8 secret of at most 1 MiB.'; return;
+    }
+    let payload = {intentOriginal: original, secret: secret.value};
+    intakeAttempted = true; seal.disabled = true;
     secret.value = ''; secret.disabled = true;
-    status.textContent = 'Submitting once. Do not repeat if delivery is uncertain.';
+    status.textContent = 'Sealing once. Do not repeat if delivery is uncertain.';
     try {
-      const body = JSON.stringify(payload); payload = null;
-      const response = await fetch(`/credentials/static/${mode}`, {method: 'POST',
-        credentials: 'same-origin', cache: 'no-store', redirect: 'error',
-        headers: {'Content-Type': 'application/json'}, body});
-      if (!response.ok || response.redirected || response.headers.get('content-type') !== 'application/json') throw new Error();
-      const raw = await response.text();
-      if (!raw || raw.length > 8388608) throw new Error();
-      const reply = JSON.parse(raw);
-      if (mode === 'intake') {
-        if (!fields(reply, ['apiVersion', 'candidate'])
-            || reply.apiVersion !== 'serverware.nativeStaticCredentialCandidateResponse/v1'
-            || !fields(reply.candidate, ['credentialId', 'intentOriginal', 'nativeGenerationOriginal', 'intentSha256', 'generationSha256', 'expiresAtEpochNs'])
-            || reply.candidate.credentialId !== id || reply.candidate.intentOriginal !== original) throw new Error();
-      } else if (!fields(reply, ['apiVersion', 'argumentsOriginal', 'evidence'])
-          || reply.apiVersion !== 'serverware.nativeStaticCredentialPreparationResponse/v1'
-          || reply.argumentsOriginal !== original || !reply.evidence) throw new Error();
-      // Show literal response bytes. Never JSON.stringify a parsed nanosecond
-      // value or reinterpret an encrypted candidate as execution authority.
+      const pending = post('intake', payload); payload = null;
+      const {raw, reply} = await pending;
+      if (!fields(reply, ['apiVersion', 'candidate'])
+          || reply.apiVersion !== prefix + 'CandidateResponse/v1'
+          || !fields(reply.candidate, ['credentialId', 'intentOriginal', 'nativeGenerationOriginal', 'intentSha256', 'generationSha256', 'expiresAtEpochNs'])
+          || reply.candidate.credentialId !== id || reply.candidate.intentOriginal !== original
+          || !literal(reply.candidate.nativeGenerationOriginal)) throw new Error();
+      sealedCandidate = reply.candidate;
+      // Display and transfer the literal response, never parsed timestamps.
       result.value = raw;
-      status.textContent = mode === 'intake' ? 'Encrypted candidate retained. Copy this public result for independent approval.'
-        : 'Fresh evidence prepared once. Copy this public result; no credential insertion was performed here.';
+      status.textContent = 'Encrypted candidate retained. Return to the original portal for independent approval and explicit Create. Keep this page open.';
+      send({apiVersion: prefix + 'CandidateMessage/v1', candidateOriginal: raw});
     } catch (_) {
-      status.textContent = 'Outcome uncertain or refused. This page will not retry. Preserve the selected identity and resolve through the portal.';
+      sealedCandidate = null; refused();
     } finally { payload = null; }
   }
-  intake.addEventListener('submit', submit);
-  prepare.addEventListener('click', submit);
+  async function prepareOnce(argumentsOriginal, credentialId, fromPortal) {
+    if (preparationAttempted) return;
+    preparationAttempted = true; prepare.disabled = true;
+    try {
+      if (!literal(argumentsOriginal) || credentialId !== id) throw new Error();
+      const args = JSON.parse(argumentsOriginal);
+      if (!fields(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request', 'approval_id'])
+          || !args.request || args.request.credentialId !== id
+          || (fromPortal && (!sealedCandidate
+            || args.request.nativeGenerationOriginal !== sealedCandidate.nativeGenerationOriginal))) throw new Error();
+      status.textContent = 'Preparing once for the original portal request. Do not retry if delivery is uncertain.';
+      const {raw, reply} = await post('prepare', {credentialId, argumentsOriginal});
+      if (!fields(reply, ['apiVersion', 'argumentsOriginal', 'evidence'])
+          || reply.apiVersion !== prefix + 'PreparationResponse/v1'
+          || reply.argumentsOriginal !== argumentsOriginal || !reply.evidence) throw new Error();
+      result.value = raw;
+      status.textContent = 'Fresh evidence prepared once. The original portal must independently authorize insertion; this page did not create a credential.';
+      if (fromPortal) send({apiVersion: prefix + 'PreparedMessage/v1', preparationOriginal: raw});
+    } catch (_) {
+      refused();
+      if (fromPortal) {
+        try { send({apiVersion: prefix + 'PrepareFailedMessage/v1', credentialId, argumentsOriginal, outcome: 'uncertain'}); }
+        catch (_) { /* The original portal must also fence a missing response. */ }
+      }
+    }
+  }
+  intake.addEventListener('submit', sealOnce);
+  prepare.addEventListener('click', () => {
+    if (mode === 'prepare' && original && !originalOpener) void prepareOnce(original, id, false);
+  });
+  window.addEventListener('message', event => {
+    if (!originalOpener || event.source !== originalOpener || event.origin !== portalOrigin) return;
+    const value = event.data;
+    if (fields(value, ['apiVersion', 'intentOriginal']) && value.apiVersion === prefix + 'IntentMessage/v1') {
+      if (selected) return;
+      try { select(value.intentOriginal, 'intake'); } catch (_) { refused(); }
+    } else if (fields(value, ['apiVersion', 'credentialId', 'argumentsOriginal'])
+        && value.apiVersion === prefix + 'PrepareMessage/v1') {
+      if (mode !== 'intake' || !sealedCandidate || preparationAttempted) return;
+      void prepareOnce(value.argumentsOriginal, value.credentialId, true);
+    }
+  });
+  try {
+    if (fragment) {
+      const query = new URLSearchParams(fragment);
+      if ([...query.keys()].length !== 1 || !(query.has('intent') || query.has('prepare'))) throw new Error();
+      const phase = query.has('intent') ? 'intake' : 'prepare';
+      // Manual prepare needs a separate explicit button and the original
+      // HttpOnly cookie. A portal-owned page never adopts a fragment execution.
+      if (phase === 'prepare' && originalOpener) throw new Error();
+      select(query.get(phase === 'intake' ? 'intent' : 'prepare'), phase);
+    } else if (!send({apiVersion: prefix + 'ReadyMessage/v1'})) {
+      status.textContent = 'Open this page from the credential portal, or supply a public intent fragment. Do not enter a secret without a selected intent.';
+    }
+  } catch (_) {
+    selected = true; original = ''; intake.hidden = true; prepare.hidden = true;
+    status.textContent = 'A valid public intent or fresh execution original is required. Return to the portal; do not enter a secret.';
+  }
 })();
 </script></html>"##;

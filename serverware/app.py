@@ -1027,7 +1027,8 @@ def _response_signer_owns_header(name: bytes) -> bool:
 
 
 def _control_plane_security_headers(
-    *, request_is_https: bool
+    *, request_is_https: bool, request_method: str = "", request_path: str = "",
+    request_query: str = "", response_status_code: int = 0, response_is_html: bool = False,
 ) -> dict[str, str]:
     headers = {
         "Cache-Control": "no-store",
@@ -1053,6 +1054,14 @@ def _control_plane_security_headers(
         headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
+    # This one dedicated page coordinates the independently terminated native
+    # intake popup. Every other page retains same-origin opener isolation.
+    # The selected header is part of the actual signed response bytes below;
+    # neither a downstream header nor a query flag can request the exception.
+    if (request_is_https and request_method in {"GET", "HEAD"}
+            and request_path == "/credentials/static/new" and not request_query
+            and response_status_code == 200 and response_is_html):
+        headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     return headers
 
 
@@ -1062,6 +1071,7 @@ def _unsigned_wire_headers(
     request_is_https: bool,
     response_status_code: int,
     representation_body_length: int,
+    request_method: str = "", request_path: str = "", request_query: str = "",
 ) -> list[tuple[bytes, bytes]]:
     preserved = [
         (name, value)
@@ -1081,7 +1091,11 @@ def _unsigned_wire_headers(
             )
         )
     for name, value in _control_plane_security_headers(
-        request_is_https=request_is_https
+        request_is_https=request_is_https, request_method=request_method,
+        request_path=request_path, request_query=request_query,
+        response_status_code=response_status_code,
+        response_is_html=([value.split(b";", 1)[0].strip().lower() for name, value in preserved
+            if name.lower() == b"content-type"] == [b"text/html"]),
     ).items():
         merged.append((name.encode("ascii"), value.encode("latin-1")))
     return merged
@@ -1222,6 +1236,7 @@ class _SignedControlPlaneASGI:
                 request_is_https=request_is_https,
                 response_status_code=response_status_code,
                 representation_body_length=len(body),
+                request_method=request_method, request_path=request_path, request_query=request_query,
             )
             proof_headers: dict[str, str] = {}
             if request_nonce is not None:

@@ -45,7 +45,7 @@ fn browser(state: &GateState, owner: &mut Owner, mut request: Accepted) -> Resul
     if owner.poisoned { return Err("static browser owner poisoned".to_owned()); }
     native_service_remaining(state)?;
     if matches!(request.kind(), Kind::Page) {
-        let (page, csp) = browser_wire::page()?;
+        let (page, csp) = browser_wire::page(&owner.config.portal_origin)?;
         return request.respond("text/html; charset=utf-8", &page, None, &csp);
     }
     let _serial = state.native_oauth_serial.try_lock().map_err(|_|"another native operation is live")?;

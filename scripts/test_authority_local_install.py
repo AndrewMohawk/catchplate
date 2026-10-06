@@ -63,6 +63,19 @@ def plan(*, local):
 
 
 class LocalInstallTests(unittest.TestCase):
+    def test_prospective_setup_window_matches_shared_ceiling(self):
+        self.assertEqual(install.MAX_SECONDS * 1_000_000_000, 5_400_000_000_000)
+        for duration in (3_600_000_000_001, 5_400_000_000_000):
+            value = configuration()
+            value["deadlineBoottimeNs"] = value["issuedAtBoottimeNs"] + duration
+            value["expiresAtUnixNanos"] = value["issuedAtUnixNanos"] + duration
+            self.assertEqual(install.configuration(artifact.canonical_json_bytes(value)), value)
+        for first, last in (("issuedAtBoottimeNs", "deadlineBoottimeNs"),
+                            ("issuedAtUnixNanos", "expiresAtUnixNanos")):
+            value = configuration(); value[last] = value[first] + 5_400_000_000_001
+            with self.subTest(field=last), self.assertRaises(ValueError):
+                install.configuration(artifact.canonical_json_bytes(value))
+
     def test_closed_independent_configuration_and_original_bounds(self):
         value = configuration()
         self.assertEqual(install.configuration(artifact.canonical_json_bytes(value)), value)

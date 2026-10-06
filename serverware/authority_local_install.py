@@ -26,11 +26,12 @@ from cryptography.hazmat.primitives import serialization
 from scripts.authority import atomic_provisioner_contract as contract
 from scripts.authority import native_pilot_authority_io as protected
 from serverware import authority_artifact_spec as artifact
+from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 CONFIGURATION_SCHEMA = "serverware.authorityTrustedHostLocalInstallation/v1"
 MAX_CONFIGURATION = 16384
 TRUST_NAME = "trust-state.json"
-MAX_SECONDS = 3600
+MAX_SECONDS = LOCAL_SETUP_MAX_NS // 1_000_000_000
 _READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _IMMUTABLE = 0x10
 _LIBC = ctypes.CDLL(None, use_errno=True)

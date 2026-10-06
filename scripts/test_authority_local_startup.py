@@ -192,9 +192,9 @@ class LocalStartupTests(unittest.TestCase):
                 startup.plan(startup.encode(changed))
 
     def test_prospective_local_setup_accepts_new_bound_without_normalizing_inputs(self):
-        self.assertEqual(limits.LOCAL_SETUP_MAX_NS, 3_600_000_000_000)
+        self.assertEqual(limits.LOCAL_SETUP_MAX_NS, 5_400_000_000_000)
         self.assertEqual(limits.LOCAL_SESSION_MAX_NS, 7_200_000_000_000)
-        for duration in (300_000_000_001, limits.LOCAL_SETUP_MAX_NS):
+        for duration in (300_000_000_001, 3_600_000_000_001, limits.LOCAL_SETUP_MAX_NS):
             value = fixture()
             value["deadlineBoottimeNs"] = value["issuedAtBoottimeNs"] + duration
             value["expiresAtUnixNanos"] = value["issuedAtUnixNanos"] + duration

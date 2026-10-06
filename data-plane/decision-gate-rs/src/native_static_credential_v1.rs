@@ -69,7 +69,7 @@ impl CredentialPolicy {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreationPolicy {
-    pub schema: String, pub control_plane_configuration_digest: String, pub credential_policy: CredentialPolicy,
+    pub schema: String, pub credential_policy: CredentialPolicy,
     pub operation_max_seconds: u64, pub maximum_argument_bytes: u64, pub maximum_secret_bytes: u64,
     pub two_person_required: bool, pub native_secret_kek_id: String, pub intent_max_seconds: u64,
 }
@@ -77,7 +77,7 @@ impl CreationPolicy {
     pub fn validate(&self) -> Result<(), String> {
         self.credential_policy.validate()?;
         ensure(self.schema == "serverware.staticCredentialCreationAuthorityPolicy/v1"
-            && current::digest(&self.control_plane_configuration_digest) && kek(&self.native_secret_kek_id)
+            && kek(&self.native_secret_kek_id)
             && (1..=30).contains(&self.operation_max_seconds) && (1..=3600).contains(&self.intent_max_seconds)
             && self.maximum_argument_bytes == MAX_ARGUMENT as u64 && self.maximum_secret_bytes == MAX_SECRET as u64,
             "static creation policy differs")
@@ -95,7 +95,7 @@ impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
         self.static_credential_creation_policy.validate()?;
         ensure(self.api_version == "serverware.nativeStaticCredentialConfiguration/v1"
-            && self.control_plane_configuration_digest == self.static_credential_creation_policy.control_plane_configuration_digest
+            && current::digest(&self.control_plane_configuration_digest)
             && (1..=16).contains(&self.candidate_capacity) && deployment(&self.deployment_id)
             && text(&self.instance_id, 512) && self.instance_id.starts_with("spiffe://")
             && self.browser_vsock_port >= 1024 && self.browser_vsock_port < u32::MAX

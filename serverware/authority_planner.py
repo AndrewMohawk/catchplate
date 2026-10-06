@@ -456,6 +456,7 @@ class PlanningState:
     setup_create_policy: Mapping[str, Any] | None = None
     setup_bind_credential_maximum_events: int | None = None
     static_credential_creation_policy: Mapping[str, Any] | None = None
+    static_credential_configuration_digest: str | None = None
     verified_static_credential_custody_evidence: Mapping[str, Any] | None = None
 
 
@@ -1206,6 +1207,7 @@ class TypedTransitionPlanningProgram:
                 setup_create_policy=state.setup_create_policy,
                 setup_bind_credential_maximum_events=state.setup_bind_credential_maximum_events,
                 static_credential_creation_policy=state.static_credential_creation_policy,
+                static_credential_configuration_digest=state.static_credential_configuration_digest,
                 verified_static_credential_custody_evidence=state.verified_static_credential_custody_evidence,
             )
             transition = self.kernel.transition(context)
@@ -3871,7 +3873,10 @@ class MeasuredPlanner:
         self.static_credential_configuration = None
         self.static_credential_root_key = None
         self.static_credential_creation_policy = None
+        self.static_credential_configuration_digest = None
         if self.enabled_operations & (static_create.OPERATIONS | static_approval.OPERATIONS):
+            from serverware.authority_policy_canary_policy import full_configuration_digest
+
             if not isinstance(static_credential_root_key, Ed25519PublicKey):
                 raise AuthorityPlannerError("Static creation planner has no admitted configuration root")
             owned_configuration = json.loads(canonical_bytes(static_credential_configuration))
@@ -3884,6 +3889,7 @@ class MeasuredPlanner:
             self.static_credential_configuration = owned_configuration
             self.static_credential_root_key = static_credential_root_key
             self.static_credential_creation_policy = selected
+            self.static_credential_configuration_digest = full_configuration_digest(owned_configuration)
         elif static_credential_configuration is not None or static_credential_root_key is not None:
             raise AuthorityPlannerError("Static creation configuration cannot select another planner")
 
@@ -4099,6 +4105,7 @@ class MeasuredPlanner:
                         if operation in static_create.OPERATIONS | static_approval.OPERATIONS:
                             planning_state = replace(planning_state,
                                 static_credential_creation_policy=self.static_credential_creation_policy,
+                                static_credential_configuration_digest=self.static_credential_configuration_digest,
                                 verified_static_credential_custody_evidence=verified_static_evidence)
                         if operation == setup_bind_credential.OPERATION:
                             authority_transition_setup_bind_credential.require_complete_populations(

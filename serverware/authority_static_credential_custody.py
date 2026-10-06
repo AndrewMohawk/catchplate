@@ -36,7 +36,7 @@ SIGNATURE_DOMAIN = STATEMENT_SCHEMA.encode("ascii") + b"\0"
 ATTESTATION_DOMAIN = b"serverware/native-static-credential-generation-attestation/v1\0"
 MAX_EVIDENCE_BYTES = 32 * 1024
 MAX_POLICY_BYTES = 512 * 1024
-POLICY_FIELDS = frozenset({"schema", "deploymentId", "controlPlaneConfigurationDigest",
+POLICY_FIELDS = frozenset({"schema", "deploymentId",
     "operationMaxSeconds", "trustRoots", "assignments"})
 ASSIGNMENT_FIELDS = native.ASSIGNMENT_FIELDS | {
     "instanceId", "secretKekId", "intakeOrigin", "portalOrigin"}
@@ -192,11 +192,9 @@ def validate_policy(value, *, payload, root_key=None):
         and type(value["deploymentId"]) is str
         and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value["deploymentId"]) is not None
         and len(canonical(value)) <= MAX_POLICY_BYTES)
-    digest(value["controlPlaneConfigurationDigest"])
     require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30)
     _trust(value["trustRoots"])
     creation = profile.validate_policy(payload.get(profile.FIELD))
-    require(value["controlPlaneConfigurationDigest"] == creation["controlPlaneConfigurationDigest"])
     forbidden = set()
     if root_key is not None:
         forbidden.add(sha256(root_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)))
@@ -230,11 +228,15 @@ def verify_original(operation, arguments, *, evidence, configuration_payload, ro
     request deadline. It must check that deadline after verification and before
     capability issuance; neither old generation time nor a quote renews it.
     """
+    from serverware.authority_policy_canary_policy import full_configuration_digest
+
     require(operation == profile.OPERATION and root_key is not None)
+    configuration_digest = full_configuration_digest(configuration_payload)
     values = profile.arguments(operation, arguments, typed="businessIntent" in arguments)
     selected = validate_policy(configuration_payload.get(FIELD), payload=configuration_payload, root_key=root_key)
     require(selected is not None)
-    profile.verify_request_context(operation, values, selected_policy=configuration_payload[profile.FIELD], now_epoch_ns=now_epoch_ns)
+    profile.verify_request_context(operation, values, selected_policy=configuration_payload[profile.FIELD],
+        expected_configuration_digest=configuration_digest, now_epoch_ns=now_epoch_ns)
     proof = _evidence(evidence)
     _bind(values, proof, now_epoch_ns)
     item = proof["statement"]
@@ -242,7 +244,7 @@ def verify_original(operation, arguments, *, evidence, configuration_payload, ro
     require(len(assignments) == 1, "Static producer has no independently admitted current assignment")
     expected = assignments[0]
     require(item["deploymentId"] == selected["deploymentId"]
-        and item["controlPlaneConfigurationDigest"] == selected["controlPlaneConfigurationDigest"]
+        and item["controlPlaneConfigurationDigest"] == configuration_digest
         and item["expiresAtEpochNs"] <= item["issuedAtEpochNs"] + selected["operationMaxSeconds"] * 1_000_000_000)
     for name in ("bootId", "keyId", "controlPlaneResponseSigningKeyId", "policyHash", "instanceId",
             "secretKekId", "intakeOrigin", "portalOrigin"):

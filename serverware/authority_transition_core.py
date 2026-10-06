@@ -652,6 +652,7 @@ class KernelContext:
     # Actual signed credential-binding capacity, never request-selected.
     setup_bind_credential_maximum_events: int | None = None
     static_credential_creation_policy: Mapping[str, Any] | None = None
+    static_credential_configuration_digest: str | None = None
     verified_static_credential_custody_evidence: Mapping[str, Any] | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:

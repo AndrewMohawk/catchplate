@@ -9432,6 +9432,7 @@ class AuthorityProcess:
                 payload=self.configuration.payload, root_key=self.configuration.root_key)
             replay_arguments = dict(payload=plan_payload, arguments=static_originals,
                 verified_webauthn_evidence=webauthn_evidence, creation_policy=creation_policy,
+                configuration_digest=self.configuration.digest,
                 deadline_ns=deadline_monotonic_ns, now_epoch_ns=static_now,
                 work=_ValidationWork(QueryReadValidationLimits()))
             if operation == static_create.OPERATION:

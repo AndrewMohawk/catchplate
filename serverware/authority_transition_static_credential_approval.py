@@ -93,10 +93,12 @@ class StaticCredentialApprovalKernel:
         selected_policy = getattr(context, "static_credential_creation_policy", None)
         profile.require(type(selected_policy) is dict)
         now = shared._database_epoch_ns(context.database_now)
-        profile.verify_request_context(self.operation, values, selected_policy=selected_policy, now_epoch_ns=now)
+        profile.verify_request_context(self.operation, values, selected_policy=selected_policy,
+            expected_configuration_digest=getattr(context, "static_credential_configuration_digest", None), now_epoch_ns=now)
         request = values["request"]
-        retained = profile.candidate(request["candidateOriginal"])
-        candidate_digest = creation.approval_payload_digest(retained)
+        retained = profile.candidate(request["candidateOriginal"]) if self.operation == profile.OP_REQUEST else None
+        original_row = profile.approval_row(request["approvalOriginal"]) if retained is None else None
+        candidate_digest = creation.approval_payload_digest(retained) if retained is not None else original_row["payload_digest"]
         item_id = _approval_id(self.operation, values, context.request_digest)
         actor = values["actor_id"]
         _role(context, actor, creation.REQUESTER_ROLES if self.operation == profile.OP_REQUEST else creation.APPROVER_ROLES)
@@ -120,6 +122,7 @@ class StaticCredentialApprovalKernel:
             expires_at = _stamp(expiry)
             profile.require(now < _epoch(expires_at))
             provenance = {"schema": profile.PROVENANCE_SCHEMA, "candidateSha256": candidate_digest,
+                "controlPlaneConfigurationDigest": values["control_plane_configuration_digest"],
                 "credentialPolicy": policy, "requestDigest": context.request_digest,
                 "requestEvidenceDigest": evidence["verifiedAssertionReceiptDigest"], "decisionDigest": None,
                 "decisionEvidenceDigest": None, "consumptionDigest": None, "consumptionEvidenceDigest": None}
@@ -132,15 +135,11 @@ class StaticCredentialApprovalKernel:
                 live_delta=1, active_delta=1, next_sequence_delta=1, minimum_expiry_epoch_ns=_epoch(expires_at)))
         else:
             row = shared._row(selected, "actual static approval")
-            profile.require(set(row) == profile.ROW_FIELDS and row["id"] == item_id
-                and row["action"] == creation.ACTION and row["resource_id"] == retained["request"]["credentialId"]
-                and row["payload_digest"] == candidate_digest and row["request_json"] == profile.approval_request(retained)
-                and row["status"] == "pending" and row["requester_id"] == retained["actor_id"] != actor
-                and all(row[name] is None for name in ("approved_by", "approved_at", "consumed_by", "consumed_at",
-                    "decision_note", "approver_webauthn_credential_id")), "Static approval target changed or already has a decision")
+            profile.require(profile.canonical(row) == profile.canonical(original_row)
+                and row["id"] == item_id and row["requester_id"] != actor,
+                "Static approval target changed or already has a decision")
             requested_at, expiry = _epoch(row["requested_at"]), _epoch(row["expires_at"])
-            profile.require(retained["request"]["issuedAtEpochNs"] <= requested_at <= now < request["expiresAtEpochNs"]
-                <= expiry <= retained["request"]["expiresAtEpochNs"] and 0 < expiry - requested_at <= 3_600_000_000_000,
+            profile.require(requested_at <= now < request["expiresAtEpochNs"] <= expiry,
                 "Static approval decision crossed its original expiry")
             _role(context, row["requester_id"], creation.REQUESTER_ROLES)
             provenance = profile.provenance(row["approval_authn"])
@@ -210,13 +209,14 @@ def _original_copy(value, work, depth=0, ancestors=frozenset()):
 
 
 def _verify_static_plan(*, operation, payload, arguments, verified_native_evidence,
-        verified_webauthn_evidence, creation_policy, deadline_ns, now_epoch_ns, work):
+        verified_webauthn_evidence, creation_policy, configuration_digest, deadline_ns, now_epoch_ns, work):
     """Replay these three source programs only, after actual plan/root admission."""
     from serverware import authority_audit_capacity as capacity
     from serverware import authority_challenge_retention as retention
     from serverware.authority_query_read_work import _ValidationWork
 
     is_create = operation == creation.OPERATION
+    profile.digest(configuration_digest)
     profile.require(operation in profile.OPERATIONS or is_create)
     profile.require(type(work) is _ValidationWork and type(payload) is dict and type(arguments) is dict
         and type(verified_webauthn_evidence) is dict and type(creation_policy) is dict
@@ -237,7 +237,7 @@ def _verify_static_plan(*, operation, payload, arguments, verified_native_eviden
 
     check()
     owned = _original_copy({"payload": payload, "arguments": arguments, "native": verified_native_evidence,
-        "hardware": verified_webauthn_evidence, "policy": creation_policy}, work)
+        "hardware": verified_webauthn_evidence, "policy": creation_policy, "configurationDigest": configuration_digest}, work)
     plan, evidence, native = owned["payload"], owned["hardware"], owned["native"]
     contract = creation if is_create else profile
     values = contract.arguments(operation, owned["arguments"], typed="businessIntent" in owned["arguments"])
@@ -277,7 +277,7 @@ def _verify_static_plan(*, operation, payload, arguments, verified_native_eviden
     check()
     context = core.KernelContext(operation, typed["arguments"], tuple(selected), datetime.fromisoformat(stamp),
         request_digest, verified_webauthn_evidence=evidence, static_credential_creation_policy=owned["policy"],
-        verified_static_credential_custody_evidence=native)
+        verified_static_credential_custody_evidence=native, static_credential_configuration_digest=owned["configurationDigest"])
     if is_create:
         from serverware.authority_transition_static_credential_create import StaticCredentialCreateKernel
         kernel = StaticCredentialCreateKernel()
@@ -299,8 +299,8 @@ def _verify_static_plan(*, operation, payload, arguments, verified_native_eviden
 
 
 def verify_static_approval_plan(*, operation, payload, arguments, verified_webauthn_evidence,
-        creation_policy, deadline_ns, now_epoch_ns, work):
+        creation_policy, configuration_digest, deadline_ns, now_epoch_ns, work):
     profile.require(operation in profile.OPERATIONS)
     _verify_static_plan(operation=operation, payload=payload, arguments=arguments, verified_native_evidence=None,
         verified_webauthn_evidence=verified_webauthn_evidence, creation_policy=creation_policy,
-        deadline_ns=deadline_ns, now_epoch_ns=now_epoch_ns, work=work)
+        configuration_digest=configuration_digest, deadline_ns=deadline_ns, now_epoch_ns=now_epoch_ns, work=work)

@@ -74,6 +74,7 @@ def _approval_mutations(context, values, now, stamp):
         "Static approval or execution crossed its original interval")
     provenance = approval_profile.provenance(row["approval_authn"])
     profile.require(provenance["candidateSha256"] == row["payload_digest"]
+        and provenance["controlPlaneConfigurationDigest"] == values["control_plane_configuration_digest"]
         and provenance["credentialPolicy"] == values["credential_policy"]
         and provenance["decisionDigest"] is not None and provenance["decisionEvidenceDigest"] is not None
         and provenance["consumptionDigest"] is None and provenance["consumptionEvidenceDigest"] is None,
@@ -154,7 +155,8 @@ class StaticCredentialCreateKernel:
         profile.require(type(selected_policy) is dict and type(proof) is dict,
             "Static creation requires independently admitted policy and locally verified custody originals")
         now = shared._database_epoch_ns(context.database_now)
-        profile.verify_request_context(self.operation, values, selected_policy=selected_policy, now_epoch_ns=now)
+        profile.verify_request_context(self.operation, values, selected_policy=selected_policy,
+            expected_configuration_digest=getattr(context, "static_credential_configuration_digest", None), now_epoch_ns=now)
         # This repeats exact original/context joins only. Both authority owners
         # must actually run custody.verify_original before supplying this field.
         custody.bind_originals(arguments=values, evidence=proof, now_epoch_ns=now)
@@ -214,10 +216,11 @@ KERNELS = MappingProxyType({profile.OPERATION: StaticCredentialCreateKernel()})
 
 
 def verify_static_create_plan(*, payload, arguments, verified_native_evidence, verified_webauthn_evidence,
-        creation_policy, deadline_ns, now_epoch_ns, work):
+        creation_policy, configuration_digest, deadline_ns, now_epoch_ns, work):
     """Exact source effects after independent native, signed-plan and root checks."""
     from serverware.authority_transition_static_credential_approval import _verify_static_plan
 
     _verify_static_plan(operation=profile.OPERATION, payload=payload, arguments=arguments,
         verified_native_evidence=verified_native_evidence, verified_webauthn_evidence=verified_webauthn_evidence,
-        creation_policy=creation_policy, deadline_ns=deadline_ns, now_epoch_ns=now_epoch_ns, work=work)
+        creation_policy=creation_policy, configuration_digest=configuration_digest,
+        deadline_ns=deadline_ns, now_epoch_ns=now_epoch_ns, work=work)

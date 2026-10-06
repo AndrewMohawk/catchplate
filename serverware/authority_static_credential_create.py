@@ -48,7 +48,7 @@ REQUEST_FIELDS = INTENT_FIELDS | EXECUTION_FIELDS | {"nativeGenerationOriginal"}
 GENERATION_FIELDS = frozenset({"apiVersion", "purpose", "actorId",
     "controlPlaneConfigurationDigest", "intentSha256", "credentialId",
     "credentialVersion", "envelope"})
-POLICY_FIELDS = frozenset({"schema", "controlPlaneConfigurationDigest",
+POLICY_FIELDS = frozenset({"schema",
     "credentialPolicy", "operationMaxSeconds", "maximumArgumentBytes",
     "maximumSecretBytes", "twoPersonRequired", "nativeSecretKekId", "intentMaxSeconds"})
 
@@ -199,7 +199,6 @@ def validate_policy(value, *, payload=None, root_key=None):
             for role in payload["roles"].values()), "Static creation requires explicit signed purpose admission")
         return None
     require(type(value) is dict and set(value) == POLICY_FIELDS and value["schema"] == SCHEMA)
-    digest(value["controlPlaneConfigurationDigest"])
     policy(value["credentialPolicy"])
     _kek_id(value["nativeSecretKekId"])
     require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30
@@ -231,13 +230,16 @@ def request_digest(operation, value):
 
 def verify_original(operation, arguments_value, *, configuration_payload, root_key, now_epoch_ns):
     """Check the actual selected policy; the owner separately verifies custody."""
+    from serverware.authority_policy_canary_policy import full_configuration_digest
+
     selected = validate_policy(configuration_payload.get(FIELD),
         payload=configuration_payload, root_key=root_key)
     require(selected is not None, "Static credential creation purpose is not selected")
-    verify_request_context(operation, arguments_value, selected_policy=selected, now_epoch_ns=now_epoch_ns)
+    verify_request_context(operation, arguments_value, selected_policy=selected,
+        expected_configuration_digest=full_configuration_digest(configuration_payload), now_epoch_ns=now_epoch_ns)
 
 
-def verify_request_context(operation, arguments_value, *, selected_policy, now_epoch_ns):
+def verify_request_context(operation, arguments_value, *, selected_policy, expected_configuration_digest, now_epoch_ns):
     """Selected request context, deliberately not native custody verification.
 
     The caller must select twoPersonRequired from the actual configured global
@@ -251,11 +253,14 @@ def verify_request_context(operation, arguments_value, *, selected_policy, now_e
     authority. Retained validity cannot extend its original interval or permit
     retry/renewal of a prior uncertain execution.
     """
+    # This pin belongs to the independently admitted complete configuration;
+    # embedding its own enclosing digest in the signed policy is impossible.
+    digest(expected_configuration_digest)
     selected = validate_policy(selected_policy)
     values = arguments(operation, arguments_value, typed="businessIntent" in arguments_value)
     request = values["request"]
     require(type(now_epoch_ns) is int and 0 < now_epoch_ns <= 2**63 - 1
-        and values["control_plane_configuration_digest"] == selected["controlPlaneConfigurationDigest"]
+        and values["control_plane_configuration_digest"] == expected_configuration_digest
         and values["credential_policy"] == selected["credentialPolicy"]
         and request["expiresAtEpochNs"] - request["issuedAtEpochNs"]
         <= selected["intentMaxSeconds"] * 1_000_000_000

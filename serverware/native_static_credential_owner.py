@@ -108,8 +108,8 @@ class Owner:
         config = codec.document(profile.canonical(value["configuration"]), 32768)
         _require(set(config) == _CONFIG_FIELDS and config["apiVersion"] == CONFIG)
         selected = profile.validate_policy(config["staticCredentialCreationPolicy"])
-        _require(config["controlPlaneConfigurationDigest"] == selected["controlPlaneConfigurationDigest"]
-            and selected["nativeSecretKekId"] == broker.key_id)
+        profile.digest(config["controlPlaneConfigurationDigest"])
+        _require(selected["nativeSecretKekId"] == broker.key_id)
         codec.integer(config["candidateCapacity"], maximum=MAX_CANDIDATES)
         for name in ("deploymentId", "instanceId"):
             codec.text(config[name], 512)
@@ -250,7 +250,8 @@ class Owner:
         self.operation = window
         now, _ = self.check(window.deadline)
         profile.verify_request_context(profile.OPERATION, values,
-            selected_policy=self.config["staticCredentialCreationPolicy"], now_epoch_ns=now)
+            selected_policy=self.config["staticCredentialCreationPolicy"],
+            expected_configuration_digest=self.config["controlPlaneConfigurationDigest"], now_epoch_ns=now)
         window.check()
         bindings = {"controlPlaneConfigurationDigest": intent["controlPlaneConfigurationDigest"],
             "deploymentId": self.config["deploymentId"], "instanceId": self.config["instanceId"],

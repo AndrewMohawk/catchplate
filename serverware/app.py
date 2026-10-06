@@ -75,6 +75,7 @@ from serverware.portal_static_credential_replacement import (
     STATIC_CREDENTIAL_REPLACEMENT_HTML,
     STATIC_CREDENTIAL_REPLACEMENT_SCRIPT,
 )
+from serverware.portal_static_credential import STATIC_CREDENTIAL_PAGE, STATIC_CREDENTIAL_SCRIPT
 from serverware.portal_public_revocation import PUBLIC_REVOCATION_HTML, PUBLIC_REVOCATION_SCRIPT
 from serverware.portal_oauth_consent import OAUTH_CONSENT_HTML, OAUTH_CONSENT_SCRIPT, enrolled_oauth_profile
 from serverware.portal_oauth_measured_consent import (
@@ -3632,7 +3633,31 @@ def _portal_document() -> str:
         raise RuntimeError("portal OAuth profile placeholder is missing or duplicated")
     seed_button = ('<button type="button" onclick="runUiAction(\'Seed demo\', seedDemo)">Seed demo</button>'
         if _development_demo_seed_enabled() else "")
-    return UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
+    protected_static = _protected_static_credentials()
+    secret_field = ('<p>Protected creation accepts no secret on this origin. '
+        '<a href="/credentials/static/new">Open protected static credential onboarding</a>. '
+        'After creation, explicitly select and bind its exact ID in Setup.</p>' if protected_static else
+        '<label for="credential-secret">Secret</label>'
+        '<textarea id="credential-secret" name="secret" required autocomplete="off"></textarea>')
+    return (UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
+        .replace("__SERVERWARE_STATIC_SECRET_FIELD__", secret_field)
+        .replace("__SERVERWARE_STATIC_PROTECTED__", json.dumps(protected_static)))
+
+
+def _protected_static_credentials() -> bool:
+    from serverware import control_plane_static_credential as owner
+    return db.metadata_uses_postgres() or owner.protected_available()
+
+
+@app.get("/credentials/static/new", response_class=HTMLResponse)
+@app.head("/credentials/static/new", response_class=HTMLResponse)
+def static_credential_page(request: Request,
+        identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner"))) -> HTMLResponse:
+    from serverware import control_plane_static_credential as owner
+    if (request.query_params or request.url.scheme != "https" or identity.auth_method != "oidc-session"
+            or not owner.selected()):
+        raise HTTPException(status_code=409, detail="Protected static onboarding is unavailable for this session")
+    return HTMLResponse(STATIC_CREDENTIAL_PAGE, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/approvals/{approval_id}", response_class=HTMLResponse)
@@ -8703,8 +8728,10 @@ def control_plane_approvals(
         pending = item.get("status") == "pending"
         has_role = identity.has_any_role(required_roles)
         is_requester = item.get("requester_id") == identity.user_id
+        static_approval = (item.get("action") == "credential.create" and isinstance(item.get("request"), dict)
+            and item["request"].get("apiVersion") == "serverware.staticCredentialCreationApprovalRequest/v1")
         can_approve = pending and has_role and not is_requester
-        can_deny = pending and has_role
+        can_deny = pending and has_role and (not static_approval or not is_requester)
         approve_block_reason = None
         deny_block_reason = None
         if not pending:
@@ -8718,6 +8745,8 @@ def control_plane_approvals(
             approve_block_reason = (
                 "A different authorized operator must approve this request."
             )
+            if static_approval:
+                deny_block_reason = "A different authorized operator must decide this static request."
         results.append(
             {
                 **item,
@@ -16714,6 +16743,37 @@ def oauth_issuance_uncertainty_resolve(
     return {"ok": True, "resolved": result}
 
 
+@app.post("/api/credentials/static/intent")
+@app.post("/api/credentials/static/candidate")
+@app.post("/api/credentials/static/approval/request/draft")
+@app.post("/api/credentials/static/approval/request/options")
+@app.post("/api/credentials/static/approval/request/execute")
+@app.post("/api/credentials/static/approval/decide/draft")
+@app.post("/api/credentials/static/approval/decide/options")
+@app.post("/api/credentials/static/approval/decide/execute")
+@app.post("/api/credentials/static/create/draft")
+@app.post("/api/credentials/static/create/options")
+@app.post("/api/credentials/static/create/execute")
+async def controlled_static_credential(request: Request) -> Response:
+    from serverware import control_plane_static_credential as owner
+    from starlette.concurrency import run_in_threadpool
+    raw = await _native_oauth_original(request, owner.MAX_REQUEST)
+    try:
+        result = await run_in_threadpool(owner.on_request, request, raw)
+        original = _canonical_json(result).encode("utf-8")
+        if len(original) > owner.MAX_RESPONSE:
+            raise ValueError("bounded response")
+    except owner.CommitUncertain as exc:
+        return JSONResponse({"ok": False, "code": "static_credential_commit_uncertain", "retryAllowed": False,
+            "operation": exc.operation, "requestDigest": exc.request_digest}, status_code=409,
+            headers={"Cache-Control": "no-store"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Static credential action unavailable; do not retry an uncertain action") from None
+    return Response(original, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/credentials")
 def create_credential(
     payload: CredentialCreate,
@@ -16721,6 +16781,8 @@ def create_credential(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    if _protected_static_credentials():
+        raise HTTPException(status_code=409, detail="Use protected native static onboarding; plaintext creation is disabled")
     if payload.kind == "oauth2" or payload.metadata.get("oauth") is True:
         raise HTTPException(
             status_code=409,
@@ -23367,8 +23429,7 @@ UI_HTML = r"""
               <option value="queryToken">Query token</option>
               <option value="cookie">Cookie</option>
             </select>
-            <label for="credential-secret">Secret</label>
-            <textarea id="credential-secret" name="secret" required autocomplete="off"></textarea>
+            __SERVERWARE_STATIC_SECRET_FIELD__
             <div id="credential-injection-name-row" hidden>
               <label id="credential-injection-name-label" for="credential-injection-name">Injection name</label>
               <input id="credential-injection-name" name="injectionName" maxlength="256" autocomplete="off">
@@ -23633,6 +23694,7 @@ UI_HTML = r"""
     let hasRendered = false;
     let policyPreviewGeneration = 0;
     const $ = (id) => document.getElementById(id);
+    const protectedStaticCredentials = __SERVERWARE_STATIC_PROTECTED__;
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
     const canonicalValue = (value) => Array.isArray(value) ? value.map(canonicalValue) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])])) : value;
@@ -26249,6 +26311,11 @@ UI_HTML = r"""
     }
 
     function safeControlPlaneRequest(request, action = null) {
+      if (action === 'credential.create' && request?.apiVersion === staticPortalReview) {
+        const fields = ['apiVersion', 'credentialId', 'credentialVersion', 'name', 'kind', 'metadata',
+          'issuedAtEpochNs', 'expiresAtEpochNs', 'intentSha256', 'nativeGenerationSha256', 'candidateSha256'];
+        return Object.fromEntries(fields.filter(key => Object.hasOwn(request, key)).map(key => [key, request[key]]));
+      }
       if (action === publicRevocationAction) return publicRevocationReview(request);
       if (action === workloadIssuanceAction) return workloadIssuanceReview(request);
       if (action === adminPublicationAction) return adminPublicationReview(request);
@@ -26278,6 +26345,7 @@ UI_HTML = r"""
         const summary = safeControlPlaneRequest(item.request, item.action);
         const requiredRoles = (item.required_approver_roles || []).join(' or ');
         const enrolledActivation = item.action === oauthActivationAction && enrolledOAuthProfile !== 'development';
+        const staticApproval = item.action === 'credential.create' && item.request?.apiVersion === staticPortalReview;
         const approveBlocked = item.can_approve !== true || enrolledActivation
           && (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || !(state.authStatus?.roles || []).includes('credential_owner'));
         const publicRevocation = item.action === publicRevocationAction;
@@ -26288,7 +26356,7 @@ UI_HTML = r"""
         const denyAttributes = denyBlocked ? `disabled aria-disabled="true" aria-describedby="${denyBlockId}"` : '';
         const actions = item.status === 'pending' ? `
           <label class="sr-only" for="${decisionId}">Approval decision note</label>
-          <input id="${decisionId}" placeholder="${publicRevocation ? 'This revocation ceremony does not accept decision notes' : 'Decision note'}" maxlength="500" ${publicRevocation ? 'disabled' : ''}>
+          <input id="${decisionId}" placeholder="${publicRevocation || staticApproval ? 'This ceremony does not accept decision notes' : 'Decision note'}" maxlength="500" ${publicRevocation || staticApproval ? 'disabled' : ''}>
           <div class="toolbar" style="margin-top:6px">
             <button type="button" onclick="runUiAction('Approve control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'approve'))" ${approveAttributes}>Approve</button>
             <button class="danger" type="button" onclick="runUiAction('Deny control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'deny'))" ${denyAttributes}>Deny</button>
@@ -26411,6 +26479,9 @@ UI_HTML = r"""
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
       const item = (state.controlPlaneApprovals || []).find(value => value.id === id);
+      if (item?.action === 'credential.create' && item.request?.apiVersion === staticPortalReview) {
+        return staticPortalDecide(id, decision);
+      }
       if (item?.action === publicRevocationAction) {
         if (decision !== 'approve' || ($(`control-plane-note-${id}`)?.value ?? '') !== '') throw new Error('Use the dedicated revocation approval ceremony without a note; no generic fallback.');
         return publicRevocationSelectApproval(id);
@@ -27386,6 +27457,7 @@ UI_HTML = r"""
 
     $('credential-form').addEventListener('submit', (event) => {
       event.preventDefault();
+      if (protectedStaticCredentials) { window.location.assign('/credentials/static/new'); return; }
       runUiAction('Create credential', async () => {
         const form = new FormData(event.target);
         const kind = String(form.get('kind') || '');
@@ -28428,6 +28500,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_SUCCESSION_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     __SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_SCRIPT__
+    __SERVERWARE_STATIC_CREDENTIAL_SCRIPT__
     initCredentialReplacement();
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
@@ -28514,6 +28587,7 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__", ADMIN_TOKEN_PUBLICATION_SCRIPT),
     ("__SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_HTML__", STATIC_CREDENTIAL_REPLACEMENT_HTML),
     ("__SERVERWARE_STATIC_CREDENTIAL_REPLACEMENT_SCRIPT__", STATIC_CREDENTIAL_REPLACEMENT_SCRIPT),
+    ("__SERVERWARE_STATIC_CREDENTIAL_SCRIPT__", STATIC_CREDENTIAL_SCRIPT),
     ("__SERVERWARE_PUBLIC_REVOCATION_HTML__", PUBLIC_REVOCATION_HTML),
     ("__SERVERWARE_PUBLIC_REVOCATION_SCRIPT__", PUBLIC_REVOCATION_SCRIPT),
     ("__SERVERWARE_OAUTH_CONSENT_HTML__", OAUTH_CONSENT_HTML),

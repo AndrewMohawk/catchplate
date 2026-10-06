@@ -1990,6 +1990,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_publication_adoption_authority.py \
 	serverware/native_pilot_publication_cold_binding.py \
 	serverware/policy_shadow_assignment_fields.py \
+	serverware/policy_candidate_artifact_issuer.py \
+	serverware/policy_shadow_assignment_issuer.py \
+	serverware/policy_bundle_issuer.py \
+	scripts/authority/sign_policy_candidate_artifact.py \
+	scripts/authority/sign_policy_shadow_assignment.py \
+	scripts/authority/sign_policy_bundle.py \
 	serverware/native_pilot_closure_set.py \
 	serverware/native_pilot_measured_configuration.py \
 	serverware/native_pilot_delivery_authority.py \
@@ -5111,6 +5117,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_publication_adoption_authority.py \
 				serverware/native_pilot_publication_cold_binding.py \
 				serverware/policy_shadow_assignment_fields.py \
+				serverware/policy_candidate_artifact_issuer.py \
+				serverware/policy_shadow_assignment_issuer.py \
+				serverware/policy_bundle_issuer.py \
+				scripts/authority/sign_policy_candidate_artifact.py \
+				scripts/authority/sign_policy_shadow_assignment.py \
+				scripts/authority/sign_policy_bundle.py \
 				serverware/native_pilot_closure_set.py \
 				serverware/native_pilot_measured_configuration.py \
 				serverware/native_pilot_delivery_authority.py \

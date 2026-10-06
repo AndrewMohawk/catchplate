@@ -38,15 +38,19 @@ pub(super) struct Bootstrap {
 }
 impl Bootstrap {
     pub(super) fn validate(&self) -> Result<(), String> {
-        use base64::Engine as _;
-        let b = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&self.channel_nonce)
-            .map_err(|_| "native shadow channel nonce differs")?;
-        require(self.api_version == "serverware.nativeShadowWorkerBootstrap/v1" && b.len() == 32
-            && b.iter().any(|v| *v != 0)
-            && base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b) == self.channel_nonce
-            && self.deadline_boottime_ns > now()? && self.executable_sha256.iter().all(|s| hash(s))
-            && self.executable_path.iter().all(|s| s.len() <= 4096 && s.starts_with('/') && !s.contains('\0')))
+        require(self.api_version == "serverware.nativeShadowWorkerBootstrap/v1")?;
+        validate_bootstrap(&self.channel_nonce,self.deadline_boottime_ns,&self.executable_sha256,&self.executable_path)
     }
+}
+fn validate_bootstrap(nonce:&str,deadline:u64,pins:&[String],paths:&[String])->Result<(),String> {
+    use base64::Engine as _;
+    let b = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(nonce)
+        .map_err(|_| "native shadow channel nonce differs")?;
+    require(b.len() == 32
+        && b.iter().any(|v| *v != 0)
+        && base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b) == nonce
+        && deadline > now()? && pins.iter().all(|s| hash(s))
+        && paths.iter().all(|s| s.len() <= 4096 && s.starts_with('/') && !s.contains('\0')))
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -64,28 +68,69 @@ pub(super) struct RuntimeBootstrap {
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub(super) publication_resources_sha256:Option<String>,
 }
+/// The two positions are exactly Runtime and Publication. There is no
+/// WebAuthn placeholder executable, hash or inherited descriptor.
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct NativeActivationBootstrap {
+    pub(super) api_version:String,
+    pub(super) channel_nonce:String,
+    pub(super) deadline_boottime_ns:u64,
+    pub(super) executable_sha256:[String;2],
+    pub(super) executable_path:[String;2],
+    pub(super) runtime_resources_sha256:String,
+    pub(super) publication_resources_sha256:String,
+}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
-pub(super) enum WorkerBootstrap {Legacy(Bootstrap),Publication(PublicationBootstrap),Runtime(RuntimeBootstrap)}
+pub(super) enum WorkerBootstrap {Legacy(Bootstrap),Publication(PublicationBootstrap),Runtime(RuntimeBootstrap),NativeActivation(NativeActivationBootstrap)}
 impl WorkerBootstrap {
-    pub(super) fn worker(&self)->&Bootstrap {
-        match self {Self::Legacy(v)=>v,Self::Publication(v)=>&v.worker,Self::Runtime(v)=>&v.worker}
+    fn worker(&self)->Option<&Bootstrap> {
+        match self {Self::Legacy(v)=>Some(v),Self::Publication(v)=>Some(&v.worker),Self::Runtime(v)=>Some(&v.worker),
+            Self::NativeActivation(_)=>None}
+    }
+    pub(super) fn channel_nonce(&self)->&str {
+        match self {Self::Legacy(v)=>&v.channel_nonce,Self::Publication(v)=>&v.worker.channel_nonce,
+            Self::Runtime(v)=>&v.worker.channel_nonce,Self::NativeActivation(v)=>&v.channel_nonce}
+    }
+    pub(super) fn deadline(&self)->u64 {
+        match self {Self::Legacy(v)=>v.deadline_boottime_ns,Self::Publication(v)=>v.worker.deadline_boottime_ns,
+            Self::Runtime(v)=>v.worker.deadline_boottime_ns,Self::NativeActivation(v)=>v.deadline_boottime_ns}
+    }
+    pub(super) fn executable(&self,index:usize)->Option<(&str,&str)> {
+        match self {
+            Self::NativeActivation(v)=>match index {
+                0=>Some((&v.executable_sha256[0],&v.executable_path[0])),
+                2=>Some((&v.executable_sha256[1],&v.executable_path[1])),_=>None,
+            },
+            _=>self.worker().and_then(|v|v.executable_sha256.get(index).zip(v.executable_path.get(index)))
+                .map(|(pin,path)|(pin.as_str(),path.as_str())),
+        }
     }
     pub(super) fn publication(&self)->Option<&str> {
         match self {Self::Legacy(_)=>None,Self::Publication(v)=>Some(&v.publication_resources_sha256),
-            Self::Runtime(v)=>v.publication_resources_sha256.as_deref()}
+            Self::Runtime(v)=>v.publication_resources_sha256.as_deref(),
+            Self::NativeActivation(v)=>Some(&v.publication_resources_sha256)}
     }
     pub(super) fn runtime(&self)->Option<&str> {
-        match self {Self::Runtime(v)=>Some(&v.runtime_resources_sha256),_=>None}
+        match self {Self::Runtime(v)=>Some(&v.runtime_resources_sha256),
+            Self::NativeActivation(v)=>Some(&v.runtime_resources_sha256),_=>None}
     }
     pub(super) fn validate(&self)->Result<(),String> {
-        self.worker().validate()?;
+        if let Some(worker)=self.worker() {worker.validate()?;}
         if let Self::Publication(v)=self {
             require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v2" && hash(&v.publication_resources_sha256))?;
         }
         if let Self::Runtime(v)=self {
             require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v3" && hash(&v.runtime_resources_sha256)
                 && v.publication_resources_sha256.as_ref().is_none_or(|pin|hash(pin)))?;
+        }
+        if let Self::NativeActivation(v)=self {
+            require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v4"
+                && hash(&v.runtime_resources_sha256) && hash(&v.publication_resources_sha256))?;
+            validate_bootstrap(&v.channel_nonce,v.deadline_boottime_ns,&v.executable_sha256,&v.executable_path)?;
+            require(v.executable_path[0]==super::runtime_resources::EXECUTABLE
+                && v.executable_path[1]=="/usr/local/bin/serverware-native-publication-handoff")?;
         }
         Ok(())
     }

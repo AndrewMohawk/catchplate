@@ -1642,7 +1642,7 @@ pub(crate) struct PolicyShadowGenerationConfig {
     pub(crate) trust_manifest_path: PathBuf,
     pub(crate) trust_manifest_sha256: Sha256Digest,
     pub(crate) runtime_verifier: PinnedVerifierCommand,
-    pub(crate) webauthn_verifier: PinnedVerifierCommand,
+    pub(crate) webauthn_verifier: Option<PinnedVerifierCommand>,
     pub(crate) publication_handoff: PinnedVerifierCommand,
     pub(crate) custody_config_path: PathBuf,
     pub(crate) custody_config_sha256: Option<Sha256Digest>,
@@ -1661,7 +1661,7 @@ pub(crate) struct PolicyShadowGenerationControl {
     trust_manifest_sha256: Sha256Digest,
     key_trust: Arc<PinnedEnvelopeKeyTrust>,
     runtime_verifier: PinnedVerifierCommand,
-    webauthn_verifier: PinnedVerifierCommand,
+    webauthn_verifier: Option<PinnedVerifierCommand>,
     publication_handoff: PinnedVerifierCommand,
     custody_config: ImmutablePathIdentity,
     installation_lock: Mutex<()>,
@@ -1732,10 +1732,10 @@ impl PolicyShadowGenerationControl {
                 RUNTIME_VERIFIER_COMMAND_ENV,
                 RUNTIME_VERIFIER_SHA256_ENV,
             )?,
-            webauthn_verifier: configured_pinned_command_from_env(
+            webauthn_verifier: Some(configured_pinned_command_from_env(
                 WEBAUTHN_VERIFIER_COMMAND_ENV,
                 WEBAUTHN_VERIFIER_SHA256_ENV,
-            )?,
+            )?),
             publication_handoff: configured_pinned_command_from_env(
                 PUBLICATION_HANDOFF_COMMAND_ENV,
                 PUBLICATION_HANDOFF_SHA256_ENV,
@@ -1770,8 +1770,19 @@ impl PolicyShadowGenerationControl {
         policy_trust_is_attested: bool,
         config: PolicyShadowGenerationConfig,
     ) -> Result<Arc<Self>, String> {
+        Self::from_config_inner(is_production,policy_trust_is_attested,config,false)
+    }
+
+    // The only native-only caller holds the explicit activation preparation
+    // and requires both resource profiles. Public/environment construction cannot omit
+    // the legacy verifier, and this flag does not itself admit activation.
+    fn from_config_inner(is_production:bool,policy_trust_is_attested:bool,
+        config:PolicyShadowGenerationConfig,native_only:bool)->Result<Arc<Self>,String> {
         if config.native_workers.is_some() || config.native_activation.is_some() {
             return Err("native shadow workers require the retained pre-drop preparation owner".into());
+        }
+        if config.webauthn_verifier.is_none()!=native_only {
+            return Err("WebAuthn omission requires the explicit native-only preparation".into());
         }
         if is_production && !policy_trust_is_attested {
             return Err(
@@ -1815,10 +1826,9 @@ impl PolicyShadowGenerationControl {
             &runtime_verifier,
             RUNTIME_VERIFIER_SHA256_ENV,
         )?;
-        validate_configured_pinned_command(
-            &webauthn_verifier,
-            WEBAUTHN_VERIFIER_SHA256_ENV,
-        )?;
+        if let Some(command)=&webauthn_verifier {
+            validate_configured_pinned_command(command,WEBAUTHN_VERIFIER_SHA256_ENV)?;
+        }
         validate_configured_pinned_command(
             &publication_handoff,
             PUBLICATION_HANDOFF_SHA256_ENV,
@@ -1990,6 +2000,8 @@ impl PolicyShadowGenerationControl {
         state: &GateState,
         body: &[u8],
     ) -> Result<GenerationActivationResponse, GenerationInstallError> {
+        let webauthn_command=self.webauthn_verifier.as_ref().ok_or_else(||
+            GenerationInstallError::conflict("legacy activation is not selected by the native-only profile"))?;
         if body.is_empty()
             || body.len() as u64 > MAX_ACTIVATION_BODY_BYTES
         {
@@ -2233,7 +2245,7 @@ impl PolicyShadowGenerationControl {
             ));
         }
         let webauthn = ExternalWebAuthnVerifier {
-            command: &self.webauthn_verifier,
+            command: webauthn_command,
             native_workers: self.native_workers.as_ref(),
             key_trust: self.key_trust.as_ref(),
             trusted_time: retained.trusted_time.as_ref(),

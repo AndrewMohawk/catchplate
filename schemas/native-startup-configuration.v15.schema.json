@@ -21,7 +21,8 @@
       {"$ref": "native-shadow-workers.v1.schema.json#/$defs/shadowConfiguration"},
       {"$ref": "native-policy-activation-custody.v1.schema.json#/$defs/shadowConfiguration"},
       {"$ref": "native-shadow-workers.v2.schema.json#/$defs/shadowConfiguration"},
-      {"$ref": "native-shadow-workers.v3.schema.json#/$defs/shadowConfiguration"}
+      {"$ref": "native-shadow-workers.v3.schema.json#/$defs/shadowConfiguration"},
+      {"$ref": "#/$defs/nativeOnlyShadowConfiguration"}
     ]},
     "responseObservationV2": {"$ref": "native-startup-configuration.v14.schema.json#/properties/responseObservationV2"},
     "policy": {"$ref": "native-startup-configuration.v14.schema.json#/properties/policy"},
@@ -40,5 +41,26 @@
     "guestRoleKeyProvisioner": {"$ref": "native-startup-configuration.v14.schema.json#/properties/guestRoleKeyProvisioner"},
     "measuredPendingRetirement": {"$ref": "native-startup-configuration.v14.schema.json#/properties/measuredPendingRetirement"},
     "gateCgroup": {"$ref": "native-gate-cgroup.v1.schema.json"}
+  },
+  "$defs": {
+    "nativeOnlyShadowConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "trustManifest", "runtimeVerifier", "publicationHandoff", "custodyConfig", "startupActiveAuthorization", "workers", "nativeActivation"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowConfiguration/v6"},
+        "trustManifest": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/artifact"},
+        "runtimeVerifier": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/command"},
+        "publicationHandoff": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/command"},
+        "custodyConfig": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/artifact"},
+        "startupActiveAuthorization": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/artifact"},
+        "workers": {"allOf": [
+          {"$ref": "native-shadow-workers.v3.schema.json#/$defs/configuration"},
+          {"required": ["publicationResources"]}
+        ]},
+        "nativeActivation": {"$ref": "native-policy-activation-custody.v1.schema.json#/$defs/client"}
+      },
+      "$comment": "Only genuine native controlled activation is selected. WebAuthn verifier commands and legacy activation are absent, not replaced by synthetic approvals. Runtime/publication resources and native activation channel are required; existing trust-manifest requirements remain unchanged. Preboot delivery does not synthesize these inherited resources."
+    }
   }
 }

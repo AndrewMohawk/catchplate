@@ -30,7 +30,7 @@ impl ShadowConfigV1 {
             trust_manifest_path: self.trust_manifest.path,
             trust_manifest_sha256: digest(self.trust_manifest.sha256)?,
             runtime_verifier: self.runtime_verifier.into_command()?,
-            webauthn_verifier: self.webauthn_verifier.into_command()?,
+            webauthn_verifier: Some(self.webauthn_verifier.into_command()?),
             publication_handoff: self.publication_handoff.into_command()?,
             custody_config_path: self.custody_config.path,
             custody_config_sha256: Some(digest(self.custody_config.sha256)?),
@@ -73,6 +73,9 @@ fn version_four<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
 fn version_five<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
     exact_version(de,"serverware.nativeShadowConfiguration/v5")
 }
+fn version_six<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
+    exact_version(de,"serverware.nativeShadowConfiguration/v6")
+}
 
 impl ShadowConfigV2 {
     pub(super) fn into_config(self) -> Result<PolicyShadowGenerationConfig, String> {
@@ -100,6 +103,7 @@ pub(super) enum ShadowConfigV15 {
     NativeActivation(ShadowConfigV3),
     NativePublication(ShadowConfigV4),
     NativeRuntimeVerification(ShadowConfigV5),
+    NativeOnlyActivation(ShadowConfigV6),
 }
 
 impl From<ShadowConfigV1> for ShadowConfigV15 {
@@ -114,6 +118,7 @@ impl ShadowConfigV15 {
             Self::NativeActivation(value)=>value.into_config(),
             Self::NativePublication(value)=>value.into_config(),
             Self::NativeRuntimeVerification(value)=>value.into_config(),
+            Self::NativeOnlyActivation(value)=>value.into_config(),
         }
     }
 }
@@ -195,5 +200,40 @@ impl ShadowConfigV3{
             runtime_verifier:self.runtime_verifier,webauthn_verifier:self.webauthn_verifier,publication_handoff:self.publication_handoff,
             custody_config:self.custody_config,startup_active_authorization:self.startup_active_authorization,workers:self.workers}.into_config()?;
         value.native_activation=Some(self.native_activation);Ok(value)
+    }
+}
+
+/// Native controlled activation only. No WebAuthn job or legacy activation
+/// fallback is selected; the existing controlled originals retain authority.
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct ShadowConfigV6 {
+    #[serde(deserialize_with="version_six")]
+    api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
+    publication_handoff:PinnedVerifierConfigV1,custody_config:ArtifactV1,
+    startup_active_authorization:ArtifactV1,
+    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    native_activation:super::super::policy_shadow_generation::activation::Configuration,
+}
+impl ShadowConfigV6 {
+    fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
+        if self.api_version!="serverware.nativeShadowConfiguration/v6"
+            || !self.workers.runtime_resources() || !self.workers.publication_resources() {
+            return Err("native-only activation requires runtime and publication resources".into());
+        }
+        self.workers.validate()?;
+        for path in [&self.trust_manifest.path,&self.custody_config.path,&self.startup_active_authorization.path] {
+            bounded_absolute_path(path)?;
+        }
+        Ok(PolicyShadowGenerationConfig {
+            native_workers:Some(self.workers),native_activation:Some(self.native_activation),
+            trust_manifest_path:self.trust_manifest.path,trust_manifest_sha256:digest(self.trust_manifest.sha256)?,
+            runtime_verifier:self.runtime_verifier.into_command()?,webauthn_verifier:None,
+            publication_handoff:self.publication_handoff.into_command()?,
+            custody_config_path:self.custody_config.path,custody_config_sha256:Some(digest(self.custody_config.sha256)?),
+            startup_generation_path:None,startup_generation_sha256:None,
+            startup_active_authorization_path:Some(self.startup_active_authorization.path),
+            startup_active_authorization_sha256:Some(digest(self.startup_active_authorization.sha256)?),
+        })
     }
 }

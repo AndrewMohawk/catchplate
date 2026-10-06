@@ -60,26 +60,40 @@ impl PreparedNativeShadowControl {
         prepared.check()?;
         let selected = config.native_workers.take().ok_or("native shadow worker profile absent")?;
         let activation=config.native_activation.take().map(|value|activation::Prepared::open(value,prepared)).transpose()?;
-        let commands = [&config.runtime_verifier, &config.webauthn_verifier, &config.publication_handoff]
-            .map(|command| workers::Executable {
-                path: command.executable.clone(), sha256: command.expected_sha256.clone(),
-            });
+        let native_only=config.webauthn_verifier.is_none();
+        if native_only && (activation.is_none() || !selected.runtime_resources() || !selected.publication_resources()) {
+            return Err("native-only generation requires actual activation, runtime and publication owners".into());
+        }
+        let executable=|command:&PinnedVerifierCommand| workers::Executable {
+            path: command.executable.clone(), sha256: command.expected_sha256.clone(),
+        };
+        let runtime_command=executable(&config.runtime_verifier);
+        let webauthn_command=config.webauthn_verifier.as_ref().map(executable);
+        let publication_command=executable(&config.publication_handoff);
         // These are the existing real manifest/configuration/pinned-command
         // constructors. No caller-ready token or native-custody classification.
-        let control = PolicyShadowGenerationControl::from_config(true, true, config)?;
+        let control = PolicyShadowGenerationControl::from_config_inner(true, true, config,native_only)?;
         let lifecycle=super::super::policy_shadow::PreparedNativeCustodyLifecycle::open(
             control.custody_config.retained_file()?,control.custody_config.content_sha256(),prepared)?;
-        let worker = if selected.runtime_resources() {
-            let runtime=runtime_pins(control.key_trust.as_ref(),&control.runtime_verifier.expected_sha256)?;
-            let publication=if selected.publication_resources() {
-                Some(publication_pins(control.key_trust.as_ref())?)
-            } else {None};
-            workers::Prepared::launch_with_runtime(selected,commands,prepared,cohort,runtime,publication)?
-        } else if selected.publication_resources() {
-            let pins=publication_pins(control.key_trust.as_ref())?;
-            workers::Prepared::launch_with_publication(selected,commands,prepared,cohort,pins)?
+        let worker = if let Some(webauthn_command)=webauthn_command {
+            let commands=[runtime_command,webauthn_command,publication_command];
+            if selected.runtime_resources() {
+                let runtime=runtime_pins(control.key_trust.as_ref(),&control.runtime_verifier.expected_sha256)?;
+                let publication=if selected.publication_resources() {
+                    Some(publication_pins(control.key_trust.as_ref())?)
+                } else {None};
+                workers::Prepared::launch_with_runtime(selected,commands,prepared,cohort,runtime,publication)?
+            } else if selected.publication_resources() {
+                let pins=publication_pins(control.key_trust.as_ref())?;
+                workers::Prepared::launch_with_publication(selected,commands,prepared,cohort,pins)?
+            } else {
+                workers::Prepared::launch(selected, commands, prepared, cohort)?
+            }
         } else {
-            workers::Prepared::launch(selected, commands, prepared, cohort)?
+            let runtime=runtime_pins(control.key_trust.as_ref(),&control.runtime_verifier.expected_sha256)?;
+            let publication=publication_pins(control.key_trust.as_ref())?;
+            workers::Prepared::launch_native_activation(selected,[runtime_command,publication_command],
+                prepared,cohort,runtime,publication)?
         };
         prepared.check()?;
         Ok(Self {control, worker,activation,lifecycle})
@@ -92,6 +106,9 @@ impl PreparedNativeShadowControl {
         let lifecycle=self.lifecycle.map(|value|value.bind(serving)).transpose()?;
         let control = Arc::get_mut(&mut self.control)
             .ok_or("native shadow control published before permanent serving bind")?;
+        if control.webauthn_verifier.is_none() && activation.is_none() {
+            return Err("native-only generation lost its actual activation owner".into());
+        }
         if control.native_workers.is_some() { return Err("native shadow worker already bound".into()); }
         control.native_workers = Some(Arc::clone(&worker));
         if control.native_custody_lifecycle.is_some(){return Err("native custody lifecycle already bound".into());}

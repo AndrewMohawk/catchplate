@@ -85,7 +85,7 @@ impl Configuration {
 }
 struct Core {
     association:Association,process:process::Process,bootstrap:image::Sealed,
-    images:[image::Image;3],worker:image::Image,nonce:String,deadline:u64,
+    images:[Option<image::Image>;3],worker:image::Image,nonce:String,deadline:u64,
     cohort:Arc<crate::StartedGuestCohort>,
 }
 impl Drop for Core {
@@ -100,28 +100,40 @@ pub struct Owner {core:Core,serving:Arc<Serving>,sequence:Mutex<u64>,poisoned:At
 impl Prepared {
     pub fn launch(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
         cohort:Arc<crate::StartedGuestCohort>)->Result<Self,String> {
-        Self::launch_inner(configuration,commands,prepared,cohort,None,None)
+        Self::launch_inner(configuration,commands.map(Some),prepared,cohort,None,None)
     }
     pub fn launch_with_publication(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
         cohort:Arc<crate::StartedGuestCohort>,pins:publication_resources::PublicationAuthorityPins)->Result<Self,String> {
-        Self::launch_inner(configuration,commands,prepared,cohort,Some(pins),None)
+        Self::launch_inner(configuration,commands.map(Some),prepared,cohort,Some(pins),None)
     }
     pub fn launch_with_runtime(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
         cohort:Arc<crate::StartedGuestCohort>,runtime_pins:runtime_resources::RuntimeAuthorityPins,
         publication_pins:Option<publication_resources::PublicationAuthorityPins>)->Result<Self,String> {
-        Self::launch_inner(configuration,commands,prepared,cohort,publication_pins,Some(runtime_pins))
+        Self::launch_inner(configuration,commands.map(Some),prepared,cohort,publication_pins,Some(runtime_pins))
     }
-    fn launch_inner(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
+    pub fn launch_native_activation(configuration:Configuration,commands:[Executable;2],prepared:&Privileged,
+        cohort:Arc<crate::StartedGuestCohort>,runtime_pins:runtime_resources::RuntimeAuthorityPins,
+        publication_pins:publication_resources::PublicationAuthorityPins)->Result<Self,String> {
+        require(configuration.runtime_resources() && configuration.publication_resources())?;
+        let [runtime,publication]=commands;
+        Self::launch_inner(configuration,[Some(runtime),None,Some(publication)],prepared,cohort,
+            Some(publication_pins),Some(runtime_pins))
+    }
+    fn launch_inner(configuration:Configuration,commands:[Option<Executable>;3],prepared:&Privileged,
         cohort:Arc<crate::StartedGuestCohort>,pins:Option<publication_resources::PublicationAuthorityPins>,
         runtime_pins:Option<runtime_resources::RuntimeAuthorityPins>)->Result<Self,String> {
         use ring::rand::SecureRandom;
         use base64::Engine as _;
         configuration.validate()?;prepared.check()?;cohort.require_shadow_preparation(prepared)?;
+        let [runtime,webauthn,publication]=commands;
+        let runtime=runtime.ok_or("runtime command is required")?;
+        let publication=publication.ok_or("publication command is required")?;
+        require(webauthn.is_some() || pins.is_some() && runtime_pins.is_some())?;
         let association=Association::capture(prepared)?;
         let (executable,resources,runtime_config)=configuration.into_parts();
         if let Some(pins)=&runtime_pins {
-            require(commands[0].path==std::path::Path::new(runtime_resources::EXECUTABLE)
-                && commands[0].sha256==pins.verifier_executable_sha256)?;
+            require(runtime.path==std::path::Path::new(runtime_resources::EXECUTABLE)
+                && runtime.sha256==pins.verifier_executable_sha256)?;
         }
         let resources=match (resources,pins) {
             (Some(config),Some(pins))=>Some(publication_resources::ColdResources::open(config,pins,prepared.deadline())?),
@@ -134,21 +146,25 @@ impl Prepared {
             _=>return Err("runtime resources require the independently admitted policy/key/checkpoint pins".into()),
         };
         let worker=image::Image::open(&executable.path,&executable.sha256)?;
-        let [runtime,webauthn,publication]=commands;
         if resources.is_some() {
             require(publication.path==std::path::Path::new("/usr/local/bin/serverware-native-publication-handoff"))?;
         }
-        let paths=[runtime.path.to_str().ok_or("runtime path not UTF8")?.to_owned(),
-            webauthn.path.to_str().ok_or("WebAuthn path not UTF8")?.to_owned(),
-            publication.path.to_str().ok_or("publication path not UTF8")?.to_owned()];
-        let images=[image::Image::open(&runtime.path,&runtime.sha256)?,image::Image::open(&webauthn.path,&webauthn.sha256)?,
-            image::Image::open(&publication.path,&publication.sha256)?];
+        let runtime_path=runtime.path.to_str().ok_or("runtime path not UTF8")?.to_owned();
+        let publication_path=publication.path.to_str().ok_or("publication path not UTF8")?.to_owned();
+        let webauthn_path=webauthn.as_ref().map(|command|command.path.to_str()
+            .map(str::to_owned).ok_or("WebAuthn path not UTF8")).transpose()?;
+        let runtime_image=image::Image::open(&runtime.path,&runtime.sha256)?;
+        let webauthn_image=webauthn.as_ref().map(|command|image::Image::open(&command.path,&command.sha256)).transpose()?;
+        let publication_image=image::Image::open(&publication.path,&publication.sha256)?;
         let mut entropy=[0;32];ring::rand::SystemRandom::new().fill(&mut entropy).map_err(|_|"shadow nonce unavailable")?;
         require(entropy.iter().any(|v|*v!=0))?;
         let nonce=base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entropy);
-        let bootstrap=wire::Bootstrap {api_version:"serverware.nativeShadowWorkerBootstrap/v1".into(),channel_nonce:nonce.clone(),
-            deadline_boottime_ns:prepared.deadline(),executable_sha256:std::array::from_fn(|i|images[i].sealed.sha256().to_owned()),executable_path:paths};
-        let bootstrap=match (runtime_resources.as_ref(),resources.as_ref()) {
+        let bootstrap=if let Some(webauthn)=&webauthn_image {
+            let bootstrap=wire::Bootstrap {api_version:"serverware.nativeShadowWorkerBootstrap/v1".into(),channel_nonce:nonce.clone(),
+                deadline_boottime_ns:prepared.deadline(),executable_sha256:[runtime_image.sealed.sha256().to_owned(),
+                    webauthn.sealed.sha256().to_owned(),publication_image.sealed.sha256().to_owned()],
+                executable_path:[runtime_path,webauthn_path.ok_or("WebAuthn command path absent")?,publication_path]};
+            match (runtime_resources.as_ref(),resources.as_ref()) {
             (Some(runtime),publication)=>wire::WorkerBootstrap::Runtime(wire::RuntimeBootstrap {
                 api_version:"serverware.nativeShadowWorkerBootstrap/v3".into(),worker:bootstrap,
                 runtime_resources_sha256:runtime.bootstrap.sha256().to_owned(),
@@ -159,10 +175,24 @@ impl Prepared {
                 api_version:"serverware.nativeShadowWorkerBootstrap/v2".into(),worker:bootstrap,
                 publication_resources_sha256:value.bootstrap.sha256().to_owned(),
             }),
+            }
+        } else {
+            let runtime=runtime_resources.as_ref().ok_or("native-only runtime resources absent")?;
+            let publication=resources.as_ref().ok_or("native-only publication resources absent")?;
+            wire::WorkerBootstrap::NativeActivation(wire::NativeActivationBootstrap {
+                api_version:"serverware.nativeShadowWorkerBootstrap/v4".into(),channel_nonce:nonce.clone(),
+                deadline_boottime_ns:prepared.deadline(),
+                executable_sha256:[runtime_image.sealed.sha256().to_owned(),publication_image.sealed.sha256().to_owned()],
+                executable_path:[runtime_path,publication_path],
+                runtime_resources_sha256:runtime.bootstrap.sha256().to_owned(),
+                publication_resources_sha256:publication.bootstrap.sha256().to_owned(),
+            })
         };
         bootstrap.validate()?;
         let bootstrap=image::Sealed::new(&wire::encode(&bootstrap)?,false)?;
-        let process=process::Process::spawn(&worker.sealed,&bootstrap,&[&images[0].sealed,&images[1].sealed,&images[2].sealed],prepared,resources.as_ref(),runtime_resources.as_ref())?;
+        let images=[Some(runtime_image),webauthn_image,Some(publication_image)];
+        let command_images=std::array::from_fn(|i|images[i].as_ref().map(|image|&image.sealed));
+        let process=process::Process::spawn(&worker.sealed,&bootstrap,&command_images,prepared,resources.as_ref(),runtime_resources.as_ref())?;
         drop(resources);drop(runtime_resources);
         let core=Core {association,process,bootstrap,images,worker,nonce,deadline:prepared.deadline(),cohort};
         transport::wait(core.process.channel.as_raw_fd(),libc::POLLIN,&core.process.pidfd,core.deadline)?;
@@ -189,7 +219,7 @@ impl Owner {
             require(!self.poisoned.load(Ordering::Acquire) && now()?<self.core.deadline)?;
             self.core.association.require(&self.serving)?;self.core.cohort.require_serving(&self.serving)?;
             self.core.process.check()?;self.core.bootstrap.check()?;self.core.worker.check()?;
-            for image in &self.core.images {image.check()?;}Ok(())
+            for image in self.core.images.iter().flatten() {image.check()?;}Ok(())
         })();
         if result.is_err() {self.poisoned.store(true,Ordering::Release);self.core.process.stop();}result
     }
@@ -197,6 +227,7 @@ impl Owner {
     /// Returned bytes remain untrusted until the existing signed-result checks.
     pub fn execute(&self,purpose:Purpose,input:&serde_json::Value)->Result<Vec<u8>,String> {
         self.check()?;purpose.input(input)?;
+        require(self.core.images[purpose.index()].is_some())?;
         let mut sequence=self.sequence.try_lock().map_err(|_|"native shadow command owner busy")?;
         let started=now()?;
         let deadline=self.core.deadline.min(started.checked_add(wire::WINDOW).ok_or("shadow deadline overflow")?);

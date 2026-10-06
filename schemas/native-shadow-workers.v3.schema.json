@@ -11,7 +11,10 @@
         "apiVersion":{"const":"serverware.nativeShadowWorkers/v3"},
         "executable":{"$ref":"native-shadow-workers.v2.schema.json#/$defs/configuration/properties/executable"},
         "runtimeResources":{"$ref":"native-shadow-runtime-resources.v1.schema.json#/$defs/configuration"},
-        "publicationResources":{"$ref":"native-shadow-publication-resources.v1.schema.json#/$defs/configuration"}
+        "publicationResources":{"oneOf":[
+          {"$ref":"native-shadow-publication-resources.v1.schema.json#/$defs/configuration"},
+          {"$ref":"native-shadow-publication-resources.v2.schema.json#/$defs/configuration"}
+        ]}
       },
       "$comment":"Runtime resources go only to the fixed runtime verifier; optional publication resources go only to the fixed publication job. WebAuthn remains unchanged. Inherited descriptor presence cannot select authority."
     },

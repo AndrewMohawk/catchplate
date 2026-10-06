@@ -59,7 +59,8 @@ impl Configuration {
     pub fn validate(&self)->Result<(),String> {
         let executable=match self {
             Self::Legacy(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v1")?;&v.executable},
-            Self::Publication(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v2")?;v.resources.validate()?;&v.executable},
+            Self::Publication(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v2"
+                && !v.resources.runtime_verification_required())?;v.resources.validate()?;&v.executable},
             Self::Runtime(v)=>{
                 require(v.api_version=="serverware.nativeShadowWorkers/v3")?;v.runtime_resources.validate()?;
                 if let Some(publication)=&v.publication_resources {
@@ -135,15 +136,21 @@ impl Prepared {
             require(runtime.path==std::path::Path::new(runtime_resources::EXECUTABLE)
                 && runtime.sha256==pins.verifier_executable_sha256)?;
         }
-        let resources=match (resources,pins) {
-            (Some(config),Some(pins))=>Some(publication_resources::ColdResources::open(config,pins,prepared.deadline())?),
-            (None,None)=>None,
-            _=>return Err("publication resources require the independently admitted trust profile".into()),
-        };
         let runtime_resources=match (runtime_config,runtime_pins) {
             (Some(config),Some(pins))=>Some(runtime_resources::ColdResources::open(config,pins,prepared.deadline())?),
             (None,None)=>None,
             _=>return Err("runtime resources require the independently admitted policy/key/checkpoint pins".into()),
+        };
+        let resources=match (resources,pins) {
+            (Some(config),Some(pins))=>{
+                let verification=if config.runtime_verification_required() {
+                    Some(runtime_resources.as_ref().ok_or("Nitro publication requires the retained runtime verifier owner")?
+                        .publication_verification()?)
+                } else {None};
+                Some(publication_resources::ColdResources::open(config,pins,prepared.deadline(),verification)?)
+            },
+            (None,None)=>None,
+            _=>return Err("publication resources require the independently admitted trust profile".into()),
         };
         let worker=image::Image::open(&executable.path,&executable.sha256)?;
         if resources.is_some() {

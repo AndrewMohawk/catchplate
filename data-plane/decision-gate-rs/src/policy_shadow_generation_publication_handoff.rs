@@ -21,6 +21,9 @@ use ed25519_dalek::{pkcs8::EncodePublicKey, Signature, Signer, SigningKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs::File, os::fd::AsRawFd, os::unix::fs::{FileExt, MetadataExt}};
+use serverware_decision_gate::native_shadow_workers::runtime_resources::PublicationVerificationAuthority;
+#[path="policy_shadow_generation_publication_runtime.rs"]
+mod runtime;
 
 // Same input ceiling as the existing native shadow worker, not a new transport.
 const MAX_INPUT: usize = 32 * 1024 * 1024;
@@ -34,6 +37,9 @@ pub(crate) struct Authority<'a> {
     pub(crate) replay_store_sha256: &'a Sha256Digest,
     // Explicit admitted resource ceiling; there is no default or growth grant.
     pub(crate) journal_limit_bytes: u64,
+    // Public originals projected only from the retained independent runtime
+    // owner for explicit resources v2; this does not change publisher custody.
+    pub(crate) runtime_verification: Option<&'a PublicationVerificationAuthority>,
     // Actual owner, original clock and independently admitted replay currentness.
     // A newly constructed closure or an arbitrary file is not admission.
     pub(crate) check: &'a dyn Fn() -> Result<i64, String>,
@@ -79,6 +85,18 @@ impl Operation {
         let chain = match self { Self::Prepare(v) => &v.proposed_preparation.attestation_chain,
             Self::Commit(v) => &v.internal_publication_payload.attestation_chain };
         chain.attestation_mode == "trusted-host-no-tee" && !chain.hardware_attested
+    }
+    fn verify_runtime(&self, authority: &Authority<'_>) -> Result<(), String> {
+        let Some(selected) = authority.runtime_verification else {
+            return require(self.local_profile(), "publication requires its original trusted-host profile");
+        };
+        let (chain, generation, runtime) = match self {
+            Self::Prepare(v) => (&v.proposed_preparation.attestation_chain, &v.proposed_preparation.generation,
+                &v.proposed_preparation.runtime),
+            Self::Commit(v) => (&v.internal_publication_payload.attestation_chain, &v.internal_publication_payload.generation,
+                &v.internal_publication_payload.runtime),
+        };
+        runtime::verify(selected, chain, generation, runtime, self.trust(), self.interval())
     }
 }
 
@@ -158,9 +176,9 @@ fn decode(raw: &[u8], authority: &Authority<'_>) -> Result<Operation, String> {
     let trust = operation.trust();
     require(&trust.publication_signing_key_id == authority.signing_key_id
         && &trust.publication_signing_key_spki_sha256 == authority.signing_key_spki_sha256
-        && &trust.publication_replay_store_sha256 == authority.replay_store_sha256
-        && operation.local_profile(),
+        && &trust.publication_replay_store_sha256 == authority.replay_store_sha256,
         "publication payload differs from admitted authority")?;
+    operation.verify_runtime(authority)?;
     Ok(operation)
 }
 

@@ -5575,6 +5575,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_generation.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_generation_publication_protocol.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_generation_publication_handoff.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_generation_publication_runtime.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
 				data-plane/decision-gate-rs/src/policy_core_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
@@ -6207,6 +6208,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-runtime-resources.v1.schema.json \
 				schemas/native-shadow-runtime-attestation-policy.v1.schema.json \
 				schemas/native-shadow-publication-resources.v1.schema.json \
+				schemas/native-shadow-publication-resources.v2.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-custody-closure.v2.schema.json \

@@ -3,6 +3,7 @@
 //! verification remains the fixed producer's job; descriptors or request claims
 //! are never successful verification. No keys or evidence are manufactured here.
 use super::{image::Sealed, transport as ipc, wire::{self, require}};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use std::{cell::Cell, fs::File, os::fd::{AsRawFd, OwnedFd},
@@ -30,6 +31,35 @@ impl RuntimeAuthorityPins {
             &self.revocation_root_sha256, &self.verifier_executable_sha256].iter().all(|v| wire::hash(v))
             && self.revocation_generation > 0 && self.not_before_unix_nanos >= 0
             && self.not_before_unix_nanos < self.not_after_unix_nanos)
+    }
+}
+/// Public syntax and independently selected bindings, not a verification or
+/// admission token. A consumer must still verify the actual runtime evidence.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+pub struct PublicationVerificationAuthority {
+    pub pins: RuntimeAuthorityPins,
+    pub policy_original: String,
+    pub verifier_public_key_base64url: String,
+}
+impl PublicationVerificationAuthority {
+    pub fn validate(&self) -> Result<(), String> {
+        self.pins.validate()?;
+        require(!self.policy_original.is_empty() && self.policy_original.len() <= MAX_POLICY as usize
+            && wire::sha(self.policy_original.as_bytes()) == self.pins.policy_sha256)?;
+        let policy: serde_json::Value = wire::decode(self.policy_original.as_bytes())?;
+        require(policy.is_object() && policy.get("apiVersion").and_then(|v| v.as_str()) == Some(POLICY_API)
+            && policy.get("trustRootsSha256").and_then(|v| v.as_str()).is_some_and(wire::hash)
+            && self.verifier_public_key_base64url.len() == 43)?;
+        let bytes = URL_SAFE_NO_PAD.decode(&self.verifier_public_key_base64url)
+            .map_err(|_| "runtime public verifier key encoding differs")?;
+        require(bytes.len() == 32 && URL_SAFE_NO_PAD.encode(&bytes) == self.verifier_public_key_base64url)?;
+        let raw: [u8; 32] = bytes.try_into().map_err(|_| "runtime public verifier key width differs")?;
+        let public = ed25519_dalek::VerifyingKey::from_bytes(&raw)
+            .map_err(|_| "runtime public verifier key differs")?;
+        let mut spki = vec![0x30,0x2a,0x30,0x05,0x06,0x03,0x2b,0x65,0x70,0x03,0x21,0x00];
+        spki.extend_from_slice(public.as_bytes());
+        require(!public.is_weak() && wire::sha(&spki) == self.pins.key_spki_sha256)
     }
 }
 #[derive(Debug, Deserialize)]
@@ -151,6 +181,27 @@ impl ColdResources {
         let bootstrap = Sealed::new(&wire::encode(&cold)?, false)?;
         cold.current(deadline)?;
         Ok(Self { bootstrap, key: key_original, roots })
+    }
+    /// Project only public bytes from the actual retained cold resources. The
+    /// software-custody profile remains unchanged; no private seed is copied
+    /// into publication resources and no runtime quote is verified here.
+    pub(super) fn publication_verification(&self) -> Result<PublicationVerificationAuthority, String> {
+        self.bootstrap.check()?; self.key.check()?; self.roots.check()?;
+        require(self.bootstrap.length() <= MAX_BOOTSTRAP)?;
+        let original = self.bootstrap.bytes()?;
+        let cold: Bootstrap = wire::decode(&original)?;
+        cold.validate()?;
+        require(wire::sha(&self.roots.bytes()?) == cold.trust_roots_sha256)?;
+        let public = key(&self.key, &cold.pins)?.verifying_key();
+        let projection = PublicationVerificationAuthority {
+            pins: cold.pins.clone(), policy_original: cold.policy_original.clone(),
+            verifier_public_key_base64url: URL_SAFE_NO_PAD.encode(public.as_bytes()),
+        };
+        projection.validate()?;
+        require(self.bootstrap.bytes()? == original)?;
+        self.key.check()?; self.roots.check()?;
+        cold.current(cold.deadline_boottime_ns)?;
+        Ok(projection)
     }
     pub(super) fn descriptors(&self) -> Result<[OwnedFd; 3], String> {
         self.bootstrap.check()?; self.key.check()?; self.roots.check()?;

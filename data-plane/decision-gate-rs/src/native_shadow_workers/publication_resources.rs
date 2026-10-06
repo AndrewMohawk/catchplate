@@ -2,6 +2,7 @@
 //! off-host rollback resistance. A new lifetime requires a separately pinned
 //! checkpoint; neither a request nor the mutable journal supplies that pin.
 use super::{image::Sealed, transport as ipc, wire::{self, require}};
+use super::runtime_resources::PublicationVerificationAuthority;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, fs::File, os::fd::{AsRawFd, OwnedFd},
@@ -11,6 +12,7 @@ const PROFILE: &str = "trusted-host-local";
 const FORMAT: &str = "serverware.privateGenerationPublicationJournal/v1";
 const MAX_JOURNAL: u64 = 64 * 1024 * 1024;
 const MAX_PUBLIC: u64 = 16 * 1024;
+const MAX_NITRO_BOOTSTRAP: u64 = 256 * 1024;
 const SEALS: i32 = libc::F_SEAL_SEAL | libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,12 +41,15 @@ pub struct Configuration {
     signing_key_fd: i32, journal_fd: i32,
 }
 impl Configuration {
+    pub(super) fn runtime_verification_required(&self) -> bool {
+        self.api_version == "serverware.nativeShadowPublicationResources/v2"
+    }
     pub(super) fn inherited_fds(&self) -> [i32; 4] {
         [self.descriptor_fd, self.checkpoint_fd, self.signing_key_fd, self.journal_fd]
     }
     pub(super) fn validate(&self) -> Result<(), String> {
         let fds = [self.descriptor_fd, self.checkpoint_fd, self.signing_key_fd, self.journal_fd];
-        require(self.api_version == "serverware.nativeShadowPublicationResources/v1"
+        require((self.api_version == "serverware.nativeShadowPublicationResources/v1" || self.runtime_verification_required())
             && self.profile == PROFILE && wire::hash(&self.descriptor_sha256)
             && wire::hash(&self.checkpoint_sha256) && fds.iter().all(|fd| *fd >= 12)
             && fds.iter().enumerate().all(|(i, fd)| !fds[..i].contains(fd)))
@@ -69,6 +74,8 @@ struct Bootstrap {
     api_version: String, profile: String, descriptor_original: String,
     checkpoint_original: String, pins: PublicationAuthorityPins,
     opening_unix_nanos: i64, opening_boottime_ns: u64, deadline_boottime_ns: u64,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    runtime_verification: Option<PublicationVerificationAuthority>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
@@ -201,9 +208,26 @@ impl Journal {
     }
 }
 impl Bootstrap {
+    fn maximum(&self, job: bool) -> u64 {
+        if self.runtime_verification.is_some() { MAX_NITRO_BOOTSTRAP }
+        else { MAX_PUBLIC * if job { 4 } else { 3 } }
+    }
+    fn job_api(&self) -> &'static str {
+        if self.runtime_verification.is_some() { "serverware.nativeShadowPublicationJob/v2" }
+        else { "serverware.nativeShadowPublicationJob/v1" }
+    }
     fn validate(&self) -> Result<(Descriptor, Checkpoint), String> {
         self.pins.validate()?;
-        require(self.api_version == "serverware.nativeShadowPublicationBootstrap/v1" && self.profile == PROFILE
+        require(match self.api_version.as_str() {
+            "serverware.nativeShadowPublicationBootstrap/v1" => self.runtime_verification.is_none(),
+            "serverware.nativeShadowPublicationBootstrap/v2" => self.runtime_verification.is_some(),
+            _ => false,
+        })?;
+        if let Some(runtime) = &self.runtime_verification {
+            runtime.validate()?;
+            require(runtime.pins.key_id != self.pins.key_id && runtime.pins.key_spki_sha256 != self.pins.key_spki_sha256)?;
+        }
+        require(self.profile == PROFILE
             && self.opening_unix_nanos >= self.pins.not_before_unix_nanos
             && self.opening_unix_nanos < self.pins.not_after_unix_nanos
             && self.opening_boottime_ns < self.deadline_boottime_ns
@@ -227,14 +251,19 @@ impl Bootstrap {
         let elapsed = i64::try_from(boot - self.opening_boottime_ns).map_err(|_| "publication local clock overflow")?;
         let epoch = self.opening_unix_nanos.checked_add(elapsed).ok_or("publication local clock overflow")?;
         require(epoch >= self.pins.not_before_unix_nanos && epoch < self.pins.not_after_unix_nanos)?;
+        if let Some(runtime) = &self.runtime_verification {
+            require(epoch >= runtime.pins.not_before_unix_nanos && epoch < runtime.pins.not_after_unix_nanos)?;
+        }
         Ok(epoch)
     }
 }
 
 pub(super) struct ColdResources { pub(super) bootstrap: Sealed, key: File, journal: File }
 impl ColdResources {
-    pub(super) fn open(config: Configuration, pins: PublicationAuthorityPins, deadline: u64) -> Result<Self, String> {
+    pub(super) fn open(config: Configuration, pins: PublicationAuthorityPins, deadline: u64,
+        runtime_verification: Option<PublicationVerificationAuthority>) -> Result<Self, String> {
         config.validate()?; pins.validate()?;
+        require(config.runtime_verification_required() == runtime_verification.is_some())?;
         require(unsafe { libc::geteuid() } == 0 && config.descriptor_sha256 == pins.replay_store_sha256)?;
         // Consume the original inherited slots once; never reopen an ambient path.
         let descriptor = File::from(ipc::inherited(config.descriptor_fd)?);
@@ -247,14 +276,19 @@ impl ColdResources {
         let opening_boot = wire::now()?;
         let opening_epoch = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|_| "publication local clock unavailable")?.as_nanos()).map_err(|_| "publication local clock overflow")?;
-        let cold = Bootstrap { api_version: "serverware.nativeShadowPublicationBootstrap/v1".into(), profile: PROFILE.into(),
+        let cold = Bootstrap { api_version: if runtime_verification.is_some() {
+                "serverware.nativeShadowPublicationBootstrap/v2".into()
+            } else { "serverware.nativeShadowPublicationBootstrap/v1".into() }, profile: PROFILE.into(),
             descriptor_original: String::from_utf8(descriptor_raw).map_err(|_| "publication descriptor not UTF8")?,
             checkpoint_original: String::from_utf8(checkpoint_raw).map_err(|_| "publication checkpoint not UTF8")?, pins,
-            opening_unix_nanos: opening_epoch, opening_boottime_ns: opening_boot, deadline_boottime_ns: deadline };
+            opening_unix_nanos: opening_epoch, opening_boottime_ns: opening_boot, deadline_boottime_ns: deadline,
+            runtime_verification };
         let (descriptor, checkpoint) = cold.validate()?;
         let _ = secret(&key, &cold.pins)?;
         let journal = Journal::open(journal, checkpoint, descriptor.journal_limit_bytes)?;
-        let bootstrap = Sealed::new(&wire::encode(&cold)?, false)?;
+        let raw = wire::encode(&cold)?;
+        require(raw.len() as u64 <= cold.maximum(false))?;
+        let bootstrap = Sealed::new(&raw, false)?;
         cold.current(deadline)?;
         Ok(Self { bootstrap, key, journal: journal.file })
     }
@@ -267,10 +301,10 @@ pub(super) struct WorkerResources { bootstrap: Sealed, cold: Bootstrap, key: Fil
 impl WorkerResources {
     pub(super) fn admit(expected: &str, lifetime: u64) -> Result<Self, String> {
         let file = File::from(ipc::inherited(9)?);
-        let raw = sealed(&file, 0, 0o600, MAX_PUBLIC * 3)?;
+        let raw = sealed(&file, 0, 0o600, MAX_NITRO_BOOTSTRAP)?;
         let bootstrap = Sealed::receive(file, 0, raw.len() as u64, expected, false)?;
         let cold: Bootstrap = wire::decode(&raw)?;
-        require(cold.deadline_boottime_ns == lifetime)?;
+        require(cold.deadline_boottime_ns == lifetime && raw.len() as u64 <= cold.maximum(false))?;
         let (descriptor, checkpoint) = cold.validate()?;
         let key = File::from(ipc::inherited(10)?); let _ = secret(&key, &cold.pins)?;
         let journal = Journal::open(File::from(ipc::inherited(11)?), checkpoint, descriptor.journal_limit_bytes)?;
@@ -283,9 +317,11 @@ impl WorkerResources {
     }
     pub(super) fn job(&self, deadline: u64) -> Result<JobTransfer, String> {
         self.check()?; self.cold.current(deadline)?;
-        let original = JobBootstrap { api_version: "serverware.nativeShadowPublicationJob/v1".into(), cold: self.cold.clone(),
+        let original = JobBootstrap { api_version: self.cold.job_api().into(), cold: self.cold.clone(),
             checkpoint: self.journal.check(true)?, deadline_boottime_ns: deadline };
-        let bootstrap = Sealed::new(&wire::encode(&original)?, false)?;
+        let raw = wire::encode(&original)?;
+        require(raw.len() as u64 <= self.cold.maximum(true))?;
+        let bootstrap = Sealed::new(&raw, false)?;
         Ok(JobTransfer { descriptors: [ipc::duplicate(bootstrap.file.as_raw_fd())?,
             ipc::duplicate(self.key.as_raw_fd())?, ipc::duplicate(self.journal.file.as_raw_fd())?], _bootstrap: bootstrap })
     }
@@ -304,10 +340,10 @@ impl JobResources {
                 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) })?;
         }
         let file = File::from(ipc::inherited(3)?);
-        let raw = sealed(&file, super::UID, 0o600, MAX_PUBLIC * 4)?;
+        let raw = sealed(&file, super::UID, 0o600, MAX_NITRO_BOOTSTRAP)?;
         let bootstrap = Sealed::receive(file, super::UID, raw.len() as u64, &wire::sha(&raw), false)?;
         let original: JobBootstrap = wire::decode(&raw)?;
-        require(original.api_version == "serverware.nativeShadowPublicationJob/v1")?;
+        require(original.api_version == original.cold.job_api() && raw.len() as u64 <= original.cold.maximum(true))?;
         let (descriptor, cold_checkpoint) = original.cold.validate()?;
         require(original.checkpoint.descriptor_sha256 == cold_checkpoint.descriptor_sha256
             && original.checkpoint.device == cold_checkpoint.device && original.checkpoint.inode == cold_checkpoint.inode
@@ -321,6 +357,9 @@ impl JobResources {
     pub fn key(&self) -> &SigningKey { &self.key }
     pub fn store(&self) -> &File { &self.journal.file }
     pub fn pins(&self) -> &PublicationAuthorityPins { &self.original.cold.pins }
+    pub fn runtime_verification(&self) -> Option<&PublicationVerificationAuthority> {
+        self.original.cold.runtime_verification.as_ref()
+    }
     pub fn journal_limit_bytes(&self) -> u64 { self.journal.limit }
     pub fn check(&self) -> Result<i64, String> {
         self.bootstrap.check()?; self.original.cold.current(self.original.deadline_boottime_ns)?;

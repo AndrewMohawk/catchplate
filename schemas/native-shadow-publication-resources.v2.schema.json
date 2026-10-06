@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-publication-resources.v2.schema.json",
+  "title": "Trusted-host publication resources with independently verified Nitro runtime originals",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "profile", "descriptorFd", "descriptorSha256", "checkpointFd", "checkpointSha256", "signingKeyFd", "journalFd"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowPublicationResources/v2"},
+        "profile": {"const": "trusted-host-local"},
+        "descriptorFd": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/fd"},
+        "descriptorSha256": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/sha256"},
+        "checkpointFd": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/fd"},
+        "checkpointSha256": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/sha256"},
+        "signingKeyFd": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/fd"},
+        "journalFd": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/fd"}
+      },
+      "$comment": "Requires the actual same cold worker's independently admitted runtime verifier owner. Only its public policy/key/checkpoint projection enters the publication bootstrap. The fixed publication job verifies the existing full signed Nitro runtime result and startup receipt/role originals before signing. Key custody, filesystem durability and rollback boundaries remain trusted-host-local; no runtime seed is transferred or TEE custody inferred. Four original distinct inherited descriptor, checkpoint and journal requirements are unchanged. No fallback to v1 or caller-supplied verification verdict is allowed."
+    },
+    "descriptor": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/descriptor"},
+    "checkpoint": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/checkpoint"}
+  }
+}

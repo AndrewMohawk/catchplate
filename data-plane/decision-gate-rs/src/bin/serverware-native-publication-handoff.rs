@@ -42,6 +42,7 @@ fn run() -> Result<(), String> {
     let response = zeroize::Zeroizing::new(handle(&original, resources.store(), Authority {
         key: resources.key(), signing_key_id: &key_id, signing_key_spki_sha256: &key_spki,
         replay_store_sha256: &replay_store, journal_limit_bytes: resources.journal_limit_bytes(), check: &check,
+        runtime_verification: resources.runtime_verification(),
     })?);
     resources.check()?;
     let mut output = std::io::stdout().lock();

@@ -63,23 +63,32 @@ SETUP_NATIVE_CANARY_SCRIPT = r"""
         && v.okForAction === false && v.automaticRetryAllowed === false && v.nativeHostVerified === false
         && v.enrollmentComplete === false && v.proxyReady === false); return v;
     }
-    function setupCanaryArguments(original, operation) {
+    async function setupCanaryArguments(original, operation) {
       const v = setupNativeOriginal(original, 16384), r = v.request;
+      const rotated = r?.apiVersion === 'serverware.setupNativeCanaryAssociation/v2';
       setupCanaryNeed(oauthConsentClosed(v, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
         && v.actor_id === operation.actor && oauthConsentDigest(v.control_plane_configuration_digest)
         && v.credential_policy && typeof v.credential_policy === 'object' && !Array.isArray(v.credential_policy)
         && oauthConsentClosed(r, ['apiVersion', 'sessionId', 'setupSha256', 'continuationSha256', 'enrollmentSha256',
           'installationSha256', 'canaryId', 'finalizationSha256', 'publicationSha256', 'policyHash', 'activationPolicySha256',
-          'credentialId', 'credentialVersion', 'enrollmentApprovalId', 'nativeApprovalId', 'auditIds', 'issuedAtEpochNs', 'expiresAtEpochNs'])
-        && r.apiVersion === 'serverware.setupNativeCanaryAssociation/v1' && r.sessionId === operation.session
+          'credentialId', 'credentialVersion', 'enrollmentApprovalId', 'nativeApprovalId', 'auditIds', 'issuedAtEpochNs', 'expiresAtEpochNs',
+          ...(rotated ? ['rotationAuditId'] : [])])
+        && r.apiVersion === (rotated ? 'serverware.setupNativeCanaryAssociation/v2' : 'serverware.setupNativeCanaryAssociation/v1')
+        && r.sessionId === operation.session
         && workloadIssuanceText(r.canaryId, 256) && nativeSetupId(r.credentialId) && nativeSetupId(r.enrollmentApprovalId)
-        && nativeSetupId(r.nativeApprovalId) && oauthConsentInteger(r.credentialVersion) === 1n
+        && nativeSetupId(r.nativeApprovalId) && (rotated ? nativeSetupId(r.rotationAuditId)
+          && oauthConsentInteger(r.credentialVersion) >= 2n && oauthConsentInteger(r.credentialVersion) <= 9223372036854775807n
+          : oauthConsentInteger(r.credentialVersion) === 1n)
         && ['setupSha256', 'continuationSha256', 'enrollmentSha256', 'installationSha256', 'finalizationSha256',
           'publicationSha256', 'policyHash', 'activationPolicySha256'].every(key => oauthConsentDigest(r[key]))
         && Array.isArray(r.auditIds) && r.auditIds.length === 9 && r.auditIds.every(nativeSetupId)
         && new Set(r.auditIds).size === 9 && JSON.stringify(r.auditIds) === JSON.stringify([...r.auditIds].sort()));
       const before = oauthConsentInteger(r.issuedAtEpochNs), after = oauthConsentInteger(r.expiresAtEpochNs);
       setupCanaryNeed(before > 0n && before < after && after - before <= 30000000000n && after <= 9223372036854775807n);
+      if (rotated) {
+        const chain = await setupEnrollmentRotationLookup({...r, ownerId: operation.actor}, operation);
+        setupCanaryNeed(chain.rotationAuditId === r.rotationAuditId);
+      }
       return v;
     }
     function setupCanaryCurrent(held, operation) {
@@ -96,7 +105,7 @@ SETUP_NATIVE_CANARY_SCRIPT = r"""
         await setupEnrollmentCookie(operation);
         const v = setupCanaryReply(await setupCanaryPost('draft', {apiVersion: setupCanaryRequest, sessionId: operation.session}, operation),
           200, 'draft', ['argumentsOriginal', 'argumentsSha256', 'review']);
-        const args = setupCanaryArguments(v.argumentsOriginal, operation), request = args.request;
+        const args = await setupCanaryArguments(v.argumentsOriginal, operation), request = args.request;
         const fields = ['sessionId', 'canaryId', 'policyHash', 'credentialId', 'credentialVersion', 'enrollmentSha256',
           'installationSha256', 'finalizationSha256', 'publicationSha256', 'expiresAtEpochNs'];
         setupCanaryNeed(oauthConsentClosed(v.review, fields) && fields.every(key =>
@@ -182,7 +191,7 @@ SETUP_NATIVE_CANARY_SCRIPT = r"""
             'request_original', 'request_digest', 'configuration_digest', 'audit_event_digest', 'associated_at'])
             && row.session_id === operation.session && row.owner_id === operation.actor
             && oauthConsentInteger(row.revision) === 0n && row.phase === 'canary_publication_associated');
-          const args = setupCanaryArguments(row.request_original, operation);
+          const args = await setupCanaryArguments(row.request_original, operation);
           setupCanaryNeed(row.configuration_digest === args.control_plane_configuration_digest
             && row.request_digest === v.association.requestDigest && row.canary_id === v.association.canaryId
             && row.policy_hash === v.association.policyHash && row.finalization_sha256 === v.association.finalizationSha256

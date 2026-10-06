@@ -100,5 +100,206 @@
         "evidenceOriginal":{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":65536}]},
         "hardwareReceiptOriginal":{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":16384}]},
         "proxyReceiptOriginal":{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":16384}]}}}
+    ,
+    "rotatedAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "attemptId",
+        "sessionId",
+        "ownerId",
+        "associationSha256",
+        "runtimeSha256",
+        "enrollmentSha256",
+        "installationSha256",
+        "scopeSha256",
+        "nonce",
+        "policyHash",
+        "principalId",
+        "routeId",
+        "credentialId",
+        "credentialVersion",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "continuationSha256",
+        "credentialProvenanceSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeHardwareAttempt/v2"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/id"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/id"
+        },
+        "ownerId": {
+          "type": "string",
+          "pattern": "^oidc:",
+          "maxLength": 1024
+        },
+        "associationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "runtimeSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "enrollmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "installationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "scopeSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "routeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "credentialId": {
+          "$ref": "#/$defs/id"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9223372036854775807
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "continuationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialProvenanceSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "rotatedStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "attempt",
+        "policyOriginalSha256",
+        "routePolicyDigest",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "dataPlaneBinarySha256",
+        "observedAtEpochNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSetupHardwareStatement/v1"
+        },
+        "attempt": {
+          "$ref": "#/$defs/rotatedAttempt"
+        },
+        "policyOriginalSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "routePolicyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "bootId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "keyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "dataPlaneBinarySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "observedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "attemptAny": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/attempt"
+        },
+        {
+          "$ref": "#/$defs/rotatedAttempt"
+        }
+      ]
+    },
+    "rotatedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "signature",
+        "nativeKeyEvidence"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/rotatedStatement"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        },
+        "nativeKeyEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "attestationDocumentB64",
+            "responseProofPublicKey"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+            },
+            "attestationDocumentB64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "responseProofPublicKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          }
+        }
+      }
+    },
+    "evidenceAny": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/evidence"
+        },
+        {
+          "$ref": "#/$defs/rotatedEvidence"
+        }
+      ]
+    }
   }
 }

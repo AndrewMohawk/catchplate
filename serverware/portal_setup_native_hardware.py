@@ -88,18 +88,40 @@ SETUP_NATIVE_HARDWARE_SCRIPT = r"""
     async function setupHardwareBundle(bundle,record,op) {
       setupHardwareNeed(oauthConsentClosed(bundle,['inputsOriginal','attemptOriginal','evidenceOriginal','verifierRequestOriginal']));
       const inputs = setupNativeOriginal(bundle.inputsOriginal,4*1024*1024), attempt = setupNativeOriginal(bundle.attemptOriginal,8192), row = setupHardwarePublic(record);
+      const rotated = attempt.apiVersion === 'serverware.setupNativeHardwareAttempt/v2';
       setupHardwareNeed(oauthConsentClosed(inputs,['actor_id','control_plane_configuration_digest','credential_policy','maximum_attempt_nanos',
         'association_original','runtime_original','enrollment_original','installation_original','scope_original']));
       setupHardwareNeed(oauthConsentClosed(attempt,['apiVersion','attemptId','sessionId','ownerId','associationSha256','runtimeSha256','enrollmentSha256',
-        'installationSha256','scopeSha256','nonce','policyHash','principalId','routeId','credentialId','credentialVersion','issuedAtEpochNs','expiresAtEpochNs'])
-        && attempt.apiVersion === 'serverware.setupNativeHardwareAttempt/v1' && nativeSetupId(attempt.attemptId) && attempt.sessionId === op.session
-        && attempt.ownerId === op.actor && inputs.actor_id === op.actor && oauthConsentInteger(attempt.credentialVersion) === 1n
+        'installationSha256','scopeSha256','nonce','policyHash','principalId','routeId','credentialId','credentialVersion','issuedAtEpochNs','expiresAtEpochNs',
+        ...(rotated ? ['continuationSha256','credentialProvenanceSha256'] : [])])
+        && attempt.apiVersion === (rotated ? 'serverware.setupNativeHardwareAttempt/v2' : 'serverware.setupNativeHardwareAttempt/v1')
+        && nativeSetupId(attempt.attemptId) && attempt.sessionId === op.session
+        && attempt.ownerId === op.actor && inputs.actor_id === op.actor
+        && (rotated ? oauthConsentInteger(attempt.credentialVersion) >= 2n && oauthConsentInteger(attempt.credentialVersion) <= 9223372036854775807n
+          && oauthConsentDigest(attempt.continuationSha256) && oauthConsentDigest(attempt.credentialProvenanceSha256)
+          : oauthConsentInteger(attempt.credentialVersion) === 1n)
         && workloadIssuanceBase64(attempt.nonce,32).byteLength === 32);
       setupHardwareNeed(await workloadIssuanceHash(new TextEncoder().encode(bundle.attemptOriginal)) === row.attemptSha256);
       for (const [name,field] of [['associationSha256','association_original'],['runtimeSha256','runtime_original'],['enrollmentSha256','enrollment_original'],
           ['installationSha256','installation_original'],['scopeSha256','scope_original']]) {
         setupNativeOriginal(inputs[field],4*1024*1024);
         setupHardwareNeed(await workloadIssuanceHash(new TextEncoder().encode(inputs[field])) === attempt[name]); op.current();
+      }
+      if (rotated) {
+        const enrollment = setupNativeOriginal(inputs.enrollment_original,1500000);
+        const intent = await setupEnrollmentIntentOriginal(enrollment.intent_original,op);
+        setupHardwareNeed(intent.apiVersion === 'serverware.setupNativeEnrollmentIntent/v2');
+        const chain = await setupEnrollmentRotation(intent.continuationOriginal,op,attempt);
+        const association = setupNativeOriginal(inputs.association_original,32768), scope = setupNativeOriginal(inputs.scope_original,32768);
+        setupHardwareNeed(chain.provenanceSha256 === attempt.credentialProvenanceSha256
+          && association.continuation_sha256 === attempt.continuationSha256 && association.enrollment_sha256 === attempt.enrollmentSha256
+          && scope.apiVersion === 'serverware.setupNativeRuntimeRotationScope/v1' && scope.continuationSha256 === attempt.continuationSha256
+          && ['sessionId','credentialId','principalId','routeId'].every(key => scope[key] === attempt[key])
+          && oauthConsentInteger(scope.credentialVersion) === oauthConsentInteger(attempt.credentialVersion));
+      } else {
+        const enrollment = setupNativeOriginal(inputs.enrollment_original,1500000), scope = setupNativeOriginal(inputs.scope_original,32768);
+        setupHardwareNeed(setupNativeOriginal(enrollment.intent_original,1200000).apiVersion === 'serverware.setupNativeEnrollmentIntent/v1'
+          && !Object.prototype.hasOwnProperty.call(scope,'apiVersion') && oauthConsentInteger(scope.credentialVersion) === 1n);
       }
       const before = oauthConsentInteger(attempt.issuedAtEpochNs), expires = oauthConsentInteger(attempt.expiresAtEpochNs);
       setupHardwareNeed(before > 0n && before < expires && expires <= 9223372036854775807n && expires-before <= 300000000000n);

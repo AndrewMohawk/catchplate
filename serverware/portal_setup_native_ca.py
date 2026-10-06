@@ -221,8 +221,8 @@ SETUP_NATIVE_CA_SCRIPT = r"""
         && enrollment.intent_sha256 === prepared.intentSha256 && enrollment.certificate_sha256 === prepared.certificateSha256
         && await workloadIssuanceHash(new TextEncoder().encode(enrollment.intent_original)) === prepared.intentSha256
         && await workloadIssuanceHash(new TextEncoder().encode(enrollment.association_original)) === prepared.associationSha256);
-      const intent = setupNativeOriginal(enrollment.intent_original, 1200000);
-      setupCaNeed(intent.apiVersion === 'serverware.setupNativeEnrollmentIntent/v1' && intent.sessionId === operation.session
+      const intent = await setupEnrollmentIntentOriginal(enrollment.intent_original, operation);
+      setupCaNeed(intent.sessionId === operation.session
         && intent.ownerId === operation.actor && expires <= oauthConsentInteger(intent.expiresAtEpochNs)
         && await workloadIssuanceHash(workloadIssuanceBase64(enrollment.certificate_original, 65536)) === prepared.certificateSha256);
       const wrapper = v.installationAuthorization;

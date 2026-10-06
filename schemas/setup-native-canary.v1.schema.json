@@ -85,5 +85,229 @@
     "error": {"allOf": [{"$ref": "#/$defs/responseFlags"}, {"properties": {"status": {"enum": ["refused", "association-outcome-unknown"]}}}], "unevaluatedProperties": false},
     "response": {"oneOf": [{"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsResponse"}, {"$ref": "#/$defs/recordResponse"},
       {"$ref": "#/$defs/lookupResponse"}, {"$ref": "#/$defs/error"}]}
+    ,
+    "rotatedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sessionId",
+        "setupSha256",
+        "continuationSha256",
+        "enrollmentSha256",
+        "installationSha256",
+        "canaryId",
+        "finalizationSha256",
+        "publicationSha256",
+        "policyHash",
+        "activationPolicySha256",
+        "credentialId",
+        "credentialVersion",
+        "enrollmentApprovalId",
+        "nativeApprovalId",
+        "auditIds",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "rotationAuditId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeCanaryAssociation/v2"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "setupSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "continuationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "enrollmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "installationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "canaryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "finalizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "publicationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "activationPolicySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9223372036854775807
+        },
+        "enrollmentApprovalId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "nativeApprovalId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "auditIds": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "rotationAuditId": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "description": "Server-selected exact originals and sorted audit selectors. Kernel rederives every selector. Metadata operation interval at most 30 seconds and within original Setup expiry; no historical effect window is extended."
+    },
+    "rotatedArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_id",
+        "control_plane_configuration_digest",
+        "credential_policy",
+        "request"
+      ],
+      "properties": {
+        "actor_id": {
+          "type": "string",
+          "pattern": "^oidc:",
+          "maxLength": 1024
+        },
+        "control_plane_configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "credential_policy": {
+          "$ref": "#/$defs/credentialPolicy"
+        },
+        "request": {
+          "$ref": "#/$defs/rotatedRequest"
+        }
+      }
+    },
+    "rotatedReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "canaryId",
+        "policyHash",
+        "credentialId",
+        "credentialVersion",
+        "enrollmentSha256",
+        "installationSha256",
+        "finalizationSha256",
+        "publicationSha256",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "canaryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9223372036854775807
+        },
+        "enrollmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "installationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "finalizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "publicationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "rotatedDraftResponse": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/responseFlags"
+        },
+        {
+          "type": "object",
+          "required": [
+            "argumentsOriginal",
+            "argumentsSha256",
+            "review"
+          ],
+          "properties": {
+            "status": {
+              "const": "draft"
+            },
+            "argumentsOriginal": {
+              "$ref": "#/$defs/argumentsOriginal"
+            },
+            "argumentsSha256": {
+              "$ref": "#/$defs/digest"
+            },
+            "review": {
+              "$ref": "#/$defs/rotatedReview"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "requestAny": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/request"
+        },
+        {
+          "$ref": "#/$defs/rotatedRequest"
+        }
+      ]
+    },
+    "responseAny": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/response"
+        },
+        {
+          "$ref": "#/$defs/rotatedDraftResponse"
+        }
+      ]
+    }
   }
 }

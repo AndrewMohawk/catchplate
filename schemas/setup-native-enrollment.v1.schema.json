@@ -91,5 +91,106 @@
       "properties": {"status": {"const": "observation"}, "enrollment": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/enrollment"}]},
         "certificate": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/file"}]}, "association": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/association"}]}}}], "unevaluatedProperties": false},
     "error": {"allOf": [{"$ref": "#/$defs/responseFlags"}, {"properties": {"status": {"enum": ["refused", "issuance-outcome-unknown"]}}}], "unevaluatedProperties": false}
+    ,
+    "rotatedIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sessionId",
+        "ownerId",
+        "setupSha256",
+        "continuationSha256",
+        "assignmentSha256",
+        "policyHash",
+        "routePolicyDigest",
+        "principalId",
+        "credentialId",
+        "credentialVersion",
+        "issuerBootstrap",
+        "authorization",
+        "packet",
+        "request",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "continuationOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeEnrollmentIntent/v2"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ownerId": {
+          "type": "string",
+          "pattern": "^oidc:",
+          "maxLength": 1024
+        },
+        "setupSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "continuationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assignmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "routePolicyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9223372036854775807
+        },
+        "issuerBootstrap": {
+          "$ref": "#/$defs/base64url"
+        },
+        "authorization": {
+          "$ref": "#/$defs/base64url"
+        },
+        "packet": {
+          "$ref": "#/$defs/base64url"
+        },
+        "request": {
+          "$ref": "#/$defs/base64url"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "continuationOriginal": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2170880,
+          "pattern": "^[\\x00-\\x7f]+$"
+        }
+      },
+      "description": "Exact v2 intent with the literal rotated static continuation; historical provenance never renews authority or expiry."
+    },
+    "intentAny": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/intent"
+        },
+        {
+          "$ref": "#/$defs/rotatedIntent"
+        }
+      ]
+    }
   }
 }

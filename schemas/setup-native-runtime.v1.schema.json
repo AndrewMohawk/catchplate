@@ -92,5 +92,217 @@
         {"properties": {"status": {"const": "runtime-evidence-recorded"}}, "required": ["runtime", "resultOriginal"], "maxProperties": 9},
         {"properties": {"status": {"const": "observation"}}, "required": ["runtime", "bundle", "resultOriginal"], "maxProperties": 10},
         {"properties": {"status": {"enum": ["refused", "capture-outcome-unknown"]}}, "maxProperties": 7}]}
+    ,
+    "rotatedAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "attemptId",
+        "sessionId",
+        "associationSha256",
+        "scopeSha256",
+        "nonce",
+        "principalId",
+        "routeId",
+        "policyHash",
+        "credentialId",
+        "credentialVersion",
+        "clientRequestSha256",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeRuntimeAttempt/v2"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "associationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "scopeSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "routeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9223372036854775807
+        },
+        "clientRequestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "rotatedScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "principalId",
+        "routeId",
+        "credentialId",
+        "credentialVersion",
+        "clientRequest",
+        "serverInstanceId",
+        "collectorPublicKeyPem",
+        "controlPlanePublicKeyPem",
+        "nativeAssignment",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "maximumAttemptNanos",
+        "responseRuntimeManifestSha256",
+        "responseProvenanceSha256",
+        "apiVersion",
+        "continuationSha256"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "routeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9223372036854775807
+        },
+        "clientRequest": {
+          "$ref": "#/$defs/clientRequest"
+        },
+        "serverInstanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "collectorPublicKeyPem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "controlPlanePublicKeyPem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "nativeAssignment": {
+          "$ref": "credential-currentness-authority.v1.schema.json#/$defs/assignment"
+        },
+        "responseRuntimeManifestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "responseProvenanceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "maximumAttemptNanos": {
+          "type": "integer",
+          "minimum": 1000000000,
+          "maximum": 300000000000
+        },
+        "apiVersion": {
+          "const": "serverware.setupNativeRuntimeRotationScope/v1"
+        },
+        "continuationSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "description": "Same shape-only native15 assignment validator, independently admitted for this separate purpose. No currentness/role grant is reused. The statement provenance digest is NOT aliased to the native quote release-record digest."
+    },
+    "scopeAny": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/scope"
+        },
+        {
+          "$ref": "#/$defs/rotatedScope"
+        }
+      ]
+    },
+    "rotationAwarePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "credentialPolicy",
+        "trustRoots",
+        "scopes"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.setupNativeRuntimeAuthorityPolicy/v1"
+        },
+        "credentialPolicy": {
+          "$ref": "setup-native-canary.v1.schema.json#/$defs/credentialPolicy"
+        },
+        "trustRoots": {
+          "$ref": "#/$defs/trustRoots"
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/scopeAny"
+          }
+        }
+      }
+    },
+    "attemptAny": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/attempt"
+        },
+        {
+          "$ref": "#/$defs/rotatedAttempt"
+        }
+      ]
+    }
   }
 }

@@ -134,18 +134,134 @@ SETUP_NATIVE_ENROLLMENT_SCRIPT = r"""
         && value.enrollmentComplete === false && value.proxyReady === false);
       return value;
     }
-    async function setupEnrollmentIntent(original, operation) {
+    // These are literal acquisition joins, not signature admission or a fresh
+    // permission. Historical lookups retain the original expiry unchanged.
+    function setupEnrollmentStoredEpoch(value) {
+      setupEnrollmentNeed(typeof value === 'string');
+      const match = /^(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d:\d\d)(?:\.(\d{1,6}))?(?:Z|\+00:00)$/.exec(value);
+      setupEnrollmentNeed(match !== null);
+      const seconds = Date.parse(match[1] + 'T' + match[2] + 'Z');
+      setupEnrollmentNeed(Number.isSafeInteger(seconds) && seconds > 0);
+      return BigInt(seconds) * 1000000n + BigInt((match[3] || '').padEnd(9, '0'));
+    }
+    async function setupEnrollmentRotation(original, operation, expected) {
+      const row = setupNativeOriginal(original, 2170880);
+      setupEnrollmentNeed(oauthConsentClosed(row, ['session_id', 'revision', 'phase', 'owner_id', 'setup_original', 'setup_sha256',
+        'credential_id', 'credential_version', 'generation_request_id', 'generation_claim_sha256', 'generation_publication_digest',
+        'candidate_id', 'canary_id', 'artifact_envelope_digest', 'assignment_envelope_digest', 'policy_hash', 'route_policy_digest',
+        'assignment_digest', 'request_original', 'request_digest', 'configuration_digest', 'created_at', 'expires_at'])
+        && row.session_id === operation.session && oauthConsentInteger(row.revision) === 0n && row.phase === 'candidate_bound'
+        && row.credential_id === expected.credentialId
+        && ['setup_sha256', 'generation_claim_sha256', 'generation_publication_digest', 'artifact_envelope_digest',
+          'assignment_envelope_digest', 'policy_hash', 'route_policy_digest', 'assignment_digest', 'request_digest',
+          'configuration_digest'].every(key => oauthConsentDigest(row[key]))
+        && oauthConsentInteger(row.credential_version) === oauthConsentInteger(expected.credentialVersion)
+        && oauthConsentInteger(row.credential_version) >= 2n && oauthConsentInteger(row.credential_version) <= 9223372036854775807n
+        && await workloadIssuanceHash(new TextEncoder().encode(original)) === expected.continuationSha256);
+      const args = setupNativeOriginal(row.request_original, 2 * 1024 * 1024), request = args.request;
+      setupEnrollmentNeed(oauthConsentClosed(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
+        && args.actor_id === row.owner_id && args.control_plane_configuration_digest === row.configuration_digest
+        && oauthConsentClosed(request, ['setupBinding', 'credentialId', 'credentialVersion', 'generationClaimOriginal', 'routePolicyDigest',
+          'assignmentDigest', 'issuedAtEpochNs', 'expiresAtEpochNs', 'credentialBindingEventId', 'credentialProvenanceOriginal'])
+        && nativeSetupId(request.credentialBindingEventId) && request.credentialId === row.credential_id
+        && oauthConsentInteger(request.credentialVersion) === oauthConsentInteger(row.credential_version)
+        && request.routePolicyDigest === row.route_policy_digest && request.assignmentDigest === row.assignment_digest
+        && await workloadIssuanceHash(new TextEncoder().encode(request.generationClaimOriginal)) === row.generation_claim_sha256);
+      const setup = setupNativeOriginal(row.setup_original, 65536), binding = nativeSetupBinding(request.setupBinding);
+      setupEnrollmentNeed(oauthConsentClosed(setup, ['id', 'owner_id', 'current_assignee_id', 'status', 'phase', 'revision', 'template_id', 'principal_id',
+        'route_id', 'route_policy_digest', 'credential_id', 'credential_version', 'policy_hash', 'assignment_digest', 'oauth_provider',
+        'oauth_state_digest', 'oauth_pending_credential_id', 'canary_id', 'enrollment_session_id', 'enrollment_packet_digest', 'verifier_nonce_hash',
+        'enrollment_verifier_receipt_digest', 'enrollment_verifier_key_id', 'attestation_challenge_digest', 'attestation_challenge_issued_at',
+        'attestation_challenge_expires_at', 'attestation_challenge_value', 'runtime_evidence_digest', 'hardware_assurance_digest',
+        'hardware_verification_receipt_digest', 'hardware_verifier_key_id', 'release_identity_digest', 'current_host_identity_digest',
+        'proxy_server_statement_digest', 'trust_profile_digest', 'completion_identity_digest', 'final_authority_key_id', 'final_consumption_id',
+        'final_receipt_digest', 'created_at', 'updated_at', 'expires_at', 'terminal_at'])
+        && setup.id === row.session_id && setup.owner_id === row.owner_id && setup.credential_id === row.credential_id
+        && oauthConsentInteger(setup.credential_version) === oauthConsentInteger(row.credential_version)
+        && setup.phase === 'credential_activated' && setup.status === 'active' && setup.terminal_at === null
+        && oauthConsentInteger(setup.revision) >= 1n && setup.expires_at === row.expires_at
+        && ['oauth_provider', 'oauth_state_digest', 'oauth_pending_credential_id', 'policy_hash', 'assignment_digest', 'canary_id',
+          'enrollment_session_id'].every(key => setup[key] === null)
+        && binding.sessionId === setup.id && binding.ownerId === setup.owner_id && binding.currentAssigneeId === setup.current_assignee_id
+        && oauthConsentInteger(binding.revision) === oauthConsentInteger(setup.revision)
+        && oauthConsentInteger(binding.expiresAtEpochNs) === setupEnrollmentStoredEpoch(setup.expires_at)
+        && binding.rowSha256 === row.setup_sha256
+        && await workloadIssuanceHash(new TextEncoder().encode(row.setup_original)) === row.setup_sha256);
+      const provenance = setupNativeOriginal(request.credentialProvenanceOriginal, 40 * 1024);
+      setupEnrollmentNeed(oauthConsentClosed(provenance, ['apiVersion', 'rotationRequestDigest', 'nativeEvidenceOriginal'])
+        && provenance.apiVersion === 'serverware.staticCredentialRotationProvenance/v1' && oauthConsentDigest(provenance.rotationRequestDigest));
+      const evidence = setupNativeOriginal(provenance.nativeEvidenceOriginal, 32768), statement = evidence.statement;
+      setupEnrollmentNeed(oauthConsentClosed(evidence, ['statement', 'signature', 'nativeKeyEvidence'])
+        && oauthConsentClosed(statement, ['apiVersion', 'operation', 'holderId', 'bootId', 'keyId', 'controlPlaneResponseSigningKeyId',
+          'deploymentId', 'instanceId', 'controlPlaneConfigurationDigest', 'actorId', 'credentialId', 'credentialVersion', 'intentSha256',
+          'generationSha256', 'inputSha256', 'secretKekId', 'generationCreatedAtEpochNs', 'challenge', 'policyHash', 'dataPlaneBinarySha256',
+          'intakeOrigin', 'portalOrigin', 'ingressLeafCertificateSha256', 'ingressLeafSpkiSha256', 'issuedAtEpochNs', 'expiresAtEpochNs',
+          'previousCredentialVersion', 'previousCredentialSha256', 'previousCurrentnessOriginRequestDigest', 'previousProvenanceSha256',
+          'predecessorBarrierSha256', 'predecessorCurrentnessRootSha256'])
+        && statement.apiVersion === 'serverware.nativeStaticCredentialRotationStatement/v1' && statement.operation === 'credential.static.rotate'
+        && statement.credentialId === row.credential_id && oauthConsentInteger(statement.credentialVersion) === oauthConsentInteger(row.credential_version)
+        && oauthConsentInteger(statement.previousCredentialVersion) >= 1n
+        && oauthConsentInteger(statement.previousCredentialVersion) + 1n === oauthConsentInteger(statement.credentialVersion)
+        && ['holderId', 'keyId', 'controlPlaneResponseSigningKeyId', 'controlPlaneConfigurationDigest', 'intentSha256',
+          'generationSha256', 'inputSha256', 'policyHash', 'dataPlaneBinarySha256', 'ingressLeafCertificateSha256', 'ingressLeafSpkiSha256',
+          'previousCredentialSha256', 'previousCurrentnessOriginRequestDigest', 'previousProvenanceSha256', 'predecessorBarrierSha256',
+          'predecessorCurrentnessRootSha256'].every(key => oauthConsentDigest(statement[key]))
+        && oauthConsentInteger(statement.generationCreatedAtEpochNs) > 0n
+        && oauthConsentInteger(statement.generationCreatedAtEpochNs) <= oauthConsentInteger(statement.issuedAtEpochNs)
+        && oauthConsentInteger(statement.issuedAtEpochNs) < oauthConsentInteger(statement.expiresAtEpochNs)
+        && oauthConsentInteger(statement.expiresAtEpochNs) - oauthConsentInteger(statement.issuedAtEpochNs) <= 30000000000n
+        && typeof evidence.signature === 'string' && /^ed25519:[A-Za-z0-9_-]{86}$/.test(evidence.signature)
+        && oauthConsentClosed(evidence.nativeKeyEvidence, ['apiVersion', 'responseProofPublicKey', 'attestationDocumentB64'])
+        && evidence.nativeKeyEvidence.apiVersion === 'serverware.nativeResponseProofKeyEvidence/v1'
+        && workloadIssuanceBase64(evidence.nativeKeyEvidence.responseProofPublicKey, 32).byteLength === 32
+        && workloadIssuanceBase64(evidence.nativeKeyEvidence.attestationDocumentB64, 12288).byteLength > 0);
+      const joins = {sessionId: row.session_id, ownerId: row.owner_id, setupSha256: row.setup_sha256,
+        assignmentSha256: row.assignment_digest, policyHash: row.policy_hash, routePolicyDigest: row.route_policy_digest,
+        principalId: setup.principal_id, routeId: setup.route_id};
+      setupEnrollmentNeed(Object.keys(joins).every(key => !(key in expected) || expected[key] === joins[key]));
+      // Source-fixed core.deterministic_uuid for the actual rotation outbox.
+      const identity = await workloadIssuanceHash(new TextEncoder().encode(oauthConsentCanonical({
+        schema: 'serverware.policyAuthorityDeterministicIdentity/v1', operation: 'credential.static.rotate',
+        requestDigest: provenance.rotationRequestDigest, purpose: 'metadata-audit-outbox'})));
+      const digits = identity.slice(7, 39).split(''); digits[12] = '5'; digits[16] = ((parseInt(digits[16], 16) & 3) | 8).toString(16);
+      const compact = digits.join(''), rotationAuditId = [compact.slice(0, 8), compact.slice(8, 12), compact.slice(12, 16),
+        compact.slice(16, 20), compact.slice(20)].join('-');
+      const provenanceSha256 = await workloadIssuanceHash(new TextEncoder().encode(request.credentialProvenanceOriginal));
+      operation.current(); return {row, request, setup, binding, provenance, provenanceSha256, rotationAuditId};
+    }
+    async function setupEnrollmentRotationLookup(expected, operation) {
+      const reply = await setupPolicyPost('/lookup', {apiVersion: setupPolicyRequestSchema, sessionId: operation.session}, operation);
+      setupEnrollmentNeed(oauthConsentClosed(reply, ['apiVersion', 'okForAction', 'automaticRetryAllowed', 'continuationOriginal'])
+        && reply.apiVersion === 'serverware.setupPolicyCandidateObservation/v1' && reply.okForAction === false
+        && reply.automaticRetryAllowed === false && typeof reply.continuationOriginal === 'string');
+      return setupEnrollmentRotation(reply.continuationOriginal, operation, expected);
+    }
+    async function setupEnrollmentIntentOriginal(original, operation) {
       const value = setupNativeOriginal(original, 1200000);
+      const rotated = value.apiVersion === 'serverware.setupNativeEnrollmentIntent/v2';
       setupEnrollmentNeed(oauthConsentClosed(value, ['apiVersion', 'sessionId', 'ownerId', 'setupSha256',
         'continuationSha256', 'assignmentSha256', 'policyHash', 'routePolicyDigest', 'principalId', 'credentialId',
-        'credentialVersion', 'issuerBootstrap', 'authorization', 'packet', 'request', 'issuedAtEpochNs', 'expiresAtEpochNs'])
-        && value.apiVersion === 'serverware.setupNativeEnrollmentIntent/v1' && value.sessionId === operation.session
+        'credentialVersion', 'issuerBootstrap', 'authorization', 'packet', 'request', 'issuedAtEpochNs', 'expiresAtEpochNs',
+        ...(rotated ? ['continuationOriginal'] : [])])
+        && value.apiVersion === (rotated ? 'serverware.setupNativeEnrollmentIntent/v2' : 'serverware.setupNativeEnrollmentIntent/v1')
+        && value.sessionId === operation.session
         && nativeSetupId(value.credentialId) && workloadIssuanceText(value.ownerId, 1024) && value.ownerId.startsWith('oidc:')
-        && workloadIssuanceNativePrincipal(value.principalId) && oauthConsentInteger(value.credentialVersion) === 1n
+        && workloadIssuanceNativePrincipal(value.principalId)
+        && (rotated ? oauthConsentInteger(value.credentialVersion) >= 2n && oauthConsentInteger(value.credentialVersion) <= 9223372036854775807n
+          : oauthConsentInteger(value.credentialVersion) === 1n)
         && ['setupSha256', 'continuationSha256', 'assignmentSha256', 'policyHash', 'routePolicyDigest'].every(name => oauthConsentDigest(value[name])));
       const issued = oauthConsentInteger(value.issuedAtEpochNs), expires = oauthConsentInteger(value.expiresAtEpochNs);
       setupEnrollmentNeed(issued > 0n && issued < expires && expires - issued <= 300000000000n
-        && BigInt(Date.now()) * 1000000n < expires);
+        && expires <= 9223372036854775807n);
+      if (rotated) {
+        const chain = await setupEnrollmentRotation(value.continuationOriginal, operation, value);
+        setupEnrollmentNeed(expires <= oauthConsentInteger(chain.binding.expiresAtEpochNs));
+      }
+      return value;
+    }
+    async function setupEnrollmentIntent(original, operation) {
+      const value = await setupEnrollmentIntentOriginal(original, operation), expires = oauthConsentInteger(value.expiresAtEpochNs);
+      setupEnrollmentNeed(BigInt(Date.now()) * 1000000n < expires);
       const bootstrap = workloadIssuanceBase64(value.issuerBootstrap, 131072);
       setupEnrollmentNeed(bootstrap.byteLength > 0);
       const files = ['authorization', 'packet', 'request'].map((name, index) =>

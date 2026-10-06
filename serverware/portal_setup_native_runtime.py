@@ -125,18 +125,22 @@ SETUP_NATIVE_RUNTIME_SCRIPT = r"""
       setupRuntimeNeed(oauthConsentClosed(v, ['attemptOriginal', 'scopeOriginal', 'expectationsOriginal']));
       const attempt = setupNativeOriginal(v.attemptOriginal, 8192), scope = setupNativeOriginal(v.scopeOriginal, 32768);
       const expected = setupNativeOriginal(v.expectationsOriginal, 16384);
+      const rotated = attempt.apiVersion === 'serverware.setupNativeRuntimeAttempt/v2';
       setupRuntimeNeed(oauthConsentClosed(attempt, ['apiVersion', 'attemptId', 'sessionId', 'associationSha256', 'scopeSha256', 'nonce',
         'principalId', 'routeId', 'policyHash', 'credentialId', 'credentialVersion', 'clientRequestSha256', 'issuedAtEpochNs', 'expiresAtEpochNs'])
-        && attempt.apiVersion === 'serverware.setupNativeRuntimeAttempt/v1' && nativeSetupId(attempt.attemptId)
-        && attempt.sessionId === operation.session && nativeSetupId(attempt.credentialId) && oauthConsentInteger(attempt.credentialVersion) === 1n
+        && attempt.apiVersion === (rotated ? 'serverware.setupNativeRuntimeAttempt/v2' : 'serverware.setupNativeRuntimeAttempt/v1')
+        && nativeSetupId(attempt.attemptId) && attempt.sessionId === operation.session && nativeSetupId(attempt.credentialId)
+        && (rotated ? oauthConsentInteger(attempt.credentialVersion) >= 2n && oauthConsentInteger(attempt.credentialVersion) <= 9223372036854775807n
+          : oauthConsentInteger(attempt.credentialVersion) === 1n)
         && workloadIssuanceText(attempt.principalId, 1024) && workloadIssuanceText(attempt.routeId, 1024)
         && workloadIssuanceBase64(attempt.nonce, 32).byteLength === 32
         && ['associationSha256', 'scopeSha256', 'policyHash', 'clientRequestSha256'].every(key => oauthConsentDigest(attempt[key]))
         && oauthConsentClosed(scope, ['sessionId', 'principalId', 'routeId', 'credentialId', 'credentialVersion', 'clientRequest', 'serverInstanceId',
           'collectorPublicKeyPem', 'controlPlanePublicKeyPem', 'nativeAssignment', 'issuedAtEpochNs', 'expiresAtEpochNs', 'maximumAttemptNanos',
-          'responseRuntimeManifestSha256', 'responseProvenanceSha256'])
+          'responseRuntimeManifestSha256', 'responseProvenanceSha256', ...(rotated ? ['apiVersion', 'continuationSha256'] : [])])
+        && (!rotated || scope.apiVersion === 'serverware.setupNativeRuntimeRotationScope/v1' && oauthConsentDigest(scope.continuationSha256))
         && ['sessionId', 'principalId', 'routeId', 'credentialId'].every(key => scope[key] === attempt[key])
-        && oauthConsentInteger(scope.credentialVersion) === 1n && workloadIssuanceText(scope.serverInstanceId, 1024)
+        && oauthConsentInteger(scope.credentialVersion) === oauthConsentInteger(attempt.credentialVersion) && workloadIssuanceText(scope.serverInstanceId, 1024)
         && typeof scope.collectorPublicKeyPem === 'string' && scope.collectorPublicKeyPem.length <= 16384
         && typeof scope.controlPlanePublicKeyPem === 'string' && scope.controlPlanePublicKeyPem.length <= 16384
         && oauthConsentDigest(scope.responseRuntimeManifestSha256) && oauthConsentDigest(scope.responseProvenanceSha256));
@@ -160,6 +164,7 @@ SETUP_NATIVE_RUNTIME_SCRIPT = r"""
         && await workloadIssuanceHash(new TextEncoder().encode(v.scopeOriginal)) === attempt.scopeSha256
         && await workloadIssuanceHash(new TextEncoder().encode(oauthConsentCanonical(request))) === attempt.clientRequestSha256);
       operation.current();
+      if (rotated) await setupEnrollmentRotationLookup({...scope, policyHash: attempt.policyHash, ownerId: operation.actor}, operation);
       const remaining = expires - BigInt(Date.now()) * 1000000n;
       const liveRemaining = remaining > 0n && remaining <= 300000000000n ? remaining : 0n;
       return {...v, attempt, scope, row, expires, until: performance.now() + Number(liveRemaining / 1000000n),

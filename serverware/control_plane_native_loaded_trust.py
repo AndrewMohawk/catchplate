@@ -71,11 +71,11 @@ class Trust:
         self.payload = envelope["payload"]
         profile.require(type(self.payload) is dict and self.payload.get("schema") == "serverware.policyAuthorityServiceConfiguration/v6"
             and self.payload.get("sourceRevision") == contract.SOURCE_REVISION
-            and configuration_digest.full_configuration_digest(self.payload) == config["authorityConfigurationDigest"])
+            and configuration_digest.full_configuration_digest(self.payload) == config["authorityConfigurationDigest"] == owner.configuration)
         self.root.verify(native.profile.encoded(envelope["signature"], 64),
             commitment.framed_digest(SIGNED, profile.canonical(self.payload)).encode("ascii"))
         self.policy = native.validate_policy(self.payload.get(native.FIELD), payload=self.payload, root_key=self.root)
-        profile.require(self.policy is not None and self.policy["controlPlaneConfigurationDigest"] == owner.configuration)
+        profile.require(self.policy is not None)
         self.assignment = native._holder(self.policy, config["holderId"])
         self.retained = profile.canonical({"payload": self.payload, "assignment": self.assignment})
         # Never renew the enclosing request, cold custody attestation, Setup or

@@ -6045,6 +6045,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/oauth-revocation-authority.v1.schema.json \
 				schemas/oauth-refresh-authority.v1.schema.json \
 				schemas/credential-currentness-authority.v1.schema.json \
+				schemas/credential-currentness-authority.v2.schema.json \
 				schemas/credential-currentness-request.v1.schema.json \
 				schemas/native-current-credential-lease-request.v1.schema.json \
 				schemas/native-current-credential-lease-envelope.v1.schema.json \

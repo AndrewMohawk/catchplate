@@ -15,9 +15,9 @@ from serverware import authority_credential_currentness as profile
 from serverware import authority_oauth_refresh as refresh
 
 FIELD = "credentialCurrentnessPolicy"
-SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v1"
+SCHEMA = "serverware.credentialCurrentnessAuthorityPolicy/v2"
 TRUST_SCHEMA = "serverware.credentialCurrentnessNativeTrustRoots/v1"
-FIELDS = frozenset({"schema", "deploymentId", "controlPlaneConfigurationDigest", "operationMaxSeconds", "maximumHolders", "trustRoots", "holders"})
+FIELDS = frozenset({"schema", "deploymentId", "operationMaxSeconds", "maximumHolders", "trustRoots", "holders"})
 ASSIGNMENT_FIELDS = frozenset({"holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest", "expectedPcrs", "expectedEif", "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds"})
 _SCOPE_DIGESTS = ("releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest")
 
@@ -74,7 +74,6 @@ def validate_policy(value, *, payload, root_key=None):
         return None
     profile.require(type(value) is dict and set(value) == FIELDS and value["schema"] == SCHEMA
         and type(value["deploymentId"]) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value["deploymentId"]) is not None)
-    profile.digest(value["controlPlaneConfigurationDigest"])
     profile.require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30
         and type(value["maximumHolders"]) is int and value["maximumHolders"] == profile.MAX_ROWS)
     _trust(value["trustRoots"])
@@ -105,10 +104,11 @@ def _holder(policy, holder_id):
 
 
 def verify_original(operation, arguments, *, configuration_payload, root_key, now_epoch_ns):
+    from serverware.authority_policy_canary_policy import full_configuration_digest
     values = profile.arguments(operation, arguments, typed="businessIntent" in arguments)
     policy = validate_policy(configuration_payload.get(FIELD), payload=configuration_payload, root_key=root_key)
     profile.require(policy is not None and type(now_epoch_ns) is int and now_epoch_ns > 0
-        and values["control_plane_configuration_digest"] == policy["controlPlaneConfigurationDigest"],
+        and values["control_plane_configuration_digest"] == full_configuration_digest(configuration_payload),
         "actual custody configuration differs from the independently admitted currentness policy")
     request = values["request"]
     if operation in {profile.OP_CHALLENGE, profile.OP_QUIESCE}:

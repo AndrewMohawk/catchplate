@@ -228,9 +228,11 @@ ADMIN_TOKEN_PUBLICATION_SCRIPT = r"""
     async function adminPublicationCookie(operation) {
       const reply = await adminPublicationRequest('/api/auth/status', null, operation), value = reply.value;
       adminPublicationNeed(reply.status === 200 && adminPublicationClosed(value, ['authenticated', 'userId', 'roles',
-        'authMethod', 'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured'])
+        'authMethod', 'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured', 'sessionActivationMode'])
         && value.authenticated === true && value.userId === operation.actor && value.authMethod === 'oidc-session'
         && value.sessionState === 'active' && value.webauthnRequired === false
+        && ['legacy', 'protected', 'unavailable'].includes(value.sessionActivationMode)
+        && value.sessionActivationMode === state.authStatus.sessionActivationMode
         && typeof value.oidcBrowserLoginConfigured === 'boolean' && Array.isArray(value.roles)
         && value.roles.length <= 64 && value.roles.every(role => adminPublicationText(role, 128))
         && value.roles.includes('admin') && new Set(value.roles).size === value.roles.length

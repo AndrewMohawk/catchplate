@@ -96,9 +96,12 @@ SETUP_NATIVE_ENROLLMENT_SCRIPT = r"""
         redirect: 'error', cache: 'no-store', signal: operation.signal});
       const value = await setupPolicyRead(response, operation, 16384);
       setupEnrollmentNeed(response.ok && oauthConsentClosed(value, ['authenticated', 'userId', 'roles', 'authMethod',
-        'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured']) && value.authenticated === true
+        'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured', 'sessionActivationMode']) && value.authenticated === true
         && value.userId === operation.actor && value.authMethod === 'oidc-session' && value.sessionState === 'active'
-        && value.webauthnRequired === false && Array.isArray(value.roles)
+        && ['legacy', 'protected', 'unavailable'].includes(value.sessionActivationMode)
+        && value.sessionActivationMode === state.authStatus.sessionActivationMode
+        && value.webauthnRequired === false && typeof value.oidcBrowserLoginConfigured === 'boolean'
+        && Array.isArray(value.roles)
         && value.roles.every(item => workloadIssuanceText(item, 128)) && new Set(value.roles).size === value.roles.length
         && JSON.stringify([...value.roles].sort()) === JSON.stringify([...state.authStatus.roles].sort()));
       operation.current();

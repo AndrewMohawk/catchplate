@@ -149,7 +149,7 @@ class Kernel:
                 selected=context.exact("setup_sessions",{"id":sid});session=q._row(selected,"original Setup")
                 continuation=row(p.enrollment.candidate.TABLE,{"session_id":sid})
                 retained=p.original(continuation["request_original"],p.enrollment.candidate.MAX_ARGUMENT_BYTES)
-                if set(retained["request"])==p.enrollment.candidate.STATIC_REQUEST_FIELDS:
+                if set(retained["request"]) in (p.enrollment.candidate.STATIC_REQUEST_FIELDS,p.enrollment.candidate.ROTATED_STATIC_REQUEST_FIELDS):
                     p.require(p.static_continuation(v)==continuation
                         and p.enrollment.candidate.row_original(continuation).decode("ascii")==v["continuation_original"])
                     next_sequence=_static_history(context,session,continuation)

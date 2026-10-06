@@ -11,23 +11,31 @@ OPERATIONS = ASSERTION_OPERATIONS = frozenset({RECORD})
 TABLE = "setup_native_canary_associations"
 HTTP = "serverware.setupNativeCanaryRequest/v1"
 REQUEST = "serverware.setupNativeCanaryAssociation/v1"
+ROTATED_REQUEST = "serverware.setupNativeCanaryAssociation/v2"
 OPTIONS = "serverware.setupNativeCanaryOptions/v1"
 MAX_ARGUMENT_BYTES = 16384
 FIELDS = frozenset({"actor_id", "control_plane_configuration_digest", "credential_policy", "request"})
 REQUEST_FIELDS = frozenset({"apiVersion", "sessionId", "setupSha256", "continuationSha256", "enrollmentSha256",
     "installationSha256", "canaryId", "finalizationSha256", "publicationSha256", "policyHash", "activationPolicySha256",
     "credentialId", "credentialVersion", "enrollmentApprovalId", "nativeApprovalId", "auditIds", "issuedAtEpochNs", "expiresAtEpochNs"})
+ROTATED_REQUEST_FIELDS = REQUEST_FIELDS | {"rotationAuditId"}
 ROW_FIELDS = frozenset({"session_id", "revision", "phase", "owner_id", "setup_sha256", "continuation_sha256",
     "enrollment_sha256", "installation_sha256", "canary_id", "finalization_sha256", "publication_sha256", "policy_hash",
     "request_original", "request_digest", "configuration_digest", "audit_event_digest", "associated_at"})
 
 
 def request(value):
-    require(type(value) is dict and set(value) == REQUEST_FIELDS and value["apiVersion"] == REQUEST)
+    require(type(value) is dict)
+    rotated = value.get("apiVersion") == ROTATED_REQUEST
+    require(set(value) == (ROTATED_REQUEST_FIELDS if rotated else REQUEST_FIELDS)
+        and value["apiVersion"] == (ROTATED_REQUEST if rotated else REQUEST))
+    if rotated:
+        enrollment.setup.identifier(value["rotationAuditId"])
     enrollment.setup.identifier(value["sessionId"]); enrollment.setup.text(value["canaryId"], 256)
     enrollment.setup.identifier(value["credentialId"])
     enrollment.setup.identifier(value["enrollmentApprovalId"]); enrollment.setup.identifier(value["nativeApprovalId"])
-    require(type(value["credentialVersion"]) is int and value["credentialVersion"] == 1)
+    require(type(value["credentialVersion"]) is int and (2 <= value["credentialVersion"] <= 2**63-1
+        if value["apiVersion"] == ROTATED_REQUEST else value["credentialVersion"] == 1))
     for name in REQUEST_FIELDS - {"apiVersion", "sessionId", "canaryId", "credentialId", "credentialVersion", "enrollmentApprovalId", "nativeApprovalId", "auditIds", "issuedAtEpochNs", "expiresAtEpochNs"}:
         digest(value[name])
     audits = value["auditIds"]

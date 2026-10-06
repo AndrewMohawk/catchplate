@@ -60,12 +60,13 @@ class _Owner:
         self.continuation=setup._continuation(sid);p.require(self.continuation is not None)
         self.continuation_original=p.enrollment.candidate.row_original(self.continuation).decode("ascii")
         retained=p.original(self.continuation["request_original"],p.enrollment.candidate.MAX_ARGUMENT_BYTES)
-        self.static=set(retained["request"])==p.enrollment.candidate.STATIC_REQUEST_FIELDS
+        self.rotated=set(retained["request"])==p.enrollment.candidate.ROTATED_STATIC_REQUEST_FIELDS
+        self.static=self.rotated or set(retained["request"])==p.enrollment.candidate.STATIC_REQUEST_FIELDS
         self.hardware=hardware._row(sid);p.require(self.hardware is not None)
         self.hardware_original=p.hardware.row_original(self.hardware).decode("ascii")
         self.phase=phase;self.check()
         if phase!="lookup":
-            if self.static: p.enrollment.candidate.require_static_session(self.session)
+            if self.static: p.enrollment.candidate.require_static_session(self.session,rotated=self.rotated)
             else: p.require(self.session["revision"]==3)
             p.require(self.session["phase"]=="credential_activated" and self.session["status"]=="active" and self.session["terminal_at"] is None
                 and self.continuation["setup_original"].encode("ascii")==self.session_original

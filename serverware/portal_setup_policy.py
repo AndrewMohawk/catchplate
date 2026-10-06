@@ -5,11 +5,13 @@ from serverware.portal_setup_native import SETUP_NATIVE_POLICY_HTML, SETUP_NATIV
 SETUP_POLICY_HTML = r"""
           <details id="setup-policy-controls">
             <summary>Associate an activated Setup with a protected candidate</summary>
-            <p class="hint">Requires the actual Setup owner with credential_owner, an active version-1 credential, its completed controlled binding audit and a completed protected native generation. OAuth uses its original revision-3 activation; static Setup uses its exact current revision and binding event. This binds review data only: it does not load policy, complete Setup or make a proxy ready.</p>
+            <p class="hint">Requires the actual Setup owner with credential_owner, an active exact credential generation, its completed controlled binding audit and a completed protected native policy generation. OAuth and original static creation retain version 1. Rotated static generations additionally require their literal audited rotation provenance and separately selected rotation policy. This associates review data only: it does not load policy, complete Setup or make a proxy ready.</p>
             <button type="button" class="secondary" onclick="runUiAction('Select current Setup candidate context', setupPolicySelectCurrent)">Use selected Setup — review only</button>
             <label>Setup session ID <input id="setup-policy-session" maxlength="36" autocomplete="off"></label>
             <label>Exact current Setup revision <input id="setup-policy-revision" value="3" maxlength="19" inputmode="numeric" autocomplete="off"></label>
             <label>Static credential binding event ID (blank only for OAuth activation) <input id="setup-policy-binding-event" maxlength="36" autocomplete="off"></label>
+            <button type="button" onclick="runUiAction('Read rotated Setup provenance', setupPolicyReadRotation)">Read selected rotated generation provenance</button>
+            <label>Unchanged public rotation provenance (blank for version 1)<textarea id="setup-policy-provenance" maxlength="40960" spellcheck="false" autocomplete="off"></textarea></label>
             <label>Completed generation request ID <input id="setup-policy-generation" maxlength="36" autocomplete="off"></label>
             <button type="button" onclick="runUiAction('Review Setup candidate', setupPolicyDraft)">Read originals + draft review</button>
             <pre id="setup-policy-review">No retained draft.</pre>
@@ -58,6 +60,23 @@ SETUP_POLICY_SCRIPT = r"""
       setupPolicyNeed(/^[1-9][0-9]{0,18}$/.test(text));
       const value = BigInt(text); setupPolicyNeed(value <= 9223372036854775803n); return value;
     }
+    function setupPolicyProvenance(original) {
+      const value = oauthConsentParse(original, 40960).value;
+      setupPolicyNeed(oauthConsentClosed(value, ['apiVersion', 'rotationRequestDigest', 'nativeEvidenceOriginal'])
+        && value.apiVersion === 'serverware.staticCredentialRotationProvenance/v1'
+        && oauthConsentDigest(value.rotationRequestDigest) && oauthConsentCanonical(value) === original);
+      const native = oauthConsentParse(value.nativeEvidenceOriginal, 32768).value, statement = native.statement;
+      setupPolicyNeed(oauthConsentClosed(native, ['statement', 'signature', 'nativeKeyEvidence'])
+        && statement?.apiVersion === 'serverware.nativeStaticCredentialRotationStatement/v1'
+        && statement.operation === 'credential.static.rotate' && nativeSetupId(statement.credentialId));
+      const version = oauthConsentInteger(statement.credentialVersion);
+      setupPolicyNeed(version >= 2n && version <= 9223372036854775807n);
+      return {credentialId: statement.credentialId, version, requestDigest: value.rotationRequestDigest};
+    }
+    async function setupPolicyProvenanceDigest(original) {
+      const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(original));
+      return 'sha256:' + Array.from(new Uint8Array(bytes), item => item.toString(16).padStart(2, '0')).join('');
+    }
     function setupPolicySelectCurrent() {
       setupPolicyNeed(!setupPolicyBusy && !adminToken() && state.authStatus?.authenticated === true
         && state.authStatus?.authMethod === 'oidc-session' && state.authStatus.roles.includes('credential_owner'));
@@ -65,24 +84,26 @@ SETUP_POLICY_SCRIPT = r"""
       setupPolicyNeed(session && nativeSetupId(session.id) && session.ownerId === state.authStatus.userId
         && [null, state.authStatus.userId].includes(session.currentAssigneeId)
         && session.status === 'active' && session.phase === 'credential_activated'
-        && session.credentialVersion === 1 && Number.isSafeInteger(session.revision));
+        && Number.isSafeInteger(session.credentialVersion) && session.credentialVersion >= 1
+        && Number.isSafeInteger(session.revision));
       const revision = BigInt(session.revision);
       setupPolicyNeed(revision >= 1n && revision <= 9223372036854775803n);
       let eventId = '';
       if (session.oauthProvider) {
-        setupPolicyNeed(revision === 3n && session.oauthPendingCredentialId === session.credentialId);
+        setupPolicyNeed(revision === 3n && session.credentialVersion === 1 && session.oauthPendingCredentialId === session.credentialId);
       } else {
         setupPolicyNeed(session.oauthStateDigest === null && session.oauthPendingCredentialId === null);
         const events = (session.events || []).filter(event => event.session_id === session.id
           && event.transition === 'bind_credential' && event.created_at === session.updatedAt
           && event.event?.details?.authorityOperation === 'setup.session.bind-credential'
           && event.event?.binding_updates?.credential_id === session.credentialId
-          && event.event?.binding_updates?.credential_version === 1);
+          && event.event?.binding_updates?.credential_version === session.credentialVersion);
         setupPolicyNeed(events.length === 1 && nativeSetupId(events[0].id)); eventId = events[0].id;
       }
       $('setup-policy-session').value = session.id;
       $('setup-policy-revision').value = revision.toString();
       $('setup-policy-binding-event').value = eventId;
+      $('setup-policy-provenance').value = '';
       $('setup-policy-generation').value = '';
       setupPolicyHeld = null; $('setup-policy-confirm').checked = false;
       $('setup-policy-controls').open = true;
@@ -95,24 +116,57 @@ SETUP_POLICY_SCRIPT = r"""
       const actor = state.authStatus.userId, scope = sessionActivationAuthScope();
       const session = $('setup-policy-session').value.trim(), generation = $('setup-policy-generation').value.trim();
       const revision = setupPolicyRevision(), bindingEvent = $('setup-policy-binding-event').value.trim();
+      const provenance = $('setup-policy-provenance').value;
       setupPolicyNeed(nativeSetupId(session));
       setupPolicyNeed(bindingEvent ? nativeSetupId(bindingEvent) : revision === 3n);
+      setupPolicyNeed(!provenance || bindingEvent);
       const until = held ? held.until : performance.now() + 30000;
       const expires = held ? held.expires : Date.now() + 30000;
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.max(0, until - performance.now()));
-      const operation = {actor, scope, session, generation, revision, bindingEvent, until, expires, signal: controller.signal, current() {
+      const operation = {actor, scope, session, generation, revision, bindingEvent, provenance, until, expires, signal: controller.signal, current() {
         setupPolicyNeed(!controller.signal.aborted && performance.now() < until && Date.now() < expires
           && !adminToken() && state.authStatus?.authenticated === true && state.authStatus?.authMethod === 'oidc-session'
           && state.authStatus.userId === actor && state.authStatus.roles.includes('credential_owner')
           && sessionActivationAuthScope() === scope && $('setup-policy-session').value.trim() === session
           && $('setup-policy-generation').value.trim() === generation && setupPolicyRevision() === revision
-          && $('setup-policy-binding-event').value.trim() === bindingEvent);
+          && $('setup-policy-binding-event').value.trim() === bindingEvent && $('setup-policy-provenance').value === provenance);
         if (held) setupPolicyNeed(setupPolicyHeld === held && held.actor === actor && held.scope === scope
           && held.session === session && held.generation === generation && held.revision === revision && held.bindingEvent === bindingEvent
+          && held.provenance === provenance
           && BigInt(Date.now()) * 1000000n < held.epochExpiry);
       }, close() { clearTimeout(timer); controller.abort(); setupPolicyBusy = false; }};
       try { operation.current(); setupPolicyBusy = true; return operation; }
       catch (error) { clearTimeout(timer); controller.abort(); throw error; }
+    }
+    async function setupPolicyReadRotation() {
+      const operation = setupPolicyBegin();
+      const session = state.setupSession, identity = setupCredentialSessionIdentity(session);
+      const current = () => {
+        operation.current();
+        setupPolicyNeed(state.setupSession === session && setupCredentialSessionIdentity(session) === identity
+          && session?.id === operation.session && BigInt(session.revision) === operation.revision
+          && !session.oauthProvider && Number.isSafeInteger(session.credentialVersion) && session.credentialVersion >= 2
+          && nativeSetupId(session.credentialId) && operation.bindingEvent);
+      };
+      const read = staticRotationOperation(current);
+      try {
+        current();
+        const value = await staticRotationRequest('predecessor', {credentialId: session.credentialId}, read);
+        current();
+        setupPolicyNeed(staticRotationClosed(value, ['apiVersion', 'okForAction', 'credentialId', 'credentialVersion',
+          'originRequestDigest', 'provenanceOriginal', 'provenanceSha256'])
+          && value.apiVersion === 'serverware.staticCredentialProvenanceObservation/v1' && value.okForAction === false
+          && value.credentialId === session.credentialId && typeof value.provenanceOriginal === 'string');
+        const exact = staticRotationNumberView(staticRotationOriginals.get(value));
+        const selected = setupPolicyProvenance(value.provenanceOriginal);
+        setupPolicyNeed(selected.credentialId === session.credentialId && selected.version === BigInt(session.credentialVersion)
+          && BigInt(exact.credentialVersion) === selected.version && selected.requestDigest === value.originRequestDigest
+          && await setupPolicyProvenanceDigest(value.provenanceOriginal) === value.provenanceSha256);
+        current(); read.check();
+        $('setup-policy-provenance').value = value.provenanceOriginal;
+        setupPolicyHeld = null; $('setup-policy-confirm').checked = false;
+        setupPolicyMessage('Exact historical rotation provenance acquired. No fresh native proof, binding, approval, drain or rotation was requested. Review the candidate explicitly.');
+      } finally { read.close(); operation.close(); }
     }
     async function setupPolicyRead(response, operation, maximum = setupPolicyMaximumResponse) {
       operation.current(); setupPolicyNeed(response.body && /^application\/json(?:\s*;|$)/i.test(response.headers.get('Content-Type') || ''));
@@ -151,38 +205,48 @@ SETUP_POLICY_SCRIPT = r"""
         setupPolicyNeed(nativeSetupId(operation.generation)
           && sessionStorage.getItem(setupPolicyMarker(operation.actor, operation.session)) === null);
         const staticBinding = operation.bindingEvent ? {credentialBindingEventId: operation.bindingEvent} : {};
+        const rotated = operation.provenance ? setupPolicyProvenance(operation.provenance) : null;
+        const provenanceBinding = rotated ? {credentialProvenanceOriginal: operation.provenance} : {};
+        const version = rotated ? rotated.version : 1n;
         const result = await setupPolicyPost('/draft', {apiVersion: setupPolicyRequestSchema, sessionId: operation.session,
-          expectedRevision: new OAuthConsentNumber(operation.revision.toString()), generationRequestId: operation.generation, ...staticBinding}, operation);
+          expectedRevision: new OAuthConsentNumber(operation.revision.toString()), generationRequestId: operation.generation,
+          ...staticBinding, ...provenanceBinding}, operation);
         setupPolicyNeed(oauthConsentClosed(result, ['apiVersion', 'okForAction', 'argumentsOriginal', 'review'])
           && result.apiVersion === setupPolicyRequestSchema && result.okForAction === false && typeof result.argumentsOriginal === 'string');
         const args = oauthConsentParse(result.argumentsOriginal, 2 * 1024 * 1024).value;
         const request = args.request, binding = nativeSetupBinding(request?.setupBinding), review = result.review;
         setupPolicyNeed(oauthConsentClosed(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
           && oauthConsentClosed(request, ['setupBinding', 'credentialId', 'credentialVersion', 'generationClaimOriginal',
-            'routePolicyDigest', 'assignmentDigest', 'issuedAtEpochNs', 'expiresAtEpochNs', ...Object.keys(staticBinding)])
+            'routePolicyDigest', 'assignmentDigest', 'issuedAtEpochNs', 'expiresAtEpochNs', ...Object.keys(staticBinding), ...Object.keys(provenanceBinding)])
           && oauthConsentClosed(review, ['principalId', 'routeId', 'credentialId', 'credentialVersion', 'policyHash',
             'routePolicyDigest', 'assignmentDigest', 'sessionId', 'setupRevision', 'continuationRevision', 'ownerId',
-            'generationRequestId', 'generationPublicationDigest', 'candidateId', 'canaryId', 'expiresAtEpochNs', ...Object.keys(staticBinding)]));
+            'generationRequestId', 'generationPublicationDigest', 'candidateId', 'canaryId', 'expiresAtEpochNs', ...Object.keys(staticBinding),
+            ...(rotated ? ['credentialProvenanceSha256'] : [])]));
         const claim = oauthConsentParse(request.generationClaimOriginal, 2 * 1024 * 1024).value;
         setupPolicyNeed(args.actor_id === operation.actor && binding.sessionId === operation.session && binding.ownerId === operation.actor
-          && oauthConsentInteger(binding.revision) === operation.revision && oauthConsentInteger(request.credentialVersion) === 1n
+          && oauthConsentInteger(binding.revision) === operation.revision && oauthConsentInteger(request.credentialVersion) === version
           && claim.request_id === operation.generation && oauthConsentDigest(claim.publication_envelope_digest)
           && review.sessionId === operation.session && review.ownerId === operation.actor
           && review.generationRequestId === operation.generation && review.generationPublicationDigest === claim.publication_envelope_digest
-          && review.credentialId === request.credentialId && oauthConsentInteger(review.credentialVersion) === 1n
+          && review.credentialId === request.credentialId && oauthConsentInteger(review.credentialVersion) === version
           && review.routePolicyDigest === request.routePolicyDigest && review.assignmentDigest === request.assignmentDigest
           && oauthConsentInteger(review.setupRevision) === operation.revision && oauthConsentInteger(review.continuationRevision) === 0n
           && (!operation.bindingEvent || request.credentialBindingEventId === operation.bindingEvent
             && review.credentialBindingEventId === operation.bindingEvent));
+        if (rotated) setupPolicyNeed(request.credentialProvenanceOriginal === operation.provenance
+          && request.credentialId === rotated.credentialId
+          && review.credentialProvenanceSha256 === await setupPolicyProvenanceDigest(operation.provenance));
+        operation.current();
         const epochExpiry = oauthConsentInteger(request.expiresAtEpochNs);
         setupPolicyNeed(epochExpiry === oauthConsentInteger(review.expiresAtEpochNs)
           && BigInt(Date.now()) * 1000000n < epochExpiry && epochExpiry <= oauthConsentInteger(binding.expiresAtEpochNs));
         setupPolicyHeld = {original: result.argumentsOriginal, actor: operation.actor, scope: operation.scope,
           session: operation.session, generation: operation.generation, revision: operation.revision, bindingEvent: operation.bindingEvent,
+          provenance: operation.provenance,
           until: operation.until, expires: operation.expires, epochExpiry};
         $('setup-policy-review').textContent = oauthConsentCanonical(review);
         setupPolicyMessage('Exact review retained briefly. Candidate binding still requires your fresh hardware passkey; original expiry is not renewed.');
-      } catch (error) { setupPolicyHeld = null; setupPolicyMessage('No binding submitted. Check the exact current activated revision, real binding event/completed audit, version-1 credential and completed generation. If a prior submission was uncertain, use lookup only.'); throw error; }
+      } catch (error) { setupPolicyHeld = null; setupPolicyMessage('No binding submitted. Check the exact current revision/generation, binding audit, required rotation provenance and completed policy generation. If a prior submission was uncertain, use lookup only.'); throw error; }
       finally { operation.close(); }
     }
     async function setupPolicyBind() {
@@ -563,8 +627,25 @@ SETUP_POLICY_SCRIPT = r"""
           && ['continuationSha256', 'completionSha256', 'policyFileSha256'].every(name => oauthConsentDigest(observed[name]))
           && Array.isArray(observed.policyFileIdentity) && observed.policyFileIdentity.length === 9
           && oauthConsentClosed(observed.assignment, ['principalId', 'routeId', 'credentialId', 'credentialVersion', 'policyHash', 'routePolicyDigest'])
-          && oauthConsentInteger(observed.assignment.credentialVersion) === 1n
           && oauthConsentInteger(observed.observedAtEpochNs) > 0n && oauthConsentInteger(observed.observedAtEpochNs) <= 9223372036854775807n);
+        if (oauthConsentInteger(observed.assignment.credentialVersion) !== 1n) {
+          const lookup = await setupPolicyPost('/lookup', {apiVersion: setupPolicyRequestSchema, sessionId: operation.session}, operation);
+          setupPolicyNeed(oauthConsentClosed(lookup, ['apiVersion', 'okForAction', 'automaticRetryAllowed', 'continuationOriginal'])
+            && lookup.apiVersion === 'serverware.setupPolicyCandidateObservation/v1' && lookup.okForAction === false
+            && lookup.automaticRetryAllowed === false && typeof lookup.continuationOriginal === 'string'
+            && await setupPolicyProvenanceDigest(lookup.continuationOriginal) === observed.continuationSha256);
+          const row = oauthConsentParse(lookup.continuationOriginal, 2170880).value;
+          const args = oauthConsentParse(row.request_original, 2 * 1024 * 1024).value, request = args.request;
+          setupPolicyNeed(oauthConsentClosed(request, ['setupBinding', 'credentialId', 'credentialVersion', 'generationClaimOriginal',
+            'routePolicyDigest', 'assignmentDigest', 'issuedAtEpochNs', 'expiresAtEpochNs', 'credentialBindingEventId', 'credentialProvenanceOriginal']));
+          const provenance = setupPolicyProvenance(request.credentialProvenanceOriginal);
+          setupPolicyNeed(row.session_id === operation.session && row.credential_id === observed.assignment.credentialId
+            && request.credentialId === row.credential_id && provenance.credentialId === row.credential_id
+            && oauthConsentInteger(row.credential_version) === provenance.version
+            && oauthConsentInteger(request.credentialVersion) === provenance.version
+            && oauthConsentInteger(observed.assignment.credentialVersion) === provenance.version);
+          operation.current();
+        }
         $('setup-policy-file-observation').textContent = 'CONTROL-PLANE loader only — nativeGateVerified: false.\n' + value.observationOriginal;
         setupFileMessage('Actual control-plane loaded observation only. Native immutable policy/startup enrollment is separate; this grants no action, proxy readiness, retry or Setup completion.');
       } finally { operation.close(); }

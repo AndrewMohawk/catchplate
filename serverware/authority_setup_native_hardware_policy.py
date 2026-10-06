@@ -56,6 +56,9 @@ def verify_inputs(values, payload, root_key, now):
         and association["enrollment_sha256"] == installation["enrollment_sha256"] == p.sha256(values["enrollment_original"].encode("ascii"))
         and association["installation_sha256"] == p.sha256(values["installation_original"].encode("ascii")))
     intent = p.enrollment.intent(enrollment["intent_original"])
+    p.require((scope.get("apiVersion") == runtime_policy.ROTATED_SCOPE) == (intent["apiVersion"] == p.enrollment.ROTATED_SCHEMA))
+    if intent["apiVersion"] == p.enrollment.ROTATED_SCHEMA:
+        p.require(scope["continuationSha256"] == intent["continuationSha256"])
     runtime_attempt = p.runtime.prepared(runtime["attempt_original"])
     runtime_policy.attempt_scope(runtime_attempt, scope)
     raw = p.enrollment.original(runtime["capture_original_base64url"], p.runtime.MAX_CAPTURE)
@@ -77,6 +80,10 @@ def verify_inputs(values, payload, root_key, now):
 def verify_quote(values, payload, root_key, now):
     policy, scope, intent, runtime_attempt, grant = verify_inputs(values, payload, root_key, now)
     attempt = p.prepared(values["attempt_original"])
+    linked = p.rotation_binding(values)
+    p.require(attempt["apiVersion"] == (p.ROTATED_ATTEMPT if linked is not None else p.ATTEMPT))
+    if linked is not None:
+        p.require(all(attempt[name] == item for name, item in linked.items()))
     p.require(attempt["issuedAtEpochNs"] <= now < attempt["expiresAtEpochNs"] <= min(runtime_attempt["expiresAtEpochNs"],intent["expiresAtEpochNs"],grant["expiresAtEpochNs"])
         and attempt["expiresAtEpochNs"]-attempt["issuedAtEpochNs"] <= policy["maximumAttemptNanos"])
     for name, field in (("associationSha256", "association_original"), ("runtimeSha256", "runtime_original"),

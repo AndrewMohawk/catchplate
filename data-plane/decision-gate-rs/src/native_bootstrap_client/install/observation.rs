@@ -44,6 +44,77 @@ fn text<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
 fn integer(v: &Value, key: &str) -> Result<u64, String> {
     v.get(key).and_then(Value::as_u64).ok_or_else(|| "host observation integer differs".to_owned())
 }
+fn closed(value: &Value, fields: &[&str]) -> bool {
+    value.as_object().is_some_and(|row| row.len() == fields.len()
+        && fields.iter().all(|field| row.contains_key(*field)))
+}
+
+/// Bind the retained rotated association as DATA. This installation observer
+/// does not replace CP signature/current-generation admission or assert native
+/// custody of the credential; its signature remains actual CA readback only.
+fn enrollment_intent(intent: &Value, raw: &[u8]) -> Result<(), String> {
+    let fields = ["apiVersion", "sessionId", "ownerId", "setupSha256", "continuationSha256",
+        "assignmentSha256", "policyHash", "routePolicyDigest", "principalId", "credentialId",
+        "credentialVersion", "issuerBootstrap", "authorization", "packet", "request",
+        "issuedAtEpochNs", "expiresAtEpochNs"];
+    ensure(encoding::encode_canonical(intent, 1200000)? == raw, "host observation intent canonical original differs")?;
+    let version = integer(intent, "credentialVersion")?;
+    match text(intent, "apiVersion")? {
+        "serverware.setupNativeEnrollmentIntent/v1" =>
+            ensure(closed(intent, &fields) && version == 1, "host observation v1 intent differs"),
+        "serverware.setupNativeEnrollmentIntent/v2" => {
+            let mut extended = fields.to_vec(); extended.push("continuationOriginal");
+            ensure(closed(intent, &extended) && (2..=i64::MAX as u64).contains(&version),
+                "host observation rotated intent differs")?;
+            let original = text(intent, "continuationOriginal")?.as_bytes();
+            let continuation = json::parse(original, 1200000)?;
+            let continuation_fields = ["session_id", "revision", "phase", "owner_id", "setup_original", "setup_sha256",
+                "credential_id", "credential_version", "generation_request_id", "generation_claim_sha256",
+                "generation_publication_digest", "candidate_id", "canary_id", "artifact_envelope_digest",
+                "assignment_envelope_digest", "policy_hash", "route_policy_digest", "assignment_digest",
+                "request_original", "request_digest", "configuration_digest", "created_at", "expires_at"];
+            ensure(closed(&continuation, &continuation_fields)
+                && encoding::encode_canonical(&continuation, 1200000)? == original
+                && digest_text(&digest(original)) == text(intent, "continuationSha256")?
+                && integer(&continuation, "revision")? == 0
+                && text(&continuation, "phase")? == "candidate_bound"
+                && integer(&continuation, "credential_version")? == version,
+                "host observation rotated continuation differs")?;
+            for (left, right) in [("session_id", "sessionId"), ("owner_id", "ownerId"),
+                ("credential_id", "credentialId"), ("setup_sha256", "setupSha256"),
+                ("assignment_digest", "assignmentSha256"), ("policy_hash", "policyHash"),
+                ("route_policy_digest", "routePolicyDigest")] {
+                ensure(text(&continuation, left)? == text(intent, right)?, "host observation rotated binding differs")?;
+            }
+            let setup_raw = text(&continuation, "setup_original")?.as_bytes();
+            let setup = json::parse(setup_raw, 65536)?;
+            ensure(digest_text(&digest(setup_raw)) == text(intent, "setupSha256")?
+                && text(&setup, "principal_id")? == text(intent, "principalId")?
+                && text(&setup, "id")? == text(intent, "sessionId")?
+                && text(&setup, "credential_id")? == text(intent, "credentialId")?
+                && integer(&setup, "credential_version")? == version,
+                "host observation rotated setup differs")?;
+            let request_raw = text(&continuation, "request_original")?.as_bytes();
+            let request = json::parse(request_raw, 1200000)?;
+            ensure(closed(&request, &["actor_id", "control_plane_configuration_digest", "credential_policy", "request"])
+                && encoding::encode_canonical(&request, 1200000)? == request_raw
+                && text(&request, "actor_id")? == text(intent, "ownerId")?
+                && text(&request, "control_plane_configuration_digest")? == text(&continuation, "configuration_digest")?,
+                "host observation rotated request original differs")?;
+            let body = request.get("request").ok_or("host observation rotated request absent")?;
+            ensure(closed(body, &["setupBinding", "credentialId", "credentialVersion", "generationClaimOriginal",
+                "routePolicyDigest", "assignmentDigest", "issuedAtEpochNs", "expiresAtEpochNs",
+                "credentialBindingEventId", "credentialProvenanceOriginal"])
+                && integer(body, "credentialVersion")? == version
+                && text(body, "credentialId")? == text(intent, "credentialId")?
+                && text(body, "routePolicyDigest")? == text(intent, "routePolicyDigest")?
+                && text(body, "assignmentDigest")? == text(intent, "assignmentSha256")?
+                && !text(body, "credentialProvenanceOriginal")?.is_empty(),
+                "host observation rotated association branch differs")
+        }
+        _ => Err("host observation intent version differs".into()),
+    }
+}
 fn decode(v: &str, max: usize) -> Result<Vec<u8>, String> {
     ensure(!v.is_empty() && v.len() <= (max * 4 + 2) / 3, "host observation encoded original bound")?;
     let raw = URL_SAFE_NO_PAD.decode(v).map_err(|_| "host observation original encoding")?;
@@ -104,9 +175,8 @@ impl Prepared {
             "host observation enrollment original differs")?;
         let intent_raw = text(&row, "intent_original")?.as_bytes();
         let intent = json::parse(intent_raw, 1200000)?;
-        ensure(intent.as_object().map(|x| x.len()) == Some(17)
-            && text(&intent, "apiVersion")? == "serverware.setupNativeEnrollmentIntent/v1"
-            && text(&intent, "sessionId")? == text(&prepared, "sessionId")?
+        enrollment_intent(&intent, intent_raw)?;
+        ensure(text(&intent, "sessionId")? == text(&prepared, "sessionId")?
             && text(&prepared, "intentSha256")? == digest_text(&digest(intent_raw)), "host observation issuer intent differs")?;
         let certificate_raw = decode(text(&row, "certificate_original")?, 65536)?;
         let certificate_sha = digest_text(&digest(&certificate_raw));

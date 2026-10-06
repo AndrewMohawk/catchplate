@@ -5,6 +5,7 @@ use crate::native_currentness_v1 as scalar;
 
 pub const PATH: &str = "/v1/native-setup-hardware";
 pub const ATTEMPT: &str = "serverware.setupNativeHardwareAttempt/v1";
+pub const ROTATED_ATTEMPT: &str = "serverware.setupNativeHardwareAttempt/v2";
 pub const STATEMENT: &str = "serverware.nativeSetupHardwareStatement/v1";
 pub const DOMAIN: &[u8] = b"serverware/native-setup-hardware-attestation/v1\0";
 pub const MAX_REQUEST: usize = 8192;
@@ -18,11 +19,26 @@ pub struct Attempt {
     pub installation_sha256:String, pub scope_sha256:String, pub nonce:String, pub policy_hash:String,
     pub principal_id:String, pub route_id:String, pub credential_id:String, pub credential_version:u64,
     pub issued_at_epoch_ns:u64, pub expires_at_epoch_ns:u64,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub continuation_sha256:Option<String>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub credential_provenance_sha256:Option<String>,
 }
 impl Attempt {
     pub fn validate(&self, now:u64)->Result<(),String> {
         scalar::bytes32(&self.nonce)?;
-        if self.api_version!=ATTEMPT || self.credential_version!=1 || !self.owner_id.starts_with("oidc:")
+        // These two v2 commitments are request associations, not native-observed
+        // generation/provenance. Independent CP verification and the protected
+        // kernel join the literal continuation, actual dispatch and current root.
+        let version = match self.api_version.as_str() {
+            ATTEMPT => self.credential_version==1 && self.continuation_sha256.is_none()
+                && self.credential_provenance_sha256.is_none(),
+            ROTATED_ATTEMPT => (2..=i64::MAX as u64).contains(&self.credential_version)
+                && self.continuation_sha256.as_deref().is_some_and(scalar::digest)
+                && self.credential_provenance_sha256.as_deref().is_some_and(scalar::digest),
+            _ => false,
+        };
+        if !version || !self.owner_id.starts_with("oidc:")
             || self.owner_id.len()>1024 || self.owner_id.bytes().any(|b|b<0x20 || b==0x7f)
             || [&self.attempt_id,&self.session_id,&self.credential_id,&self.principal_id,&self.route_id]
                 .iter().any(|s|!scalar::identifier(s))

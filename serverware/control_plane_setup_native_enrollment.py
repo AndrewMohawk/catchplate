@@ -67,8 +67,9 @@ class _Setup:
         self.session_original = p.setup.row_original(self.session)
         self.continuation_original = p.candidate.row_original(self.continuation)
         retained = p.setup.document(self.continuation["request_original"].encode("ascii"), p.candidate.MAX_ARGUMENT_BYTES)
-        if set(retained["request"]) == p.candidate.STATIC_REQUEST_FIELDS:
-            p.candidate.require_static_session(self.session)
+        self.rotated = set(retained["request"]) == p.candidate.ROTATED_STATIC_REQUEST_FIELDS
+        if self.rotated or set(retained["request"]) == p.candidate.STATIC_REQUEST_FIELDS:
+            p.candidate.require_static_session(self.session, rotated=self.rotated)
         else:
             p.require(set(retained["request"]) == p.candidate.REQUEST_FIELDS and self.session["revision"] == 3)
         p.require(self.session["phase"] == "credential_activated"
@@ -104,6 +105,8 @@ class _Setup:
 
     def bind(self, text):
         value = p.intent(text)
+        p.require((p.rotated_continuation(value) == self.continuation) if self.rotated
+            else value["apiVersion"] == p.SCHEMA)
         expected = {"sessionId": self.session["id"], "ownerId": self.session["owner_id"],
             "setupSha256": p.sha256(self.session_original), "continuationSha256": p.sha256(self.continuation_original),
             "assignmentSha256": self.continuation["assignment_digest"], "policyHash": self.continuation["policy_hash"],
@@ -195,7 +198,7 @@ def run(frame, request):
             admitted = issuer._admit_on_context(frame.context, originals=raw)
             p.require(type(admitted) is issuer.native_authorization._NativeIssuanceMaterial and admitted.principal_id == owner.session["principal_id"])
             now = owner.check()
-            selected = {"apiVersion": p.SCHEMA, "sessionId": owner.session["id"], "ownerId": owner.session["owner_id"],
+            selected = {"apiVersion": p.ROTATED_SCHEMA if owner.rotated else p.SCHEMA, "sessionId": owner.session["id"], "ownerId": owner.session["owner_id"],
                 "setupSha256": p.sha256(owner.session_original), "continuationSha256": p.sha256(owner.continuation_original),
                 "assignmentSha256": owner.continuation["assignment_digest"], "policyHash": owner.continuation["policy_hash"],
                 "routePolicyDigest": owner.continuation["route_policy_digest"], "principalId": owner.session["principal_id"],
@@ -204,6 +207,8 @@ def run(frame, request):
                 **{name: p.encoded(raw[index]) for index, name in enumerate(("authorization", "packet", "request"))},
                 "issuedAtEpochNs": now, "expiresAtEpochNs": min(now + 300_000_000_000,
                     admitted.not_after_epoch_seconds * 1_000_000_000, p.setup.epoch(owner.session["expires_at"]))}
+            if owner.rotated:
+                selected["continuationOriginal"] = owner.continuation_original.decode("ascii")
             text = p.canonical(selected).decode("ascii"); owner.bind(text)
             return routes._response(frame, {**COMMON, "status": "draft", "intentOriginal": text, "intentSha256": p.sha256(text.encode("ascii"))})
         fields = {"apiVersion", "intentOriginal", "approvalId", "phase" if phase == "options" else "assertion"}

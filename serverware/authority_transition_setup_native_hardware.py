@@ -57,11 +57,13 @@ class Kernel:
             mutations.extend(assertion._assertion_mutations(context,{"actor_id":v["actor_id"]}))
             nonce=hashlib.sha256(b"serverware/setup-native-hardware-challenge/v1\0"+
                 p.enrollment.original(challenge["challenge"],64)+bytes.fromhex(context.request_digest[7:])).digest()
-            attempt={"apiVersion":p.ATTEMPT,"attemptId":core.deterministic_uuid(operation=self.operation,request_digest=context.request_digest,
+            linked=p.rotation_binding(v)
+            attempt={"apiVersion":p.ROTATED_ATTEMPT if linked is not None else p.ATTEMPT,"attemptId":core.deterministic_uuid(operation=self.operation,request_digest=context.request_digest,
                 purpose="native-setup-hardware"),"sessionId":sid,"ownerId":v["actor_id"],"nonce":p.enrollment.encoded(nonce),
                 "policyHash":a["policy_hash"],"principalId":scope["principalId"],"routeId":scope["routeId"],"credentialId":scope["credentialId"],
                 "credentialVersion":scope["credentialVersion"],"issuedAtEpochNs":now,"expiresAtEpochNs":min(now+v["maximum_attempt_nanos"],
                     before["expiresAtEpochNs"],i["expiresAtEpochNs"],grant["expiresAtEpochNs"],p.enrollment.setup.epoch(row("setup_sessions",{"id":sid})["expires_at"]))}
+            if linked is not None: attempt.update(linked)
             for name,field in (("associationSha256","association_original"),("runtimeSha256","runtime_original"),("enrollmentSha256","enrollment_original"),
                     ("installationSha256","installation_original"),("scopeSha256","scope_original")):
                 attempt[name]=p.sha256(v[field].encode("ascii"))
@@ -103,6 +105,7 @@ def source_queries(operation,v,request_digest):
             p.enrollment.candidate.TABLE,{"session_id":sid},"artifact_envelope_digest")}),
         exact("association_audit","metadata_audit_outbox",{"id":q._audit_identity(p.runtime.canary.RECORD,a["request_digest"])}),
         q._role_query(operation,"owner",v["actor_id"]),q._audit_query(operation,request_digest)]
+    query.extend(issued.rotation_audit_queries(operation,i))
     for codec,name in ((p.runtime,"runtime_original"),(p.enrollment,"enrollment_original"),(p.ca,"installation_original")):
         row=p.original(v[name],p.MAX_ROW_BYTES)
         query.append(exact(name+"_audit","metadata_audit_outbox",{"id":q._audit_identity(codec.COMPLETE,row["complete_request_digest"])}))

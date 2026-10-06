@@ -9453,6 +9453,19 @@ class AuthorityProcess:
                     now_epoch_ns=binding_now, work=_ValidationWork(QueryReadValidationLimits()))
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
                 raise AuthorityServiceError("Setup credential binding plan differs from its admitted originals") from exc
+        if operation in setup_policy.OPERATIONS and set(arguments["request"]) == setup_policy.ROTATED_STATIC_REQUEST_FIELDS:
+            from serverware import authority_transition_setup_policy as setup_kernel
+            from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+            setup_originals = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            try:
+                setup_kernel.verify_rotated_plan(payload=plan_payload, arguments=setup_originals,
+                    verified_webauthn_evidence=webauthn_evidence,
+                    selected_policy=setup_policy.rotated_selection(self.configuration.payload, self.configuration.root_key),
+                    deadline_ns=deadline_monotonic_ns, now_epoch_ns=time.time_ns(),
+                    work=_ValidationWork(QueryReadValidationLimits()))
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise AuthorityServiceError("Rotated Setup association differs from its admitted originals") from exc
         if operation == setup_native_final.SETTLE and "continuation_original" in arguments:
             from serverware import authority_transition_setup_native_final as final_kernel
             from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
@@ -9978,6 +9991,9 @@ class AuthorityProcess:
                 if set(self.role_config["enabledOperations"]) & (static_create.OPERATIONS | static_approval.OPERATIONS | static_rotate.OPERATIONS | static_rotation_approval.OPERATIONS) else None),
             static_credential_root_key=(self.configuration.root_key
                 if set(self.role_config["enabledOperations"]) & (static_create.OPERATIONS | static_approval.OPERATIONS | static_rotate.OPERATIONS | static_rotation_approval.OPERATIONS) else None),
+            setup_rotated_static_policy=(setup_policy.rotated_selection(self.configuration.payload, self.configuration.root_key)
+                if set(self.role_config["enabledOperations"]) & setup_policy.OPERATIONS
+                and self.configuration.payload.get(static_rotate.FIELD) is not None else None),
         )
         # Check the pinned embedded receipt even on a durable-plan replay, and
         # before asking another process for stored planning data.

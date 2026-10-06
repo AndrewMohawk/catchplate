@@ -10,6 +10,7 @@ OPERATIONS, ASSERTION_OPERATIONS = frozenset({PREPARE, COMPLETE}), frozenset({PR
 TABLE = "setup_native_hardware_attempts"
 HTTP, OPTIONS = "serverware.setupNativeHardwareRequest/v1", "serverware.setupNativeHardwareOptions/v1"
 ATTEMPT, STATEMENT = "serverware.setupNativeHardwareAttempt/v1", "serverware.nativeSetupHardwareStatement/v1"
+ROTATED_ATTEMPT = "serverware.setupNativeHardwareAttempt/v2"
 QUOTE_DOMAIN = b"serverware/native-setup-hardware-attestation/v1\0"
 RECEIPT_DOMAIN = b"serverware/setup-native-independent-verification/v1\0"
 ROLES = ("hardware-verifier", "proxy-verifier")
@@ -20,6 +21,7 @@ FIELDS = frozenset({"actor_id", "control_plane_configuration_digest", "credentia
 ATTEMPT_FIELDS = frozenset({"apiVersion", "attemptId", "sessionId", "ownerId", "associationSha256", "runtimeSha256",
     "enrollmentSha256", "installationSha256", "scopeSha256", "nonce", "policyHash", "principalId", "routeId",
     "credentialId", "credentialVersion", "issuedAtEpochNs", "expiresAtEpochNs"})
+ROTATED_ATTEMPT_FIELDS = ATTEMPT_FIELDS | {"continuationSha256", "credentialProvenanceSha256"}
 ROW_FIELDS = frozenset({"session_id", "revision", "phase", "owner_id", "inputs_original", "attempt_original", "attempt_sha256",
     "prepare_request_digest", "prepare_audit_id", "evidence_original", "hardware_receipt_original", "proxy_receipt_original",
     "result_original", "complete_request_digest", "configuration_digest", "created_at", "completed_at"})
@@ -36,14 +38,19 @@ def original(text, maximum):
 
 def prepared(text):
     value = original(text, 8192)
-    require(set(value) == ATTEMPT_FIELDS and value["apiVersion"] == ATTEMPT)
+    rotated = value.get("apiVersion") == ROTATED_ATTEMPT
+    require(set(value) == (ROTATED_ATTEMPT_FIELDS if rotated else ATTEMPT_FIELDS)
+        and value["apiVersion"] == (ROTATED_ATTEMPT if rotated else ATTEMPT))
     for name in ("attemptId", "sessionId", "credentialId"):
         enrollment.setup.identifier(value[name])
     for name in ("ownerId", "principalId", "routeId"):
         enrollment.setup.text(value[name], 1024)
-    require(value["ownerId"].startswith("oidc:") and type(value["credentialVersion"]) is int and value["credentialVersion"] == 1)
+    require(value["ownerId"].startswith("oidc:") and type(value["credentialVersion"]) is int
+        and (2 <= value["credentialVersion"] <= 2**63-1 if rotated else value["credentialVersion"] == 1))
     for name in ("associationSha256", "runtimeSha256", "enrollmentSha256", "installationSha256", "scopeSha256", "policyHash"):
         digest(value[name])
+    if rotated:
+        digest(value["continuationSha256"]); digest(value["credentialProvenanceSha256"])
     require(len(enrollment.original(value["nonce"], 32)) == 32)
     before, after = value["issuedAtEpochNs"], value["expiresAtEpochNs"]
     require(type(before) is int and type(after) is int and 0 < before < after <= 2**63-1 and after-before <= 300_000_000_000)
@@ -65,6 +72,10 @@ def inputs(value):
             and row["configuration_digest"] == value["control_plane_configuration_digest"])
     from serverware import authority_setup_native_runtime_policy as rp
     scope=rp.scope(original(value["scope_original"], 32768))
+    linked = rotation_binding(value)
+    require((scope.get("apiVersion") == rp.ROTATED_SCOPE) == (linked is not None))
+    if linked is not None:
+        require(scope["continuationSha256"] == linked["continuationSha256"])
     require(all(len(scope[name].encode("utf-8")) <= 256 for name in ("principalId","routeId")))
     require(len(canonical(value)) <= MAX_ARGUMENT_BYTES)
     # Refuse BEFORE reservation when even the bounded native output could make
@@ -76,6 +87,28 @@ def inputs(value):
     return value
 
 
+def rotation_binding(value):
+    """Request association, never native-observed credential currentness.
+
+    The independent verifier rechecks the actual dispatch receipt and the kernel
+    selects the exact retained continuation and current credential/root rows.
+    """
+    enrolled = original(value["enrollment_original"], enrollment.MAX_ROW_BYTES)
+    selected = enrollment.intent(enrolled["intent_original"])
+    retained = enrollment.rotated_continuation(selected)
+    if retained is None:
+        return None
+    request = original(retained["request_original"], enrollment.candidate.MAX_ARGUMENT_BYTES)["request"]
+    scope = original(value["scope_original"], 32768)
+    require(scope["sessionId"] == selected["sessionId"] and scope["credentialId"] == selected["credentialId"]
+        and scope["credentialVersion"] == selected["credentialVersion"])
+    association = runtime.association(value["association_original"])
+    require(association["continuation_sha256"] == selected["continuationSha256"]
+        and association["enrollment_sha256"] == sha256(value["enrollment_original"].encode("ascii")))
+    return {"continuationSha256": selected["continuationSha256"],
+        "credentialProvenanceSha256": sha256(request["credentialProvenanceOriginal"].encode("ascii"))}
+
+
 def arguments(operation, value, *, typed=False):
     require(operation in OPERATIONS and isinstance(value, Mapping))
     require(FIELDS <= set(value) <= FIELDS | ({"businessIntent", "authn_evidence"} if typed else set())
@@ -85,6 +118,10 @@ def arguments(operation, value, *, typed=False):
         require(all(value[name] is None for name in FIELDS-INPUT_FIELDS))
     else:
         attempt = prepared(value["attempt_original"])
+        linked = rotation_binding(value)
+        require(attempt["apiVersion"] == (ROTATED_ATTEMPT if linked is not None else ATTEMPT))
+        if linked is not None:
+            require(all(attempt[name] == item for name, item in linked.items()))
         for name, field in (("associationSha256", "association_original"), ("runtimeSha256", "runtime_original"),
                 ("enrollmentSha256", "enrollment_original"), ("installationSha256", "installation_original"), ("scopeSha256", "scope_original")):
             require(attempt[name] == sha256(value[field].encode("ascii")))
@@ -133,6 +170,10 @@ def receipt(text, role):
 def row_original(row):
     require(type(row) is dict and set(row) == ROW_FIELDS and type(row["revision"]) is int)
     i = inputs(original(row["inputs_original"], MAX_ARGUMENT_BYTES)); a = prepared(row["attempt_original"])
+    linked = rotation_binding(i)
+    require(a["apiVersion"] == (ROTATED_ATTEMPT if linked is not None else ATTEMPT))
+    if linked is not None:
+        require(all(a[name] == item for name, item in linked.items()))
     require(row["owner_id"] == i["actor_id"] == a["ownerId"] and row["session_id"] == a["sessionId"]
         and row["configuration_digest"] == i["control_plane_configuration_digest"]
         and row["attempt_sha256"] == sha256(row["attempt_original"].encode("ascii")))

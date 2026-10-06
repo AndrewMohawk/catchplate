@@ -30,3 +30,6 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
         and values["credential_policy"] == policy["credentialPolicy"]
         and request["issuedAtEpochNs"] <= now_epoch_ns < request["expiresAtEpochNs"]
         <= request["issuedAtEpochNs"] + policy["operationMaxSeconds"] * 1_000_000_000)
+    if set(request) == profile.ROTATED_STATIC_REQUEST_FIELDS:
+        selected = profile.rotated_selection(configuration_payload, root_key)
+        profile.require(selected["configurationDigest"] == values["control_plane_configuration_digest"])

@@ -19,6 +19,9 @@ REQUEST_FIELDS = frozenset({"setupBinding", "credentialId", "credentialVersion",
 # The existing eight-field OAuth original is unchanged. This additional exact
 # spelling carries only a locator; the kernel must prove its actual provenance.
 STATIC_REQUEST_FIELDS = REQUEST_FIELDS | {"credentialBindingEventId"}
+# N+1 is a distinct original, never an interpretation of the old static-v1
+# spelling. Historical native evidence is not a fresh Nitro/currentness grant.
+ROTATED_STATIC_REQUEST_FIELDS = STATIC_REQUEST_FIELDS | {"credentialProvenanceOriginal"}
 ROW_FIELDS = frozenset({"session_id", "revision", "phase", "owner_id", "setup_original", "setup_sha256",
     "credential_id", "credential_version", "generation_request_id", "generation_claim_sha256",
     "generation_publication_digest", "candidate_id", "canary_id", "artifact_envelope_digest",
@@ -43,9 +46,9 @@ def arguments(operation, value, *, typed=False):
     digest(value["control_plane_configuration_digest"])
     assertions.policy(value["credential_policy"])
     request = value["request"]
-    require(type(request) is dict and set(request) in (REQUEST_FIELDS, STATIC_REQUEST_FIELDS))
+    require(type(request) is dict and set(request) in (REQUEST_FIELDS, STATIC_REQUEST_FIELDS, ROTATED_STATIC_REQUEST_FIELDS))
     bound = setup.binding(request["setupBinding"])
-    if set(request) == STATIC_REQUEST_FIELDS:
+    if is_static_request(request):
         setup.identifier(request["credentialBindingEventId"])
         require(bound["revision"] >= 1)
     else:
@@ -53,7 +56,10 @@ def arguments(operation, value, *, typed=False):
     require(bound["ownerId"] == value["actor_id"]
         and bound["currentAssigneeId"] in {None, value["actor_id"]})
     setup.identifier(request["credentialId"])
-    require(type(request["credentialVersion"]) is int and request["credentialVersion"] == 1)
+    if set(request) == ROTATED_STATIC_REQUEST_FIELDS:
+        rotated_provenance(request)
+    else:
+        require(type(request["credentialVersion"]) is int and request["credentialVersion"] == 1)
     claim_original(request["generationClaimOriginal"])
     digest(request["routePolicyDigest"]); digest(request["assignmentDigest"])
     issued, expires = candidate.epoch(request["issuedAtEpochNs"]), candidate.epoch(request["expiresAtEpochNs"])
@@ -64,11 +70,71 @@ def arguments(operation, value, *, typed=False):
     return original
 
 
-def require_static_session(session):
+def is_static_request(request):
+    return type(request) is dict and set(request) in (STATIC_REQUEST_FIELDS, ROTATED_STATIC_REQUEST_FIELDS)
+
+
+def rotated_provenance(request):
+    from serverware import authority_static_credential_provenance as provenance
+
+    require(type(request) is dict and set(request) == ROTATED_STATIC_REQUEST_FIELDS
+        and type(request["credentialVersion"]) is int and 2 <= request["credentialVersion"] <= 2**63 - 1)
+    original = request["credentialProvenanceOriginal"]
+    parsed = provenance.generation_original(original)
+    require(parsed["apiVersion"] == provenance.ROTATION_SCHEMA and canonical(parsed).decode("ascii") == original)
+    statement = provenance.generation_evidence(original)["statement"]
+    require(statement["operation"] == "credential.static.rotate"
+        and statement["credentialId"] == request["credentialId"]
+        and statement["credentialVersion"] == request["credentialVersion"])
+    return original
+
+
+def rotated_selection(configuration_payload, root_key):
+    """Projection of the actual independently authenticated full configuration."""
+    from serverware import authority_static_credential_rotate as rotation
+    from serverware import authority_static_credential_custody as custody
+    from serverware.authority_policy_canary_policy import full_configuration_digest
+
+    selected = rotation.validate_policy(configuration_payload.get(rotation.FIELD),
+        payload=configuration_payload, root_key=root_key)
+    native = custody.validate_policy(configuration_payload.get(custody.FIELD),
+        payload=configuration_payload, root_key=root_key)
+    require(selected is not None and native is not None,
+        "Rotated Setup requires the separately selected rotation and native custody policies")
+    return {"configurationDigest": full_configuration_digest(configuration_payload),
+        "rotationPolicy": selected, "custodyPolicy": native}
+
+
+def verify_rotated_rows(original, *, selection, credential, generation, root, outbox,
+        configuration_digest, now_epoch_ns):
+    from serverware import authority_static_credential_rotate as rotation
+    from serverware import authority_static_credential_assignment as assignment
+    from serverware import authority_static_credential_provenance as provenance
+
+    parsed = provenance.generation_original(original)
+    require(parsed["apiVersion"] == provenance.ROTATION_SCHEMA and canonical(parsed).decode("ascii") == original)
+    require(type(selection) is dict and set(selection) == {"configurationDigest", "rotationPolicy", "custodyPolicy"}
+        and selection["configurationDigest"] == configuration_digest)
+    selected = rotation.validate_policy(selection["rotationPolicy"])
+    native = selection["custodyPolicy"]
+    target = assignment.target(native["target"])
+    deployment = provenance.verify_generation_rows(original, credential=credential, generation=generation,
+        root=root, outbox=outbox, configuration_digest=configuration_digest, now_epoch_ns=now_epoch_ns)
+    statement = provenance.generation_evidence(original)["statement"]
+    require(deployment == native["deploymentId"] and credential["secret_kek_id"] == selected["nativeSecretKekId"]
+        == target["secretKekId"] and root["status"] == "open" and root["barrier_id"] is None
+        and all(statement[name] == target[name] for name in ("controlPlaneResponseSigningKeyId", "instanceId",
+            "secretKekId", "intakeOrigin", "portalOrigin", "policyHash"))
+        and statement["dataPlaneBinarySha256"] == target["expectedBinaryDigest"])
+
+
+def require_static_session(session, *, rotated=False):
     """Structural restriction only; this is not binding-event admission."""
+    require(type(rotated) is bool and type(session["credential_version"]) is int
+        and (2 <= session["credential_version"] <= 2**63 - 1 if rotated else session["credential_version"] == 1))
     require(type(session["revision"]) is int and session["revision"] >= 1
         and session["phase"] == "credential_activated" and session["status"] == "active"
-        and session["terminal_at"] is None and session["credential_version"] == 1
+        and session["terminal_at"] is None
         and all(session[name] is None for name in ("oauth_provider", "oauth_state_digest",
             "oauth_pending_credential_id", "policy_hash", "assignment_digest", "canary_id", "enrollment_session_id")))
 
@@ -106,8 +172,8 @@ def row_original(value):
     require(setup.row_original(session) == session_raw and setup.row_binding(session) == args["request"]["setupBinding"]
         and session["phase"] == "credential_activated"
         and session["status"] == "active" and session["terminal_at"] is None)
-    if set(args["request"]) == STATIC_REQUEST_FIELDS:
-        require_static_session(session)
+    if is_static_request(args["request"]):
+        require_static_session(session, rotated=set(args["request"]) == ROTATED_STATIC_REQUEST_FIELDS)
     else:
         require(session["revision"] == 3)
     claim = claim_original(args["request"]["generationClaimOriginal"])

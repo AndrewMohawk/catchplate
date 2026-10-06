@@ -91,7 +91,8 @@ def static_continuation(values):
     retained=original(text,enrollment.candidate.MAX_ROW_BYTES)
     require(enrollment.candidate.row_original(retained).decode("ascii")==text)
     request=original(retained["request_original"],enrollment.candidate.MAX_ARGUMENT_BYTES)
-    require(set(request["request"])==enrollment.candidate.STATIC_REQUEST_FIELDS)
+    rotated=set(request["request"])==enrollment.candidate.ROTATED_STATIC_REQUEST_FIELDS
+    require(rotated or set(request["request"])==enrollment.candidate.STATIC_REQUEST_FIELDS)
     old,prior=source(values["hardware_original"])
     enrolled=original(prior["enrollment_original"],enrollment.MAX_ROW_BYTES)
     intent=enrollment.intent(enrolled["intent_original"])
@@ -101,7 +102,9 @@ def static_continuation(values):
         and sha256(text.encode("ascii"))==intent["continuationSha256"]
         and sha256(retained["setup_original"].encode("ascii"))==intent["setupSha256"]
         and retained["credential_id"]==intent["credentialId"]
-        and retained["credential_version"]==intent["credentialVersion"]==1)
+        and retained["credential_version"]==intent["credentialVersion"])
+    require((enrollment.rotated_continuation(intent)==retained and intent["continuationOriginal"]==text)
+        if rotated else intent["apiVersion"]==enrollment.SCHEMA and intent["credentialVersion"]==1)
     return retained
 
 

@@ -105,25 +105,34 @@
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "expectedRevision", "generationRequestId"],
       "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
         "expectedRevision": {"$ref": "#/$defs/setupRevision"}, "generationRequestId": {"$ref": "#/$defs/uuid"},
-        "credentialBindingEventId": {"$ref": "#/$defs/uuid"}},
-      "if": {"required": ["credentialBindingEventId"]},
-      "else": {"properties": {"expectedRevision": {"const": 3}}}
+        "credentialBindingEventId": {"$ref": "#/$defs/uuid"},
+        "credentialProvenanceOriginal": {"type": "string", "minLength": 2, "maxLength": 40960,
+          "pattern": "^[\\x00-\\x7f]*$", "description": "Exact canonical staticCredentialRotationProvenance/v1 only. The new ten-field authority branch requires actual N+1 current rows and the completed audited rotation; historical evidence is not a fresh native grant."}},
+      "allOf": [
+        {"if": {"required": ["credentialBindingEventId"]}, "else": {"properties": {"expectedRevision": {"const": 3}}}},
+        {"if": {"required": ["credentialProvenanceOriginal"]}, "then": {"required": ["credentialBindingEventId"]}}
+      ]
     },
     "review": {
       "type": "object", "additionalProperties": false,
       "required": ["principalId", "routeId", "credentialId", "credentialVersion", "policyHash", "routePolicyDigest", "assignmentDigest", "sessionId", "setupRevision", "continuationRevision", "ownerId", "generationRequestId", "generationPublicationDigest", "candidateId", "canaryId", "expiresAtEpochNs"],
       "properties": {
         "principalId": {"$ref": "#/$defs/id"}, "routeId": {"$ref": "#/$defs/id"}, "credentialId": {"$ref": "#/$defs/uuid"},
-        "credentialVersion": {"const": 1}, "policyHash": {"$ref": "#/$defs/digest"}, "routePolicyDigest": {"$ref": "#/$defs/digest"},
+        "credentialVersion": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, "policyHash": {"$ref": "#/$defs/digest"}, "routePolicyDigest": {"$ref": "#/$defs/digest"},
         "assignmentDigest": {"$ref": "#/$defs/digest"}, "sessionId": {"$ref": "#/$defs/uuid"}, "setupRevision": {"$ref": "#/$defs/setupRevision"},
         "credentialBindingEventId": {"$ref": "#/$defs/uuid"},
+        "credentialProvenanceSha256": {"$ref": "#/$defs/digest"},
         "continuationRevision": {"const": 0}, "ownerId": {"type": "string", "pattern": "^oidc:", "maxLength": 1024},
         "generationRequestId": {"$ref": "#/$defs/uuid"}, "generationPublicationDigest": {"$ref": "#/$defs/digest"},
         "candidateId": {"$ref": "#/$defs/id"}, "canaryId": {"$ref": "#/$defs/id"},
         "expiresAtEpochNs": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
       },
-      "if": {"required": ["credentialBindingEventId"]},
-      "else": {"properties": {"setupRevision": {"const": 3}}}
+      "allOf": [
+        {"if": {"required": ["credentialBindingEventId"]}, "else": {"properties": {"setupRevision": {"const": 3}}}},
+        {"if": {"required": ["credentialProvenanceSha256"]},
+          "then": {"required": ["credentialBindingEventId"], "properties": {"credentialVersion": {"minimum": 2}}},
+          "else": {"properties": {"credentialVersion": {"const": 1}}}}
+      ]
     },
     "draftResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "argumentsOriginal", "review"],

@@ -15,6 +15,7 @@ OPERATIONS = frozenset({REQUEST, DECIDE, PREPARE, COMPLETE})
 ASSERTION_OPERATIONS = OPERATIONS - {COMPLETE}
 TABLE = "setup_native_enrollments"
 SCHEMA = "serverware.setupNativeEnrollmentIntent/v1"
+ROTATED_SCHEMA = "serverware.setupNativeEnrollmentIntent/v2"
 HTTP_SCHEMA = "serverware.setupNativeEnrollmentRequest/v1"
 MAX_INTENT = 1200000
 MAX_ARGUMENT_BYTES = 1400000
@@ -25,6 +26,7 @@ INTENT_FIELDS = frozenset({"apiVersion", "sessionId", "ownerId", "setupSha256", 
     "assignmentSha256", "policyHash", "routePolicyDigest", "principalId", "credentialId",
     "credentialVersion", "issuerBootstrap", "authorization", "packet", "request",
     "issuedAtEpochNs", "expiresAtEpochNs"})
+ROTATED_INTENT_FIELDS = INTENT_FIELDS | {"continuationOriginal"}
 ROW_FIELDS = frozenset({"session_id", "revision", "phase", "owner_id", "intent_original",
     "intent_sha256", "approval_id", "approval_original", "prepare_request_digest",
     "certificate_original", "certificate_sha256", "association_original", "complete_request_digest",
@@ -49,18 +51,54 @@ def original(value, maximum):
 def intent(text):
     require(type(text) is str and text.isascii())
     value = setup.document(text.encode("ascii"), MAX_INTENT)
-    require(set(value) == INTENT_FIELDS and value["apiVersion"] == SCHEMA)
+    rotated = value.get("apiVersion") == ROTATED_SCHEMA
+    require(set(value) == (ROTATED_INTENT_FIELDS if rotated else INTENT_FIELDS)
+        and value["apiVersion"] == (ROTATED_SCHEMA if rotated else SCHEMA))
     for field in ("setupSha256", "continuationSha256", "assignmentSha256", "policyHash", "routePolicyDigest"):
         digest(value[field])
     setup.identifier(value["sessionId"]); setup.identifier(value["credentialId"])
     setup.text(value["ownerId"], 1024); require(value["ownerId"].startswith("oidc:"))
     setup.text(value["principalId"], 1024)
-    require(type(value["credentialVersion"]) is int and value["credentialVersion"] == 1)
+    require(type(value["credentialVersion"]) is int and
+        (2 <= value["credentialVersion"] <= 2**63-1 if rotated else value["credentialVersion"] == 1))
     for field, limit in (("issuerBootstrap", 131072), ("authorization", 32768), ("packet", 524288), ("request", 65536)):
         original(value[field], limit)
     before, after = candidate.candidate.epoch(value["issuedAtEpochNs"]), candidate.candidate.epoch(value["expiresAtEpochNs"])
     require(0 < after - before <= 300_000_000_000)
+    rotated_continuation(value)
     return value
+
+
+def rotated_continuation(value):
+    """Structural literal join only; the kernel must select this actual row."""
+    if value["apiVersion"] == SCHEMA:
+        require("continuationOriginal" not in value and value["credentialVersion"] == 1)
+        return None
+    require(value["apiVersion"] == ROTATED_SCHEMA and set(value) == ROTATED_INTENT_FIELDS)
+    text = value["continuationOriginal"]
+    require(type(text) is str and text.isascii())
+    retained = setup.document(text.encode("ascii"), candidate.MAX_ROW_BYTES)
+    require(candidate.row_original(retained).decode("ascii") == text)
+    request = setup.document(retained["request_original"].encode("ascii"), candidate.MAX_ARGUMENT_BYTES)
+    require(set(request["request"]) == candidate.ROTATED_STATIC_REQUEST_FIELDS
+        and sha256(text.encode("ascii")) == value["continuationSha256"]
+        and sha256(retained["setup_original"].encode("ascii")) == value["setupSha256"])
+    for name, field in (("session_id", "sessionId"), ("owner_id", "ownerId"),
+            ("assignment_digest", "assignmentSha256"), ("policy_hash", "policyHash"),
+            ("route_policy_digest", "routePolicyDigest"), ("credential_id", "credentialId"),
+            ("credential_version", "credentialVersion")):
+        require(retained[name] == value[field])
+    session = setup.document(retained["setup_original"].encode("ascii"), setup.MAX_ROW_BYTES)
+    require(session["principal_id"] == value["principalId"] and 2 <= value["credentialVersion"] <= 2**63-1
+        and value["expiresAtEpochNs"] <= setup.epoch(session["expires_at"]))
+    return retained
+
+
+def rotation_provenance(value):
+    retained = rotated_continuation(value)
+    if retained is None:
+        return None
+    return setup.document(retained["request_original"].encode("ascii"), candidate.MAX_ARGUMENT_BYTES)["request"]["credentialProvenanceOriginal"]
 
 
 def arguments(operation, value, *, typed=False):

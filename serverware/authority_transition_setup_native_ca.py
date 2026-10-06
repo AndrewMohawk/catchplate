@@ -53,6 +53,7 @@ class Kernel:
             q._role_query(self.operation, "original_approver", core.SelectedRowFieldReference("control_plane_approvals", {"id": aid}, "approved_by")),
             exact("approver_key", "webauthn_credentials", {"id": core.SelectedRowFieldReference("control_plane_approvals", {"id": aid}, "approver_webauthn_credential_id")}),
             q._audit_query(self.operation, request_digest)]
+        queries.extend(issued.rotation_audit_queries(self.operation, i))
         if evidence is not None:
             for label, table, field in (("request_key", "webauthn_credentials", "credentialRecordId"), ("challenge", "webauthn_challenges", "challengeId")):
                 p.enrollment.setup.text(evidence.get(field), 1024)

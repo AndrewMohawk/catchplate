@@ -49,6 +49,9 @@ class Kernel:
             exact("artifact", "policy_candidate_artifacts", {"artifact_envelope_digest": core.SelectedRowFieldReference(p.enrollment.candidate.TABLE, {"session_id": sid}, "artifact_envelope_digest")}),
             exact("association_audit", "metadata_audit_outbox", {"id": q._audit_identity(p.canary.RECORD, a["request_digest"])}),
             q._role_query(self.operation, "owner", values["actor_id"]), q._audit_query(self.operation, request_digest)]
+        association_request = p.enrollment.setup.document(a["request_original"].encode("ascii"), p.canary.MAX_ARGUMENT_BYTES)["request"]
+        if association_request["apiVersion"] == p.canary.ROTATED_REQUEST:
+            queries.append(exact("rotation_provenance_audit", "metadata_audit_outbox", {"id": association_request["rotationAuditId"]}))
         for table in (p.canary.activation.PREPARATION_TABLE, p.canary.activation.READY_TABLE, p.canary.activation.HEAD_TABLE,
                 "policy_canary_heads", "policy_canary_assignments"):
             queries.append(exact(table, table, {"canary_id": cid}))
@@ -78,6 +81,9 @@ class Kernel:
         p.require(audit["event_digest"] == a["audit_event_digest"])
         enrolled, installed = row(p.enrollment.TABLE, {"session_id": sid}), row(p.canary.ca.TABLE, {"session_id": sid})
         i = p.enrollment.intent(enrolled["intent_original"])
+        p.require((scope.get("apiVersion") == policy.ROTATED_SCOPE) == (i["apiVersion"] == p.enrollment.ROTATED_SCHEMA))
+        if i["apiVersion"] == p.enrollment.ROTATED_SCHEMA:
+            p.require(scope["continuationSha256"] == i["continuationSha256"])
         p.require(p.sha256(p.enrollment.row_original(enrolled)) == a["enrollment_sha256"]
             and p.sha256(p.canary.ca.row_original(installed)) == a["installation_sha256"])
         issued._current(context, values, i)
@@ -100,7 +106,7 @@ class Kernel:
             hardware._hardware(row("webauthn_credentials", {"id": evidence["credentialRecordId"]}), values["credential_policy"])
             challenge = row("webauthn_challenges", {"id": evidence["challengeId"]})
             mutations.extend(assertion._assertion_mutations(context, {"actor_id": values["actor_id"]}))
-            attempt = {"apiVersion": p.PREPARED, "attemptId": core.deterministic_uuid(operation=self.operation,
+            attempt = {"apiVersion": p.ROTATED_PREPARED if i["apiVersion"] == p.enrollment.ROTATED_SCHEMA else p.PREPARED, "attemptId": core.deterministic_uuid(operation=self.operation,
                 request_digest=context.request_digest, purpose="native-setup-runtime-capture"), "sessionId": sid,
                 "associationSha256": p.sha256(values["association_original"].encode("ascii")), "scopeSha256": p.sha256(values["scope_original"].encode("ascii")),
                 "nonce": p.nonce(challenge["challenge"], context.request_digest), "principalId": scope["principalId"], "routeId": scope["routeId"],

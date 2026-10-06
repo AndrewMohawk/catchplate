@@ -11,6 +11,7 @@ OPERATIONS, ASSERTION_OPERATIONS = frozenset({PREPARE, COMPLETE}), frozenset({PR
 TABLE = "setup_native_runtime_attempts"
 HTTP, OPTIONS = "serverware.setupNativeRuntimeRequest/v1", "serverware.setupNativeRuntimeOptions/v1"
 PREPARED = "serverware.setupNativeRuntimeAttempt/v1"
+ROTATED_PREPARED = "serverware.setupNativeRuntimeAttempt/v2"
 MAX_CAPTURE, MAX_ARGUMENT_BYTES, MAX_ROW_BYTES = 512 * 1024, 768 * 1024, 800 * 1024
 FIELDS = frozenset({"actor_id", "control_plane_configuration_digest", "credential_policy", "association_original", "scope_original",
     "attempt_original", "capture_original_base64url"})
@@ -35,14 +36,15 @@ def association(text):
 def prepared(text):
     require(type(text) is str and text.isascii())
     value = enrollment.setup.document(text.encode("ascii"), 8192)
-    require(set(value) == PREPARED_FIELDS and value["apiVersion"] == PREPARED)
+    require(set(value) == PREPARED_FIELDS and value["apiVersion"] in {PREPARED, ROTATED_PREPARED})
     for name in ("attemptId", "sessionId", "credentialId"):
         enrollment.setup.identifier(value[name])
     for name in ("associationSha256", "scopeSha256", "policyHash", "clientRequestSha256"):
         digest(value[name])
     for name in ("principalId", "routeId"):
         enrollment.setup.text(value[name], 1024)
-    require(type(value["credentialVersion"]) is int and value["credentialVersion"] == 1
+    require(type(value["credentialVersion"]) is int and (2 <= value["credentialVersion"] <= 2**63-1
+        if value["apiVersion"] == ROTATED_PREPARED else value["credentialVersion"] == 1)
         and len(enrollment.original(value["nonce"], 32)) == 32)
     before, after = value["issuedAtEpochNs"], value["expiresAtEpochNs"]
     require(type(before) is int and type(after) is int and 0 < before < after <= 2**63 - 1
@@ -59,6 +61,11 @@ def arguments(operation, value, *, typed=False):
     require(type(value["scope_original"]) is str and value["scope_original"].isascii())
     from serverware import authority_setup_native_runtime_policy as policy
     scope = policy.scope(enrollment.setup.document(value["scope_original"].encode("ascii"), 32768))
+    linked = canary.arguments(canary.RECORD, enrollment.setup.document(a["request_original"].encode("ascii"), canary.MAX_ARGUMENT_BYTES))["request"]
+    require((scope.get("apiVersion") == policy.ROTATED_SCOPE) == (linked["apiVersion"] == canary.ROTATED_REQUEST))
+    if linked["apiVersion"] == canary.ROTATED_REQUEST:
+        require(scope["continuationSha256"] == linked["continuationSha256"])
+    require(scope["credentialId"] == linked["credentialId"] and scope["credentialVersion"] == linked["credentialVersion"])
     require(scope["sessionId"] == a["session_id"])
     require(a["owner_id"] == value["actor_id"] and a["configuration_digest"] == value["control_plane_configuration_digest"])
     enrollment.hardware.policy(value["credential_policy"])
@@ -66,6 +73,7 @@ def arguments(operation, value, *, typed=False):
         require(value["attempt_original"] is None and value["capture_original_base64url"] is None)
     else:
         attempt = prepared(value["attempt_original"])
+        policy.attempt_scope(attempt, scope)
         require(attempt["sessionId"] == a["session_id"] and attempt["associationSha256"] == sha256(value["association_original"].encode("ascii")))
         enrollment.original(value["capture_original_base64url"], MAX_CAPTURE)
     require(len(canonical(original)) <= MAX_ARGUMENT_BYTES)

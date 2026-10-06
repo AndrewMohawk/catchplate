@@ -86,10 +86,10 @@ def _continuation(session_id):
     return row
 
 
-def _binding_original(event_id, session):
+def _binding_original(event_id, session, *, rotated=False):
     """Retain actual read-only provenance; the kernel independently proves it."""
     setup.identifier(event_id)
-    profile.require_static_session(session)
+    profile.require_static_session(session, rotated=rotated)
     with db.connect() as connection:
         event = connection.execute("SELECT * FROM setup_session_events WHERE id = ?", (event_id,)).fetchone()
         link = connection.execute("SELECT * FROM oauth_setup_audit_links WHERE id = ?", (event_id,)).fetchone()
@@ -108,7 +108,7 @@ def _binding_original(event_id, session):
         and event["transition"] == "bind_credential" and document["transition"] == "bind_credential"
         and document["setup_session_id"] == session["id"]
         and document["from_phase"] == "created" and document["to_phase"] == "credential_activated"
-        and document["binding_updates"] == {"credential_id": session["credential_id"], "credential_version": 1}
+        and document["binding_updates"] == {"credential_id": session["credential_id"], "credential_version": session["credential_version"]}
         and details["authorityOperation"] == binding.OPERATION
         and details["authorityRequestDigest"] == link["request_digest"]
         and details["setupPostSha256"] == profile.sha256(setup.row_original(session))
@@ -143,6 +143,7 @@ class _Owner:
         self.session, self.claim, self.credential = None, None, None
         self.session_original, self.claim_original, self.arguments_original = None, None, None
         self.binding_event_id = self.binding_original = None
+        self.rotation_cold = self.rotation_selection = self.provenance_original = self.rotation_rows_original = None
         self.dispatched = False
         self.check()
 
@@ -167,7 +168,14 @@ class _Owner:
         if self.claim is not None:
             profile.require(candidate.row_original(_claim(self.claim["request_id"])) == self.claim_original)
         if self.binding_event_id is not None:
-            profile.require(_binding_original(self.binding_event_id, self.session) == self.binding_original)
+            profile.require(_binding_original(self.binding_event_id, self.session,
+                rotated=self.provenance_original is not None) == self.binding_original)
+        if self.rotation_cold is not None:
+            self.rotation_cold.check()
+            profile.require(self.rotation_cold.custody is self.custody and self.rotation_cold.binding is self.binding
+                and profile.canonical(profile.rotated_selection(self.rotation_cold.payload, self.rotation_cold.root))
+                == profile.canonical(self.rotation_selection)
+                and self._rotation_rows() == self.rotation_rows_original)
         if self.credential is not None:
             current = db.get_webauthn_credential_by_record_id(self.credential["id"])
             profile.require(type(current) is dict and current.get("revoked_at") is None
@@ -178,20 +186,58 @@ class _Owner:
         profile.require(mono <= end_mono < self.deadline and epoch <= end_epoch < self.expires)
         self.last_mono, self.last_epoch = end_mono, end_epoch
 
-    def retain(self, session_id, generation_id, *, expected_revision=3, binding_event_id=None):
+    def _rotation_rows(self):
+        from serverware import control_plane_credential_currentness as currentness
+        from serverware import authority_static_credential_provenance as provenance
+
+        credential, generation, root = currentness._rows(self.session["credential_id"], self.session["credential_version"])
+        profile.require(credential["id"] == self.session["credential_id"]
+            and credential["credential_version"] == self.session["credential_version"])
+        with db.connect() as connection:
+            outbox = connection.execute("SELECT * FROM metadata_audit_outbox WHERE id = ?",
+                (provenance.generation_outbox_id(self.provenance_original),)).fetchone()
+        profile.require(outbox is not None)
+        outbox = dict(outbox)
+        profile.verify_rotated_rows(self.provenance_original, selection=self.rotation_selection,
+            credential=credential, generation=generation, root=root, outbox=outbox,
+            configuration_digest=self.configuration, now_epoch_ns=time.time_ns())
+        return profile.canonical({"credential": credential, "generation": generation, "root": root, "outbox": outbox})
+
+    def _retain_rotation(self, original):
+        from serverware import control_plane_static_credential_rotation as rotation
+
+        profile.require(self.rotation_cold is None and original is not None)
+        with rotation._LOCK:
+            profile.require(rotation.selected(), "Rotated Setup requires the actual selected rotation cold owner")
+            cold = rotation._cold
+            profile.require(type(cold) is rotation._Cold and cold.custody is self.custody and cold.binding is self.binding)
+            self.rotation_selection = profile.rotated_selection(cold.payload, cold.root)
+            self.provenance_original = original
+            self.rotation_rows_original = self._rotation_rows()
+            self.rotation_cold = cold
+            self.clip(cold.expires)
+
+    def retain(self, session_id, generation_id, *, expected_revision=3, binding_event_id=None, provenance_original=None):
         profile.require(self.session is None and self.claim is None)
         self.session, self.claim = _session(session_id), _claim(generation_id)
         row = self.session
         profile.require(row["owner_id"] == self.identity.user_id and row["current_assignee_id"] in {None, self.identity.user_id}
             and type(expected_revision) is int and row["revision"] == expected_revision
             and row["phase"] == "credential_activated" and row["status"] == "active"
-            and row["terminal_at"] is None and row["credential_version"] == 1)
+            and row["terminal_at"] is None)
+        if provenance_original is None:
+            profile.require(row["credential_version"] == 1)
+        else:
+            profile.require(binding_event_id is not None)
+            profile.require_static_session(row, rotated=True)
         self.session_original, self.claim_original = setup.row_original(row), candidate.row_original(self.claim)
         if binding_event_id is None:
             profile.require(expected_revision == 3)
         else:
             self.binding_event_id = setup.identifier(binding_event_id)
-            self.binding_original = _binding_original(binding_event_id, row)
+            self.binding_original = _binding_original(binding_event_id, row, rotated=provenance_original is not None)
+        if provenance_original is not None:
+            self._retain_rotation(provenance_original)
         self.clip(setup.epoch(row["expires_at"]))
         profile.require(_continuation(session_id) is None, "candidate association exists; use read-only lookup")
         self.check()
@@ -205,7 +251,8 @@ class _Owner:
         bound = value["request"]
         claim = profile.claim_original(bound["generationClaimOriginal"])
         self.retain(bound["setupBinding"]["sessionId"], claim["request_id"],
-            expected_revision=bound["setupBinding"]["revision"], binding_event_id=bound.get("credentialBindingEventId"))
+            expected_revision=bound["setupBinding"]["revision"], binding_event_id=bound.get("credentialBindingEventId"),
+            provenance_original=bound.get("credentialProvenanceOriginal"))
         assignment, assignment_digest = profile.reviewed_assignment(self.session, candidate.management_original(self.claim["management_request_json"]))
         profile.require(bound["setupBinding"] == setup.row_binding(self.session)
             and bound["generationClaimOriginal"].encode("ascii") == self.claim_original
@@ -254,15 +301,19 @@ class _Owner:
 
 def _draft(owner, value):
     base_fields = {"apiVersion", "sessionId", "expectedRevision", "generationRequestId"}
-    profile.require(set(value) in (base_fields, base_fields | {"credentialBindingEventId"})
+    profile.require(set(value) in (base_fields, base_fields | {"credentialBindingEventId"},
+            base_fields | {"credentialBindingEventId", "credentialProvenanceOriginal"})
         and value["apiVersion"] == profile.HTTP_SCHEMA and type(value["expectedRevision"]) is int)
     binding_event = {}
     if "credentialBindingEventId" in value:
         binding_event = {"credentialBindingEventId": setup.identifier(value["credentialBindingEventId"])}
+        if "credentialProvenanceOriginal" in value:
+            binding_event["credentialProvenanceOriginal"] = value["credentialProvenanceOriginal"]
     else:
         profile.require(value["expectedRevision"] == 3)
     owner.retain(value["sessionId"], value["generationRequestId"], expected_revision=value["expectedRevision"],
-        binding_event_id=binding_event.get("credentialBindingEventId"))
+        binding_event_id=binding_event.get("credentialBindingEventId"),
+        provenance_original=binding_event.get("credentialProvenanceOriginal"))
     assignment, digest = profile.reviewed_assignment(owner.session, candidate.management_original(owner.claim["management_request_json"]))
     context = candidate.context(setup.document(owner.claim["context_json"].encode("ascii"), 8192))
     now = time.time_ns() // 1000 * 1000
@@ -276,7 +327,10 @@ def _draft(owner, value):
     review = {**assignment, "assignmentDigest": digest, "sessionId": owner.session["id"], "setupRevision": owner.session["revision"],
         "continuationRevision": 0, "ownerId": owner.identity.user_id, "generationRequestId": owner.claim["request_id"],
         "generationPublicationDigest": owner.claim["publication_envelope_digest"], "candidateId": context["candidateId"],
-        "canaryId": context["canaryId"], "expiresAtEpochNs": expires, **binding_event}
+        "canaryId": context["canaryId"], "expiresAtEpochNs": expires,
+        **{name: item for name, item in binding_event.items() if name != "credentialProvenanceOriginal"}}
+    if "credentialProvenanceOriginal" in binding_event:
+        review["credentialProvenanceSha256"] = profile.sha256(binding_event["credentialProvenanceOriginal"].encode("ascii"))
     owner.check()
     return {"apiVersion": profile.HTTP_SCHEMA, "okForAction": False,
         "argumentsOriginal": profile.canonical(arguments).decode("ascii"), "review": review}
@@ -303,16 +357,19 @@ class _PostBindOwner(_Owner):
         self.session_original, self.claim_original = setup.row_original(self.session), candidate.row_original(self.claim)
         row = self.session
         arguments = setup.document(self.continuation["request_original"].encode("ascii"), profile.MAX_ARGUMENT_BYTES)
-        if set(arguments["request"]) == profile.STATIC_REQUEST_FIELDS:
-            profile.require_static_session(row)
+        if profile.is_static_request(arguments["request"]):
+            rotated = set(arguments["request"]) == profile.ROTATED_STATIC_REQUEST_FIELDS
+            profile.require_static_session(row, rotated=rotated)
             self.binding_event_id = arguments["request"]["credentialBindingEventId"]
-            self.binding_original = _binding_original(self.binding_event_id, row)
+            self.binding_original = _binding_original(self.binding_event_id, row, rotated=rotated)
+            if rotated:
+                self._retain_rotation(arguments["request"]["credentialProvenanceOriginal"])
         else:
-            profile.require(row["revision"] == 3)
+            profile.require(row["revision"] == 3 and row["credential_version"] == 1)
         profile.require(row["owner_id"] == self.identity.user_id == self.continuation["owner_id"]
             and row["current_assignee_id"] in {None, self.identity.user_id}
             and row["phase"] == "credential_activated" and row["status"] == "active"
-            and row["terminal_at"] is None and row["credential_version"] == 1
+            and row["terminal_at"] is None
             and self.continuation["setup_original"].encode("ascii") == self.session_original
             and self.continuation["generation_claim_sha256"] == profile.sha256(self.claim_original)
             and self.continuation["generation_publication_digest"] == self.claim["publication_envelope_digest"]

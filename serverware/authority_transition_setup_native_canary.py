@@ -100,6 +100,8 @@ class Kernel:
             order_by=(core.QueryOrder("canary_id"),), maximum_rows=2, proof_primitive="bounded-limit-plus-one", work_units=2, page_size=1))
         for index, identity in enumerate(r["auditIds"]):
             queries.append(exact("completed_audit_" + str(index), "metadata_audit_outbox", {"id": identity}))
+        if r["apiVersion"] == p.ROTATED_REQUEST:
+            queries.append(exact("rotation_provenance_audit", "metadata_audit_outbox", {"id": r["rotationAuditId"]}))
         for name, table, field in (("request_key", "webauthn_credentials", "credentialRecordId"), ("challenge", "webauthn_challenges", "challengeId")):
             p.enrollment.setup.text(evidence.get(field), 1024)
             queries.append(exact(name, table, {"id": evidence[field]}))
@@ -113,6 +115,9 @@ class Kernel:
         enrolled = _row(context, p.enrollment.TABLE, {"session_id": sid})
         installed = _row(context, p.ca.TABLE, {"session_id": sid})
         i = p.enrollment.intent(enrolled["intent_original"])
+        p.require(r["apiVersion"] == (p.ROTATED_REQUEST if i["apiVersion"] == p.enrollment.ROTATED_SCHEMA else p.REQUEST))
+        if r["apiVersion"] == p.ROTATED_REQUEST:
+            p.require(r["rotationAuditId"] == issued.provenance.generation_outbox_id(p.enrollment.rotation_provenance(i)))
         p.require(enrolled["phase"] == "certificate_issued" and installed["phase"] == "ca_readback_authenticated"
             and p.sha256(p.enrollment.row_original(enrolled)) == r["enrollmentSha256"] == installed["enrollment_sha256"]
             and p.sha256(p.ca.row_original(installed)) == r["installationSha256"]

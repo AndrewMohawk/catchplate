@@ -5,6 +5,7 @@ nor produces filesystem, enrollment, canary readiness or proxy-ready evidence.
 """
 from dataclasses import dataclass
 from datetime import timezone
+import time
 from types import MappingProxyType
 
 from serverware import authority_setup_policy as profile
@@ -21,6 +22,7 @@ from serverware import authority_transition_webauthn as assertion
 from serverware import authority_transition_oauth_activation as hardware
 from serverware import authority_setup_bind_credential as binding
 from serverware import authority_static_credential_create as static_creation
+from serverware import authority_static_credential_provenance as static_provenance
 
 
 def _inputs(arguments):
@@ -75,9 +77,9 @@ def _static_bound_session(context, values):
     request, setup = values["request"], profile.setup
     _, session = setup_rows.current(context, request["setupBinding"],
         phase="credential_activated", actor=values["actor_id"])
-    profile.require_static_session(session)
+    profile.require_static_session(session, rotated=set(request) == profile.ROTATED_STATIC_REQUEST_FIELDS)
     profile.require(session["credential_id"] == request["credentialId"]
-        and session["credential_version"] == request["credentialVersion"] == 1)
+        and session["credential_version"] == request["credentialVersion"])
     key = {"id": request["credentialBindingEventId"]}
     event = shared._row(context.exact("setup_session_events", key), "actual controlled static binding event")
     link = shared._row(context.exact(binding.AUDIT_LINK_TABLE, key), "actual static binding audit link")
@@ -100,7 +102,7 @@ def _static_bound_session(context, values):
         and document["version"] == "serverware.setupTransition/v1"
         and set(details) == {"authorityOperation", "authorityRequestDigest", "setupPreSha256", "setupPostSha256",
             "credentialOriginalSha256", "currentnessRootSha256", "credential_lifecycle_status"}
-        and updates == {"credential_id": session["credential_id"], "credential_version": 1}
+        and updates == {"credential_id": session["credential_id"], "credential_version": session["credential_version"]}
         and type(updates["credential_version"]) is int
         and event["payload_digest"] == profile.sha256(profile.canonical(document))
         and document["setup_session_id"] == session["id"] and document["transition"] == "bind_credential"
@@ -125,7 +127,7 @@ def _static_bound_session(context, values):
     expected = {"schema": "serverware.setupCredentialBindingAudit/v1", "operation": binding.OPERATION,
         "requestDigest": link["request_digest"], "sessionId": session["id"],
         "setupPreSha256": details["setupPreSha256"], "setupPostSha256": details["setupPostSha256"],
-        "credentialId": session["credential_id"], "credentialVersion": 1,
+        "credentialId": session["credential_id"], "credentialVersion": session["credential_version"],
         "credentialOriginalSha256": details["credentialOriginalSha256"], "currentnessRootSha256": details["currentnessRootSha256"]}
     profile.require(profile.canonical(actual) == profile.canonical(expected)
         and outbox["event_digest"] == core.framed_digest("serverware.metadataAuditOutboxEvent/v1", outbox["event_json"].encode("ascii")))
@@ -166,7 +168,7 @@ class BindCandidateKernel:
         values, claim, bound, management = _inputs(arguments)
         request = values["request"]
         sid, cid = request["setupBinding"]["sessionId"], request["credentialId"]
-        event_key = {"id": request["credentialBindingEventId"] if set(request) == profile.STATIC_REQUEST_FIELDS
+        event_key = {"id": request["credentialBindingEventId"] if profile.is_static_request(request)
             else profile.setup.event_id(sid, 4)}
         queries = list(originals.queries(self.operation, bound, management))
         from serverware import authority_primary_contract as primary
@@ -184,6 +186,9 @@ class BindCandidateKernel:
             originals.exact(self.operation, "credential_generation", "credential_generations", {"credential_id": cid}),
             currentness.root_query(self.operation, cid, request["credentialVersion"]),
             shared._role_query(self.operation, "owner", values["actor_id"]), shared._audit_query(self.operation, request_digest)))
+        if set(request) == profile.ROTATED_STATIC_REQUEST_FIELDS:
+            queries.append(originals.exact(self.operation, "rotation_provenance_audit", "metadata_audit_outbox",
+                {"id": static_provenance.generation_outbox_id(request["credentialProvenanceOriginal"])}))
         for name, table, field in (("hardware", "webauthn_credentials", "credentialRecordId"),
                 ("challenge", "webauthn_challenges", "challengeId")):
             core.require_text(evidence.get(field), field, maximum_bytes=1024)
@@ -205,7 +210,7 @@ class BindCandidateKernel:
         profile.require(evidence["rpId"] == values["credential_policy"]["rpId"]
             and evidence["origin"] in values["credential_policy"]["origins"]
             and evidence["expiresAtEpochNs"] - evidence["verifiedAtEpochNs"] <= values["credential_policy"]["maxAssertionAgeSeconds"] * 1_000_000_000)
-        static_binding = set(request) == profile.STATIC_REQUEST_FIELDS
+        static_binding = profile.is_static_request(request)
         session = _static_bound_session(context, values) if static_binding else _activated_session(context, values)
         selected = context.exact(profile.TABLE, {"session_id": session["id"]})
         profile.require(not selected["present"], "Setup already has a candidate successor; inspect, never overwrite")
@@ -216,6 +221,13 @@ class BindCandidateKernel:
             == generation["last_version"] and root["status"] == "open")
         if static_binding:
             profile.require(root["barrier_id"] is None)
+        if set(request) == profile.ROTATED_STATIC_REQUEST_FIELDS:
+            outbox = shared._row(context.exact("metadata_audit_outbox", {
+                "id": static_provenance.generation_outbox_id(request["credentialProvenanceOriginal"])}),
+                "actual completed static rotation audit")
+            profile.verify_rotated_rows(request["credentialProvenanceOriginal"], selection=context.setup_rotated_static_policy,
+                credential=credential, generation=generation, root=root, outbox=outbox,
+                configuration_digest=values["control_plane_configuration_digest"], now_epoch_ns=now)
         actual_claim = shared._row(context.exact(candidate.TABLE, {"request_id": claim["request_id"]}), "actual completed generation claim")
         profile.require(actual_claim == claim and claim["configuration_digest"] == values["control_plane_configuration_digest"])
         actual = originals.original_context(context, bound, management)
@@ -259,6 +271,77 @@ class BindCandidateKernel:
             + tuple(assertion._assertion_mutations(context, {"actor_id": actor})) + audit,
             result={"ok": True, "operation": self.operation, "requestDigest": context.request_digest,
                 "auditEventDigest": audit_digest, "idempotentReplay": False, "continuationOriginal": raw.decode("ascii")}, work_units=4096)
+
+
+def verify_rotated_plan(*, payload, arguments, verified_webauthn_evidence,
+        selected_policy, deadline_ns, now_epoch_ns, work):
+    """Independent exact source replay after authenticated plan/root admission."""
+    from datetime import datetime
+    from serverware import authority_audit_capacity as capacity
+    from serverware import authority_challenge_retention as retention
+    from serverware.authority_query_read_work import _ValidationWork
+    from serverware.authority_transition_static_credential_rotation_approval import _original_copy
+
+    profile.require(type(work) is _ValidationWork and type(payload) is dict and type(arguments) is dict
+        and type(verified_webauthn_evidence) is dict and type(selected_policy) is dict)
+    core.require_integer(deadline_ns, "original Setup deadline", minimum=1, maximum=2**63 - 1)
+    core.require_integer(now_epoch_ns, "current Setup verifier time", minimum=1, maximum=2**63 - 1)
+    expires = None
+
+    def check():
+        current = time.time_ns()
+        profile.require(time.monotonic_ns() < deadline_ns and now_epoch_ns <= current
+            and (expires is None or current < expires))
+
+    def equal(left, right):
+        profile.require(profile.canonical(_original_copy(left, work)) == profile.canonical(_original_copy(right, work)),
+            "Rotated Setup plan differs from its original source effects")
+
+    check()
+    owned = _original_copy({"payload": payload, "arguments": arguments,
+        "evidence": verified_webauthn_evidence, "policy": selected_policy}, work)
+    plan, evidence = owned["payload"], owned["evidence"]
+    values = profile.arguments(profile.OP_BIND, owned["arguments"], typed="businessIntent" in owned["arguments"])
+    profile.rotated_provenance(values["request"])
+    typed, measured, projection = plan["typedRequest"], plan["measuredPlan"], plan["authorizationProjection"]
+    profile.require(typed["operation"] == measured["operation"] == profile.OP_BIND)
+    equal(profile.arguments(profile.OP_BIND, typed["arguments"], typed=True), values)
+    equal(plan["webauthnEvidence"], evidence)
+    request_digest = profile.request_digest(profile.OP_BIND, values)
+    profile.require(typed["requestDigest"] == measured["requestDigest"] == evidence["requestDigest"] == request_digest
+        and measured["deadlineMonotonicNs"] == deadline_ns)
+    expires = measured["deadlineEpochNs"]
+    core.require_integer(expires, "signed Setup expiry", minimum=1, maximum=2**63 - 1)
+    selected, mutations = plan["selectedBusinessRows"], plan["mutationPlan"]
+    work.prepare_scan(mutations)
+    challenges = [item for item in mutations if item["table"] == "webauthn_challenges"
+        and item["key"] == {"id": evidence["challengeId"]}]
+    profile.require(len(challenges) == 1 and challenges[0]["operation"] == "UPDATE" and type(challenges[0]["row"]) is dict)
+    stamp = challenges[0]["row"]["used_at"]
+    cutoff = profile.setup.epoch(stamp)
+    profile.require(values["request"]["issuedAtEpochNs"] <= projection["createdAtEpochNs"] <= cutoff <= now_epoch_ns
+        and evidence["verifiedAtEpochNs"] <= cutoff and now_epoch_ns < expires
+        and projection["expiresAtEpochNs"] == expires <= values["request"]["expiresAtEpochNs"]
+        and expires <= evidence["expiresAtEpochNs"])
+    roots = plan["rootTransition"]
+    require_complete_populations(selected_rows=selected,
+        before_roots=tuple(roots["businessBeforeRoots"]) + tuple(roots["authorizationBeforeRoots"]),
+        work=work, deadline_ns=deadline_ns)
+    context = core.KernelContext(profile.OP_BIND, typed["arguments"], tuple(selected), datetime.fromisoformat(stamp),
+        request_digest, verified_webauthn_evidence=evidence, setup_rotated_static_policy=owned["policy"])
+    kernel = BindCandidateKernel()
+    transition = kernel.transition(context)
+    check()
+    expanded = retention.expand_mutations(context, transition.mutations, work=work)
+    expected = capacity._finalize_capacity(context, expanded, work=work)
+    expected = sorted(expected, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+    equal(mutations, expected); equal(plan["expectedResult"], transition.result)
+    queries = capacity.add_capacity_query(profile.OP_BIND, kernel.queries_with_evidence(arguments=typed["arguments"],
+        database_now=context.database_now, request_digest=request_digest, evidence=evidence))
+    profile.require(measured["workUnits"] == capacity.transition_work_units(operation=profile.OP_BIND,
+        query_work_units=sum(query.work_units for query in queries), kernel_work_units=transition.work_units,
+        mutations=tuple(expected)))
+    check()
 
 
 KERNELS = MappingProxyType({profile.OP_BIND: BindCandidateKernel()})

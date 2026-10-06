@@ -13,6 +13,7 @@ from serverware import authority_transition_quota as q
 from serverware import authority_transition_webauthn as assertion
 from serverware import authority_transition_oauth_activation as hardware
 from serverware import authority_transition_credential_currentness as currentness
+from serverware import authority_static_credential_provenance as provenance
 
 
 def _approval_id(operation, values, request_digest):
@@ -24,15 +25,26 @@ def _row(context, table, key):
     return q._row(context.exact(table, key), "native Setup " + table)
 
 
+def rotation_audit_queries(operation, intent):
+    original = p.rotation_provenance(intent)
+    if original is None:
+        return ()
+    return (q._query(operation=operation, name="rotation_provenance_audit", table="metadata_audit_outbox",
+        key={"id": provenance.generation_outbox_id(original)}),)
+
+
 def _current(context, values, intent):
     session = _row(context, "setup_sessions", {"id": intent["sessionId"]})
     continuation = _row(context, p.candidate.TABLE, {"session_id": intent["sessionId"]})
     continuation_original = p.candidate.row_original(continuation)
     retained = p.setup.document(continuation["request_original"].encode("ascii"), p.candidate.MAX_ARGUMENT_BYTES)
-    if set(retained["request"]) == p.candidate.STATIC_REQUEST_FIELDS:
-        p.candidate.require_static_session(session)
+    rotated = set(retained["request"]) == p.candidate.ROTATED_STATIC_REQUEST_FIELDS
+    if rotated or set(retained["request"]) == p.candidate.STATIC_REQUEST_FIELDS:
+        p.candidate.require_static_session(session, rotated=rotated)
     else:
         p.require(set(retained["request"]) == p.candidate.REQUEST_FIELDS and session["revision"] == 3)
+    p.require((p.rotated_continuation(intent) == continuation) if rotated
+        else intent["apiVersion"] == p.SCHEMA)
     p.require(p.sha256(p.setup.row_original(session)) == intent["setupSha256"]
         and p.sha256(continuation_original) == intent["continuationSha256"]
         and session["phase"] == "credential_activated" and session["status"] == "active"
@@ -50,6 +62,11 @@ def _current(context, values, intent):
     _, root = currentness.require_root(context, intent["credentialId"], intent["credentialVersion"])
     p.require(credential["lifecycle_status"] == "active" and credential["credential_version"] == generation["last_version"]
         == intent["credentialVersion"] and root["status"] == "open")
+    if rotated:
+        original = p.rotation_provenance(intent)
+        provenance.verify_generation_rows(original, credential=credential, generation=generation, root=root,
+            outbox=_row(context, "metadata_audit_outbox", {"id": provenance.generation_outbox_id(original)}),
+            configuration_digest=values["control_plane_configuration_digest"], now_epoch_ns=q._database_epoch_ns(context.database_now))
     high = _row(context, "policy_high_water", {"scope": "active"})
     publication = _row(context, "policy_publications", {"policy_hash": intent["policyHash"]})
     artifact = _row(context, "policy_candidate_artifacts", {"artifact_envelope_digest": continuation["artifact_envelope_digest"]})
@@ -99,6 +116,7 @@ class Kernel:
             exact("artifact", "policy_candidate_artifacts", {"artifact_envelope_digest": core.SelectedRowFieldReference(
                 p.candidate.TABLE, {"session_id": i["sessionId"]}, "artifact_envelope_digest")}),
             q._role_query(self.operation, "requester", i["ownerId"]), q._audit_query(self.operation, request_digest)]
+        queries.extend(rotation_audit_queries(self.operation, i))
         if self.operation == p.REQUEST:
             queries.append(q._aggregate_query(self.operation, "capacity", "control-plane-approvals", "global"))
         if self.operation == p.DECIDE:

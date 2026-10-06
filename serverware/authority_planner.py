@@ -479,6 +479,7 @@ class PlanningState:
     verified_static_credential_custody_evidence: Mapping[str, Any] | None = None
     static_credential_rotation_policy: Mapping[str, Any] | None = None
     verified_static_credential_rotation_evidence: Mapping[str, Any] | None = None
+    setup_rotated_static_policy: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1232,6 +1233,7 @@ class TypedTransitionPlanningProgram:
                 verified_static_credential_custody_evidence=state.verified_static_credential_custody_evidence,
                 static_credential_rotation_policy=state.static_credential_rotation_policy,
                 verified_static_credential_rotation_evidence=state.verified_static_credential_rotation_evidence,
+                setup_rotated_static_policy=state.setup_rotated_static_policy,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -3822,6 +3824,7 @@ class MeasuredPlanner:
         setup_bind_credential_maximum_events=None,
         static_credential_configuration=None,
         static_credential_root_key=None,
+        setup_rotated_static_policy=None,
     ) -> None:
         if (
             not read_dsn
@@ -3896,6 +3899,11 @@ class MeasuredPlanner:
                     or not 1 <= setup_bind_credential_maximum_events <= setup_bind_credential.MAX_EVENTS):
                 raise AuthorityPlannerError("Setup credential binding planner lacks its signed event capacity")
         self.setup_bind_credential_maximum_events = setup_bind_credential_maximum_events
+        if setup_rotated_static_policy is not None:
+            if not self.enabled_operations & setup_policy.OPERATIONS or type(setup_rotated_static_policy) is not dict:
+                raise AuthorityPlannerError("Rotated Setup policy cannot select another planner")
+            setup_rotated_static_policy = json.loads(canonical_bytes(setup_rotated_static_policy))
+        self.setup_rotated_static_policy = setup_rotated_static_policy
         # These originals come only from the service's admitted root-signed
         # configuration. No input receipt, flag or caller-selected policy is
         # accepted as a substitute for independent cryptographic verification.
@@ -4120,6 +4128,8 @@ class MeasuredPlanner:
                             planning_state = replace(planning_state, genesis_root_digest=self.genesis_root_digest,
                                 genesis_policy=self.genesis_policy)
                         if operation in setup_policy.OPERATIONS:
+                            planning_state = replace(planning_state,
+                                setup_rotated_static_policy=self.setup_rotated_static_policy)
                             authority_transition_setup_policy.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"])

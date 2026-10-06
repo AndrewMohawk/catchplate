@@ -78,7 +78,8 @@ class _Owner(setup._PostBindOwner):
 def _binding(owner):
     enrolled, installed, final, _, preparation = _sources(owner)
     p.require(final["policy_hash"] == owner.continuation["policy_hash"])
-    return {"apiVersion": p.REQUEST, "sessionId": owner.session["id"],
+    intent = p.enrollment.intent(enrolled["intent_original"])
+    value = {"apiVersion": p.ROTATED_REQUEST if intent["apiVersion"] == p.enrollment.ROTATED_SCHEMA else p.REQUEST, "sessionId": owner.session["id"],
         "setupSha256": p.sha256(owner.session_original), "continuationSha256": p.sha256(owner.continuation_original),
         "enrollmentSha256": p.sha256(p.enrollment.row_original(enrolled)), "installationSha256": p.sha256(p.ca.row_original(installed)),
         "canaryId": owner.continuation["canary_id"], "finalizationSha256": final["finalization_digest"],
@@ -87,6 +88,10 @@ def _binding(owner):
         "credentialId": owner.continuation["credential_id"], "credentialVersion": owner.continuation["credential_version"],
         "enrollmentApprovalId": enrolled["approval_id"], "nativeApprovalId": preparation["approval_id"],
         "auditIds": p.audit_ids(enrolled, installed, final)}
+    if intent["apiVersion"] == p.enrollment.ROTATED_SCHEMA:
+        from serverware import authority_static_credential_provenance as provenance
+        value["rotationAuditId"] = provenance.generation_outbox_id(p.enrollment.rotation_provenance(intent))
+    return value
 
 
 def _options(owner, values):

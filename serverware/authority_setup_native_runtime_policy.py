@@ -12,15 +12,22 @@ TRUST = "serverware.setupNativeRuntimeTrustRoots/v1"
 SCOPE_FIELDS = frozenset({"sessionId", "principalId", "routeId", "credentialId", "credentialVersion", "clientRequest",
     "serverInstanceId", "collectorPublicKeyPem", "controlPlanePublicKeyPem", "nativeAssignment", "issuedAtEpochNs",
     "expiresAtEpochNs", "maximumAttemptNanos", "responseRuntimeManifestSha256", "responseProvenanceSha256"})
+ROTATED_SCOPE = "serverware.setupNativeRuntimeRotationScope/v1"
+ROTATED_SCOPE_FIELDS = SCOPE_FIELDS | {"apiVersion", "continuationSha256"}
 
 
 def scope(value):
-    p.require(type(value) is dict and set(value) == SCOPE_FIELDS)
+    p.require(type(value) is dict)
+    rotated = value.get("apiVersion") == ROTATED_SCOPE
+    p.require(set(value) == (ROTATED_SCOPE_FIELDS if rotated else SCOPE_FIELDS))
+    if rotated:
+        p.digest(value["continuationSha256"])
     for name in ("sessionId", "credentialId"):
         p.enrollment.setup.identifier(value[name])
     for name in ("principalId", "routeId", "serverInstanceId"):
         p.enrollment.setup.text(value[name], 1024)
-    p.require(type(value["credentialVersion"]) is int and value["credentialVersion"] == 1)
+    p.require(type(value["credentialVersion"]) is int and
+        (2 <= value["credentialVersion"] <= 2**63-1 if rotated else value["credentialVersion"] == 1))
     before, after, limit = value["issuedAtEpochNs"], value["expiresAtEpochNs"], value["maximumAttemptNanos"]
     p.require(all(type(item) is int for item in (before, after, limit)) and 0 < before < after <= 2**63 - 1
         and after - before <= 86400_000_000_000 and 1_000_000_000 <= limit <= 300_000_000_000)
@@ -87,6 +94,7 @@ def validate_policy(value, *, payload, root_key=None):
 
 def attempt_scope(attempt, actual):
     from serverware import authority_setup_native_runtime_receipt as original
+    p.require(attempt["apiVersion"] == (p.ROTATED_PREPARED if actual.get("apiVersion") == ROTATED_SCOPE else p.PREPARED))
     for name in ("sessionId", "principalId", "routeId", "credentialId", "credentialVersion"):
         p.require(type(attempt[name]) is type(actual[name]) and attempt[name] == actual[name])
     p.require(attempt["policyHash"] == actual["nativeAssignment"]["policyHash"]

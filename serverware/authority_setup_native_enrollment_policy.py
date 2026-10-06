@@ -34,7 +34,9 @@ def validate_policy(value, *, payload, root_key=None):
 def verify_original(operation, arguments, *, configuration_payload, root_key, now_epoch_ns):
     values = p.arguments(operation, arguments, typed="businessIntent" in arguments)
     policy = validate_policy(configuration_payload.get(FIELD), payload=configuration_payload, root_key=root_key)
-    p.require(policy is not None and values["credential_policy"] == policy["credentialPolicy"])
+    from serverware import authority_policy_canary_policy as configuration
+    p.require(policy is not None and values["credential_policy"] == policy["credentialPolicy"]
+        and values["control_plane_configuration_digest"] == configuration.full_configuration_digest(configuration_payload))
     return verify_issuer(values, policy, now_epoch_ns=now_epoch_ns)
 
 

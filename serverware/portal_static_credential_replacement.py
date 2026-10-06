@@ -1,4 +1,4 @@
-"""Static-secret editor using the existing authenticated mutation/MFA flow.
+"""Development static-secret editor using the legacy mutation/MFA flow.
 
 Browser state is neither authorization nor durable custody. A pending secret is
 held only in this page's memory until explicit continuation or discard. Network
@@ -31,11 +31,13 @@ STATIC_CREDENTIAL_REPLACEMENT_SCRIPT = r"""
     let credentialReplacementEpoch = 0, credentialReplacement = null;
 
     function credentialReplacementEligible(item) {
-      return item && typeof item.id === 'string' && item.id.length > 0
+      return protectedStaticCredentials === false && item && typeof item.id === 'string' && item.id.length > 0
         && typeof item.kind === 'string' && item.kind !== 'oauth2'
         && item.metadata?.oauth !== true && (item.lifecycle_status || 'active') === 'active';
     }
     function credentialReplacementButton(item) {
+      if (protectedStaticCredentials !== false)
+        return '<span class="muted">Protected secret replacement is not yet available; no plaintext editor.</span>';
       return credentialReplacementEligible(item)
         ? `<button type="button" data-credential-replacement="${esc(item.id)}">Replace secret</button>` : '';
     }

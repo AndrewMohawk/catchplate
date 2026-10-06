@@ -84,7 +84,7 @@ async function staticPortalCookie(operation) {
   operation.check(); return value;
 }
 async function staticPortalRequest(route, body, operation) {
-  staticPortalNeed(/^(assignment|intent|candidate|(approval\/(request|decide)|create)\/(draft|options|execute))$/.test(route));
+  staticPortalNeed(/^(assignment|intent|candidate|approval\/status|(approval\/(request|decide)|create)\/(draft|options|execute))$/.test(route));
   await staticPortalCookie(operation); operation.check();
   const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin',
     redirect: 'error', cache: 'no-store', signal: operation.controller.signal});
@@ -201,7 +201,7 @@ function staticPageCheck(flow) {
   flow.lastWall = Date.now(); flow.lastMono = performance.now();
 }
 function staticPageFail(flow) {
-  flow.failed = true; sc('static-request').disabled = sc('static-create').disabled = true;
+  flow.failed = true; sc('static-request').disabled = sc('static-create').disabled = sc('static-approval-status').disabled = true;
   if (flow.waiter) { flow.waiter.reject(new Error('Native preparation outcome is uncertain.')); flow.waiter = null; }
   staticPageMessage('This continuation stopped. Any sent action may have taken effect. Inspect the original credential/approval; do not retry it. Reloading does not resolve uncertainty.');
 }
@@ -252,7 +252,7 @@ async function staticPageCandidate(flow, original) {
     flow.expires = Math.min(flow.expires, staticPortalExpiry(result.expiresAtEpochNs));
     flow.deadline = Math.min(flow.deadline, performance.now() + flow.expires - Date.now()); staticPageCheck(flow);
     sc('static-request').disabled = !flow.twoPerson; sc('static-create').disabled = flow.twoPerson;
-    staticPageMessage('Candidate sealed, not saved. ' + (flow.twoPerson ? 'Request a distinct operator’s approval, then explicitly Create.' : 'Explicitly Create with a fresh passkey.'));
+    staticPageMessage('Candidate sealed, not saved. ' + (flow.twoPerson ? 'Request a distinct operator’s approval, explicitly check its status, then Create.' : 'Explicitly Create with a fresh passkey.'));
   } catch (_) { staticPageFail(flow); } finally { operation.close(); }
 }
 sc('static-form').addEventListener('submit', event => {
@@ -290,18 +290,76 @@ sc('static-form').addEventListener('submit', event => {
     } catch (_) { staticPageFail(flow); } finally { flow.busy = false; operation.close(); }
   })();
 });
+function staticPageApprovalReady(flow) {
+  const status = flow.approvalStatus;
+  return !flow.twoPerson || Boolean(status && status.approvalId === flow.approvalId
+    && status.credentialId === flow.id && status.candidateSha256 === flow.digest
+    && status.status === 'approved' && status.consumed === false
+    && staticPortalExpiry(status.observedAtEpochNs) < staticPortalExpiry(status.expiresAtEpochNs)
+    && Date.now() < staticPortalExpiry(status.expiresAtEpochNs));
+}
+async function staticPageApprovalStatus() {
+  const flow = staticFlow;
+  staticPageCheck(flow);
+  staticPortalNeed(!flow.busy && flow.twoPerson && flow.candidate && flow.approvalId && !flow.createAttempted);
+  const candidate = flow.candidate, approvalId = flow.approvalId, digest = flow.digest;
+  const operation = staticPortalOperation(() => {
+    staticPageCheck(flow);
+    staticPortalNeed(flow.candidate === candidate && flow.approvalId === approvalId && flow.digest === digest
+      && !flow.createAttempted);
+  }, flow.auth);
+  flow.busy = true; flow.approvalStatus = null;
+  sc('static-approval-status').disabled = sc('static-create').disabled = true;
+  try {
+    const result = await staticPortalRequest('approval/status', {candidateArgumentsOriginal: candidate, approvalId}, operation);
+    operation.check();
+    staticPortalNeed(staticPortalClosed(result, ['apiVersion', 'okForAction', 'approvalId', 'credentialId',
+      'candidateSha256', 'status', 'consumed', 'expiresAtEpochNs', 'observedAtEpochNs'])
+      && result.apiVersion === 'serverware.staticCredentialApprovalStatus/v1' && result.okForAction === false
+      && result.approvalId === approvalId && result.credentialId === flow.id && result.candidateSha256 === digest
+      && ['pending', 'approved', 'denied', 'consumed', 'invalidated'].includes(result.status)
+      && typeof result.consumed === 'boolean');
+    const expires = staticPortalExpiry(result.expiresAtEpochNs), observed = staticPortalExpiry(result.observedAtEpochNs);
+    staticPortalNeed(expires <= flow.expires);
+    flow.approvalStatus = Object.freeze(result);
+    const ready = staticPageApprovalReady(flow);
+    sc('static-create').disabled = !ready;
+    staticPageMessage(ready ? 'Approval observed. Explicitly Create once with your passkey; current approval and authority will be checked again.'
+      : result.status === 'pending' && !result.consumed && observed < expires && Date.now() < expires
+        ? 'Approval is still pending. Keep both pages open and check again explicitly after the other operator decides. No creation was attempted.'
+        : 'Approval is ' + result.status + (result.consumed ? ' and consumed' : '')
+          + (observed >= expires || Date.now() >= expires ? ' or expired' : '') + '. Creation remains unavailable. No creation was attempted.');
+  } catch (_) {
+    // A read has no ambiguous write to retry. Preserve the original candidate,
+    // but never keep a prior readiness observation after a failed status read.
+    flow.approvalStatus = null;
+    staticPageMessage('Approval status was not confirmed. No creation was attempted. Check explicitly again only with the original session and candidate.');
+  } finally {
+    flow.busy = false; operation.close();
+    if (staticFlow === flow && !flow.failed && !flow.createAttempted) {
+      try { staticPageCheck(flow); sc('static-approval-status').disabled = false; } catch (_) { /* Original lifetime stays closed. */ }
+    }
+  }
+}
 async function staticPageAction(create) {
   const flow = staticFlow;
   staticPageCheck(flow); staticPortalNeed(!flow.busy && flow.candidate
     && !(create ? flow.createAttempted : flow.requestAttempted) && (create || flow.twoPerson));
+  if (create && !staticPageApprovalReady(flow)) {
+    sc('static-create').disabled = true;
+    staticPageMessage('Check this candidate’s approval status before Create. No creation was attempted.'); return;
+  }
   flow.busy = true;
-  if (create) flow.createAttempted = true; else flow.requestAttempted = true;
-  sc('static-request').disabled = sc('static-create').disabled = true;
+  if (!create) flow.requestAttempted = true;
+  sc('static-request').disabled = sc('static-create').disabled = sc('static-approval-status').disabled = true;
   const operation = staticPortalOperation(() => staticPageCheck(flow), flow.auth);
   try {
     const route = create ? 'create' : 'approval/request', expected = create ? 'credential.static.create' : 'credential.static.approval-request';
     const draft = staticPortalDraft(await staticPortalRequest(route + '/draft', {candidateArgumentsOriginal: flow.candidate,
       ...(create ? {approvalId: flow.approvalId || null} : {ttlSeconds: 3600})}, operation), expected, operation);
+    // Draft is read-only. Spend the one-shot creation attempt only before the
+    // first challenge/native preparation, never while merely awaiting approval.
+    if (create) flow.createAttempted = true;
     const mfa = await staticPortalMfa(route, draft, operation);
     let preparationOriginal;
     if (create) {
@@ -328,13 +386,23 @@ async function staticPageAction(create) {
       staticPortalNeed(result.approval?.status === 'pending' && result.approval.resource_id === flow.id
         && result.approval.payload_digest === flow.digest && staticPortalText(result.approval.id, 64));
       flow.approvalId = result.approval.id;
-      staticPageMessage('Approval requested: ' + flow.approvalId + '. A different operator must review it in the portal approval queue. After approval, click Create once. Nothing is saved yet.');
-      sc('static-create').disabled = false;
+      flow.approvalStatus = null;
+      staticPageMessage('Approval requested: ' + flow.approvalId + '. A different operator must review it in the approval queue. Explicitly check approval status before Create. Nothing is saved yet.');
+      sc('static-approval-status').disabled = false;
     }
-  } catch (_) { staticPageFail(flow); } finally { flow.busy = false; operation.close(); }
+  } catch (_) {
+    if (create && flow.twoPerson && !flow.createAttempted) {
+      flow.approvalStatus = null;
+      staticPageMessage('Creation draft was not accepted. No hardware or native creation was attempted. Check the original approval status explicitly; no lifetime has been renewed.');
+      try { staticPageCheck(flow); sc('static-approval-status').disabled = false; } catch (_) { /* No fresh continuation. */ }
+    } else { staticPageFail(flow); }
+  } finally { flow.busy = false; operation.close(); }
 }
 sc('static-request').addEventListener('click', () => void staticPageAction(false).catch(() => staticPageFail(staticFlow)));
 sc('static-create').addEventListener('click', () => void staticPageAction(true).catch(() => staticPageFail(staticFlow)));
+sc('static-approval-status').addEventListener('click', () => void staticPageApprovalStatus().catch(() => {
+  sc('static-create').disabled = true; staticPageMessage('The original approval continuation is unavailable. No creation was attempted.');
+}));
 """
 
 STATIC_CREDENTIAL_PAGE = r"""<!doctype html><html lang="en"><meta charset="utf-8">
@@ -354,6 +422,7 @@ STATIC_CREDENTIAL_PAGE = r"""<!doctype html><html lang="en"><meta charset="utf-8
 <label>Candidate lifetime (seconds, maximum 3600)<input name="ttlSeconds" type="number" min="1" max="3600" value="900" required></label>
 <button id="static-start" type="submit">Open native secret intake</button></form>
 <button id="static-request" type="button" disabled>Passkey + request approval</button>
+<button id="static-approval-status" type="button" disabled>Check approval status</button>
 <button id="static-create" type="button" disabled>Passkey + Create once</button>
 <p id="static-status" role="status" aria-live="polite">No intake or creation has started.</p>
 <p><a href="/approvals" target="_blank" rel="noopener">Approval queue</a> · <a href="/">Return to Setup</a></p>

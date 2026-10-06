@@ -16746,6 +16746,7 @@ def oauth_issuance_uncertainty_resolve(
 @app.post("/api/credentials/static/assignment")
 @app.post("/api/credentials/static/intent")
 @app.post("/api/credentials/static/candidate")
+@app.post("/api/credentials/static/approval/status")
 @app.post("/api/credentials/static/approval/request/draft")
 @app.post("/api/credentials/static/approval/request/options")
 @app.post("/api/credentials/static/approval/request/execute")
@@ -16847,6 +16848,11 @@ def update_credential(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    if _protected_static_credentials():
+        # Protected creation is INSERT-only. It cannot authorize an in-place
+        # N+1 replacement, local envelope encryption or direct protected DML.
+        raise HTTPException(status_code=409,
+            detail="Protected credential replacement is unavailable; legacy plaintext updates are disabled")
     changes = payload.model_dump(exclude_unset=True, exclude={"mfa"})
     payload_digest = _control_plane_payload_digest(
         {"credential_id": credential_id, "changes": changes}

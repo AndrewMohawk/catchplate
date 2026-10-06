@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Six synthetic/source controls; no app import, server, real MFA or browser.
+"""Focused synthetic/source controls; no app import, server, real MFA or browser.
 
 Actual portal helpers execute in Node against inert DOM, response, clock and
 WebAuthn fixtures. These controls do not establish backend or Rust rotation.
@@ -49,7 +49,7 @@ HELPERS = helper("ApiError", kind="class") + "".join(helper(name) for name in (
     "adminToken", "adminHeaders", "hasOperatorAuth", "requireAdminToken",
     "setStatus", "runUiAction", "controlStateKey", "captureControlState", "restoreControlState",
     "b64ToBytes", "bytesToB64", "credentialToJson", "prepareRequestOptions",
-    "ensureCsrfToken", "api", "persistPendingMutation", "restorePendingMutation",
+    "ensureCsrfToken", "api", "setupCredentialMutationGuard", "persistPendingMutation", "restorePendingMutation",
     "renderPendingMutation", "controlPlaneAssertion", "mutationOptions", "runControlPlaneMutation",
     "continuePendingMutation", "finishMutation",
 ))
@@ -76,7 +76,7 @@ const state={currentUserId:'user:requester',currentUserRoles:['credential_owner'
     authMethod:'oidc-session',sessionState:'active'},
   credentials:[{id,name:'Static fixture',kind:'bearer',metadata:{},lifecycle_status:'active'}],
   controlPlaneApprovals:[]};
-let pendingMutation=null, csrfToken=null, oidcSessionStatusUnknown=false;
+let pendingMutation=null, csrfToken=null, oidcSessionStatusUnknown=false, protectedStaticCredentials=false;
 const pendingMutationKey='synthetic-pending';
 $('admin-token').value='synthetic-operator';
 const calls=[], queue=[]; let refreshes=0, refreshHook=async()=>{};
@@ -128,6 +128,37 @@ class StaticCredentialReplacementControls(unittest.TestCase):
             text=True, capture_output=True, timeout=10, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_protected_mode_refuses_legacy_replacement_before_side_effects(self) -> None:
+        function = next(node for node in ast.parse(APP).body
+            if isinstance(node, ast.FunctionDef) and node.name == "update_credential")
+        guard = function.body[0]
+        self.assertIsInstance(guard, ast.If)
+        self.assertEqual(ast.unparse(guard.test), "_protected_static_credentials()")
+        self.assertIsInstance(guard.body[0], ast.Raise)
+        class Refused(Exception):
+            pass
+        calls = []
+        def refusal(**kwargs):
+            calls.append(kwargs)
+            return Refused()
+        code = compile(ast.Module(body=[guard], type_ignores=[]), "protected-update-guard", "exec")
+        for protected in (False, True):
+            context = {"_protected_static_credentials": lambda: protected, "HTTPException": refusal}
+            if protected:
+                with self.assertRaises(Refused):
+                    exec(code, context)
+            else:
+                exec(code, context)
+        self.assertEqual([call["status_code"] for call in calls], [409])
+        self.javascript(r"""
+protectedStaticCredentials=true;
+assert.match(credentialReplacementButton(state.credentials[0]),/no plaintext editor/);
+assert.throws(open);assert.equal(credentialReplacement,null);assert.equal(calls.length,0);
+protectedStaticCredentials=false;const owner=open();
+protectedStaticCredentials=true;credentialReplacementAuthChanged();cleared(owner);
+assert.equal(calls.length,0);assert.equal(hardware,0);
+""")
 
     def test_01_source_closure_and_secret_snapshot_exclusion(self) -> None:
         dialog_style = re.search(r"(?m)^    dialog \{[^\n]+\}", UI).group(0)

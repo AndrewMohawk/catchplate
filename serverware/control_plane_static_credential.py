@@ -23,11 +23,12 @@ from serverware import authority_policy_canary_policy as config_digest
 from serverware import oauth_application_owner as originals
 
 PREFIX = "/api/credentials/static"
-PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/intent", PREFIX + "/candidate"} | {
+PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
     PREFIX + "/" + operation + "/" + phase
     for operation in ("approval/request", "approval/decide", "create")
     for phase in ("draft", "options", "execute")})
 HTTP_SCHEMA = "serverware.staticCredentialPortalRequest/v1"
+APPROVAL_STATUS_SCHEMA = "serverware.staticCredentialApprovalStatus/v1"
 CREATE_OPTIONS_SCHEMA = "serverware.staticCredentialCreationOptions/v1"
 CREATE_MFA_FIELD = "staticCredentialCreationProfile"
 MAX_REQUEST = MAX_RESPONSE = 4 * 1024 * 1024
@@ -487,6 +488,42 @@ def _candidate(owner, original):
     return values
 
 
+def _approval_status(owner, value):
+    """Observe this requester's exact candidate; never authorize or consume it."""
+    profile.require(set(value) == {"apiVersion", "candidateArgumentsOriginal", "approvalId"}
+        and owner.policy["twoPersonRequired"] is True)
+    values = _candidate(owner, value["candidateArgumentsOriginal"])
+    owner.clip(values["request"]["expiresAtEpochNs"])
+    row = _approval_row(value["approvalId"])
+    # A decision can commit during the read; compare it with the retained
+    # clock sampled after that read, not the earlier request-start sample.
+    owner.check()
+    provenance = approval.provenance(row["approval_authn"])
+    candidate_digest = profile.approval_payload_digest(values)
+    profile.require(row["id"] == value["approvalId"] and row["action"] == profile.ACTION
+        and row["resource_id"] == values["request"]["credentialId"]
+        and row["requester_id"] == owner.identity.user_id
+        and row["payload_digest"] == provenance["candidateSha256"] == candidate_digest
+        and row["request_json"] == approval.approval_request(values)
+        and provenance["controlPlaneConfigurationDigest"] == values["control_plane_configuration_digest"]
+        and provenance["credentialPolicy"] == values["credential_policy"]
+        and row["status"] in {"pending", "approved", "denied", "consumed", "invalidated"})
+    expires = approval.epoch(row["expires_at"])
+    profile.require(values["request"]["issuedAtEpochNs"] <= approval.epoch(row["requested_at"])
+        < expires <= values["request"]["expiresAtEpochNs"])
+    consumed = row["consumed_at"] is not None or row["consumed_by"] is not None
+    if row["status"] == "approved":
+        profile.require(row["approved_by"] is not None and row["approved_by"] != row["requester_id"]
+            and approval.epoch(row["requested_at"]) <= approval.epoch(row["approved_at"]) <= owner.last_epoch
+            and approval.epoch(row["approved_at"]) < expires
+            and provenance["decisionDigest"] is not None)
+    owner.check()
+    return {"apiVersion": APPROVAL_STATUS_SCHEMA, "okForAction": False,
+        "approvalId": row["id"], "credentialId": row["resource_id"], "candidateSha256": candidate_digest,
+        "status": row["status"], "consumed": consumed or provenance["consumptionDigest"] is not None,
+        "expiresAtEpochNs": str(expires), "observedAtEpochNs": str(owner.last_epoch)}
+
+
 def on_request(request, raw):
     # HTTP envelopes have no canonical wire requirement. Literal originals
     # inside them retain their separate byte-exact canonical admission.
@@ -507,6 +544,8 @@ def on_request(request, raw):
 
 
 def _handle(owner, route, value):
+    if route == "approval/status":
+        return _approval_status(owner, value)
     if route == "assignment":
         profile.require(set(value) == {"apiVersion", "assignmentOriginal"})
         original = value["assignmentOriginal"]

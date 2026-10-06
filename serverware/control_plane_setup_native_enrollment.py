@@ -66,7 +66,12 @@ class _Setup:
         p.require(self.continuation is not None)
         self.session_original = p.setup.row_original(self.session)
         self.continuation_original = p.candidate.row_original(self.continuation)
-        p.require(self.session["revision"] == 3 and self.session["phase"] == "credential_activated"
+        retained = p.setup.document(self.continuation["request_original"].encode("ascii"), p.candidate.MAX_ARGUMENT_BYTES)
+        if set(retained["request"]) == p.candidate.STATIC_REQUEST_FIELDS:
+            p.candidate.require_static_session(self.session)
+        else:
+            p.require(set(retained["request"]) == p.candidate.REQUEST_FIELDS and self.session["revision"] == 3)
+        p.require(self.session["phase"] == "credential_activated"
             and self.session["status"] == "active" and self.session["terminal_at"] is None
             and self.session["current_assignee_id"] in {None, self.session["owner_id"]}
             and self.continuation["setup_original"].encode("ascii") == self.session_original

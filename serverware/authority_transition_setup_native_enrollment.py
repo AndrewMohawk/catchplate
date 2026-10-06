@@ -1,7 +1,7 @@
 """Actual protected approval, precontact fence and verified-certificate CAS.
 
-The legacy Setup row remains revision three. This distinct successor records
-only issuance. A pending/unknown row is never reset on timeout or lost output.
+The original Setup row remains unchanged. This distinct successor records only
+issuance. A pending/unknown row is never reset on timeout or lost output.
 """
 from dataclasses import dataclass
 from datetime import timezone
@@ -27,9 +27,15 @@ def _row(context, table, key):
 def _current(context, values, intent):
     session = _row(context, "setup_sessions", {"id": intent["sessionId"]})
     continuation = _row(context, p.candidate.TABLE, {"session_id": intent["sessionId"]})
+    continuation_original = p.candidate.row_original(continuation)
+    retained = p.setup.document(continuation["request_original"].encode("ascii"), p.candidate.MAX_ARGUMENT_BYTES)
+    if set(retained["request"]) == p.candidate.STATIC_REQUEST_FIELDS:
+        p.candidate.require_static_session(session)
+    else:
+        p.require(set(retained["request"]) == p.candidate.REQUEST_FIELDS and session["revision"] == 3)
     p.require(p.sha256(p.setup.row_original(session)) == intent["setupSha256"]
-        and p.sha256(p.candidate.row_original(continuation)) == intent["continuationSha256"]
-        and session["revision"] == 3 and session["phase"] == "credential_activated" and session["status"] == "active"
+        and p.sha256(continuation_original) == intent["continuationSha256"]
+        and session["phase"] == "credential_activated" and session["status"] == "active"
         and session["terminal_at"] is None and session["owner_id"] == continuation["owner_id"] == intent["ownerId"]
         and session["current_assignee_id"] in {None, intent["ownerId"]}
         and continuation["setup_original"] == p.setup.row_original(session).decode("ascii")

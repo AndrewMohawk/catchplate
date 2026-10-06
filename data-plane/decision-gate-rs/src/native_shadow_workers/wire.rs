@@ -48,6 +48,31 @@ impl Bootstrap {
             && self.executable_path.iter().all(|s| s.len() <= 4096 && s.starts_with('/') && !s.contains('\0')))
     }
 }
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct PublicationBootstrap {
+    pub(super) api_version:String,
+    pub(super) worker:Bootstrap,
+    pub(super) publication_resources_sha256:String,
+}
+#[derive(Serialize,Deserialize)]
+#[serde(untagged)]
+pub(super) enum WorkerBootstrap {Legacy(Bootstrap),Publication(PublicationBootstrap)}
+impl WorkerBootstrap {
+    pub(super) fn worker(&self)->&Bootstrap {
+        match self {Self::Legacy(v)=>v,Self::Publication(v)=>&v.worker}
+    }
+    pub(super) fn publication(&self)->Option<&str> {
+        match self {Self::Legacy(_)=>None,Self::Publication(v)=>Some(&v.publication_resources_sha256)}
+    }
+    pub(super) fn validate(&self)->Result<(),String> {
+        self.worker().validate()?;
+        if let Self::Publication(v)=self {
+            require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v2" && hash(&v.publication_resources_sha256))?;
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub(super) struct Request {

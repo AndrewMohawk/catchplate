@@ -5510,6 +5510,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_loaded_policy.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_runtime.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_generation.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_generation_publication_protocol.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_generation_publication_handoff.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
 				data-plane/decision-gate-rs/src/policy_core_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
@@ -5598,6 +5600,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-publication-handoff.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
@@ -5717,6 +5720,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_shadow_workers/job.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/mod.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/process.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/publication_resources.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/transport.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/wire.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/worker.rs \
@@ -6128,6 +6132,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/oauth-retired-scope-succession.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-shadow-workers.v1.schema.json \
+				schemas/native-shadow-workers.v2.schema.json \
+				schemas/native-shadow-publication-resources.v1.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-custody-closure.v2.schema.json \

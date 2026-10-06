@@ -7,6 +7,7 @@ mod process;
 mod transport;
 mod wire;
 mod worker;
+pub mod publication_resources;
 pub use elf::validate_static_amd64_elf_verifier;
 pub use worker::run;
 use crate::native_serving_privileges::{Association,Owner as Serving,Prepared as Privileged};
@@ -36,11 +37,25 @@ impl Purpose {
 pub struct Executable {pub path:PathBuf,pub sha256:String}
 #[derive(Debug,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Configuration {api_version:String,executable:Executable}
+pub struct LegacyConfiguration {api_version:String,executable:Executable}
+#[derive(Debug,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct PublicationConfiguration {api_version:String,executable:Executable,resources:publication_resources::Configuration}
+#[derive(Debug,Deserialize)]
+#[serde(untagged)]
+pub enum Configuration {Legacy(LegacyConfiguration),Publication(PublicationConfiguration)}
 impl Configuration {
     pub fn validate(&self)->Result<(),String> {
-        require(self.api_version=="serverware.nativeShadowWorkers/v1" && self.executable.path==std::path::Path::new(EXECUTABLE)
-            && wire::hash(&self.executable.sha256))
+        let executable=match self {
+            Self::Legacy(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v1")?;&v.executable},
+            Self::Publication(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v2")?;v.resources.validate()?;&v.executable},
+        };
+        require(executable.path==std::path::Path::new(EXECUTABLE) && wire::hash(&executable.sha256))
+    }
+    pub fn publication_resources(&self)->bool {matches!(self,Self::Publication(_))}
+    pub fn validate_legacy(&self)->Result<(),String> {self.validate()?;require(!self.publication_resources())}
+    fn into_parts(self)->(Executable,Option<publication_resources::Configuration>) {
+        match self {Self::Legacy(v)=>(v.executable,None),Self::Publication(v)=>(v.executable,Some(v.resources))}
     }
 }
 struct Core {
@@ -60,12 +75,29 @@ pub struct Owner {core:Core,serving:Arc<Serving>,sequence:Mutex<u64>,poisoned:At
 impl Prepared {
     pub fn launch(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
         cohort:Arc<crate::StartedGuestCohort>)->Result<Self,String> {
+        Self::launch_inner(configuration,commands,prepared,cohort,None)
+    }
+    pub fn launch_with_publication(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
+        cohort:Arc<crate::StartedGuestCohort>,pins:publication_resources::PublicationAuthorityPins)->Result<Self,String> {
+        Self::launch_inner(configuration,commands,prepared,cohort,Some(pins))
+    }
+    fn launch_inner(configuration:Configuration,commands:[Executable;3],prepared:&Privileged,
+        cohort:Arc<crate::StartedGuestCohort>,pins:Option<publication_resources::PublicationAuthorityPins>)->Result<Self,String> {
         use ring::rand::SecureRandom;
         use base64::Engine as _;
         configuration.validate()?;prepared.check()?;cohort.require_shadow_preparation(prepared)?;
         let association=Association::capture(prepared)?;
-        let worker=image::Image::open(&configuration.executable.path,&configuration.executable.sha256)?;
+        let (executable,resources)=configuration.into_parts();
+        let resources=match (resources,pins) {
+            (Some(config),Some(pins))=>Some(publication_resources::ColdResources::open(config,pins,prepared.deadline())?),
+            (None,None)=>None,
+            _=>return Err("publication resources require the independently admitted trust profile".into()),
+        };
+        let worker=image::Image::open(&executable.path,&executable.sha256)?;
         let [runtime,webauthn,publication]=commands;
+        if resources.is_some() {
+            require(publication.path==std::path::Path::new("/usr/local/bin/serverware-native-publication-handoff"))?;
+        }
         let paths=[runtime.path.to_str().ok_or("runtime path not UTF8")?.to_owned(),
             webauthn.path.to_str().ok_or("WebAuthn path not UTF8")?.to_owned(),
             publication.path.to_str().ok_or("publication path not UTF8")?.to_owned()];
@@ -76,9 +108,17 @@ impl Prepared {
         let nonce=base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entropy);
         let bootstrap=wire::Bootstrap {api_version:"serverware.nativeShadowWorkerBootstrap/v1".into(),channel_nonce:nonce.clone(),
             deadline_boottime_ns:prepared.deadline(),executable_sha256:std::array::from_fn(|i|images[i].sealed.sha256().to_owned()),executable_path:paths};
+        let bootstrap=match resources.as_ref() {
+            None=>wire::WorkerBootstrap::Legacy(bootstrap),
+            Some(value)=>wire::WorkerBootstrap::Publication(wire::PublicationBootstrap {
+                api_version:"serverware.nativeShadowWorkerBootstrap/v2".into(),worker:bootstrap,
+                publication_resources_sha256:value.bootstrap.sha256().to_owned(),
+            }),
+        };
         bootstrap.validate()?;
         let bootstrap=image::Sealed::new(&wire::encode(&bootstrap)?,false)?;
-        let process=process::Process::spawn(&worker.sealed,&bootstrap,&[&images[0].sealed,&images[1].sealed,&images[2].sealed],prepared)?;
+        let process=process::Process::spawn(&worker.sealed,&bootstrap,&[&images[0].sealed,&images[1].sealed,&images[2].sealed],prepared,resources.as_ref())?;
+        drop(resources);
         let core=Core {association,process,bootstrap,images,worker,nonce,deadline:prepared.deadline(),cohort};
         transport::wait(core.process.channel.as_raw_fd(),libc::POLLIN,&core.process.pidfd,core.deadline)?;
         let packet=transport::receive(core.process.channel.as_raw_fd(),0)?;core.process.authenticate(&packet)?;

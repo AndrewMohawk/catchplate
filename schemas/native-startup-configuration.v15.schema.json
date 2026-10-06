@@ -19,7 +19,8 @@
     "shadow": {"oneOf": [
       {"$ref": "native-startup-configuration.v14.schema.json#/properties/shadow"},
       {"$ref": "native-shadow-workers.v1.schema.json#/$defs/shadowConfiguration"},
-      {"$ref": "native-policy-activation-custody.v1.schema.json#/$defs/shadowConfiguration"}
+      {"$ref": "native-policy-activation-custody.v1.schema.json#/$defs/shadowConfiguration"},
+      {"$ref": "native-shadow-workers.v2.schema.json#/$defs/shadowConfiguration"}
     ]},
     "responseObservationV2": {"$ref": "native-startup-configuration.v14.schema.json#/properties/responseObservationV2"},
     "policy": {"$ref": "native-startup-configuration.v14.schema.json#/properties/policy"},

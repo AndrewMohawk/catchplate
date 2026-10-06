@@ -46,6 +46,7 @@ impl ShadowConfigV1 {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ShadowConfigV2 {
+    #[serde(deserialize_with="version_two")]
     api_version: String,
     trust_manifest: ArtifactV1,
     runtime_verifier: PinnedVerifierConfigV1,
@@ -56,12 +57,26 @@ pub(super) struct ShadowConfigV2 {
     workers: serverware_decision_gate::native_shadow_workers::Configuration,
 }
 
+fn exact_version<'de,D:serde::Deserializer<'de>>(de:D,expected:&str)->Result<String,D::Error> {
+    let value=String::deserialize(de)?;
+    if value==expected {Ok(value)} else {Err(serde::de::Error::custom("native shadow profile version differs"))}
+}
+fn version_two<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
+    exact_version(de,"serverware.nativeShadowConfiguration/v2")
+}
+fn version_three<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
+    exact_version(de,"serverware.nativeShadowConfiguration/v3")
+}
+fn version_four<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
+    exact_version(de,"serverware.nativeShadowConfiguration/v4")
+}
+
 impl ShadowConfigV2 {
     pub(super) fn into_config(self) -> Result<PolicyShadowGenerationConfig, String> {
         if self.api_version != "serverware.nativeShadowConfiguration/v2" {
             return Err("native shadow worker configuration version differs".into());
         }
-        self.workers.validate()?;
+        self.workers.validate_legacy()?;
         let mut original = ShadowConfigV1 {
             trust_manifest: self.trust_manifest, runtime_verifier: self.runtime_verifier,
             webauthn_verifier: self.webauthn_verifier, publication_handoff: self.publication_handoff,
@@ -80,6 +95,7 @@ pub(super) enum ShadowConfigV15 {
     Legacy(ShadowConfigV1),
     Native(ShadowConfigV2),
     NativeActivation(ShadowConfigV3),
+    NativePublication(ShadowConfigV4),
 }
 
 impl From<ShadowConfigV1> for ShadowConfigV15 {
@@ -92,7 +108,38 @@ impl ShadowConfigV15 {
             Self::Legacy(value) => value.into_config(),
             Self::Native(value) => value.into_config(),
             Self::NativeActivation(value)=>value.into_config(),
+            Self::NativePublication(value)=>value.into_config(),
         }
+    }
+}
+
+/// Only this explicit nested successor may select publication descriptors.
+/// An omitted activation profile remains omitted; explicit null is not one.
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct ShadowConfigV4 {
+    #[serde(deserialize_with="version_four")]
+    api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
+    webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
+    custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,
+    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    #[serde(default,deserialize_with="present_activation")]
+    native_activation:Option<super::super::policy_shadow_generation::activation::Configuration>,
+}
+fn present_activation<'de,D:serde::Deserializer<'de>>(deserializer:D)
+    ->Result<Option<super::super::policy_shadow_generation::activation::Configuration>,D::Error> {
+    Deserialize::deserialize(deserializer).map(Some)
+}
+impl ShadowConfigV4 {
+    fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
+        if self.api_version!="serverware.nativeShadowConfiguration/v4" || !self.workers.publication_resources() {
+            return Err("native publication nested profile differs".into());
+        }
+        self.workers.validate()?;
+        let mut value=ShadowConfigV1{trust_manifest:self.trust_manifest,runtime_verifier:self.runtime_verifier,
+            webauthn_verifier:self.webauthn_verifier,publication_handoff:self.publication_handoff,
+            custody_config:self.custody_config,startup_active_authorization:self.startup_active_authorization}.into_config()?;
+        value.native_workers=Some(self.workers);value.native_activation=self.native_activation;Ok(value)
     }
 }
 
@@ -101,6 +148,7 @@ impl ShadowConfigV15 {
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct ShadowConfigV3{
+    #[serde(deserialize_with="version_three")]
     api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
     webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
     custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,

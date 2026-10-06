@@ -47,6 +47,7 @@ NATIVE_FILES = {
     "opt/serverware/serverware-native-publication-genesis-controller": (0o555, 64 * 1024 * 1024),
     "opt/serverware/serverware-native-publication-adoption-validator": (0o555, 64 * 1024 * 1024),
     "usr/local/bin/serverware-native-shadow-worker": (0o555, 64 * 1024 * 1024),
+    "usr/local/bin/serverware-native-publication-handoff": (0o555, 64 * 1024 * 1024),
     "opt/serverware/native-shadow-custody-runtime.squashfs": (0o444, 256 * 1024 * 1024),
     "usr/share/serverware/native-shadow-custody-runtime.json": (0o444, 4 * 1024 * 1024),
 }

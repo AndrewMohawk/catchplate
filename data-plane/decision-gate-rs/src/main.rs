@@ -5,6 +5,7 @@ mod policy_core;
 mod policy_route_authority;
 mod policy_shadow;
 mod policy_shadow_generation;
+mod policy_shadow_generation_publication_protocol;
 mod native_canary_opening;
 mod native_canary_runtime;
 mod response_v2;

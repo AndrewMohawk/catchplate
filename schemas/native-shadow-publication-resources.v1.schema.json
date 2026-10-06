@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-publication-resources.v1.schema.json",
+  "title": "Explicit trusted-host-local publication resources",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha256": {"$ref":"native-shadow-workers.v1.schema.json#/$defs/sha256"},
+    "uint64": {"type":"integer","minimum":0,"maximum":18446744073709551615},
+    "fd": {"type":"integer","minimum":12,"maximum":2147483647},
+    "configuration": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","profile","descriptorFd","descriptorSha256","checkpointFd","checkpointSha256","signingKeyFd","journalFd"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowPublicationResources/v1"},
+        "profile":{"const":"trusted-host-local"},
+        "descriptorFd":{"$ref":"#/$defs/fd"},
+        "descriptorSha256":{"$ref":"#/$defs/sha256"},
+        "checkpointFd":{"$ref":"#/$defs/fd"},
+        "checkpointSha256":{"$ref":"#/$defs/sha256"},
+        "signingKeyFd":{"$ref":"#/$defs/fd"},
+        "journalFd":{"$ref":"#/$defs/fd"}
+      },
+      "$comment":"Runtime requires four distinct inherited descriptors, actual protected/sealed originals, independently selected descriptor/checkpoint pins, purpose-key SPKI and journal identity joins. This profile does not assert hardware attestation or off-host rollback protection and admits no ambient resource paths."
+    },
+    "descriptor": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","profile","namespaceSha256","publicationSigningKeyId","publicationSigningKeySpkiSha256","journalFormat","journalLimitBytes"],
+      "properties": {
+        "apiVersion":{"const":"serverware.privateGenerationPublicationStore/v1"},
+        "profile":{"const":"trusted-host-local"},
+        "namespaceSha256":{"$ref":"#/$defs/sha256"},
+        "publicationSigningKeyId":{"$ref":"#/$defs/sha256"},
+        "publicationSigningKeySpkiSha256":{"$ref":"#/$defs/sha256"},
+        "journalFormat":{"const":"serverware.privateGenerationPublicationJournal/v1"},
+        "journalLimitBytes":{"type":"integer","minimum":1,"maximum":67108864}
+      },
+      "$comment":"Exact canonical original digest equals the independently admitted publicationReplayStoreSha256. It identifies this local profile, not the changing journal contents or a self-authorizing checkpoint."
+    },
+    "checkpoint": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","descriptorSha256","device","inode","sequence","headSha256","byteCount"],
+      "properties": {
+        "apiVersion":{"const":"serverware.privateGenerationPublicationCheckpoint/v1"},
+        "descriptorSha256":{"$ref":"#/$defs/sha256"},
+        "device":{"$ref":"#/$defs/uint64"},
+        "inode":{"type":"integer","minimum":1,"maximum":18446744073709551615},
+        "sequence":{"$ref":"#/$defs/uint64"},
+        "headSha256":{"$ref":"#/$defs/sha256"},
+        "byteCount":{"$ref":"#/$defs/uint64"}
+      },
+      "$comment":"Independently pinned cold checkpoint must equal the actual journal prefix/identity, not a locally guessed head. Sequence counts frames and byteCount includes each eight-byte length prefix. Explicit pre-existing empty genesis has sequence=0, byteCount=0 and SHA256(empty); runtime verifies these joins and never creates or resets genesis."
+    }
+  }
+}

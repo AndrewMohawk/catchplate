@@ -10,6 +10,29 @@ pub(crate) struct PreparedNativeShadowControl {
     lifecycle:Option<super::super::policy_shadow::PreparedNativeCustodyLifecycle>,
 }
 
+fn publication_pins(trust:&PinnedEnvelopeKeyTrust)
+    ->Result<workers::publication_resources::PublicationAuthorityPins,String> {
+    let key_id=trust.publication_signing_key_id.clone();
+    let spki=trust.publication_signing_key_spki_sha256.clone();
+    let mut opening=trust.issued_at_unix_nanos;let mut closing=trust.expires_at_unix_nanos;
+    let mut public=None;
+    for domain in [PUBLICATION_SIGNATURE_DOMAIN,PUBLICATION_PREPARATION_SIGNATURE_DOMAIN] {
+        let key=trust.keys.get(&("fleet-shadow-runtime".into(),domain.into(),key_id.clone(),spki.clone()))
+            .ok_or("publication key lacks one independently admitted signature domain")?;
+        if public.is_some_and(|previous| previous!=key.verifying_key.to_bytes()) {
+            return Err("publication signature domains name different admitted keys".into());
+        }
+        public=Some(key.verifying_key.to_bytes());
+        opening=opening.max(key.not_before_unix_nanos);closing=closing.min(key.not_after_unix_nanos);
+    }
+    if opening>=closing {return Err("publication trust/key validity intersection is empty".into());}
+    Ok(workers::publication_resources::PublicationAuthorityPins {
+        key_id:key_id.as_str().into(),key_spki_sha256:spki.as_str().into(),
+        replay_store_sha256:trust.publication_replay_store_sha256.as_str().into(),
+        not_before_unix_nanos:opening,not_after_unix_nanos:closing,
+    })
+}
+
 impl PreparedNativeShadowControl {
     pub(crate) fn open(mut config: PolicyShadowGenerationConfig, prepared: &Prepared,
         cohort: Arc<StartedGuestCohort>) -> Result<Self, String> {
@@ -25,7 +48,12 @@ impl PreparedNativeShadowControl {
         let control = PolicyShadowGenerationControl::from_config(true, true, config)?;
         let lifecycle=super::super::policy_shadow::PreparedNativeCustodyLifecycle::open(
             control.custody_config.retained_file()?,control.custody_config.content_sha256(),prepared)?;
-        let worker = workers::Prepared::launch(selected, commands, prepared, cohort)?;
+        let worker = if selected.publication_resources() {
+            let pins=publication_pins(control.key_trust.as_ref())?;
+            workers::Prepared::launch_with_publication(selected,commands,prepared,cohort,pins)?
+        } else {
+            workers::Prepared::launch(selected, commands, prepared, cohort)?
+        };
         prepared.check()?;
         Ok(Self {control, worker,activation,lifecycle})
     }

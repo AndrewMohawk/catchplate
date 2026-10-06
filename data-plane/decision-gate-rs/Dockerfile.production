@@ -155,6 +155,7 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-response-v2-guest-inspector \
         --bin serverware-response-v2-guest-role \
         --bin serverware-native-shadow-worker \
+        --bin serverware-native-publication-handoff \
         --bin serverware-policy-shadow-custody-guest \
         --bin serverware-native-shadow-guest-supervisor \
         --bin serverware-native-shadow-proof-cohort \
@@ -199,6 +200,9 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-worker | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-worker | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-worker)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-publication-handoff | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-publication-handoff | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-publication-handoff)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-verifier | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-verifier | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier)" -le 67108864 \
@@ -283,6 +287,9 @@ COPY --from=launcher-build /src/target/release/serverware-response-v2-guest-role
 
 FROM scratch AS native-shadow-worker-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-shadow-worker /serverware-native-shadow-worker
+
+FROM scratch AS native-publication-handoff-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-handoff /serverware-native-publication-handoff
 
 FROM scratch AS native-shadow-verifier-supervisor-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-shadow-verifier /serverware-native-shadow-verifier
@@ -481,6 +488,7 @@ COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverwa
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-response-v2-guest-inspector /usr/local/bin/serverware-response-v2-guest-inspector
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-response-v2-guest-role /usr/local/bin/serverware-response-v2-guest-role
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /usr/local/bin/serverware-native-shadow-worker
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-handoff /usr/local/bin/serverware-native-publication-handoff
 COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
 COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/serverware-custody /run/serverware-custody
 COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody
@@ -502,6 +510,7 @@ COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverwa
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-genesis-controller /native-install/opt/serverware/serverware-native-publication-genesis-controller
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-adoption-validator /native-install/opt/serverware/serverware-native-publication-adoption-validator
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /native-install/usr/local/bin/serverware-native-shadow-worker
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-handoff /native-install/usr/local/bin/serverware-native-publication-handoff
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /native-install/opt/serverware/native-shadow-custody-runtime.squashfs
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /native-install/usr/share/serverware/native-shadow-custody-runtime.json
 

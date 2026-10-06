@@ -18,16 +18,22 @@ SETUP_POLICY_HTML = r"""
             <h4>Separately approved policy-file publication</h4>
             <p class="hint">The Setup owner also needs the literal policy_publisher role to request or consume publication. A DIFFERENT policy_publisher approves. credential_owner alone grants no publication authority. Setup remains revision 3.</p>
             <button type="button" onclick="runUiAction('Draft policy-file publication', setupPolicyFileDraft)">Read actual association + draft publication</button>
-            <label>Exact data-only materialization draft for manual handoff (no passkeys or credentials)
+            <label>Exact data-only materialization draft or resolution binding for manual handoff (no passkeys or credentials)
               <textarea id="setup-policy-file-draft" class="policy-result" spellcheck="false" autocomplete="off"></textarea></label>
             <button type="button" class="secondary" onclick="runUiAction('Review publication draft', setupPolicyFileImport)">Review this same draft; do not create a replacement</button>
             <label>Exact approval ID <input id="setup-policy-file-approval" maxlength="36" autocomplete="off"></label>
-            <label><input id="setup-policy-file-confirm" type="checkbox">I reviewed the exact Setup owner, candidate, signed policy bytes, existing-file pin and this publication ID.</label>
+            <label><input id="setup-policy-file-confirm" type="checkbox">I reviewed the exact publication binding and its displayed materialization or resolution purpose. Resolution does not retry materialization.</label>
             <pre id="setup-policy-file-review">No publication draft reviewed.</pre>
             <button type="button" onclick="runUiAction('Request policy publication approval', () => setupPolicyFileEffect('request'))">Requester passkey + request once (expects 428)</button>
             <button type="button" onclick="runUiAction('Approve policy publication', () => setupPolicyFileEffect('decide'))">Distinct publisher passkey + approve once</button>
-            <button type="button" onclick="runUiAction('Materialize policy file', () => setupPolicyFileEffect('consume'))">Requester NEW passkey + materialize once</button>
+            <button type="button" onclick="runUiAction('Execute reviewed policy-file purpose', () => setupPolicyFileEffect('consume'))">Requester NEW passkey + execute reviewed purpose once</button>
             <button type="button" class="secondary" onclick="runUiAction('Read publication journal', setupPolicyFileInspect)">Read publication journal; never unlock retry</button>
+            <h5>Separate resolution of an uncertain ordinary publication</h5>
+            <p class="hint">Read the journal, select its exact incomplete intent and explicitly request an outcome. The server checks retained file bytes and inode identity; file absence is not proof of nonexecution. Resolution uses separate publisher approval and never repeats a rename. Existing materialization attempt locks remain.</p>
+            <label>Retained publication intent <select id="setup-policy-file-resolution-target"><option value="">Read the journal, then select an intent</option></select></label>
+            <label>Requested resolution <select id="setup-policy-file-resolution-outcome"><option value="">Choose explicitly; no outcome is inferred</option><option value="finalize-installed">Finalize only if the exact file was installed</option><option value="abandon-uninstalled">Abandon only if the exact old file and staged original remain</option></select></label>
+            <label>Resolution reason (optional) <textarea id="setup-policy-file-resolution-reason" maxlength="500"></textarea></label>
+            <button type="button" class="secondary" onclick="runUiAction('Review separate policy-file resolution', setupPolicyFileResolveDraft)">Review this resolution; no effect</button>
             <button type="button" class="secondary" onclick="runUiAction('Observe installed Setup policy', setupPolicyInstalled)">Owner: observe CONTROL-PLANE loader only</button>
             <pre id="setup-policy-file-observation">No installation observation. nativeGateVerified: false.</pre>
             <p id="setup-policy-file-status" class="hint" role="status" aria-live="polite">No publication sent. Share only the unchanged data-only draft and nonsecret IDs; uncertain effects remain locked locally.</p>
@@ -198,13 +204,15 @@ SETUP_POLICY_SCRIPT = r"""
     const setupFileBytes = value => new TextEncoder().encode(value);
     const setupFileId = value => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
     function setupFileMessage(text) { $('setup-policy-file-status').textContent = text; }
-    function setupFileBegin(held = null) {
+    function setupFileBegin(held = null, mode = 'materialize') {
       setupPolicyNeed(!setupPolicyBusy && window.isSecureContext && window.top === window && !adminToken()
         && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
         && state.authStatus.roles.includes('policy_publisher'));
       const actor = state.authStatus.userId, scope = sessionActivationAuthScope(), session = $('setup-policy-session').value.trim();
       const draft = $('setup-policy-file-draft').value, approval = $('setup-policy-file-approval').value.trim();
-      setupPolicyNeed(nativeSetupId(session));
+      const resolutionSelection = JSON.stringify(['target', 'outcome', 'reason'].map(name => $('setup-policy-file-resolution-' + name).value));
+      setupPolicyNeed(['materialize', 'resolve', 'inspect'].includes(mode)
+        && (nativeSetupId(session) || mode !== 'materialize' && session === ''));
       const controller = new AbortController(), until = performance.now() + 30000, expires = Date.now() + 30000;
       const timer = setTimeout(() => controller.abort(), 30000); setupPolicyBusy = true;
       return {actor, scope, session, approval, signal: controller.signal, current() {
@@ -212,9 +220,11 @@ SETUP_POLICY_SCRIPT = r"""
           && !adminToken() && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
           && state.authStatus.userId === actor && state.authStatus.roles.includes('policy_publisher')
           && sessionActivationAuthScope() === scope && $('setup-policy-session').value.trim() === session
-          && $('setup-policy-file-draft').value === draft && $('setup-policy-file-approval').value.trim() === approval);
+          && $('setup-policy-file-draft').value === draft && $('setup-policy-file-approval').value.trim() === approval
+          && JSON.stringify(['target', 'outcome', 'reason'].map(name => $('setup-policy-file-resolution-' + name).value)) === resolutionSelection);
         if (held) setupPolicyNeed(setupFileHeld === held && held.raw === draft && held.session === session
-          && $('setup-policy-file-confirm').checked);
+          && $('setup-policy-file-confirm').checked
+          && (held.binding.kind !== 'resolve' || held.resolutionSelection === resolutionSelection));
       }, close() { clearTimeout(timer); controller.abort(); setupPolicyBusy = false; }};
     }
     async function setupFileCookie(operation) {
@@ -229,7 +239,7 @@ SETUP_POLICY_SCRIPT = r"""
     async function setupFileCall(path, body, operation, sent = null) {
       const get = body === null;
       setupPolicyNeed(get ? [setupFileBase, '/api/control-plane/approvals?limit=100'].includes(path)
-        : [setupFileBase + '/webauthn/options', setupFileBase + '/materialize'].includes(path)
+        : [setupFileBase + '/webauthn/options', setupFileBase + '/materialize', setupFileBase + '/resolve'].includes(path)
           || /^\/api\/control-plane\/approvals\/[0-9a-f-]{36}\/approve$/.test(path));
       let original = null, csrf = null;
       try {
@@ -246,8 +256,9 @@ SETUP_POLICY_SCRIPT = r"""
         return {status: response.status, ok: response.ok, value: await setupPolicyRead(response, operation)};
       } finally { original = null; csrf = null; }
     }
-    function setupFileHistory(session) {
-      const key = 'serverware.setup-policy.file-attempts:' + session, raw = sessionStorage.getItem(key);
+    function setupFileHistory(session, resolution = false) {
+      const key = (resolution ? 'serverware.setup-policy.file-resolution-attempts:' : 'serverware.setup-policy.file-attempts:') + session;
+      const raw = sessionStorage.getItem(key);
       setupPolicyNeed(raw === null || setupFileBytes(raw).length <= 65536);
       const rows = raw === null ? [] : oauthConsentParse(raw, 65536).value;
       setupPolicyNeed(Array.isArray(rows) && rows.length <= 32 && rows.every(row =>
@@ -267,9 +278,71 @@ SETUP_POLICY_SCRIPT = r"""
       return history.rows.some(row => row.phase === phase && (phase === 'request'
         || row.publicationId === held.body.publicationId || row.approvalId === approval));
     }
+    function setupFileAttemptHistory(held, session) {
+      return held.binding.kind === 'resolve' ? setupFileHistory(held.body.publicationId, true) : setupFileHistory(session);
+    }
+    async function setupFileJournal(operation) {
+      const reply = await setupFileCall(setupFileBase, null, operation), value = reply.value;
+      setupPolicyNeed(reply.ok && oauthConsentClosed(value, ['schema', 'fileSha256', 'automaticRetryAllowed',
+        'incompletePublicationId', 'terminalSha256', 'attempts', 'terminalMatches'])
+        && value.schema === 'serverware.policyFilePublicationObservation/v1' && value.automaticRetryAllowed === false
+        && (value.fileSha256 === null || oauthConsentDigest(value.fileSha256))
+        && (value.terminalSha256 === null || oauthConsentDigest(value.terminalSha256))
+        && (value.incompletePublicationId === null || setupFileId(value.incompletePublicationId))
+        && typeof value.terminalMatches === 'boolean' && Array.isArray(value.attempts) && value.attempts.length <= 16
+        && value.attempts.every(item => oauthConsentClosed(item, ['publicationId', 'intentSha256', 'binding', 'resolutionClaimed'])
+          && setupFileId(item.publicationId) && oauthConsentDigest(item.intentSha256) && typeof item.resolutionClaimed === 'boolean'
+          && item.binding?.publicationId === item.publicationId)
+        && new Set(value.attempts.map(item => item.publicationId)).size === value.attempts.length);
+      operation.current(); return value;
+    }
+    function setupFileResolutionIntent(observed, binding) {
+      const matches = observed.attempts.filter(item => item.publicationId === binding.publicationId);
+      setupPolicyNeed(observed.incompletePublicationId === binding.publicationId && matches.length === 1
+        && matches[0].intentSha256 === binding.intentSha256 && matches[0].resolutionClaimed === false
+        && matches[0].binding.kind === 'materialize');
+      return oauthConsentCanonical(matches[0].binding);
+    }
+    async function setupFileResolutionAccept(raw, operation, observed = null) {
+      setupPolicyNeed(setupFileBytes(raw).length <= 8192);
+      const binding = oauthConsentParse(raw, 8192).value;
+      setupPolicyNeed(oauthConsentClosed(binding, ['kind', 'publicationId', 'intentSha256', 'outcome', 'reason'])
+        && binding.kind === 'resolve' && oauthConsentCanonical(binding) === raw && setupFileId(binding.publicationId)
+        && oauthConsentDigest(binding.intentSha256) && ['finalize-installed', 'abandon-uninstalled'].includes(binding.outcome)
+        && (binding.reason === null || typeof binding.reason === 'string' && Array.from(binding.reason).length <= 500));
+      const materialOriginal = setupFileResolutionIntent(observed || await setupFileJournal(operation), binding);
+      const digest = await workloadIssuanceHash(setupFileBytes(raw)); operation.current();
+      const body = {publicationId: binding.publicationId, intentSha256: binding.intentSha256, outcome: binding.outcome, reason: binding.reason};
+      $('setup-policy-file-review').textContent = 'SEPARATE RESOLUTION — data-only requested outcome, not proof of installation or permission to retry.\n'
+        + 'Exact resolution binding:\n' + raw + '\nPayload digest: ' + digest + '\nRetained materialization binding:\n' + materialOriginal
+        + '\nA current publisher requests; a different publisher approves; the same requester supplies a NEW passkey. The server alone checks the actual file outcome.';
+      const resolutionSelection = JSON.stringify(['target', 'outcome', 'reason'].map(name => $('setup-policy-file-resolution-' + name).value));
+      return {raw, session: operation.session, draft: {bindingOriginal: raw}, continuation: null, body, binding, digest, materialOriginal, resolutionSelection};
+    }
+    async function setupFileRecheckResolution(held, operation) {
+      if (held.binding.kind !== 'resolve') return;
+      setupPolicyNeed(setupFileResolutionIntent(await setupFileJournal(operation), held.binding) === held.materialOriginal);
+      operation.current();
+    }
+    async function setupPolicyFileResolveDraft() {
+      const operation = setupFileBegin(null, 'resolve'); setupFileHeld = null; $('setup-policy-file-confirm').checked = false;
+      try {
+        const publicationId = $('setup-policy-file-resolution-target').value, outcome = $('setup-policy-file-resolution-outcome').value;
+        const reason = $('setup-policy-file-resolution-reason').value || null;
+        setupPolicyNeed(setupFileId(publicationId) && ['finalize-installed', 'abandon-uninstalled'].includes(outcome));
+        await setupFileCookie(operation);
+        const observed = await setupFileJournal(operation), matches = observed.attempts.filter(item => item.publicationId === publicationId);
+        setupPolicyNeed(matches.length === 1);
+        const raw = oauthConsentCanonical({kind: 'resolve', publicationId, intentSha256: matches[0].intentSha256, outcome, reason});
+        const held = await setupFileResolutionAccept(raw, operation, observed); operation.current();
+        $('setup-policy-file-draft').value = raw; setupFileHeld = held;
+        setupFileMessage('Resolution binding reviewed only. No outcome inferred or effect sent. Clear the approval ID yourself before a new request; share this unchanged binding and its actual approval ID for the separate ceremony.');
+      } finally { operation.close(); }
+    }
     async function setupFileAccept(raw, operation) {
       setupPolicyNeed(typeof raw === 'string' && setupFileBytes(raw).length <= setupPolicyMaximumResponse);
       const draft = oauthConsentParse(raw, setupPolicyMaximumResponse).value;
+      if (draft?.kind === 'resolve') return setupFileResolutionAccept(raw, operation);
       setupPolicyNeed(oauthConsentClosed(draft, ['apiVersion', 'okForAction', 'automaticRetryAllowed', 'continuationOriginal', 'requestOriginal', 'bindingOriginal'])
         && draft.apiVersion === 'serverware.setupPolicyMaterializationDraft/v1' && draft.okForAction === false && draft.automaticRetryAllowed === false);
       for (const [name, maximum] of [['continuationOriginal', 2170880], ['requestOriginal', 1400000], ['bindingOriginal', 8192]]) {
@@ -319,8 +392,10 @@ SETUP_POLICY_SCRIPT = r"""
       } finally { operation.close(); }
     }
     async function setupPolicyFileImport() {
-      const operation = setupFileBegin(); setupFileHeld = null; $('setup-policy-file-confirm').checked = false;
-      try { await setupFileCookie(operation); setupFileHeld = await setupFileAccept($('setup-policy-file-draft').value, operation);
+      const raw = $('setup-policy-file-draft').value;
+      const resolving = oauthConsentParse(raw, setupPolicyMaximumResponse).value?.kind === 'resolve';
+      const operation = setupFileBegin(null, resolving ? 'resolve' : 'materialize'); setupFileHeld = null; $('setup-policy-file-confirm').checked = false;
+      try { await setupFileCookie(operation); setupFileHeld = await setupFileAccept(raw, operation);
         setupFileMessage('Data-only draft reviewed. An approval phase also requires the actual authenticated approval row and a fresh hardware assertion.');
       } finally { operation.close(); }
     }
@@ -333,9 +408,11 @@ SETUP_POLICY_SCRIPT = r"""
       // The authenticated listing exposes parsed `request`, not request_json.
       // Exact-integer canonicalization must reproduce the reviewed binding and
       // its stored digest; real effect owners still check the DB original.
-      setupPolicyNeed(row.action === 'policy.file.materialize' && row.resource_id === 'active-policy-file'
+      const resolving = held.binding.kind === 'resolve';
+      setupPolicyNeed(row.action === (resolving ? 'policy.file.resolve' : 'policy.file.materialize') && row.resource_id === 'active-policy-file'
         && row.payload_digest === held.digest && row.request && oauthConsentCanonical(row.request) === held.draft.bindingOriginal
-        && row.requester_id === held.continuation.owner_id && oauthConsentText(row.requester_id, 512)
+        && (resolving || row.requester_id === held.continuation.owner_id) && oauthConsentText(row.requester_id, 512)
+        && row.requester_id.startsWith('oidc:')
         && typeof row.expires_at === 'string' && row.expires_at.length <= 128 && Date.parse(row.expires_at) > Date.now());
       setupPolicyNeed(phase === 'decide' ? row.status === 'pending' && row.requester_id !== operation.actor && row.approved_by === null
         : row.status === 'approved' && row.requester_id === operation.actor && oauthConsentText(row.approved_by, 512) && row.approved_by !== operation.actor);
@@ -343,15 +420,16 @@ SETUP_POLICY_SCRIPT = r"""
     }
     async function setupPolicyFileEffect(phase) {
       setupPolicyNeed(['request', 'decide', 'consume'].includes(phase) && setupFileHeld && $('setup-policy-file-confirm').checked);
-      const held = setupFileHeld, operation = setupFileBegin(held); let assertion = null, sent = false;
+      const held = setupFileHeld, operation = setupFileBegin(held, held.binding.kind === 'resolve' ? 'resolve' : 'materialize'); let assertion = null, sent = false;
       try {
-        const history = setupFileHistory(operation.session);
+        const resolving = held.binding.kind === 'resolve', action = resolving ? 'policy.file.resolve' : 'policy.file.materialize';
+        const history = setupFileAttemptHistory(held, operation.session);
         setupPolicyNeed(!setupFileBlocked(history, held, phase, operation.approval) && history.rows.length < 32);
-        await setupFileCookie(operation);
+        await setupFileCookie(operation); await setupFileRecheckResolution(held, operation);
         const row = phase === 'request' ? null : await setupFileApproval(held, phase, operation);
-        if (phase !== 'decide') setupPolicyNeed(held.continuation.owner_id === operation.actor && state.authStatus.roles.includes('credential_owner'));
+        if (!resolving && phase !== 'decide') setupPolicyNeed(held.continuation.owner_id === operation.actor && state.authStatus.roles.includes('credential_owner'));
         if (phase === 'request') setupPolicyNeed(operation.approval === '');
-        const optionsBody = {apiVersion: setupFileOptions, action: 'policy.file.materialize', resourceId: 'active-policy-file',
+        const optionsBody = {apiVersion: setupFileOptions, action, resourceId: 'active-policy-file',
           payloadDigest: held.digest, request: held.binding}; if (row) optionsBody.approvalId = row.id;
         const optionsReply = await setupFileCall(setupFileBase + '/webauthn/options', optionsBody, operation);
         const options = optionsReply.value, proof = options?.serverware;
@@ -364,12 +442,13 @@ SETUP_POLICY_SCRIPT = r"""
         // Refresh the same real approval immediately before the effect; never
         // take a UI flag, draft, row status from storage or missing row as permission.
         if (row) await setupFileApproval(held, phase, operation);
+        await setupFileRecheckResolution(held, operation);
         const mfa = {publicationProfile: setupFileOptions, assertion}; if (phase === 'consume') mfa.approvalId = row.id;
-        const path = phase === 'decide' ? '/api/control-plane/approvals/' + row.id + '/approve' : setupFileBase + '/materialize';
+        const path = phase === 'decide' ? '/api/control-plane/approvals/' + row.id + '/approve' : setupFileBase + (resolving ? '/resolve' : '/materialize');
         const body = phase === 'decide' ? {note: null, mfa} : {...held.body, mfa};
         let marker;
         const reply = await setupFileCall(path, body, operation, () => {
-          const current = setupFileHistory(operation.session);
+          const current = setupFileAttemptHistory(held, operation.session);
           setupPolicyNeed(!setupFileBlocked(current, held, phase, operation.approval) && current.rows.length < 32);
           marker = {phase, publicationId: held.body.publicationId, payloadDigest: held.digest,
             approvalId: row?.id || null, actorId: operation.actor, status: 'unresolved'};
@@ -379,10 +458,10 @@ SETUP_POLICY_SCRIPT = r"""
         if (phase === 'request') {
           const detail = reply.value?.detail;
           setupPolicyNeed(reply.status === 428 && detail?.error === 'control_plane_approval_required' && nativeSetupId(detail.approvalId)
-            && detail.status === 'pending' && detail.action === 'policy.file.materialize' && detail.resourceId === 'active-policy-file' && detail.payloadDigest === held.digest);
+            && detail.status === 'pending' && detail.action === action && detail.resourceId === 'active-policy-file' && detail.payloadDigest === held.digest);
           marker.approvalId = detail.approvalId; marker.status = 'approval-observed'; setupFileSave(history);
           $('setup-policy-file-approval').value = detail.approvalId;
-          setupFileMessage('Pending approval observed, not materialization. Give the same draft and approval ID to a DIFFERENT policy_publisher.');
+          setupFileMessage('Pending approval observed, not completion. Give the same reviewed binding and approval ID to a DIFFERENT policy_publisher.');
         } else if (phase === 'decide') {
           setupPolicyNeed(reply.ok && reply.value.id === row.id && reply.value.status === 'approved'
             && reply.value.requester_id === row.requester_id && reply.value.approved_by === operation.actor && reply.value.payload_digest === held.digest);
@@ -392,20 +471,25 @@ SETUP_POLICY_SCRIPT = r"""
           const value = reply.value;
           setupPolicyNeed(reply.ok && oauthConsentClosed(value, ['schema', 'ok', 'publicationId', 'completionSha256', 'outcome', 'automaticRetryAllowed'])
             && value.schema === 'serverware.policyFilePublicationResult/v1' && value.ok === true && value.publicationId === held.body.publicationId
-            && oauthConsentDigest(value.completionSha256) && value.outcome === 'materialized' && value.automaticRetryAllowed === false);
+            && oauthConsentDigest(value.completionSha256) && value.outcome === (resolving ? held.binding.outcome : 'materialized') && value.automaticRetryAllowed === false);
           marker.status = 'completion-observed'; setupFileSave(history);
-          setupFileMessage('Materializer completion observed. This is NOT native gate verification, proxy readiness, action authorization or Setup completion. Use the separate installed observation.');
+          setupFileMessage((resolving ? 'Resolution completion observed; materialization was not repeated and its old attempt locks remain. ' : 'Materializer completion observed. ')
+            + 'This is NOT native gate verification, proxy readiness, action authorization or Setup completion. Use the separate installed observation.');
         }
       } catch (error) { setupFileMessage(sent ? 'Outcome may be unresolved. Keep the nonsecret IDs and inspect only; the dispatched ceremony remains locked and must not be resent.'
-          : 'No materialization/approval effect sent. Required role, unchanged draft, approval or fresh passkey was unavailable.'); throw error;
+          : 'No materialization/resolution/approval effect sent. Required role, unchanged intent, approval or fresh passkey was unavailable.'); throw error;
       } finally { assertion = null; setupFileHeld = null; $('setup-policy-file-confirm').checked = false; operation.close(); }
     }
     async function setupPolicyFileInspect() {
-      const operation = setupFileBegin();
-      try { await setupFileCookie(operation); const reply = await setupFileCall(setupFileBase, null, operation), value = reply.value;
-        setupPolicyNeed(reply.ok && value?.schema === 'serverware.policyFilePublicationObservation/v1'
-          && value.automaticRetryAllowed === false && Array.isArray(value.attempts) && value.attempts.length <= 16);
+      const operation = setupFileBegin(null, 'inspect');
+      try { await setupFileCookie(operation); const value = await setupFileJournal(operation);
         $('setup-policy-file-observation').textContent = oauthConsentCanonical(value);
+        const target = $('setup-policy-file-resolution-target'), selected = target.value;
+        const candidates = value.attempts.filter(item => item.publicationId === value.incompletePublicationId
+          && item.resolutionClaimed === false && item.binding.kind === 'materialize');
+        target.innerHTML = '<option value="">Select the exact incomplete ordinary intent</option>' + candidates.map(item =>
+          `<option value="${esc(item.publicationId)}">${esc(item.publicationId)} / ${esc(item.intentSha256)}</option>`).join('');
+        target.value = candidates.some(item => item.publicationId === selected) ? selected : '';
         setupFileMessage('Read-only bounded journal observation. Missing or incomplete publication remains unknown; no local marker was cleared and no retry was authorized.');
       } finally { operation.close(); }
     }

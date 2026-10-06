@@ -123,6 +123,52 @@ class ChallengeIndexTests(unittest.TestCase):
         self.assertEqual(len(projection.INDEX_IDS), 24)
         self.assertEqual(len(projection.index_ids_for_table("webauthn_challenges")), 9)
 
+    def test_sql_identity_guards_select_exact_layout_and_independent_commitments(self):
+        # Render the actual shared source guards; SQL execution is a separate
+        # PostgreSQL fixture, not simulated by this pure regression.
+        import re
+        from serverware.authority_store import counted_path_sql as path
+        from serverware.authority_store import counted_store_sql as store
+
+        compact = lambda value: " ".join(value.split())
+        guard = compact(store._key_identity_check(
+            "index_id", "index_key", "primary_id", "primary_key_digest"))
+        rosters = re.findall(r'WHEN index_id COLLATE "C" IN \(([^)]+)\) THEN', guard)
+        self.assertEqual(len(rosters), 2)
+        challenge, legacy = [re.findall(r"'([^']*)'", roster) for roster in rosters]
+        expected_challenge = {
+            name for name in projection.INDEX_IDS
+            if projection._definition(name).document()["keySuffix"]
+                == "UUID36-class0-padded16-or-sha256-class1/zero7/exact-text-order"
+        }
+        self.assertEqual(len(expected_challenge), 7)
+        self.assertEqual(set(challenge), expected_challenge)
+        self.assertEqual(set(legacy), set(projection.INDEX_IDS) - expected_challenge)
+        self.assertCountEqual(challenge + legacy, projection.INDEX_IDS)
+        self.assertNotIn("unknown_profile", challenge + legacy)
+        self.assertEqual(guard.count("ELSE FALSE"), 2)
+        self.assertTrue(guard.endswith("ELSE FALSE END)"))
+        for length, pattern, suffix in (
+            (36, ids.UUID_PATTERN, "'00' || pg_catalog.replace(primary_id, '-', '') || pg_catalog.repeat('0', 46)"),
+            (71, ids.SHA_PATTERN, "'01' || pg_catalog.substr(primary_id, 8) || pg_catalog.repeat('0', 14)"),
+        ):
+            self.assertIn(f'pg_catalog.octet_length(primary_id) = {length} AND primary_id COLLATE "C" ~ \'^{pattern}$\'', guard)
+            self.assertIn(f'pg_catalog.substr(index_key, 81) COLLATE "C" = ({suffix}) COLLATE "C"', guard)
+        self.assertIn('pg_catalog.substr(index_key, 97) COLLATE "C" = pg_catalog.substr(primary_key_digest, 8) COLLATE "C"', guard)
+        leaves = compact(store.counted_store_ddl('"fixture"')[1])
+        self.assertIn(f"CONSTRAINT counted_leaves_suffix CHECK ( {guard} IS TRUE )", leaves)
+
+        rendered_path = compact(path.counted_path_functions_sql('"fixture"')[0])
+        self.assertIn('identity_digest := "fixture".serverware_policy_authority_domain_digest( '
+            "'serverware.policyAuthorityBusinessKey/v1',source_table, "
+            '\"fixture\".serverware_policy_authority_wire_json(pg_catalog.jsonb_build_object(\'id\',event_id)));', rendered_path)
+        for side in ("old", "new"):
+            self.assertIn(f"{side}_primary_key_digest := projected.primary_key_digest;", rendered_path)
+            side_guard = compact(store._key_identity_check(
+                "index_identity", f"{side}_key", "event_id", "identity_digest"))
+            self.assertIn(f'{side}_member AND ({side}_primary_key_digest COLLATE "C" '
+                f'IS DISTINCT FROM identity_digest COLLATE "C" OR {side_guard} IS NOT TRUE)', rendered_path)
+
     def test_count_trace_shape_cannot_authorize_other_profiles_or_tables(self):
         key = dict(profile=trace.COUNT_READ_PROFILE,
             indexId="webauthn_challenge_unused_global", projectionDigest=PK,

@@ -18,6 +18,7 @@ import re
 
 from serverware import authority_index_contract as contract
 from serverware import authority_index_projection as projection
+from serverware import authority_challenge_id as challenge_ids
 
 
 COUNTED_STORE_TABLES = (
@@ -47,6 +48,50 @@ def _digest_check(column: str) -> str:
         f"AND pg_catalog.translate(pg_catalog.substr({column}, 8), "
         "'0123456789abcdef', '') COLLATE \"C\" = '' COLLATE \"C\""
     )
+
+
+def _key_identity_check(index_id: str, index_key: str, primary_id: str,
+                        primary_key_digest: str) -> str:
+    """Render the fixed profile's key suffix check from source SQL expressions.
+
+    This checks representation, not the independently derived BusinessKey or
+    row commitment. Callers must keep those checks and reject a NULL result.
+    Unknown source codecs are not silently assigned the legacy key layout.
+    """
+    challenge, legacy = [], []
+    challenge_codecs = {
+        prefix + projection._CHALLENGE_ORDER_SUFFIX
+        for prefix in ("zero8", "signed64-expires_at", "signed64-created_at", "signed64-used_at")
+    }
+    legacy_codecs = {
+        "zero16", "signed64-expiry-microseconds/zero8",
+        "signed64-rollback-epoch/signed64-sequence",
+    }
+    for source_id in projection.INDEX_IDS:
+        definition = projection._definition(source_id)
+        if definition.order_codec in challenge_codecs and ("id", "challenge-id") in definition.row_fields:
+            challenge.append(f"'{source_id}'")
+        elif definition.order_codec in legacy_codecs and ("id", "text") in definition.row_fields:
+            legacy.append(f"'{source_id}'")
+        else:
+            raise ValueError("counted key identity codec is not source admitted")
+    return f"""(CASE
+        WHEN {index_id} COLLATE "C" IN ({', '.join(challenge)}) THEN
+            CASE
+                WHEN pg_catalog.octet_length({primary_id}) = 36
+                    AND {primary_id} COLLATE "C" ~ '^{challenge_ids.UUID_PATTERN}$'
+                THEN pg_catalog.substr({index_key}, 81) COLLATE "C" =
+                    ('00' || pg_catalog.replace({primary_id}, '-', '') || pg_catalog.repeat('0', 46)) COLLATE "C"
+                WHEN pg_catalog.octet_length({primary_id}) = 71
+                    AND {primary_id} COLLATE "C" ~ '^{challenge_ids.SHA_PATTERN}$'
+                THEN pg_catalog.substr({index_key}, 81) COLLATE "C" =
+                    ('01' || pg_catalog.substr({primary_id}, 8) || pg_catalog.repeat('0', 14)) COLLATE "C"
+                ELSE FALSE
+            END
+        WHEN {index_id} COLLATE "C" IN ({', '.join(legacy)}) THEN
+            pg_catalog.substr({index_key}, 97) COLLATE "C" = pg_catalog.substr({primary_key_digest}, 8) COLLATE "C"
+        ELSE FALSE
+    END)"""
 
 
 def counted_store_ddl(namespace: str) -> tuple[str, str, str]:
@@ -126,7 +171,7 @@ def counted_store_ddl(namespace: str) -> tuple[str, str, str]:
             CONSTRAINT counted_leaves_key_digest CHECK ({_digest_check('primary_key_digest')}),
             CONSTRAINT counted_leaves_row_digest CHECK ({_digest_check('primary_row_digest')}),
             CONSTRAINT counted_leaves_suffix CHECK (
-                pg_catalog.substr(index_key, 97) COLLATE "C" = pg_catalog.substr(primary_key_digest, 8) COLLATE "C"
+                {_key_identity_check('index_id', 'index_key', 'primary_id', 'primary_key_digest')} IS TRUE
             ),
             CONSTRAINT counted_leaves_revision CHECK (index_revision > 0)
         )

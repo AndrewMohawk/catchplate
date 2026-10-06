@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from serverware import authority_index_contract as contract
 from serverware import authority_index_projection as projection
+from serverware.authority_store.counted_store_sql import _key_identity_check
 from serverware.authority_store.primary_tree_sql import _namespace
 
 
@@ -83,6 +84,8 @@ def counted_path_functions_sql(namespace: str) -> tuple[str, ...]:
             identity_digest text;
             old_key text;
             new_key text;
+            old_primary_key_digest text;
+            new_primary_key_digest text;
             old_row_digest text;
             new_row_digest text;
             old_leaf_digest text;
@@ -167,8 +170,10 @@ def counted_path_functions_sql(namespace: str) -> tuple[str, ...]:
                     END IF;
                     IF image_number = 1 THEN
                         old_member := true; old_key := projected.index_key; old_row_digest := projected.primary_row_digest;
+                        old_primary_key_digest := projected.primary_key_digest;
                     ELSE
                         new_member := true; new_key := projected.index_key; new_row_digest := projected.primary_row_digest;
+                        new_primary_key_digest := projected.primary_key_digest;
                     END IF;
                 END LOOP;
             END LOOP;
@@ -179,8 +184,13 @@ def counted_path_functions_sql(namespace: str) -> tuple[str, ...]:
             identity_digest := {namespace}.serverware_policy_authority_domain_digest(
                 'serverware.policyAuthorityBusinessKey/v1',source_table,
                 {namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_build_object('id',event_id)));
-            IF old_member AND pg_catalog.substr(old_key,97) COLLATE "C" IS DISTINCT FROM pg_catalog.substr(identity_digest,8) COLLATE "C"
-                OR new_member AND pg_catalog.substr(new_key,97) COLLATE "C" IS DISTINCT FROM pg_catalog.substr(identity_digest,8) COLLATE "C"
+            -- Challenge profiles order by the source ID, not its business-key
+            -- hash. Check the independently derived commitment and the exact
+            -- source-selected layout, retaining the legacy suffix constraint.
+            IF old_member AND (old_primary_key_digest COLLATE "C" IS DISTINCT FROM identity_digest COLLATE "C"
+                    OR {_key_identity_check('index_identity', 'old_key', 'event_id', 'identity_digest')} IS NOT TRUE)
+                OR new_member AND (new_primary_key_digest COLLATE "C" IS DISTINCT FROM identity_digest COLLATE "C"
+                    OR {_key_identity_check('index_identity', 'new_key', 'event_id', 'identity_digest')} IS NOT TRUE)
             THEN RAISE EXCEPTION 'counted path projected key identity changed'; END IF;
 
             seen := 0;

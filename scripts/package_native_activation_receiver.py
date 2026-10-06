@@ -21,6 +21,7 @@ OUTPUT = Path("/activation-receiver-root")
 RECEIVER = "/etc/serverware/native-shadow-activation-receiver.json"
 DELIVERY = "/etc/serverware/native-activation-delivery.json"
 SUPERVISOR = "/opt/serverware/serverware-native-shadow-guest-supervisor"
+BOOTSTRAP = "/usr/local/libexec/serverware-native-enclave-entrypoint"
 MANIFEST = "/usr/share/serverware/native-activation-receiver.json"
 FIELDS = {"apiVersion", "sourceManifestSha256", "receiverConfigurationSha256", "deliveryConfigurationSha256"}
 FILES = {"inputs.json": 16384, "receiver.json": 32768, "delivery-configuration.json": 65536}
@@ -100,6 +101,14 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
         "sourceManifestSha256": source_sha256, "inputManifestSha256": expected_sha256,
         **({"publicInstallationSignatureRequired": True} if installation else {}),
         "command": [SUPERVISOR, "--activation-receiver"], "environment": {},
+        **({"enclaveBootstrap": {
+            "command": [BOOTSTRAP, "--activation-receiver-v1"],
+            "journalPath": "/var/lib/serverware/native-activation",
+            "journalProvisionedByImage": False,
+            "controlConnection": {"family": "AF_VSOCK", "peerCid": 3, "peerPort": 9103},
+            "controlTransportAuthority": False,
+            "receiverDescriptorsCreatedInsideGuest": True,
+        }} if installation else {}),
         "exactInheritedFdSet": [0, 1, 2, 6],
         "inheritedFds": {"0": {"kind": "fifo", "access": "read-only", "purpose": "completion"},
                          "1": {"kind": "fifo", "access": "write-only", "purpose": "observation"}, "2": "stderr",
@@ -110,7 +119,8 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
         "requiredExternalResources": ["actual service-enclave kernel and NSM",
             "same-process observation and independently signed late C9/service/key/closure originals",
             "privileged installation of those originals without replacing held receiver inputs",
-            "actual already-open retained journal and stdin/stdout descriptors, not Docker-created placeholders",
+            ("preprovisioned durable guest journal; bootstrap opens it and creates local receiver pipes" if installation
+             else "actual already-open retained journal and stdin/stdout descriptors, not Docker-created placeholders"),
             "separately configured untrusted parent relay; no cross-kernel descriptor transfer"],
     }
 

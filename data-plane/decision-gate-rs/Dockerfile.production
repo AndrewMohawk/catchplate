@@ -159,6 +159,7 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-native-publication-handoff \
         --bin serverware-policy-shadow-custody-guest \
         --bin serverware-native-shadow-guest-supervisor \
+        --bin serverware-native-enclave-entrypoint \
         --bin serverware-native-shadow-proof-cohort \
         --bin serverware-native-publication-genesis-controller \
         --bin serverware-native-publication-adoption-validator \
@@ -569,16 +570,23 @@ ENV ACTIVATION_RECEIVER_INPUTS_SHA256=$ACTIVATION_RECEIVER_INPUTS_SHA256
 COPY production-activation-receiver/ /activation-receiver-inputs/
 RUN --network=none python -I -B /source/scripts/package_native_activation_receiver.py
 
-# Export only: this is not a standalone Nitro init or Docker entrypoint.
-# Its public manifest requires empty environment and genuine inherited0/1/2/6;
-# an external approved launcher must provide them and install late originals.
+# Export includes the fixed guest bootstrap; it does not provision a journal,
+# credentials or NSM. The bootstrap creates only the receiver's local pipes.
 FROM scratch AS native-activation-receiver-artifact
 COPY --from=native-activation-receiver-configuration --chown=0:0 /activation-receiver-root/ /
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-enclave-entrypoint /usr/local/libexec/serverware-native-enclave-entrypoint
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /opt/serverware/serverware-native-shadow-guest-supervisor
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /opt/serverware/native-shadow-custody-runtime.squashfs
 COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /usr/share/serverware/native-shadow-custody-runtime.json
 COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/serverware/native-shadow-key-delivery-runtime.squashfs
 COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/serverware/native-shadow-key-delivery-runtime.json
+
+# Explicit service-enclave image, separate from the decision-gate default.
+# Existing NSM, role-owned durable journal and encrypted credential resources
+# must be provisioned inside the guest; no placeholder storage is created here.
+FROM native-enclave-base AS native-activation-receiver-enclave
+COPY --from=native-activation-receiver-artifact --chown=0:0 / /
+CMD ["--activation-receiver-v1"]
 
 # Preserve both the named legacy target and the Dockerfile's default target.
 FROM native-enclave-base AS native-enclave

@@ -97,6 +97,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
 }
 NATIVE_PILOT_TARGET = "native-pilot-artifacts"
 NATIVE_ACTIVATION_RECEIVER_TARGET = "native-activation-receiver-artifact"
+NATIVE_ACTIVATION_RECEIVER_IMAGE_TARGET = "native-activation-receiver-enclave"
 NATIVE_PILOT_OPERATOR_TARGET = "native-pilot-operator-artifact"
 NATIVE_PILOT_CONDUCTOR_TARGET = "native-pilot-conductor-artifact"
 NATIVE_PILOT_AUTHORITY_TARGET = "native-pilot-authority-artifact"
@@ -485,7 +486,8 @@ def copy_native_pilot_public_inputs(directory: Path, expected_sha256: str,
 
 
 def copy_activation_receiver_inputs(directory: Path, expected_sha256: str,
-                                    metadata: dict[str, Any], context: Path) -> None:
+                                    metadata: dict[str, Any], context: Path, *,
+                                    require_installation: bool = False) -> dict[str, str]:
     import package_native_activation_receiver as receiver
     receiver.digest(expected_sha256)
     if not directory.is_absolute() or directory.resolve() != directory:
@@ -501,9 +503,14 @@ def copy_activation_receiver_inputs(directory: Path, expected_sha256: str,
                             ("delivery-configuration.json", "deliveryConfigurationSha256")):
         _copy_context_file(directory / filename, destination / filename, receiver.digest(manifest[field]),
                            maximum_bytes=receiver.FILES[filename])
-    receiver.validate(manifest_raw, (destination / "receiver.json").read_bytes(),
+    packaged = receiver.validate(manifest_raw, (destination / "receiver.json").read_bytes(),
                       (destination / "delivery-configuration.json").read_bytes(),
                       expected_sha256=expected_sha256, source_sha256=metadata["source_manifest_digest"])
+    if require_installation and packaged.get("publicInstallationSignatureRequired") is not True:
+        raise RuntimeError("activation receiver image requires explicit cold-v2 installation delegation")
+    return {receiver.RECEIVER: manifest["receiverConfigurationSha256"],
+            receiver.DELIVERY: manifest["deliveryConfigurationSha256"],
+            receiver.MANIFEST: receiver.sha(receiver.canonical(packaged))}
 
 
 def _tracked_file_digests(metadata: dict[str, Any]) -> dict[str, str]:
@@ -584,6 +591,7 @@ def build_command(
     engineering_bounded_build: bool = False,
     native_pilot_bounded_build: bool = False,
     native_delivery_binding: dict[str, str] | None = None,
+    native_activation_receiver_binding: dict[str, str] | None = None,
 ) -> list[str]:
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
@@ -612,6 +620,15 @@ def build_command(
         for resource in ENGINEERING_BUILD_RESOURCES:
             command.extend(("--resource", resource))
     command.extend(pilot_resources)
+    if native_activation_receiver_binding is not None:
+        if (native_delivery_binding is not None or dockerfile != NATIVE_DELIVERY_DOCKERFILE
+                or set(native_activation_receiver_binding) != {"public_inputs_sha256", "receiver_inputs_sha256"}
+                or any(type(value) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+                       or value == "sha256:" + "0" * 64 for value in native_activation_receiver_binding.values())):
+            raise RuntimeError("activation receiver image requires its fixed Dockerfile and both public input pins")
+        command.extend(("--target", NATIVE_ACTIVATION_RECEIVER_IMAGE_TARGET,
+            "--build-arg", "SHADOW_CUSTODY_INPUTS_SHA256=" + native_activation_receiver_binding["public_inputs_sha256"],
+            "--build-arg", "ACTIVATION_RECEIVER_INPUTS_SHA256=" + native_activation_receiver_binding["receiver_inputs_sha256"]))
     if native_delivery_binding is not None:
         if (dockerfile != NATIVE_DELIVERY_DOCKERFILE
                 or set(native_delivery_binding) != {"public_key_pem_sha256", "public_key_spki_sha256"}
@@ -852,6 +869,7 @@ def main() -> None:
     parser.add_argument("--control-tag")
     parser.add_argument("--decision-gate-tag")
     parser.add_argument("--native-enclave-delivery-tag")
+    parser.add_argument("--native-activation-receiver-tag")
     parser.add_argument("--native-delivery-authority", type=Path)
     parser.add_argument("--native-delivery-authority-sha256")
     parser.add_argument("--platform", default=PRODUCTION_PLATFORM, choices=(PRODUCTION_PLATFORM,))
@@ -879,6 +897,19 @@ def main() -> None:
     if args.engineering_bounded_build and not args.development_dirty_tree:
         parser.error("--engineering-bounded-build requires --development-dirty-tree")
 
+    receiver_image_binding: dict[str, str] | None = None
+    if args.native_activation_receiver_tag is not None:
+        if not args.native_activation_receiver_tag or any(value is not None for value in (
+                args.control_tag, args.decision_gate_tag, args.native_enclave_delivery_tag,
+                args.native_delivery_authority, args.native_delivery_authority_sha256,
+                args.dockerfile, args.target, args.output, args.network)):
+            parser.error("activation receiver image requires its own non-empty tag and cannot be combined with another build mode")
+        if not all((args.shadow_custody_inputs, args.shadow_custody_inputs_sha256,
+                    args.activation_receiver_inputs, args.activation_receiver_inputs_sha256)):
+            parser.error("activation receiver image requires both separately pinned public input directories")
+        receiver_image_binding = {"public_inputs_sha256": args.shadow_custody_inputs_sha256,
+                                  "receiver_inputs_sha256": args.activation_receiver_inputs_sha256}
+
     delivery_inputs = (args.native_enclave_delivery_tag, args.native_delivery_authority,
                        args.native_delivery_authority_sha256)
     delivery_binding: dict[str, str] | None = None
@@ -893,18 +924,18 @@ def main() -> None:
             args.native_delivery_authority, args.native_delivery_authority_sha256)
 
     guest_inputs = (args.shadow_custody_inputs, args.shadow_custody_inputs_sha256)
-    if args.target in {NATIVE_PILOT_TARGET, NATIVE_ACTIVATION_RECEIVER_TARGET}:
+    if args.target in {NATIVE_PILOT_TARGET, NATIVE_ACTIVATION_RECEIVER_TARGET} or receiver_image_binding is not None:
         if not all(guest_inputs):
             parser.error("selected custody artifact requires --shadow-custody-inputs and --shadow-custody-inputs-sha256")
     elif any(guest_inputs):
         parser.error("public guest inputs require an explicit custody artifact target")
 
     receiver_inputs = (args.activation_receiver_inputs, args.activation_receiver_inputs_sha256)
-    if args.target == NATIVE_ACTIVATION_RECEIVER_TARGET:
+    if args.target == NATIVE_ACTIVATION_RECEIVER_TARGET or receiver_image_binding is not None:
         if not all(receiver_inputs):
             parser.error("receiver artifact requires --activation-receiver-inputs and --activation-receiver-inputs-sha256")
     elif any(value is not None for value in receiver_inputs):
-        parser.error("receiver inputs require the explicit native-activation-receiver-artifact target")
+        parser.error("receiver inputs require the explicit activation receiver artifact or image mode")
 
     artifact_values = (args.dockerfile, args.target, args.output, args.network)
     if any(value is not None for value in artifact_values):
@@ -1036,9 +1067,15 @@ def main() -> None:
         image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_enclave_delivery_tag)]
         output = args.out or (".tmp/development-native-enclave-delivery-build.json" if args.development_dirty_tree
                               else ".tmp/native-enclave-delivery-build.json")
+    if receiver_image_binding is not None:
+        image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_activation_receiver_tag)]
+        output = args.out or (".tmp/development-native-activation-receiver-build.json" if args.development_dirty_tree
+                              else ".tmp/native-activation-receiver-build.json")
     metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
     if delivery_binding is not None:
         metadata["native_delivery_authority"] = {**delivery_binding, "image_path": NATIVE_DELIVERY_IMAGE_KEY}
+    if receiver_image_binding is not None:
+        metadata["native_activation_receiver"] = dict(receiver_image_binding)
     resource_profile: dict[str, Any] = {}
     if args.engineering_bounded_build:
         resource_profile = {
@@ -1067,6 +1104,7 @@ def main() -> None:
                     context=placeholder_context,
                     engineering_bounded_build=args.engineering_bounded_build,
                     native_delivery_binding=delivery_binding,
+                    native_activation_receiver_binding=receiver_image_binding,
                 ),
             }
             for service, dockerfile, tag in image_specs
@@ -1091,6 +1129,11 @@ def main() -> None:
     images: list[dict[str, Any]] = []
     verify_dependency_cache()
     with private_build_context(metadata) as context:
+        receiver_image_files: dict[str, str] = {}
+        if receiver_image_binding is not None:
+            copy_native_pilot_public_inputs(args.shadow_custody_inputs, args.shadow_custody_inputs_sha256, metadata, context)
+            receiver_image_files = copy_activation_receiver_inputs(args.activation_receiver_inputs,
+                args.activation_receiver_inputs_sha256, metadata, context, require_installation=True)
         if delivery_binding is not None:
             if delivery_raw is None:
                 raise RuntimeError("native delivery public snapshot is absent")
@@ -1108,6 +1151,7 @@ def main() -> None:
                     context=context,
                     engineering_bounded_build=args.engineering_bounded_build,
                     native_delivery_binding=delivery_binding,
+                    native_activation_receiver_binding=receiver_image_binding,
                 ),
             }
             for service, dockerfile, tag in image_specs
@@ -1121,6 +1165,17 @@ def main() -> None:
             if spec["service"] == "serverware-decision-gate":
                 binary_digests = decision_gate_binary_digests(built_image_id)
             delivery_result: dict[str, Any] = {}
+            if receiver_image_binding is not None:
+                for path, expected in receiver_image_files.items():
+                    if image_file_sha256(built_image_id, path) != expected:
+                        raise RuntimeError("built activation receiver image differs from its pinned public inputs")
+                config = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config}}", built_image_id]))
+                if (config.get("Entrypoint") != ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
+                        or config.get("Cmd") != ["--activation-receiver-v1"] or config.get("User") != "0:0"):
+                    raise RuntimeError("built activation receiver image startup differs from the fixed bootstrap")
+                delivery_result = {"target": NATIVE_ACTIVATION_RECEIVER_IMAGE_TARGET,
+                                   "native_activation_receiver": dict(receiver_image_binding),
+                                   "receiver_public_files": receiver_image_files}
             if delivery_binding is not None:
                 installed_pin = image_file_sha256(built_image_id, NATIVE_DELIVERY_IMAGE_KEY)
                 if installed_pin != delivery_binding["public_key_pem_sha256"]:

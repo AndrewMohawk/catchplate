@@ -1454,6 +1454,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/build_production_images.py \
 	scripts/send_native_audit_assignment.py \
 	scripts/send_native_configuration.py \
+	scripts/send_native_activation_receiver.py \
 	scripts/prepare_native_configuration_delivery.py \
 	scripts/collect_native_public_identity.py \
 	scripts/build_native_pilot_artifacts.py \
@@ -4621,6 +4622,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/build_production_images.py \
 				scripts/send_native_audit_assignment.py \
 				scripts/send_native_configuration.py \
+				scripts/send_native_activation_receiver.py \
 				scripts/prepare_native_configuration_delivery.py \
 				scripts/collect_native_public_identity.py \
 				scripts/build_native_pilot_artifacts.py \
@@ -5813,6 +5815,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_policy_activation_stream.rs \
 				data-plane/decision-gate-rs/src/native_policy_activation_parent.rs \
 				data-plane/decision-gate-rs/src/native_activation_relay.rs \
+				data-plane/decision-gate-rs/src/native_activation_receiver_bootstrap.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/proof.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/completion.rs \

@@ -40,6 +40,7 @@ AUTHORITY_FILES = (
     "scripts/verify_nitro_tee.py",
     "scripts/authority/native_pilot_authority_io.py",
     "scripts/authority/issue_native_activation_receiver.py",
+    "scripts/send_native_activation_receiver.py",
     "scripts/authority/prepare_native_pilot_closure_set.py",
 )
 AUTHORITY_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + AUTHORITY_ENTRYPOINT, "--run-native-pilot"]

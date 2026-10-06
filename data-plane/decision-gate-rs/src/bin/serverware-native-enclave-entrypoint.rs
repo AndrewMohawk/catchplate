@@ -48,7 +48,8 @@ fn main() -> Result<(), String> {
     // inferred from a returned configuration or an incoming request.
     let mut arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     let receive_configuration = arguments.first().is_some_and(|arg| arg == "--receive-configuration-v1");
-    if receive_configuration && arguments.len() != 1 {
+    let activation_receiver = arguments.first().is_some_and(|arg| arg == "--activation-receiver-v1");
+    if (receive_configuration || activation_receiver) && arguments.len() != 1 {
         return Err("native configuration delivery accepts no caller-selected paths, commands or overrides".into());
     }
     let mode = match arguments.first().and_then(|v| v.to_str()) {
@@ -79,7 +80,7 @@ fn main() -> Result<(), String> {
     let maximum_arguments = (if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 })
         + usize::from(arguments.iter().any(|arg| arg == "--response-proof-identity-stdout"
             || arg == "--response-proof-identity-vsock"));
-    if !receive_configuration && (arguments.is_empty() || arguments.len() > maximum_arguments) {
+    if !receive_configuration && !activation_receiver && (arguments.is_empty() || arguments.len() > maximum_arguments) {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
     }
     let fd = unsafe {
@@ -93,6 +94,9 @@ fn main() -> Result<(), String> {
     device(&directory, "nsm", None)?;
     device(&directory, "loop-control", Some((10, 237)))?;
     drop(directory);
+    if activation_receiver {
+        return serverware_decision_gate::native_activation_receiver_bootstrap::run();
+    }
     let mut delivery = if receive_configuration { Some(native_preboot_delivery::receive()?) } else { None };
     if let Some(owner) = &mut delivery {
         arguments = owner.arguments();

@@ -1554,6 +1554,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_native_pilot_bridge_authorization.py \
 	scripts/authority/sign_native_pilot_generation_install.py \
 	scripts/authority/sign_native_pilot_native_service.py \
+	scripts/authority/issue_native_activation_receiver.py \
 	scripts/install_native_pilot_public_original.py \
 	scripts/install_native_pilot_precreation.py \
 	scripts/install_native_pilot_bridge.py \
@@ -2146,6 +2147,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_driver_outgoing.py \
 	serverware/native_shadow_driver_resources.py \
 	serverware/native_policy_activation_inputs.py \
+	serverware/native_activation_receiver_profile.py \
+	serverware/native_activation_receiver_installation.py \
+	serverware/native_activation_receiver_issuer.py \
 	serverware/native_policy_activation_recovery.py \
 	serverware/native_shadow_trusted_time_inputs.py \
 	serverware/authority_native_activation_completion.py \
@@ -4717,6 +4721,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_native_pilot_bridge_authorization.py \
 				scripts/authority/sign_native_pilot_generation_install.py \
 				scripts/authority/sign_native_pilot_native_service.py \
+				scripts/authority/issue_native_activation_receiver.py \
 				scripts/install_native_pilot_public_original.py \
 				scripts/install_native_pilot_precreation.py \
 				scripts/install_native_pilot_bridge.py \
@@ -5303,6 +5308,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_driver_outgoing.py \
 				serverware/native_shadow_driver_resources.py \
 				serverware/native_policy_activation_inputs.py \
+				serverware/native_activation_receiver_profile.py \
+				serverware/native_activation_receiver_installation.py \
+				serverware/native_activation_receiver_issuer.py \
 				serverware/native_policy_activation_recovery.py \
 				serverware/native_shadow_trusted_time_inputs.py \
 				serverware/authority_native_activation_completion.py \
@@ -5686,6 +5694,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/activation_receiver.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/activation_receiver_inputs.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/activation_receiver_install.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_controller.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_parked.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/publication_adoption_validator.rs \

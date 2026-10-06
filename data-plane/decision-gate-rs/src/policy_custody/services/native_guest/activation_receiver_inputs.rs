@@ -5,13 +5,19 @@ use super::*;
 use crate::policy_shadow::policy_custody::services::guest;
 use serverware_decision_gate::native_policy_activation_transport::ChannelVersion;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+#[path = "activation_receiver_install.rs"]
+mod install;
+pub(super) use install::Installed;
 
-const MAX_COMPLETION: usize = 1024;
+const MAX_COMPLETION: usize = 1024 * 1024;
 const MAX_SERVICE: usize = 65536;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Completion { api_version: String, observation_sha256: Sha256Digest, launch_sha256: Sha256Digest }
+struct LegacyCompletion { api_version: String, observation_sha256: Sha256Digest, launch_sha256: Sha256Digest }
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Completion { Legacy(LegacyCompletion), Installation(install::Completion) }
 
 // Exact existing service/v2 syntax, not a signature-verification result. The
 // child still parses the same protected original and performs its full actual
@@ -84,7 +90,9 @@ impl Input {
         require(length > 0 && length <= MAX_COMPLETION)?;
         let mut raw = vec![0u8; length]; self.exact(cold, &mut raw)?;
         require(self.read(cold, &mut [0u8; 1])? == 0)?;
-        exact(&raw)
+        let completion = exact(&raw)?;
+        if matches!(&completion, Completion::Legacy(_)) { require(length <= 1024)?; }
+        Ok(completion)
     }
 }
 
@@ -94,17 +102,29 @@ pub(super) struct Completed {
     pub(super) files: guest::FileAdmission,
     pub(super) activation: BTreeMap<String, OwnedFd>,
     pub(super) service_original: Original,
+    pub(super) installed: Option<Installed>,
 }
 impl Completed {
     pub(super) fn receive(cold: &super::activation_receiver::Cold, observation_sha: &Sha256Digest,
         channel: OwnedFd, journal: OwnedFd) -> Result<Self, ShadowError> {
         cold.check()?;
         let completion = Input::open()?.completion(cold)?;
-        require(completion.api_version == "serverware.nativeShadowActivationReceiverCompletion/v1"
-            && completion.observation_sha256 == *observation_sha)?;
+        // Keep the installation timer through real C9 file admission and the
+        // final unchanged startup recheck, not merely through the last write.
+        let (launch_sha256, installed, installation_timer) = match completion {
+            Completion::Legacy(completion) => {
+                require(completion.api_version == "serverware.nativeShadowActivationReceiverCompletion/v1"
+                    && completion.observation_sha256 == *observation_sha)?;
+                (completion.launch_sha256, None, None)
+            }
+            Completion::Installation(completion) => {
+                let (sha, owner, timer) = completion.install(cold, observation_sha)?;
+                (sha, Some(owner), Some(timer))
+            }
+        };
         let launch = Original::native_launch().map_err(fail)?;
         let launch_bytes = launch.read(32768).map_err(fail)?.to_vec();
-        require(Sha256Digest::compute(&launch_bytes) == completion.launch_sha256)?;
+        require(Sha256Digest::compute(&launch_bytes) == launch_sha256)?;
         let (selected, service) = selection(&launch_bytes)?;
         let service_pin = match service { SelectedService::Activation(pin) => pin,
             _ => return Err(ShadowError::BindingDrift) };
@@ -143,6 +163,8 @@ impl Completed {
         cold.require_delivery(&files.payload)?; files.check_preparation().map_err(fail)?;
         require(launch.read(32768).map_err(fail)?.as_slice() == launch_bytes.as_slice())?;
         service_original.check().map_err(fail)?;
-        Ok(Self { launch, launch_bytes, files, activation, service_original })
+        if let Some(owner) = &installed { owner.check()?; }
+        if let Some(timer) = &installation_timer { timer.check()?; }
+        Ok(Self { launch, launch_bytes, files, activation, service_original, installed })
     }
 }

@@ -114,7 +114,7 @@ struct Running {
     launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,inspector:Option<Inspection>,
     // Retain the same service-enclave socket and observed journal through the
     // real child's exit. The child is dropped/reaped before these owners.
-    activation_receiver:Option<(activation_receiver::Cold,Original)>,
+    activation_receiver:Option<(activation_receiver::Cold,Original,Option<activation_receiver_inputs::Installed>)>,
 }
 enum Inspection {Server(retrieval_peer::Inspector),Client(retrieval_client::Inspector),ProofClient(proof_client::Inspector)}
 impl Inspection {
@@ -137,8 +137,8 @@ impl Running {
         let (launch,launch_bytes,files,received_activation,activation_receiver)=if receiver {
             require(inherited==BTreeSet::from([0,1,2,6]))?;
             let (cold,completed)=activation_receiver::receive()?;
-            let activation_receiver_inputs::Completed{launch,launch_bytes,files,activation,service_original}=completed;
-            (launch,launch_bytes,files,Some(activation),Some((cold,service_original)))
+            let activation_receiver_inputs::Completed{launch,launch_bytes,files,activation,service_original,installed}=completed;
+            (launch,launch_bytes,files,Some(activation),Some((cold,service_original,installed)))
         }else{
             let launch=Original::native_launch().map_err(fail)?;
             let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
@@ -294,8 +294,9 @@ impl Running {
     }
     fn check_originals(&self)->Result<(),ShadowError> {
         self.files.check().map_err(fail)?;self.image.check(&self.files)?;
-        if let Some((cold,service))=&self.activation_receiver {
+        if let Some((cold,service,installed))=&self.activation_receiver {
             cold.check()?;service.check().map_err(fail)?;
+            if let Some(owner)=installed {owner.check()?;}
         }
         require(self.launch.read(32768).map_err(fail)?.as_slice()==self.launch_bytes.as_slice())?;
         for entry in &self.files.payload.activation {

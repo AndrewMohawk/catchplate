@@ -68,8 +68,15 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
             and manifest["sourceManifestSha256"] == digest(source_sha256))
     require(sha(receiver_raw) == digest(manifest["receiverConfigurationSha256"])
             and sha(delivery_raw) == digest(manifest["deliveryConfigurationSha256"]))
-    receiver = document(receiver_raw, {"apiVersion", "deliveryConfiguration"}, FILES["receiver.json"])
-    require(receiver["apiVersion"] == "serverware.nativeShadowActivationReceiverConfiguration/v1"
+    require(type(receiver_raw) is bytes and 0 < len(receiver_raw) <= FILES["receiver.json"])
+    receiver_selector = json.loads(receiver_raw.decode("ascii"), object_pairs_hook=_pairs)
+    require(type(receiver_selector) is dict)
+    receiver_api = receiver_selector.get("apiVersion")
+    installation = receiver_api == "serverware.nativeShadowActivationReceiverConfiguration/v2"
+    receiver = document(receiver_raw, {"apiVersion", "deliveryConfiguration"}
+                        | ({"installationAuthority"} if installation else set()), FILES["receiver.json"])
+    require(receiver_api in {"serverware.nativeShadowActivationReceiverConfiguration/v1",
+                             "serverware.nativeShadowActivationReceiverConfiguration/v2"}
             and receiver["deliveryConfiguration"] == {"path": DELIVERY, "sha256": sha(delivery_raw)})
     delivery = document(delivery_raw, {"apiVersion", "authority", "serviceRole", "uid", "gid"}, FILES["delivery-configuration.json"])
     require(delivery["apiVersion"] == "serverware.policyCustodyGuestConfiguration/v1"
@@ -84,10 +91,14 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
     key = base64.b64decode(encoded + "=", altchars=b"-_", validate=True)
     require(len(key) == 32 and any(key) and base64.urlsafe_b64encode(key).rstrip(b"=").decode("ascii") == encoded
             and sha(key) == digest(authority["keyId"]))
+    if installation:
+        require(receiver["installationAuthority"] == authority,
+                "receiver installation requires explicit delegation of its pinned C9 authority")
     return {
-        "apiVersion": "serverware.nativeActivationReceiverImage/v1",
+        "apiVersion": "serverware.nativeActivationReceiverImage/v2" if installation else "serverware.nativeActivationReceiverImage/v1",
         "artifactOnly": True, "releaseAuthority": False, "liveReady": False, "lateInputsInstalled": False,
         "sourceManifestSha256": source_sha256, "inputManifestSha256": expected_sha256,
+        **({"publicInstallationSignatureRequired": True} if installation else {}),
         "command": [SUPERVISOR, "--activation-receiver"], "environment": {},
         "exactInheritedFdSet": [0, 1, 2, 6],
         "inheritedFds": {"0": {"kind": "fifo", "access": "read-only", "purpose": "completion"},

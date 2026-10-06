@@ -66,6 +66,16 @@ def sign_persistence_delivery(*, configuration_raw, configuration_sha256, payloa
 def _validate_delivery_payload(*, configuration_raw, configuration_sha256, payload_raw,
                                activation, boot, startup_deadline, now, names, adopted_core=None):
     """Shared public checks; only retained callers supply actual resource facts."""
+    cold, payload = _validate_delivery_payload_fields(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw, activation=activation,
+        boot=boot, startup_deadline=startup_deadline, names=names, adopted_core=adopted_core)
+    p.require(p.ns(payload["issuedAtBoottimeNs"]) <= now < p.ns(payload["startupDeadlineBoottimeNs"]))
+    return cold, payload
+
+
+def _validate_delivery_payload_fields(*, configuration_raw, configuration_sha256, payload_raw,
+                                      activation, boot, startup_deadline, names, adopted_core=None):
+    """Original syntax and interval relationships; no current clock assertion."""
     adopted = names == ADOPTED_RETRIEVAL_NAMES
     p.require((adopted and adopted_core is not None) or (adopted_core is None and names in
         (("retrieval-listener", "retrieval-objects"), ("activation-channel", "activation-journal"),
@@ -87,7 +97,7 @@ def _validate_delivery_payload(*, configuration_raw, configuration_sha256, paylo
         and payload["invocationId"] != "0" * 32)
     issued, startup, lifetime = (p.ns(payload[name]) for name in
         ("issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"))
-    p.require(issued <= now < startup <= lifetime and startup == startup_deadline
+    p.require(issued < startup <= lifetime and startup == startup_deadline
         and startup - issued <= 30_000_000_000
         and (payload["bootIdBase64url"], payload["timeNamespaceDevice"], payload["timeNamespaceInode"]) == boot)
     p.require(type(activation) is list and len(activation) == len(names) and payload["activation"] == activation)
@@ -229,6 +239,36 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
     cold, payload = _validate_delivery_payload(configuration_raw=configuration_raw,
         configuration_sha256=configuration_sha256, payload_raw=payload_raw,
         activation=activation, boot=boot, startup_deadline=startup_deadline, now=now, names=names)
+    return _sign_validated_delivery(cold, payload, payload_raw, signing_key)
+
+
+def validate_activation_delivery_sample_anchored(*, configuration_raw, configuration_sha256,
+        payload_raw, activation, boot, observed_at_boottime_ns):
+    """Validate an explicitly approved interval anchored to an original sample.
+
+    The sample is public acquisition data, NOT a fresh same-domain clock. No
+    host clock is consulted or substituted. Delayed issuance cannot rebase the
+    interval: the actual enclave receiver still refuses an expired delivery.
+    """
+    sample = p.integer(observed_at_boottime_ns, maximum=p.MAX_U64)
+    payload = p.fields(p.document(payload_raw, MAX_DELIVERY), FIELDS)
+    p.require(p.ns(payload["issuedAtBoottimeNs"]) == sample)
+    return _validate_delivery_payload_fields(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw,
+        activation=activation, boot=boot, startup_deadline=p.ns(payload["startupDeadlineBoottimeNs"]),
+        names=("activation-channel", "activation-journal"))
+
+
+def sign_activation_delivery_sample_anchored(*, configuration_raw, configuration_sha256,
+        payload_raw, signing_key, activation, boot, observed_at_boottime_ns):
+    """Sign exact approved sample-anchored bytes, never a currentness proof."""
+    cold, payload = validate_activation_delivery_sample_anchored(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw, activation=activation,
+        boot=boot, observed_at_boottime_ns=observed_at_boottime_ns)
+    return _sign_validated_delivery(cold, payload, payload_raw, signing_key)
+
+
+def _sign_validated_delivery(cold, payload, payload_raw, signing_key):
     p.require(isinstance(signing_key, Ed25519PrivateKey))
     actual = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(actual) == cold["authority"]["publicKeyBase64url"])

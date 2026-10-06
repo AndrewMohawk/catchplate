@@ -9,7 +9,11 @@ const PORT: u32 = 9102;
 const PARENT_CID: u32 = 3;
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Configuration { api_version: String, delivery_configuration: Pin }
+struct Configuration {
+    api_version: String, delivery_configuration: Pin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    installation_authority: Option<guest::Authority>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Identity { device: u64, inode: u64, mode: u32, uid: u32, gid: u32 }
@@ -79,12 +83,22 @@ impl Cold {
         let original = Original::activation_receiver_configuration().map_err(fail)?;
         let original_bytes = original.read(32768).map_err(fail)?.to_vec();
         let configuration: Configuration = exact(&original_bytes)?;
-        require(configuration.api_version == "serverware.nativeShadowActivationReceiverConfiguration/v1")?;
+        require(match configuration.api_version.as_str() {
+            "serverware.nativeShadowActivationReceiverConfiguration/v1" => configuration.installation_authority.is_none(),
+            "serverware.nativeShadowActivationReceiverConfiguration/v2" => configuration.installation_authority.is_some(),
+            _ => false,
+        })?;
         let delivery_original = configuration.delivery_configuration.open(65536)?;
         let delivery: guest::Configuration = exact(&delivery_original.read(65536).map_err(fail)?)?;
         require(delivery.api_version == "serverware.policyCustodyGuestConfiguration/v1"
             && delivery.service_role == guest::Role::ProductionBridge
             && delivery.uid > 0 && delivery.gid > 0)?;
+        if let Some(authority) = &configuration.installation_authority {
+            // Installation is a distinct, explicit cold-v2 delegation. The old
+            // C9 configuration alone never grants protected-file provisioning.
+            require(authority.public_key_base64url == delivery.authority.public_key_base64url
+                && authority.key_id == delivery.authority.key_id)?;
+        }
         let journal_identity = identity(journal.as_fd())?;
         let flags = unsafe { libc::fcntl(journal.as_raw_fd(), libc::F_GETFL) };
         require(journal_identity.mode & libc::S_IFMT == libc::S_IFDIR
@@ -93,7 +107,9 @@ impl Cold {
             && flags >= 0 && flags & (libc::O_PATH | libc::O_ACCMODE) == libc::O_RDONLY)?;
         let value = Self { process, original, original_bytes, configuration, delivery_original,
             journal, journal_identity, journal_flags: flags, connection: None, observed_at: None };
-        value.check()?; Ok(value)
+        value.check()?;
+        if value.configuration.installation_authority.is_some() { value.installation_key()?; }
+        Ok(value)
     }
     pub(super) fn check(&self) -> Result<(), ShadowError> {
         self.process.check().map_err(fail)?;
@@ -107,6 +123,27 @@ impl Cold {
         Ok(())
     }
     pub(super) fn delivery_configuration(&self) -> &Pin { &self.configuration.delivery_configuration }
+    pub(super) fn configuration_sha256(&self) -> Sha256Digest { Sha256Digest::compute(&self.original_bytes) }
+    pub(super) fn installation_key(&self) -> Result<VerifyingKey, ShadowError> {
+        self.check()?;
+        let authority = self.configuration.installation_authority.as_ref().ok_or(ShadowError::BindingDrift)?;
+        require(self.configuration.api_version == "serverware.nativeShadowActivationReceiverConfiguration/v2")?;
+        let raw = URL_SAFE_NO_PAD.decode(&authority.public_key_base64url).map_err(fail)?;
+        require(raw.len() == 32 && raw.iter().any(|byte| *byte != 0)
+            && URL_SAFE_NO_PAD.encode(&raw) == authority.public_key_base64url
+            && Sha256Digest::compute(&raw) == authority.key_id)?;
+        VerifyingKey::from_bytes(&raw.try_into().map_err(fail)?).map_err(fail)
+    }
+    pub(super) fn require_installation_window(&self, issued: &str, deadline: &str) -> Result<(), ShadowError> {
+        self.check()?;
+        let issued = decimal(issued)?;
+        let deadline = decimal(deadline)?;
+        // This is the actual retained enclave clock. The signer cannot rebase
+        // its observed sample to host BOOTTIME or renew it after a slow handoff.
+        require(issued == self.observed_at.ok_or(ShadowError::BindingDrift)?
+            && issued < deadline && deadline <= issued.checked_add(30_000_000_000).ok_or(ShadowError::BindingDrift)?
+            && now()? < deadline)
+    }
     pub(super) fn require_delivery(&self, p: &guest::Payload) -> Result<(), ShadowError> {
         self.check()?;
         let domain = self.process.domain();

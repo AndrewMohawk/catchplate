@@ -10,12 +10,25 @@
     "uint64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "positiveUint64": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
     "configuration": {
+      "oneOf": [ { "$ref": "#/$defs/configurationV1" }, { "$ref": "#/$defs/configurationV2" } ]
+    },
+    "configurationV1": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliveryConfiguration"],
       "properties": {
         "apiVersion": { "const": "serverware.nativeShadowActivationReceiverConfiguration/v1" },
         "deliveryConfiguration": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin" }
       }
+    },
+    "configurationV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "deliveryConfiguration", "installationAuthority"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverConfiguration/v2" },
+        "deliveryConfiguration": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin" },
+        "installationAuthority": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority" }
+      },
+      "$comment": "Explicit new delegation of the exact independently pinned C9 public key to sign a purpose-fixed public installation capsule. The installation authority must equal deliveryConfiguration.authority. Cold v1 never grants installation permission. Neither this delegation nor installation replaces native C9/service/key/NSM admission."
     },
     "imageInputs": {
       "type": "object", "additionalProperties": false,
@@ -37,6 +50,55 @@
         "launchSha256": { "$ref": "#/$defs/sha256" }
       },
       "$comment": "SHA256 values bind literal canonical observation and retained native launch bytes. Payload length is 1..1024 bytes. Completion grants no authority and cannot extend the independently signed C9 startup or lifetime deadlines."
+    },
+    "completionV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "installation"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverCompletion/v2" },
+        "installation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["payload", "signature"],
+          "properties": {
+            "payload": { "$ref": "#/$defs/installationPayload" },
+            "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+          }
+        }
+      },
+      "$comment": "At most 1 MiB of exact canonical bytes, BE32 framed and followed by EOF. Requires explicit cold-v2 installation delegation and a valid purpose-fixed installation signature before any filesystem write. Existing cold-v1 completion semantics are unchanged."
+    },
+    "installationPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "purpose", "configurationSha256", "deliveryConfigurationSha256", "observationSha256", "launchSha256", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "files"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverInstallation/v1" },
+        "purpose": { "const": "install-activation-public-originals" },
+        "configurationSha256": { "$ref": "#/$defs/sha256" },
+        "deliveryConfigurationSha256": { "$ref": "#/$defs/sha256" },
+        "observationSha256": { "$ref": "#/$defs/sha256" },
+        "launchSha256": { "$ref": "#/$defs/sha256" },
+        "issuedAtBoottimeNs": { "$ref": "#/$defs/ns" },
+        "startupDeadlineBoottimeNs": { "$ref": "#/$defs/ns" },
+        "files": { "type": "array", "minItems": 13, "maxItems": 13, "items": { "$ref": "#/$defs/installationFile" } }
+      },
+      "$comment": "Signature domain serverware.nativeShadowActivationReceiverInstallation.signature/v1. Exactly the fixed unique 13-file roster; decoded originals total at most 720 KiB, each intersected with its downstream parser limit and at most 512 KiB. Issuance equals the retained observation timestamp; startup is at most 30 seconds later and must still be future on the actual enclave clock. Both must equal the genuine C9 interval. The installer never writes cold inputs, credential originals, binaries, helpers, images or journal state."
+    },
+    "installationFile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "originalBase64url"],
+      "properties": {
+        "path": { "enum": [
+          "/etc/serverware/native-shadow-guest-launch.json", "/etc/serverware/native-shadow-public-exchange.json",
+          "/etc/serverware/native-activation-inputs/delivery.json", "/etc/serverware/native-activation-inputs/runtime.json",
+          "/etc/serverware/native-activation-inputs/trust.json", "/etc/serverware/native-activation-inputs/time-bootstrap.json",
+          "/etc/serverware/native-activation-inputs/assignment.json", "/etc/serverware/native-activation-inputs/closure.json",
+          "/etc/serverware/native-activation-inputs/keys.json", "/etc/serverware/native-activation-inputs/encrypted-keys.json",
+          "/etc/serverware/native-activation-inputs/admission.json", "/etc/serverware/native-activation-inputs/activation.json",
+          "/etc/serverware/native-activation-inputs/activation-authority.json"
+        ] },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "originalBase64url": { "type": "string", "minLength": 2, "maxLength": 699051, "pattern": "^[A-Za-z0-9_-]+$" }
+      }
     },
     "observation": {
       "type": "object", "additionalProperties": false,

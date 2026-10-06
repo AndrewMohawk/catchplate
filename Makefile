@@ -1642,6 +1642,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_static_credential_approval.py \
 	serverware/authority_static_credential_custody.py \
 	serverware/authority_static_credential_assignment.py \
+	serverware/authority_static_credential_assignment_issuer.py \
 	serverware/authority_transition_static_credential_create.py \
 	serverware/authority_transition_static_credential_approval.py \
 	serverware/native_static_credential_owner.py \
@@ -2037,6 +2038,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_policy_candidate_artifact.py \
 	scripts/authority/sign_policy_shadow_assignment.py \
 	scripts/authority/sign_currentness_assignment.py \
+	scripts/authority/sign_static_credential_assignment.py \
 	scripts/authority/sign_measured_audit_assignment.py \
 	scripts/authority/sign_native_configuration_delivery.py \
 	scripts/authority/sign_policy_bundle.py \
@@ -4816,6 +4818,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_static_credential_approval.py \
 				serverware/authority_static_credential_custody.py \
 				serverware/authority_static_credential_assignment.py \
+				serverware/authority_static_credential_assignment_issuer.py \
 				serverware/authority_transition_static_credential_create.py \
 				serverware/authority_transition_static_credential_approval.py \
 				serverware/native_static_credential_owner.py \
@@ -5211,6 +5214,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_policy_candidate_artifact.py \
 				scripts/authority/sign_policy_shadow_assignment.py \
 				scripts/authority/sign_currentness_assignment.py \
+				scripts/authority/sign_static_credential_assignment.py \
 				scripts/authority/sign_measured_audit_assignment.py \
 				scripts/authority/sign_native_configuration_delivery.py \
 				scripts/authority/sign_policy_bundle.py \

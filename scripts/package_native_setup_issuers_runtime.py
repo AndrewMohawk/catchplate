@@ -29,6 +29,8 @@ PROFILES = (
 # Explicit actual runtime lazy imports: native Originals selects final; the
 # hardware chain calls runtime-policy -> buffered-capture/receipt, CA -> work
 # accounting, and canary association -> full signed configuration digest.
+# Rotated enrollment parses its literal continuation through historical static
+# provenance and the distinct rotation custody grammar. Both imports are lazy.
 # Uncalled transition/request-effect factories are NOT recursively packaged.
 ROOT_MODULES = (
     "serverware.native_setup_independent_verifier", "serverware.native_setup_independent_originals",
@@ -36,6 +38,8 @@ ROOT_MODULES = (
     "serverware.authority_setup_native_runtime_policy", "serverware.authority_setup_native_runtime_capture",
     "serverware.authority_setup_native_runtime_receipt", "serverware.authority_query_read_work",
     "serverware.authority_policy_canary_policy", "scripts.verify_nitro_tee",
+    "serverware.authority_static_credential_provenance",
+    "serverware.authority_static_credential_rotation_custody",
 )
 FORBIDDEN = frozenset({"serverware.app", "serverware.db", "serverware.authority_service",
     "serverware.authority_factory", "serverware.authority_client", "serverware.authority_transitions"})

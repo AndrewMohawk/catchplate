@@ -674,6 +674,7 @@ def registration_options(
             "pubKeyCredParams": [{"type": "public-key", "alg": ES256_ALG}],
             "timeout": 300000,
             "attestation": "direct",
+            "hints": ["security-key"],
             "authenticatorSelection": {
                 "residentKey": "discouraged",
                 "userVerification": "preferred",

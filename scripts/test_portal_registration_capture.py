@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import ast
+import base64
+import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +37,50 @@ def javascript(source, name):
 
 
 class RegistrationCaptureControl(unittest.TestCase):
+    def test_registration_options_offer_security_key_without_changing_authority_or_freshness(self):
+        tree = ast.parse((ROOT / "serverware/webauthn.py").read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "registration_options")
+        canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
+        prefixed = lambda value: "sha256:" + hashlib.sha256(value).hexdigest()
+        create = Mock()
+        namespace = {
+            "Any": object,
+            "os": SimpleNamespace(urandom=lambda length: b"\x01" * length),
+            "db": SimpleNamespace(create_webauthn_challenge=create),
+            "b64u": lambda value: base64.urlsafe_b64encode(value).rstrip(b"=").decode(),
+            "_sha256": lambda value: hashlib.sha256(value).digest(),
+            "_sha256_prefixed": prefixed, "canonical_json": canonical,
+            "WEBAUTHN_RP_NAME": "Synthetic options control",
+            "WEBAUTHN_RP_ID": "registration.invalid", "ES256_ALG": -7,
+        }
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "webauthn.py", "exec"), namespace)
+        authorization = {"mode": "oidc-session-first-enrollment", "payload_digest": "sha256:" + "a" * 64}
+        value = namespace["registration_options"]("synthetic-user", "synthetic-key", authorization=authorization)
+        public_key = value["publicKey"]
+        self.assertEqual(set(public_key), {"rp", "user", "challenge", "pubKeyCredParams",
+                                         "timeout", "attestation", "hints", "authenticatorSelection"})
+        self.assertEqual(public_key["hints"], ["security-key"])
+        self.assertEqual(public_key["attestation"], "direct")
+        self.assertEqual(public_key["authenticatorSelection"], {
+            "residentKey": "discouraged", "userVerification": "preferred",
+            "authenticatorAttachment": "cross-platform"})
+        self.assertEqual(public_key["pubKeyCredParams"], [{"type": "public-key", "alg": -7}])
+        self.assertEqual(public_key["timeout"], 300000)
+        create.assert_called_once()
+        stored = create.call_args.kwargs
+        self.assertEqual(stored["ttl_seconds"], 300)
+        self.assertEqual(stored["challenge_type"], "registration")
+        self.assertEqual(stored["challenge"], public_key["challenge"])
+        self.assertEqual(stored["user_id"], "synthetic-user")
+        self.assertIs(stored["payload"]["authorization"], authorization)
+        self.assertEqual(stored["payload"]["label"], "synthetic-key")
+        self.assertEqual(stored["scope_key"], prefixed(canonical({
+            "authorization": authorization, "label": "synthetic-key", "user_id": "synthetic-user"
+        }).encode()))
+        self.assertEqual(value["serverware"], {"authorizationMode": authorization["mode"],
+                                              "payloadDigest": authorization["payload_digest"]})
+
     def test_explicit_cookie_capture_retains_only_real_202_locator_and_refuses_stale_work(self):
         ui = literal(APP, "UI_HTML")
         script = literal(FRAGMENT, "REGISTRATION_CAPTURE_SCRIPT")

@@ -1,0 +1,62 @@
+# Unrendered, uninstalled v3 software-key profile; not TEE/HSM custody.
+[Unit]
+Description=Serverware bounded sequential independently authorized workload issuer
+BindsTo=serverware-workload-identity-issuer-sequential.socket
+After=local-fs.target serverware-workload-identity-issuer-sequential.socket
+Conflicts=serverware-workload-identity-issuer.service serverware-workload-identity-issuer.socket
+RequiresMountsFor=@WORKLOAD_ISSUER_RELEASE_ROOT@ @WORKLOAD_ISSUER_TRUST_DIR@ @WORKLOAD_ISSUER_CA_KEY@ @WORKLOAD_ISSUER_JOURNAL@
+AssertPathIsDirectory=@WORKLOAD_ISSUER_RELEASE_ROOT@
+AssertPathIsDirectory=@WORKLOAD_ISSUER_TRUST_DIR@
+AssertPathIsDirectory=@WORKLOAD_ISSUER_JOURNAL@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Same five original resources and permanent same-PID UID drop as one-shot.
+User=root
+Group=root
+RootDirectory=@WORKLOAD_ISSUER_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@WORKLOAD_ISSUER_TRUST_DIR@:/run/serverware/workload-identity-issuer-trust
+BindReadOnlyPaths=@WORKLOAD_ISSUER_CA_KEY@:/run/secrets/serverware-workload-identity-issuer-ca-key
+BindReadOnlyPaths=/run/serverware/workload-identity-issuer:/run/serverware/workload-identity-issuer
+BindPaths=@WORKLOAD_ISSUER_JOURNAL@:/var/lib/serverware/workload-identity-issuer
+ReadWritePaths=/var/lib/serverware/workload-identity-issuer
+Sockets=serverware-workload-identity-issuer-sequential.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/workload_identity_issuer_launcher.py --root-service-delivery
+Restart=no
+RuntimeMaxSec=2h
+TimeoutStartSec=35s
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native

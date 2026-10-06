@@ -10,7 +10,8 @@ def main():
     try:
         if (sys.prefix != "/runtime/python" or sys.executable != "/runtime/python/bin/python3"
                 or not sys.flags.isolated or not sys.flags.ignore_environment
-                or len(sys.argv) != 2 or sys.argv[1] != "--root-delivery"):
+                or len(sys.argv) != 2
+                or sys.argv[1] not in ("--root-delivery", "--root-service-delivery")):
             raise RuntimeError("workload issuer requires its fixed isolated root launcher")
         for path in ("/", "/runtime", "/runtime/authority-bootstrap", "/vendor", "/app"):
             value = os.stat(path, follow_symlinks=False)
@@ -20,7 +21,7 @@ def main():
         sys.dont_write_bytecode = True
         sys.path[:0] = ["/vendor", "/app"]
         from serverware.workload_identity_issuer_entrypoint import main as run
-        return run()
+        return run(service_profile=sys.argv[1] == "--root-service-delivery")
     except BaseException:
         try:
             os.write(2, b"workload identity issuer launch failed\n")

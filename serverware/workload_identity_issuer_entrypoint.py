@@ -40,6 +40,65 @@ _CONSTRUCTION = object()
 _active_launch = None
 
 
+class _ServiceLifetime:
+    """One signed local lifetime anchored before the first cold original read.
+
+    Cold acquisition must still finish within its original processing window.
+    This separate v3 clock never extends that window or a request deadline.
+    """
+
+    def __init__(self, construction, *, material, opening, work, cold_current):
+        from serverware import workload_identity_issuer_bootstrap as bootstrap
+
+        if (construction is not _CONSTRUCTION
+                or type(material) is not bootstrap._IssuerMaterial
+                or material.profile != bootstrap.NATIVE_SERVICE_PROFILE):
+            raise RuntimeError("workload service lifetime requires its original v3 admission")
+        cold_current()
+        opening = bootstrap.clock._validate(opening)
+        certificate = material.issuer_certificate.certificate
+        self.interval = (max(material.attestation_interval[0],
+            int(certificate.not_valid_before_utc.timestamp()) * 1_000_000_000),
+            min(material.attestation_interval[1],
+                int(certificate.not_valid_after_utc.timestamp()) * 1_000_000_000,
+                opening[0] + bootstrap._MAX_SERVICE_NS))
+        if not self.interval[0] <= opening[0] < self.interval[1]:
+            raise RuntimeError("workload service lacks an original currently live interval")
+        self.deadline_ns = opening[1] + self.interval[1] - opening[0]
+        self._opening, self._work, self._cold = opening, work, cold_current
+        self._epoch, self._monotonic = opening[0], opening[2]
+        self._active = False
+        self._pin = (self.interval, self.deadline_ns, opening, work, cold_current)
+        self.current()
+
+    def current(self):
+        from serverware import workload_identity_issuer_bootstrap as bootstrap
+
+        if (type(self) is not _ServiceLifetime or type(self._active) is not bool
+                or type(self._pin) is not tuple or len(self._pin) != 5
+                or any(actual is not original for actual, original in zip(
+                    (self.interval, self.deadline_ns, self._opening, self._work, self._cold), self._pin))):
+            raise RuntimeError("workload service original lifetime changed")
+        if not self._active:
+            self._epoch = self._cold()
+            return self._epoch
+        before, epoch, after = bootstrap.clock._sample_on_work(self._work)
+        origin_epoch, origin_before, origin_after = self._opening[:3]
+        if (before < self._monotonic or epoch < self._epoch
+                or after >= self.deadline_ns or not self.interval[0] <= epoch < self.interval[1]
+                or not origin_epoch + before - origin_after <= epoch <= origin_epoch + after - origin_before):
+            raise RuntimeError("workload service original local lifetime expired or reversed")
+        self._epoch, self._monotonic = epoch, after
+        return epoch
+
+    def activate(self):
+        if self._active:
+            raise RuntimeError("workload service lifetime cannot be reopened")
+        self.current()
+        self._active = True
+        self.current()
+
+
 def _fd_identity(descriptor):
     value = os.fstat(descriptor)
     # Directory contents legitimately change during durable publication.
@@ -202,6 +261,7 @@ class _LaunchContext:
     original_reservation_bytes: int
     identities: tuple
     pid: int
+    service_lifetime: object = None
 
 
 def _require_launch(value):
@@ -213,9 +273,10 @@ def _require_launch(value):
     return value
 
 
-def main():
+def main(*, service_profile=False):
     global _active_launch
-    if (os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0)
+    if (type(service_profile) is not bool
+            or os.getresuid() != (0, 0, 0) or os.getresgid() != (0, 0, 0)
             or os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1"
             or os.environ.get("LISTEN_FDNAMES") != LISTENER_NAME or _active_launch is not None):
         raise RuntimeError("workload issuer requires its one original root socket activation")
@@ -266,6 +327,8 @@ def main():
             raise RuntimeError("workload issuer root is not Ed25519")
         material = bootstrap._verify_launch_on_work(bootstrap_bytes=original, root_public_key=root,
             live_window=window, transport_deadline_ns=bound, work=work, _current=construction_current)
+        if (material.profile == bootstrap.NATIVE_SERVICE_PROFILE) is not service_profile:
+            raise RuntimeError("workload issuer signed profile differs from its fixed launcher mode")
         current_epoch = construction_current()
 
         def current():
@@ -317,8 +380,11 @@ def main():
         for descriptor in INHERITED_DESCRIPTORS:
             os.set_inheritable(descriptor, False)
         inventory._require_inventory(INHERITED_DESCRIPTORS)
+        lifetime = (_ServiceLifetime(_CONSTRUCTION, material=material, opening=window,
+            work=work, cold_current=current) if service_profile else None)
         _active_launch = _LaunchContext(_CONSTRUCTION, material, root, work, material.window,
-            material.deadline_ns, current, reserved, identities, os.getpid())
+            material.deadline_ns, lifetime.current if lifetime is not None else current,
+            reserved, identities, os.getpid(), lifetime)
         os.setgroups([])
         os.setresgid(SERVICE_GID, SERVICE_GID, SERVICE_GID)
         os.setresuid(SERVICE_UID, SERVICE_UID, SERVICE_UID)

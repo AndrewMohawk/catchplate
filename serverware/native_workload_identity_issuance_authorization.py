@@ -1,7 +1,7 @@
 """Separate explicit issuer grants over original native bootstrap material.
 
 Native packet v2 is a data container, not a legacy signed packet. Admission
-replays the dedicated cold v2 bootstrap, independent grant signature, original
+replays the dedicated cold v2 or explicit v3 bootstrap, independent grant signature, original
 setup/delegation, target CSR/PoP and certificate selectors. Role-5 captures,
 verifier summaries and Python success objects are never grant authority inputs.
 No runtime custody, protected installation or egress claim is made here.
@@ -113,10 +113,11 @@ def _admit(*, authorization_bytes, bootstrap_bytes, root_public_key, packet_byte
         _additional_original_bytes, certificate_bytes=None):
     reserve = _preflight(authorization_bytes, bootstrap_bytes, packet_bytes, request_bytes,
         _additional_original_bytes, certificate_bytes, work)
-    cold = bootstrap._verify_native_on_work(bootstrap_bytes=bootstrap_bytes,
+    cold = bootstrap._verify_native_launch_on_work(bootstrap_bytes=bootstrap_bytes,
         root_public_key=root_public_key, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work, _current=_current)
-    if (type(cold) is not bootstrap._IssuerMaterial or cold.profile != "native-request-first-v2"
+    if (type(cold) is not bootstrap._IssuerMaterial
+            or cold.profile not in (bootstrap.NATIVE_PROFILE, bootstrap.NATIVE_SERVICE_PROFILE)
             or type(cold.native_scope) is not bootstrap._NativeEnrollmentScope
             or cold.packet_signing_key_bytes is not None or cold.runtime_manifest_digest is not None):
         bootstrap._fail()
@@ -249,7 +250,7 @@ def _produce_on_work(*, payload_bytes, authorization_private_key, bootstrap_byte
         work, _current=None, _additional_original_bytes=0):
     """Explicit separate authorizer operation; never a CSR-triggered grant route."""
     bootstrap._raw(payload_bytes, MAX_BYTES)
-    cold = bootstrap._verify_native_on_work(bootstrap_bytes=bootstrap_bytes,
+    cold = bootstrap._verify_native_launch_on_work(bootstrap_bytes=bootstrap_bytes,
         root_public_key=root_public_key, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work, _current=_current)
     budget = bootstrap._Budget(work, cold.window, cold.deadline_ns, cold.live)

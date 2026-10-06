@@ -1,4 +1,4 @@
-"""Actual one-shot software CA owner, continuing original root delivery.
+"""Actual software CA owner, continuing original fixed-profile root delivery.
 
 No application process imports a signing capability from this owner. It is
 constructed only by the exact same-PID fixed launcher after permanent UID drop.
@@ -34,7 +34,8 @@ def _process():
 
 class _IssuerOwner:
     __slots__ = ("material", "root_public_key", "ca_private_key", "journal", "listener", "work",
-        "window", "deadline_ns", "original_reservation_bytes", "_base", "_active", "_service_spent", "_seal")
+        "window", "deadline_ns", "original_reservation_bytes", "_base", "_active", "_service_spent",
+        "_service_lifetime", "_material_pin", "_exchanges", "_request", "_seal")
 
     def __init__(self, construction, *, launch, key, journal, listener, current):
         if construction is not _CONSTRUCTION or _state != "starting":
@@ -42,8 +43,14 @@ class _IssuerOwner:
         self.material, self.root_public_key, self.ca_private_key = launch.material, launch.root_public_key, key
         self.journal, self.listener, self.work = journal, listener, launch.work
         self.window, self.deadline_ns = launch.window, launch.deadline_ns
+        self._service_lifetime = launch.service_lifetime
+        if self._service_lifetime is not None:
+            self.deadline_ns = self._service_lifetime.deadline_ns
         self.original_reservation_bytes = launch.original_reservation_bytes
         self._base, self._active, self._service_spent = current, True, False
+        self._material_pin = (self.material.profile, self.material.bootstrap_bytes,
+            self.material.service_maximum_exchanges)
+        self._exchanges, self._request = 0, None
         self._seal = tuple(getattr(self, name) for name in _FIELDS)
 
     def current(self):
@@ -62,7 +69,7 @@ class _IssuerOwner:
 
 
 _FIELDS = ("material", "root_public_key", "ca_private_key", "journal", "listener", "work",
-    "window", "deadline_ns", "original_reservation_bytes", "_base")
+    "window", "deadline_ns", "original_reservation_bytes", "_base", "_service_lifetime", "_material_pin")
 
 
 def _identity(value):
@@ -70,7 +77,14 @@ def _identity(value):
             or value._active is not True or type(value._service_spent) is not bool
             or type(value._seal) is not tuple or len(value._seal) != len(_FIELDS)
             or any(getattr(value, name) is not expected for name, expected in zip(_FIELDS, value._seal))
-            or type(value.material) is not bootstrap._IssuerMaterial):
+            or type(value.material) is not bootstrap._IssuerMaterial
+            or len(value._material_pin) != 3 or any(actual is not original for actual, original in zip(
+                (value.material.profile, value.material.bootstrap_bytes,
+                    value.material.service_maximum_exchanges), value._material_pin))
+            or type(value._exchanges) is not int
+            or not 0 <= value._exchanges <= value.material.service_maximum_exchanges
+            or (value.material.profile == bootstrap.NATIVE_SERVICE_PROFILE)
+                != (type(value._service_lifetime) is delivery._ServiceLifetime)):
         raise RuntimeError("workload issuer owner lost its original private lifecycle")
 
 
@@ -79,6 +93,62 @@ def _require_owner(value):
     value.current()
     _identity(value)
     return value
+
+
+class _IssuerRequest:
+    """One accepted v3 exchange; never a replacement ledger or service owner."""
+
+    __slots__ = ("owner", "sequence", "window", "deadline_ns", "_budget", "_seal", "_closed")
+
+    def __init__(self, construction, owner):
+        _require_owner(owner)
+        if (construction is not _CONSTRUCTION
+                or owner.material.profile != bootstrap.NATIVE_SERVICE_PROFILE
+                or not owner._service_spent or owner._request is not None
+                or owner._exchanges >= owner.material.service_maximum_exchanges):
+            raise RuntimeError("workload service cannot open another request")
+        # Consume before accepting even the first request byte. An exception
+        # exits the service; it never unspends this attempt or opens a retry.
+        owner._exchanges += 1
+        window = bootstrap.clock._open_on_work(
+            deadline_epoch_ns=owner._service_lifetime.interval[1],
+            maximum_lifetime_ns=owner.material.request_timeout_ns,
+            maximum_clock_skew_ns=0, work=owner.work)
+        bound = min(window[4], owner.deadline_ns)
+        self.owner, self.sequence = owner, owner._exchanges
+        self._budget = bootstrap._Budget(owner.work, window, bound, owner.current)
+        self.window, self.deadline_ns = self._budget.window, self._budget.bound
+        self._closed = False
+        self._seal = (owner, self.sequence, self.window, self.deadline_ns, self._budget)
+        owner._request = self
+        self.current()
+
+    def current(self):
+        _require_request(self, self.owner)
+        now = self._budget.current()
+        _require_request(self, self.owner)
+        return now
+
+
+def _require_request(value, owner):
+    _require_owner(owner)
+    if (type(value) is not _IssuerRequest or value.owner is not owner
+            or owner._request is not value or value._closed is not False
+            or value.sequence != owner._exchanges
+            or len(value._seal) != 5 or any(actual is not original for actual, original in zip(
+                (value.owner, value.sequence, value.window, value.deadline_ns, value._budget), value._seal))
+            or value._budget.work is not owner.work or value._budget.window is not value.window
+            or value._budget.bound != value.deadline_ns or value.deadline_ns > owner.deadline_ns):
+        raise RuntimeError("workload request lost its original private exchange context")
+    return value
+
+
+def _finish_request(value, owner):
+    value.current()
+    _require_request(value, owner)
+    value._closed = True
+    owner._request = None
+    _require_owner(owner)
 
 
 def _key_on_launch(launch, current):
@@ -140,6 +210,14 @@ def _run_on_launch(launch):
         current()
         listener = socket.socket(fileno=delivery.LISTENER_FD)
         listener.setblocking(False)
+        if material.profile == bootstrap.NATIVE_SERVICE_PROFILE:
+            delivery._require_launch(launch)
+            if type(launch.service_lifetime) is not delivery._ServiceLifetime:
+                raise RuntimeError("workload service lacks its original launcher lifetime")
+            # Only completed original cold admission/key/journal acquisition
+            # can enter the separately signed service lifetime, exactly once.
+            launch.service_lifetime.activate()
+            delivery._require_launch(launch)
         _owner = _IssuerOwner(_CONSTRUCTION, launch=launch, key=key, journal=journal,
             listener=listener, current=current)
         _state = "ready"
@@ -149,6 +227,8 @@ def _run_on_launch(launch):
         _require_owner(_owner)
     finally:
         if _owner is not None:
+            if _owner._request is not None:
+                _owner._request._closed = True
             _owner._active = False
         _state = "closed"
         _owner = None

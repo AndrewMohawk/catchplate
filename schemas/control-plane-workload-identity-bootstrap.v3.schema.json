@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/control-plane-workload-identity-bootstrap.v3.schema.json",
+  "title": "Root-signed caller for the bounded sequential native workload issuer v3",
+  "description": "Closed canonical public original, at most 262144 bytes. Ed25519 signs the exact v3 payload-schema ASCII bytes, NUL and canonical payload. The independent runtime root admits only an exact nested issuer v3 original; every request still separately verifies its grant, native packet, CSR/PoP and resulting certificate under its own nonrenewing context. No automatic retry, service restart or issuance permission follows from this profile. Existing v1/v2 caller contracts remain unchanged.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedControlPlaneWorkloadIdentityBootstrap/v3"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/properties/signature"}
+  },
+  "$defs": {
+    "issuer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root", "bootstrap", "endpoint", "requestTimeoutNs", "maximumOriginalBytes"],
+      "properties": {
+        "root": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/root"},
+        "bootstrap": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/wrapped", "description": "Exact signedWorkloadIdentityIssuerBootstrap/v3 original, not v2 or legacy fallback; its independently signed service and journal bounds remain mandatory."},
+        "endpoint": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/endpoint"},
+        "requestTimeoutNs": {"type": "integer", "minimum": 1, "maximum": 30000000000},
+        "maximumOriginalBytes": {"const": 67108864}
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "processMode", "callerUid", "callerGid", "configurationDigest", "issuedAtEpochNs", "expiresAtEpochNs", "issuer"],
+      "properties": {
+        "schema": {"const": "serverware.controlPlaneWorkloadIdentityBootstrap/v3"},
+        "sourceRevision": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/payload/properties/sourceRevision"},
+        "purpose": {"const": "native-workload-identity-caller"},
+        "trustMode": {"const": "trusted-host-local"},
+        "processMode": {"const": "serverware-control-plane"},
+        "callerUid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "callerGid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "configurationDigest": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/positive"},
+        "expiresAtEpochNs": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/positive"},
+        "issuer": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/issuer"}]}
+      },
+      "allOf": [{"if": {"properties": {"issuer": {"type": "object"}}}, "then": {"properties": {"callerUid": {"const": 65532}, "callerGid": {"const": 65532}}}}],
+      "description": "Null is explicitly disabled. Enabled caller validity is intersected with the genuine v3 worker interval and actual CA validity; caller configuration and UID/GID must match actual cold custody."
+    }
+  }
+}

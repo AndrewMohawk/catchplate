@@ -25,8 +25,11 @@ SCHEMA = "serverware.signedWorkloadIdentityIssuerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.workloadIdentityIssuerBootstrap/v1"
 NATIVE_SCHEMA = "serverware.signedWorkloadIdentityIssuerBootstrap/v2"
 NATIVE_PAYLOAD_SCHEMA = "serverware.workloadIdentityIssuerBootstrap/v2"
+NATIVE_SERVICE_SCHEMA = "serverware.signedWorkloadIdentityIssuerBootstrap/v3"
+NATIVE_SERVICE_PAYLOAD_SCHEMA = "serverware.workloadIdentityIssuerBootstrap/v3"
 LEGACY_PROFILE = "legacy-v1"
 NATIVE_PROFILE = "native-request-first-v2"
+NATIVE_SERVICE_PROFILE = "native-request-first-service-v3"
 MAX_BYTES = 128 * 1024
 SERVICE_UID = SERVICE_GID = 65492
 PROCESS_MODE = "workload-identity-issuer"
@@ -34,6 +37,7 @@ PEER_UID = PEER_GID = 65532
 LISTENER_PATH = "/run/serverware/workload-identity-issuer/issuer.sock"
 INHERITED_DESCRIPTORS = (198, 199, 200, 201, 202)
 _MAX_TIMEOUT_NS = 30_000_000_000
+_MAX_SERVICE_NS = 7_200_000_000_000
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _PAYLOAD_FIELDS = frozenset({
@@ -44,6 +48,7 @@ _PAYLOAD_FIELDS = frozenset({
 })
 _NATIVE_PAYLOAD_FIELDS = (_PAYLOAD_FIELDS - {"packetSigningKey", "runtimeManifestDigest"}
     | {"nativeEnrollment"})
+_NATIVE_SERVICE_PAYLOAD_FIELDS = _NATIVE_PAYLOAD_FIELDS | {"service"}
 _NATIVE_ENROLLMENT_FIELDS = frozenset({"releaseRecordSha256", "configurationSha256",
     "runtimeCaCertificateSha256", "runtimeCaSpkiSha256",
     "delegationAuthorizerKey", "setupAuthorizerKey"})
@@ -282,6 +287,7 @@ class _IssuerMaterial:
     live: object
     profile: str = LEGACY_PROFILE
     native_scope: _NativeEnrollmentScope | None = None
+    service_maximum_exchanges: int = 1
 
 
 def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window,
@@ -302,6 +308,32 @@ def _verify_native_on_work(*, bootstrap_bytes, root_public_key, live_window,
         _current=_current, native_profile=True)
 
 
+def _verify_native_service_on_work(*, bootstrap_bytes, root_public_key, live_window,
+        transport_deadline_ns, work, _current=None):
+    """Strict native v3: a bounded service lifetime, not repeated grant authority."""
+    return _verify_profile_on_work(bootstrap_bytes=bootstrap_bytes,
+        root_public_key=root_public_key, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, native_profile=True, native_service=True)
+
+
+def _verify_native_launch_on_work(*, bootstrap_bytes, root_public_key, live_window,
+        transport_deadline_ns, work, _current=None):
+    """Select only explicit native v2/v3 originals; never legacy fallback."""
+    budget = _Budget(work, live_window, transport_deadline_ns, _current)
+    envelope = _decode(bootstrap_bytes, MAX_BYTES, budget)
+    _object(envelope, {"schema", "payload", "signature"})
+    if envelope["schema"] == NATIVE_SCHEMA:
+        verifier = _verify_native_on_work
+    elif envelope["schema"] == NATIVE_SERVICE_SCHEMA:
+        verifier = _verify_native_service_on_work
+    else:
+        _fail()
+    return verifier(bootstrap_bytes=bootstrap_bytes, root_public_key=root_public_key,
+        live_window=budget.window, transport_deadline_ns=budget.bound, work=work,
+        _current=budget.current)
+
+
 def _verify_launch_on_work(*, bootstrap_bytes, root_public_key, live_window,
         transport_deadline_ns, work, _current=None):
     """Select a closed root-signed profile before private-resource acquisition.
@@ -317,6 +349,8 @@ def _verify_launch_on_work(*, bootstrap_bytes, root_public_key, live_window,
         verifier = _verify_on_work
     elif envelope["schema"] == NATIVE_SCHEMA:
         verifier = _verify_native_on_work
+    elif envelope["schema"] == NATIVE_SERVICE_SCHEMA:
+        verifier = _verify_native_service_on_work
     else:
         _fail()
     return verifier(bootstrap_bytes=bootstrap_bytes, root_public_key=root_public_key,
@@ -332,7 +366,7 @@ def _enrollment_original_byte_count(material):
             and type(material.packet_signing_key_bytes) is bytes
             and type(material.runtime_manifest_digest) is str):
         return len(material.packet_signing_key_bytes)
-    if (material.profile == NATIVE_PROFILE
+    if (material.profile in (NATIVE_PROFILE, NATIVE_SERVICE_PROFILE)
             and type(material.native_scope) is _NativeEnrollmentScope
             and material.packet_signing_key_bytes is None
             and material.runtime_manifest_digest is None):
@@ -342,14 +376,18 @@ def _enrollment_original_byte_count(material):
 
 
 def _verify_profile_on_work(*, bootstrap_bytes, root_public_key, live_window,
-        transport_deadline_ns, work, _current, native_profile):
-    if type(native_profile) is not bool:
+        transport_deadline_ns, work, _current, native_profile, native_service=False):
+    if (type(native_profile) is not bool or type(native_service) is not bool
+            or native_service and not native_profile):
         _fail()
     budget = _Budget(work, live_window, transport_deadline_ns, _current)
-    p = _signed(bootstrap_bytes, NATIVE_SCHEMA if native_profile else SCHEMA,
-        NATIVE_PAYLOAD_SCHEMA if native_profile else PAYLOAD_SCHEMA,
+    schema = NATIVE_SERVICE_SCHEMA if native_service else NATIVE_SCHEMA if native_profile else SCHEMA
+    payload_schema = (NATIVE_SERVICE_PAYLOAD_SCHEMA if native_service
+        else NATIVE_PAYLOAD_SCHEMA if native_profile else PAYLOAD_SCHEMA)
+    p = _signed(bootstrap_bytes, schema, payload_schema,
         root_public_key, MAX_BYTES, budget)
-    _object(p, _NATIVE_PAYLOAD_FIELDS if native_profile else _PAYLOAD_FIELDS)
+    _object(p, _NATIVE_SERVICE_PAYLOAD_FIELDS if native_service
+        else _NATIVE_PAYLOAD_FIELDS if native_profile else _PAYLOAD_FIELDS)
     purpose = "native-workload-identity-issuance" if native_profile else "workload-identity-issuance"
     for name, expected in (("purpose", purpose),
             ("trustMode", "trusted-host-local"), ("serviceUid", SERVICE_UID),
@@ -357,6 +395,8 @@ def _verify_profile_on_work(*, bootstrap_bytes, root_public_key, live_window,
         if type(p[name]) is not type(expected) or p[name] != expected:
             _fail()
     budget.interval(p["issuedAtEpochNs"], p["expiresAtEpochNs"])
+    if native_service and p["expiresAtEpochNs"] - p["issuedAtEpochNs"] > _MAX_SERVICE_NS:
+        _fail()
     certificate_bytes = _wrapped(p["issuerCertificate"], originals.MAX_CERTIFICATE_BYTES, budget)
     issuer = originals._issuer(certificate_bytes, budget)
     authorization_key_bytes = _wrapped(p["authorizationKey"], 1024, budget)
@@ -402,6 +442,12 @@ def _verify_profile_on_work(*, bootstrap_bytes, root_public_key, live_window,
     records = _integer(journal["maximumRecords"], 1024, 2)
     if records % 2:
         _fail()
+    service_maximum_exchanges = 1
+    if native_service:
+        service = _object(p["service"], {"mode", "maximumExchanges"})
+        if service["mode"] != "sequential-bounded":
+            _fail()
+        service_maximum_exchanges = _integer(service["maximumExchanges"], records, 1)
     checkpoint = _object(journal["checkpoint"], {"recordCount", "headDigest"})
     count = _integer(checkpoint["recordCount"], records)
     head = checkpoint["headDigest"]
@@ -421,9 +467,10 @@ def _verify_profile_on_work(*, bootstrap_bytes, root_public_key, live_window,
     for name in ("listenerDevice", "listenerInode", "listenerPathDevice", "listenerPathInode"):
         _integer(launch[name], minimum=1)
     timeout = _integer(launch["requestTimeoutNs"], _MAX_TIMEOUT_NS, 1)
-    budget.window = windows._narrow(budget.window, deadline_epoch_ns=budget.window[3],
-        maximum_lifetime_ns=timeout, maximum_clock_skew_ns=budget.window[6])
-    budget.bound = min(budget.bound, budget.window[4])
+    if not native_service:
+        budget.window = windows._narrow(budget.window, deadline_epoch_ns=budget.window[3],
+            maximum_lifetime_ns=timeout, maximum_clock_skew_ns=budget.window[6])
+        budget.bound = min(budget.bound, budget.window[4])
     budget.interval(int(issuer.certificate.not_valid_before_utc.timestamp()) * 1_000_000_000,
         int(issuer.certificate.not_valid_after_utc.timestamp()) * 1_000_000_000)
     result = _IssuerMaterial(bootstrap_bytes, packets._digest(bootstrap_bytes, budget),
@@ -434,7 +481,8 @@ def _verify_profile_on_work(*, bootstrap_bytes, root_public_key, live_window,
         launch["listenerDevice"], launch["listenerInode"], launch["listenerPathDevice"],
         launch["listenerPathInode"], SERVICE_UID, PEER_GID, 0o660, timeout,
         (p["issuedAtEpochNs"], p["expiresAtEpochNs"]), budget.window, budget.bound, budget.current,
-        profile=NATIVE_PROFILE if native_profile else LEGACY_PROFILE, native_scope=native_scope)
+        profile=NATIVE_SERVICE_PROFILE if native_service else NATIVE_PROFILE if native_profile else LEGACY_PROFILE,
+        native_scope=native_scope, service_maximum_exchanges=service_maximum_exchanges)
     result.live()
     return result
 
@@ -456,6 +504,19 @@ def _produce_native_on_work(*, payload_bytes, root_private_key, root_public_key,
     raw = _produce(payload_bytes, NATIVE_SCHEMA, NATIVE_PAYLOAD_SCHEMA,
         root_private_key, root_public_key, MAX_BYTES, budget)
     admitted = _verify_native_on_work(bootstrap_bytes=raw, root_public_key=root_public_key,
+        live_window=budget.window, transport_deadline_ns=budget.bound, work=work,
+        _current=budget.current)
+    admitted.live()
+    return raw
+
+
+def _produce_native_service_on_work(*, payload_bytes, root_private_key, root_public_key,
+        live_window, transport_deadline_ns, work, _current=None):
+    """Explicit root-selected v3; no new key, interval, checkpoint or grant."""
+    budget = _Budget(work, live_window, transport_deadline_ns, _current)
+    raw = _produce(payload_bytes, NATIVE_SERVICE_SCHEMA, NATIVE_SERVICE_PAYLOAD_SCHEMA,
+        root_private_key, root_public_key, MAX_BYTES, budget)
+    admitted = _verify_native_service_on_work(bootstrap_bytes=raw, root_public_key=root_public_key,
         live_window=budget.window, transport_deadline_ns=budget.bound, work=work,
         _current=budget.current)
     admitted.live()

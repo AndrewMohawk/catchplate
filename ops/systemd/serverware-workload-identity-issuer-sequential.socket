@@ -1,0 +1,22 @@
+# Uninstalled source. Select the explicit signed native service v3 profile.
+[Unit]
+Description=Serverware bounded sequential private workload issuer ingress
+Before=serverware-workload-identity-issuer-sequential.service
+After=systemd-tmpfiles-setup.service
+Conflicts=serverware-workload-identity-issuer.service serverware-workload-identity-issuer.socket
+
+[Socket]
+ListenStream=/run/serverware/workload-identity-issuer/issuer.sock
+FileDescriptorName=serverware-workload-identity-issuer
+SocketUser=65492
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-workload-identity-issuer-sequential.service
+
+[Install]
+WantedBy=sockets.target

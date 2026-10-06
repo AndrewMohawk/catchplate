@@ -65,7 +65,8 @@ def _authorization_profile(context):
     authorization.bootstrap._enrollment_original_byte_count(cold)
     if context.material.profile == authorization.bootstrap.LEGACY_PROFILE:
         return authorization, authorization._IssuanceMaterial, _ADMISSION_FIELDS
-    if context.material.profile == authorization.bootstrap.NATIVE_PROFILE:
+    if context.material.profile in (authorization.bootstrap.NATIVE_PROFILE,
+            authorization.bootstrap.NATIVE_SERVICE_PROFILE):
         return native_authorization, native_authorization._NativeIssuanceMaterial, _NATIVE_ADMISSION_FIELDS
     _fail("workload issuer caller has an unsupported cold verifier profile")
 
@@ -168,7 +169,8 @@ def _same_association(actual, expected, work, *, profile):
     # pass through JSON-only comparison accounting or be converted to text.
     if type(actual) is not tuple or type(expected) is not tuple or len(actual) != 17 or len(expected) != 17:
         _fail("workload issuer response lacks its closed association")
-    if profile not in (authorization.bootstrap.LEGACY_PROFILE, authorization.bootstrap.NATIVE_PROFILE):
+    if profile not in (authorization.bootstrap.LEGACY_PROFILE, authorization.bootstrap.NATIVE_PROFILE,
+            authorization.bootstrap.NATIVE_SERVICE_PROFILE):
         _fail("workload issuer association has no cold-selected profile")
     for index, (left, right) in enumerate(zip(actual, expected)):
         if type(left) is not type(right):
@@ -178,7 +180,8 @@ def _same_association(actual, expected, work, *, profile):
                 _fail("workload issuer association original exceeds its bound")
             work.charge(input_bytes=len(left) + len(right))
         elif type(left) is str:
-            if profile == authorization.bootstrap.NATIVE_PROFILE and index == 1:
+            if profile in (authorization.bootstrap.NATIVE_PROFILE,
+                    authorization.bootstrap.NATIVE_SERVICE_PROFILE) and index == 1:
                 if not (1 <= len(left.encode("utf-8")) <= 1024
                         and 1 <= len(right.encode("utf-8")) <= 1024):
                     _fail("native workload issuer principal exceeds its original UTF-8 bound")

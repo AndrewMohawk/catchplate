@@ -75,7 +75,7 @@ def _authorization_on_owner(owner):
                 or type(material.runtime_manifest_digest) is not str):
             _fail("legacy workload issuer cold scope is not its original profile")
         return authorization, authorization._IssuanceMaterial
-    if material.profile == "native-request-first-v2":
+    if material.profile in (bootstrap.NATIVE_PROFILE, bootstrap.NATIVE_SERVICE_PROFILE):
         if (type(material.native_scope) is not bootstrap._NativeEnrollmentScope
                 or material.packet_signing_key_bytes is not None
                 or material.runtime_manifest_digest is not None):
@@ -134,11 +134,18 @@ def _certificate_builder(owner, admitted, *, work, current, deadline_ns):
     return builder, private, algorithm
 
 
-def _issue_on_owner(owner, originals, *, current):
+def _issue_on_owner(owner, originals, *, current, _request=None):
     """Internal only: actual cold owner plus raw3, never an admission DTO."""
     from serverware import workload_identity_issuer_startup as startup
 
     startup._require_owner(owner)
+    if owner.material.profile == startup.bootstrap.NATIVE_SERVICE_PROFILE:
+        startup._require_request(_request, owner)
+        window, original_deadline = _request.window, _request.deadline_ns
+    else:
+        if _request is not None:
+            _fail("one-shot issuer cannot replace its original processing context")
+        window, original_deadline = owner.window, owner.deadline_ns
     verifier, material_type = _authorization_on_owner(owner)
     raw = transport._originals(originals, response=False)
     work = owner.work
@@ -150,13 +157,13 @@ def _issue_on_owner(owner, originals, *, current):
         _fail("workload issuer lost its original cold/exchange representation reservation")
     kwargs = dict(authorization_bytes=raw[0], bootstrap_bytes=owner.material.bootstrap_bytes,
         root_public_key=owner.root_public_key, packet_bytes=raw[1], request_bytes=raw[2],
-        live_window=owner.window, transport_deadline_ns=owner.deadline_ns, work=work,
+        live_window=window, transport_deadline_ns=original_deadline, work=work,
         _current=current, _additional_original_bytes=(owner.original_reservation_bytes
             + transport.FIXED_RESERVATION_BYTES))
     admitted = verifier._verify_on_work(**kwargs)
     if type(admitted) is not material_type:
         _fail("workload issuer requires actual original grant, packet and request admission")
-    deadline = min(owner.deadline_ns, admitted.deadline_ns, admitted.window[4])
+    deadline = min(original_deadline, admitted.deadline_ns, admitted.window[4])
 
     def admitted_current():
         current()
@@ -234,18 +241,48 @@ def _issue_on_owner(owner, originals, *, current):
 
 
 def _serve_on_owner(owner):
-    """One accepted exchange; normal return only after guarded socket close."""
+    """One invocation: one-shot v1/v2 or explicitly bounded sequential v3."""
     from serverware import workload_identity_issuer_startup as startup
 
     startup._require_owner(owner)
     owner.claim_service()
-    work, deadline, listener = owner.work, owner.deadline_ns, owner.listener
+    if owner.material.profile != startup.bootstrap.NATIVE_SERVICE_PROFILE:
+        return _exchange_on_owner(owner)
+    # Idle waiting consumes the original service lifetime, not an issuance
+    # request window. Every accepted exchange gets one fresh clipped context,
+    # while all exchanges retain the SAME cold ledger, journal and lease.
+    for _ in range(owner.material.service_maximum_exchanges):
+        startup._require_owner(owner)
+        transport._ready(owner.listener, writing=False, work=owner.work,
+            current=owner.current, deadline_ns=owner.deadline_ns)
+        request = startup._IssuerRequest(startup._CONSTRUCTION, owner)
+        _exchange_on_owner(owner, _request=request)
+        startup._finish_request(request, owner)
+    # No error is swallowed: an uncertain exchange ends this owner, retaining
+    # all journal claims and the consumed attempt rather than trying another.
+    return None
+
+
+def _exchange_on_owner(owner, *, _request=None):
+    """One accepted exchange; normal return only after guarded socket close."""
+    from serverware import workload_identity_issuer_startup as startup
+
+    startup._require_owner(owner)
+    owner_deadline = owner.deadline_ns
+    if owner.material.profile == startup.bootstrap.NATIVE_SERVICE_PROFILE:
+        startup._require_request(_request, owner)
+        deadline, base_current = _request.deadline_ns, _request.current
+    else:
+        if _request is not None:
+            _fail("one-shot issuer cannot receive a service request context")
+        deadline, base_current = owner_deadline, owner.current
+    work, listener = owner.work, owner.listener
     connection, identity = None, None
 
     def current():
         startup._require_owner(owner)
-        now = owner.current()
-        if owner.work is not work or owner.listener is not listener or owner.deadline_ns != deadline:
+        now = base_current()
+        if owner.work is not work or owner.listener is not listener or owner.deadline_ns != owner_deadline:
             _fail("workload issuer service changed its original cold owner")
         if connection is not None and identity is not None:
             work.charge(input_bytes=1)
@@ -275,7 +312,8 @@ def _serve_on_owner(owner):
         originals = transport._recv_request(connection,
             maximum_original_bytes=transport.MAX_ORIGINAL_BYTES - owner.original_reservation_bytes,
             deadline_ns=deadline, work=work, current=current)
-        response, response_current, response_deadline = _issue_on_owner(owner, originals, current=current)
+        response, response_current, response_deadline = _issue_on_owner(owner, originals,
+            current=current, _request=_request)
         transport._send_response(connection, response, deadline_ns=response_deadline,
             work=work, current=response_current)
         response_current()

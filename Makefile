@@ -6185,6 +6185,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-workload-identity-issuance-authorization.v1.schema.json \
 				schemas/workload-identity-issuer-bootstrap.v2.schema.json \
 				schemas/control-plane-workload-identity-bootstrap.v2.schema.json \
+				schemas/workload-identity-issuer-bootstrap.v3.schema.json \
+				schemas/control-plane-workload-identity-bootstrap.v3.schema.json \
 				schemas/native-enrollment-setup-authorizer.v1.schema.json \
 				schemas/native-enrollment-packet.v2.schema.json \
 				schemas/release-completion-verification.v1.schema.json \

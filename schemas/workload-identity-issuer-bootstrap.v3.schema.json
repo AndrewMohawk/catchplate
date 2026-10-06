@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/workload-identity-issuer-bootstrap.v3.schema.json",
+  "title": "Root-signed bounded sequential native workload issuer bootstrap v3",
+  "description": "Closed canonical public original, at most 131072 bytes. Ed25519 signs the exact v3 payload-schema ASCII bytes, NUL and canonical payload. This explicit service profile preserves each separately signed native issuance grant and exact raw3 exchange; it grants no automatic retry, new key, renewed interval or checkpoint reset. The service lifetime is at most two hours from its ORIGINAL signed issuance and is further clipped to the actual CA and original cold clock. Existing v1/v2 remain separate one-exchange profiles. Schema validation is not authority.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedWorkloadIdentityIssuerBootstrap/v3"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/properties/signature"}
+  },
+  "$defs": {
+    "service": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "maximumExchanges"],
+      "properties": {
+        "mode": {"const": "sequential-bounded"},
+        "maximumExchanges": {"type": "integer", "minimum": 1, "maximum": 1024}
+      },
+      "description": "Must not exceed the signed journal maximumRecords. Each accepted connection consumes a service slot, even if no successful certificate results. Journal byte/record limits and original cumulative validation work remain independent limits."
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "serviceUid", "serviceGid", "processMode", "configurationDigest", "journalNamespace", "issuerCertificate", "authorizationKey", "policyHash", "caPrivateKey", "journal", "launch", "issuedAtEpochNs", "expiresAtEpochNs", "nativeEnrollment", "service"],
+      "properties": {
+        "schema": {"const": "serverware.workloadIdentityIssuerBootstrap/v3"},
+        "sourceRevision": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/payload/properties/sourceRevision"},
+        "purpose": {"const": "native-workload-identity-issuance"}, "trustMode": {"const": "trusted-host-local"},
+        "serviceUid": {"const": 65492}, "serviceGid": {"const": 65492},
+        "processMode": {"const": "workload-identity-issuer"},
+        "configurationDigest": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/digest"},
+        "journalNamespace": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/payload/properties/journalNamespace"},
+        "issuerCertificate": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/wrapped"},
+        "authorizationKey": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/wrappedKey"},
+        "policyHash": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/digest"},
+        "nativeEnrollment": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/nativeEnrollment"},
+        "caPrivateKey": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/caPrivateKey"},
+        "journal": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/journal"},
+        "launch": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/launch"},
+        "issuedAtEpochNs": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/positive"},
+        "expiresAtEpochNs": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/positive", "description": "Strictly after issue and no more than 7200000000000 ns later; actual currentness and CA validity are mandatory."},
+        "service": {"$ref": "#/$defs/service"}
+      }
+    }
+  }
+}

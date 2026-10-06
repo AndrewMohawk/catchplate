@@ -7771,6 +7771,7 @@ def key_release_verify(
 def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any]:
     snapshot = get_policy_snapshot()
     setup_cancellation_profile = _setup_tracking_cancellation_profile()
+    setup_creation_profile = _setup_tracking_creation_profile()
     metadata = snapshot.raw.get("metadata") if snapshot else {}
     can_view_credentials = identity.has_any_role({"policy_author", "credential_owner"})
     can_view_routes = identity.has_any_role(
@@ -7829,6 +7830,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "oauthProviders": provider_status_with_custody() if can_view_credentials else [],
         "setupTrackingCancellationAvailable": setup_cancellation_profile != "unavailable",
         "setupTrackingCancellationProfile": setup_cancellation_profile,
+        "setupTrackingCreationProfile": setup_creation_profile,
         "currentUserId": identity.user_id,
         "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
@@ -12869,6 +12871,16 @@ def _setup_tracking_cancellation_profile() -> str:
     return "controlled-v1" if control_plane_setup_cancel.selected() else "unavailable"
 
 
+def _setup_tracking_creation_profile() -> str:
+    if _setup_tracking_cancellation_available():
+        return "ordinary-v1"
+    from serverware import control_plane_setup_create
+
+    # This advertises only the current transport. Signed purpose admission,
+    # retained capacity, roles and fresh hardware are independently enforced.
+    return "controlled-v1" if control_plane_setup_create.selected() else "unavailable"
+
+
 def _setup_sha256_json(value: Any) -> str:
     return (
         "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
@@ -13817,9 +13829,8 @@ def setup_session_create(
         require_role("admin", "policy_author", "policy_publisher", "credential_owner")
     ),
 ) -> dict[str, Any]:
-    from serverware import oauth_application_owner
-    if oauth_application_owner.setup_profile_selected():
-        raise HTTPException(status_code=409, detail="use the controlled Setup create draft/options/submit ceremony")
+    if _setup_tracking_creation_profile() != "ordinary-v1":
+        raise HTTPException(status_code=409, detail="use the explicit controlled Setup creation ceremony; direct protected metadata creation is unavailable")
     route_policy_digest = payload.route_policy_digest
     _require_authoritative_setup_route_binding(
         route_id=payload.route_id,
@@ -13840,6 +13851,27 @@ def setup_session_create(
         _setup_session_error(exc)
         raise AssertionError("unreachable")
     return _finish_setup_transition(item)
+
+
+@app.post("/api/setup/sessions/create/draft")
+@app.post("/api/setup/sessions/create/options")
+@app.post("/api/setup/sessions/create/execute")
+@app.post("/api/setup/sessions/create/settle")
+async def controlled_setup_create(request: Request) -> Response:
+    from serverware import control_plane_setup_create as controlled
+    from starlette.concurrency import run_in_threadpool
+
+    raw = await _native_oauth_original(request, controlled.MAX_REQUEST)
+    try:
+        result = await run_in_threadpool(controlled.on_request, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > controlled.MAX_RESPONSE:
+            raise ValueError("bounded Setup creation response")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Setup creation refused or outcome unknown; inspect the original ID and event without automatically resubmitting. Independently selected purpose, TTL and retained capacity limits still apply") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/setup/sessions")
@@ -23163,9 +23195,13 @@ UI_HTML = r"""
         <div class="toolbar setup-session-controls">
           <div><label for="setup-session">Setup run</label><select id="setup-session"><option value="">New setup</option></select></div>
           <button id="setup-new-button" class="secondary" type="button" onclick="runUiAction('Create setup run', createSetupSession)">New run</button>
+          <div id="setup-create-ttl-row" hidden><label for="setup-create-ttl">Tracking lifetime (seconds)</label><input id="setup-create-ttl" type="number" min="300" max="604800" step="1" value="86400"></div>
           <div><label for="setup-assignee">Next operator</label><input id="setup-assignee" maxlength="512" placeholder="user:operator"></div>
           <button id="setup-handoff-button" class="secondary" type="button" onclick="runUiAction('Hand off setup run', handoffSetupSession)" disabled>Hand off</button>
         </div>
+        <p id="setup-create-status" class="hint" role="status" aria-live="polite"></p>
+        <button id="setup-create-settle-button" class="secondary" type="button" onclick="runUiAction('Settle Setup creation audit', settleSetupCreation)" disabled>Settle completed creation audit</button>
+        <p id="setup-create-settle-status" class="hint" role="status" aria-live="polite"></p>
         <details>
           <summary>Cancel this Setup's tracking</summary>
           <p class="hint">This ends only the selected Setup run. It does not revoke a credential or certificate, abort a policy candidate, stop a workload, or resolve a previously uncertain action. Its bindings and evidence remain retained.</p>
@@ -23531,6 +23567,8 @@ UI_HTML = r"""
     let setupLoadGeneration = 0;
     const setupCancellationAttempts = new Map();
     const setupCancellationSettlements = new Map();
+    let setupCreationAttempt = null;
+    const setupCreationSettlements = new Map();
     let setupLoadInFlight = null;
     let refreshInFlight = null;
     let auditSearchGeneration = 0;
@@ -25094,16 +25132,136 @@ UI_HTML = r"""
       );
     }
 
-    async function createSetupSession(checkContext = undefined) {
-      checkContext?.();
+    function setupCreationOperator() {
+      return Boolean(hasOperatorAuth() && (state.currentUserRoles || []).some(role =>
+        ['admin', 'policy_author', 'policy_publisher', 'credential_owner'].includes(role))
+        && ['ordinary-v1', 'controlled-v1'].includes(state.setupTrackingCreationProfile)
+        && (state.setupTrackingCreationProfile !== 'controlled-v1' || !adminToken()
+          && state.authStatus?.authMethod === 'oidc-session' && state.authStatus?.sessionState === 'active'));
+    }
+
+    function setupCreationEvent(session = state.setupSession) {
+      if (!session) return null;
+      if (setupCreationAttempt?.outcome === 'confirmed' && setupCreationAttempt.sessionId === session.id
+          && setupCreationAttempt.audit?.settlement === 'controlled_pending') return setupCreationAttempt.audit.eventId;
+      const events = (session.events || []).filter(event => event.transition === 'create'
+        && event.audit_status === 'controlled_pending' && event.event?.details?.authorityOperation === 'setup.session.create');
+      return events.length === 1 ? events[0].id : null;
+    }
+
+    function renderSetupCreation() {
+      const controlled = state.setupTrackingCreationProfile === 'controlled-v1';
+      const native = (state.oauthProviders || []).some(item => item.id === policyTemplates[currentSetupSelection().template]?.provider
+        && item.consentProfile === nativeOAuthSetupSchema);
+      const unresolved = setupCreationAttempt && setupCreationAttempt.outcome !== 'confirmed';
+      $('setup-new-button').disabled = (!native && !setupCreationOperator()) || Boolean(unresolved);
+      $('setup-create-ttl-row').hidden = !controlled || native;
+      $('setup-create-ttl').disabled = Boolean(unresolved);
+      const visible = setupCreationAttempt?.authScope === policyAuthoringScope() ? setupCreationAttempt : null;
+      $('setup-create-status').textContent = visible
+        ? visible.outcome === 'confirmed' ? `Tracking run ${visible.sessionId} was created. Its creation audit is not yet claimed settled; no other binding was created.`
+          : `Creation was started${visible.sessionId ? ` for ${visible.sessionId}` : ''}; outcome is not adopted. Inspect that exact ID and retained events. This page will not retry or create a replacement.`
+        : unresolved ? 'A previous creation attempt remains unresolved. No replacement or retry is offered from this page.'
+        : native ? 'This provider uses its separate native OAuth Setup ceremony.'
+        : controlled ? 'New run requires an active OIDC cookie and a new hardware assertion. Transport availability is not signed purpose admission: independently selected TTL and retained-capacity limits still apply.'
+        : state.setupTrackingCreationProfile === 'ordinary-v1' ? 'New run creates only Setup tracking; it does not issue credentials, approve policy or enroll a workload.'
+        : 'Creation is unavailable for this profile; no admitted controlled request transport is available.';
+      const session = state.setupSession, eventId = setupCreationEvent(session), settlement = setupCreationSettlements.get(eventId);
+      const participant = session && ((state.currentUserRoles || []).includes('admin')
+        || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId));
+      $('setup-create-settle-button').disabled = !controlled || !setupCreationOperator() || !participant || !eventId || Boolean(settlement);
+      const visibleSettlement = settlement?.authScope === policyAuthoringScope() ? settlement : null;
+      $('setup-create-settle-status').textContent = visibleSettlement
+        ? visibleSettlement.result ? `Creation event ${eventId} audit settled as ${visibleSettlement.result.auditEventHash}. Reload the exact run for a fresh record.`
+          : `Settlement of creation event ${eventId} was started; outcome is not adopted. Inspect the event; this page will not retry.`
+        : 'Audit settlement is a separate explicit readback of the genuine completed outbox, not another creation or hardware approval.';
+    }
+
+    async function controlledSetupCreation(body, checkContext, attempt) {
+      const schema = 'serverware.setupTrackingCreationRequest/v1', optionsSchema = 'serverware.setupTrackingCreationOptions/v1';
+      const post = async (phase, input) => {
+        checkContext();
+        const value = await api('/api/setup/sessions/create/' + phase, {method: 'POST', checkContext,
+          body: oauthConsentCanonical({apiVersion: schema, ...input})});
+        checkContext(); return value;
+      };
+      const draft = await post('draft', body);
+      if (!oauthConsentClosed(draft, ['apiVersion', 'okForAction', 'argumentsOriginal', 'requestDigest'])
+          || draft.apiVersion !== schema || draft.okForAction !== false || !oauthConsentDigest(draft.requestDigest)) {
+        throw new Error('Creation draft does not match its closed request contract');
+      }
+      const original = draft.argumentsOriginal, args = oauthConsentParse(original, 128 * 1024).value;
+      if (oauthConsentCanonical(args) !== original || !oauthConsentClosed(args, ['actor_id', 'control_plane_configuration_digest', 'credential_policy', 'request'])
+          || args.actor_id !== state.currentUserId || !oauthConsentDigest(args.control_plane_configuration_digest)
+          || !oauthConsentClosed(args.request, ['sessionId', 'templateId', 'principalId', 'routeId', 'routePolicyDigest', 'ttlSeconds', 'issuedAtEpochNs', 'expiresAtEpochNs'])
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(args.request.sessionId)
+          || !['templateId', 'principalId', 'routeId', 'routePolicyDigest'].every(key => args.request[key] === body[key])
+          || oauthConsentInteger(args.request.ttlSeconds) !== BigInt(body.ttlSeconds)) {
+        throw new Error('Creation draft differs from the original operator, selection or tracking lifetime');
+      }
+      const issued = oauthConsentInteger(args.request.issuedAtEpochNs), expires = oauthConsentInteger(args.request.expiresAtEpochNs);
+      if (issued <= 0n || expires <= issued || expires - issued > 30000000000n) throw new Error('Creation authority interval is invalid');
+      attempt.sessionId = args.request.sessionId;
+      renderSetupCreation(); checkContext();
+      const options = await post('options', {argumentsOriginal: original});
+      if (!oauthConsentClosed(options, ['publicKey', 'serverware']) || options.serverware?.schema !== optionsSchema
+          || options.serverware.operation !== 'setup.session.create' || options.serverware.requestDigest !== draft.requestDigest
+          || options.publicKey?.userVerification !== 'required' || !Array.isArray(options.publicKey.allowCredentials)
+          || options.publicKey.allowCredentials.length !== 1 || !window.PublicKeyCredential || !navigator.credentials) {
+        throw new Error('Exact hardware creation options are unavailable');
+      }
+      const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+      checkContext();
+      const result = await post('execute', {argumentsOriginal: original,
+        mfa: {setupTrackingCreationProfile: optionsSchema, assertion: credentialToJson(assertion)}});
+      if (!oauthConsentClosed(result, ['ok', 'operation', 'requestDigest', 'auditEventDigest', 'idempotentReplay', 'setupOriginal', 'setupEventId', 'auditState'])
+          || result.ok !== true || result.operation !== 'setup.session.create' || result.requestDigest !== draft.requestDigest
+          || result.idempotentReplay !== false || result.auditState !== 'controlled_pending' || !oauthConsentDigest(result.auditEventDigest)
+          || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(result.setupEventId)) {
+        throw new Error('Creation outcome is not the exact durable result; inspect without retry');
+      }
+      const session = setupCancellationSession(result.setupOriginal);
+      const initial = {apiVersion: 'serverware.setupSession/v1', id: attempt.sessionId,
+        ownerId: args.actor_id, currentAssigneeId: args.actor_id, status: 'active', phase: 'created', revision: 0,
+        templateId: body.templateId, principalId: body.principalId, routeId: body.routeId, routePolicyDigest: body.routePolicyDigest};
+      if (Object.entries(initial).some(([key, value]) => session[key] !== value)
+          || session.createdAt !== session.updatedAt || !Number.isFinite(Date.parse(session.createdAt))
+          || Date.parse(session.expiresAt) - Date.parse(session.createdAt) !== body.ttlSeconds * 1000
+          || Object.keys(session).some(key => !(key in initial) && !['createdAt', 'updatedAt', 'expiresAt'].includes(key) && session[key] !== null)) {
+        throw new Error('Created row differs from the exact blank tracking run; inspect the original ID without retry');
+      }
+      return {session, audit: {settlement: result.auditState, eventId: result.setupEventId,
+        outboxEventDigest: result.auditEventDigest, requestDigest: result.requestDigest}};
+    }
+
+    async function createSetupSession(outerCheck = undefined) {
+      outerCheck?.();
       const selection = currentSetupSelection();
       if (!selection.template || !selection.principalId || !selection.routeId) {
         throw new Error('Select a template, principal, and route before creating a setup run');
       }
       const provider = policyTemplates[selection.template]?.provider;
       if ((state.oauthProviders || []).some(item => item.id === provider && item.consentProfile === nativeOAuthSetupSchema)) {
+        if (setupCreationAttempt && setupCreationAttempt.outcome !== 'confirmed') throw new Error('Inspect the unresolved tracking creation before any replacement run');
         return {session: await nativeSetupCreate(), audit: {settlement: 'protected-explicit-settle-required'}};
       }
+      if (!setupCreationOperator()) throw new Error('Setup creation is unavailable for the current operator and request profile');
+      if (setupCreationAttempt && setupCreationAttempt.outcome !== 'confirmed') throw new Error('Inspect the original creation; no retry or replacement is authorized from this page');
+      const creationProfile = state.setupTrackingCreationProfile, authScope = policyAuthoringScope();
+      const originalSession = state.setupSession, sessionOriginal = JSON.stringify(originalSession), selectedId = $('setup-session').value;
+      const generation = setupLoadGeneration, selectionOriginal = JSON.stringify(selection), ttlText = $('setup-create-ttl').value;
+      const policy = state.activePolicy, policyOriginal = JSON.stringify(policy);
+      const checkContext = () => {
+        outerCheck?.();
+        if (!setupCreationOperator() || state.setupTrackingCreationProfile !== creationProfile || policyAuthoringScope() !== authScope
+            || state.setupSession !== originalSession || JSON.stringify(originalSession) !== sessionOriginal
+            || $('setup-session').value !== selectedId || setupLoadGeneration !== generation
+            || JSON.stringify(currentSetupSelection()) !== selectionOriginal || $('setup-create-ttl').value !== ttlText
+            || state.activePolicy !== policy || JSON.stringify(policy) !== policyOriginal) {
+          throw new Error('Original Setup selection, policy or operator changed; no further creation dispatch is authorized');
+        }
+      };
+      checkContext();
       const activeRoute = (state.activePolicy?.bundle?.routes || []).find((item) => item.id === selection.routeId);
       const body = {
         templateId: selection.template,
@@ -25111,15 +25269,68 @@ UI_HTML = r"""
         routeId: selection.routeId
       };
       if (activeRoute) body.routePolicyDigest = await sha256CanonicalJson(activeRoute);
-      checkContext?.();
-      const result = await api('/api/setup/sessions', {
-        method: 'POST', checkContext,
-        body: JSON.stringify(body)
-      });
-      rememberSetupSession(result.session);
-      state.setupVerification = null;
-      renderSetupWorkflow();
-      return result;
+      checkContext();
+      let attempt = null;
+      if (creationProfile === 'controlled-v1') {
+        const ttl = Number(ttlText);
+        if (!/^\d+$/.test(ttlText) || !Number.isSafeInteger(ttl) || ttl < 300 || ttl > 604800) throw new Error('Tracking lifetime must be 300 to 604800 whole seconds');
+        body.routePolicyDigest ??= null; body.ttlSeconds = ttl;
+        if (!window.confirm(`Create only a new tracking run for ${body.principalId} and ${body.routeId}, lasting ${ttl} seconds? A new hardware assertion is required; no credential, policy or workload will be issued.`)) {
+          return cancelledAction('Setup tracking creation');
+        }
+        checkContext();
+        attempt = {authScope, outcome: 'unresolved', sessionId: null, audit: null};
+        setupCreationAttempt = attempt; renderSetupCreation();
+      }
+      try {
+        const result = creationProfile === 'controlled-v1' ? await controlledSetupCreation(body, checkContext, attempt)
+          : await api('/api/setup/sessions', {method: 'POST', checkContext, body: JSON.stringify(body)});
+        checkContext();
+        if (!result?.session || result.session.status !== 'active' || result.session.phase !== 'created'
+            || result.session.revision !== 0 || result.session.ownerId !== state.currentUserId
+            || result.session.currentAssigneeId !== state.currentUserId
+            || !['templateId', 'principalId', 'routeId'].every(key => result.session[key] === body[key])) {
+          throw new Error('Creation response does not match the original selection');
+        }
+        if (attempt) { attempt.outcome = 'confirmed'; attempt.audit = result.audit; }
+        rememberSetupSession(result.session);
+        state.setupVerification = null;
+        renderSetupWorkflow();
+        return result;
+      } finally { renderSetupCreation(); }
+    }
+
+    async function settleSetupCreation() {
+      const session = state.setupSession, eventId = setupCreationEvent(session);
+      const participant = session && ((state.currentUserRoles || []).includes('admin')
+        || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId));
+      if (state.setupTrackingCreationProfile !== 'controlled-v1' || !setupCreationOperator() || !participant
+          || !eventId || setupCreationSettlements.has(eventId)) throw new Error('Select an unsettled creation event; no settlement retry is authorized');
+      const original = JSON.stringify(session), authScope = policyAuthoringScope(), generation = setupLoadGeneration;
+      const selection = JSON.stringify(currentSetupSelection());
+      const checkContext = () => {
+        if (state.setupTrackingCreationProfile !== 'controlled-v1' || !setupCreationOperator() || policyAuthoringScope() !== authScope
+            || setupLoadGeneration !== generation || state.setupSession !== session || JSON.stringify(session) !== original
+            || $('setup-session').value !== session.id || JSON.stringify(currentSetupSelection()) !== selection
+            || setupCreationEvent(session) !== eventId) throw new Error('Creation settlement context changed; inspect the original event without retry');
+      };
+      checkContext();
+      if (!window.confirm(`Settle only creation audit event ${eventId} from its independently completed outbox?`)) return cancelledAction('Creation audit settlement');
+      checkContext();
+      const attempt = {authScope, result: null}; setupCreationSettlements.set(eventId, attempt); renderSetupCreation();
+      try {
+        const result = await api('/api/setup/sessions/create/settle', {method: 'POST', checkContext,
+          body: oauthConsentCanonical({apiVersion: 'serverware.setupTrackingCreationRequest/v1', sessionId: session.id, eventId})});
+        checkContext();
+        if (!oauthConsentClosed(result, ['ok', 'operation', 'requestDigest', 'auditEventDigest', 'idempotentReplay', 'eventId', 'auditState', 'auditEventHash'])
+            || result.ok !== true || result.operation !== 'setup.session.create-audit-settle' || result.eventId !== eventId
+            || result.idempotentReplay !== false || result.auditState !== 'audited'
+            || !['requestDigest', 'auditEventDigest', 'auditEventHash'].every(key => oauthConsentDigest(result[key]))) {
+          throw new Error('Creation settlement result differs from the original event; inspect without retry');
+        }
+        attempt.result = result;
+        return {...result, uiHandled: true};
+      } finally { renderSetupCreation(); }
     }
 
     async function loadSetupSession(id) {
@@ -25189,7 +25400,7 @@ UI_HTML = r"""
       return Boolean(hasOperatorAuth() && state.setupTrackingCancellationAvailable === true && session
         && ['ordinary-v1', 'controlled-v1'].includes(state.setupTrackingCancellationProfile)
         && (state.setupTrackingCancellationProfile !== 'controlled-v1' || !adminToken()
-          && state.authStatus?.authMethod === 'oidc' && state.authStatus?.sessionState === 'active')
+          && state.authStatus?.authMethod === 'oidc-session' && state.authStatus?.sessionState === 'active')
         && roles.some(role => ['admin', 'attestation_operator', 'attestation_reviewer', 'credential_owner', 'policy_author', 'policy_publisher'].includes(role))
         && (roles.includes('admin') || [session.ownerId, session.currentAssigneeId].includes(state.currentUserId)));
     }
@@ -25389,6 +25600,9 @@ UI_HTML = r"""
     async function ensureSetupSession(checkContext = undefined) {
       checkContext?.();
       if (setupSessionMatchesSelection()) return state.setupSession;
+      if (state.setupTrackingCreationProfile !== 'ordinary-v1') {
+        throw new Error('Use New run explicitly to create and approve the selected tracking run before continuing');
+      }
       const result = await createSetupSession(checkContext);
       return result.session;
     }
@@ -25564,6 +25778,7 @@ UI_HTML = r"""
       if (savedApprovers != null) $('setup-approvers').value = savedApprovers;
       $('setup-approvers-row').hidden = !template?.jit;
       $('setup-approvers').required = Boolean(template?.jit);
+      renderSetupCreation();
       renderPolicyEffect('setup-template-summary', template);
       const bindingsLocked = Boolean(setupSession && setupSession.phase !== 'created');
       $('setup-template').disabled = bindingsLocked;

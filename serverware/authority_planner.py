@@ -34,6 +34,8 @@ from serverware import authority_setup_policy as setup_policy
 from serverware import authority_transition_setup_policy
 from serverware import authority_setup_cancel as setup_cancel
 from serverware import authority_transition_setup_cancel
+from serverware import authority_setup_create as setup_create
+from serverware import authority_transition_setup_create
 from serverware import authority_policy_canary
 from serverware import authority_policy_canary_tables
 from serverware import authority_policy_native_activation
@@ -446,6 +448,7 @@ class PlanningState:
     genesis_root_digest: str | None = None
     genesis_policy: Mapping[str, str] | None = None
     setup_cancel_maximum_events: int | None = None
+    setup_create_policy: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,7 +607,7 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=self.operation)
         try:
-            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
                 query_program = getattr(self.kernel, "queries_with_evidence", None)
                 if not callable(query_program) or verified_webauthn_evidence is None:
                     raise AuthorityPlannerError(
@@ -1165,7 +1168,7 @@ class TypedTransitionPlanningProgram:
             or self.kernel.program_id
                 != authority_contract.transition_program_id(operation)
             or state.database_now is None
-            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
+            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
                 != (state.verified_webauthn_evidence is not None)
         ):
             raise AuthorityPlannerError(
@@ -1192,6 +1195,7 @@ class TypedTransitionPlanningProgram:
                 genesis_root_digest=state.genesis_root_digest,
                 genesis_policy=state.genesis_policy,
                 setup_cancel_maximum_events=state.setup_cancel_maximum_events,
+                setup_create_policy=state.setup_create_policy,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -3766,6 +3770,7 @@ class MeasuredPlanner:
         genesis_root_digest=None,
         genesis_policy=None,
         setup_cancel_maximum_events=None,
+        setup_create_policy=None,
     ) -> None:
         if (
             not read_dsn
@@ -3785,7 +3790,7 @@ class MeasuredPlanner:
         self.connect_timeout_seconds = connect_timeout_seconds
         self.enabled_operations = frozenset(enabled_operations)
         self.programs = dict(programs)
-        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
+        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
             if (
                 not isinstance(verifier_public_key, Ed25519PublicKey)
                 or not isinstance(verifier_identity, Mapping)
@@ -3822,12 +3827,23 @@ class MeasuredPlanner:
         elif setup_cancel_maximum_events is not None:
             raise AuthorityPlannerError("Setup cancellation capacity cannot be supplied to another planner")
         self.setup_cancel_maximum_events = setup_cancel_maximum_events
+        if self.enabled_operations & setup_create.OPERATIONS:
+            try:
+                selected_create_policy = setup_create.validate_policy(setup_create_policy,
+                    payload={"roles": {"planner": {"enabledOperations": enabled_operations}}})
+                self.setup_create_policy = json.loads(setup_create.canonical(selected_create_policy))
+            except (TypeError, ValueError) as exc:
+                raise AuthorityPlannerError("Setup creation planner lacks its signed purpose policy") from exc
+        elif setup_create_policy is not None:
+            raise AuthorityPlannerError("Setup creation policy cannot be supplied to another planner")
+        else:
+            self.setup_create_policy = None
 
     def verify_assertion_evidence(
         self, request: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
         verified_webauthn_evidence = None
-        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
             # Independently pinned receipt verification precedes any proof SQL;
             # current hardware/trust/actor and raw challenge joins are repeated
             # by the purpose kernel over genuine selected originals.
@@ -4002,6 +4018,14 @@ class MeasuredPlanner:
                                 maximum_events=self.setup_cancel_maximum_events)
                             planning_state = replace(planning_state,
                                 setup_cancel_maximum_events=self.setup_cancel_maximum_events)
+                        if operation == setup_create.OPERATION:
+                            authority_transition_setup_create.require_complete_populations(
+                                selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
+                                work=query_work, deadline_ns=request["deadlineMonotonicNs"],
+                                creation_policy=self.setup_create_policy)
+                        if operation in setup_create.OPERATIONS:
+                            planning_state = replace(planning_state,
+                                setup_create_policy=self.setup_create_policy)
                         if operation in ({authority_policy_canary.OP_INTAKE} | authority_policy_native_activation.OPERATIONS):
                             authority_policy_canary_tables.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),

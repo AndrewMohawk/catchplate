@@ -88,6 +88,7 @@ from serverware import authority_policy_candidate_policy as policy_candidate_pol
 from serverware import authority_transition_policy_genesis as genesis_policy
 from serverware import authority_setup_policy as setup_policy
 from serverware import authority_setup_cancel as setup_cancel
+from serverware import authority_setup_create as setup_create
 from serverware import authority_setup_policy_admission as setup_policy_admission
 from serverware import authority_setup_native_enrollment as setup_native_enrollment
 from serverware import authority_setup_native_enrollment_policy as setup_native_enrollment_policy
@@ -1266,7 +1267,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, setup_cancel.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
+            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, setup_cancel.FIELD, setup_create.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1388,6 +1389,10 @@ class MeasuredConfiguration:
             setup_cancel.validate_policy(payload.get(setup_cancel.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority Setup tracking cancellation admission is invalid") from exc
+        try:
+            setup_create.validate_policy(payload.get(setup_create.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority Setup tracking creation admission is invalid") from exc
         try:
             setup_native_enrollment_policy.validate_policy(payload.get(setup_native_enrollment_policy.FIELD), payload=payload, root_key=root_key)
             setup_native_ca.validate_policy(payload.get(setup_native_ca.FIELD), payload=payload, root_key=root_key)
@@ -8583,7 +8588,7 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in (setup_native_final.ASSERTION_OPERATIONS | setup_native_hardware.ASSERTION_OPERATIONS | setup_native_runtime.ASSERTION_OPERATIONS | setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
+        if operation in (setup_native_final.ASSERTION_OPERATIONS | setup_native_hardware.ASSERTION_OPERATIONS | setup_native_runtime.ASSERTION_OPERATIONS | setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | setup_cancel.ASSERTION_OPERATIONS | setup_create.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
             selected_profile = (setup_native_final if operation in setup_native_final.OPERATIONS else
@@ -8594,6 +8599,7 @@ class AuthorityProcess:
                 setup_native_enrollment if operation in setup_native_enrollment.OPERATIONS else
                 setup_policy if operation in setup_policy.OPERATIONS else
                 setup_cancel if operation in setup_cancel.OPERATIONS else
+                setup_create if operation in setup_create.OPERATIONS else
                 policy_candidate if operation in policy_candidate.OPERATIONS else
                 oauth_succession if operation in oauth_succession.OPERATIONS else
                 oauth_reconnect if operation in oauth_reconnect.OPERATIONS else
@@ -8652,6 +8658,9 @@ class AuthorityProcess:
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if operation in setup_cancel.OPERATIONS:
                 setup_cancel.verify_original(operation, values,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if operation in setup_create.OPERATIONS:
+                setup_create.verify_original(operation, values,
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if operation in policy_candidate.OPERATIONS:
                 policy_candidate_policy.verify_original(operation, values,
@@ -8942,6 +8951,12 @@ class AuthorityProcess:
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if setup_cancel.request_digest(operation, original_values) != request_digest:
                 raise AuthorityServiceError("Setup tracking cancellation original commitment differs")
+        if operation in setup_create.OPERATIONS:
+            original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            setup_create.verify_original(operation, original_values,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if setup_create.request_digest(operation, original_values) != request_digest:
+                raise AuthorityServiceError("Setup tracking creation original commitment differs")
         if operation in native_activation.OPERATIONS:
             original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
             native_activation.verify_original(operation, original_values, configuration_payload=self.configuration.payload,
@@ -9060,12 +9075,14 @@ class AuthorityProcess:
         issued_monotonic_ns = time.monotonic_ns()
         issued_at_epoch_ns = time.time_ns()
         remaining_ns = deadline_monotonic_ns - issued_monotonic_ns
-        if operation == setup_cancel.OPERATION:
-            cancel_values = setup_cancel.arguments(operation, arguments,
+        if operation in {setup_cancel.OPERATION, setup_create.OPERATION}:
+            tracking_profile = setup_cancel if operation == setup_cancel.OPERATION else setup_create
+            tracking_name = "cancellation" if operation == setup_cancel.OPERATION else "creation"
+            tracking_values = tracking_profile.arguments(operation, arguments,
                 typed="businessIntent" in arguments)
-            original_expires = cancel_values["request"]["expiresAtEpochNs"]
-            if issued_at_epoch_ns < cancel_values["request"]["issuedAtEpochNs"]:
-                raise AuthorityServiceError("Setup cancellation clock precedes its approved original")
+            original_expires = tracking_values["request"]["expiresAtEpochNs"]
+            if issued_at_epoch_ns < tracking_values["request"]["issuedAtEpochNs"]:
+                raise AuthorityServiceError(f"Setup {tracking_name} clock precedes its approved original")
             remaining_ns = min(remaining_ns, original_expires - issued_at_epoch_ns)
             deadline_monotonic_ns = min(deadline_monotonic_ns, issued_monotonic_ns + remaining_ns)
         if remaining_ns <= 0:
@@ -9136,13 +9153,13 @@ class AuthorityProcess:
             webauthn_trust_high_water_digest = (
                 webauthn_receipt["trustHighWaterDigest"]
             )
-        if operation == setup_cancel.OPERATION:
+        if operation in {setup_cancel.OPERATION, setup_create.OPERATION}:
             # The executor's capability must expire with this exact assertion,
             # even when its challenge expires before the request's own bound.
             deadline_epoch_ns = min(deadline_epoch_ns, webauthn_evidence["expiresAtEpochNs"])
             assertion_mono, assertion_epoch = time.monotonic_ns(), time.time_ns()
             if assertion_epoch < issued_at_epoch_ns or assertion_epoch >= deadline_epoch_ns:
-                raise AuthorityServiceError("Setup cancellation assertion expired before planning")
+                raise AuthorityServiceError(f"Setup {tracking_name} assertion expired before planning")
             deadline_monotonic_ns = min(deadline_monotonic_ns,
                 issued_monotonic_ns + deadline_epoch_ns - issued_at_epoch_ns,
                 assertion_mono + deadline_epoch_ns - assertion_epoch)
@@ -9296,6 +9313,26 @@ class AuthorityProcess:
                     now_epoch_ns=cancel_now, work=_ValidationWork(QueryReadValidationLimits()))
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
                 raise AuthorityServiceError("Setup cancellation plan differs from its admitted originals") from exc
+        if operation == setup_create.OPERATION:
+            from serverware import authority_transition_setup_create as create_kernel
+            from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+            # Only this verifier's independently admitted root policy and local
+            # assertion can authorize the planner's bounded creation proposal.
+            create_originals = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            create_now = time.time_ns()
+            try:
+                setup_create.verify_original(operation, create_originals,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                    now_epoch_ns=create_now)
+                creation_policy = setup_create.validate_policy(self.configuration.payload.get(setup_create.FIELD),
+                    payload=self.configuration.payload, root_key=self.configuration.root_key)
+                create_kernel.verify_create_plan(payload=plan_payload, arguments=create_originals,
+                    verified_webauthn_evidence=webauthn_evidence, creation_policy=creation_policy,
+                    deadline_ns=deadline_monotonic_ns, now_epoch_ns=create_now,
+                    work=_ValidationWork(QueryReadValidationLimits()))
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise AuthorityServiceError("Setup creation plan differs from its admitted originals") from exc
         if operation in canary_delivery.OPERATIONS:
             canary_delivery_completion.preflight_bounds(operation, request_original=_delivery_request_original,
                 signed_plan=signed_plan, configuration_original=self.configuration.original_bytes,
@@ -9624,6 +9661,9 @@ class AuthorityProcess:
         if planner_request["operation"] in setup_cancel.OPERATIONS:
             setup_cancel.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in setup_create.OPERATIONS:
+            setup_create.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in native_activation.OPERATIONS:
             native_activation.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
@@ -9721,6 +9761,10 @@ class AuthorityProcess:
                 self.configuration.payload.get(setup_cancel.FIELD), payload=self.configuration.payload,
                 root_key=self.configuration.root_key)["maximumEvents"]
                 if set(self.role_config["enabledOperations"]) & setup_cancel.OPERATIONS else None),
+            setup_create_policy=(setup_create.validate_policy(
+                self.configuration.payload.get(setup_create.FIELD), payload=self.configuration.payload,
+                root_key=self.configuration.root_key)
+                if set(self.role_config["enabledOperations"]) & setup_create.OPERATIONS else None),
         )
         # Check the pinned embedded receipt even on a durable-plan replay, and
         # before asking another process for stored planning data.

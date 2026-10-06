@@ -647,6 +647,8 @@ class KernelContext:
     genesis_policy: Mapping[str, str] | None = None
     # Independently admitted Setup cancellation capacity, never HTTP arguments.
     setup_cancel_maximum_events: int | None = None
+    # Independently admitted creation purpose and capacities, never HTTP input.
+    setup_create_policy: Mapping[str, Any] | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

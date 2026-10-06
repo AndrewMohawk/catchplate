@@ -123,7 +123,8 @@ class CancelKernel:
             shared._role_query(self.operation, "actor_role", values["actor_id"]),
             core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", "setup_session_events"),
                 table="setup_session_events", predicates=(), order_by=(core.QueryOrder("id"),),
-                maximum_rows=profile.MAX_EVENTS + 1, proof_primitive="bounded-limit-plus-one", work_units=profile.MAX_EVENTS + 1),
+                maximum_rows=profile.MAX_EVENTS + 1, page_size=profile.MAX_EVENTS,
+                proof_primitive="bounded-limit-plus-one", work_units=profile.MAX_EVENTS + 1),
             shared._query(operation=self.operation, name="cancel_event", table="setup_session_events", key={"id": item_id}, require_absence=True),
             shared._query(operation=self.operation, name="cancel_audit_link", table=profile.AUDIT_LINK_TABLE, key={"id": item_id}, require_absence=True)]
         for name, table, field in (("assertion_credential", "webauthn_credentials", "credentialRecordId"),

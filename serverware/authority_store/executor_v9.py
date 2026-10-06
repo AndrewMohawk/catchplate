@@ -1886,7 +1886,17 @@ def install_authority_v9_executor(
                 FROM pg_catalog.jsonb_array_elements(
                     planner.mutation_plan_json::pg_catalog.jsonb
                 ) AS planned(value)
-                ORDER BY planned.value->>'table' COLLATE "C",
+                -- These exact creation purposes insert a session and its
+                -- event in one transaction. The event's immediate foreign
+                -- key requires its parent first; canonical plan ordering is
+                -- still preserved for hashing, retention and every other
+                -- operation. No constraint or mutation guard is bypassed.
+                ORDER BY CASE
+                    WHEN capability.operation IN ('setup.session.create', 'oauth.setup.create')
+                        AND planned.value->>'table' = 'setup_sessions'
+                        AND planned.value->>'operation' = 'INSERT'
+                    THEN 0 ELSE 1 END,
+                    planned.value->>'table' COLLATE "C",
                     planned.value->>'keyDigest' COLLATE "C",
                     planned.value->>'operation' COLLATE "C"
             LOOP

@@ -130,7 +130,7 @@ async function staticRotationCookie(operation) {
   operation.check(); return value;
 }
 async function staticRotationRequest(route, body, operation) {
-  staticRotationNeed(/^(assignment|intent|candidate|approval\/status|(approval\/(request|decide)|rotate)\/(draft|options|execute))$/.test(route));
+  staticRotationNeed(/^(assignment|predecessor|intent|candidate|approval\/status|(approval\/(request|decide)|rotate)\/(draft|options|execute))$/.test(route));
   await staticRotationCookie(operation); operation.check();
   const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin',
     redirect: 'error', cache: 'no-store', signal: operation.controller.signal});
@@ -335,13 +335,24 @@ sr('rotation-form').addEventListener('submit', event => {
   rotationFlow = flow; sr('rotation-start').disabled = true;
   const form = new FormData(event.target);
   flow.requestedId = String(form.get('credentialId'));
-  flow.provenance = String(form.get('previousProvenanceOriginal'));
+  flow.provenance = null;
   for (const field of event.target.elements) field.disabled = true;
   void (async () => {
     const operation = staticRotationOperation(() => rotationPageCheck(flow));
     try {
-      staticRotationNeed(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(flow.requestedId)
-        && staticRotationText(flow.provenance, 40960));
+      staticRotationNeed(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(flow.requestedId));
+      rotationPageMessage('Reading the current generation and its retained public provenance. No drain or rotation has started.');
+      const previous = await staticRotationRequest('predecessor', {credentialId: flow.requestedId}, operation);
+      staticRotationNeed(staticRotationClosed(previous, ['apiVersion', 'okForAction', 'credentialId', 'credentialVersion',
+        'originRequestDigest', 'provenanceOriginal', 'provenanceSha256'])
+        && previous.apiVersion === 'serverware.staticCredentialProvenanceObservation/v1' && previous.okForAction === false
+        && previous.credentialId === flow.requestedId && staticRotationText(previous.provenanceOriginal, 40960)
+        && /^sha256:[0-9a-f]{64}$/.test(previous.originRequestDigest)
+        && /^sha256:[0-9a-f]{64}$/.test(previous.provenanceSha256));
+      const previousVersion = staticRotationNumberView(staticRotationOriginals.get(previous)).credentialVersion;
+      staticRotationNeed(typeof previousVersion === 'string' && /^[1-9][0-9]{0,18}$/.test(previousVersion)
+        && BigInt(previousVersion) < 9223372036854775807n);
+      flow.provenance = previous.provenanceOriginal;
       const result = await staticRotationRequest('intent', {credentialId: flow.requestedId,
         previousProvenanceOriginal: flow.provenance, ttlSeconds: Number(form.get('ttlSeconds'))}, operation);
       staticRotationNeed(staticRotationClosed(result, ['apiVersion', 'okForAction', 'intentOriginal', 'credentialId',
@@ -353,6 +364,8 @@ sr('rotation-form').addEventListener('submit', event => {
       staticRotationNeed(intent.apiVersion === 'serverware.staticCredentialRotationIntent/v1'
         && intent.operation === 'credential.static.rotate' && intent.request?.credentialId === flow.requestedId
         && intent.request.previousProvenanceOriginal === flow.provenance
+        && intent.request.previousCurrentnessOriginRequestDigest === previous.originRequestDigest
+        && versions.previous === previousVersion
         && typeof intent.request.name === 'string' && typeof intent.request.kind === 'string');
       const origin = new URL(result.intakeOrigin);
       staticRotationNeed(origin.protocol === 'https:' && origin.origin === result.intakeOrigin
@@ -500,15 +513,14 @@ STATIC_CREDENTIAL_ROTATION_PAGE = r"""<!doctype html><html lang="en"><meta chars
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Rotate protected static credential</title>
 <style>body{font:16px system-ui;max-width:48rem;margin:3rem auto;padding:0 1rem}label{display:block;margin-top:1rem}input,select,textarea{box-sizing:border-box;width:100%;padding:.5rem}button{margin:.8rem .5rem .8rem 0;padding:.6rem}pre,p{overflow-wrap:anywhere}</style>
 <h1>Rotate protected static credential</h1>
-<p>Use your active OIDC operator session. Select an existing static credential and its exact retained public provenance. Its current version, identity, kind and metadata are read from protected state, not edited here. Enter the new secret exclusively in the authenticated native window. No secret, candidate or assertion is saved to browser storage.</p>
+<p>Use your active OIDC operator session. Select an existing static credential. Its current version, public provenance, identity, kind and metadata are read from protected state, not edited here. Enter the new secret exclusively in the authenticated native window. No secret, candidate or assertion is saved to browser storage.</p>
 <details><summary>Deployment operator: admit the native assignment</summary>
 <p>After the enclave boots, the independent assignment service signs its actual public identity and immutable configuration. Admit that unchanged public original once for this server process. This does not authorize rotation or replace fresh native proof. Never paste private keys or credentials here.</p>
 <label>Signed public assignment original<textarea id="rotation-assignment-original" autocomplete="off" spellcheck="false"></textarea></label>
 <button id="rotation-assignment-admit" type="button">Admit signed assignment</button>
 <p id="rotation-assignment-status" role="status" aria-live="polite">No assignment submitted from this page.</p></details>
 <form id="rotation-form"><label>Existing credential ID<input name="credentialId" required autocomplete="off" spellcheck="false"></label>
-<label>Exact public provenance original from the previous completed generation<textarea name="previousProvenanceOriginal" required autocomplete="off" spellcheck="false" rows="6"></textarea></label>
-<p>This is the retained creation/rotation provenance containing its original signed native evidence, not a secret, private key, guessed digest or freshly renewed proof. If that original is unavailable, this page cannot reconstruct it.</p>
+<p>The server retrieves and verifies the previous generation's retained public evidence. If its original evidence or completed audit is unavailable, rotation stays unavailable; this page never guesses or renews it.</p>
 <label>Candidate lifetime (seconds, maximum 3600)<input name="ttlSeconds" type="number" min="1" max="3600" value="900" required></label>
 <button id="rotation-start" type="submit">Open native secret intake</button></form>
 <pre id="rotation-selection" aria-label="Actual selected predecessor"></pre>

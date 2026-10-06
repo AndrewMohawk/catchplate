@@ -16846,6 +16846,7 @@ async def controlled_static_credential(request: Request) -> Response:
 
 
 @app.post("/api/credentials/static/rotation/assignment")
+@app.post("/api/credentials/static/rotation/predecessor")
 @app.post("/api/credentials/static/rotation/intent")
 @app.post("/api/credentials/static/rotation/candidate")
 @app.post("/api/credentials/static/rotation/approval/status")

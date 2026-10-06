@@ -25,7 +25,7 @@ from serverware import authority_credential_currentness as currentness_profile
 from serverware import credential_currentness_rows
 
 PREFIX = "/api/credentials/static/rotation"
-PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
+PATHS = frozenset({PREFIX + "/assignment", PREFIX + "/predecessor", PREFIX + "/intent", PREFIX + "/candidate", PREFIX + "/approval/status"} | {
     PREFIX + "/" + operation + "/" + phase
     for operation in ("approval/request", "approval/decide", "rotate")
     for phase in ("draft", "options", "execute")})
@@ -650,6 +650,10 @@ def on_request(request, raw):
 def _handle(owner, route, value):
     if route == "approval/status":
         return _approval_status(owner, value)
+    if route == "predecessor":
+        profile.require(set(value) == {"apiVersion", "credentialId"})
+        from serverware import control_plane_static_credential_provenance as retained
+        return retained.lookup(owner, value["credentialId"])
     if route == "assignment":
         profile.require(set(value) == {"apiVersion", "assignmentOriginal"})
         original = value["assignmentOriginal"]

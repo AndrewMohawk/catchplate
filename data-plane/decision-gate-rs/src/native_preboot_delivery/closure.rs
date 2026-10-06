@@ -1,7 +1,7 @@
 //! Data-only closure for the explicitly selected fresh v24 delivery layout.
 //! These joins grant neither inner signature validity nor native readiness.
 //! The unchanged v24 decoder and retained original owners remain mandatory.
-use super::{digest, ensure, json, pin, MAX_FILE, MAX_TOTAL};
+use super::{digest, ensure, json, pin, Profile, MAX_FILE, MAX_TOTAL};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use zeroize::Zeroizing;
@@ -132,13 +132,22 @@ fn logical_roles(role: &str) -> &'static [&'static str] {
 
 /// Signature/actual boot/time admission is the caller's preceding operation.
 /// Exact N and launch bytes are copied, never rewritten into this layout.
-pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap<String, Vec<u8>>)
+pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap<String, Vec<u8>>, profile: Profile)
     -> Result<Plan, String> {
     ensure(artifacts.len() <= 126 && !artifacts.contains_key("configuration")
         && !artifacts.contains_key("launch"), "preboot artifact count or reserved label differs")?;
     let n = json::parse(configuration, MAX_FILE)?;
     let l = json::parse(launch, 16384)?;
-    exact(&n, "apiVersion", "serverware.nativeStartupConfiguration/v24")?;
+    exact(&n, "apiVersion", profile.configuration())?;
+    if profile == Profile::RotationV25 {
+        ensure(n.get("measuredStaticCredential").is_none(), "rotation delivery excludes creation profile")?;
+        exact(&n["measuredStaticCredentialRotation"], "apiVersion",
+            "serverware.nativeStaticCredentialRotationConfiguration/v1")?;
+        exact(&n["measuredStaticCredentialRotation"]["staticCredentialRotationPolicy"], "schema",
+            "serverware.staticCredentialRotationAuthorityPolicy/v1")?;
+        exact(&n["measuredStaticCredentialRotation"]["staticCredentialRotationPolicy"], "nativeCustodyPurpose",
+            "serverware.nativeStaticCredentialRotationStatement/v1")?;
+    }
     exact(&l, "apiVersion", "serverware.nativeStartupLaunch/v1")?;
     ensure(text(&l, "configurationSha256")? == digest(configuration), "preboot launch does not bind literal N")?;
     for field in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",

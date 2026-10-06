@@ -48,12 +48,14 @@ fn main() -> Result<(), String> {
     // inferred from a returned configuration or an incoming request.
     let mut arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     let receive_configuration = arguments.first().is_some_and(|arg| arg == "--receive-configuration-v1");
+    let receive_rotation = arguments.first().is_some_and(|arg| arg == "--receive-rotation-configuration-v2");
     let activation_receiver = arguments.first().is_some_and(|arg| arg == "--activation-receiver-v1");
-    if (receive_configuration || activation_receiver) && arguments.len() != 1 {
+    if (receive_configuration || receive_rotation || activation_receiver) && arguments.len() != 1 {
         return Err("native configuration delivery accepts no caller-selected paths, commands or overrides".into());
     }
     let mode = match arguments.first().and_then(|v| v.to_str()) {
         Some("--receive-configuration-v1") => { arguments.clear(); "--native-postboot-static-startup-v24" },
+        Some("--receive-rotation-configuration-v2") => { arguments.clear(); "--native-static-credential-rotation-startup-v25" },
         Some("--measured-refresh-v7") => { arguments.remove(0); "--native-measured-refresh-startup" },
         Some("--guest-inspector-v8") => { arguments.remove(0); "--native-startup-inspector-v8" },
         Some("--measured-issuance-v9") => { arguments.remove(0); "--native-measured-issuance-startup-v9" },
@@ -72,6 +74,7 @@ fn main() -> Result<(), String> {
         Some("--workload-trust-v22") => { arguments.remove(0); "--native-workload-trust-startup-v22" },
         Some("--static-credential-v23") => { arguments.remove(0); "--native-static-credential-startup-v23" },
         Some("--postboot-static-v24") => { arguments.remove(0); "--native-postboot-static-startup-v24" },
+        Some("--static-credential-rotation-v25") => { arguments.remove(0); "--native-static-credential-rotation-startup-v25" },
         _ => "--native-encrypted-startup",
     };
     // v22 adds the separately pinned trust original (two flag/value pairs).
@@ -80,7 +83,7 @@ fn main() -> Result<(), String> {
     let maximum_arguments = (if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 })
         + usize::from(arguments.iter().any(|arg| arg == "--response-proof-identity-stdout"
             || arg == "--response-proof-identity-vsock"));
-    if !receive_configuration && !activation_receiver && (arguments.is_empty() || arguments.len() > maximum_arguments) {
+    if !receive_configuration && !receive_rotation && !activation_receiver && (arguments.is_empty() || arguments.len() > maximum_arguments) {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
     }
     let fd = unsafe {
@@ -97,7 +100,8 @@ fn main() -> Result<(), String> {
     if activation_receiver {
         return serverware_decision_gate::native_activation_receiver_bootstrap::run();
     }
-    let mut delivery = if receive_configuration { Some(native_preboot_delivery::receive()?) } else { None };
+    let mut delivery = if receive_configuration { Some(native_preboot_delivery::receive()?) }
+        else if receive_rotation { Some(native_preboot_delivery::receive_rotation()?) } else { None };
     if let Some(owner) = &mut delivery {
         arguments = owner.arguments();
         owner.recheck()?;

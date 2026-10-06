@@ -31,6 +31,26 @@ const MAX_FILE: usize = 16 * 1024 * 1024;
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
 const MAX_INTERVAL: u64 = 86_400_000_000_000;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Profile { StaticV24, RotationV25 }
+const ROTATION_PROFILE: &str = "static-credential-rotation-v25";
+impl Profile {
+    fn payload(self) -> &'static str {
+        match self { Self::StaticV24 => PAYLOAD, Self::RotationV25 => "serverware.nativeConfigurationDelivery/v2" }
+    }
+    fn signed(self) -> &'static str {
+        match self { Self::StaticV24 => SIGNED, Self::RotationV25 => "serverware.signedNativeConfigurationDelivery/v2" }
+    }
+    fn challenge(self) -> &'static str {
+        match self { Self::StaticV24 => "serverware.nativeConfigurationDeliveryChallenge/v1",
+            Self::RotationV25 => "serverware.nativeConfigurationDeliveryChallenge/v2" }
+    }
+    fn configuration(self) -> &'static str {
+        match self { Self::StaticV24 => "serverware.nativeStartupConfiguration/v24",
+            Self::RotationV25 => "serverware.nativeStartupConfiguration/v25" }
+    }
+}
+
 fn ensure(condition: bool, message: &str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(message.to_owned()) }
 }
@@ -67,6 +87,8 @@ fn boot_id() -> Result<String, String> {
 #[serde(rename_all = "camelCase")]
 struct Challenge {
     api_version: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup_profile: Option<&'static str>,
     challenge_base64_url: String,
     boot_id: String,
     receiver_started_boottime_ns: u64,
@@ -75,19 +97,21 @@ struct Challenge {
 
 struct Owner {
     pid: u32,
+    profile: Profile,
     challenge: Challenge,
     previous_boot: u64,
     previous_wall: u64,
     interval: Option<(u64, u64, u64)>,
 }
 impl Owner {
-    fn new(key_id: String) -> Result<Self, String> {
+    fn new(key_id: String, profile: Profile) -> Result<Self, String> {
         let (boot, wall) = clocks()?;
         let mut random = [0u8; 32];
         SystemRandom::new().fill(&mut random).map_err(|_| "delivery challenge entropy unavailable")?;
         ensure(random != [0; 32], "delivery challenge entropy invalid")?;
-        Ok(Self { pid: std::process::id(), previous_boot: boot, previous_wall: wall, interval: None,
-            challenge: Challenge { api_version: "serverware.nativeConfigurationDeliveryChallenge/v1",
+        Ok(Self { pid: std::process::id(), profile, previous_boot: boot, previous_wall: wall, interval: None,
+            challenge: Challenge { api_version: profile.challenge(),
+                startup_profile: (profile == Profile::RotationV25).then_some(ROTATION_PROFILE),
                 challenge_base64_url: URL_SAFE_NO_PAD.encode(random), boot_id: boot_id()?,
                 receiver_started_boottime_ns: boot, delivery_key_spki_sha256: key_id } })
     }
@@ -103,7 +127,7 @@ impl Owner {
     }
     fn admit(&mut self, payload: &Payload) -> Result<(), String> {
         self.check()?;
-        ensure(self.interval.is_none() && payload.api_version == PAYLOAD
+        ensure(self.interval.is_none() && payload.api_version == self.profile.payload()
             && payload.challenge_base64_url == self.challenge.challenge_base64_url
             && payload.boot_id == self.challenge.boot_id
             && payload.receiver_started_boottime_ns == self.challenge.receiver_started_boottime_ns
@@ -136,6 +160,51 @@ struct Payload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Signed { api_version: String, payload: Payload, signature_base64_url: String }
+
+// Disjoint closed v2 input: v1 never accepts even a null startupProfile.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RotationPayload {
+    api_version: String, startup_profile: String, challenge_base64_url: String, boot_id: String,
+    receiver_started_boottime_ns: u64, delivery_key_spki_sha256: String,
+    issued_at_epoch_ns: u64, expires_at_epoch_ns: u64, deadline_boottime_ns: u64,
+    configuration_sha256: String, launch_sha256: String, artifacts: Vec<Artifact>,
+}
+impl RotationPayload {
+    fn into_parts(self) -> Result<Payload, String> {
+        ensure(self.startup_profile == ROTATION_PROFILE, "delivery rotation purpose differs")?;
+        Ok(Payload { api_version: self.api_version, challenge_base64_url: self.challenge_base64_url,
+            boot_id: self.boot_id, receiver_started_boottime_ns: self.receiver_started_boottime_ns,
+            delivery_key_spki_sha256: self.delivery_key_spki_sha256,
+            issued_at_epoch_ns: self.issued_at_epoch_ns, expires_at_epoch_ns: self.expires_at_epoch_ns,
+            deadline_boottime_ns: self.deadline_boottime_ns, configuration_sha256: self.configuration_sha256,
+            launch_sha256: self.launch_sha256, artifacts: self.artifacts })
+    }
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SignedRotation { api_version: String, payload: RotationPayload, signature_base64_url: String }
+
+fn signed_parts(original: serde_json::Value, profile: Profile) -> Result<(Payload, Vec<u8>, String), String> {
+    match profile {
+        Profile::StaticV24 => {
+            let signed: Signed = serde_json::from_value(original)
+                .map_err(|_| "delivery signed envelope is not closed")?;
+            ensure(signed.api_version == profile.signed(), "delivery signed purpose differs")?;
+            let raw = canonical_ascii_bytes(&signed.payload)?;
+            Ok((signed.payload, raw, signed.signature_base64_url))
+        }
+        Profile::RotationV25 => {
+            let signed: SignedRotation = serde_json::from_value(original)
+                .map_err(|_| "rotation delivery signed envelope is not closed")?;
+            ensure(signed.api_version == profile.signed(), "rotation delivery signed purpose differs")?;
+            // Sign/verify the entire v2 original, including startupProfile,
+            // before using its source-local common resource projection.
+            let raw = canonical_ascii_bytes(&signed.payload)?;
+            Ok((signed.payload.into_parts()?, raw, signed.signature_base64_url))
+        }
+    }
+}
 
 struct Trust { file: File, original: Vec<u8>, identity: (u64,u64,u32,u32,u32,u64,u64,i64,i64,i64,i64) }
 impl Trust {
@@ -238,8 +307,16 @@ impl Delivered {
 }
 
 pub(super) fn receive() -> Result<Delivered, String> {
+    receive_for(Profile::StaticV24)
+}
+
+pub(super) fn receive_rotation() -> Result<Delivered, String> {
+    receive_for(Profile::RotationV25)
+}
+
+fn receive_for(profile: Profile) -> Result<Delivered, String> {
     let (trust, key, key_id) = Trust::acquire()?;
-    let mut owner = Owner::new(key_id)?;
+    let mut owner = Owner::new(key_id, profile)?;
     // No authority or secret has been acquired. A first parent connection may
     // await independent operator approval; no arbitrary setup timeout creates
     // replacement attempts. The signed original later supplies the deadline.
@@ -266,17 +343,15 @@ pub(super) fn receive() -> Result<Delivered, String> {
     let raw = raw?; closed.map_err(|_| "delivery socket close failed")?;
     owner.check()?; trust.check()?;
     let original = json::parse(&raw, MAX_FRAME)?;
-    let signed: Signed = serde_json::from_value(original).map_err(|_| "delivery signed envelope is not closed")?;
-    ensure(signed.api_version == SIGNED, "delivery signed purpose differs")?;
-    let signature = URL_SAFE_NO_PAD.decode(&signed.signature_base64_url).map_err(|_| "delivery signature encoding")?;
-    ensure(signature.len() == 64 && URL_SAFE_NO_PAD.encode(&signature) == signed.signature_base64_url,
+    let (p, payload_original, signature_original) = signed_parts(original, profile)?;
+    let signature = URL_SAFE_NO_PAD.decode(&signature_original).map_err(|_| "delivery signature encoding")?;
+    ensure(signature.len() == 64 && URL_SAFE_NO_PAD.encode(&signature) == signature_original,
         "delivery signature is not canonical")?;
-    let mut preimage = PAYLOAD.as_bytes().to_vec(); preimage.push(0);
-    preimage.extend(canonical_ascii_bytes(&signed.payload)?);
+    let mut preimage = profile.payload().as_bytes().to_vec(); preimage.push(0);
+    preimage.extend(payload_original);
     key.verify_strict(&preimage, &Signature::from_slice(&signature).map_err(|_| "delivery signature length")?)
         .map_err(|_| "delivery signature refused")?;
-    owner.admit(&signed.payload)?;
-    let p = signed.payload;
+    owner.admit(&p)?;
     ensure(pin(&p.configuration_sha256) && pin(&p.launch_sha256)
         && (2..=128).contains(&p.artifacts.len()), "delivery artifact inventory invalid")?;
     let mut artifacts = BTreeMap::new(); let mut total = 0usize;
@@ -302,7 +377,7 @@ pub(super) fn receive() -> Result<Delivered, String> {
         .ok_or("delivery launch original deadline absent")?;
     ensure(launch_deadline > owner.previous_boot && launch_deadline <= owner.interval.ok_or("delivery interval absent")?.2,
         "native launch would extend the signed delivery lifetime")?;
-    let plan = closure::validate(&configuration, &launch, &artifacts)?;
+    let plan = closure::validate(&configuration, &launch, &artifacts, profile)?;
     trust.check()?; owner.check()?;
     let materialized = materialize::materialize(plan, &mut || owner.check())?;
     let mut delivered = Delivered { materialized, owner, trust,

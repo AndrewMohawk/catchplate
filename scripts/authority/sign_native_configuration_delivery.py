@@ -5,6 +5,9 @@ Use python3 -I -B as root with --input-fd, its independently approved complete
 --input-sha256, and a distinct preprovisioned sealed 32-byte --authority-key-fd.
 Input is the exact canonical nativeConfigurationDelivery/v1 PAYLOAD original;
 all challenge, boot, interval, artifact and key identities already exist there.
+The explicit v2 payload instead binds startupProfile to the fixed rotation-v25
+purpose and is signed under its separate v2 domain/envelope. No mode is inferred
+from mutable artifacts, and the complete input pin remains required.
 The public input FD must be read-only, root:root 0400 and at most 64 MiB.
 
 Output is only the canonical signedNativeConfigurationDelivery/v1 original on
@@ -119,11 +122,11 @@ def _write(raw, expected, deadline, check):
     transport.require(previous <= io._clock() < deadline and _pipe() == expected)
 
 
-def _envelope(payload_original, signature):
+def _envelope(payload_original, signature, *, profile=transport.STATIC_PROFILE):
     # Sorted closed keys plus the literal canonical payload, never a repaired
     # or regenerated configuration. The signature slot is always exactly 64 B.
     transport.require(type(signature) is bytes and len(signature) == 64)
-    return (b'{"apiVersion":' + transport.canonical(transport.SIGNED_API)
+    return (b'{"apiVersion":' + transport.canonical(transport.profile_apis(profile)[1])
         + b',"payload":' + payload_original + b',"signatureBase64Url":"'
         + base64.urlsafe_b64encode(signature).rstrip(b"=") + b'"}')
 
@@ -155,15 +158,17 @@ def main():
         raw = _read(args.input_fd, input_identity, check)
         transport.require("sha256:" + hashlib.sha256(raw).hexdigest() == approved_pin)
         payload = transport.document(raw, MAX_INPUT, canonical_required=True)
-        challenge = transport.hello(transport.canonical({"apiVersion": transport.HELLO_API,
-            **{name: payload[name] for name in transport.SCOPE}}))
+        profile = transport.payload_profile(payload)
+        hello_api, _, payload_api = transport.profile_apis(profile)
+        challenge = transport.hello(transport.canonical({"apiVersion": hello_api,
+            **{name: payload[name] for name in transport.profile_scope(profile)}}), profile=profile)
         # The real sender parser consumes its original interval and checks every
         # artifact's actual bytes/pin. The zero signature is ONLY an unsigned
         # grammar/size slot: never verified, emitted, or treated as authority.
-        preflight = _envelope(raw, bytes(64))
+        preflight = _envelope(raw, bytes(64), profile=profile)
         transport.require(len(preflight) <= transport.MAX_MANIFEST)
         output_length = len(preflight)
-        transport.manifest(preflight, challenge, budget)
+        transport.manifest(preflight, challenge, budget, profile=profile)
         del preflight
         check()
         # raw is the retained independently hash-approved original. Repeated
@@ -174,13 +179,13 @@ def main():
         public = key.public_key()
         spki = public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
         transport.require("sha256:" + hashlib.sha256(spki).hexdigest() == payload["deliveryKeySpkiSha256"])
-        preimage = transport.PAYLOAD_API.encode("ascii") + b"\0" + raw
+        preimage = payload_api.encode("ascii") + b"\0" + raw
         check()
         signature = key.sign(preimage)
         check()
         public.verify(signature, preimage)
         check()
-        result = _envelope(raw, signature)
+        result = _envelope(raw, signature, profile=profile)
         transport.require(len(result) == output_length and len(result) <= transport.MAX_MANIFEST)
         check()
         output_identity = _pipe()

@@ -8,6 +8,10 @@ bytes. The manifest pipe receives the signer's raw original followed by EOF;
 this command supplies its network length prefix without changing those bytes.
 No files, keys, signatures, or configuration are created.
 
+The default profile is postboot-static-v24 with the unchanged v1 wire. Explicit
+--profile static-credential-rotation-v25 requires the closed v2 hello/manifest
+and its signed startupProfile; neither profile accepts caller-selected argv.
+
 The single connection uses fixed port 9100. Preauthorization waits are unbounded
 until input, disconnect or cancellation. Once the manifest supplies its original
 expiry, parsing/validation/transmission consume that interval without renewal.
@@ -42,11 +46,37 @@ HELLO_API = "serverware.nativeConfigurationDeliveryChallenge/v1"
 SIGNED_API = "serverware.signedNativeConfigurationDelivery/v1"
 PAYLOAD_API = "serverware.nativeConfigurationDelivery/v1"
 SCOPE = {"challengeBase64Url", "bootId", "receiverStartedBoottimeNs", "deliveryKeySpkiSha256"}
+STATIC_PROFILE = "postboot-static-v24"
+ROTATION_PROFILE = "static-credential-rotation-v25"
+ROTATION_HELLO_API = "serverware.nativeConfigurationDeliveryChallenge/v2"
+ROTATION_SIGNED_API = "serverware.signedNativeConfigurationDelivery/v2"
+ROTATION_PAYLOAD_API = "serverware.nativeConfigurationDelivery/v2"
 
 
 def require(value):
     if not value:
         raise ValueError("native configuration transport refused")
+
+
+def profile_apis(profile):
+    require(profile in (STATIC_PROFILE, ROTATION_PROFILE))
+    return ((HELLO_API, SIGNED_API, PAYLOAD_API) if profile == STATIC_PROFILE else
+        (ROTATION_HELLO_API, ROTATION_SIGNED_API, ROTATION_PAYLOAD_API))
+
+
+def profile_scope(profile):
+    profile_apis(profile)
+    return SCOPE if profile == STATIC_PROFILE else SCOPE | {"startupProfile"}
+
+
+def payload_profile(value):
+    """Only a closed version selects signing grammar; no argv is accepted."""
+    require(type(value) is dict)
+    if value.get("apiVersion") == PAYLOAD_API:
+        return STATIC_PROFILE
+    require(value.get("apiVersion") == ROTATION_PAYLOAD_API
+        and value.get("startupProfile") == ROTATION_PROFILE)
+    return ROTATION_PROFILE
 
 
 class Parser(argparse.ArgumentParser):
@@ -96,9 +126,11 @@ def digest(value):
     return value
 
 
-def hello(raw):
+def hello(raw, *, profile=STATIC_PROFILE):
     value = document(raw, MAX_HELLO, canonical_required=True)
-    require(set(value) == {"apiVersion", *SCOPE} and value["apiVersion"] == HELLO_API)
+    require(set(value) == {"apiVersion", *profile_scope(profile)} and value["apiVersion"] == profile_apis(profile)[0])
+    if profile == ROTATION_PROFILE:
+        require(value["startupProfile"] == ROTATION_PROFILE)
     require(encoded(value["challengeBase64Url"], 32, exact=32) != bytes(32))
     require(type(value["bootId"]) is str and re.fullmatch(
         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value["bootId"]) is not None)
@@ -131,15 +163,18 @@ class Budget:
         return (deadline - boot) / 1_000_000_000
 
 
-def manifest(raw, challenge, budget):
+def manifest(raw, challenge, budget, *, profile=STATIC_PROFILE):
+    hello(canonical(challenge), profile=profile)
+    scope = profile_scope(profile)
+    _, signed_api, payload_api = profile_apis(profile)
     value = document(raw, MAX_MANIFEST)
-    require(set(value) == {"apiVersion", "payload", "signatureBase64Url"} and value["apiVersion"] == SIGNED_API)
+    require(set(value) == {"apiVersion", "payload", "signatureBase64Url"} and value["apiVersion"] == signed_api)
     encoded(value["signatureBase64Url"], 64, exact=64)  # Encoding, NOT signature verification.
     payload = value["payload"]
-    require(type(payload) is dict and set(payload) == {"apiVersion", *SCOPE,
+    require(type(payload) is dict and set(payload) == {"apiVersion", *scope,
         "issuedAtEpochNs", "expiresAtEpochNs", "deadlineBoottimeNs", "configurationSha256", "launchSha256", "artifacts"}
-        and payload["apiVersion"] == PAYLOAD_API)
-    require(all(type(payload[name]) is type(challenge[name]) and payload[name] == challenge[name] for name in SCOPE))
+        and payload["apiVersion"] == payload_api)
+    require(all(type(payload[name]) is type(challenge[name]) and payload[name] == challenge[name] for name in scope))
     budget.admit(u64(payload["issuedAtEpochNs"]), u64(payload["expiresAtEpochNs"]))
     # Only native can compare its absolute BOOTTIME deadline to its current
     # clock. Preserve this original; the parent uses the original wall expiry.
@@ -158,6 +193,13 @@ def manifest(raw, challenge, budget):
         total += len(content)
         require(total <= MAX_TOTAL and "sha256:" + hashlib.sha256(content).hexdigest() == digest(row["sha256"]))
         pins[row["label"]] = row["sha256"]
+        if profile == ROTATION_PROFILE and row["label"] == "configuration":
+            configuration = document(content, MAX_FILE)
+            require(configuration.get("apiVersion") == "serverware.nativeStartupConfiguration/v25"
+                and "measuredStaticCredential" not in configuration
+                and type(configuration.get("measuredStaticCredentialRotation")) is dict
+                and configuration["measuredStaticCredentialRotation"].get("apiVersion")
+                == "serverware.nativeStaticCredentialRotationConfiguration/v1")
         del content
         budget.remaining()
     require(pins.get("configuration") == payload["configurationSha256"]
@@ -257,6 +299,7 @@ def main():
     parser.add_argument("--enclave-cid", type=int, required=True)
     parser.add_argument("--challenge-output-fd", type=int, required=True)
     parser.add_argument("--manifest-input-fd", type=int, required=True)
+    parser.add_argument("--profile", choices=(STATIC_PROFILE, ROTATION_PROFILE), default=STATIC_PROFILE)
     args = parser.parse_args()
     require(4 <= args.enclave_cid < 2**32 - 1 and args.challenge_output_fd != args.manifest_input_fd)
     pipes = {args.challenge_output_fd: (os.O_WRONLY, pipe_identity(args.challenge_output_fd, os.O_WRONLY)),
@@ -286,7 +329,7 @@ def main():
                 require(stream.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0)
             require(stream.getpeername() == (args.enclave_cid, PORT))
             prefix, raw = read_frame(stream.fileno(), MAX_HELLO, check)
-            challenge = hello(raw)
+            challenge = hello(raw, profile=args.profile)
             write_exact(args.challenge_output_fd, prefix, check, stream.fileno())
             write_exact(args.challenge_output_fd, raw, check, stream.fileno())
             os.close(args.challenge_output_fd)
@@ -294,7 +337,7 @@ def main():
             raw = read_original(args.manifest_input_fd, MAX_MANIFEST, check, stream.fileno())
             prefix = len(raw).to_bytes(4, "big")
             budget = Budget()  # Parsing and structural checks consume this same original expiry.
-            manifest(raw, challenge, budget)
+            manifest(raw, challenge, budget, profile=args.profile)
             check()
             write_exact(stream.fileno(), prefix, check)
             write_exact(stream.fileno(), raw, check)

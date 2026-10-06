@@ -47,6 +47,7 @@ LAUNCH_AUTHORITY_METADATA_FIELDS = (
     "launch_authority_root_sha256",
 )
 NATIVE_DELIVERY_TARGET = "native-enclave-delivery"
+NATIVE_ROTATION_DELIVERY_TARGET = "native-enclave-rotation-delivery"
 NATIVE_DELIVERY_DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
 NATIVE_DELIVERY_CONTEXT_KEY = "production-native-delivery/authority.pem"
 NATIVE_DELIVERY_IMAGE_KEY = "/usr/share/serverware/native-delivery-authority.pem"
@@ -591,10 +592,13 @@ def build_command(
     engineering_bounded_build: bool = False,
     native_pilot_bounded_build: bool = False,
     native_delivery_binding: dict[str, str] | None = None,
+    native_rotation_delivery: bool = False,
     native_activation_receiver_binding: dict[str, str] | None = None,
 ) -> list[str]:
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
+    if type(native_rotation_delivery) is not bool or native_rotation_delivery and native_delivery_binding is None:
+        raise RuntimeError("rotation delivery requires an explicit pinned native delivery authority")
     if engineering_bounded_build and (
         metadata["source_identity_mode"] != "development-dirty-tree"
         or metadata["production_release_eligible"] is not False
@@ -635,7 +639,7 @@ def build_command(
                 or any(re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
                        or value == "sha256:" + "0" * 64 for value in native_delivery_binding.values())):
             raise RuntimeError("native delivery requires its fixed Dockerfile and public key binding")
-        command.extend(("--target", NATIVE_DELIVERY_TARGET,
+        command.extend(("--target", NATIVE_ROTATION_DELIVERY_TARGET if native_rotation_delivery else NATIVE_DELIVERY_TARGET,
             "--build-arg", "NATIVE_DELIVERY_AUTHORITY_SHA256=" + native_delivery_binding["public_key_pem_sha256"],
             "--build-arg", "NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256=" + native_delivery_binding["public_key_spki_sha256"]))
     component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
@@ -869,6 +873,7 @@ def main() -> None:
     parser.add_argument("--control-tag")
     parser.add_argument("--decision-gate-tag")
     parser.add_argument("--native-enclave-delivery-tag")
+    parser.add_argument("--native-enclave-rotation-delivery-tag")
     parser.add_argument("--native-activation-receiver-tag")
     parser.add_argument("--native-delivery-authority", type=Path)
     parser.add_argument("--native-delivery-authority-sha256")
@@ -900,7 +905,7 @@ def main() -> None:
     receiver_image_binding: dict[str, str] | None = None
     if args.native_activation_receiver_tag is not None:
         if not args.native_activation_receiver_tag or any(value is not None for value in (
-                args.control_tag, args.decision_gate_tag, args.native_enclave_delivery_tag,
+                args.control_tag, args.decision_gate_tag, args.native_enclave_delivery_tag, args.native_enclave_rotation_delivery_tag,
                 args.native_delivery_authority, args.native_delivery_authority_sha256,
                 args.dockerfile, args.target, args.output, args.network)):
             parser.error("activation receiver image requires its own non-empty tag and cannot be combined with another build mode")
@@ -910,7 +915,12 @@ def main() -> None:
         receiver_image_binding = {"public_inputs_sha256": args.shadow_custody_inputs_sha256,
                                   "receiver_inputs_sha256": args.activation_receiver_inputs_sha256}
 
-    delivery_inputs = (args.native_enclave_delivery_tag, args.native_delivery_authority,
+    if args.native_enclave_delivery_tag is not None and args.native_enclave_rotation_delivery_tag is not None:
+        parser.error("select exactly one native delivery purpose")
+    rotation_delivery = args.native_enclave_rotation_delivery_tag is not None
+    delivery_tag = args.native_enclave_rotation_delivery_tag if rotation_delivery else args.native_enclave_delivery_tag
+    delivery_target = NATIVE_ROTATION_DELIVERY_TARGET if rotation_delivery else NATIVE_DELIVERY_TARGET
+    delivery_inputs = (delivery_tag, args.native_delivery_authority,
                        args.native_delivery_authority_sha256)
     delivery_binding: dict[str, str] | None = None
     delivery_raw: bytes | None = None
@@ -1064,9 +1074,9 @@ def main() -> None:
         ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", decision_gate_tag),
     ]
     if delivery_binding is not None:
-        image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_enclave_delivery_tag)]
-        output = args.out or (".tmp/development-native-enclave-delivery-build.json" if args.development_dirty_tree
-                              else ".tmp/native-enclave-delivery-build.json")
+        image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, delivery_tag)]
+        output = args.out or (".tmp/" + ("development-" if args.development_dirty_tree else "")
+            + delivery_target + "-build.json")
     if receiver_image_binding is not None:
         image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_activation_receiver_tag)]
         output = args.out or (".tmp/development-native-activation-receiver-build.json" if args.development_dirty_tree
@@ -1074,6 +1084,8 @@ def main() -> None:
     metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
     if delivery_binding is not None:
         metadata["native_delivery_authority"] = {**delivery_binding, "image_path": NATIVE_DELIVERY_IMAGE_KEY}
+        if rotation_delivery:
+            metadata["native_delivery_profile"] = "static-credential-rotation-v25"
     if receiver_image_binding is not None:
         metadata["native_activation_receiver"] = dict(receiver_image_binding)
     resource_profile: dict[str, Any] = {}
@@ -1104,6 +1116,7 @@ def main() -> None:
                     context=placeholder_context,
                     engineering_bounded_build=args.engineering_bounded_build,
                     native_delivery_binding=delivery_binding,
+                    native_rotation_delivery=rotation_delivery,
                     native_activation_receiver_binding=receiver_image_binding,
                 ),
             }
@@ -1151,6 +1164,7 @@ def main() -> None:
                     context=context,
                     engineering_bounded_build=args.engineering_bounded_build,
                     native_delivery_binding=delivery_binding,
+                    native_rotation_delivery=rotation_delivery,
                     native_activation_receiver_binding=receiver_image_binding,
                 ),
             }
@@ -1180,8 +1194,15 @@ def main() -> None:
                 installed_pin = image_file_sha256(built_image_id, NATIVE_DELIVERY_IMAGE_KEY)
                 if installed_pin != delivery_binding["public_key_pem_sha256"]:
                     raise RuntimeError("built native delivery image contains a different public authority")
-                delivery_result = {"target": NATIVE_DELIVERY_TARGET,
+                config = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config}}", built_image_id]))
+                expected_command = "--receive-rotation-configuration-v2" if rotation_delivery else "--receive-configuration-v1"
+                if (config.get("Entrypoint") != ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
+                        or config.get("Cmd") != [expected_command] or config.get("User") != "0:0"):
+                    raise RuntimeError("built native delivery startup differs from the explicitly selected purpose")
+                delivery_result = {"target": delivery_target,
                                    "native_delivery_authority": dict(delivery_binding)}
+                if rotation_delivery:
+                    delivery_result["native_delivery_profile"] = "static-credential-rotation-v25"
             images.append(
                 {
                     "service": spec["service"],

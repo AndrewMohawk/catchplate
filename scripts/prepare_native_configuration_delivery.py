@@ -11,6 +11,10 @@ Every input is a read-only root:root0400 regular file or sealed memfd. Only
 independently selected public/encrypted artifacts belong in this descriptor;
 the command has no private-key or plaintext-credential input.
 
+The separately selected AssemblyInput/v2 adds exactly startupProfile with the
+fixed value static-credential-rotation-v25 and requires a matching v2 hello.
+It produces the v2 payload; v1 fields and output remain unchanged.
+
 Output is the existing canonical nativeConfigurationDelivery/v1 unsigned
 payload, without framing or newline. A supervisor must retain complete output
 AND exit0, then stage/hash it for independent approval by the existing signer.
@@ -38,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import send_native_configuration as transport
 
 INPUT_API = "serverware.nativeConfigurationDeliveryAssemblyInput/v1"
+ROTATION_INPUT_API = "serverware.nativeConfigurationDeliveryAssemblyInput/v2"
 MAX_INPUT = 64 * 1024
 SEALS = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 
@@ -85,9 +90,13 @@ def read_public(fd, expected, pin, check):
 
 def descriptor(raw):
     value = transport.document(raw, MAX_INPUT, canonical_required=True)
+    rotation = value.get("apiVersion") == ROTATION_INPUT_API
     transport.require(set(value) == {"apiVersion", "challenge", "issuedAtEpochNs", "expiresAtEpochNs",
         "deadlineBoottimeNs", "configurationSha256", "launchSha256", "artifacts"}
-        and value["apiVersion"] == INPUT_API)
+        | ({"startupProfile"} if rotation else set())
+        and value["apiVersion"] == (ROTATION_INPUT_API if rotation else INPUT_API))
+    if rotation:
+        transport.require(value["startupProfile"] == transport.ROTATION_PROFILE)
     challenge = value["challenge"]
     transport.require(type(challenge) is dict and set(challenge) == {"fd", "sha256"})
     descriptor_number(challenge["fd"]); transport.digest(challenge["sha256"])
@@ -155,12 +164,14 @@ def main():
         os.set_inheritable(args.input_fd, False)
         check()
         value = descriptor(read_public(args.input_fd, held[args.input_fd][1], input_pin, check))
+        profile = transport.ROTATION_PROFILE if value["apiVersion"] == ROTATION_INPUT_API else transport.STATIC_PROFILE
         budget.admit(value["issuedAtEpochNs"], value["expiresAtEpochNs"])
         challenge_fd = value["challenge"]["fd"]
         transport.require(challenge_fd not in {args.input_fd, args.output_fd})
         held[challenge_fd] = transport.MAX_HELLO, public_identity(challenge_fd, transport.MAX_HELLO)
         os.set_inheritable(challenge_fd, False)
-        challenge = transport.hello(read_public(challenge_fd, held[challenge_fd][1], value["challenge"]["sha256"], check))
+        challenge = transport.hello(read_public(challenge_fd, held[challenge_fd][1], value["challenge"]["sha256"], check),
+            profile=profile)
         transport.require(value["deadlineBoottimeNs"] > challenge["receiverStartedBoottimeNs"])
         total = 0
         for row in value["artifacts"]:
@@ -180,15 +191,16 @@ def main():
                 "contentBase64Url": base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")})
             del raw
             check()
-        payload = {"apiVersion": transport.PAYLOAD_API, **{name: challenge[name] for name in transport.SCOPE},
+        _, signed_api, payload_api = transport.profile_apis(profile)
+        payload = {"apiVersion": payload_api, **{name: challenge[name] for name in transport.profile_scope(profile)},
             **{name: value[name] for name in ("issuedAtEpochNs", "expiresAtEpochNs", "deadlineBoottimeNs",
                 "configurationSha256", "launchSha256")}, "artifacts": artifacts}
         result = transport.canonical(payload)
         # This non-authorizing signature slot exists only to call the unchanged
         # sender grammar/bounds. It is never signed, returned or transmitted.
-        preflight = transport.canonical({"apiVersion": transport.SIGNED_API, "payload": payload,
+        preflight = transport.canonical({"apiVersion": signed_api, "payload": payload,
             "signatureBase64Url": base64.urlsafe_b64encode(bytes(64)).rstrip(b"=").decode("ascii")})
-        transport.manifest(preflight, challenge, AdmittedBudget(budget))
+        transport.manifest(preflight, challenge, AdmittedBudget(budget), profile=profile)
         del preflight, payload, artifacts
         check()
         transport.write_exact(args.output_fd, result, check)

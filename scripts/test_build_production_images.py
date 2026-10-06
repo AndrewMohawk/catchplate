@@ -134,6 +134,30 @@ def assert_build_contract_version() -> None:
         raise AssertionError(f"unexpected production image build kind: {build_production_images.BUILD_KIND}")
 
 
+def assert_native_rotation_delivery_selection() -> None:
+    """Command construction only; no Docker build or native delivery claim."""
+    build = build_production_images
+    arguments = dict(platform="linux/amd64", metadata=build_metadata_fixture(), context=ROOT)
+    binding = {"public_key_pem_sha256": "sha256:" + "3" * 64,
+        "public_key_spki_sha256": "sha256:" + "4" * 64}
+    for rotation, target in ((False, build.NATIVE_DELIVERY_TARGET), (True, build.NATIVE_ROTATION_DELIVERY_TARGET)):
+        argv = build.build_command(build.NATIVE_DELIVERY_DOCKERFILE, "serverware/test:local",
+            native_delivery_binding=binding, native_rotation_delivery=rotation, **arguments)
+        assert argv[argv.index("--target") + 1] == target
+        assert "--network=none" in argv
+        assert "NATIVE_DELIVERY_AUTHORITY_SHA256=" + binding["public_key_pem_sha256"] in argv
+    for changed in ({"native_rotation_delivery": True},
+            {"native_rotation_delivery": 1, "native_delivery_binding": binding},
+            {"native_rotation_delivery": True, "native_delivery_binding": binding,
+                "native_activation_receiver_binding": {"public_inputs_sha256": "sha256:" + "5" * 64,
+                    "receiver_inputs_sha256": "sha256:" + "6" * 64}}):
+        try:
+            build.build_command(build.NATIVE_DELIVERY_DOCKERFILE, "serverware/test:local", **changed, **arguments)
+        except RuntimeError:
+            continue
+        raise AssertionError("rotation delivery accepted an absent authority, non-boolean selector, or mixed purpose")
+
+
 def dockerfile_stage(lines: list[str], name: str) -> list[str]:
     start = next(
         (
@@ -452,6 +476,7 @@ def assert_exported_python_runtime() -> None:
 
 def main() -> None:
     assert_build_contract_version()
+    assert_native_rotation_delivery_selection()
     assert_malformed_trust_roots_fail_closed()
     assert_deterministic_launch_authority_metadata()
     assert_launch_authority_is_not_a_build_arg()

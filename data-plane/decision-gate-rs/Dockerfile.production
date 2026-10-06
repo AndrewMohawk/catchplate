@@ -562,6 +562,11 @@ LABEL dev.serverware.native_delivery_authority_pem_sha256="${NATIVE_DELIVERY_AUT
 COPY --from=native-delivery-authority-input --chown=0:0 --chmod=0444 /native-delivery/authority.pem /usr/share/serverware/native-delivery-authority.pem
 CMD ["--receive-configuration-v1"]
 
+# Explicit signed v2 rotation delivery. The legacy v1/v24 image stays fixed;
+# both inherit the same independently selected public delivery-authority pin.
+FROM native-enclave-delivery AS native-enclave-rotation-delivery
+CMD ["--receive-rotation-configuration-v2"]
+
 # Explicit outer receiver DATA packaging. No C9 delivery, service assignment,
 # key, launch original or journal state is accepted as an image input.
 FROM native-python-runtime-build AS native-activation-receiver-configuration

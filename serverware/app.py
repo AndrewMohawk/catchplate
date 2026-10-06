@@ -22455,6 +22455,14 @@ _PORTAL_POLICY_TEMPLATE_SPECS = {
         "example.slack.chat_post.hourly",
         "Slack bounded message post",
     ),
+    "github_issues_recent": (
+        "example.github.issues_since_30_days",
+        "GitHub issues updated in the last 30 days",
+    ),
+    "github_issue_create_jit": (
+        "example.github.issue_create.yubikey",
+        "GitHub issue creation with hardware JIT approval",
+    ),
     "stripe_customers_list": (
         "example.stripe.customers.list",
         "Stripe customer list read-only",
@@ -24823,8 +24831,10 @@ UI_HTML = r"""
         const scopes = Array.isArray(review.scopes) ? review.scopes.join(', ') : '';
         let action = '';
         if (enrolledOAuthProfile !== 'development') {
+          const setupProfile = (state.oauthProviders || []).some(provider => provider.id === review.provider
+            && provider.consentProfile === nativeOAuthSetupSchema);
           action = enrolledOAuthProfile === 'enrolled-new-credential-v1' && status === 'pending' && mine && oauthActivationId(item.id)
-            ? `<button type="button" onclick="activatePendingOAuthCredential('${item.id}')">Review enrolled account</button>`
+            ? `<button type="button" onclick="activatePendingOAuthCredential('${item.id}')">${setupProfile ? 'Review Setup account' : 'Review enrolled account'}</button>`
             : '<span class="pill warn">Enrolled account: explicit authorized action required</span>';
           action += '<span class="hint">No legacy cancellation or revocation retry is available for enrolled accounts.</span>';
         } else if (status === 'pending' && mine) {
@@ -27187,7 +27197,12 @@ UI_HTML = r"""
       return completed;
     }
     async function activatePendingOAuthCredential(id) {
-      if (enrolledOAuthProfile === 'enrolled-new-credential-v1') return oauthActivationInspect(id);
+      if (enrolledOAuthProfile === 'enrolled-new-credential-v1') {
+        const pending = (state.pendingOAuthCredentials || []).find(item => item.id === id);
+        const provider = (state.oauthProviders || []).find(item => item.id === pending?.review?.provider);
+        if (provider?.consentProfile === nativeOAuthSetupSchema) return nativeSetupInspect(true, id, provider.id);
+        return oauthActivationInspect(id);
+      }
       if (enrolledOAuthProfile !== 'development') throw new Error('Enrolled OAuth activation profile is unavailable.');
       const item = (state.pendingOAuthCredentials || []).find((candidate) => candidate.id === id);
       if (!item) throw new Error('Pending OAuth credential is no longer available');

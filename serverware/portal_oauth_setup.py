@@ -109,13 +109,24 @@ OAUTH_SETUP_SCRIPT = r"""
       } catch (error) {nativeSetupMessage(nativeSetupCreateSpent ? 'Create was submitted; outcome may be unknown. Inspect the retained session ID. Do not recreate automatically.' : 'Draft or passkey did not complete. No create was sent.'); throw error;}
       finally {assertion = null; operation?.close(); nativeSetupBusy = false;}
     }
-    async function nativeSetupInspect(account = false) {
+    async function nativeSetupInspect(account = false, pendingId = null, providerId = null) {
       let operation = null;
       try {
-        oauthConsentNeed(!nativeSetupBusy); operation = oauthConsentBegin(); nativeSetupBusy = true; await oauthConsentCookie(operation);
-        const id = $(account ? 'native-setup-pending' : 'native-setup-session').value.trim(); oauthConsentNeed(nativeSetupId(id));
+        oauthConsentNeed(!nativeSetupBusy && (pendingId === null || account && nativeSetupId(pendingId))
+          && (providerId === null || account && pendingId !== null));
+        const field = account ? 'native-setup-pending' : 'native-setup-session';
+        if (pendingId !== null) $(field).value = pendingId;
+        const id = $(field).value.trim(); oauthConsentNeed(nativeSetupId(id));
+        nativeSetupHeld = null; $('native-setup-confirm').checked = false;
+        operation = oauthConsentBegin(); nativeSetupBusy = true;
+        const originalCurrent = operation.current;
+        operation = {...operation, current() {
+          originalCurrent(); oauthConsentNeed($(field).value.trim() === id && (providerId === null
+            || (state.oauthProviders || []).some(p => p.id === providerId && p.consentProfile === nativeOAuthSetupSchema)));
+        }};
+        operation.current(); await oauthConsentCookie(operation);
         const reply = await nativeSetupFetch(account ? '/api/setup/oauth/pending/' + id + '/activation-original' : '/api/setup/oauth/sessions/' + id + '/original', null, operation);
-        oauthConsentNeed(reply.status === 200); const value = reply.value;
+        operation.current(); oauthConsentNeed(reply.status === 200); const value = reply.value;
         if (account) {
           oauthConsentNeed(value.apiVersion === 'serverware.oauthSetupActivationOriginal/v1' && value.action === 'credential.oauth.setup-activate'
             && value.resourceId === id && oauthConsentDigest(value.payloadDigest) && oauthConsentText(value.requesterId, 512));
@@ -123,11 +134,15 @@ OAUTH_SETUP_SCRIPT = r"""
           oauthConsentNeed(bound.ownerId === value.requesterId && oauthConsentInteger(bound.revision) === 2n
             && value.request.pendingCredentialId === id && value.request.payloadDigest === value.payloadDigest
             && oauthConsentDigest(value.request.pendingRowSha256) && oauthConsentDigest(value.request.enrollmentSha256)
+            && (providerId === null || value.review?.provider === providerId)
             && (state.oauthProviders || []).some(p => p.id === value.review?.provider && p.consentProfile === nativeOAuthSetupSchema)
             && BigInt(Date.now()) * 1000000n < oauthConsentInteger(bound.expiresAtEpochNs));
           nativeSetupHeld = {value, original: oauthConsentCanonical(value), scope: sessionActivationAuthScope()};
           $('native-setup-confirm').checked = false;
           $('native-setup-review').textContent = oauthConsentCanonical(value);
+          $('native-setup-session').value = bound.sessionId;
+          renderNativeSetup(); $('native-setup-controls').scrollIntoView({block: 'nearest'});
+          $('native-setup-confirm').focus({preventScroll: true});
         } else {
           oauthConsentNeed(value.apiVersion === 'serverware.oauthSetupObservation/v1' && value.okForAction === false && value.completionClaimed === false);
           $('native-setup-review').textContent = oauthConsentCanonical(value);

@@ -198,8 +198,10 @@ OAUTH_CONSENT_SCRIPT = r"""
     async function oauthConsentCookie(operation) {
       const reply = await oauthConsentRequest('/api/auth/status', null, operation), a = reply.value;
       oauthConsentNeed(reply.status === 200 && oauthConsentClosed(a, ['authenticated', 'userId', 'roles', 'authMethod',
-        'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured']) && a.authenticated === true
+        'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured', 'sessionActivationMode']) && a.authenticated === true
         && a.userId === operation.actor && a.authMethod === 'oidc-session' && a.sessionState === 'active'
+        && ['legacy', 'protected', 'unavailable'].includes(a.sessionActivationMode)
+        && a.sessionActivationMode === state.authStatus.sessionActivationMode
         && a.webauthnRequired === false && typeof a.oidcBrowserLoginConfigured === 'boolean' && Array.isArray(a.roles)
         && a.roles.length <= 64 && a.roles.every(r => oauthConsentText(r, 128)) && a.roles.includes('credential_owner')
         && new Set(a.roles).size === a.roles.length && JSON.stringify([...a.roles].sort()) === JSON.stringify([...state.authStatus.roles].sort()));

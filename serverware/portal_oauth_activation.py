@@ -286,9 +286,11 @@ OAUTH_ACTIVATION_SCRIPT = r"""
     async function oauthActivationCookie(operation) {
       const reply = await oauthActivationRequest('/api/auth/status', null, operation), value = reply.value;
       oauthActivationNeed(reply.status === 200 && workloadIssuanceClosed(value, ['authenticated', 'userId', 'roles',
-        'authMethod', 'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured'])
+        'authMethod', 'sessionState', 'webauthnRequired', 'oidcBrowserLoginConfigured', 'sessionActivationMode'])
         && value.authenticated === true && value.userId === operation.actor && value.authMethod === 'oidc-session'
         && value.sessionState === 'active' && value.webauthnRequired === false
+        && ['legacy', 'protected', 'unavailable'].includes(value.sessionActivationMode)
+        && value.sessionActivationMode === state.authStatus.sessionActivationMode
         && typeof value.oidcBrowserLoginConfigured === 'boolean' && Array.isArray(value.roles)
         && value.roles.length <= 64 && value.roles.every(role => oauthActivationText(role, 128))
         && value.roles.includes('credential_owner') && new Set(value.roles).size === value.roles.length

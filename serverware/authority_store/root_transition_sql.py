@@ -56,6 +56,18 @@ def _exact_keys(expression: str, fields: tuple[str, ...] | frozenset[str]) -> st
         IS NOT DISTINCT FROM ARRAY[{expected}]::text[] END)"""
 
 
+def _exact_payload_keys(expression: str) -> str:
+    # Match the independently validated full original. Only these two fixed
+    # operations carry native evidence; neither field is optional or accepted
+    # on approvals or any legacy operation. json preserves duplicate members.
+    return f"""(CASE {expression}->'measuredPlan'->>'operation'
+        WHEN 'credential.static.create' THEN
+            {_exact_keys(expression, _PAYLOAD_FIELDS + ('staticCredentialCustodyEvidence',))}
+        WHEN 'credential.static.rotate' THEN
+            {_exact_keys(expression, _PAYLOAD_FIELDS + ('staticCredentialRotationEvidence',))}
+        ELSE {_exact_keys(expression, _PAYLOAD_FIELDS)} END)"""
+
+
 def root_transition_declarations_sql() -> str:
     return """
         rt_plan_bytes bytea;
@@ -138,7 +150,7 @@ canonicalizer. Only the closed ASCII root transition is canonicalized here.
         IF pg_catalog.octet_length(rt_plan_text) <> pg_catalog.length(rt_plan_text)
         THEN RAISE EXCEPTION 'authority root transition plan transport is not ASCII'; END IF;
         rt_payload_json := rt_plan_text::pg_catalog.json;
-        IF NOT {_exact_keys('rt_payload_json', _PAYLOAD_FIELDS)}
+        IF NOT {_exact_payload_keys('rt_payload_json')}
             OR rt_payload_json->>'schema' IS DISTINCT FROM 'serverware.policyAuthorityPlannerResponse/v3'
         THEN RAISE EXCEPTION 'authority root transition plan payload is not closed v3'; END IF;
         rt_plan_json := rt_payload_json->'measuredPlan';

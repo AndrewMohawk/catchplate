@@ -3350,6 +3350,19 @@ def complete_authority_planner_transaction(
         if isinstance(planner_payload, dict)
         else None
     )
+    # The original evidence is part of the exact persisted/signed plan, not an
+    # optional extension or a reconstructed post-commit receipt. Keep every
+    # other operation on its existing closed roster.
+    if isinstance(plan, dict) and plan.get("operation") == "credential.static.create":
+        from serverware import authority_static_credential_custody as static_custody
+
+        required_payload_fields.add("staticCredentialCustodyEvidence")
+        static_custody.authority_evidence(planner_payload.get("staticCredentialCustodyEvidence"))
+    elif isinstance(plan, dict) and plan.get("operation") == "credential.static.rotate":
+        from serverware import authority_static_credential_rotation_custody as rotation_custody
+
+        required_payload_fields.add("staticCredentialRotationEvidence")
+        rotation_custody.authority_evidence(planner_payload.get("staticCredentialRotationEvidence"))
     planner_identity = (
         planner_payload.get("plannerIdentity")
         if isinstance(planner_payload, dict)

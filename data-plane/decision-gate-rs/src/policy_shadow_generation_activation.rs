@@ -7,7 +7,10 @@ pub(crate) const PATH:&str="/v1/policy-shadow/native-activations";
 pub(crate) const MAX_BODY_BYTES:u64=8*1024*1024;
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(crate) struct Configuration{api_version:String,authority:AuthorityPin,channel:transport::Configuration}
+pub(crate) struct Configuration{api_version:String,authority:AuthorityPin,channel:ChannelConfiguration}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ChannelConfiguration { Inherited(transport::Configuration), Parent(transport::parent::Configuration) }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct AuthorityPin{path:PathBuf,sha256:Sha256Digest}
@@ -47,19 +50,41 @@ impl Original{
         self.authority.require_original(&bytes).map_err(shadow_error)
     }
 }
-pub(crate) struct Prepared{original:Original,channel:transport::Prepared}
-pub(crate) struct Owner{original:Original,channel:transport::Owner}
+enum PreparedChannel { Inherited(transport::Prepared), Parent(transport::parent::Prepared) }
+enum Channel { Inherited(transport::Owner), Parent(transport::parent::Owner) }
+impl PreparedChannel {
+    fn bind(self,serving:Arc<native_serving_privileges::Owner>)->Result<Channel,String>{match self{
+        Self::Inherited(value)=>value.bind(serving).map(Channel::Inherited),
+        Self::Parent(value)=>value.bind(serving).map(Channel::Parent),
+    }}
+}
+impl Channel {
+    fn check(&self)->Result<(),String>{match self{Self::Inherited(v)=>v.check(),Self::Parent(v)=>v.check()}}
+    fn deadline(&self)->u64{match self{Self::Inherited(v)=>v.deadline(),Self::Parent(v)=>v.deadline()}}
+    fn publish(&mut self,raw:&[u8],deadline:u64,check:impl Fn()->Result<(),String>)->Result<Vec<u8>,String>{match self{
+        Self::Inherited(v)=>v.publish(raw,deadline,check),Self::Parent(v)=>v.publish(raw,deadline,check),
+    }}
+}
+pub(crate) struct Prepared{original:Original,channel:PreparedChannel}
+pub(crate) struct Owner{original:Original,channel:Channel}
 impl Prepared{
     pub(crate) fn open(config:Configuration,prepared:&native_serving_privileges::Prepared)->Result<Self,String>{
         prepared.check()?;
-        let version=match config.api_version.as_str(){
-            "serverware.nativePolicyActivationClient/v1"=>transport::ChannelVersion::UnixV1,
-            "serverware.nativePolicyActivationClient/v2"=>transport::ChannelVersion::VsockV2,
-            _=>return Err("native activation client not explicitly selected".into()),
-        };
-        if config.channel.version()?!=version{return Err("native activation client/channel profile mismatch".into());}
         let original=Original::open(&config.authority)?;
-        let channel=transport::Prepared::take(config.channel,prepared)?;prepared.check()?;Ok(Self{original,channel})
+        let channel=match (config.api_version.as_str(),config.channel){
+            ("serverware.nativePolicyActivationClient/v1",ChannelConfiguration::Inherited(channel))=>{
+                if channel.version()?!=transport::ChannelVersion::UnixV1{return Err("native activation client/channel profile mismatch".into());}
+                PreparedChannel::Inherited(transport::Prepared::take(channel,prepared)?)
+            },
+            ("serverware.nativePolicyActivationClient/v2",ChannelConfiguration::Inherited(channel))=>{
+                if channel.version()?!=transport::ChannelVersion::VsockV2{return Err("native activation client/channel profile mismatch".into());}
+                PreparedChannel::Inherited(transport::Prepared::take(channel,prepared)?)
+            },
+            ("serverware.nativePolicyActivationClient/v3",ChannelConfiguration::Parent(channel))=>
+                PreparedChannel::Parent(transport::parent::Prepared::connect(channel,prepared)?),
+            _=>return Err("native activation client/channel profile not explicitly selected".into()),
+        };
+        original.check()?;prepared.check()?;Ok(Self{original,channel})
     }
     pub(crate) fn bind(self,serving:Arc<native_serving_privileges::Owner>)->Result<Owner,String>{
         self.original.check()?;Ok(Owner{original:self.original,channel:self.channel.bind(serving)?})

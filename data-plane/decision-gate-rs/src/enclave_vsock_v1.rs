@@ -547,6 +547,17 @@ impl VsockStreamV1 {
         }
     }
 
+    /// Half-close the actual retained stream after a complete one-shot frame.
+    /// Read authority remains available under the SAME original deadline; no
+    /// descriptor is exported and a failed EOF is not permission to reconnect.
+    pub(crate) fn finish_write(&self) -> io::Result<()> {
+        self.verify_connected_original(self.deadline)?;
+        if unsafe { libc::shutdown(self.socket.fd.as_raw_fd(), libc::SHUT_WR) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.verify_connected_original(self.deadline)
+    }
+
     /// Cancellation remains available after expiry; it never permits more IO.
     pub fn shutdown(&self) -> io::Result<()> { shutdown(&self.socket, &self.closed) }
 

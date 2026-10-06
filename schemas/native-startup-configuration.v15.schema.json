@@ -58,7 +58,11 @@
           {"$ref": "native-shadow-workers.v3.schema.json#/$defs/configuration"},
           {"required": ["publicationResources"]}
         ]},
-        "nativeActivation": {"$ref": "native-policy-activation-custody.v1.schema.json#/$defs/client"}
+        "nativeActivation": {"oneOf": [
+          {"$ref": "native-policy-activation-custody.v1.schema.json#/$defs/client"},
+          {"$ref": "native-policy-activation-custody.v2.schema.json#/$defs/client"},
+          {"$ref": "native-policy-activation-custody.v3.schema.json#/$defs/client"}
+        ]}
       },
       "$comment": "Only genuine native controlled activation is selected. WebAuthn verifier commands and legacy activation are absent, not replaced by synthetic approvals. Runtime/publication resources and native activation channel are required; existing trust-manifest requirements remain unchanged. Preboot delivery does not synthesize these inherited resources."
     }

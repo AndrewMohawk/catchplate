@@ -5795,6 +5795,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_generation_native.rs \
 				data-plane/decision-gate-rs/src/native_policy_activation_transport.rs \
 				data-plane/decision-gate-rs/src/native_policy_activation_stream.rs \
+				data-plane/decision-gate-rs/src/native_policy_activation_parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/proof.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_activation/completion.rs \
@@ -6148,6 +6149,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-readiness.v1.schema.json \
 				schemas/native-policy-activation-custody.v1.schema.json \
 				schemas/native-policy-activation-custody.v2.schema.json \
+				schemas/native-policy-activation-custody.v3.schema.json \
 				schemas/native-shadow-trusted-time-service.v1.schema.json \
 				schemas/native-shadow-persistence-service.v1.schema.json \
 				schemas/native-shadow-persistence-service.v2.schema.json \

@@ -32,7 +32,8 @@
         "workers":{"$ref":"#/$defs/configuration"},
         "nativeActivation":{"oneOf":[
           {"$ref":"native-policy-activation-custody.v1.schema.json#/$defs/client"},
-          {"$ref":"native-policy-activation-custody.v2.schema.json#/$defs/client"}
+          {"$ref":"native-policy-activation-custody.v2.schema.json#/$defs/client"},
+          {"$ref":"native-policy-activation-custody.v3.schema.json#/$defs/client"}
         ]}
       }
     }

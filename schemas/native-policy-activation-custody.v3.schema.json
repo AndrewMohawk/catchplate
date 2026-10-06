@@ -1,0 +1,25 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-policy-activation-custody.v3.schema.json",
+  "$ref":"#/$defs/client",
+  "$defs":{
+    "channel":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","parentCid","parentPort"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationParentChannel/v1"},
+        "parentCid":{"const":3},
+        "parentPort":{"const":9102}
+      },
+      "description":"One actual source-owned AF_VSOCK connection to fixed Nitro parent CID3 port9102, acquired before the permanent serving identity drop. No inherited FD70 or caller-supplied socket identity. CID/port select transport only, not the receiving custody authority."
+    },
+    "client":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","authority","channel"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationClient/v3"},
+        "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+        "channel":{"$ref":"#/$defs/channel"}
+      },
+      "description":"Explicit v3 client uses unchanged v2 stream framing and existing signed activation request/publication originals. The actual cold owner retains the same socket across privilege drop and narrows its original startup deadline once to the authenticated request expiry. One attempt, no retry/reconnect or timeout renewal. This supplies only the client resource; a genuine independently assigned v2 receiving service and durable journal remain required, and preboot closure is not enabled."
+    }
+  }
+}

@@ -10,6 +10,8 @@ use std::os::unix::fs::{FileExt,MetadataExt};
 use std::sync::Arc;
 #[path="native_policy_activation_stream.rs"]
 mod stream;
+#[path="native_policy_activation_parent.rs"]
+pub mod parent;
 const FD:i32=70;
 const MAXIMUM:usize=8*1024*1024;
 const MAX_PUBLICATION:usize=32768;

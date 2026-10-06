@@ -23347,15 +23347,16 @@ UI_HTML = r"""
             <button id="setup-bind-button" class="secondary" type="button" onclick="runUiAction('Bind selected Setup credential', bindSelectedSetupCredential)" disabled>Bind selected credential</button>
             <button id="setup-preview-button" class="secondary" type="button" onclick="runUiAction('Preview setup assignment', previewSetupAssignment)">Preview assignment</button>
             <button id="setup-stage-button" type="button" onclick="runUiAction('Stage setup assignment', stagePolicyCanary)" disabled>Stage assignment</button>
-            <button id="setup-activate-button" type="button" onclick="runUiAction('Activate setup assignment', activatePolicyCanary)" disabled>Activate assignment</button>
+            <button id="setup-activate-button" type="button" onclick="runUiAction('Review setup publication', activateSetupAssignment)" disabled>Activate assignment</button>
             <button id="setup-enroll-button" class="secondary" type="button" onclick="runUiAction('Generate setup enrollment', generateSetupEnrollment)">Generate enrollment</button>
             <button id="setup-command-button" class="secondary" type="button" onclick="runUiAction('Download packet and copy verifier command', copyEnrollmentVerifier)" disabled>Copy verification command</button>
             <button id="setup-verify-button" class="secondary" type="submit">Verify server evidence</button>
           </div>
+          <p id="setup-protected-navigation-status" class="hint" role="status" aria-live="polite" hidden></p>
           <p id="setup-bind-status" class="hint" role="status" aria-live="polite"></p>
           <button id="setup-bind-settle-button" class="secondary" type="button" onclick="runUiAction('Settle Setup credential binding audit', settleSetupCredentialBinding)" disabled>Settle completed binding audit</button>
           <p id="setup-bind-settle-status" class="hint" role="status" aria-live="polite"></p>
-          <div class="setup-form-grid">
+          <div id="setup-legacy-evidence-controls" class="setup-form-grid">
             <div><label for="setup-enrollment-receipt">Enrollment verifier receipt</label><input id="setup-enrollment-receipt" type="file" accept="application/json,.json"></div>
             <button id="setup-enrollment-receipt-button" class="secondary" type="button" onclick="runUiAction('Accept enrollment receipt', submitSetupEnrollmentReceipt)" disabled>Accept enrollment receipt</button>
             <button id="setup-challenge-button" class="secondary" type="button" onclick="runUiAction('Issue attestation challenge', issueSetupAttestationChallenge)" disabled>Issue challenge</button>
@@ -23365,9 +23366,9 @@ UI_HTML = r"""
             <div><label for="setup-hardware-receipt">Hardware verifier receipt</label><input id="setup-hardware-receipt" type="file" accept="application/json,.json"></div>
             <div><label for="setup-proxy-statement">Proxy response statement</label><input id="setup-proxy-statement" type="file" accept="application/json,.json"></div>
             <button id="setup-hardware-button" class="secondary" type="button" onclick="runUiAction('Accept hardware verification', submitSetupHardwareVerification)" disabled>Accept hardware proof</button>
-            <div><label for="setup-final-receipt">Off-host final receipt</label><input id="setup-final-receipt" type="file" accept="application/json,.json"></div>
-            <button id="setup-final-button" type="button" onclick="runUiAction('Finalize attested setup', finalizeSetupAttestation)" disabled>Finalize attestation</button>
+            <div><label for="setup-legacy-final-receipt">Off-host final receipt</label><input id="setup-legacy-final-receipt" type="file" accept="application/json,.json"></div>
           </div>
+          <button id="setup-final-button" type="button" onclick="runUiAction('Review final Setup attestation', finalizeSetupAttestation)" disabled>Finalize attestation</button>
         </form>
         <div id="setup-summary" class="setup-summary" role="status" aria-live="polite"></div>
         <div id="setup-checks" class="setup-checks"></div>
@@ -26075,6 +26076,52 @@ UI_HTML = r"""
       target.className = passed ? 'pill good' : 'pill warn';
     }
 
+    function protectedStaticSetup(session = state.setupSession) {
+      return Boolean(protectedStaticCredentials && session && !session.oauthProvider);
+    }
+
+    function protectedSetupNavigationReady(session = state.setupSession) {
+      return protectedStaticSetup(session) && nativeSetupId(session.id) && session.credentialId
+        && ['credential_activated', 'native_scoped_complete'].includes(session.phase)
+        && ['active', 'complete'].includes(session.status) && Number.isSafeInteger(session.revision) && session.revision >= 1
+        && !adminToken() && window.isSecureContext && window.top === window
+        && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
+        && state.authStatus.sessionState === 'active' && state.authStatus.webauthnRequired === false;
+    }
+
+    function openProtectedSetupControls(step) {
+      const targets = {publication: 'setup-policy-file-draft', enrollment: 'setup-native-enrollment-grant',
+        evidence: 'setup-native-ca-grant', hardware: 'setup-hardware-prepare-confirm', final: 'setup-final-confirm'};
+      const session = state.setupSession, target = $(targets[step]);
+      if (!target || !protectedSetupNavigationReady(session)) {
+        throw new Error('Load the exact active or completed protected Setup run first; no request was sent.');
+      }
+      const input = $('setup-policy-session'), revision = String(session.revision);
+      if (input.value.trim() !== session.id || $('setup-policy-revision').value.trim() !== revision) {
+        const differentRun = input.value.trim() !== session.id;
+        input.value = session.id;
+        $('setup-policy-revision').value = revision;
+        if (differentRun) {
+          $('setup-policy-binding-event').value = '';
+          $('setup-policy-generation').value = '';
+        }
+        // Existing listeners invalidate page-held context, never submission fences.
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+      for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+        if (parent.tagName === 'DETAILS') parent.open = true;
+      }
+      target.scrollIntoView({block: 'center'});
+      target.focus({preventScroll: true});
+      $('setup-protected-navigation-status').textContent = 'Selected Setup ' + session.id + ', revision ' + revision
+        + '. Review the protected ' + step + ' controls. No request, approval, enrollment, activation or verification was submitted.';
+      return {navigationOnly: true, sessionId: session.id, control: step};
+    }
+
+    function activateSetupAssignment() {
+      return protectedStaticSetup() ? openProtectedSetupControls('publication') : activatePolicyCanary();
+    }
+
     function renderSetupWorkflow(controlState = {}) {
       const setupSession = state.setupSession;
       const setupSessions = state.setupSessions || [];
@@ -26151,15 +26198,25 @@ UI_HTML = r"""
           || !(state.authStatus?.roles || []).includes('credential_owner')
         : !candidateReady || setupSession?.phase !== 'credential_activated'
           || !$('policy-signed-bundle').value.trim() || !$('policy-authority-package').value.trim();
-      $('setup-activate-button').disabled = !staged || setupSession?.phase !== 'policy_staged';
-      $('setup-enroll-button').disabled = !active || setupSession?.phase !== 'policy_activated';
-      $('setup-command-button').disabled = !packetMatches;
-      $('setup-verify-button').disabled = !setupSession || !['enrollment_issued', 'ca_installed', 'canaries_verified', 'runtime_verified', 'hardware_verified'].includes(setupSession.phase);
+      const protectedNavigation = protectedStaticSetup(setupSession), navigationReady = protectedSetupNavigationReady(setupSession);
+      $('setup-protected-navigation-status').hidden = !protectedNavigation;
+      if (protectedNavigation) {
+        $('setup-protected-navigation-status').textContent = 'Protected Setup uses separate enrollment and evidence records. These buttons open explicit review controls only; legacy phase names are not readiness evidence.';
+      }
+      $('setup-legacy-evidence-controls').hidden = protectedNavigation;
+      $('setup-activate-button').textContent = protectedNavigation ? 'Review protected publication' : 'Activate assignment';
+      $('setup-activate-button').disabled = protectedNavigation ? !navigationReady : !staged || setupSession?.phase !== 'policy_staged';
+      $('setup-enroll-button').textContent = protectedNavigation ? 'Review native enrollment' : 'Generate enrollment';
+      $('setup-enroll-button').disabled = protectedNavigation ? !navigationReady : !active || setupSession?.phase !== 'policy_activated';
+      $('setup-command-button').disabled = protectedNavigation || !packetMatches;
+      $('setup-verify-button').textContent = protectedNavigation ? 'Review native evidence steps' : 'Verify server evidence';
+      $('setup-verify-button').disabled = protectedNavigation ? !navigationReady : !setupSession || !['enrollment_issued', 'ca_installed', 'canaries_verified', 'runtime_verified', 'hardware_verified'].includes(setupSession.phase);
       $('setup-enrollment-receipt-button').disabled = setupSession?.phase !== 'enrollment_issued';
       $('setup-challenge-button').disabled = setupSession?.phase !== 'runtime_verified';
       $('setup-challenge-button').textContent = setupSession?.attestationChallengeDigest ? 'Get challenge' : 'Issue challenge';
       $('setup-hardware-button').disabled = setupSession?.phase !== 'runtime_verified' || !setupSession?.attestationChallengeDigest;
-      $('setup-final-button').disabled = !['hardware_verified', 'completion_pending_audit'].includes(setupSession?.phase);
+      $('setup-final-button').textContent = protectedNavigation ? 'Review scoped final attestation' : 'Finalize attestation';
+      $('setup-final-button').disabled = protectedNavigation ? !navigationReady : !['hardware_verified', 'completion_pending_audit'].includes(setupSession?.phase);
       $('setup-attestation-challenge').value = state.setupChallenge && state.setupChallenge.setupSessionId === setupSession?.id ? state.setupChallenge.value : '';
       $('setup-copy-challenge-button').disabled = !state.setupChallenge?.value || state.setupChallenge.setupSessionId !== setupSession?.id;
 
@@ -27705,6 +27762,7 @@ UI_HTML = r"""
     }
 
     async function generateSetupEnrollment() {
+      if (protectedStaticSetup()) return openProtectedSetupControls('enrollment');
       const selection = currentSetupSelection();
       if (!setupAssignmentIsActive(selection)) throw new Error('Activate the exact principal, route, and credential assignment first');
       const session = state.setupSession, revision = session?.revision, selectionGeneration = setupLoadGeneration;
@@ -27757,6 +27815,7 @@ UI_HTML = r"""
     }
 
     async function verifySetupEvidence() {
+      if (protectedStaticSetup()) return openProtectedSetupControls('evidence');
       const session = state.setupSession;
       if (!session) throw new Error('Select a durable setup run');
       const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/verify`, {
@@ -27780,6 +27839,7 @@ UI_HTML = r"""
     }
 
     async function submitSetupEnrollmentReceipt() {
+      if (protectedStaticSetup()) return openProtectedSetupControls('evidence');
       const session = state.setupSession;
       if (!session || session.phase !== 'enrollment_issued') throw new Error('This setup run is not awaiting enrollment verification');
       const receipt = await readSetupArtifact('setup-enrollment-receipt', 65536, 'enrollment verifier receipt');
@@ -27794,6 +27854,7 @@ UI_HTML = r"""
     }
 
     async function issueSetupAttestationChallenge() {
+      if (protectedStaticSetup()) return openProtectedSetupControls('hardware');
       const session = state.setupSession;
       if (!session || session.phase !== 'runtime_verified') throw new Error('Verify runtime evidence before issuing a hardware challenge');
       const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/attestation-challenge`, {
@@ -27814,6 +27875,7 @@ UI_HTML = r"""
     }
 
     async function submitSetupHardwareVerification() {
+      if (protectedStaticSetup()) return openProtectedSetupControls('hardware');
       const session = state.setupSession;
       if (!session || session.phase !== 'runtime_verified' || !session.attestationChallengeDigest) throw new Error('This setup run is not awaiting hardware verification');
       const hardwareAssurance = await readSetupArtifact('setup-hardware-assurance', 524288, 'hardware assurance');
@@ -27836,9 +27898,10 @@ UI_HTML = r"""
     }
 
     async function finalizeSetupAttestation() {
+      if (protectedStaticSetup()) return openProtectedSetupControls('final');
       const session = state.setupSession;
       if (!session || !['hardware_verified', 'completion_pending_audit'].includes(session.phase)) throw new Error('This setup run is not awaiting final attestation');
-      const receipt = await readSetupArtifact('setup-final-receipt', 65536, 'off-host final receipt');
+      const receipt = await readSetupArtifact('setup-legacy-final-receipt', 65536, 'off-host final receipt');
       const mutation = {
         kind: 'setup-attestation-finalize',
         label: 'Finalize attested setup',

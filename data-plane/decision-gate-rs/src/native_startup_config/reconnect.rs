@@ -56,7 +56,7 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
     Ok(ConfigurationParts {
         measured_canary_delivery: None,
         measured_succession: None, historical_broker: None,
-        measured_setup: None,
+        measured_static_credential: None, measured_setup: None,
         measured_capture_retirement: Some(original.measured_capture_retirement),
         measured_reconnect: Some(original.measured_reconnect),
         gate_cgroup: Some(original.gate_cgroup),

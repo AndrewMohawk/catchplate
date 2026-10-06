@@ -12,7 +12,7 @@ impl Owner {
         deadline: u64) -> Result<(),String> {
         let result=(|| {
             config.validate()?; self.check(deadline)?; identity.verify_browser_ingress(&ingress,deadline)?;
-            ensure(self.setup_configuration.is_none() && self.exchange_configuration.is_none() && self.reconnect_configuration.is_none() && self.succession_configuration.is_none() && !self.service_phase_closed
+            ensure(self.static_configuration.is_none() && self.setup_configuration.is_none() && self.exchange_configuration.is_none() && self.reconnect_configuration.is_none() && self.succession_configuration.is_none() && !self.service_phase_closed
                 && config.callback_origin==ingress.origin() && Sha256::digest(identity.ca_certificate_der()).as_slice()==self.owner_ca,
                 "Setup helper requires its same cold CA and browser owner")?;
             let mut scope=identity.refresh_scope(deadline)?;

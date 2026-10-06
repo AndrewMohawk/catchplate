@@ -72,7 +72,7 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }
     let pending_tokens = super::native_service_tokens::pending(inputs)?;
-    if [inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
+    if [inputs.measured_static_credential.is_some(), inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {
         return Err("native cold configuration requires one browser/helper purpose".to_owned());
     }
@@ -92,6 +92,12 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
         reconnect.validate()?;
         if !pending_tokens || inputs.credential_currentness.is_none() || !measured {
             return Err("native reconnect requires its distinct encrypted cold profile".to_owned());
+        }
+    }
+    if let Some(config) = &inputs.measured_static_credential {
+        config.validate()?;
+        if !pending_tokens || inputs.credential_currentness.is_none() || !measured {
+            return Err("static credential intake requires its encrypted native cold profile".to_owned());
         }
     }
     if let Some(setup) = &inputs.measured_setup {

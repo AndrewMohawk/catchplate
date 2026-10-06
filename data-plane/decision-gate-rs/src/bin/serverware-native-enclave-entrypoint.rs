@@ -62,6 +62,7 @@ fn main() -> Result<(), String> {
         Some("--canary-heartbeat-v20") => { arguments.remove(0); "--native-canary-heartbeat-startup-v20" },
         Some("--canary-readiness-v21") => { arguments.remove(0); "--native-canary-readiness-startup-v21" },
         Some("--workload-trust-v22") => { arguments.remove(0); "--native-workload-trust-startup-v22" },
+        Some("--static-credential-v23") => { arguments.remove(0); "--native-static-credential-startup-v23" },
         _ => "--native-encrypted-startup",
     };
     // Only v22 adds the separately pinned trust original (two flag/value

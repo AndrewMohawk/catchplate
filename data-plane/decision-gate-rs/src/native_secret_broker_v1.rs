@@ -14,6 +14,7 @@ mod exchange;
 mod setup;
 mod reconnect;
 mod succession;
+mod static_credential;
 #[path = "native_verifier/json.rs"]
 mod json;
 
@@ -201,7 +202,7 @@ impl PendingBroker {
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
             secret_kek_id: self.config.secret_kek_id, service_phase_closed: false,
             poisoned: false, _quote: quote, serving: None, refresh_configuration: None, exchange_configuration: None, setup_configuration: None, reconnect_configuration: None, succession_configuration: None,
-            cleanup_configuration: None, pending_retirement_configuration: None, capture_retirement_configuration: None,
+            cleanup_configuration: None, pending_retirement_configuration: None, capture_retirement_configuration: None, static_configuration: None,
             historical_configuration_sha256: None, historical_original: None, _historical_quotes: Vec::new() })
     }
 }
@@ -223,6 +224,7 @@ pub struct Owner {
     setup_configuration: Option<(crate::native_oauth_setup_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     reconnect_configuration: Option<(crate::native_oauth_reconnect_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     succession_configuration: Option<(crate::native_oauth_succession_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
+    static_configuration: Option<(crate::native_static_credential_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
 }
 
 /// Privileged image/child setup only. The helper is already unprivileged; no

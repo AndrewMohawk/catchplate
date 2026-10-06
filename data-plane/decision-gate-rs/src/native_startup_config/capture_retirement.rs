@@ -58,7 +58,7 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
         measured_succession: None, historical_broker: None,
         measured_reconnect: None,
         measured_capture_retirement: Some(original.measured_capture_retirement),
-        measured_setup: Some(original.measured_setup),
+        measured_static_credential: None, measured_setup: Some(original.measured_setup),
         gate_cgroup: Some(original.gate_cgroup),
         measured_pending_retirement: Some(original.measured_pending_retirement),
         guest_role_key_provisioner: Some(original.guest_role_key_provisioner),

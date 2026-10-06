@@ -12,7 +12,7 @@ impl Owner {
         deadline:u64)->Result<(),String>{
         let result=(||{
             config.validate()?; self.check(deadline)?; identity.verify_browser_ingress(&ingress,deadline)?;
-            ensure(self.succession_configuration.is_none() && self.reconnect_configuration.is_none() && self.setup_configuration.is_none()
+            ensure(self.static_configuration.is_none() && self.succession_configuration.is_none() && self.reconnect_configuration.is_none() && self.setup_configuration.is_none()
                 && self.exchange_configuration.is_none() && !self.service_phase_closed
                 && self.historical_configuration_sha256.is_some() && self.historical_original.is_some()
                 && config.callback_origin==ingress.origin()

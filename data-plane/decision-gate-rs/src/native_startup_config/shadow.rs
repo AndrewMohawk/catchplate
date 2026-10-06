@@ -70,6 +70,9 @@ fn version_three<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> 
 fn version_four<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
     exact_version(de,"serverware.nativeShadowConfiguration/v4")
 }
+fn version_five<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
+    exact_version(de,"serverware.nativeShadowConfiguration/v5")
+}
 
 impl ShadowConfigV2 {
     pub(super) fn into_config(self) -> Result<PolicyShadowGenerationConfig, String> {
@@ -96,6 +99,7 @@ pub(super) enum ShadowConfigV15 {
     Native(ShadowConfigV2),
     NativeActivation(ShadowConfigV3),
     NativePublication(ShadowConfigV4),
+    NativeRuntimeVerification(ShadowConfigV5),
 }
 
 impl From<ShadowConfigV1> for ShadowConfigV15 {
@@ -109,6 +113,7 @@ impl ShadowConfigV15 {
             Self::Native(value) => value.into_config(),
             Self::NativeActivation(value)=>value.into_config(),
             Self::NativePublication(value)=>value.into_config(),
+            Self::NativeRuntimeVerification(value)=>value.into_config(),
         }
     }
 }
@@ -132,8 +137,36 @@ fn present_activation<'de,D:serde::Deserializer<'de>>(deserializer:D)
 }
 impl ShadowConfigV4 {
     fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
-        if self.api_version!="serverware.nativeShadowConfiguration/v4" || !self.workers.publication_resources() {
+        if self.api_version!="serverware.nativeShadowConfiguration/v4" || !self.workers.publication_resources()
+            || self.workers.runtime_resources() {
             return Err("native publication nested profile differs".into());
+        }
+        self.workers.validate()?;
+        let mut value=ShadowConfigV1{trust_manifest:self.trust_manifest,runtime_verifier:self.runtime_verifier,
+            webauthn_verifier:self.webauthn_verifier,publication_handoff:self.publication_handoff,
+            custody_config:self.custody_config,startup_active_authorization:self.startup_active_authorization}.into_config()?;
+        value.native_workers=Some(self.workers);value.native_activation=self.native_activation;Ok(value)
+    }
+}
+
+/// Runtime verification receives separately admitted originals only through
+/// this explicit successor. It may also select the existing publication and
+/// activation owners; none is inferred from inherited descriptor presence.
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct ShadowConfigV5 {
+    #[serde(deserialize_with="version_five")]
+    api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
+    webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
+    custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,
+    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    #[serde(default,deserialize_with="present_activation")]
+    native_activation:Option<super::super::policy_shadow_generation::activation::Configuration>,
+}
+impl ShadowConfigV5 {
+    fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
+        if self.api_version!="serverware.nativeShadowConfiguration/v5" || !self.workers.runtime_resources() {
+            return Err("native runtime-verifier nested profile differs".into());
         }
         self.workers.validate()?;
         let mut value=ShadowConfigV1{trust_manifest:self.trust_manifest,runtime_verifier:self.runtime_verifier,

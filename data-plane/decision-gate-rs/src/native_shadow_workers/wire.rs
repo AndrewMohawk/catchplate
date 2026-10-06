@@ -56,19 +56,36 @@ pub(super) struct PublicationBootstrap {
     pub(super) publication_resources_sha256:String,
 }
 #[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct RuntimeBootstrap {
+    pub(super) api_version:String,
+    pub(super) worker:Bootstrap,
+    pub(super) runtime_resources_sha256:String,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(super) publication_resources_sha256:Option<String>,
+}
+#[derive(Serialize,Deserialize)]
 #[serde(untagged)]
-pub(super) enum WorkerBootstrap {Legacy(Bootstrap),Publication(PublicationBootstrap)}
+pub(super) enum WorkerBootstrap {Legacy(Bootstrap),Publication(PublicationBootstrap),Runtime(RuntimeBootstrap)}
 impl WorkerBootstrap {
     pub(super) fn worker(&self)->&Bootstrap {
-        match self {Self::Legacy(v)=>v,Self::Publication(v)=>&v.worker}
+        match self {Self::Legacy(v)=>v,Self::Publication(v)=>&v.worker,Self::Runtime(v)=>&v.worker}
     }
     pub(super) fn publication(&self)->Option<&str> {
-        match self {Self::Legacy(_)=>None,Self::Publication(v)=>Some(&v.publication_resources_sha256)}
+        match self {Self::Legacy(_)=>None,Self::Publication(v)=>Some(&v.publication_resources_sha256),
+            Self::Runtime(v)=>v.publication_resources_sha256.as_deref()}
+    }
+    pub(super) fn runtime(&self)->Option<&str> {
+        match self {Self::Runtime(v)=>Some(&v.runtime_resources_sha256),_=>None}
     }
     pub(super) fn validate(&self)->Result<(),String> {
         self.worker().validate()?;
         if let Self::Publication(v)=self {
             require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v2" && hash(&v.publication_resources_sha256))?;
+        }
+        if let Self::Runtime(v)=self {
+            require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v3" && hash(&v.runtime_resources_sha256)
+                && v.publication_resources_sha256.as_ref().is_none_or(|pin|hash(pin)))?;
         }
         Ok(())
     }

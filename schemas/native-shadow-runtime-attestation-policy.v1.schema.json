@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-runtime-attestation-policy.v1.schema.json",
+  "title": "Independently pinned Nitro runtime verification policy",
+  "type":"object","additionalProperties":false,
+  "required":["apiVersion","trustRootsSha256","expectedPcrs","expectedEif","expectedModuleId","expectedRuntimeExecutableSha256","expectedRuntimeReleaseSha256","expectedTeeMeasurementSha256","maxAgeSeconds","futureSkewSeconds","startupReceiptAuthority","shadowRoleAuthority"],
+  "properties": {
+    "apiVersion":{"const":"serverware.nativeShadowRuntimeAttestationPolicy/v1"},
+    "trustRootsSha256":{"$ref":"#/$defs/sha256"},
+    "expectedPcrs":{
+      "type":"object","additionalProperties":false,"minProperties":3,"maxProperties":32,
+      "required":["PCR0","PCR1","PCR2"],
+      "patternProperties":{"^PCR(?:[0-9]|[12][0-9]|3[01])$":{"$ref":"#/$defs/sha384"}}
+    },
+    "expectedEif":{"$ref":"#/$defs/sha384"},
+    "expectedModuleId":{"type":"string","minLength":1,"maxLength":256},
+    "expectedRuntimeExecutableSha256":{"$ref":"#/$defs/sha256"},
+    "expectedRuntimeReleaseSha256":{"$ref":"#/$defs/sha256"},
+    "expectedTeeMeasurementSha256":{"$ref":"#/$defs/sha256"},
+    "maxAgeSeconds":{"type":"integer","minimum":1,"maximum":300},
+    "futureSkewSeconds":{"type":"integer","minimum":0,"maximum":30},
+    "startupReceiptAuthority":{"$ref":"#/$defs/key"},
+    "shadowRoleAuthority":{"$ref":"#/$defs/key"}
+  },
+  "$defs": {
+    "sha256":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/sha256"},
+    "sha384":{"type":"string","pattern":"^sha384:[0-9a-f]{96}$"},
+    "key":{
+      "type":"object","additionalProperties":false,
+      "required":["keyId","keySpkiSha256","publicKeyPem"],
+      "properties":{
+        "keyId":{"$ref":"#/$defs/sha256"},
+        "keySpkiSha256":{"$ref":"#/$defs/sha256"},
+        "publicKeyPem":{"type":"string","minLength":1,"maxLength":1024}
+      }
+    }
+  },
+  "$comment":"Exact original bytes are pinned by independently admitted generation trust. The producer additionally checks distinct actual authority keys, PCR0/EIF equality, non-debug PCRs, quote signatures/certificates and signed receipt/role/evidence joins. Hardware-attested runtime identity does not imply TEE custody of the separately authorized shadow signing key."
+}

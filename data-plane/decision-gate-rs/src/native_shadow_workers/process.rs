@@ -6,7 +6,7 @@ use std::{mem::{size_of,zeroed}, os::fd::{AsRawFd,OwnedFd,FromRawFd},sync::atomi
 struct CloneArgs { flags:u64,pidfd:u64,child_tid:u64,parent_tid:u64,exit_signal:u64,stack:u64,stack_size:u64,tls:u64,set_tid:u64,set_tid_size:u64,cgroup:u64 }
 #[repr(C)]
 struct Action { handler:usize,flags:usize,restorer:usize,mask:u64 }
-unsafe fn child(parent:i32,source:&[OwnedFd;7],publication:Option<&[OwnedFd;3]>)->! {
+unsafe fn child(parent:i32,source:&[OwnedFd;7],publication:Option<&[OwnedFd;3]>,runtime:Option<&[OwnedFd;3]>)->! {
     let mut good=unsafe {libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL,0,0,0)}==0 && unsafe {libc::getppid()}==parent;
     for (i,target) in [3,5,6,7,8].iter().enumerate() {good &= unsafe {libc::dup3(source[i].as_raw_fd(),*target,0)}==*target;}
     let action=Action {handler:0,flags:0,restorer:0,mask:0};
@@ -26,6 +26,12 @@ unsafe fn child(parent:i32,source:&[OwnedFd;7],publication:Option<&[OwnedFd;3]>)
             good &= unsafe {libc::dup3(source.as_raw_fd(),target,0)}==target;
         }
     }
+    // Runtime's separate policy/key/roots roster is never selected by a job.
+    if let Some(resources)=runtime {
+        for (source,target) in resources.iter().zip([12,13,14]) {
+            good &= unsafe {libc::dup3(source.as_raw_fd(),target,0)}==target;
+        }
+    }
     if good {
         let argv=[c"serverware-native-shadow-worker".as_ptr(),std::ptr::null()];
         let env:[*const libc::c_char;1]=[std::ptr::null()];
@@ -40,7 +46,8 @@ pub(super) struct Process {
 }
 impl Process {
     pub(super) fn spawn(image:&Sealed,bootstrap:&Sealed,commands:&[&Sealed;3],prepared:&crate::native_serving_privileges::Prepared,
-        publication:Option<&super::publication_resources::ColdResources>)->Result<Self,String> {
+        publication:Option<&super::publication_resources::ColdResources>,
+        runtime:Option<&super::runtime_resources::ColdResources>)->Result<Self,String> {
         prepared.check()?; image.check()?;bootstrap.check()?;
         for command in commands {command.check()?;}
         let mut disposition:libc::sigaction=unsafe {zeroed()};
@@ -56,15 +63,16 @@ impl Process {
             ipc::duplicate(commands[0].file.as_raw_fd())?,ipc::duplicate(commands[1].file.as_raw_fd())?,
             ipc::duplicate(commands[2].file.as_raw_fd())?,ipc::duplicate(image.file.as_raw_fd())?,ipc::duplicate(null.as_raw_fd())?];
         let publication=publication.map(|resources|resources.descriptors()).transpose()?;
+        let runtime=runtime.map(|resources|resources.descriptors()).transpose()?;
         let creator=unsafe {libc::getpid()}; let mut pidfd=-1i32;
         let args=CloneArgs {flags:libc::CLONE_PIDFD as u64,pidfd:(&mut pidfd as *mut i32) as u64,exit_signal:libc::SIGCHLD as u64,..CloneArgs::default()};
         prepared.check()?;
         let pid=unsafe {libc::syscall(libc::SYS_clone3,&args,size_of::<CloneArgs>())};
-        if pid==0 {unsafe {child(creator,&sources,publication.as_ref());}}
+        if pid==0 {unsafe {child(creator,&sources,publication.as_ref(),runtime.as_ref());}}
         require(pid>0 && pidfd>=0)?;
         let process=Self {channel,pidfd:unsafe {OwnedFd::from_raw_fd(pidfd)},pid:pid as i32,creator,deadline:prepared.deadline(),
             stopped:AtomicBool::new(false),reaped:AtomicBool::new(false)};
-        drop(sources);drop(publication);drop(remote);
+        drop(sources);drop(publication);drop(runtime);drop(remote);
         prepared.check()?; process.check()?; Ok(process)
     }
     pub(super) fn check(&self)->Result<(),String> {

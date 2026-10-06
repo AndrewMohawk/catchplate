@@ -1452,6 +1452,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/build_production_images.py \
 	scripts/send_native_audit_assignment.py \
 	scripts/send_native_configuration.py \
+	scripts/prepare_native_configuration_delivery.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/native_pilot_runtime_artifacts.py \
 	scripts/native_pilot_tar_export.py \
@@ -4611,6 +4612,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/build_production_images.py \
 				scripts/send_native_audit_assignment.py \
 				scripts/send_native_configuration.py \
+				scripts/prepare_native_configuration_delivery.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/native_pilot_runtime_artifacts.py \
 				scripts/native_pilot_tar_export.py \
@@ -5657,6 +5659,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-runtime-attestation-verifier.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-publication-handoff.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
@@ -5778,6 +5781,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_shadow_workers/mod.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/process.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/publication_resources.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/runtime_resources.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_runtime_attestation.rs \
+				data-plane/decision-gate-rs/src/native_verifier/runtime_shadow.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/transport.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/wire.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/worker.rs \
@@ -6191,6 +6197,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-shadow-workers.v1.schema.json \
 				schemas/native-shadow-workers.v2.schema.json \
+				schemas/native-shadow-workers.v3.schema.json \
+				schemas/native-shadow-runtime-resources.v1.schema.json \
+				schemas/native-shadow-runtime-attestation-policy.v1.schema.json \
 				schemas/native-shadow-publication-resources.v1.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \
 				schemas/native-custody-closure.v1.schema.json \

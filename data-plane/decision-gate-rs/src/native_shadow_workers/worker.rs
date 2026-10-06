@@ -7,9 +7,11 @@ use std::{fs::File,os::fd::AsRawFd,os::unix::fs::FileExt};
 pub fn run()->Result<(),String> {
     require(std::env::args_os().count()==1 && std::env::vars_os().next().is_none())?;
     let publication_descriptors=unsafe {libc::fcntl(9,libc::F_GETFD)}==0;
+    let runtime_descriptors=unsafe {libc::fcntl(12,libc::F_GETFD)}==0;
     for fd in 0..128 {
         let flags=unsafe {libc::fcntl(fd,libc::F_GETFD)};
         require(if matches!(fd,0|1|2|3|5|6|7|8) || publication_descriptors && matches!(fd,9|10|11)
+            || runtime_descriptors && matches!(fd,12|13|14)
             {flags==0} else {flags<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EBADF)})?;
     }
     // Fixed null stdio exists across exec/startup, never a parent log pipe.
@@ -31,6 +33,7 @@ pub fn run()->Result<(),String> {
     let bootstrap=Sealed::receive(bootstrap,0,meta.len(),&wire::sha(&raw),false)?;
     let selected:wire::WorkerBootstrap=wire::decode(&raw)?;selected.validate()?;
     require(publication_descriptors==selected.publication().is_some())?;
+    require(runtime_descriptors==selected.runtime().is_some())?;
     let admitted=selected.worker();
     let mut held=Vec::new();
     for i in 0..3 {
@@ -43,9 +46,12 @@ pub fn run()->Result<(),String> {
     // neither inherited descriptor presence nor a job request selects authority.
     let publication=selected.publication().map(|expected|
         super::publication_resources::WorkerResources::admit(expected,admitted.deadline_boottime_ns)).transpose()?;
+    let runtime=selected.runtime().map(|expected|
+        super::runtime_resources::WorkerResources::admit(expected,admitted.deadline_boottime_ns)).transpose()?;
     let identity=identity::enter(parent)?;
     bootstrap.check()?;identity.check()?;
     if let Some(resources)=&publication {resources.check()?;}
+    if let Some(resources)=&runtime {resources.check()?;}
     let initialized=wire::Initialized {api_version:"serverware.nativeShadowWorkerInitialized/v1".into(),
         channel_nonce:admitted.channel_nonce.clone(),bootstrap_sha256:bootstrap.sha256().to_owned()};
     ipc::wait(channel.as_raw_fd(),libc::POLLOUT,&parent_pidfd,admitted.deadline_boottime_ns)?;
@@ -54,6 +60,7 @@ pub fn run()->Result<(),String> {
     loop {
         identity.check()?;bootstrap.check()?;
         if let Some(resources)=&publication {resources.check()?;}
+        if let Some(resources)=&runtime {resources.check()?;}
         ipc::wait(channel.as_raw_fd(),libc::POLLIN,&parent_pidfd,admitted.deadline_boottime_ns)?;
         let packet=ipc::receive(channel.as_raw_fd(),1)?;
         require(packet.credentials.pid==parent && packet.credentials.uid==crate::native_serving_privileges::UID
@@ -69,13 +76,20 @@ pub fn run()->Result<(),String> {
         let input=wire::input(&request,File::from(packet.descriptor.ok_or("shadow request input absent")?),crate::native_serving_privileges::UID)?;
         let document:serde_json::Value=wire::decode(&input.bytes()?)?;request.purpose.input(&document)?;drop(document);
         let index=request.purpose.index();identity.check()?;
-        let transfer=if request.purpose==super::Purpose::Publication {
+        let publication_transfer=if request.purpose==super::Purpose::Publication {
             publication.as_ref().map(|resources|resources.job(request.deadline_boottime_ns)).transpose()?
         } else {None};
+        let runtime_transfer=if request.purpose==super::Purpose::Runtime {
+            runtime.as_ref().map(|resources|resources.job(request.deadline_boottime_ns,&request.input_sha256)).transpose()?
+        } else {None};
+        require(publication_transfer.is_none() || runtime_transfer.is_none())?;
+        let transfer=publication_transfer.as_ref().map(|v|&v.descriptors)
+            .or_else(||runtime_transfer.as_ref().map(|v|&v.descriptors));
         let output=job::run(&held[index],&input,&admitted.executable_path[index],&parent_pidfd,channel.as_raw_fd(),
-            request.deadline_boottime_ns,admitted.deadline_boottime_ns,request.purpose.maximum(),transfer.as_ref())?;
-        drop(transfer);
+            request.deadline_boottime_ns,admitted.deadline_boottime_ns,request.purpose.maximum(),transfer)?;
+        drop(publication_transfer);drop(runtime_transfer);
         if let Some(resources)=&publication {resources.check()?;}
+        if let Some(resources)=&runtime {resources.check()?;}
         identity.check()?;bootstrap.check()?;input.check()?;
         ipc::prove_owned_process(&parent_pidfd,&packet.sender,parent).map_err(|_|"shadow original parent changed during command")?;
         let output=Sealed::new(&output,false)?;
@@ -83,6 +97,7 @@ pub fn run()->Result<(),String> {
         let response=wire::Response {api_version:"serverware.nativeShadowWorkerResponse/v1".into(),request,result};
         ipc::wait(channel.as_raw_fd(),libc::POLLOUT,&parent_pidfd,response.request.deadline_boottime_ns)?;
         if let Some(resources)=&publication {resources.check()?;}
+        if let Some(resources)=&runtime {resources.check()?;}
         require(now()?<response.request.deadline_boottime_ns)?;
         ipc::send(channel.as_raw_fd(),&wire::encode(&response)?,Some(output.file.as_raw_fd()))?;
     }

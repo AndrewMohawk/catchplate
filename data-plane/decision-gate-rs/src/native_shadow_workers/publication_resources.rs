@@ -39,6 +39,9 @@ pub struct Configuration {
     signing_key_fd: i32, journal_fd: i32,
 }
 impl Configuration {
+    pub(super) fn inherited_fds(&self) -> [i32; 4] {
+        [self.descriptor_fd, self.checkpoint_fd, self.signing_key_fd, self.journal_fd]
+    }
     pub(super) fn validate(&self) -> Result<(), String> {
         let fds = [self.descriptor_fd, self.checkpoint_fd, self.signing_key_fd, self.journal_fd];
         require(self.api_version == "serverware.nativeShadowPublicationResources/v1"

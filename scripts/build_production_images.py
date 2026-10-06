@@ -86,6 +86,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-setup-proxy-artifact"),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-setup-final-artifact"),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-verifier-supervisor-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-runtime-attestation-verifier-artifact"),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-verifier-transport-artifact"),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-verifier-runtime-artifact"),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-time-issuer-supervisor-artifact"),

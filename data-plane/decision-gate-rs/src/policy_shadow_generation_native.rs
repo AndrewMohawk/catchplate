@@ -33,6 +33,27 @@ fn publication_pins(trust:&PinnedEnvelopeKeyTrust)
     })
 }
 
+fn runtime_pins(trust:&PinnedEnvelopeKeyTrust,verifier_executable_sha256:&str)
+    ->Result<workers::runtime_resources::RuntimeAuthorityPins,String> {
+    let key_id=trust.runtime_attestation_verifier_signing_key_id.clone();
+    let spki=trust.runtime_attestation_verifier_signing_key_spki_sha256.clone();
+    let key=trust.keys.get(&("runtime-attestation-verifier".into(),
+        RUNTIME_VERIFIER_SIGNATURE_DOMAIN.into(),key_id.clone(),spki.clone()))
+        .ok_or("runtime verifier key lacks its independently admitted signature domain")?;
+    let opening=trust.issued_at_unix_nanos.max(key.not_before_unix_nanos);
+    let closing=trust.expires_at_unix_nanos.min(key.not_after_unix_nanos);
+    if opening>=closing {return Err("runtime verifier trust/key validity intersection is empty".into());}
+    Ok(workers::runtime_resources::RuntimeAuthorityPins {
+        key_id:key_id.as_str().into(),key_spki_sha256:spki.as_str().into(),
+        policy_sha256:trust.runtime_attestation_policy_sha256.as_str().into(),
+        verifier_executable_sha256:verifier_executable_sha256.into(),
+        trust_checkpoint_sha256:trust.checkpoint.checkpoint_id.as_str().into(),
+        revocation_generation:trust.checkpoint.revocation_generation,
+        revocation_root_sha256:trust.checkpoint.revocation_root_sha256.as_str().into(),
+        not_before_unix_nanos:opening,not_after_unix_nanos:closing,
+    })
+}
+
 impl PreparedNativeShadowControl {
     pub(crate) fn open(mut config: PolicyShadowGenerationConfig, prepared: &Prepared,
         cohort: Arc<StartedGuestCohort>) -> Result<Self, String> {
@@ -48,7 +69,13 @@ impl PreparedNativeShadowControl {
         let control = PolicyShadowGenerationControl::from_config(true, true, config)?;
         let lifecycle=super::super::policy_shadow::PreparedNativeCustodyLifecycle::open(
             control.custody_config.retained_file()?,control.custody_config.content_sha256(),prepared)?;
-        let worker = if selected.publication_resources() {
+        let worker = if selected.runtime_resources() {
+            let runtime=runtime_pins(control.key_trust.as_ref(),&control.runtime_verifier.expected_sha256)?;
+            let publication=if selected.publication_resources() {
+                Some(publication_pins(control.key_trust.as_ref())?)
+            } else {None};
+            workers::Prepared::launch_with_runtime(selected,commands,prepared,cohort,runtime,publication)?
+        } else if selected.publication_resources() {
             let pins=publication_pins(control.key_trust.as_ref())?;
             workers::Prepared::launch_with_publication(selected,commands,prepared,cohort,pins)?
         } else {

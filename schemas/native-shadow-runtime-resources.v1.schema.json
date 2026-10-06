@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-runtime-resources.v1.schema.json",
+  "title": "Explicit runtime attestation verifier originals",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "fd": {"type":"integer","minimum":12,"maximum":2147483647},
+    "configuration": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","profile","policyFd","policySha256","trustRootsFd","trustRootsSha256","signingKeyFd"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowRuntimeResources/v1"},
+        "profile":{"const":"trusted-host-local"},
+        "policyFd":{"$ref":"#/$defs/fd"},
+        "policySha256":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/sha256"},
+        "trustRootsFd":{"$ref":"#/$defs/fd"},
+        "trustRootsSha256":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/sha256"},
+        "signingKeyFd":{"$ref":"#/$defs/fd"}
+      },
+      "$comment":"All descriptors must be distinct root-owned sealed originals; public policy and key authorization come from the separately admitted generation trust. No runtime request can select a policy, trust root or signer. This profile does not claim hardware custody of the verifier key."
+    }
+  }
+}

@@ -10,6 +10,7 @@ mod cli;
 mod config;
 mod json;
 mod nitro;
+pub(crate) mod runtime_shadow;
 mod statement;
 mod ingress;
 mod ingress_certificates;

@@ -30,16 +30,16 @@ fn filter(executable:i32)->Vec<libc::sock_filter> {
     out
 }
 unsafe fn child(parent:i32,image:i32,input:i32,output:i32,discard:i32,argv0:&std::ffi::CStr,filters:&[libc::sock_filter],
-    publication:Option<&[OwnedFd;3]>)->! {
+    resources:Option<&[OwnedFd;3]>)->! {
     let mut good=unsafe {libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL,0,0,0)}==0
         && unsafe {libc::getppid()}==parent && unsafe {libc::setpgid(0,0)}==0
         && unsafe {libc::lseek(input,0,libc::SEEK_SET)}==0;
     good &= unsafe {libc::dup3(input,0,0)}==0 && unsafe {libc::dup3(output,1,0)}==1;
     good &= unsafe {libc::dup3(discard,2,0)}==2;
     good &= unsafe {libc::syscall(libc::SYS_close_range,3u32,u32::MAX,4u32)}==0;
-    // Runtime/WebAuthn and legacy publication jobs keep the original stdio-only
-    // roster. Only the fixed selected publication executable receives 3/4/5.
-    if let Some(resources)=publication {
+    // The worker selects a purpose-specific admitted resource owner before
+    // this call. Jobs without that owner keep the original stdio-only roster.
+    if let Some(resources)=resources {
         for (source,target) in resources.iter().zip([3,4,5]) {
             good &= unsafe {libc::dup3(source.as_raw_fd(),target,0)}==target;
         }
@@ -84,7 +84,7 @@ impl Job {
 impl Drop for Job {fn drop(&mut self){self.kill();if !self.reaped {let _=self.reap();}}}
 
 pub(super) fn run(image:&Sealed,input:&Sealed,argv0:&str,parent:&OwnedFd,channel:i32,deadline:u64,lifetime:u64,maximum:usize,
-    transfer:Option<&super::publication_resources::JobTransfer>)->Result<Vec<u8>,String> {
+    transfer:Option<&[OwnedFd;3]>)->Result<Vec<u8>,String> {
     image.check()?;input.check()?;require(now()?<deadline && deadline<=lifetime)?;
     let mut pipe=[-1;2];require(unsafe {libc::pipe2(pipe.as_mut_ptr(),libc::O_CLOEXEC)}==0)?;
     let read=unsafe {OwnedFd::from_raw_fd(pipe[0])};let write=unsafe {OwnedFd::from_raw_fd(pipe[1])};
@@ -99,19 +99,19 @@ pub(super) fn run(image:&Sealed,input:&Sealed,argv0:&str,parent:&OwnedFd,channel
     require(unsafe {libc::fstat(null.as_raw_fd(),&mut metadata)}==0 && metadata.st_mode&libc::S_IFMT==libc::S_IFCHR
         && libc::major(metadata.st_rdev)==1 && libc::minor(metadata.st_rdev)==3 && metadata.st_uid==0 && metadata.st_gid==0)?;
     let discard_fd=ipc::duplicate(null.as_raw_fd())?;
-    let publication=transfer.map(|resources|->Result<[OwnedFd;3],String> {
-        Ok([ipc::duplicate(resources.descriptors[0].as_raw_fd())?,
-            ipc::duplicate(resources.descriptors[1].as_raw_fd())?,
-            ipc::duplicate(resources.descriptors[2].as_raw_fd())?])
+    let resources=transfer.map(|resources|->Result<[OwnedFd;3],String> {
+        Ok([ipc::duplicate(resources[0].as_raw_fd())?,
+            ipc::duplicate(resources[1].as_raw_fd())?,
+            ipc::duplicate(resources[2].as_raw_fd())?])
     }).transpose()?;
     let argv0=std::ffi::CString::new(argv0).map_err(|_|"shadow original argv0 invalid")?;
     let filters=filter(image_fd.as_raw_fd());let pid=unsafe {libc::getpid()};let mut child_pidfd=-1;
     let args=CloneArgs {flags:libc::CLONE_PIDFD as u64,pidfd:(&mut child_pidfd as *mut i32) as u64,exit_signal:libc::SIGCHLD as u64,..CloneArgs::default()};
     let child_pid=unsafe {libc::syscall(libc::SYS_clone3,&args,size_of::<CloneArgs>())};
-    if child_pid==0 {unsafe {child(pid,image_fd.as_raw_fd(),input_fd.as_raw_fd(),output_fd.as_raw_fd(),discard_fd.as_raw_fd(),&argv0,&filters,publication.as_ref());}}
+    if child_pid==0 {unsafe {child(pid,image_fd.as_raw_fd(),input_fd.as_raw_fd(),output_fd.as_raw_fd(),discard_fd.as_raw_fd(),&argv0,&filters,resources.as_ref());}}
     require(child_pid>0 && child_pidfd>=0)?;
     let mut job=Job {pid:child_pid as i32,pidfd:unsafe {OwnedFd::from_raw_fd(child_pidfd)},reaped:false};
-    drop(write);drop(image_fd);drop(input_fd);drop(output_fd);drop(discard_fd);drop(null);drop(publication);
+    drop(write);drop(image_fd);drop(input_fd);drop(output_fd);drop(discard_fd);drop(null);drop(resources);
     let outcome=(|| {
         let mut bytes=Vec::new();let mut eof=false;let mut status=None;
         loop {

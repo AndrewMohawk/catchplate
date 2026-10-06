@@ -30,11 +30,11 @@ HTTP_SCHEMA = "serverware.setupTrackingCreationRequest/v1"
 OPTIONS_SCHEMA = "serverware.setupTrackingCreationOptions/v1"
 MFA_FIELD = "setupTrackingCreationProfile"
 FIELD = "setupTrackingCreationPolicy"
-SCHEMA = "serverware.setupTrackingCreationAuthorityPolicy/v1"
+SCHEMA = "serverware.setupTrackingCreationAuthorityPolicy/v2"
 FIELDS = frozenset({"actor_id", "control_plane_configuration_digest", "credential_policy", "request"})
 REQUEST_FIELDS = frozenset({"sessionId", "templateId", "principalId", "routeId", "routePolicyDigest",
     "ttlSeconds", "issuedAtEpochNs", "expiresAtEpochNs"})
-POLICY_FIELDS = frozenset({"schema", "controlPlaneConfigurationDigest", "credentialPolicy",
+POLICY_FIELDS = frozenset({"schema", "credentialPolicy",
     "operationMaxSeconds", "maximumArgumentBytes", "maximumSessions", "maximumEvents",
     "maximumActiveSessions", "maximumSessionTtlSeconds"})
 MUTATION_ROLES = frozenset({"admin", "policy_author", "policy_publisher", "credential_owner"})
@@ -105,7 +105,6 @@ def validate_policy(value, *, payload, root_key=None):
         require(not enabled, "Setup tracking creation requires explicit signed purpose admission")
         return None
     require(type(value) is dict and set(value) == POLICY_FIELDS and value["schema"] == SCHEMA)
-    digest(value["controlPlaneConfigurationDigest"])
     policy(value["credentialPolicy"])
     require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30
         and type(value["maximumArgumentBytes"]) is int and value["maximumArgumentBytes"] == MAX_ARGUMENT_BYTES
@@ -119,6 +118,8 @@ def validate_policy(value, *, payload, root_key=None):
 
 
 def verify_original(operation, arguments_value, *, configuration_payload, root_key, now_epoch_ns):
+    from serverware.authority_policy_canary_policy import full_configuration_digest
+
     values = arguments(operation, arguments_value, typed="businessIntent" in arguments_value)
     require(type(now_epoch_ns) is int and 0 < now_epoch_ns <= 2**63 - 1)
     selected = validate_policy(configuration_payload.get(FIELD), payload=configuration_payload, root_key=root_key)
@@ -128,7 +129,7 @@ def verify_original(operation, arguments_value, *, configuration_payload, root_k
         # creation outbox original; settlement does not grant a human action.
         return
     request = values["request"]
-    require(values["control_plane_configuration_digest"] == selected["controlPlaneConfigurationDigest"]
+    require(values["control_plane_configuration_digest"] == full_configuration_digest(configuration_payload)
         and values["credential_policy"] == selected["credentialPolicy"]
         and request["ttlSeconds"] <= selected["maximumSessionTtlSeconds"]
         and request["issuedAtEpochNs"] <= now_epoch_ns < request["expiresAtEpochNs"]

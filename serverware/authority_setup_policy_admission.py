@@ -3,8 +3,8 @@ from serverware import authority_setup_policy as profile
 from serverware import authority_publication_approval as assertions
 
 FIELD = "setupPolicyContinuationPolicy"
-SCHEMA = "serverware.setupPolicyContinuationAuthorityPolicy/v1"
-FIELDS = frozenset({"schema", "controlPlaneConfigurationDigest", "credentialPolicy", "operationMaxSeconds", "maximumArgumentBytes"})
+SCHEMA = "serverware.setupPolicyContinuationAuthorityPolicy/v2"
+FIELDS = frozenset({"schema", "credentialPolicy", "operationMaxSeconds", "maximumArgumentBytes"})
 
 
 def validate_policy(value, *, payload, root_key=None):
@@ -14,7 +14,6 @@ def validate_policy(value, *, payload, root_key=None):
         profile.require(not enabled, "Setup policy continuation needs separate signed purpose admission")
         return None
     profile.require(type(value) is dict and set(value) == FIELDS and value["schema"] == SCHEMA)
-    profile.digest(value["controlPlaneConfigurationDigest"])
     assertions.policy(value["credentialPolicy"])
     profile.require(type(value["operationMaxSeconds"]) is int and 1 <= value["operationMaxSeconds"] <= 30
         and value["maximumArgumentBytes"] == profile.MAX_ARGUMENT_BYTES)
@@ -22,10 +21,12 @@ def validate_policy(value, *, payload, root_key=None):
 
 
 def verify_original(operation, arguments, *, configuration_payload, root_key, now_epoch_ns):
+    from serverware.authority_policy_canary_policy import full_configuration_digest
+
     values = profile.arguments(operation, arguments, typed="businessIntent" in arguments)
     policy = validate_policy(configuration_payload.get(FIELD), payload=configuration_payload, root_key=root_key)
     request = values["request"]
-    profile.require(policy is not None and values["control_plane_configuration_digest"] == policy["controlPlaneConfigurationDigest"]
+    profile.require(policy is not None and values["control_plane_configuration_digest"] == full_configuration_digest(configuration_payload)
         and values["credential_policy"] == policy["credentialPolicy"]
         and request["issuedAtEpochNs"] <= now_epoch_ns < request["expiresAtEpochNs"]
         <= request["issuedAtEpochNs"] + policy["operationMaxSeconds"] * 1_000_000_000)

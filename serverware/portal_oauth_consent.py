@@ -11,7 +11,7 @@ def enrolled_oauth_profile() -> str:
 
 OAUTH_CONSENT_HTML = r"""
           <div id="oauth-consent-controls" hidden>
-            <p class="hint">Enrolled new credentials require an active OIDC credential-owner cookie and a fresh hardware passkey. Clear an entered bearer credential yourself. Setup and reconnect are not supported by this consent profile.</p>
+            <p id="oauth-consent-hint" class="hint">Enrolled credentials require an active OIDC credential-owner cookie and a fresh hardware passkey. Clear an entered bearer credential yourself. The selected provider determines the available consent workflow.</p>
             <button id="oauth-consent-show-auth" type="button" class="secondary">Show operator credential field</button>
             <button id="oauth-consent-start" type="button" disabled>Fresh passkey + open provider once</button>
             <button id="oauth-consent-discard" type="button" class="secondary">Discard prepared consent</button>
@@ -108,6 +108,10 @@ OAUTH_CONSENT_SCRIPT = r"""
       return JSON.stringify([$('oauth-provider').value, $('oauth-credential-name').value, $('oauth-scopes').value,
         $('oauth-metadata').value, state.oauthSetupSessionId, state.oauthProviders]);
     }
+    function oauthConsentLegacySelected() {
+      const provider = (state.oauthProviders || []).find(p => p.id === $('oauth-provider').value);
+      return provider?.configured === true && !Object.hasOwn(provider, 'consentProfile');
+    }
     function oauthConsentActor() {
       const a = state.authStatus;
       oauthConsentNeed(enrolledOAuthProfile === 'enrolled-new-credential-v1' && !adminToken() && !oidcSessionStatusUnknown
@@ -135,15 +139,25 @@ OAUTH_CONSENT_SCRIPT = r"""
       oauthConsentContext = sessionActivationAuthScope(); oauthConsentForm = oauthConsentFormPin();
       if (oauthConsentPending && (Date.now() >= oauthConsentPending.expires || performance.now() >= oauthConsentPending.until))
         oauthConsentInvalidate('Original consent window expired; no allowance was renewed.');
+      const native = nativeOAuthSelected(), setup = nativeOAuthSetupSelected(), legacy = oauthConsentLegacySelected();
+      $('oauth-consent-hint').textContent = native
+        ? (setup ? 'Controlled Setup uses the native preparation and account-review controls below. Create or inspect the matching draft Setup first; account activation and policy approval remain separate.'
+          : 'Native consent keeps provider credentials inside the configured native service. Open preparation, review the returned account and scopes, then authorize with a fresh passkey.')
+        : 'Enrolled new credentials require an active OIDC credential-owner cookie and a fresh hardware passkey. This consent profile does not support controlled Setup or reconnect.';
+      $('oauth-consent-start').hidden = native || !legacy;
+      $('oauth-consent-discard').hidden = native || !legacy;
+      $('oauth-consent-status').hidden = native && (!state.oauthSetupSessionId || setup)
+        && !adminToken() && enrolledOAuthProfile !== 'unavailable';
       let allowed = false; try { oauthConsentActor();
-        allowed = (state.oauthProviders || []).some(p => p.id === $('oauth-provider').value && p.configured === true);
+        allowed = (native || legacy) && (state.oauthProviders || []).some(p => p.id === $('oauth-provider').value && p.configured === true);
       } catch (_) {}
       $('oauth-submit').textContent = 'Prepare enrolled consent options';
       $('oauth-submit').disabled = !allowed || oauthConsentBusy || oauthConsentBlocked || oauthConsentPending !== null;
       $('oauth-consent-start').disabled = !allowed || oauthConsentBusy || oauthConsentBlocked || oauthConsentPending === null;
       $('oauth-consent-discard').disabled = oauthConsentBusy;
       if (enrolledOAuthProfile === 'unavailable') oauthConsentMessage('Cold OAuth ownership is unavailable. No development fallback or request is allowed.', true);
-      else if (state.oauthSetupSessionId) oauthConsentMessage('Controlled setup consent is not implemented. This form cannot silently create an unrelated credential.', true);
+      else if (!native && !legacy) oauthConsentMessage('This provider is not configured for new-credential consent. For reconnect or succession, use the matching credential recovery review below; no other consent flow will be substituted.', true);
+      else if (state.oauthSetupSessionId && !setup) oauthConsentMessage('This provider profile does not support controlled Setup. Choose the configured Setup provider; no unrelated credential will be created.', true);
       else if (adminToken()) oauthConsentMessage('Clear the entered bearer credential yourself, then refresh the active OIDC cookie status.', true);
       renderNativeOAuth();
     }
@@ -210,7 +224,8 @@ OAUTH_CONSENT_SCRIPT = r"""
     async function oauthConsentPrepare() {
       let operation = null;
       try {
-        oauthConsentNeed(oauthConsentPending === null); operation = oauthConsentBegin(); await oauthConsentCookie(operation);
+        oauthConsentNeed(oauthConsentLegacySelected() && oauthConsentPending === null);
+        operation = oauthConsentBegin(); await oauthConsentCookie(operation);
         const provider = (state.oauthProviders || []).find(p => p.id === $('oauth-provider').value);
         oauthConsentNeed(provider?.configured === true && ['google', 'x'].includes(provider.id));
         const metadataOriginal = $('oauth-metadata').value || '{}';
@@ -279,7 +294,7 @@ OAUTH_CONSENT_SCRIPT = r"""
     async function oauthConsentStart() {
       let operation = null, held = null, assertion = null, original = null;
       try {
-        held = oauthConsentPending; oauthConsentNeed(held !== null); operation = oauthConsentBegin();
+        held = oauthConsentPending; oauthConsentNeed(oauthConsentLegacySelected() && held !== null); operation = oauthConsentBegin();
         const current = () => { operation.current(); oauthConsentNeed(held === oauthConsentPending && held.actor === operation.actor
           && Date.now() < held.expires && performance.now() < held.until); };
         await oauthConsentCookie(operation); current(); oauthConsentNeed(window.PublicKeyCredential && navigator.credentials);

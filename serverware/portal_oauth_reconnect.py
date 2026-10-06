@@ -41,21 +41,37 @@ OAUTH_RECONNECT_SCRIPT = r"""
     async function reconnectRead(inventory = false, target = null) {
       oauthConsentNeed(!reconnectBusy); let operation = null;
       try {
-        reconnectBusy = true; operation = oauthConsentBegin(); await oauthConsentCookie(operation);
-        const value = await reconnectFetch('/api/oauth/reconnect/' + (inventory ? 'inventory' : reconnectId()), inventory ? {} : null, operation);
+        const selection = target === null ? null : oauthCredentialRecoverySelection(target, reconnectProfile);
+        oauthConsentNeed(selection === null || inventory);
+        const identifier = inventory ? null : reconnectId();
+        reconnectHeld = null; $('oauth-reconnect-confirm').checked = false;
+        if (inventory) $('oauth-reconnect-id').value = '';
+        const field = $('oauth-reconnect-id').value;
+        reconnectBusy = true; operation = oauthConsentBegin();
+        const originalCurrent = operation.current;
+        operation = {...operation, current() {
+          originalCurrent(); oauthConsentNeed($('oauth-reconnect-id').value === field && (selection === null
+            || oauthCredentialRecoverySelection(target, reconnectProfile).original === selection.original));
+        }};
+        operation.current(); await oauthConsentCookie(operation);
+        const value = await reconnectFetch('/api/oauth/reconnect/' + (inventory ? 'inventory' : identifier), inventory ? {} : null, operation);
+        operation.current();
         oauthConsentNeed(value.apiVersion === 'serverware.oauthReconnectObservation/v1' && value.okForAction === false);
         $('oauth-reconnect-review').textContent = oauthConsentCanonical(value); $('oauth-reconnect-confirm').checked = false;
         reconnectHeld = null;
         if (inventory) {
           oauthConsentNeed(Array.isArray(value.authorizations) && value.authorizations.length <= 16);
-          const matches = target ? value.authorizations.filter(item => item.credentialId === target) : value.authorizations;
+          const matches = selection ? value.authorizations.filter(item => item.credentialId === target && item.providerId === selection.providerId) : value.authorizations;
           if (matches.length === 1) $('oauth-reconnect-id').value = matches[0].authorizationId;
-          reconnectMessage('Review a cold-admitted grant, then inspect its retained operation before continuing.');
+          reconnectMessage(matches.length === 1 ? 'One matching cold-admitted grant selected. Inspect its retained operation before a separate action.'
+            : matches.length === 0 ? 'No matching cold-admitted grant. Nothing was selected or authorized.'
+              : 'Multiple matching grants. Review and explicitly choose the exact authorization ID before inspection.');
         } else {
           oauthConsentNeed(value.authorization?.authorizationId === reconnectId() && value.continuationAllowed === false);
           reconnectHeld = value;
           reconnectMessage('Read-only status: ' + value.status + '. Inspection does not permit replay or native continuation.');
         }
+        if (selection) { $('oauth-reconnect-controls').scrollIntoView({block: 'nearest'}); $('oauth-reconnect-id').focus(); }
       } catch (_) { reconnectMessage('Inspection unavailable or refused. No mutation or fallback was attempted.'); }
       finally { reconnectBusy = false; operation?.close(); }
     }

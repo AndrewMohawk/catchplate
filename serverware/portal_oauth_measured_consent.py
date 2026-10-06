@@ -22,6 +22,7 @@ def provider_status_with_custody():
 MEASURED_OAUTH_CONSENT_HTML = r"""
           <div id="native-oauth-controls" hidden>
             <p class="hint">Confidential consent uses the explicitly provisioned native HTTPS origin. A cold-selected Setup profile binds a controlled draft session; the unbound profile cannot adopt it. Reconnect remains separate.</p>
+            <p id="native-oauth-prerequisites" class="hint" role="status" aria-live="polite" hidden></p>
             <button id="native-oauth-review" type="button" disabled>Review returned native preparation</button>
             <button id="native-oauth-authorize" type="button" disabled>Fresh passkey + authorize once</button>
             <button id="native-oauth-discard" type="button" class="secondary">Discard native preparation</button>
@@ -72,19 +73,39 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
       if (nativeOAuthBusy) nativeOAuthBlocked = true;
       nativeOAuthMessage(message); renderNativeOAuth();
     }
+    function nativeOAuthPreparationReady() {
+      return nativeOAuthSelected() && nativeOAuthProvider()?.configured === true
+        && (!nativeOAuthSetupSelected() || Boolean(state.oauthSetupSessionId
+          && state.setupSession?.id === state.oauthSetupSessionId
+          && state.setupSession.phase === 'created' && state.setupSession.revision === 0));
+    }
     function renderNativeOAuth() {
       if (!$('native-oauth-controls')) return;
       const selected = nativeOAuthSelected(); $('native-oauth-controls').hidden = !selected && nativeOAuthReturned === null;
-      if (!selected) return;
-      let allowed = false; try { oauthConsentActor(); allowed = true; } catch (_) {}
+      if (!selected) {
+        $('native-oauth-review').disabled = $('native-oauth-authorize').disabled = true;
+        if (nativeOAuthReturned !== null)
+          nativeOAuthMessage('The returned preparation does not match the selected native provider profile. No review or authorization can be submitted.');
+        return;
+      }
+      let allowed = false; try { oauthConsentActor(); allowed = nativeOAuthProvider()?.configured === true; } catch (_) {}
       $('oauth-consent-start').disabled = true;
       $('oauth-submit').textContent = 'Open confidential native preparation';
-      $('oauth-submit').disabled = !allowed || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthReturned !== null || nativeOAuthPrepared !== null;
+      $('oauth-submit').disabled = !allowed || !nativeOAuthPreparationReady() || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthReturned !== null || nativeOAuthPrepared !== null;
       $('native-oauth-review').disabled = !allowed || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthReturned === null || nativeOAuthPrepared !== null;
       $('native-oauth-authorize').disabled = !allowed || nativeOAuthBusy || nativeOAuthBlocked || nativeOAuthPrepared === null;
       if (nativeOAuthPrepared && (Date.now() >= nativeOAuthPrepared.expires
           || nativeOAuthPrepared.scope !== sessionActivationAuthScope() || nativeOAuthPrepared.form !== oauthConsentFormPin()))
         nativeOAuthDiscard('Preparation expired or operator context changed. Nothing is replayed.');
+      let prerequisite = '';
+      if (!nativeOAuthBusy && !nativeOAuthBlocked && nativeOAuthReturned === null && nativeOAuthPrepared === null) {
+        if (nativeOAuthProvider()?.configured !== true)
+          prerequisite = 'This provider is not configured for native consent. No preparation can be opened.';
+        else if (nativeOAuthSetupSelected() && !nativeOAuthPreparationReady())
+          prerequisite = 'Create or inspect the matching draft Setup before opening native preparation. A staged or completed Setup cannot start another consent exchange.';
+      }
+      $('native-oauth-prerequisites').textContent = prerequisite;
+      $('native-oauth-prerequisites').hidden = !prerequisite;
     }
     async function nativeOAuthRequest(path, body, operation, sent = null) {
       oauthConsentNeed(['/api/oauth/native/intent', '/api/oauth/native/options', '/api/oauth/native/consent',
@@ -112,7 +133,8 @@ MEASURED_OAUTH_CONSENT_SCRIPT = r"""
     async function nativeOAuthBegin() {
       let operation = null;
       try {
-        oauthConsentNeed(nativeOAuthSelected() && !nativeOAuthBusy && !nativeOAuthBlocked && nativeOAuthReturned === null);
+        oauthConsentNeed(nativeOAuthPreparationReady() && !nativeOAuthBusy && !nativeOAuthBlocked
+          && nativeOAuthReturned === null && nativeOAuthPrepared === null);
         operation = oauthConsentBegin(); nativeOAuthBusy = true; await oauthConsentCookie(operation);
         const metadata = oauthConsentParse($('oauth-metadata').value || '{}').value;
         oauthConsentNeed(metadata && typeof metadata === 'object' && !Array.isArray(metadata)

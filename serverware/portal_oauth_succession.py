@@ -47,22 +47,40 @@ OAUTH_SUCCESSION_SCRIPT = r"""
       const result = await oauthConsentRead(response, 8388608, operation);
       oauthConsentNeed(response.status === 200); return result.value;
     }
-    async function successionRead(inventory = false) {
+    async function successionRead(inventory = false, target = null) {
       oauthConsentNeed(!successionBusy); let operation = null;
       try {
-        successionBusy = true; operation = oauthConsentBegin(); await oauthConsentCookie(operation);
-        const value = await successionFetch('/api/oauth/succession/' + (inventory ? 'inventory' : successionId()), inventory ? {} : null, operation);
+        const selection = target === null ? null : oauthCredentialRecoverySelection(target, successionProfile);
+        oauthConsentNeed(selection === null || inventory);
+        const identifier = inventory ? null : successionId();
+        successionHeld = null; $('oauth-succession-confirm').checked = false;
+        if (inventory) $('oauth-succession-id').value = '';
+        const field = $('oauth-succession-id').value;
+        successionBusy = true; operation = oauthConsentBegin();
+        const originalCurrent = operation.current;
+        operation = {...operation, current() {
+          originalCurrent(); oauthConsentNeed($('oauth-succession-id').value === field && (selection === null
+            || oauthCredentialRecoverySelection(target, successionProfile).original === selection.original));
+        }};
+        operation.current(); await oauthConsentCookie(operation);
+        const value = await successionFetch('/api/oauth/succession/' + (inventory ? 'inventory' : identifier), inventory ? {} : null, operation);
+        operation.current();
         oauthConsentNeed(value.apiVersion === 'serverware.oauthRetiredScopeSuccessionObservation/v1' && value.okForAction === false);
         $('oauth-succession-review').textContent = oauthConsentCanonical(value); $('oauth-succession-confirm').checked = false;
         successionHeld = null;
         if (inventory) {
           oauthConsentNeed(Array.isArray(value.authorizations) && value.authorizations.length <= 16);
-          if (value.authorizations.length === 1) $('oauth-succession-id').value = value.authorizations[0].authorizationId;
+          const matches = selection ? value.authorizations.filter(item => item.credentialId === target && item.providerId === selection.providerId) : value.authorizations;
+          if (matches.length === 1) $('oauth-succession-id').value = matches[0].authorizationId;
+          successionMessage(matches.length === 1 ? 'One matching cold-admitted successor grant selected. Inspect it before a separate ceremony.'
+            : matches.length === 0 ? 'No matching cold-admitted successor grant. Nothing was selected or authorized.'
+              : 'Multiple matching successor grants. Review and explicitly choose the exact authorization ID before inspection.');
         } else {
           oauthConsentNeed(value.authorization?.authorizationId === successionId() && value.continuationAllowed === false);
           successionHeld = value;
+          successionMessage('Read-only observation. Review it before a separate action; it never recreates a missing acknowledgement.');
         }
-        successionMessage('Read-only observation. Review it before a separate action; it never recreates a missing acknowledgement.');
+        if (selection) { $('oauth-succession-controls').scrollIntoView({block: 'nearest'}); $('oauth-succession-id').focus(); }
       } catch (_) { successionMessage('Read unavailable or refused. No mutation or fallback was attempted.'); }
       finally { successionBusy = false; operation?.close(); }
     }

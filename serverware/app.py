@@ -25015,9 +25015,29 @@ UI_HTML = r"""
       return `<div class="stack"><div class="toolbar">${status}${verified}</div><strong>${esc(account)}</strong><span class="muted">${esc(provider)} / ${esc(expiry)}</span>${scopes ? `<span class="muted">${esc(scopes)}</span>` : ''}</div>`;
     }
 
+    function credentialRecoveryProfile(item) {
+      if (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || item?.kind !== 'oauth2' || item.metadata?.oauth !== true) return null;
+      const provider = (state.oauthProviders || []).find(candidate => candidate.id === item.metadata.provider_id);
+      return provider?.configured === true && [reconnectProfile, successionProfile].includes(provider.consentProfile)
+        ? provider.consentProfile : null;
+    }
+
+    function oauthCredentialRecoverySelection(id, profile) {
+      const item = (state.credentials || []).find(candidate => candidate.id === id);
+      oauthConsentNeed(nativeSetupId(id) && credentialRecoveryProfile(item) === profile);
+      const provider = (state.oauthProviders || []).find(candidate => candidate.id === item.metadata.provider_id);
+      return {providerId: provider.id, original: JSON.stringify([item, provider])};
+    }
+
     function credentialActions(item) {
       const managedOAuth = item.kind === 'oauth2' && item.metadata?.oauth === true;
       if (!managedOAuth) return credentialReplacementButton(item) + `<button class="danger" type="button" onclick="runUiAction('Delete credential', () => deleteCredential('${item.id}'))">Delete</button>`;
+      if (enrolledOAuthProfile !== 'development') {
+        const profile = credentialRecoveryProfile(item);
+        if (profile === null) return '<span class="muted">Controlled recovery is unavailable for this provider; no legacy disconnect or retry.</span>';
+        const label = profile === successionProfile ? 'Review retired-scope successor' : 'Review same-account replacement';
+        return `<button type="button" onclick="runUiAction('Review controlled OAuth recovery', () => reconnectOAuthCredential('${item.id}'))">${label}</button>`;
+      }
       if ((item.lifecycle_status || 'active') !== 'active') {
         return `<button class="danger" type="button" onclick="runUiAction('Retry OAuth disconnect', () => deleteCredential('${item.id}'))">Retry disconnect</button>`;
       }
@@ -28187,9 +28207,14 @@ UI_HTML = r"""
       return completed;
     }
     async function reconnectOAuthCredential(id) {
-      if (enrolledOAuthProfile !== 'development') return reconnectRead(true, id);
       const item = state.credentials.find((candidate) => candidate.id === id);
       if (!item || item.kind !== 'oauth2' || item.metadata?.oauth !== true) throw new Error('Managed OAuth credential is unavailable');
+      if (enrolledOAuthProfile !== 'development') {
+        const profile = credentialRecoveryProfile(item);
+        if (profile === successionProfile) return successionRead(true, id);
+        if (profile === reconnectProfile) return reconnectRead(true, id);
+        throw new Error('No matching controlled recovery profile is configured; no request was sent.');
+      }
       if ((item.lifecycle_status || 'active') !== 'active') throw new Error('Complete provider revocation before reconnecting this credential');
       if (item.metadata?.provider_id === 'google') throw new Error('Disconnect the Google credential before connecting the account again');
       const body = {

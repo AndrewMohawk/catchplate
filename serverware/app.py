@@ -23311,6 +23311,7 @@ UI_HTML = r"""
             </div>
             <div class="toolbar" style="margin-top:10px">
               <button type="submit" class="secondary">Preview candidate</button>
+              <button id="policy-authority-request-download" type="button" class="secondary" onclick="runUiAction('Download unsigned authority request', downloadPolicyAuthorityDraftRequest)" disabled>Download unsigned authority request</button>
               <button id="policy-stage-button" type="button" onclick="runUiAction('Stage policy candidate', stagePolicyCanary)" disabled>Stage candidate</button>
             </div>
           </form>
@@ -23319,6 +23320,7 @@ UI_HTML = r"""
           <p class="hint">Route-match preview checks policy selection only. It does not authenticate a client certificate, provision an issuer, or prove runtime enforcement.</p>
           <label for="policy-candidate-output">Unsigned draft, diff, and route-match preview</label>
           <textarea id="policy-candidate-output" class="policy-result" readonly></textarea>
+          <p class="hint">The download requests independent review and signing. It contains no approval, signature or runtime handoff; your external policy authority must supply those separately.</p>
           <label for="policy-authority-carrier">Import an assembled policy-authority carrier</label>
           <input id="policy-authority-carrier" type="file" accept="application/json,.json">
           <button type="button" class="secondary" onclick="runUiAction('Import policy authority carrier', importPolicyAuthorityCarrier)">Import signed material for this preview</button>
@@ -26159,6 +26161,60 @@ UI_HTML = r"""
       return report;
     }
 
+    function policyAuthorityDraftRequestReady(candidate) {
+      if (!candidate || candidate !== state.policyCandidate || !hasOperatorAuth()) return false;
+      try { candidate.checkContext(); } catch (_) { return false; }
+      const report = candidate.report;
+      const checks = Array.isArray(report?.dryRun?.results) ? report.dryRun.results : [];
+      return report?.apiVersion === 'serverware.policyPreview/v1' && report.previewOnly === true
+        && report.signatureVerified === false && report.activated === false && report.publicationReady === false
+        && report.dryRun?.passed === true && checks.length > 0 && checks.every(item => item.passed === true)
+        && state.activePolicy?.ready === true && state.activePolicy.policy_hash === candidate.basePolicyHash
+        && report.current?.policyHash === candidate.basePolicyHash
+        && /^sha256:[0-9a-f]{64}$/.test(candidate.basePolicyHash)
+        && /^sha256:[0-9a-f]{64}$/.test(report.candidate?.draftHash || '')
+        && candidate.bundle?.metadata && !Object.hasOwn(candidate.bundle.metadata, 'signature')
+        && !Object.hasOwn(candidate.bundle.metadata, 'signingKeyId');
+    }
+
+    function downloadPolicyAuthorityDraftRequest() {
+      const candidate = state.policyCandidate;
+      const checkContext = () => {
+        if (!policyAuthorityDraftRequestReady(candidate)) {
+          throw new Error('A current successful unsigned preview is required before downloading an authority request');
+        }
+      };
+      checkContext();
+      // Select public request fields explicitly, never the candidate/context or stored credentials.
+      const request = {
+        apiVersion: 'serverware.policyAuthorityDraftRequest/v1',
+        unsignedPolicyBundle: candidate.bundle,
+        predecessorPolicyHash: candidate.basePolicyHash,
+        previewDraftHash: candidate.report.candidate.draftHash,
+        selection: {templateId: candidate.templateId, routeId: candidate.routeId,
+          principalId: candidate.principalId, credentialId: candidate.credentialRef},
+        dryRun: candidate.dryRun,
+        approved: false,
+        signed: false
+      };
+      const bytes = new TextEncoder().encode(JSON.stringify(request, null, 2) + '\n');
+      if (bytes.byteLength > 8 * 1024 * 1024) throw new Error('Unsigned authority request exceeds 8 MiB');
+      checkContext();
+      const url = URL.createObjectURL(new Blob([bytes], {type: 'application/json'}));
+      const link = document.createElement('a');
+      try {
+        link.href = url;
+        link.download = 'serverware-policy-authority-request-unsigned.json';
+        document.body.appendChild(link);
+        checkContext();
+        link.click();
+      } finally {
+        link.remove();
+        URL.revokeObjectURL(url);
+      }
+      return {downloaded: true, unsigned: true};
+    }
+
     function signedPolicyCandidate(candidate, raw = $('policy-signed-bundle').value.trim()) {
       if (!raw) throw new Error('Supply an independently signed candidate PolicyBundle before staging');
       const bundle = JSON.parse(raw);
@@ -26272,6 +26328,7 @@ UI_HTML = r"""
       let contextCurrent = false;
       try { candidate?.checkContext(); contextCurrent = Boolean(candidate); } catch (_) { /* Stale preview cannot stage. */ }
       const authoritySupplied = Boolean($('policy-signed-bundle').value.trim() && $('policy-authority-package').value.trim());
+      $('policy-authority-request-download').disabled = !policyAuthorityDraftRequestReady(candidate);
       $('policy-stage-button').disabled = !contextCurrent || !report || !state.activePolicy || !dryRunPassed || !authoritySupplied || candidate.basePolicyHash !== state.activePolicy.policy_hash;
       $('policy-identity-change-summary').textContent = candidate?.identityChangeSummary || '';
       $('policy-candidate-output').value = candidate ? JSON.stringify({unsignedDraft: candidate.bundle, preview: candidate.report, stage: candidate.stage}, null, 2) : '';

@@ -597,12 +597,15 @@ def assemble(
     signed_bundle: dict[str, Any] | None = None,
     policy_public_key: Path | None = None,
     policy_public_key_sha256: str | None = None,
+    draft_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     carrier_inputs = (signed_bundle, policy_public_key, policy_public_key_sha256)
     if any(value is not None for value in carrier_inputs) and (
         any(value is None for value in carrier_inputs) or purpose != "handoff"
     ):
         raise AssemblyError("signed-bundle carrier requires handoff purpose and all public-key inputs")
+    if draft_request is not None and signed_bundle is None:
+        raise AssemblyError("a draft request requires an already-signed handoff carrier")
     _signed_record(artifact, "artifact", trust)
     _signed_record(assignment, "assignment", trust)
     _signed_record(load_receipt, "load receipt", trust)
@@ -655,12 +658,88 @@ def assemble(
     _reject_private_material(package, "portal package")
     _canonical_bytes(package)
     if signed_bundle is not None:
-        return _bundle_carrier(
+        carrier = _bundle_carrier(
             package, signed_bundle, artifact, assignment,
             public_key_path=policy_public_key,
             public_key_sha256=policy_public_key_sha256,
         )
+        if draft_request is not None:
+            _match_draft_request(draft_request, carrier)
+        return carrier
     return package
+
+
+def _match_draft_request(request: dict[str, Any], carrier: dict[str, Any]) -> None:
+    """Join an unsigned operator request to verified output; never approve it."""
+    fields = {"apiVersion", "unsignedPolicyBundle", "predecessorPolicyHash",
+        "previewDraftHash", "selection", "dryRun", "approved", "signed"}
+    if (not isinstance(request, dict) or set(request) != fields
+        or request["apiVersion"] != "serverware.policyAuthorityDraftRequest/v1"
+        or request["approved"] is not False or request["signed"] is not False):
+        raise AssemblyError("draft request is not the closed unsigned v1 request")
+    _reject_private_material(request, "draft request")
+    if len(_canonical_bytes(request)) > MAX_INPUT_BYTES:
+        raise AssemblyError("draft request exceeds the fixed input bound")
+    draft = request["unsignedPolicyBundle"]
+    if (not isinstance(draft, dict)
+        or not isinstance(draft.get("apiVersion"), str)
+        or draft.get("apiVersion") not in {"serverware.policy/v1", "serverware.policy/v2"}
+        or not isinstance(draft.get("metadata"), dict)
+        or {"signature", "signingKeyId"} & set(draft["metadata"])):
+        raise AssemblyError("draft request must contain an unsigned PolicyBundle")
+    returned = json.loads(_canonical_bytes(carrier["signedPolicyBundle"]))
+    returned["metadata"].pop("signature", None)
+    returned["metadata"].pop("signingKeyId", None)
+    if _canonical_bytes(returned) != _canonical_bytes(draft):
+        raise AssemblyError("signed bundle differs from the requested unsigned draft")
+    # Reuse the actual policy framing, including the explicit v2 profile.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from serverware.policy_bundle import PolicyBundleError, policy_signature_bytes
+    try:
+        draft_hash = "sha256:" + hashlib.sha256(policy_signature_bytes(draft)).hexdigest()
+    except (PolicyBundleError, TypeError, ValueError) as exc:
+        raise AssemblyError("draft signature framing is invalid") from exc
+    if _digest(request["previewDraftHash"], "preview draft hash") != draft_hash:
+        raise AssemblyError("preview hash differs from the requested draft")
+    if (_digest(request["predecessorPolicyHash"], "draft predecessor")
+        != carrier["portalPackage"]["handoff"]["predecessorPolicyHash"]):
+        raise AssemblyError("signed artifact predecessor differs from the draft request")
+    selection = request["selection"]
+    if not isinstance(selection, dict) or set(selection) != {"templateId", "routeId", "principalId", "credentialId"}:
+        raise AssemblyError("draft selection is not closed")
+    for name, value in selection.items():
+        _text(value, "draft " + name, 1024)
+    selected = {}
+    for group, name in (("routes", "routeId"), ("principals", "principalId"), ("credentials", "credentialId")):
+        rows = draft.get(group)
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise AssemblyError("draft policy declarations are invalid")
+        matches = [row for row in rows if row.get("id") == selection[name]]
+        if len(matches) != 1:
+            raise AssemblyError("draft selection does not identify one policy declaration")
+        selected[group] = matches[0]
+    route = selected["routes"]
+    if (route.get("credentialRef") != selection["credentialId"]
+        or not isinstance(route.get("principals"), list)
+        or selection["principalId"] not in route["principals"]):
+        raise AssemblyError("draft selection differs from its route binding")
+    cases = request["dryRun"]
+    if not isinstance(cases, list) or not 1 <= len(cases) <= 256:
+        raise AssemblyError("draft request must retain its bounded preview cases")
+    case_fields = {"name", "principalId", "scheme", "host", "port", "method", "path", "expect", "expectedRouteId"}
+    for case in cases:
+        if (not isinstance(case, dict) or not {"principalId", "host", "method", "path"} <= set(case) <= case_fields
+            or not isinstance(case.get("expect", "allow"), str)
+            or case.get("expect", "allow") not in {"allow", "deny"}
+            or type(case.get("port", 443)) is not int or not 1 <= case.get("port", 443) <= 65535):
+            raise AssemblyError("draft preview case is invalid")
+        for name in ("principalId", "host", "method", "path"):
+            _text(case[name], "draft preview " + name, MAX_INPUT_BYTES)
+        for name in ("name", "expectedRouteId"):
+            if case.get(name) is not None:
+                _text(case[name], "draft preview " + name, MAX_INPUT_BYTES)
+        if "scheme" in case:
+            _text(case["scheme"], "draft preview scheme", 32)
 
 
 def _bundle_carrier(package, bundle, artifact, assignment, *, public_key_path, public_key_sha256):
@@ -785,6 +864,8 @@ def _parser() -> argparse.ArgumentParser:
         help="independently trusted root-owned Ed25519 PUBLIC key (PEM or DER)")
     parser.add_argument("--policy-public-key-sha256",
         help="independently selected sha256: digest of public-key DER SPKI")
+    parser.add_argument("--draft-request", type=Path,
+        help="optional portal unsigned request; verify the signed carrier matches it (not approval)")
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -820,6 +901,8 @@ def main() -> int:
                 if args.signed_bundle is not None else None),
             policy_public_key=args.policy_public_key,
             policy_public_key_sha256=args.policy_public_key_sha256,
+            draft_request=(_load_object(args.draft_request, "unsigned draft request")
+                if args.draft_request is not None else None),
         )
         payload = _canonical_bytes(package) + b"\n"
         if args.output is None:

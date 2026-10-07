@@ -50,8 +50,11 @@ refused configuration writes and persistent data identity.
 
 `scripts/check_development_sandbox.py` runs only against an explicitly identified
 sandbox. It checks the selected Rust executable digest, CONNECT/TLS, credential
-injection and filtering, negative dispatch controls, nested request/response
-redaction and correlated stored audit events. The portal invokes this same
+injection and filtering, negative dispatch controls, response-field projection
+and correlated stored audit events. Transforming request streams, including
+nested JSON, are deliberately unsupported by the current proxy authorization
+path: the checker proves their explicit HTTP 422 refusal without upstream
+dispatch, not bidirectional streaming redaction. The portal invokes this same
 bounded checker, accepting no arbitrary target or test input.
 
 `scripts/check_development_sandbox_browser.cjs` uses local Playwright against

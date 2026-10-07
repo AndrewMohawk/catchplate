@@ -248,9 +248,14 @@ def request_view(request: Request) -> dict[str, Any]:
 async def echo(request: Request) -> dict[str, Any]:
     _record_request(request)
     view = request_view(request)
+    # Normal success must not reflect the credential even in a field that the
+    # response projection removes. Keep reflection explicit for its deny test.
+    authorization = view.pop("authorization")
+    view.pop("authorization_sha256")
     view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
+    view["query"]["_cookie_seen"] = "cookie" in request.headers
     if request.query_params.get("reflectCredential") == "1":
-        view["credential_reflection"] = view["authorization"]
+        view["credential_reflection"] = authorization
     return view
 
 
@@ -468,6 +473,7 @@ def _contains_secret_key(value: Any) -> bool:
 
 @app.api_route("/json-nested-redact", methods=["POST", "PUT"])
 async def json_nested_redact(request: Request) -> StreamingResponse:
+    _record_request(request)
     view = request_view(request)
     body = b""
     async for chunk in request.stream():
@@ -716,4 +722,10 @@ async def npm_dist_tag(package: str, tag: str, request: Request) -> dict[str, An
 
 if __name__ == "__main__":
     ensure_cert()
-    uvicorn.run(app, host="0.0.0.0", port=8443, ssl_keyfile=str(KEY_PATH), ssl_certfile=str(CERT_PATH))
+    # The canonical signed demo envelope permits no semantic response headers.
+    # Transport metadata remains; do not add Uvicorn's Date/Server defaults.
+    uvicorn.run(
+        app, host="0.0.0.0", port=8443,
+        ssl_keyfile=str(KEY_PATH), ssl_certfile=str(CERT_PATH),
+        date_header=False, server_header=False,
+    )

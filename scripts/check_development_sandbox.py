@@ -137,12 +137,13 @@ class SandboxCheck:
         self.results.append("synthetic_profile_and_exact_rust_build")
         return health
 
-    def upstream_count(self, method: str) -> int:
+    def upstream_count(self, method: str, *, path: str = "/echo") -> int:
+        require(path in {"/echo", "/json-nested-redact"}, "counter path is not a sandbox fixture")
         connection = http.client.HTTPSConnection(
             UPSTREAM, 8443, context=self.upstream_ca, timeout=self.timeout())
         try:
             connection.request("GET", "/_test/request-count?" + urlencode({
-                "method": method, "path": "/echo", "run_id": self.run_id,
+                "method": method, "path": path, "run_id": self.run_id,
             }))
             status, payload = response_json(connection.getresponse())
             require(status == 200 and type(payload.get("count")) is int,
@@ -230,10 +231,12 @@ class SandboxCheck:
         self.results.append("caller_credential_collision_denied_without_dispatch")
 
         status, payload = self.request("/echo", sensitive_headers=True)
-        require(status == 200 and payload.get("authorization_present") is True
+        require(status == 200, f"credentialed echo expected HTTP 200, received {status}")
+        require(payload.get("authorization_present") is True
                 and payload.get("authorization_scheme") == "Bearer"
                 and payload.get("credential_marker") == "initial"
-                and payload.get("query", {}).get("_data_plane_token_seen") is False,
+                and payload.get("query", {}).get("_data_plane_token_seen") is False
+                and payload.get("query", {}).get("_cookie_seen") is False,
                 "real credential injection or internal-header removal failed")
         require(not ({"authorization", "authorization_sha256", "proxy_authorization",
                       "serverware_agent", "cookie", "x_api_key"} & payload.keys()),
@@ -268,16 +271,17 @@ class SandboxCheck:
             "audit": {"trace": self.run_id, "privateToken": self.client_secret},
             "secret": self.client_secret,
         }
+        require(self.upstream_count("POST", path="/json-nested-redact") == 0,
+                "fresh streaming-transform control already reached the upstream")
         status, payload = self.request("/json-nested-redact", method="POST",
                                        body=json.dumps(nested, separators=(",", ":")).encode("ascii"))
-        require(status == 200 and payload == {
-            "requestId": self.run_id,
-            "profile": {"email": "sandbox@example.test", "settings": {"theme": "dark"}},
-            "items": [{"id": 1, "details": {"safe": "kept"}}],
-            "audit": {"trace": self.run_id}, "sawSecret": False,
-            "authorization_present": False, "authorization_scheme": None,
-        }, "nested request and response redaction did not preserve the exact safe projection")
-        self.results.append("bidirectional_nested_json_redaction")
+        require(status == 422 and payload == {
+            "bodyMode": "jsonNestedStream",
+            "error": "streaming_request_transform_requires_buffered_authorization",
+            "route_id": "demo.json.nested.redact.stream",
+        } and self.upstream_count("POST", path="/json-nested-redact") == 0,
+                "unsupported streaming transform was not denied before upstream dispatch")
+        self.results.append("unsupported_streaming_transform_denied_without_dispatch")
 
         deadline = min(self.deadline, time.monotonic() + 15)
         while True:
@@ -301,6 +305,7 @@ class SandboxCheck:
         return {"ok": True, "schema": "serverware.developmentSandboxCheck/v1",
                 "mode": "synthetic-development", "productionReady": False,
                 "hardwareVerified": False, "checks": self.results,
+                "unsupportedFeatures": ["transforming request streams (including nested JSON)"],
                 "dataPlaneBinaryDigest": health["data_plane_binary_digest"],
                 "policyHash": health["policy_hash"], "auditRequestBodySha256": body_digest}
 
@@ -317,6 +322,7 @@ def run_checks(*, expected_binary_sha256: str,
     Callers must not accept these configuration arguments from browser input.
     The application also owns its single-in-flight concurrency admission.
     """
+    check: SandboxCheck | None = None
     try:
         require(isinstance(expected_binary_sha256, str)
                 and re.fullmatch(r"sha256:[a-f0-9]{64}", expected_binary_sha256) is not None,
@@ -329,11 +335,13 @@ def run_checks(*, expected_binary_sha256: str,
             management_port=management_port, ca_file=Path(ca_file),
             upstream_ca_file=Path(upstream_ca_file), admin_token_file=Path(admin_token_file),
         )
-        return SandboxCheck(args).run()
+        check = SandboxCheck(args)
+        return check.run()
     except Exception as error:
         # No server response body, token, request header, or secret is returned.
         label = str(error) if isinstance(error, RuntimeError) else type(error).__name__
-        return {"ok": False, "error": label, "mode": "synthetic-development"}
+        return {"ok": False, "error": label, "mode": "synthetic-development",
+                "checks": list(check.results) if check is not None else []}
 
 
 def main() -> int:

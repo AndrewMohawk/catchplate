@@ -37,7 +37,7 @@ async function main() {
     });
     const start = performance.now();
     await page.goto(origin, {waitUntil:'domcontentloaded',timeout:30000});
-    await page.waitForFunction(() => document.getElementById('operator-auth-status')?.textContent.includes('sandbox-operator'), {timeout:20000});
+    await page.waitForFunction(() => document.getElementById('operator-auth-status')?.textContent.includes('sandbox-operator'), null, {timeout:20000});
     await page.locator('#credentials').getByText('Demo bearer token', {exact:true}).waitFor({timeout:20000});
     const firstLoadMs = Math.round(performance.now()-start);
     if (!(await page.locator('#admin-token').isHidden())) throw new Error('Operator token input remained visible');
@@ -45,7 +45,7 @@ async function main() {
     if (!banner.includes('synthetic credentials only')) throw new Error('Sandbox boundary banner missing');
     if (process.env.SANDBOX_BROWSER_CHECK_PROXY === '1') {
       await page.locator('#sandbox-run-check').click();
-      await page.waitForFunction(() => /^(Passed|Check failed:)/.test(document.getElementById('sandbox-check-result').textContent), {timeout:60000});
+      await page.waitForFunction(() => /^(Passed|Check failed:)/.test(document.getElementById('sandbox-check-result').textContent), null, {timeout:60000});
       const result = await page.locator('#sandbox-check-result').innerText();
       if(!result.startsWith('Passed')) throw new Error(result);
       proxyCheckPassed = true;

@@ -385,6 +385,7 @@ _PUBLIC_EVIDENCE_ROUTE_SLOTS = asyncio.BoundedSemaphore(1)
 _POLICY_AUTHORITY_HANDOFF_SLOTS = asyncio.BoundedSemaphore(2)
 _POLICY_CANARY_EVIDENCE_SLOTS = asyncio.BoundedSemaphore(4)
 _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS = asyncio.BoundedSemaphore(1)
+_DATA_PLANE_AUDIT_INGEST_SLOTS = asyncio.BoundedSemaphore(4)
 _SIGNED_RESPONSE_WORKER_SLOTS = asyncio.BoundedSemaphore(4)
 _SIGNED_RESPONSE_BUFFER_SLOTS = asyncio.BoundedSemaphore(16)
 _SIGNED_RESPONSE_BUFFER_ADMISSION_SECONDS = 1.0
@@ -20528,7 +20529,15 @@ async def data_plane_audit(
         batch = DataPlaneAuditBatch.model_validate_json(request_body)
     except Exception as exc:
         raise HTTPException(status_code=422, detail="invalid data-plane audit batch") from exc
-    result = _ingest_data_plane_audit(batch, x_serverware_data_plane_token)
+    # Legacy SQLite/PostgreSQL transactions can wait on durable writes. Keep
+    # those waits off the ASGI receive loop without unbounding worker creation.
+    # The independently selected measured intake above retains its own owner.
+    result = await _run_bounded_blocking(
+        _DATA_PLANE_AUDIT_INGEST_SLOTS,
+        _ingest_data_plane_audit,
+        batch,
+        x_serverware_data_plane_token,
+    )
     return {
         "apiVersion": "serverware.dataPlaneAuditAck/v1",
         **result,

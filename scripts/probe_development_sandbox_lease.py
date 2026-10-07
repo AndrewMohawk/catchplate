@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -86,7 +87,9 @@ def main() -> None:
             "recipientNonce": b64e(nonce), "policyHash": bundle_hash,
             "dataPlaneBinaryDigest": binary_digest, "maxTtlSeconds": 5,
         }
+        started = time.monotonic()
         status, envelope = request("POST", "/api/data-plane/credential-leases", payload, token)
+        lease_elapsed_ms = round((time.monotonic() - started) * 1000)
         if status != 200:
             # Never print server messages, bodies, envelopes or exception text.
             raise ProbeFailure(purpose + "-http-" + str(status))
@@ -99,12 +102,16 @@ def main() -> None:
             metadata = entry
         else:
             require(entry["secret"] == CREDENTIAL_SECRET, "synthetic-secret-mismatch")
+        started = time.monotonic()
         replay_status, rejection = request("POST", "/api/data-plane/credential-leases", payload, token)
+        replay_elapsed_ms = round((time.monotonic() - started) * 1000)
         require(replay_status == 409 and rejection.get("detail") == "recipient nonce has already been used",
                 purpose + "-replay-not-rejected")
         print(json.dumps({"phase": purpose, "httpStatus": status,
                           "encryptedRoundtrip": True, "bindingsVerified": True,
-                          "replayStatus": replay_status, "syntheticOnly": True}), flush=True)
+                          "replayStatus": replay_status, "syntheticOnly": True,
+                          "leaseElapsedMs": lease_elapsed_ms,
+                          "replayElapsedMs": replay_elapsed_ms}), flush=True)
 
 
 if __name__ == "__main__":

@@ -331,6 +331,13 @@ def _install_authority_controlled_writer_boundaries() -> None:
             __signature: inspect.Signature = signature,
             **kwargs: Any,
         ) -> Any:
+            if (__operation == "credential-nonce.reserve"
+                    and __handler_name == "reserve_credential_lease_nonce"):
+                from serverware.development_sandbox import active as sandbox_active
+                if sandbox_active():
+                    # The dedicated synthetic runner selects its separate
+                    # nonce store; no other controlled writer is admitted.
+                    return __handler(*args, **kwargs)
             if (
                 __operation
                 not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS

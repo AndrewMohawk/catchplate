@@ -219,6 +219,9 @@ def validate_control_plane_startup() -> None:
     validate_control_plane_configuration()
     ensure_data_dirs()
     db.init_db()
+    from serverware import development_sandbox
+    if development_sandbox.active():
+        development_sandbox.bootstrap()
     if OIDC_SESSION_WEBAUTHN_REQUIRED:
         db.revoke_unbound_oidc_browser_sessions(
             actor_id="system:startup",

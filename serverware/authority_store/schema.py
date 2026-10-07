@@ -1326,12 +1326,15 @@ def _policy_candidate_authority_required_guard_names(
         "serverware_policy_runtime_role_key_revocation_sequence",
         "serverware_policy_canary_checkpoint_heads_successor",
         "serverware_policy_checkpoint_append_guard",
-        "serverware_policy_authority_verifier_commit_deadline",
-        "serverware_policy_authority_writer_commit_deadline",
         "serverware_planner_retention_guard",
         "serverware_capability_retention_guard",
     }
     function_names: set[str] = set()
+    if postgres:
+        # These are deferred PostgreSQL constraint triggers. SQLite never
+        # installs them and is not an active policy-authority backend.
+        trigger_names.update({"serverware_policy_authority_verifier_commit_deadline",
+                              "serverware_policy_authority_writer_commit_deadline"})
     if not postgres:
         trigger_names.update({"serverware_planner_retention_insert_guard",
                               "serverware_retained_sqlite_insert_guard",

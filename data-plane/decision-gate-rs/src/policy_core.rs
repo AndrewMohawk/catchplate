@@ -9176,6 +9176,7 @@ enum ShadowWork {
 }
 
 pub(crate) struct ShadowRuntime {
+    development_sandbox: Option<super::development_sandbox::Profile>,
     generation:
         Arc<RwLock<Option<Arc<PublishedShadowGeneration>>>>,
     custody: Arc<OnceLock<Arc<dyn PolicyShadowCustodyRpcSupervisor>>>,
@@ -9220,6 +9221,7 @@ impl ShadowRuntime {
             .name("policy-shadow-evaluator".to_string())
             .spawn(move || shadow_worker(receiver, worker_ledger));
         Self {
+            development_sandbox: None,
             generation: Arc::new(RwLock::new(None)),
             custody,
             prepared_generation: Mutex::new(None),
@@ -9238,6 +9240,21 @@ impl ShadowRuntime {
             #[cfg(test)]
             inactive_for_forwarding_tests: false,
         }
+    }
+
+    pub(crate) fn new_development_sandbox(profile: super::development_sandbox::Profile) -> Self {
+        let mut runtime = Self::new();
+        runtime.development_sandbox = Some(profile);
+        runtime
+    }
+
+    pub(crate) fn serving_ready(&self, snapshot: &Snapshot) -> bool {
+        #[cfg(test)]
+        if self.inactive_for_forwarding_tests { return true; }
+        let custody_ready = self.development_sandbox.is_none()
+            && self.status().get("readiness").and_then(Value::as_bool) == Some(true);
+        super::development_sandbox::serving_ready(self.development_sandbox.as_ref(),
+            &snapshot.hash, custody_ready)
     }
 
     pub(crate) fn bind_native_observation_owner(&self,state:&Arc<GateState>)->Result<(),String> {
@@ -10189,6 +10206,14 @@ impl ShadowRuntime {
         raw_body: Option<&[u8]>,
         native_export: Option<(&GateState,u64,&std::cell::Cell<bool>)>,
     ) -> ShadowAdmission {
+        if let Some(profile) = &self.development_sandbox {
+            if profile.matches(&snapshot.hash) {
+                return ShadowAdmission::inactive(snapshot, ingress);
+            }
+            return ShadowAdmission::custody_fail_closed(snapshot,
+                request_binding(snapshot, request, authenticated_principal_id), ingress,
+                PolicyShadowTerminalReason::AccountingCustodyUnavailable);
+        }
         #[cfg(test)]
         if self.inactive_for_forwarding_tests {
             return ShadowAdmission::inactive(snapshot, ingress);
@@ -10817,6 +10842,9 @@ impl ShadowRuntime {
         method: &str,
         target: &str,
     ) -> bool {
+        if let Some(profile) = &self.development_sandbox {
+            return profile.matches(&snapshot.hash);
+        }
         let binding = sha256_prefixed(
             format!(
                 "serverware.shadowIngressAccounting/v2\0{}\0{}\0{}\0{:?}",
@@ -10934,6 +10962,13 @@ impl ShadowRuntime {
     }
 
     pub(crate) fn status(&self) -> Value {
+        if let Some(profile) = &self.development_sandbox {
+            return json!({"api_version":"serverware.policyShadowRuntimeStatus/v2",
+                "mode":"synthetic-development", "enabled":false, "readiness":false,
+                "readiness_reason":"intentionally_uncommissioned_synthetic_sandbox",
+                "production_custody_bound":false, "active_generation":null,
+                "synthetic_policy_sha256":profile.policy_hash()});
+        }
         let generation =
             if self.installation_in_progress.load(Ordering::Acquire) {
                 None

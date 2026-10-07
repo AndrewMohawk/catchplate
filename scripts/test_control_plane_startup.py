@@ -623,19 +623,30 @@ class ControlPlaneStartupTests(unittest.TestCase):
         ensure_ca.assert_not_called()
 
     def test_runner_uses_the_shared_startup_gate(self) -> None:
+        import uvicorn
+        from serverware import signed_http
         with (
-            patch.object(control_plane_runner, "validate_control_plane_startup") as preflight,
+            patch.object(control_plane_startup, "validate_control_plane_startup") as preflight,
             patch.object(
-                control_plane_runner,
+                signed_http,
                 "validate_signed_http_protocol",
             ) as protocol_preflight,
-            patch.object(control_plane_runner.uvicorn, "run") as uvicorn_run,
+            patch.object(uvicorn, "Config") as uvicorn_config,
+            patch.object(uvicorn, "Server") as uvicorn_server,
+            # This plumbing control must not close shared cold-owner fixtures
+            # used by later startup controls in the same test process.
+            patch.object(control_plane_runner, "_close_remaining") as close_owners,
         ):
+            uvicorn_config.return_value.ssl = None
             control_plane_runner.main()
         preflight.assert_called_once_with()
         protocol_preflight.assert_called_once_with()
-        uvicorn_run.assert_called_once()
-        runner_kwargs = uvicorn_run.call_args.kwargs
+        uvicorn_config.assert_called_once()
+        uvicorn_config.return_value.load.assert_called_once_with()
+        uvicorn_server.assert_called_once_with(uvicorn_config.return_value)
+        uvicorn_server.return_value.run.assert_called_once_with()
+        close_owners.assert_called_once()
+        runner_kwargs = uvicorn_config.call_args.kwargs
         self.assertIs(runner_kwargs["http"], SignedOnlyHttpToolsProtocol)
         self.assertEqual(runner_kwargs["ws"], "none")
         self.assertFalse(runner_kwargs["server_header"])

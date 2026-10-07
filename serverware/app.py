@@ -509,6 +509,11 @@ async def csrf_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
+    from serverware import development_sandbox
+    if (development_sandbox.active()
+            and not development_sandbox.request_allowed(request.method, request.url.path)):
+        return JSONResponse(status_code=403, content={"detail":
+            "This persistent sandbox has a fixed synthetic policy; production setup, provider and configuration writes are unavailable."})
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
     from serverware import portal_session_activation_confirmation_routes as confirmation_routes
@@ -3660,6 +3665,7 @@ def index() -> str:
 
 def _portal_document() -> str:
     from serverware import control_plane_static_credential_rotation as rotation_owner
+    from serverware import development_sandbox
 
     marker = "__SERVERWARE_ENROLLED_OAUTH_PROFILE__"
     seed_marker = "__SERVERWARE_DEMO_SEED_BUTTON__"
@@ -3677,7 +3683,7 @@ def _portal_document() -> str:
     if protected_rotation:
         secret_field += ('<p><a href="/credentials/static/rotation">'
             'Rotate an existing protected static credential</a>.</p>')
-    return (UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
+    return development_sandbox.decorate_portal(UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile())).replace(seed_marker, seed_button)
         .replace("__SERVERWARE_STATIC_SECRET_FIELD__", secret_field)
         .replace("__SERVERWARE_STATIC_PROTECTED__", json.dumps(protected_static))
         .replace("__SERVERWARE_STATIC_ROTATION_SELECTED__", json.dumps(protected_rotation)))
@@ -3753,6 +3759,18 @@ def _operator_session_activation_mode() -> str:
 
 @app.get("/api/auth/status")
 def operator_auth_status(request: Request) -> dict[str, Any]:
+    from serverware import development_sandbox
+    from serverware.auth import check_admin_token
+
+    if development_sandbox.active() and check_admin_token(request.headers.get("X-Serverware-Admin-Token")):
+        identity = require_admin(request, request.headers.get("X-Serverware-Admin-Token"))
+        return {
+            "authenticated": True, "userId": identity.user_id,
+            "roles": sorted(identity.roles), "authMethod": "sandbox-header",
+            "sessionState": None, "webauthnRequired": False,
+            "oidcBrowserLoginConfigured": False, "sessionActivationMode": "unavailable",
+            "developmentSandbox": True,
+        }
     identity = None
     session = None
     token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
@@ -3775,6 +3793,28 @@ def operator_auth_status(request: Request) -> dict[str, Any]:
         "oidcBrowserLoginConfigured": browser_login_configured(),
         "sessionActivationMode": _operator_session_activation_mode(),
     }
+
+
+@app.get("/api/sandbox/status")
+def development_sandbox_status() -> dict[str, Any]:
+    from serverware import development_sandbox
+
+    if not development_sandbox.active():
+        raise HTTPException(status_code=404, detail="not found")
+    return development_sandbox.status()
+
+
+@app.post("/api/sandbox/check")
+def development_sandbox_check(request: Request,
+        _: AdminIdentity = Depends(require_role("admin"))) -> JSONResponse:
+    from serverware import development_sandbox
+    if not development_sandbox.active():
+        raise HTTPException(status_code=404, detail="not found")
+    if request.query_params or request.headers.get("content-length", "0") != "0" or request.headers.get("transfer-encoding"):
+        raise HTTPException(status_code=400, detail="The sandbox check accepts no input")
+    result = development_sandbox.run_proxy_check()
+    return JSONResponse(status_code=200 if result.get("ok") else 503, content=result,
+        headers={"Cache-Control": "no-store"})
 
 
 def _operator_oidc_source_key(request: Request) -> str:
@@ -22710,9 +22750,10 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
             },
         ),
     ]
-    cleared_rate_limit_counters = db.clear_rate_limit_counters(
-        ("demo.x.tweet.one_per_day",)
-    )
+    from serverware import development_sandbox
+    # Atomic quota writers are deliberately unavailable in the local sandbox.
+    cleared_rate_limit_counters = (0 if development_sandbox.active() else
+        db.clear_rate_limit_counters(("demo.x.tweet.one_per_day",)))
     db.record_audit_event(
         "demo.seeded",
         {
@@ -24112,6 +24153,14 @@ UI_HTML = r"""
         && status.authMethod === 'oidc-session';
     }
 
+    function sandboxHeaderIsActive(status) {
+      return Boolean(document.getElementById('development-sandbox-banner'))
+        && status?.developmentSandbox === true && status.authenticated === true
+        && status.authMethod === 'sandbox-header' && status.sessionState === null
+        && status.webauthnRequired === false && status.oidcBrowserLoginConfigured === false
+        && status.sessionActivationMode === 'unavailable';
+    }
+
     function markOIDCSessionStatusUnknown() {
       invalidateSetupCredentialContext();
       registrationCaptureInvalidate('Browser authentication became unknown.');
@@ -24138,13 +24187,13 @@ UI_HTML = r"""
       if (!status || typeof status !== 'object' || Array.isArray(status)
           || typeof status.authenticated !== 'boolean'
           || ![null, 'pending_webauthn', 'active'].includes(status.sessionState)
-          || ![null, 'oidc-session'].includes(status.authMethod)
+          || (!([null, 'oidc-session'].includes(status.authMethod)) && !sandboxHeaderIsActive(status))
           || !(status.userId === null || (typeof status.userId === 'string' && status.userId.length > 0))
           || !Array.isArray(status.roles) || !status.roles.every(role => typeof role === 'string')
           || typeof status.webauthnRequired !== 'boolean'
           || typeof status.oidcBrowserLoginConfigured !== 'boolean'
           || !['legacy', 'protected', 'unavailable'].includes(status.sessionActivationMode)
-          || (status.authenticated && (!oidcSessionActivationIsActive(status) || status.userId === null))) {
+          || (status.authenticated && (!(oidcSessionActivationIsActive(status) || sandboxHeaderIsActive(status)) || status.userId === null))) {
         throw new Error('Authentication status response is invalid');
       }
       if (JSON.stringify([state.authStatus?.userId, state.authStatus?.authMethod,
@@ -25018,7 +25067,7 @@ UI_HTML = r"""
         const [controlPlaneResult, policyResult, policyCanaryResult, attestationResult, setupSessionsResult] = await Promise.allSettled([
           api('/api/control-plane/approvals?limit=100'),
           api('/api/policy'),
-          api('/api/policy/canary/status'),
+          sandboxHeaderIsActive(state.authStatus) ? Promise.resolve(null) : api('/api/policy/canary/status'),
           api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`),
           api('/api/setup/sessions?limit=100')
         ]);

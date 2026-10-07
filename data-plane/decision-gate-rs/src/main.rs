@@ -11,6 +11,7 @@ mod native_canary_runtime;
 mod response_v2;
 mod gate_state_init;
 mod control_plane_client_config;
+mod development_sandbox;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
@@ -49413,8 +49414,9 @@ fn health_response(state: &GateState) -> Vec<u8> {
             client.healthy.load(Ordering::Acquire) == 1
         })
         .unwrap_or(!state.is_production);
+    let policy_shadow_serving_ready = state.policy_shadow.serving_ready(&snapshot);
     let overall_healthy =
-        custody_healthy && response_observation_v2_healthy;
+        custody_healthy && response_observation_v2_healthy && policy_shadow_serving_ready;
     http_response(
         if overall_healthy {
             "200 OK"
@@ -49423,6 +49425,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
         },
         json!({
             "ok":overall_healthy,
+            "policy_shadow_serving_ready":policy_shadow_serving_ready,
             "response_observation_v2":{
                 "configured":state.response_observation_v2_client.is_some(),
                 "healthy":response_observation_v2_healthy,
@@ -51357,6 +51360,7 @@ fn start_response_proof_custody_health_probe(state: Arc<GateState>) -> Result<()
 
 fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    let sandbox_selection = development_sandbox::from_environment()?;
     workload_identity_trust::reject_native_namespace()?;
     if native_startup_config::run_from_process_arguments()?.is_some() {
         return Ok(());
@@ -51923,7 +51927,7 @@ fn main() -> Result<(), String> {
     let audit_client = build_audit_client()?;
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
-    let state = Arc::new(GateStateInputs {
+    let mut initialized_state = GateStateInputs {
         service_tokens: native_service_tokens::Source::Legacy,
         native_serving_privileges: None,
         prepared_secret_broker: None,
@@ -51984,7 +51988,29 @@ fn main() -> Result<(), String> {
             public_key_pem: response_proof_public_key_pem,
             key_id: response_proof_signing_key_id,
         },
-    })?);
+    })?;
+    if let Some(selection) = sandbox_selection {
+        let snapshot = current_snapshot(&initialized_state);
+        let profile = selection.admit(development_sandbox::Configuration {
+            is_production: initialized_state.is_production,
+            has_native_authority: initialized_state.native_serving_privileges.is_some()
+                || initialized_state.native_secret_broker.is_some()
+                || initialized_state.measured_canary_delivery.is_some(),
+            has_shadow_control: initialized_state.policy_shadow_generation_control.is_some(),
+            atomic: initialized_state.atomic_release_authorization_enabled,
+            ingress_mode: initialized_state.proxy_ingress_attestation.mode,
+            policy_path: &initialized_state.policy_path,
+            policy_id: &snapshot.policy_id,
+            policy_hash: &snapshot.hash,
+            routes: snapshot.routes.iter().map(|route| (route.scheme.as_str(), route.host.as_str(), route.port)).collect(),
+            lease_url: initialized_state.credential_lease_url.as_deref(),
+            audit_url: initialized_state.audit_url.as_deref(),
+            instance_id: initialized_state.server_instance_id.as_deref(),
+            audit_enabled: audit_enabled(&initialized_state),
+        })?;
+        initialized_state.policy_shadow = ShadowRuntime::new_development_sandbox(profile);
+    }
+    let state = Arc::new(initialized_state);
     if let Some(control) =
         state.policy_shadow_generation_control.as_ref()
     {
@@ -54181,6 +54207,15 @@ mod tests {
                 .expect("custody health")
                 .proof_assembly_healthy
         );
+    }
+
+    #[test]
+    fn uncommissioned_shadow_runtime_is_not_reported_as_serving_healthy() {
+        let mut state = test_gate_state(test_snapshot(1));
+        state.policy_shadow = ShadowRuntime::new();
+        let response = String::from_utf8(health_response(&state)).expect("health response");
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(response.contains("\"policy_shadow_serving_ready\":false"));
     }
 
     #[test]

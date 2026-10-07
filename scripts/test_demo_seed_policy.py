@@ -82,7 +82,8 @@ class DemoSeedPolicyTests(unittest.TestCase):
                 (True, False, "dev", True), (True, True, "dev", False), (True, False, "production", False)):
             namespace = dict(DEV_DEMO_SEED_ENABLED=enabled, PRODUCTION_IMAGE=image, RELEASE_CHANNEL=channel,
                 UI_HTML="__SERVERWARE_ENROLLED_OAUTH_PROFILE__ __SERVERWARE_DEMO_SEED_BUTTON__",
-                json=json, enrolled_oauth_profile=lambda: {"syntheticTestOnly": True})
+                json=json, enrolled_oauth_profile=lambda: {"syntheticTestOnly": True},
+                _protected_static_credentials=lambda: False)
             exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])), "app.py", "exec"), namespace)
             self.assertEqual("Seed demo</button>" in namespace["_portal_document"](), visible)
         self.assertNotIn("advance its policy sequence", source)

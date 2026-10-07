@@ -26232,6 +26232,7 @@ def connect() -> Any:
             _metadata_pg_connect_raw()
         )
     conn = sqlite3.connect(DB_PATH, timeout=10)
+    _metadata_schema.configure_sqlite_metadata_connection(conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -27776,6 +27777,11 @@ def init_db(
         if local_audit_reader_profile is not None:
             selected_timestamp(local_initial_rbac)
     if not metadata_uses_postgres():
+        from serverware.development_sandbox import active as sandbox_active
+        if sandbox_active():
+            # The isolated sandbox has no PostgreSQL RBAC or release authority.
+            # Do not manufacture those records in its application staging DB.
+            return
         initialize_rbac_authority()
         reconcile_policy_state_bundles(limit=100)
 
@@ -29429,6 +29435,10 @@ def _committed_policy_authority_row(conn: Any) -> Any | None:
 
 
 def get_policy_high_water() -> dict[str, Any] | None:
+    from serverware.development_sandbox import active as sandbox_active
+    if sandbox_active():
+        from serverware.development_sandbox_store import get_policy_high_water as sandbox_read
+        return sandbox_read()
     _require_postgres_policy_authority("active policy read")
     with connect() as conn:
         row = _committed_policy_authority_row(conn)
@@ -29476,6 +29486,10 @@ def _policy_publication_row(conn: Any, policy_hash: str) -> Any | None:
 
 
 def get_policy_publication(policy_hash: str) -> dict[str, Any] | None:
+    from serverware.development_sandbox import active as sandbox_active
+    if sandbox_active():
+        from serverware.development_sandbox_store import get_policy_publication as sandbox_read
+        return sandbox_read(policy_hash)
     _require_postgres_policy_authority("active publication read")
     if not isinstance(policy_hash, str) or re.fullmatch(
         r"sha256:[0-9a-f]{64}", policy_hash
@@ -29675,6 +29689,12 @@ def verify_policy_high_water(
     _allow_pending: bool = False,
 ) -> dict[str, Any]:
     """Verify exact authority state without changing it."""
+    from serverware.development_sandbox import active as sandbox_active
+    if sandbox_active():
+        from serverware.development_sandbox_store import verify_policy_high_water as sandbox_verify
+        return sandbox_verify(policy_id=policy_id, sequence=sequence,
+            rollback_epoch=rollback_epoch, policy_hash=policy_hash,
+            _connection=_connection, _allow_pending=_allow_pending)
     _require_postgres_policy_authority("policy high-water verification")
     if _allow_pending and _connection is None:
         raise PolicyCandidateAuthorityError(
@@ -63739,6 +63759,10 @@ def reserve_credential_lease_nonce(
     *,
     now_epoch_ms: int,
 ) -> str | None:
+    from serverware.development_sandbox import active as sandbox_active
+    if sandbox_active():
+        from serverware.development_sandbox_store import reserve_credential_lease_nonce as sandbox_reserve
+        return sandbox_reserve(recipient_key_id, nonce_sha256, now_epoch_ms=now_epoch_ms)
     _require_postgres_jit_authority("credential lease nonce reservation")
     if _policy_authority_writer_context.get() is not None:
         with connect() as conn:
@@ -63827,6 +63851,10 @@ def credential_lease_nonce_reserved(
     *,
     now_epoch_ms: int,
 ) -> bool:
+    from serverware.development_sandbox import active as sandbox_active
+    if sandbox_active():
+        from serverware.development_sandbox_store import credential_lease_nonce_reserved as sandbox_read
+        return sandbox_read(recipient_key_id, nonce_sha256, now_epoch_ms=now_epoch_ms)
     _require_postgres_jit_authority("credential lease nonce replay read")
     with connect() as conn:
         _require_postgres_jit_authority(

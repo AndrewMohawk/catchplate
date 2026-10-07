@@ -59,6 +59,7 @@ async function main() {
     await page.reload({waitUntil:'domcontentloaded'});
     await page.locator('#credentials').getByText('Demo bearer token', {exact:true}).waitFor({timeout:20000});
     const reloadMs = Math.round(performance.now()-reloadStart);
+    await page.evaluate(() => window.scrollTo({top:0,left:0,behavior:'instant'}));
     await page.screenshot({path:'/tmp/serverware-sandbox-browser.png',fullPage:false});
     if ((await page.content()).includes(token)) throw new Error('Service credential appeared in browser content');
     console.log(JSON.stringify({ok:errors.length===0 && failures.length===0, boundary:'real backend; browser transport adapter, not human SSO',

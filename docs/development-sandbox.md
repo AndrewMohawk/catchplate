@@ -37,6 +37,12 @@ proxy check** to exercise the actual internal TLS path and inspect the result.
 - The proxy and app have only an internal Docker network; no host ports,
   external DNS forwarding or provider egress. The HTTP edge alone joins
   Traefik's network. Service tokens remain private runtime files.
+- The deployment sets `SERVERWARE_DATA_PLANE_AUDIT_BATCH_MAX=1` for this
+  synthetic legacy transport. Multi-event retries can otherwise combine an
+  already-committed event with new events, which the immutable audit store
+  correctly rejects. Singleton batching preserves signed acknowledgements and
+  exact event-ID replay checks; it does not relax the database or repair the
+  general multi-event retry implementation.
 - Full atomic/JIT/quota commissioning and hardware workflows are not supplied
   by this profile. The separate measured pilot remains unchanged.
 
@@ -68,6 +74,13 @@ loopback broker: both metadata and synthetic-secret leases must decrypt with
 their real recipient bindings, and each exact nonce replay must return 409.
 It refuses a non-sandbox target and prints only status/verification labels,
 never tokens, plaintext credentials or encrypted envelopes.
+
+`scripts/diagnose_development_sandbox_audit.py` records the bounded, operator-
+gated recovery used for the observed 15-event retry batch. Capture is limited to
+the named sandbox pair, eight seconds and one MiB; bodies stay in process memory.
+Its optional recovery refuses any state other than the reviewed exact 1-present,
+14-missing, zero-conflict case and replays only those original events through
+the authenticated API. It is not a startup action or a general repair/reset tool.
 
 See the deployment README and its verification record for the actual runtime
 artifact, measured timings, test outcomes and remaining boundaries. Cached

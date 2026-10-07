@@ -43,6 +43,7 @@ async function main() {
     if (!(await page.locator('#admin-token').isHidden())) throw new Error('Operator token input remained visible');
     const banner = await page.locator('#development-sandbox-banner').innerText();
     if (!banner.includes('synthetic credentials only')) throw new Error('Sandbox boundary banner missing');
+    if (!banner.includes('Streaming request transformations are unsupported and refused.')) throw new Error('Unsupported feature boundary missing');
     if (process.env.SANDBOX_BROWSER_CHECK_PROXY === '1') {
       await page.locator('#sandbox-run-check').click();
       await page.waitForFunction(() => /^(Passed|Check failed:)/.test(document.getElementById('sandbox-check-result').textContent), null, {timeout:60000});

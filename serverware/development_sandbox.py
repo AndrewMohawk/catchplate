@@ -291,7 +291,8 @@ def decorate_portal(document: str) -> str:
         '<strong>Persistent development sandbox - synthetic credentials only.</strong> '
         'Local test keys; no hardware, enclave or production-authority verification. '
         'The fixed demo policy is isolated from real providers. Reloads and restarts keep test data. '
-        'Production setup and configuration writes are unavailable here.'
+        'Production setup and configuration writes are unavailable here. '
+        'Streaming request transformations are unsupported and refused.'
         '<div style="margin-top:.6rem"><button id="sandbox-run-check" type="button" '
         'onclick="runSandboxProxyCheck()">Run synthetic proxy check</button> '
         '<span id="sandbox-check-result" role="status" aria-live="polite">No setup required.</span></div>'
@@ -303,7 +304,8 @@ def decorate_portal(document: str) -> str:
         'cache:"no-store",signal:AbortSignal.timeout(55000)});const result=await response.json();'
         'if(!response.ok||result.ok!==true)throw new Error(result.error||result.detail||"Check failed");'
         'r.textContent="Passed "+result.checks.length+" checks: TLS, synthetic credential injection, '
-        'denials, redaction and stored audit. No production or hardware claim.";'
+        'denials, response filtering and stored audit. Streaming request transformations remain '
+        'unsupported. No production or hardware claim.";'
         '}catch(e){r.textContent="Check failed: "+e.message;}finally{b.disabled=false;}}'
         '</script>')
     return document.replace("<body>", "<body>" + banner, 1)

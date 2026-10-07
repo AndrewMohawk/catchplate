@@ -181,7 +181,8 @@ class SandboxCheck:
             raise
 
     def request(self, path: str, *, method: str = "GET", body: bytes = b"",
-                sensitive_headers: bool = False) -> tuple[int, Any]:
+                sensitive_headers: bool = False,
+                authorization_collision: bool = False) -> tuple[int, Any]:
         raw = self.tunnel()
         require(raw is not None, "CONNECT did not open a tunnel")
         with raw:
@@ -193,9 +194,10 @@ class SandboxCheck:
                 if body:
                     headers.extend(["Content-Type: application/json", f"Content-Length: {len(body)}"])
                 if sensitive_headers:
-                    headers.extend([f"Authorization: Bearer {self.client_secret}",
-                                    f"Cookie: sandbox={self.client_secret}",
+                    headers.extend([f"Cookie: sandbox={self.client_secret}",
                                     f"X-Serverware-Data-Plane-Token: {self.client_secret}"])
+                if authorization_collision:
+                    headers.append(f"Authorization: Bearer {self.client_secret}")
                 tls.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body)
                 response = http.client.HTTPResponse(tls)
                 response.begin()
@@ -220,6 +222,12 @@ class SandboxCheck:
                     expected_status=403)
         self.tunnel(port=9443, expected_status=403)
         self.results.append("connect_identity_and_destination_denials")
+
+        status, payload = self.request("/echo", authorization_collision=True)
+        require(status == 403 and payload.get("reason") == "credential_injection_header_collision"
+                and self.upstream_count("GET") == 0,
+                "caller credential collision was not denied before upstream dispatch")
+        self.results.append("caller_credential_collision_denied_without_dispatch")
 
         status, payload = self.request("/echo", sensitive_headers=True)
         require(status == 200 and payload.get("authorization_present") is True

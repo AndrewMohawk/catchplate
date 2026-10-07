@@ -25,6 +25,12 @@ proxy check** to exercise the actual internal TLS path and inspect the result.
   encrypted synthetic credential and demo routes are created once.
 - Separate SQLite policy/nonce database. Nonce replay checks are transactional
   and persist across restarts. No PostgreSQL authority receipts are fabricated.
+- Rust independently requires the explicit sandbox flag, exact development
+  profile, private synthetic marker, local service URLs and signed demo-only
+  destinations. It pins the signed policy hash for that process. Ordinary and
+  native constructors keep their commissioning requirement. Sandbox serving
+  readiness is distinct from policy-shadow commissioning readiness, which
+  remains false rather than claiming a completed ceremony.
 - Only the fixed synthetic proxy check, demo seed and real internal
   credential-lease/audit writes are admitted. Production configuration,
   provider authorization, enrollment and authority mutation are unavailable.
@@ -53,6 +59,12 @@ real deployed backend responses through a transport adapter. It checks rendered
 data, reload and optionally the proxy-check button. This is not proof of an
 already signed-in human Authelia session. Edge identity/Origin controls and the
 public sign-in redirect must also be checked separately.
+
+`scripts/probe_development_sandbox_lease.py` independently checks the actual
+loopback broker: both metadata and synthetic-secret leases must decrypt with
+their real recipient bindings, and each exact nonce replay must return 409.
+It refuses a non-sandbox target and prints only status/verification labels,
+never tokens, plaintext credentials or encrypted envelopes.
 
 See the deployment README and its verification record for the actual runtime
 artifact, measured timings, test outcomes and remaining boundaries. Cached

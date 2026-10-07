@@ -8,7 +8,7 @@ async function main() {
   const container = 'serverware-sandbox-serverware-1';
   const topology = JSON.parse(execFileSync('docker', ['inspect', container], {encoding:'utf8'}))[0];
   const address = topology.NetworkSettings.Networks['serverware-sandbox_sandbox'].IPAddress;
-  if (!/^10\.254\.249\.[0-9]+$/.test(address)) throw new Error('Unexpected sandbox network');
+  if (!/^172\.16\.249\.[0-9]+$/.test(address)) throw new Error('Unexpected sandbox network');
   const token = execFileSync('docker', ['exec', container, 'python', '-c',
     "from pathlib import Path; print(Path('/run/secrets/serverware/admin.token').read_text(),end='')"], {encoding:'utf8'}).trim();
   const origin = 'https://serverware-sandbox.example.com';
@@ -17,6 +17,7 @@ async function main() {
   }});
   const browser = await chromium.launch({headless:true,args:['--no-sandbox']});
   let page;
+  let proxyCheckPassed = false;
   const errors = [], failures = [];
   try {
     page = await browser.newPage({viewport:{width:1440,height:1000}});
@@ -47,7 +48,12 @@ async function main() {
       await page.waitForFunction(() => /^(Passed|Check failed:)/.test(document.getElementById('sandbox-check-result').textContent), {timeout:60000});
       const result = await page.locator('#sandbox-check-result').innerText();
       if(!result.startsWith('Passed')) throw new Error(result);
+      proxyCheckPassed = true;
     }
+    const chainResponse = page.waitForResponse(r => new URL(r.url()).pathname === '/api/audit/verify');
+    await page.getByRole('button', {name:'Verify chain',exact:true}).click();
+    const chain = await (await chainResponse).json();
+    if (chain.ok !== true || chain.complete !== true) throw new Error('Audit chain did not verify completely');
     const reloadStart = performance.now();
     await page.reload({waitUntil:'domcontentloaded'});
     await page.locator('#credentials').getByText('Demo bearer token', {exact:true}).waitFor({timeout:20000});
@@ -55,7 +61,7 @@ async function main() {
     await page.screenshot({path:'/tmp/serverware-sandbox-browser.png',fullPage:false});
     if ((await page.content()).includes(token)) throw new Error('Service credential appeared in browser content');
     console.log(JSON.stringify({ok:errors.length===0 && failures.length===0, boundary:'real backend; browser transport adapter, not human SSO',
-      title:await page.title(),url:page.url(),firstLoadMs,reloadMs,errors,failures,screenshot:'/tmp/serverware-sandbox-browser.png'}));
+      title:await page.title(),url:page.url(),firstLoadMs,reloadMs,proxyCheckPassed,auditChainVerified:true,errors,failures,screenshot:'/tmp/serverware-sandbox-browser.png'}));
     if(errors.length || failures.length) process.exitCode=1;
   } catch (error) {
     if(page) {

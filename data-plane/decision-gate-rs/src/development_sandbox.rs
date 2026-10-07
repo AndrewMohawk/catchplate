@@ -39,6 +39,16 @@ pub(crate) struct Profile {
     policy_hash: String,
 }
 
+/// Engineering-only provenance, deliberately not a custody effect receipt.
+pub(crate) struct EffectPermit {
+    policy_hash: String,
+}
+
+pub(crate) struct DispatchPermit {
+    effect: EffectPermit,
+    request_commitment: String,
+}
+
 fn refused() -> String {
     "isolated development sandbox admission refused".to_owned()
 }
@@ -181,6 +191,71 @@ impl Profile {
     pub(crate) fn policy_hash(&self) -> &str {
         &self.policy_hash
     }
+    pub(crate) fn effect(&self, policy_hash: &str) -> Result<EffectPermit, String> {
+        if !self.matches(policy_hash) {
+            return Err(refused());
+        }
+        Ok(EffectPermit {
+            policy_hash: self.policy_hash.clone(),
+        })
+    }
+}
+
+impl EffectPermit {
+    pub(crate) fn validate(&self, policy_hash: &str) -> Result<(), String> {
+        if self.policy_hash != policy_hash {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn execute<T, F>(&self, policy_hash: &str, operation: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+    {
+        self.validate(policy_hash)?;
+        operation()
+    }
+
+    pub(crate) fn bind_dispatch(
+        self,
+        policy_hash: &str,
+        scheme: &str,
+        host: &str,
+        port: u16,
+        request_commitment: &str,
+    ) -> Result<DispatchPermit, String> {
+        self.validate(policy_hash)?;
+        let digest = request_commitment
+            .strip_prefix("sha256:")
+            .ok_or_else(refused)?;
+        if (scheme, host, port) != ("https", "demo-upstream", 8443)
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(refused());
+        }
+        Ok(DispatchPermit {
+            effect: self,
+            request_commitment: request_commitment.to_owned(),
+        })
+    }
+}
+
+impl DispatchPermit {
+    pub(crate) fn validate(
+        &self,
+        policy_hash: &str,
+        request_commitment: &str,
+    ) -> Result<(), String> {
+        self.effect.validate(policy_hash)?;
+        if self.request_commitment != request_commitment {
+            return Err(refused());
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn serving_ready(
@@ -284,6 +359,79 @@ mod tests {
         assert!(!serving_ready(Some(&profile), "changed-policy", true));
         assert!(!serving_ready(None, config().policy_hash, false));
         assert!(serving_ready(None, config().policy_hash, true));
+    }
+
+    #[test]
+    fn synthetic_effects_require_original_policy_and_do_not_fabricate_success() {
+        let profile = Profile {
+            policy_hash: config().policy_hash.to_owned(),
+        };
+        let permit = profile.effect(config().policy_hash).unwrap();
+        assert!(profile.effect("changed-policy").is_err());
+        let calls = std::cell::Cell::new(0);
+        assert!(permit
+            .execute("changed-policy", || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            permit
+                .execute(config().policy_hash, || {
+                    calls.set(calls.get() + 1);
+                    Err::<(), _>("real operation failed".to_owned())
+                })
+                .unwrap_err(),
+            "real operation failed"
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(permit.execute(config().policy_hash, || Ok(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn synthetic_dispatch_binds_exact_local_destination_and_request() {
+        let profile = Profile {
+            policy_hash: config().policy_hash.to_owned(),
+        };
+        let digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        for (scheme, host, port) in [
+            ("https", "provider.example", 8443),
+            ("http", "demo-upstream", 8443),
+            ("https", "demo-upstream", 443),
+        ] {
+            assert!(profile
+                .effect(config().policy_hash)
+                .unwrap()
+                .bind_dispatch(config().policy_hash, scheme, host, port, digest)
+                .is_err());
+        }
+        assert!(profile
+            .effect(config().policy_hash)
+            .unwrap()
+            .bind_dispatch("changed-policy", "https", "demo-upstream", 8443, digest)
+            .is_err());
+        assert!(profile
+            .effect(config().policy_hash)
+            .unwrap()
+            .bind_dispatch(
+                config().policy_hash,
+                "https",
+                "demo-upstream",
+                8443,
+                "invalid"
+            )
+            .is_err());
+        let dispatch = profile
+            .effect(config().policy_hash)
+            .unwrap()
+            .bind_dispatch(config().policy_hash, "https", "demo-upstream", 8443, digest)
+            .unwrap();
+        assert!(dispatch.validate(config().policy_hash, digest).is_ok());
+        assert!(dispatch.validate("changed-policy", digest).is_err());
+        assert!(dispatch
+            .validate(config().policy_hash, "changed-request")
+            .is_err());
     }
 
     #[test]

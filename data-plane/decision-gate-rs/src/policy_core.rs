@@ -9248,6 +9248,11 @@ impl ShadowRuntime {
         runtime
     }
 
+    pub(crate) fn development_effect_permit(&self, snapshot: &Snapshot)
+        -> Result<Option<super::development_sandbox::EffectPermit>, String> {
+        self.development_sandbox.as_ref().map(|profile| profile.effect(&snapshot.hash)).transpose()
+    }
+
     pub(crate) fn serving_ready(&self, snapshot: &Snapshot) -> bool {
         #[cfg(test)]
         if self.inactive_for_forwarding_tests { return true; }

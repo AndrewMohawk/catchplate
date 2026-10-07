@@ -23228,7 +23228,16 @@ where
         let final_upstream_request_commitment =
             shadow_final_upstream_request_commitment(&request)
             .map_err(UpstreamSendError::DispatchBarrier)?;
-        if shadow_dispatch_permit
+        let synthetic_dispatch_permit = if shadow_dispatch_permit.is_none() {
+            state.policy_shadow.development_effect_permit(snapshot)
+                .map_err(UpstreamSendError::DispatchBarrier)?
+                .map(|permit| permit.bind_dispatch(&snapshot.hash, request.url().scheme(),
+                    request.url().host_str().unwrap_or_default(),
+                    request.url().port_or_known_default().unwrap_or(0),
+                    &final_upstream_request_commitment))
+                .transpose().map_err(UpstreamSendError::DispatchBarrier)?
+        } else { None };
+        if synthetic_dispatch_permit.is_none() && shadow_dispatch_permit
                 .as_ref()
                 .is_none_or(|permit| {
                     !permit.authorizes_credentialed_send(
@@ -23247,6 +23256,10 @@ where
             .map_err(|_| UpstreamSendError::CredentialAuthority("native_upstream_authority_expired"))? {
             let bounded = request.timeout().copied().unwrap_or(Duration::from_secs(10)).min(remaining);
             *request.timeout_mut() = Some(bounded);
+        }
+        if let Some(permit) = synthetic_dispatch_permit.as_ref() {
+            permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
+                .map_err(UpstreamSendError::DispatchBarrier)?;
         }
         let result = client.execute(request);
         let (effect_state, effect_result_sha256) = match result.as_ref() {
@@ -23268,14 +23281,18 @@ where
                 })),
             ),
         };
-        shadow_dispatch_permit
-            .ok_or_else(|| {
-                UpstreamSendError::DispatchBarrier(
-                    "provider-send effect permit is unavailable".to_string(),
-                )
-            })?
-            .commit_provider_send(effect_state, &effect_result_sha256)
-            .map_err(UpstreamSendError::DispatchBarrier)?;
+        if let Some(permit) = shadow_dispatch_permit {
+            permit.commit_provider_send(effect_state, &effect_result_sha256)
+                .map_err(UpstreamSendError::DispatchBarrier)?;
+        } else if let Some(permit) = synthetic_dispatch_permit {
+            // This is an actual local send, not a manufactured custody commit.
+            permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
+                .map_err(UpstreamSendError::DispatchBarrier)?;
+        } else {
+            return Err(UpstreamSendError::DispatchBarrier(
+                "provider-send effect permit is unavailable".to_string(),
+            ));
+        }
         let result = result
             .map_err(redacted_reqwest_error)
             .map_err(UpstreamSendError::Request);
@@ -27277,10 +27294,11 @@ fn prepare_shadow_release_effect(
     }
 }
 
-// The committed branch is non-authorizing provenance retained by the matching
-// lifecycle. The explicit test-only branch cannot supply a refinement input.
+// Committed provenance is retained by the matching lifecycle. Synthetic
+// development provenance is a different type and never a custody refinement.
 enum CredentialPrerequisiteReference {
     Committed(policy_core::CommittedCredentialPrerequisite),
+    SyntheticDevelopment(development_sandbox::EffectPermit),
     #[cfg(test)]
     InactiveForwardingTest,
 }
@@ -27332,6 +27350,7 @@ where P: FnMut(usize) -> Result<T, String>, S: FnMut(usize, T) -> Result<(), Str
 }
 
 fn execute_shadow_credential_effect<F>(
+    state: &GateState,
     finalization: Option<&policy_core::ShadowRequestHandle>,
     snapshot: &Arc<Snapshot>,
     effect_kind: ActiveMutableEffectKind,
@@ -27341,6 +27360,14 @@ fn execute_shadow_credential_effect<F>(
 where
     F: FnOnce() -> Result<CredentialLeaseInfo, String>,
 {
+    if finalization.is_none() {
+        if let Some(permit) = state.policy_shadow.development_effect_permit(snapshot)? {
+            let info = permit.execute(&snapshot.hash, operation)?;
+            return Ok(CommittedCredentialResolution {
+                info, prerequisite_ref: CredentialPrerequisiteReference::SyntheticDevelopment(permit),
+            });
+        }
+    }
     #[cfg(test)]
     if finalization.is_none() {
         // Existing forwarding-only fixtures are not active authority evidence.
@@ -27478,6 +27505,7 @@ mod credential_prerequisite_sibling_tests {
 }
 
 fn execute_shadow_constraint_effects<F>(
+    state: &GateState,
     finalization: Option<&policy_core::ShadowRequestHandle>,
     snapshot: &Arc<Snapshot>,
     intent: &Value,
@@ -27486,6 +27514,18 @@ fn execute_shadow_constraint_effects<F>(
 where
     F: FnOnce() -> Result<(), Value>,
 {
+    if finalization.is_none() {
+        match state.policy_shadow.development_effect_permit(snapshot) {
+            Ok(Some(permit)) => {
+                permit.validate(&snapshot.hash).map_err(|_| json!({
+                    "status_code":503,"error":"synthetic_development_policy_changed"
+                }))?;
+                return operation();
+            }
+            Err(_) => return Err(json!({"status_code":503,"error":"synthetic_development_policy_changed"})),
+            Ok(None) => {},
+        }
+    }
     let prepared_state = json!({
         "domain":"serverware.policyShadowConstraintPreparedState/v1",
         "policySha256":snapshot.hash,
@@ -34970,6 +35010,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             );
         };
         let info = match execute_shadow_credential_effect(
+            state,
             shadow_finalization.as_ref(),
             snapshot,
             ActiveMutableEffectKind::CredentialGeneration,
@@ -35198,6 +35239,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
     {
         let info = if !preview && !atomic_release {
             execute_shadow_credential_effect(
+                state,
                 shadow_finalization.as_ref(),
                 snapshot,
                 ActiveMutableEffectKind::CredentialLease,
@@ -35208,6 +35250,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             Ok(info)
         } else {
             execute_shadow_credential_effect(
+                state,
                 shadow_finalization.as_ref(),
                 snapshot,
                 ActiveMutableEffectKind::CredentialGeneration,
@@ -35778,6 +35821,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
                 }
             }
             match execute_shadow_credential_effect(
+                state,
                 shadow_finalization.as_ref(),
                 snapshot,
                 ActiveMutableEffectKind::CredentialLease,
@@ -35842,6 +35886,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             }
         }
         if let Err(payload) = execute_shadow_constraint_effects(
+            state,
             shadow_finalization.as_ref(),
             snapshot,
             &json!({
@@ -36123,6 +36168,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         // LEGACY_IRREVERSIBLE_QUOTA_CONSUME: composition admission above guarantees that no
         // independently fallible authorization consume can follow this quota consume.
         if let Err(payload) = execute_shadow_constraint_effects(
+            state,
             shadow_finalization.as_ref(),
             snapshot,
             &json!({
@@ -37596,6 +37642,31 @@ fn validate_final_provider_url_binding(
         }
     }
     Ok(())
+}
+
+fn apply_bound_credential_injection_for_gate(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    headers: &mut HeaderMap,
+    precredential_url: &Url,
+    final_url: &mut Url,
+    injection_plan: &Value,
+    lease: &SecretLease,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+) -> Result<ResponseSecretGuard, String> {
+    if final_url != precredential_url {
+        return Err("provider URL changed before credential injection".to_string());
+    }
+    if shadow_finalization.is_none() {
+        if let Some(permit) = state.policy_shadow.development_effect_permit(snapshot)? {
+            return permit.execute(&snapshot.hash, || validate_and_apply_bound_credential_injection(
+                snapshot, decision, headers, precredential_url, final_url, injection_plan, lease,
+            ));
+        }
+    }
+    apply_bound_credential_injection(snapshot, decision, headers, precredential_url,
+        final_url, injection_plan, lease, shadow_finalization)
 }
 
 fn apply_bound_credential_injection(
@@ -45764,7 +45835,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         }
         credential_release_binding = Some(credential_lease_release_binding(&lease));
         let (provider_headers, provider_url) = provider_request.injection_parts();
-        match apply_bound_credential_injection(
+        match apply_bound_credential_injection_for_gate(
+            state,
             snapshot,
             &decision,
             provider_headers,
@@ -46541,7 +46613,8 @@ fn forward_absolute_streaming_request_to(
         };
         credential_release_binding = Some(credential_lease_release_binding(&lease));
         let (provider_headers, provider_url) = provider_request.injection_parts();
-        match apply_bound_credential_injection(
+        match apply_bound_credential_injection_for_gate(
+            state,
             snapshot,
             &decision,
             provider_headers,
@@ -47200,7 +47273,8 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         };
         credential_release_binding = Some(credential_lease_release_binding(&lease));
         let (provider_headers, provider_url) = provider_request.injection_parts();
-        match apply_bound_credential_injection(
+        match apply_bound_credential_injection_for_gate(
+            state,
             snapshot,
             &decision,
             provider_headers,

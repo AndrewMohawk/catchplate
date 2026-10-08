@@ -14,15 +14,19 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 
 _LOCK = threading.RLock()
 _SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _RETENTION_MS = 24 * 60 * 60 * 1000
+MAX_ACTIVE_CONNECTIONS = 32
+MAX_RETAINED_CONNECTIONS = 1024
 _PUBLIC_FIELDS = ("id", "name", "upstream_url", "methods", "auth_type", "header_name",
     "credential_id", "principal_id", "created_at", "token_expires_at_epoch_ms",
     "request_fields", "response_fields", "query_keys", "allowed_headers")
+_REVOCATION_FIELDS = ("connection_id", "name", "credential_id", "principal_id", "revoked_at",
+    "expected_policy_hash", "revocation_policy_hash", "sequence")
 
 
 class ConnectionInput(BaseModel):
@@ -37,6 +41,33 @@ class ConnectionInput(BaseModel):
     response_fields: list[str] = Field(min_length=1, max_length=64)
     query_keys: list[str] = Field(default_factory=list, max_length=64)
     allowed_headers: list[str] = Field(default_factory=lambda: ["accept", "user-agent"], max_length=32)
+
+
+class RevocationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    connection_id: str = Field(min_length=36, max_length=36)
+    expected_policy_hash: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("connection_id")
+    @classmethod
+    def canonical_identifier(cls, value: str) -> str:
+        if str(uuid.UUID(value)) != value:
+            raise ValueError("connection identifier must be a canonical UUID")
+        return value
+
+
+class RevocationNotFound(Exception):
+    """No active connection or durable revocation matches this identifier."""
+
+
+class RevocationConflict(Exception):
+    """The submitted review or retained local binding no longer matches."""
+
+
+class ConnectionLimitReached(Exception):
+    def __init__(self, reason: Literal["active", "retained"]):
+        self.reason = reason
+        super().__init__("operator demo connection admission limit reached")
 
 
 def _require():
@@ -143,6 +174,8 @@ def initialize() -> None:
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), settings_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS operator_demo_connections (
                 id TEXT PRIMARY KEY, metadata_json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS operator_demo_revocations (
+                connection_id TEXT PRIMARY KEY, receipt_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS operator_demo_policy (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), sequence INTEGER NOT NULL,
                 policy_hash TEXT NOT NULL, signed_bundle_json TEXT NOT NULL,
@@ -250,8 +283,13 @@ def create_connection(payload: ConnectionInput, actor_id: str) -> tuple[dict, st
     with _LOCK, db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = [json.loads(row[0]) for row in conn.execute("SELECT metadata_json FROM operator_demo_connections ORDER BY rowid")]
-        if len(rows) >= 32:
-            raise ValueError("operator demo connection limit reached")
+        if len(rows) >= MAX_ACTIVE_CONNECTIONS:
+            raise ConnectionLimitReached("active")
+        retained_count = conn.execute("SELECT COUNT(*) FROM operator_demo_revocations").fetchone()[0]
+        if len(rows) + retained_count >= MAX_RETAINED_CONNECTIONS:
+            raise ConnectionLimitReached("retained")
+        if conn.execute("SELECT 1 FROM operator_demo_revocations WHERE connection_id=?", (identifier,)).fetchone():
+            raise RuntimeError("operator demo connection identifier was previously revoked")
         state = conn.execute("SELECT * FROM operator_demo_policy WHERE singleton=1").fetchone()
         if state is None:
             raise RuntimeError("operator demo policy unavailable")
@@ -273,6 +311,85 @@ def create_connection(payload: ConnectionInput, actor_id: str) -> tuple[dict, st
         except Exception:
             pass
     return _public(record), token, digest
+
+
+def _revocation_receipt(row) -> dict:
+    receipt = json.loads(row["receipt_json"])
+    return {key: receipt[key] for key in _REVOCATION_FIELDS}
+
+
+def revoke_connection(payload: RevocationInput, actor_id: str) -> dict:
+    """Commit one exact local revocation; replay returns its original receipt.
+
+    This removes local proxy access and the stored provider credential. It does
+    not revoke that credential with its provider or undo an upstream request.
+    """
+    db = _require()
+    with _LOCK, db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute("SELECT * FROM operator_demo_revocations WHERE connection_id=?",
+            (payload.connection_id,)).fetchone()
+        target = conn.execute("SELECT metadata_json FROM operator_demo_connections WHERE id=?",
+            (payload.connection_id,)).fetchone()
+        if previous is not None:
+            receipt = _revocation_receipt(previous)
+            if receipt["expected_policy_hash"] != payload.expected_policy_hash or target is not None:
+                raise RevocationConflict()
+            # A lost HTTP response is not permission for a second mutation.
+            return receipt
+        if target is None:
+            raise RevocationNotFound()
+        state = conn.execute("SELECT * FROM operator_demo_policy WHERE singleton=1").fetchone()
+        if state is None:
+            raise RuntimeError("operator demo policy unavailable")
+        if state["policy_hash"] != payload.expected_policy_hash:
+            raise RevocationConflict()
+        record = json.loads(target["metadata_json"])
+        credential = conn.execute("SELECT id, name, kind, metadata, lifecycle_status FROM credentials WHERE id=?",
+            (record.get("credential_id"),)).fetchone()
+        metadata = json.loads(credential["metadata"]) if credential is not None else None
+        bearer = record.get("auth_type") == "bearer"
+        if (record.get("id") != payload.connection_id
+                or record.get("principal_id") != "agent:operator-demo:" + payload.connection_id
+                or record.get("auth_type") not in {"bearer", "header"}
+                or credential is None or not isinstance(metadata, dict)
+                or credential["name"] != record.get("name")
+                or credential["kind"] != ("bearer" if bearer else "header")
+                or credential["lifecycle_status"] != "active"
+                or metadata.get("provider_id") != "operator-demo"
+                or metadata.get("provider_subject") != payload.connection_id
+                or metadata.get("secret_class") != ("bearerToken" if bearer else "customHeader")
+                or metadata.get("oauth") is True):
+            raise RevocationConflict()
+        remaining = [json.loads(row[0]) for row in conn.execute(
+            "SELECT metadata_json FROM operator_demo_connections WHERE id<>? ORDER BY rowid", (payload.connection_id,))]
+        if any(row.get("credential_id") == record["credential_id"]
+                or row.get("principal_id") == record["principal_id"] for row in remaining):
+            raise RevocationConflict()
+        sequence = state["sequence"] + 1
+        raw, digest = _signed(remaining, sequence, state["initial_hash"])
+        receipt = {"connection_id": payload.connection_id, "name": record["name"],
+            "credential_id": record["credential_id"], "principal_id": record["principal_id"],
+            "revoked_at": db.iso_now(), "expected_policy_hash": payload.expected_policy_hash,
+            "revocation_policy_hash": digest, "sequence": sequence}
+        if not db.delete_credential(record["credential_id"], _connection=conn):
+            raise RevocationConflict()
+        if conn.execute("DELETE FROM operator_demo_connections WHERE id=?", (payload.connection_id,)).rowcount != 1:
+            raise RevocationConflict()
+        conn.execute("UPDATE operator_demo_policy SET sequence=?,policy_hash=?,signed_bundle_json=?,updated_at=? WHERE singleton=1",
+            (sequence, digest, raw, receipt["revoked_at"]))
+        conn.execute("INSERT INTO operator_demo_revocations VALUES (?,?)",
+            (payload.connection_id, json.dumps(receipt, sort_keys=True)))
+        db.append_audit_event(conn, event_type="operator_demo.connection.revoked", actor_type="admin", actor_id=actor_id,
+            event=receipt)
+        conn.commit()
+        # The DB commit is authoritative, even if publication needs recovery.
+        # A pending observation must never be reported as enforced revocation.
+        try:
+            materialize()
+        except Exception:
+            pass
+    return receipt
 
 
 def loaded_policy_hash() -> str | None:
@@ -307,20 +424,51 @@ def loaded_policy_hash() -> str | None:
     return None
 
 
+def _revocation_observation(receipt: dict, committed: str | None, loaded: str | None,
+        active_ids: set[str]) -> dict:
+    return {**receipt, "policy_hash": committed,
+        "enforcement": "enforced" if committed is not None and loaded == committed
+            and receipt["connection_id"] not in active_ids else "pending"}
+
+
+def revoke_result(connection_id: str) -> dict:
+    """Read the durable receipt and current policy together, then observe reload."""
+    db = _require()
+    with db.connect() as conn:
+        conn.execute("BEGIN")
+        row = conn.execute("SELECT * FROM operator_demo_revocations WHERE connection_id=?", (connection_id,)).fetchone()
+        if row is None:
+            raise RevocationNotFound()
+        receipt = _revocation_receipt(row)
+        state = conn.execute("SELECT policy_hash FROM operator_demo_policy WHERE singleton=1").fetchone()
+        active = conn.execute("SELECT 1 FROM operator_demo_connections WHERE id=?", (connection_id,)).fetchone()
+    committed = state["policy_hash"] if state else None
+    loaded = loaded_policy_hash()
+    return {"revocation": _revocation_observation(receipt, committed, loaded, {connection_id} if active else set()),
+        "policy_hash": committed, "loaded_policy_hash": loaded}
+
+
 def status() -> dict:
     db = _require()
     from serverware import operator_demo
     with db.connect() as conn:
+        conn.execute("BEGIN")
         rows = [json.loads(row[0]) for row in conn.execute("SELECT metadata_json FROM operator_demo_connections ORDER BY rowid")]
+        revocations = [_revocation_receipt(row) for row in conn.execute("SELECT * FROM operator_demo_revocations ORDER BY rowid")]
         state = conn.execute("SELECT * FROM operator_demo_policy WHERE singleton=1").fetchone()
     committed = state["policy_hash"] if state else None
     loaded = loaded_policy_hash()
     activation = "active" if loaded is not None and loaded == committed else "pending"
     now_epoch_ms = time.time_ns() // 1_000_000
     settings = operator_demo.settings()
+    active_ids = {row["id"] for row in rows}
     return {"schema": operator_demo.SCHEMA, "mode": "operator-development", "syntheticOnly": False,
         "productionReady": False, "hardwareVerified": False, "proxy_url": settings["proxy_url"],
         "allowed_upstreams": settings["allowed_upstreams"], "active_policy_hash": committed,
+        "connection_limits": {"active_max": MAX_ACTIVE_CONNECTIONS, "retained_max": MAX_RETAINED_CONNECTIONS,
+            "active_count": len(rows), "retained_count": len(rows) + len(revocations)},
+        "revocations": [_revocation_observation(receipt, committed, loaded, active_ids)
+            for receipt in revocations],
         "loaded_policy_hash": loaded, "connections": [{**_public(row), "policy_hash": committed,
             "activation": activation,
             "client_status": "expired" if now_epoch_ms >= row["token_expires_at_epoch_ms"] else

@@ -51,6 +51,7 @@ user-agent</textarea><p class="small muted">One name per line. Do not list Conte
           <div class="actions"><button id="add-connection" type="submit">Save credential &amp; create client token</button></div>
         </fieldset>
         <p id="form-status" role="status" aria-live="polite">Loading workspace...</p>
+        <p id="connection-capacity" class="small muted" role="status"></p>
       </form>
       <article id="one-time-access" class="card token-card" hidden aria-labelledby="token-title">
         <p class="eyebrow">SAVE THIS NOW</p><h2 id="token-title">Your one-time client token</h2><p>This is your application's scoped access token, not the provider key. It expires after 24 hours. This page cannot retrieve it again after reload or dismissal.</p>
@@ -59,6 +60,9 @@ user-agent</textarea><p class="small muted">One name per line. Do not list Conte
       </article>
       <p id="token-expiry-status" class="small muted" role="status"></p>
       <div class="heading"><h2>Saved connections</h2><button id="refresh-status" class="secondary">Refresh activation</button></div><div id="connections-list" class="stack"><p class="muted">Loading connections...</p></div>
+      <p id="revocation-status" role="status" aria-live="polite"></p>
+      <h2>Revocation receipts</h2><p class="small muted">Revocation removes a connection's locally stored credential and client access after the proxy loads the updated policy. It does not revoke the credential at its provider or recall an already-dispatched request. No token is renewed or replaced.</p>
+      <div id="revocations-list" class="stack"><p class="muted">Loading saved revocations...</p></div>
     </section>
     <section id="proxy" class="page" aria-labelledby="proxy-title" hidden>
       <p class="eyebrow">CONNECT YOUR APPLICATION</p><h1 id="proxy-title">Proxy setup</h1><p class="intro">Use this HTTPS proxy address, the downloaded CA and your scoped client token. The console URL is not the forward proxy.</p>

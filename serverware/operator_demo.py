@@ -210,6 +210,8 @@ def settings() -> dict:
 def request_allowed(method: str, path: str) -> bool:
     if path.startswith(("/api/auth/oidc/", "/api/oauth/callback/")):
         return False
+    if path == "/api/operator-demo/connections/revoke":
+        return method.upper() == "POST"
     return method.upper() in {"GET", "HEAD", "OPTIONS"} or path in {
         "/api/operator-demo/connections", "/api/data-plane/credential-leases", "/api/data-plane/audit"}
 

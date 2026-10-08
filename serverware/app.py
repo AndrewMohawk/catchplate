@@ -3832,6 +3832,13 @@ async def operator_demo_connection(request: Request,
         payload = operator_demo_store.ConnectionInput.model_validate_json(body)
         connection, client_token, policy_hash_value = await asyncio.to_thread(
             operator_demo_store.create_connection, payload, identity.user_id)
+    except operator_demo_store.ConnectionLimitReached as exc:
+        return JSONResponse(status_code=409, content={
+            "code": "operator_demo_" + exc.reason + "_limit",
+            "detail": "The active connection limit is reached. Revoke an unused connection first."
+                if exc.reason == "active" else
+                "The development lifetime connection limit is reached. Revocation remains available; retained history cannot be reset in place."},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
     except ValueError:
         # Never serialize validation inputs or exception text containing secrets.
         raise HTTPException(status_code=422, detail="invalid connection input or unsupported policy") from None
@@ -3842,6 +3849,37 @@ async def operator_demo_connection(request: Request,
     return JSONResponse({"connection": {**connection, "policy_hash": policy_hash_value, "activation": activation},
         "client_token": client_token, "policy_hash": policy_hash_value, "activation": activation},
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+
+@app.post("/api/operator-demo/connections/revoke")
+async def operator_demo_revoke_connection(request: Request,
+        identity: AdminIdentity = Depends(require_role("admin"))) -> JSONResponse:
+    from serverware import config, operator_demo, operator_demo_store
+    if not operator_demo.active():
+        raise HTTPException(status_code=404, detail="not found")
+    if request.headers.get("origin") != config.PUBLIC_URL.rstrip("/"):
+        raise HTTPException(status_code=403, detail="same-origin operator session required")
+    if request.query_params or request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+        raise HTTPException(status_code=422, detail="invalid revocation input")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 1024:
+            raise HTTPException(status_code=413, detail="revocation input exceeds size limit")
+    try:
+        payload = operator_demo_store.RevocationInput.model_validate_json(body)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid revocation input") from None
+    try:
+        await asyncio.to_thread(operator_demo_store.revoke_connection, payload, identity.user_id)
+        result = await asyncio.to_thread(operator_demo_store.revoke_result, payload.connection_id)
+    except operator_demo_store.RevocationNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+    except operator_demo_store.RevocationConflict:
+        raise HTTPException(status_code=409, detail="connection or policy changed; refresh status before retrying") from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="revocation storage unavailable; inspect status before retrying") from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @app.get("/api/sandbox/status")

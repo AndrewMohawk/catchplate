@@ -82,6 +82,19 @@ class OperatorPortalTests(unittest.TestCase):
         self.assertEqual(methods, ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
         self.assertNotIn("HEAD", methods)
 
+    def test_revocation_has_separate_status_and_retained_receipt_regions(self):
+        items = Elements(operator_demo_portal.render()).items
+        indexed = {attrs["id"]: (tag, attrs) for tag, attrs in items if "id" in attrs}
+        self.assertEqual(indexed["revocation-status"][1].get("role"), "status")
+        self.assertIn("revocations-list", indexed)
+        # Actual confirmation, mutation payload and uncertainty behavior are
+        # exercised by the separate intercepted Chromium fixtures.
+        script = (ASSETS / "app.js").read_text()
+        self.assertIn("/api/operator-demo/connections/revoke", script)
+        self.assertIn("window.confirm", script)
+        self.assertIn("expected_policy_hash", script)
+        self.assertIn("revocation_policy_hash", script)
+
     def test_no_secret_persistence_or_unsafe_client_transport(self):
         script = (ASSETS / "app.js").read_text()
         for forbidden in ("localStorage", "sessionStorage", "indexedDB", "innerHTML", "--insecure", "--proxy-insecure", "decision-gate-rs:"):

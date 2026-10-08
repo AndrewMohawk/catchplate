@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..');
 const origin = 'https://operator-ui.example.test';
 const hash = 'sha256:' + 'a'.repeat(64);
 const oldHash = 'sha256:' + 'b'.repeat(64);
+const revokedHash = 'sha256:' + 'c'.repeat(64);
 const fakeProviderSecret = 'fixture-provider-secret-never-a-real-key';
 const fakeClientToken = 'fixture-client-token-never-a-real-token';
 const fixtureNow = Date.parse('2026-10-08T12:00:00Z');
@@ -28,7 +29,8 @@ async function fixture(browser, options, run) {
   // Synthetic browser time makes exact token deadlines independent of wall time.
   const now = new Date(options.now ?? fixtureNow);
   await page.clock.install({time: now}); await page.clock.pauseAt(now);
-  const state = {connections: options.connections || [], loaded: options.loaded ?? hash, posts: [], requests: [], errors: [], unexpected: [], statusCalls: 0};
+  const state = {connections: options.connections || [], revocations: options.revocations || [], active: options.active ?? hash,
+    loaded: options.loaded ?? hash, posts: [], revokes: [], requests: [], errors: [], unexpected: [], statusCalls: 0};
   page.on('pageerror', error => state.errors.push(error.message));
   const document = html();
   await context.route('**/*', async route => {
@@ -37,15 +39,23 @@ async function fixture(browser, options, run) {
     if (url.origin !== origin) { state.unexpected.push('external network request'); return route.abort(); }
     if (url.pathname === '/') return route.fulfill({status: 200, contentType: 'text/html', body: document});
     if (url.pathname === '/favicon.ico') return route.fulfill({status: 204, body: ''});
+    if (url.pathname === '/api/operator-demo/connections/revoke' && request.method() === 'POST')
+      state.revokes.push(request.postDataJSON());
     const override = await options.override?.(url, request, state);
+    if (override?.abort) return route.abort(override.abort);
     if (override) return route.fulfill(override);
     if (url.pathname === '/api/operator-demo/status') {
       state.statusCalls++;
       return route.fulfill(response({mode: 'operator-development', syntheticOnly: false, productionReady: false,
         hardwareVerified: false, proxy_url: 'https://serverware-proxy.example.test',
         allowed_upstreams: ['https://api.example.test'], connections: state.connections.map(item => ({...item,
-          activation: state.loaded === hash ? 'active' : 'pending',
-          client_status: state.loaded === hash ? item.client_status : 'pending'})), active_policy_hash: hash, loaded_policy_hash: state.loaded}));
+          policy_hash: state.active, activation: state.loaded === state.active ? 'active' : 'pending',
+          client_status: state.loaded === state.active ? item.client_status : 'pending'})),
+        revocations: state.revocations.map(item => ({...item, policy_hash: state.active,
+          enforcement: state.loaded === state.active && !state.connections.some(row => row.id === item.connection_id) ? 'enforced' : 'pending'})),
+        active_policy_hash: state.active, loaded_policy_hash: state.loaded,
+        connection_limits: options.connectionLimits || {active_count: state.connections.length, active_max: 32,
+          retained_count: state.connections.length + state.revocations.length, retained_max: 1024}}));
     }
     if (url.pathname === '/api/operator-demo/connections' && request.method() === 'POST') {
       const body = request.postDataJSON(); state.posts.push(body);
@@ -54,6 +64,15 @@ async function fixture(browser, options, run) {
       state.connections.push(saved);
       return route.fulfill(response({connection: saved, client_token: fakeClientToken, policy_hash: hash,
         activation: 'active', client_status: saved.client_status}, 201));
+    }
+    if (url.pathname === '/api/operator-demo/connections/revoke' && request.method() === 'POST') {
+      const body = request.postDataJSON();
+      const target = state.connections.find(item => item.id === body.connection_id);
+      if (!target) return route.fulfill(response({detail: 'Unknown fixture connection'}, 404));
+      if (body.expected_policy_hash !== state.active) return route.fulfill(response({detail: 'Stale fixture policy'}, 409));
+      const receipt = revokeFixture(state, target);
+      return route.fulfill(response({revocation: {...receipt, policy_hash: state.active, enforcement: 'pending'},
+        policy_hash: state.active, loaded_policy_hash: state.loaded}));
     }
     if (url.pathname === '/api/audit/search') return route.fulfill(response({ok: true, complete: true, has_more: false,
       next_cursor: null, items: [{id: 'fixture-event', created_at: '2026-10-08T12:00:00Z',
@@ -66,7 +85,8 @@ async function fixture(browser, options, run) {
     await page.goto(origin + '/' + (options.hash || ''), {waitUntil: 'domcontentloaded'});
     await run(page, state);
     assert.deepEqual(state.errors, []); assert.deepEqual(state.unexpected, []);
-    assert(state.requests.every(item => item.method === 'GET' || item.path === '/api/operator-demo/connections' && item.method === 'POST'));
+    assert(state.requests.every(item => item.method === 'GET' ||
+      ['/api/operator-demo/connections', '/api/operator-demo/connections/revoke'].includes(item.path) && item.method === 'POST'));
   } finally { await context.unrouteAll({behavior: 'wait'}); await context.close(); }
 }
 async function ready(page) { await page.waitForFunction(() => !document.querySelector('#connection-fields').disabled); }
@@ -88,7 +108,19 @@ async function noTokenActions(page) {
   assert(await page.locator('#one-time-access').isHidden());
 }
 
+function revokeFixture(state, target) {
+  const receipt = {connection_id: target.id, name: target.name, credential_id: target.credential_id,
+    principal_id: target.principal_id, revoked_at: '2026-10-08T12:00:00Z', expected_policy_hash: state.active,
+    revocation_policy_hash: revokedHash, sequence: 3};
+  state.connections = state.connections.filter(item => item.id !== target.id);
+  state.revocations.push(receipt); state.active = revokedHash;
+  return receipt;
+}
+
 const tests = [
+  ...require('./test_operator_demo_portal_revocation.cjs')({fixture, connection, response, ready, fill, statusText,
+    noClientActions, noTokenActions, revokeFixture, hash, oldHash, revokedHash, fixtureNow, tokenLifetime,
+    fakeClientToken, fakeProviderSecret}),
   ...methods.map(method => ['pure cURL generator supports ' + method, async () => {
     const {buildCurlCommand} = require(path.join(root, 'serverware/operator_demo_web/app.js'));
     const command = buildCurlCommand({proxyUrl: 'https://proxy.example.test', upstreamUrl: 'https://api.example.test/item',

@@ -11,6 +11,13 @@ admission, before its cleanup assertions; 18 cases were unattempted. That
 failure is retained separately from subsequent corrections. Individual source
 checks or focused tests do not establish complete end-to-end acceptance.
 
+The corrected clean `71aa1ec5` batch passed five focused cases, then failed cold
+restart because the new cleanup trigger is attached to a v9 schema-pinned core
+table but absent from its expected manifest. Sixteen selected cases remain
+unattempted. Do not bypass that guard or repair a retained/live database in place.
+See [backend verification](operator-google-backend-verification.md) for exact
+evidence and the still-open schema-ownership repair.
+
 Read with `operator-workspace-requirements.md` and the OAuth onboarding section
 of `goal.md`. R96 remains terminal: no restart, new enrollment, real provider
 contact, configuration change or native authority is authorized by this plan.

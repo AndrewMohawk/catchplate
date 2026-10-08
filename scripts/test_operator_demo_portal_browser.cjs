@@ -118,11 +118,13 @@ const tests = [
     await fill(page, true); await page.locator('input[name="method"][value="POST"]').check();
     await page.locator('#connection-form summary').click();
     await page.locator('#request-fields').fill('message\nmessage'); await page.locator('#query-keys').fill('version');
-    await page.locator('#allowed-headers').fill('accept\ncontent-type');
+    await page.locator('#allowed-headers').fill('accept\nuser-agent');
     await page.locator('#add-connection').click(); await page.locator('#one-time-access').waitFor({state: 'visible'});
     assert.equal(state.posts[0].auth_type, 'header'); assert.equal(state.posts[0].header_name, 'X-API-Key');
     assert.deepEqual(state.posts[0].methods, ['GET', 'POST']); assert.deepEqual(state.posts[0].request_fields, ['message']);
-    assert.deepEqual(state.posts[0].query_keys, ['version']); assert.deepEqual(state.posts[0].allowed_headers, ['accept', 'content-type']);
+    assert.deepEqual(state.posts[0].query_keys, ['version']); assert.deepEqual(state.posts[0].allowed_headers, ['accept', 'user-agent']);
+    await page.locator('nav a[href="#proxy"]').click();
+    await statusText(page, '#client-guidance', 'do not add Content-Type');
   })],
   ['validation failure clears provider secret and does not echo server details', browser => fixture(browser, {
     override: (url, request) => url.pathname === '/api/operator-demo/connections' ? response({detail: fakeProviderSecret}, 422) : null,

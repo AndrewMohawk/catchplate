@@ -10,7 +10,8 @@ const {randomBytes, randomUUID, X509Certificate, createHash} = require('node:cry
 const READ_PATHS = new Set(['/', '/ca.pem', '/api/operator-demo/status', '/api/audit/search', '/api/audit/verify']);
 const WRITE_PATH = '/api/operator-demo/connections';
 const MAX_RESPONSE = 2 * 1024 * 1024;
-function requireCondition(value, label) { if (!value) throw new Error(label); }
+class VerificationFailure extends Error {}
+function requireCondition(value, label) { if (!value) throw new VerificationFailure(label); }
 function privateOrigin(value) {
   const parsed = new URL(value);
   requireCondition(parsed.protocol === 'http:' && !parsed.username && !parsed.password &&
@@ -224,7 +225,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
       page_errors: errorCount, console_errors: consoleErrorCount, unexpected_requests: unexpectedRequests,
       public_ingress_verified: false, human_sso_verified: false, generated_client_executed: false,
       screenshots: ['/tmp/serverware-operator-demo-live-mobile.png', '/tmp/serverware-operator-demo-live-desktop.png']};
-  } catch (_) { return {ok: false, stage, completed_checks: checks, page_errors: errorCount,
+  } catch (error) { return {ok: false, stage, reason: error instanceof VerificationFailure ? error.message : 'browser action failed; private diagnostics suppressed', completed_checks: checks, page_errors: errorCount,
     console_errors: consoleErrorCount, unexpected_requests: unexpectedRequests, connection_id: connectionId || null}; }
   finally {
     providerSecret = ''; clientToken = '';

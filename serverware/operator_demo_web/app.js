@@ -221,7 +221,7 @@ else (() => {
     $('download-config').disabled = !connectionActive(connection) || !state.token || state.tokenConnection !== connection.id;
     $('client-guidance').textContent = (connectionActive(connection) ? 'Active policy confirmed. This command is a configuration example, not a successful request test.' :
       'Waiting for the saved policy to be loaded. Copy/download will be available after activation.') +
-      (connection.request_fields.length ? ' If your endpoint requires a body, add your own JSON using only the approved request fields and an allowed Content-Type header.' : ' Request bodies are forbidden for this connection.');
+      (connection.request_fields.length ? ' If your endpoint requires a body, send application/json using only the approved request fields. Media type is controlled by the JSON policy; do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden for this connection.');
   }
   async function copy(value, target) {
     try { await navigator.clipboard.writeText(value); $(target).textContent = 'Copied. Keep the clipboard private.'; }

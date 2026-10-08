@@ -178,5 +178,37 @@ class FixtureReceiptControls(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(result))
 
 
+class ConnectionPolicyContract(unittest.TestCase):
+    def test_actual_checker_input_compiles_under_signed_policy_schema(self):
+        from serverware import operator_demo_store as store, policy_bundle
+        captured = {}
+
+        class Captured(Exception):
+            pass
+
+        def capture(_path, **kwargs):
+            captured.update(kwargs["payload"])
+            raise Captured()
+
+        check = OperatorDemoCheck.__new__(OperatorDemoCheck)
+        check.run_id, check.credential = "operator-check-contract", "synthetic-contract-only"
+        check.control_json = capture
+        with self.assertRaises(Captured):
+            check.create_connection()
+        payload = store.ConnectionInput.model_validate(captured)
+        row = payload.model_dump(exclude={"secret"})
+        row.update(id="contract", principal_id="agent:operator-demo:contract",
+                   credential_id="credential-contract", token_sha256="sha256:" + "a" * 64,
+                   token_expires_at_epoch_ms=4102444800000)
+        with patch("serverware.operator_demo.settings", return_value={"fixture_cidrs": ["172.16.249.18/32"]}):
+            document = store._build([row], 2, "sha256:" + "b" * 64)
+        policy_bundle.compile_policy_bundle(document, validate_schema=True, enforce_signed_policy_constraints=True)
+        # The authoritative schema owns Content-Type through the body policy,
+        # independently of the general forwarded-header runtime allowlist.
+        document["routes"][0]["adapter"]["config"]["request"]["allowedHeaders"].append("content-type")
+        with self.assertRaises(policy_bundle.PolicyBundleError):
+            policy_bundle.compile_policy_bundle(document, validate_schema=True, enforce_signed_policy_constraints=True)
+
+
 if __name__ == "__main__":
     unittest.main()

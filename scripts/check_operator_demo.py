@@ -307,7 +307,7 @@ class OperatorDemoCheck:
                     "authorization_present", "authorization_scheme", "authorization_matches_expected",
                     "proxy_authorization_seen"],
                 "query_keys": ["expectedAuthorizationSha256", "reflectCredential"],
-                "allowed_headers": ["accept", "user-agent", "content-type"]})
+                "allowed_headers": ["accept", "user-agent"]})
         self.client_token = result.get("client_token")
         require(isinstance(self.client_token, str) and re.fullmatch(r"[A-Za-z0-9_-]{32,128}", self.client_token)
                 is not None, "connection creation did not return a bounded one-time proxy token")

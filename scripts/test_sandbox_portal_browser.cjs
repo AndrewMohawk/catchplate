@@ -117,6 +117,27 @@ tests.push(['task navigation and invalid-hash fallback', browser => fixture(brow
   assert.equal(await page.locator('nav [aria-current="page"]').getAttribute('href'), '#overview');
 })]);
 
+for (const hash of ['#constructor', '#toString']) {
+  tests.push([`inherited property hash ${hash} safely falls back to Overview`, browser =>
+    fixture(browser, {hash}, async page => {
+      await ready(page);
+      assert.equal(new URL(page.url()).hash, '#overview');
+      assert.equal(await page.title(), 'Overview - Serverware');
+      assert(await page.locator('#overview').isVisible());
+      assert.equal(await page.locator('.page:visible').count(), 1);
+      assert.equal(await page.locator('nav [aria-current="page"]').getAttribute('href'), '#overview');
+      // Initial navigation and hashchange use the same guard; exercise both.
+      await page.locator('nav a[href="#credentials"]').click();
+      await page.locator('#credentials').waitFor({state: 'visible'});
+      await page.evaluate(value => {location.hash = value;}, hash);
+      await page.locator('#overview').waitFor({state: 'visible'});
+      assert.equal(new URL(page.url()).hash, '#overview');
+      assert.equal(await page.locator('.page:visible').count(), 1);
+      assert.equal(await page.locator('nav [aria-current="page"]').getAttribute('href'), '#overview');
+      assert(await page.locator('#load-error').isHidden());
+    })]);
+}
+
 tests.push(['workspace API failure is visible and retry recovers', async browser => {
   let fail = true;
   await fixture(browser, {override: url => url.pathname === '/api/bootstrap' && fail ?

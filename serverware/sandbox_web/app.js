@@ -53,7 +53,7 @@
   function navigate(focus = false) {
     let name = location.hash.slice(1) || 'overview';
     if (name === 'limitations') { $('limitations').open = true; $('limitations').scrollIntoView(); return; }
-    if (!(name in views)) { name = 'overview'; history.replaceState(null, '', '#overview'); }
+    if (!Object.hasOwn(views, name)) { name = 'overview'; history.replaceState(null, '', '#overview'); }
     for (const [id, label] of Object.entries(views)) {
       $(id).hidden = id !== name;
       const link = document.querySelector(`nav a[href="#${id}"]`);

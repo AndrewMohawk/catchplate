@@ -515,6 +515,10 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             and not development_sandbox.request_allowed(request.method, request.url.path)):
         return JSONResponse(status_code=403, content={"detail":
             "This persistent sandbox has a fixed synthetic policy; production setup, provider and configuration writes are unavailable."})
+    from serverware import operator_demo
+    if operator_demo.active() and not operator_demo.request_allowed(request.method, request.url.path):
+        return JSONResponse(status_code=403, content={"detail":
+            "This operator demo allows only scoped local connections; production and native authority mutations are unavailable."})
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
     from serverware import portal_session_activation_confirmation_routes as confirmation_routes
@@ -3665,6 +3669,10 @@ def index() -> str:
 
 
 def _portal_document() -> str:
+    from serverware import operator_demo
+    if operator_demo.active():
+        from serverware.operator_demo_portal import render
+        return render()
     from serverware import control_plane_static_credential_rotation as rotation_owner
     from serverware import development_sandbox
 
@@ -3761,16 +3769,17 @@ def _operator_session_activation_mode() -> str:
 @app.get("/api/auth/status")
 def operator_auth_status(request: Request) -> dict[str, Any]:
     from serverware import development_sandbox
+    from serverware import operator_demo
     from serverware.auth import check_admin_token
 
-    if development_sandbox.active() and check_admin_token(request.headers.get("X-Serverware-Admin-Token")):
+    if (development_sandbox.active() or operator_demo.active()) and check_admin_token(request.headers.get("X-Serverware-Admin-Token")):
         identity = require_admin(request, request.headers.get("X-Serverware-Admin-Token"))
         return {
             "authenticated": True, "userId": identity.user_id,
-            "roles": sorted(identity.roles), "authMethod": "sandbox-header",
+            "roles": sorted(identity.roles), "authMethod": "operator-demo-header" if operator_demo.active() else "sandbox-header",
             "sessionState": None, "webauthnRequired": False,
             "oidcBrowserLoginConfigured": False, "sessionActivationMode": "unavailable",
-            "developmentSandbox": True,
+            "developmentSandbox": development_sandbox.active(), "operatorDemo": operator_demo.active(),
         }
     identity = None
     session = None
@@ -3794,6 +3803,45 @@ def operator_auth_status(request: Request) -> dict[str, Any]:
         "oidcBrowserLoginConfigured": browser_login_configured(),
         "sessionActivationMode": _operator_session_activation_mode(),
     }
+
+
+@app.get("/api/operator-demo/status")
+def operator_demo_status(_: AdminIdentity = Depends(require_role("admin"))) -> JSONResponse:
+    from serverware import operator_demo, operator_demo_store
+    if not operator_demo.active():
+        raise HTTPException(status_code=404, detail="not found")
+    return JSONResponse(operator_demo_store.status(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/operator-demo/connections")
+async def operator_demo_connection(request: Request,
+        identity: AdminIdentity = Depends(require_role("admin"))) -> JSONResponse:
+    from serverware import config, operator_demo, operator_demo_store
+    if not operator_demo.active():
+        raise HTTPException(status_code=404, detail="not found")
+    if request.headers.get("origin") != config.PUBLIC_URL.rstrip("/"):
+        raise HTTPException(status_code=403, detail="same-origin operator session required")
+    if request.query_params or request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+        raise HTTPException(status_code=422, detail="invalid connection input")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 32768:
+            raise HTTPException(status_code=413, detail="connection input exceeds size limit")
+    try:
+        payload = operator_demo_store.ConnectionInput.model_validate_json(body)
+        connection, client_token, policy_hash_value = await asyncio.to_thread(
+            operator_demo_store.create_connection, payload, identity.user_id)
+    except ValueError:
+        # Never serialize validation inputs or exception text containing secrets.
+        raise HTTPException(status_code=422, detail="invalid connection input or unsupported policy") from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="connection storage unavailable; inspect status before retrying") from None
+    loaded = await asyncio.to_thread(operator_demo_store.loaded_policy_hash)
+    activation = "active" if loaded == policy_hash_value else "pending"
+    return JSONResponse({"connection": {**connection, "policy_hash": policy_hash_value, "activation": activation},
+        "client_token": client_token, "policy_hash": policy_hash_value, "activation": activation},
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @app.get("/api/sandbox/status")

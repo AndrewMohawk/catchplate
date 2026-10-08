@@ -222,6 +222,9 @@ def validate_control_plane_startup() -> None:
     from serverware import development_sandbox
     if development_sandbox.active():
         development_sandbox.bootstrap()
+    from serverware import operator_demo
+    if operator_demo.active():
+        operator_demo.bootstrap()
     if OIDC_SESSION_WEBAUTHN_REQUIRED:
         db.revoke_unbound_oidc_browser_sessions(
             actor_id="system:startup",

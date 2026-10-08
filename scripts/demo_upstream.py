@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import hmac
 import io
 import json
 from pathlib import Path
@@ -252,6 +253,13 @@ async def echo(request: Request) -> dict[str, Any]:
     # response projection removes. Keep reflection explicit for its deny test.
     authorization = view.pop("authorization")
     view.pop("authorization_sha256")
+    # Optional private acceptance oracle: return a comparison only, never the
+    # supplied or observed digest. Existing sandbox responses stay unchanged.
+    expected = view["query"].pop("expectedAuthorizationSha256", None)
+    if expected is not None:
+        actual = "sha256:" + hashlib.sha256((authorization or "").encode("utf-8")).hexdigest()
+        view["authorization_matches_expected"] = hmac.compare_digest(expected.encode("utf-8"), actual.encode("ascii"))
+        view["proxy_authorization_seen"] = "proxy-authorization" in request.headers
     view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
     view["query"]["_cookie_seen"] = "cookie" in request.headers
     if request.query_params.get("reflectCredential") == "1":

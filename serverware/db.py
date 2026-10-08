@@ -27782,6 +27782,10 @@ def init_db(
             # The isolated sandbox has no PostgreSQL RBAC or release authority.
             # Do not manufacture those records in its application staging DB.
             return
+        from serverware.operator_demo import active as operator_demo_active
+        if operator_demo_active():
+            # Explicit local operator state is not PostgreSQL or native authority.
+            return
         initialize_rbac_authority()
         reconcile_policy_state_bundles(limit=100)
 
@@ -29439,6 +29443,10 @@ def get_policy_high_water() -> dict[str, Any] | None:
     if sandbox_active():
         from serverware.development_sandbox_store import get_policy_high_water as sandbox_read
         return sandbox_read()
+    from serverware.operator_demo import active as operator_demo_active
+    if operator_demo_active():
+        from serverware.operator_demo_store import get_policy_high_water as operator_read
+        return operator_read()
     _require_postgres_policy_authority("active policy read")
     with connect() as conn:
         row = _committed_policy_authority_row(conn)
@@ -29490,6 +29498,10 @@ def get_policy_publication(policy_hash: str) -> dict[str, Any] | None:
     if sandbox_active():
         from serverware.development_sandbox_store import get_policy_publication as sandbox_read
         return sandbox_read(policy_hash)
+    from serverware.operator_demo import active as operator_demo_active
+    if operator_demo_active():
+        from serverware.operator_demo_store import get_policy_publication as operator_read
+        return operator_read(policy_hash)
     _require_postgres_policy_authority("active publication read")
     if not isinstance(policy_hash, str) or re.fullmatch(
         r"sha256:[0-9a-f]{64}", policy_hash
@@ -29693,6 +29705,12 @@ def verify_policy_high_water(
     if sandbox_active():
         from serverware.development_sandbox_store import verify_policy_high_water as sandbox_verify
         return sandbox_verify(policy_id=policy_id, sequence=sequence,
+            rollback_epoch=rollback_epoch, policy_hash=policy_hash,
+            _connection=_connection, _allow_pending=_allow_pending)
+    from serverware.operator_demo import active as operator_demo_active
+    if operator_demo_active():
+        from serverware.operator_demo_store import verify_policy_high_water as operator_verify
+        return operator_verify(policy_id=policy_id, sequence=sequence,
             rollback_epoch=rollback_epoch, policy_hash=policy_hash,
             _connection=_connection, _allow_pending=_allow_pending)
     _require_postgres_policy_authority("policy high-water verification")
@@ -63763,6 +63781,10 @@ def reserve_credential_lease_nonce(
     if sandbox_active():
         from serverware.development_sandbox_store import reserve_credential_lease_nonce as sandbox_reserve
         return sandbox_reserve(recipient_key_id, nonce_sha256, now_epoch_ms=now_epoch_ms)
+    from serverware.operator_demo import active as operator_demo_active
+    if operator_demo_active():
+        from serverware.operator_demo_store import reserve_credential_lease_nonce as operator_reserve
+        return operator_reserve(recipient_key_id, nonce_sha256, now_epoch_ms=now_epoch_ms)
     _require_postgres_jit_authority("credential lease nonce reservation")
     if _policy_authority_writer_context.get() is not None:
         with connect() as conn:
@@ -63855,6 +63877,10 @@ def credential_lease_nonce_reserved(
     if sandbox_active():
         from serverware.development_sandbox_store import credential_lease_nonce_reserved as sandbox_read
         return sandbox_read(recipient_key_id, nonce_sha256, now_epoch_ms=now_epoch_ms)
+    from serverware.operator_demo import active as operator_demo_active
+    if operator_demo_active():
+        from serverware.operator_demo_store import credential_lease_nonce_reserved as operator_read
+        return operator_read(recipient_key_id, nonce_sha256, now_epoch_ms=now_epoch_ms)
     _require_postgres_jit_authority("credential lease nonce replay read")
     with connect() as conn:
         _require_postgres_jit_authority(

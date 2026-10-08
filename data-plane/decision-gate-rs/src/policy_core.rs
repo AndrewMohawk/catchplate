@@ -9177,6 +9177,7 @@ enum ShadowWork {
 
 pub(crate) struct ShadowRuntime {
     development_sandbox: Option<super::development_sandbox::Profile>,
+    operator_demo: Option<super::operator_demo::Profile>,
     generation:
         Arc<RwLock<Option<Arc<PublishedShadowGeneration>>>>,
     custody: Arc<OnceLock<Arc<dyn PolicyShadowCustodyRpcSupervisor>>>,
@@ -9222,6 +9223,7 @@ impl ShadowRuntime {
             .spawn(move || shadow_worker(receiver, worker_ledger));
         Self {
             development_sandbox: None,
+            operator_demo: None,
             generation: Arc::new(RwLock::new(None)),
             custody,
             prepared_generation: Mutex::new(None),
@@ -9253,9 +9255,47 @@ impl ShadowRuntime {
         self.development_sandbox.as_ref().map(|profile| profile.effect(&snapshot.hash)).transpose()
     }
 
+    pub(crate) fn new_operator_demo(profile: super::operator_demo::Profile) -> Self {
+        let mut runtime = Self::new();
+        runtime.operator_demo = Some(profile);
+        runtime
+    }
+
+    pub(crate) fn is_operator_demo(&self) -> bool { self.operator_demo.is_some() }
+
+    pub(crate) fn operator_effect_permit(&self, snapshot: &Snapshot, route_id: &str)
+        -> Result<Option<super::operator_demo::EffectPermit>, String> {
+        self.operator_demo.as_ref().map(|profile| profile.effect(snapshot, route_id)).transpose()
+    }
+
+    pub(crate) fn operator_dispatch_permit(&self, snapshot: &Snapshot, url: &Url, commitment: &str)
+        -> Result<Option<super::operator_demo::DispatchPermit>, String> {
+        self.operator_demo.as_ref().map(|profile| {
+            let host = url.host_str().ok_or("operator demo dispatch host missing")?;
+            let port = url.port_or_known_default().ok_or("operator demo dispatch port missing")?;
+            profile.effect_for_target(&snapshot.hash, url.scheme(), host, port)?
+                .bind_dispatch(&snapshot.hash, url.scheme(), host, port, commitment)
+        }).transpose()
+    }
+
+    pub(crate) fn prepare_operator_reload(&self, previous: &Snapshot, next: &Snapshot)
+        -> Result<Option<super::operator_demo::PreparedReload>, String> {
+        self.operator_demo.as_ref().map(|profile| profile.prepare_reload(previous, next)).transpose()
+    }
+
+    pub(crate) fn commit_operator_reload(&self, prepared: Option<super::operator_demo::PreparedReload>)
+        -> Result<(), String> {
+        match (&self.operator_demo, prepared) {
+            (Some(profile), Some(prepared)) => profile.commit_reload(prepared),
+            (None, None) => Ok(()),
+            _ => Err("operator demo reload owner mismatch".to_string()),
+        }
+    }
+
     pub(crate) fn serving_ready(&self, snapshot: &Snapshot) -> bool {
         #[cfg(test)]
         if self.inactive_for_forwarding_tests { return true; }
+        if let Some(profile) = &self.operator_demo { return profile.matches(&snapshot.hash); }
         let custody_ready = self.development_sandbox.is_none()
             && self.status().get("readiness").and_then(Value::as_bool) == Some(true);
         super::development_sandbox::serving_ready(self.development_sandbox.as_ref(),
@@ -10219,6 +10259,12 @@ impl ShadowRuntime {
                 request_binding(snapshot, request, authenticated_principal_id), ingress,
                 PolicyShadowTerminalReason::AccountingCustodyUnavailable);
         }
+        if let Some(profile) = &self.operator_demo {
+            if profile.matches(&snapshot.hash) { return ShadowAdmission::inactive(snapshot, ingress); }
+            return ShadowAdmission::custody_fail_closed(snapshot,
+                request_binding(snapshot, request, authenticated_principal_id), ingress,
+                PolicyShadowTerminalReason::AccountingCustodyUnavailable);
+        }
         #[cfg(test)]
         if self.inactive_for_forwarding_tests {
             return ShadowAdmission::inactive(snapshot, ingress);
@@ -10850,6 +10896,7 @@ impl ShadowRuntime {
         if let Some(profile) = &self.development_sandbox {
             return profile.matches(&snapshot.hash);
         }
+        if let Some(profile) = &self.operator_demo { return profile.matches(&snapshot.hash); }
         let binding = sha256_prefixed(
             format!(
                 "serverware.shadowIngressAccounting/v2\0{}\0{}\0{}\0{:?}",
@@ -10967,6 +11014,7 @@ impl ShadowRuntime {
     }
 
     pub(crate) fn status(&self) -> Value {
+        if let Some(profile) = &self.operator_demo { return profile.status(); }
         if let Some(profile) = &self.development_sandbox {
             return json!({"api_version":"serverware.policyShadowRuntimeStatus/v2",
                 "mode":"synthetic-development", "enabled":false, "readiness":false,

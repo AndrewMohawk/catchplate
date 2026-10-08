@@ -12,6 +12,7 @@ mod response_v2;
 mod gate_state_init;
 mod control_plane_client_config;
 mod development_sandbox;
+mod operator_demo;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
@@ -1027,6 +1028,7 @@ struct ProxyIngressTlsConfig {
 #[derive(Clone)]
 enum ProxyIngressConfig {
     DevelopmentRaw,
+    OperatorDemoTlsEdge,
     MutualTls(Arc<ProxyIngressTlsConfig>),
 }
 
@@ -15610,6 +15612,17 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 snapshot,
                 &previous,
             )?;
+            // This separate demo admission is checked under the same guard as
+            // the signed monotonic reload. It never authorizes native custody.
+            let operator_reload = state.policy_shadow.prepare_operator_reload(&previous, &snapshot)
+                .map_err(|error| {
+                    state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
+                    enqueue_audit(state, "data_plane.policy.reload_failed", json!({
+                        "component":"serverware-decision-gate-rs", "error":"operator_demo_policy_refused",
+                        "candidate_policy_hash":snapshot.hash,
+                    }));
+                    error
+                })?;
             if state.policy_shadow_generation_control.is_some()
                 && !same_signed_policy_identity(&previous, &snapshot)
                 && !state
@@ -15717,6 +15730,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     .snapshot
                     .write()
                     .expect("policy snapshot lock poisoned");
+                state.policy_shadow.commit_operator_reload(operator_reload)?;
                 *current = Arc::clone(&next);
                 let grants_cleared =
                     clear_local_grants_if_signed_policy_changed(state, &previous, &next);
@@ -23264,7 +23278,11 @@ where
                     &final_upstream_request_commitment))
                 .transpose().map_err(UpstreamSendError::DispatchBarrier)?
         } else { None };
-        if synthetic_dispatch_permit.is_none() && shadow_dispatch_permit
+        let operator_dispatch_permit = if shadow_dispatch_permit.is_none() {
+            state.policy_shadow.operator_dispatch_permit(snapshot, request.url(), &final_upstream_request_commitment)
+                .map_err(UpstreamSendError::DispatchBarrier)?
+        } else { None };
+        if synthetic_dispatch_permit.is_none() && operator_dispatch_permit.is_none() && shadow_dispatch_permit
                 .as_ref()
                 .is_none_or(|permit| {
                     !permit.authorizes_credentialed_send(
@@ -23285,6 +23303,10 @@ where
             *request.timeout_mut() = Some(bounded);
         }
         if let Some(permit) = synthetic_dispatch_permit.as_ref() {
+            permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
+                .map_err(UpstreamSendError::DispatchBarrier)?;
+        }
+        if let Some(permit) = operator_dispatch_permit.as_ref() {
             permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
                 .map_err(UpstreamSendError::DispatchBarrier)?;
         }
@@ -23313,6 +23335,10 @@ where
                 .map_err(UpstreamSendError::DispatchBarrier)?;
         } else if let Some(permit) = synthetic_dispatch_permit {
             // This is an actual local send, not a manufactured custody commit.
+            permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
+                .map_err(UpstreamSendError::DispatchBarrier)?;
+        } else if let Some(permit) = operator_dispatch_permit {
+            // Operator demo is likewise a real send without native custody.
             permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
                 .map_err(UpstreamSendError::DispatchBarrier)?;
         } else {
@@ -27331,6 +27357,7 @@ fn prepare_shadow_release_effect(
 enum CredentialPrerequisiteReference {
     Committed(policy_core::CommittedCredentialPrerequisite),
     SyntheticDevelopment(development_sandbox::EffectPermit),
+    OperatorDemo(operator_demo::EffectPermit),
     #[cfg(test)]
     InactiveForwardingTest,
 }
@@ -27397,6 +27424,12 @@ where
             let info = permit.execute(&snapshot.hash, operation)?;
             return Ok(CommittedCredentialResolution {
                 info, prerequisite_ref: CredentialPrerequisiteReference::SyntheticDevelopment(permit),
+            });
+        }
+        if let Some(permit) = state.policy_shadow.operator_effect_permit(snapshot, &scope.route_id)? {
+            let info = permit.execute(&snapshot.hash, operation)?;
+            return Ok(CommittedCredentialResolution {
+                info, prerequisite_ref: CredentialPrerequisiteReference::OperatorDemo(permit),
             });
         }
     }
@@ -27555,6 +27588,17 @@ where
                 return operation();
             }
             Err(_) => return Err(json!({"status_code":503,"error":"synthetic_development_policy_changed"})),
+            Ok(None) => {},
+        }
+        match state.policy_shadow.operator_effect_permit(snapshot,
+            intent.get("routeId").and_then(Value::as_str).unwrap_or_default()) {
+            Ok(Some(permit)) => {
+                permit.validate(&snapshot.hash).map_err(|_| json!({
+                    "status_code":503,"error":"operator_demo_policy_changed"
+                }))?;
+                return operation();
+            }
+            Err(_) => return Err(json!({"status_code":503,"error":"operator_demo_policy_changed"})),
             Ok(None) => {},
         }
     }
@@ -37692,6 +37736,11 @@ fn apply_bound_credential_injection_for_gate(
     }
     if shadow_finalization.is_none() {
         if let Some(permit) = state.policy_shadow.development_effect_permit(snapshot)? {
+            return permit.execute(&snapshot.hash, || validate_and_apply_bound_credential_injection(
+                snapshot, decision, headers, precredential_url, final_url, injection_plan, lease,
+            ));
+        }
+        if let Some(permit) = state.policy_shadow.operator_effect_permit(snapshot, &lease.scope.route_id)? {
             return permit.execute(&snapshot.hash, || validate_and_apply_bound_credential_injection(
                 snapshot, decision, headers, precredential_url, final_url, injection_plan, lease,
             ));
@@ -49618,6 +49667,9 @@ fn require_workload_ingress_trust(
     let retained = state.proxy_ingress_attestation.workload_identity_trust.as_ref();
     match ingress {
         ProxyIngressConfig::DevelopmentRaw if retained.is_none() => Ok(()),
+        ProxyIngressConfig::OperatorDemoTlsEdge if retained.is_none()
+            && !state.is_production && state.policy_shadow.is_operator_demo()
+            && state.proxy_ingress_attestation.mode == operator_demo::INGRESS_MODE => Ok(()),
         ProxyIngressConfig::MutualTls(config) => match (retained, config.workload_identity_trust.as_ref()) {
             (None, None) => Ok(()),
             (Some(expected), Some(actual)) if Arc::ptr_eq(expected, actual) => actual.check_ingress(config),
@@ -49693,7 +49745,8 @@ fn establish_gate_listener_stream(
         state.request_head_deadline,
         state.response_write_deadline,
     );
-    if management_listener || matches!(proxy_ingress, ProxyIngressConfig::DevelopmentRaw) {
+    if management_listener || matches!(proxy_ingress,
+        ProxyIngressConfig::DevelopmentRaw | ProxyIngressConfig::OperatorDemoTlsEdge) {
         return Ok((DirectProxyStream::DevelopmentRaw(deadline_stream), None));
     }
     let ProxyIngressConfig::MutualTls(config) = proxy_ingress else {
@@ -50866,12 +50919,16 @@ fn load_proxy_ingress_config(
     if mode != mode.trim() || mode.chars().any(char::is_control) {
         return Err("SERVERWARE_PROXY_INGRESS_MODE is not canonical".to_string());
     }
-    if mode == "development-raw" {
+    if mode == "development-raw" || mode == operator_demo::INGRESS_MODE {
         if is_production || workload_trust_configured {
             return Err(
                 "production or configured workload trust requires mTLS proxy ingress"
                     .to_string(),
             );
+        }
+        let operator_edge = mode == operator_demo::INGRESS_MODE;
+        if operator_edge && env::var("SERVERWARE_OPERATOR_DEMO").as_deref() != Ok("1") {
+            return Err("operator-demo-tls-edge requires explicit operator demo admission".to_string());
         }
         for name in [
             "SERVERWARE_PROXY_TLS_CERT",
@@ -50885,11 +50942,11 @@ fn load_proxy_ingress_config(
             }
         }
         return Ok((
-            ProxyIngressConfig::DevelopmentRaw,
+            if operator_edge { ProxyIngressConfig::OperatorDemoTlsEdge } else { ProxyIngressConfig::DevelopmentRaw },
             ProxyIngressAttestation {
-                mode: "development-raw",
+                mode: if operator_edge { operator_demo::INGRESS_MODE } else { "development-raw" },
                 tls_protocol: None,
-                client_authentication: "none-development-only",
+                client_authentication: if operator_edge { "bearer-required-behind-deployment-tls-edge" } else { "none-development-only" },
                 server_leaf_certificate_sha256: None,
                 server_leaf_spki_sha256: None,
                 server_certificate_chain_sha256: None,
@@ -50901,7 +50958,7 @@ fn load_proxy_ingress_config(
     }
     if mode != "mtls" {
         return Err(
-            "SERVERWARE_PROXY_INGRESS_MODE must be mtls or development-raw".to_string(),
+            "SERVERWARE_PROXY_INGRESS_MODE must be mtls, development-raw or operator-demo-tls-edge".to_string(),
         );
     }
 
@@ -51467,6 +51524,7 @@ fn start_response_proof_custody_health_probe(state: Arc<GateState>) -> Result<()
 fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let sandbox_selection = development_sandbox::from_environment()?;
+    let operator_selection = operator_demo::from_environment()?;
     workload_identity_trust::reject_native_namespace()?;
     if native_startup_config::run_from_process_arguments()?.is_some() {
         return Ok(());
@@ -52019,7 +52077,9 @@ fn main() -> Result<(), String> {
     let policy_high_water = initialize_policy_high_water_after_response_proof_binding(
         &initial_snapshot,
         &response_proof_signer,
-        policy_high_water_path.as_deref(),
+        // Operator admission must precede durable high-water advancement.
+        // Native/ordinary startup retains its original persistence ordering.
+        if operator_selection.is_some() { None } else { policy_high_water_path.as_deref() },
         policy_minimum_sequence,
         policy_minimum_rollback_epoch,
     )?;
@@ -52115,6 +52175,17 @@ fn main() -> Result<(), String> {
             audit_enabled: audit_enabled(&initialized_state),
         })?;
         initialized_state.policy_shadow = ShadowRuntime::new_development_sandbox(profile);
+    }
+    if let Some(selection) = operator_selection {
+        let profile = selection.admit(&initialized_state)?;
+        let snapshot = current_snapshot(&initialized_state);
+        let high_water = initialize_policy_high_water_after_response_proof_binding(
+            &snapshot, &initialized_state.response_proof_signer,
+            initialized_state.policy_high_water_path.as_deref(),
+            policy_minimum_sequence, policy_minimum_rollback_epoch,
+        )?;
+        *initialized_state.policy_high_water.get_mut().map_err(|_| "operator demo high-water lock poisoned")? = high_water;
+        initialized_state.policy_shadow = ShadowRuntime::new_operator_demo(profile);
     }
     let state = Arc::new(initialized_state);
     if let Some(control) =
@@ -53466,7 +53537,7 @@ mod tests {
         }
     }
 
-    fn test_gate_state(snapshot: Arc<Snapshot>) -> GateState {
+    pub(super) fn test_gate_state(snapshot: Arc<Snapshot>) -> GateState {
         let client = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -59657,7 +59728,7 @@ mod tests {
         }
     }
 
-    fn policy_with_route(mut route: Value) -> Value {
+    pub(super) fn policy_with_route(mut route: Value) -> Value {
         let constraints = route
             .as_object_mut()
             .expect("test route object")
@@ -60002,7 +60073,7 @@ mod tests {
         loaded.expect("signed test policy must compile through the production loader")
     }
 
-    fn generic_policy_route(body_mode: &str, response_max_body_bytes: Value) -> Value {
+    pub(super) fn generic_policy_route(body_mode: &str, response_max_body_bytes: Value) -> Value {
         let allowed_media_types = required_generic_body_media_type(body_mode)
             .into_iter()
             .collect::<Vec<_>>();

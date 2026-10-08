@@ -338,6 +338,10 @@ def _install_authority_controlled_writer_boundaries() -> None:
                     # The dedicated synthetic runner selects its separate
                     # nonce store; no other controlled writer is admitted.
                     return __handler(*args, **kwargs)
+                from serverware.operator_demo import active as operator_demo_active
+                if operator_demo_active():
+                    # Only the explicit local demo nonce store, not native authorship.
+                    return __handler(*args, **kwargs)
             if (
                 __operation
                 not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS

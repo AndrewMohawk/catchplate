@@ -53,11 +53,11 @@ function generatorChecks() {
 
 function policy(state) {
   return {policy_hash: state.active, loaded_policy_hash: state.loaded, sequence: state.sequence,
-    activation: state.active === state.loaded ? 'active' : 'pending'};
+    activation: state.activationOverride ?? (state.active === state.loaded ? 'active' : 'pending')};
 }
 function catalog(state) {
   const activeRules = state.rules.filter(item => item.status === 'active');
-  const loaded = state.active === state.loaded;
+  const loaded = state.active === state.loaded && policy(state).activation === 'active';
   const value = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
     hardwareVerified: false, revision: state.revision, policy: policy(state), proxy_url: 'https://proxy.example.test',
     allowed_upstreams: [UPSTREAM], credentials: state.credentials.map(item => ({...item,
@@ -67,7 +67,7 @@ function catalog(state) {
       return {...item, active_rule_count: count, access_status: item.status === 'revoked' ? loaded ? 'revoked' : 'pending' :
         count === 0 ? 'unassigned' : loaded && item.token_status === 'valid' ? 'active' : 'pending'};
     }), access_rules: state.rules.map(item => ({...item, enforcement: loaded ? item.status === 'revoked' ? 'revoked' : 'active' : 'pending'})),
-    capabilities: {credential_types: ['bearer', 'header'], response_modes: ['projected_json'], oauth: false,
+    capabilities: {credential_types: ['bearer', 'header'], response_modes: state.responseModes, oauth: false,
       token_lifetime_seconds: {min: 3600, max: 7776000, default: 2592000}}};
   value.limits = Object.fromEntries(['credentials', 'applications', 'access_rules'].map(key => [key,
     {active: value[key].filter(item => item.status === 'active').length, retained: value[key].length, active_max: 32, retained_max: 1024}]));
@@ -90,6 +90,12 @@ function mutation(state, name, body) {
     state.applications.push(selected); collection = 'applications'; clientToken = token(id);
   } else if (name === 'access-rules') {
     assert(!Object.hasOwn(payload, 'secret') && !Object.hasOwn(payload, 'client_token'));
+    const responseMode = payload.response_mode || 'projected_json';
+    assert(['projected_json', 'unfiltered_json'].includes(responseMode), 'supported response mode');
+    if (responseMode === 'unfiltered_json') {
+      assert(state.responseModes?.includes('unfiltered_json'), 'simple response mode must be explicitly advertised');
+      assert.deepEqual(payload.response_fields || [], []);
+    } else assert(Array.isArray(payload.response_fields) && payload.response_fields.length > 0, 'projected response retains explicit fields');
     assert(state.credentials.some(item => item.id === payload.credential_id && item.status === 'active'));
     assert(state.applications.some(item => item.id === payload.application_id && item.status === 'active'));
     const id = state.rules.length ? '55555555-5555-4555-8555-555555555555' : IDS.rule;
@@ -125,6 +131,8 @@ function mutation(state, name, body) {
 
 async function fixture(browser, options, exercise) {
   const state = {credentials: copy(options.credentials || []), applications: copy(options.applications || []), rules: copy(options.rules || []),
+    responseModes: Object.hasOwn(options, 'responseModes') ? options.responseModes : ['projected_json'],
+    activationOverride: options.activationOverride,
     revision: 1, sequence: 1, active: digest(1), loaded: options.pending ? digest(0) : digest(1), autoLoad: options.autoLoad !== false,
     posts: [], requests: [], errors: [], unexpected: [], consoleErrors: [], expectedFailures: new Set(), dialogs: [], catalogCalls: 0,
     catalogStatus: 200, cancelNextDialog: false, fault: options.fault, faultUsed: false};
@@ -409,4 +417,4 @@ async function main() {
   } finally { clearTimeout(deadline); await browser.close(); }
 }
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });
-module.exports = {main};
+module.exports = {main, fixture, ready, view, saveRule, credential, application, rule, IDS, NOW, UPSTREAM};

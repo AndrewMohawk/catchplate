@@ -38,26 +38,44 @@ function createCredentialsView(workspace) {
 }
 function createAccessRulesView(workspace) {
   const form = element('access-rule-form');
+  function renderResponseMode() {
+    const mode = element('rule-response-mode').value;
+    const supported = availableResponseModes(workspace.state.catalog).includes(mode);
+    const projected = supported && mode === 'projected_json';
+    element('rule-response-fields-group').hidden = !projected;
+    element('rule-response-fields').disabled = !projected;
+    element('rule-response-fields').required = projected;
+    element('rule-response-mode-help').textContent = !supported ? 'Refresh the workspace to load supported response modes. Saving is disabled until one is available.' :
+      mode === 'unfiltered_json' ? 'Returns all content in a bounded JSON response, including error responses. No response field list is needed. Destination, method and request restrictions still apply.' :
+      'Successful JSON responses contain only the fields you list below. Error responses retain only error, code and message fields. Destination, method and request restrictions still apply.';
+  }
+  element('rule-response-mode').addEventListener('change', renderResponseMode);
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (!workspace.ready('access_rules') || !form.reportValidity()) return;
     const catalog = workspace.state.catalog; const origin = element('rule-upstream-origin').value;
     const path = element('rule-path').value.trim();
+    const responseMode = element('rule-response-mode').value;
+    const responseFields = responseMode === 'projected_json' ? fieldLines('rule-response-fields') : [];
     const methods = [...document.querySelectorAll('input[name="rule-method"]:checked')].map(input => input.value);
     if (!catalog.allowed_upstreams.includes(origin) || !path.startsWith('/') || path.startsWith('//') || /[?#\\\s*]/.test(path) ||
-        !methods.length || methods.some(method => !operatorMethods.includes(method)) || !fieldLines('rule-response-fields').length) {
-      element('access-rule-form-status').textContent = 'Choose an approved destination, exact path, supported method and explicit response fields.'; return;
+        !methods.length || methods.some(method => !operatorMethods.includes(method)) || !availableResponseModes(catalog).includes(responseMode) ||
+        responseMode === 'projected_json' && !responseFields.length) {
+      element('access-rule-form-status').textContent = 'Choose an approved destination, exact path, supported method and response mode. Selected-field filtering also requires explicit response fields.'; return;
     }
     const body = {name: element('rule-name').value.trim(), application_id: element('rule-application-id').value,
       credential_id: element('rule-credential-id').value, upstream_url: origin.replace(/\/$/, '') + path, methods,
-      request_fields: fieldLines('rule-request-fields'), response_fields: fieldLines('rule-response-fields'),
+      request_fields: fieldLines('rule-request-fields'), response_mode: responseMode, response_fields: responseFields,
       query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers')};
     await workspace.mutate('access-rules', body, 'access-rule-form-status');
   });
   function render() {
     const catalog = workspace.state.catalog;
+    const responseModes = availableResponseModes(catalog);
     element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active') ||
-      !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length;
-    if (!catalog) return;
+      !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length;
+    if (!catalog) { renderResponseMode(); return; }
+    chooseOptions('rule-response-mode', responseModes.map(mode => ({id: mode, name: operatorResponseModes[mode]})), 'No supported response mode available');
+    renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
     chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active'), 'Save a credential first');
     chooseOptions('rule-upstream-origin', catalog.allowed_upstreams.map(origin => ({id: origin, name: origin})), 'No approved destination configured');
@@ -67,7 +85,10 @@ function createAccessRulesView(workspace) {
       const enforced = workspace.loaded() && rule.enforcement === (rule.status === 'revoked' ? 'revoked' : 'active');
       const badge = rule.status === 'revoked' ? enforced ? 'Revoked · enforced' : 'Revoked · enforcement pending' : enforced ? 'Active' : 'Saved · activation pending';
       const card = resourceCard(rule, badge, [['Application', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
-        ['Exact URL', rule.upstream_url], ['Methods', rule.methods.join(', ')], ['Response fields', rule.response_fields.join(', ')], ['Rule ID', rule.id]]);
+        ['Exact URL', rule.upstream_url], ['Methods', rule.methods.join(', ')],
+        ['Response content', operatorResponseModes[rule.response_mode] || 'Unsupported response mode'],
+        [rule.response_mode === 'unfiltered_json' ? 'Response fields' : 'Success response fields',
+          rule.response_mode === 'unfiltered_json' ? 'All JSON content (no field filtering)' : rule.response_fields.join(', ')], ['Rule ID', rule.id]]);
       if (rule.status === 'active') {
         const button = textNode('button', 'Revoke access rule', 'secondary'); button.dataset.action = 'revoke-rule';
         button.disabled = workspace.state.busy || workspace.state.uncertain;

@@ -230,6 +230,10 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                 or type(row.get('token_expires_at_epoch_ms')) is not int or row['token_expires_at_epoch_ms'] <= 0):
             raise CatalogIntegrityError('catalog application verifier refused')
     for row in catalog['access_rules']:
+        mode, fields = row.get('response_mode', 'projected_json'), row.get('response_fields')
+        if (mode not in {'projected_json', 'unfiltered_json'} or not isinstance(fields, list)
+                or (mode == 'projected_json') != bool(fields)):
+            raise CatalogIntegrityError('catalog response mode/fields refused')
         app, credential = applications.get(row['application_id']), credentials.get(row['credential_id'])
         if app is None or credential is None or row.get('route_id') != 'operator.' + row['id']:
             raise CatalogIntegrityError('catalog rule binding refused')

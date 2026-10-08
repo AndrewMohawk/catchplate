@@ -75,10 +75,10 @@ class RuleInput(NamedInput):
     upstream_url: str = Field(min_length=1, max_length=2048)
     methods: list[Literal["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]] = Field(min_length=1, max_length=6)
     request_fields: list[_Item] = Field(default_factory=list, max_length=64)
-    response_fields: list[_Item] = Field(min_length=1, max_length=64)
+    response_fields: list[_Item] = Field(default_factory=list, max_length=64)
     query_keys: list[_Item] = Field(default_factory=list, max_length=64)
     allowed_headers: list[_Item] = Field(default_factory=lambda: ["accept", "user-agent"], max_length=32)
-    response_mode: Literal["projected_json"] = "projected_json"
+    response_mode: Literal["projected_json", "unfiltered_json"] = "projected_json"
     _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
 
     @field_validator("methods", "request_fields", "response_fields", "query_keys", "allowed_headers")
@@ -95,3 +95,9 @@ class RuleInput(NamedInput):
         if any(RESPONSE_FIELD_PATH_RE.fullmatch(item) is None for item in values):
             raise ValueError("invalid field projection")
         return values
+
+    @model_validator(mode="after")
+    def response_mode_fields(self):
+        if (self.response_mode == "projected_json") != bool(self.response_fields):
+            raise ValueError("projected JSON requires fields; unfiltered JSON forbids them")
+        return self

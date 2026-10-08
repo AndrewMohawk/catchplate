@@ -15,7 +15,8 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = 'Credentials and applications alone grant no access. Add a rule, then return here.'; return;
     }
     const valid = application.token_status === 'valid' && Number.isSafeInteger(application.token_expires_at_epoch_ms) && application.token_expires_at_epoch_ms > Date.now();
-    const supported = rule.response_mode === 'projected_json' && rule.response_fields.length > 0 &&
+    const supported = availableResponseModes(catalog).includes(rule.response_mode) &&
+      (rule.response_mode === 'projected_json' ? rule.response_fields.length > 0 : rule.response_fields.length === 0) &&
       rule.methods.length > 0 && rule.methods.every(method => operatorMethods.includes(method));
     if (!valid || !supported || credential?.status !== 'active') {
       element('client-command').textContent = !valid ? 'The application token is expired, revoked or cannot be verified.' : 'The saved rule or credential is unavailable or unsupported.';
@@ -34,6 +35,9 @@ function createProxyView(workspace, applications) {
     element('download-config').disabled = !ready || !applications.tokenFor(application.id);
     element('client-guidance').textContent = (ready ? 'Policy loaded and token not expired. This is a configuration example, not a successful request test.' :
       'Saved configuration is not currently confirmed for use. Wait for activation and resolve any uncertain change.') +
+      (rule.response_mode === 'unfiltered_json' ? ' Response content: all JSON fields, including error responses; no field filtering.' :
+        ' Successful JSON responses contain only the selected fields. Error responses retain only error, code and message fields.') +
+      ' Both modes require bounded JSON responses; text, binary and streaming responses are unsupported.' +
       (rule.request_fields.length ? ' If the endpoint requires a body, send application/json using only approved fields; do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule.');
   }
   for (const id of ['proxy-application', 'proxy-rule', 'proxy-method']) element(id).addEventListener('change', render);
@@ -49,7 +53,7 @@ function createProxyView(workspace, applications) {
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value); const token = applications.tokenFor(application.id);
     if (!token) return;
     const config = {application_id: application.id, access_rule_id: rule.id, proxy_url: catalog.proxy_url, upstream_url: rule.upstream_url,
-      methods: rule.methods, ca_file: element('ca-path').value || './serverware-ca.pem', proxy_authorization: 'Bearer ' + token,
+      methods: rule.methods, response_mode: rule.response_mode, ca_file: element('ca-path').value || './serverware-ca.pem', proxy_authorization: 'Bearer ' + token,
       token_expires_at_epoch_ms: application.token_expires_at_epoch_ms, note: 'Private development client configuration. Never commit or share. Provider credential not included.'};
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2) + '\n'], {type: 'application/json'}));
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();

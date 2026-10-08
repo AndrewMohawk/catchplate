@@ -110,17 +110,30 @@ mutation. Status remains available for reconciliation.
 
 ## Incremental delivery is not completion
 
-The first resource-model implementation retains the existing projected-JSON
-rule contract. This removes response fields from **credential storage**, but
-does not yet implement replacement-only access. An additive bounded whole-JSON
-response mode is a separate implementation lane; text, binary, compression and
-streaming compatibility need their own evidence. Existing projected policies
-must never be silently broadened.
+The workspace now offers an explicit bounded whole-JSON response choice as
+well as selected-field projection. New UI rules prefer the whole-JSON choice
+when advertised; the API's omitted mode still requires the historical
+projection. Existing saved policies are not broadened. Text, binary, compression
+and streaming compatibility remain separate requirements, not capabilities of
+the JSON-only choice.
+
+The advertised modes describe this source version, not dynamic negotiation
+with an arbitrary running proxy. Deployment must pin a compatible control plane
+and gate supporting `bufferedPassthrough`, and establish private actual-proxy
+acceptance before rollout. An old gate must reject an unsupported policy; never
+silently substitute another response mode. Saved state is not active until the
+backend reports active publication and the loaded hash matches the saved hash.
 
 Exact placeholder replacement, Google profile integration and the real-provider
 consent/refresh journey are also separate open requirements. Do not present
 inactive OAuth controls, a health check, fixture-only browser success or a
 JSON-only response mode as completion of those journeys.
+
+Client placeholder matching belongs to an access rule, not the reusable secret.
+Two applications sharing a credential may use different dummy values, or one
+may need insertion without any dummy header. The provider header target still
+comes from the credential's injection contract. The placeholder is public client
+configuration, never a provider secret or an application authentication token.
 
 ## What the original examples imply
 

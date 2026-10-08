@@ -269,6 +269,9 @@ def catalog_status() -> dict:
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
         **{collection: [_public(collection, row, catalog, observation, now) for row in catalog[collection]]
            for collection in _RESULT_KEYS}, "limits": limits,
-        "capabilities": {"credential_types": ["bearer", "header"], "response_modes": ["projected_json"], "oauth": False,
+        # Source capability, not proof of a deployed gate version. Publication
+        # requires the co-versioned buffered-JSON gate; never downgrade policies.
+        "capabilities": {"credential_types": ["bearer", "header"],
+            "response_modes": ["projected_json", "unfiltered_json"], "oauth": False,
             "token_lifetime_seconds": {"min": MIN_TOKEN_LIFETIME_SECONDS, "max": MAX_TOKEN_LIFETIME_SECONDS,
                 "default": DEFAULT_TOKEN_LIFETIME_SECONDS}}}

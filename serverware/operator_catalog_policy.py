@@ -7,6 +7,27 @@ import json
 from serverware import operator_catalog_schema as schema
 
 
+def _response_profile(rule: dict, route: dict) -> None:
+    mode = rule.get('response_mode', 'projected_json')
+    fields = rule.get('response_fields')
+    if (mode not in {'projected_json', 'unfiltered_json'} or not isinstance(fields, list)
+            or (mode == 'projected_json') != bool(fields)):
+        raise schema.CatalogIntegrityError('catalog response mode/fields refused')
+    if mode == 'projected_json':
+        return  # Preserve the complete legacy profile byte-for-byte.
+    config = route['adapter']['config']
+    previous = config['response']
+    config['response'] = {
+        'mode': 'bufferedPassthrough', 'bodyFormat': 'json',
+        'maxBodyBytes': previous['maxBodyBytes'], 'contentTypes': ['application/json'],
+        'allowedHeaders': [], 'error': {
+            'mode': 'bufferedPassthrough', 'bodyFormat': 'json',
+            'maxBodyBytes': previous['error']['maxBodyBytes'], 'contentTypes': ['application/json'],
+            'allowedHeaders': [], 'onInvalid': 'block',
+        },
+    }
+
+
 def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
     from serverware import operator_demo_store as legacy
     credentials = {row['id']: row for row in catalog['credentials']}
@@ -34,6 +55,7 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
         credential_policies[credential['id']] = credential_policy
         route = generated['routes'][0]
         route['adapter']['config']['credentialBinding']['subjects'] = [credential['provider_subject']]
+        _response_profile(rule, route)
         routes.append(route)
     bundle = generated
     bundle['principals'] = [principals[row['id']] for row in catalog['applications'] if row['id'] in principals]

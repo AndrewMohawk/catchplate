@@ -1,6 +1,12 @@
 // Public catalog state and transport only. Provider secrets and client tokens do
 // not belong in this state. All resource views share one explicit mutation gate.
 const operatorMethods = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+const operatorResponseModes = Object.freeze({unfiltered_json: 'Do not filter response content (JSON)',
+  projected_json: 'Only return selected JSON fields'});
+function availableResponseModes(catalog) {
+  const advertised = catalog?.capabilities?.response_modes;
+  return Array.isArray(advertised) ? Object.keys(operatorResponseModes).filter(mode => advertised.includes(mode)) : [];
+}
 const operatorViews = {overview: 'Overview', credentials: 'Credentials', applications: 'Applications',
   'access-rules': 'Access rules', proxy: 'Proxy setup', audit: 'Audit log'};
 const element = id => document.getElementById(id);
@@ -70,7 +76,7 @@ function createOperatorWorkspace() {
     const limit = state.catalog.limits?.[collection];
     return !limit || limit.active < limit.active_max && limit.retained < limit.retained_max;
   }
-  function loaded() { const policy = state.catalog?.policy; return Boolean(policy && policy.loaded_policy_hash === policy.policy_hash); }
+  function loaded() { const policy = state.catalog?.policy; return Boolean(policy && policy.activation === 'active' && policy.loaded_policy_hash === policy.policy_hash); }
   async function api(path, options = {}) {
     const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store', redirect: 'error',
       signal: AbortSignal.timeout(30000), ...options});

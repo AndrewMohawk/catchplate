@@ -5,15 +5,26 @@ profile owns routing and the authenticated APIs supply all displayed metadata.
 """
 from functools import lru_cache
 from pathlib import Path
+import re
+
+SCRIPT_FILES = ("workspace_core.js", "workspace_resources.js", "workspace_applications.js",
+                "workspace_proxy_audit.js", "app.js")
 
 
 @lru_cache(maxsize=1)
 def render() -> str:
     assets = Path(__file__).with_name("operator_demo_web")
     document = (assets / "index.html").read_text(encoding="utf-8")
-    for marker, filename in (("__OPERATOR_DEMO_STYLE__", "style.css"),
-                             ("__OPERATOR_DEMO_SCRIPT__", "app.js")):
+    styles = (assets / "style.css").read_text(encoding="utf-8")
+    scripts = "\n".join((assets / filename).read_text(encoding="utf-8") for filename in SCRIPT_FILES)
+    # A fixed asset list, never request/configuration values. Refuse raw-text
+    # terminators rather than letting an asset escape its HTML script/style tag.
+    if re.search(r"</script", scripts, re.I) or re.search(r"</style", styles, re.I):
+        raise RuntimeError("operator portal asset contains an HTML raw-text terminator")
+    scripts = "(() => {\n'use strict';\n" + scripts + "\n})();\n"
+    for marker, content in (("__OPERATOR_DEMO_STYLE__", styles),
+                            ("__OPERATOR_DEMO_SCRIPT__", scripts)):
         if document.count(marker) != 1:
             raise RuntimeError("operator demo portal asset marker is missing or duplicated")
-        document = document.replace(marker, (assets / filename).read_text(encoding="utf-8"))
+        document = document.replace(marker, content)
     return document

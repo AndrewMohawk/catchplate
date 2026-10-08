@@ -1,0 +1,219 @@
+"""Bounded administrator API for the operator-development resource catalog.
+
+Transport admission stays here; catalog persistence and policy publication stay
+with their existing owners. No request, credential, token or exception body is
+logged. This module grants no native or production authority.
+"""
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+from serverware import auth, config, operator_demo
+from serverware.setup_receipts import JsonLimits, parse_strict_json_object
+
+
+PREFIX = "/api/operator-demo"
+CATALOG_PATH = PREFIX + "/catalog"
+MUTATION_PATHS = frozenset(PREFIX + path for path in (
+    "/credentials", "/credentials/revoke", "/applications", "/applications/revoke",
+    "/applications/rotate-token", "/access-rules", "/access-rules/revoke",
+))
+router = APIRouter(prefix=PREFIX)
+_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
+_ADMIN_ROLE = auth.require_role("admin")
+_WORKER_SLOTS = asyncio.BoundedSemaphore(4)
+
+
+def _reject(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail, headers=_HEADERS)
+
+
+def _profile() -> None:
+    try:
+        enabled = operator_demo.active()
+    except Exception:
+        _reject(503, "operator workspace unavailable")
+    if not enabled:
+        _reject(404, "not found")
+
+
+def _admin_identity(request: Request) -> auth.AdminIdentity:
+    _profile()
+    if any(len(request.headers.getlist(name)) > 1 for name in ("authorization", "x-serverware-admin-token")):
+        _reject(401, "administrator authentication required")
+    try:
+        identity = auth.require_admin(request, request.headers.get("x-serverware-admin-token"))
+        return _ADMIN_ROLE(identity)
+    except HTTPException as exc:
+        status = exc.status_code if exc.status_code in {401, 403, 503} else 503
+        details = {401: "administrator authentication required", 403: "administrator access required",
+            503: "administrator authentication unavailable"}
+        _reject(status, details[status])
+    except Exception:
+        _reject(503, "administrator authentication unavailable")
+
+
+async def _blocking(function, *args):
+    from serverware import app as application
+
+    # The existing helper retains its slot until the worker exits, including
+    # when an HTTP caller disconnects. A cancelled request never retries work.
+    return await application._run_bounded_blocking(_WORKER_SLOTS, function, *args)
+
+
+def legacy_catalog_refusal() -> JSONResponse:
+    return JSONResponse(status_code=409, headers=_HEADERS, content={
+        "code": "operator_demo_resource_model_changed",
+        "detail": "This workspace uses separate credentials, applications and access rules. Reload the workspace before continuing.",
+        "catalog_path": CATALOG_PATH,
+    })
+
+
+def legacy_catalog_guard() -> JSONResponse | None:
+    from serverware import operator_catalog_schema
+
+    try:
+        migrated = operator_catalog_schema.active()
+    except Exception:
+        _reject(503, "operator workspace status unavailable")
+    return legacy_catalog_refusal() if migrated else None
+
+
+def _admit(request: Request, *, mutation: bool) -> None:
+    _profile()
+    if request.query_params:
+        _reject(422, "operator catalog requests do not accept query parameters")
+    if mutation and request.headers.getlist("origin") != [config.PUBLIC_URL.rstrip("/")]:
+        _reject(403, "same-origin operator session required")
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain(item) for item in value]
+    return value
+
+
+async def _payload(request: Request, model, maximum: int):
+    content_types = request.headers.getlist("content-type")
+    if (len(content_types) != 1 or content_types[0].split(";", 1)[0].strip().lower() != "application/json"
+            or request.headers.getlist("content-encoding")):
+        _reject(415, "operator catalog requires unencoded application/json")
+    lengths = request.headers.getlist("content-length")
+    transfers = request.headers.getlist("transfer-encoding")
+    if len(lengths) > 1 or len(transfers) > 1 or lengths and transfers:
+        _reject(400, "ambiguous operator catalog request framing")
+    if transfers and transfers[0].strip().lower() != "chunked":
+        _reject(400, "unsupported operator catalog transfer encoding")
+    declared = None
+    if lengths:
+        if not lengths[0].isascii() or not lengths[0].isdecimal() or len(lengths[0]) > 10:
+            _reject(400, "invalid operator catalog content length")
+        declared = int(lengths[0])
+        if declared > maximum:
+            _reject(413, "operator catalog input exceeds size limit")
+    body = bytearray()
+    try:
+        async with asyncio.timeout(30):
+            async for chunk in request.stream():
+                if len(chunk) > maximum - len(body):
+                    _reject(413, "operator catalog input exceeds size limit")
+                body.extend(chunk)
+    except HTTPException:
+        raise
+    except TimeoutError:
+        _reject(408, "operator catalog request body timed out")
+    except Exception:
+        _reject(400, "operator catalog request body unavailable")
+    if declared is not None and declared != len(body):
+        _reject(400, "operator catalog content length mismatch")
+    try:
+        value = parse_strict_json_object(bytes(body), limits=JsonLimits(
+            max_bytes=maximum, max_depth=4, max_object_keys=24, max_total_keys=32,
+            max_array_items=64, max_total_nodes=512, max_string_bytes=8192,
+        ))
+        return model.model_validate(_plain(value))
+    except (ValueError, TypeError, RecursionError):
+        # Pydantic and parser exceptions can contain submitted secret material.
+        _reject(422, "invalid operator catalog input")
+
+
+async def _mutate(request: Request, identity: auth.AdminIdentity, model_name: str,
+        operation_name: str, maximum: int, *, created: bool = False) -> JSONResponse:
+    from serverware import operator_catalog_inputs as inputs
+    from serverware import operator_catalog_mutations as mutations
+    from serverware import operator_catalog_schema
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, getattr(inputs, model_name), maximum)
+    try:
+        result = await _blocking(getattr(mutations, operation_name), payload, identity.user_id)
+    except mutations.CatalogNotFound:
+        _reject(404, "operator catalog resource not found")
+    except operator_catalog_schema.CatalogConflict:
+        _reject(409, "operator catalog or policy changed; refresh before trying again")
+    except mutations.CatalogLimitReached:
+        _reject(409, "operator catalog capacity reached; inspect workspace limits before trying again")
+    except ValueError:
+        _reject(422, "invalid operator catalog input or unsupported policy")
+    except Exception:
+        _reject(503, "operator catalog storage unavailable; inspect saved status before retrying")
+    try:
+        return JSONResponse(result, status_code=201 if created else 200, headers=_HEADERS)
+    except Exception:
+        _reject(503, "operator catalog result unavailable; inspect saved status before retrying")
+
+
+@router.get("/catalog")
+async def catalog(request: Request, _: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_catalog_mutations as mutations
+
+    _admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _reject(400, "operator catalog status accepts no body")
+    try:
+        result = await _blocking(mutations.catalog_status)
+        return JSONResponse(result, headers=_HEADERS)
+    except Exception:
+        _reject(503, "operator catalog status unavailable")
+
+
+@router.post("/credentials")
+async def create_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "CredentialInput", "create_credential", 16384, created=True)
+
+
+@router.post("/credentials/revoke")
+async def revoke_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "TargetInput", "revoke_credential", 1024)
+
+
+@router.post("/applications")
+async def create_application(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "ApplicationInput", "create_application", 2048, created=True)
+
+
+@router.post("/applications/revoke")
+async def revoke_application(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "TargetInput", "revoke_application", 1024)
+
+
+@router.post("/applications/rotate-token")
+async def rotate_application_token(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "RotateApplicationInput", "rotate_application_token", 2048)
+
+
+@router.post("/access-rules")
+async def create_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "RuleInput", "create_rule", 32768, created=True)
+
+
+@router.post("/access-rules/revoke")
+async def revoke_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "TargetInput", "revoke_rule", 1024)

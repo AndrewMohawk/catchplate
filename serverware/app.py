@@ -3810,17 +3810,23 @@ def operator_demo_status(_: AdminIdentity = Depends(require_role("admin"))) -> J
     from serverware import operator_demo, operator_demo_store
     if not operator_demo.active():
         raise HTTPException(status_code=404, detail="not found")
+    refusal = _operator_catalog_api.legacy_catalog_guard()
+    if refusal is not None:
+        return refusal
     return JSONResponse(operator_demo_store.status(), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/operator-demo/connections")
 async def operator_demo_connection(request: Request,
         identity: AdminIdentity = Depends(require_role("admin"))) -> JSONResponse:
-    from serverware import config, operator_demo, operator_demo_store
+    from serverware import config, operator_demo, operator_demo_store, operator_catalog_schema
     if not operator_demo.active():
         raise HTTPException(status_code=404, detail="not found")
     if request.headers.get("origin") != config.PUBLIC_URL.rstrip("/"):
         raise HTTPException(status_code=403, detail="same-origin operator session required")
+    refusal = await asyncio.to_thread(_operator_catalog_api.legacy_catalog_guard)
+    if refusal is not None:
+        return refusal
     if request.query_params or request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
         raise HTTPException(status_code=422, detail="invalid connection input")
     body = bytearray()
@@ -3832,6 +3838,8 @@ async def operator_demo_connection(request: Request,
         payload = operator_demo_store.ConnectionInput.model_validate_json(body)
         connection, client_token, policy_hash_value = await asyncio.to_thread(
             operator_demo_store.create_connection, payload, identity.user_id)
+    except operator_catalog_schema.LegacyCatalogWriteBlocked:
+        return _operator_catalog_api.legacy_catalog_refusal()
     except operator_demo_store.ConnectionLimitReached as exc:
         return JSONResponse(status_code=409, content={
             "code": "operator_demo_" + exc.reason + "_limit",
@@ -3854,11 +3862,14 @@ async def operator_demo_connection(request: Request,
 @app.post("/api/operator-demo/connections/revoke")
 async def operator_demo_revoke_connection(request: Request,
         identity: AdminIdentity = Depends(require_role("admin"))) -> JSONResponse:
-    from serverware import config, operator_demo, operator_demo_store
+    from serverware import config, operator_demo, operator_demo_store, operator_catalog_schema
     if not operator_demo.active():
         raise HTTPException(status_code=404, detail="not found")
     if request.headers.get("origin") != config.PUBLIC_URL.rstrip("/"):
         raise HTTPException(status_code=403, detail="same-origin operator session required")
+    refusal = await asyncio.to_thread(_operator_catalog_api.legacy_catalog_guard)
+    if refusal is not None:
+        return refusal
     if request.query_params or request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
         raise HTTPException(status_code=422, detail="invalid revocation input")
     body = bytearray()
@@ -3873,6 +3884,8 @@ async def operator_demo_revoke_connection(request: Request,
     try:
         await asyncio.to_thread(operator_demo_store.revoke_connection, payload, identity.user_id)
         result = await asyncio.to_thread(operator_demo_store.revoke_result, payload.connection_id)
+    except operator_catalog_schema.LegacyCatalogWriteBlocked:
+        return _operator_catalog_api.legacy_catalog_refusal()
     except operator_demo_store.RevocationNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
     except operator_demo_store.RevocationConflict:
@@ -29019,6 +29032,7 @@ from serverware import control_plane_oidc_session_activation_routes as _activati
 from serverware import control_plane_oidc_session_activation_recovery_routes as _activation_recovery_routes
 from serverware import portal_session_activation_confirmation_routes as _activation_confirmation_routes
 from serverware import control_plane_workload_identity_routes as _workload_identity_routes
+from serverware import operator_catalog_api as _operator_catalog_api
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -29032,4 +29046,5 @@ _fastapi_app.include_router(_activation_routes.router)
 _fastapi_app.include_router(_activation_recovery_routes.router)
 _fastapi_app.include_router(_activation_confirmation_routes.router)
 _fastapi_app.include_router(_workload_identity_routes.router)
+_fastapi_app.include_router(_operator_catalog_api.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

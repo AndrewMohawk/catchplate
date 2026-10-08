@@ -197,6 +197,8 @@ def initialize() -> None:
             raw, digest = _signed([], 1, initial_hash)
             conn.execute("INSERT INTO operator_demo_policy VALUES(1,1,?,?,?,?)",
                 (digest, raw, initial_hash, db.iso_now()))
+        from serverware import operator_catalog_schema
+        operator_catalog_schema.initialize(conn)
         conn.commit()
         materialize()
 
@@ -282,6 +284,9 @@ def create_connection(payload: ConnectionInput, actor_id: str) -> tuple[dict, st
         created_at=db.iso_now())
     with _LOCK, db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        from serverware import operator_catalog_schema
+        if operator_catalog_schema.active(conn):
+            raise operator_catalog_schema.LegacyCatalogWriteBlocked()
         rows = [json.loads(row[0]) for row in conn.execute("SELECT metadata_json FROM operator_demo_connections ORDER BY rowid")]
         if len(rows) >= MAX_ACTIVE_CONNECTIONS:
             raise ConnectionLimitReached("active")
@@ -327,6 +332,9 @@ def revoke_connection(payload: RevocationInput, actor_id: str) -> dict:
     db = _require()
     with _LOCK, db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        from serverware import operator_catalog_schema
+        if operator_catalog_schema.active(conn):
+            raise operator_catalog_schema.LegacyCatalogWriteBlocked()
         previous = conn.execute("SELECT * FROM operator_demo_revocations WHERE connection_id=?",
             (payload.connection_id,)).fetchone()
         target = conn.execute("SELECT metadata_json FROM operator_demo_connections WHERE id=?",

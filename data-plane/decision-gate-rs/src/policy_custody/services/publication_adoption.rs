@@ -30,6 +30,7 @@ fn profile(api: &str) -> Result<(bool, &'static str), ServiceError> {
 #[cfg(test)]
 mod profile_tests {
     use super::*;
+    use ed25519_dalek::Signer as _;
 
     #[test]
     fn bootstrap_adoption_is_an_explicit_separate_signature_domain() {

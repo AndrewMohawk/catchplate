@@ -18,6 +18,7 @@ mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
 mod legacy_audit_delivery;
+mod audit_post_diagnostics;
 mod native_audit_assignment;
 mod native_postboot_assignment;
 mod native_canary_transport;
@@ -47,6 +48,7 @@ mod native_loaded_policy;
 mod native_generation_origin;
 mod native_setup_hardware;
 mod credential_currentness;
+mod credential_header_replacement;
 mod native_runtime_lifetime;
 mod native_background_workers;
 mod native_lease_renewal;
@@ -1090,6 +1092,7 @@ struct Route {
     methods: HashSet<String>,
     paths: Vec<PathTemplate>,
     credential_ref: Option<String>,
+    credential_header: Option<Value>,
     adapter_type: String,
     adapter_config: Value,
     discard_headers: Vec<String>,
@@ -1239,7 +1242,7 @@ fn compiled_snapshot_behavior_sha256(
                         "publicationTargetPolicySha256":config.publication_target_policy_sha256,
                     })
                 });
-            json!({
+            let mut compiled_route = json!({
                 "id":route.id,
                 "principals":route.principals,
                 "scheme":route.scheme,
@@ -1255,7 +1258,11 @@ fn compiled_snapshot_behavior_sha256(
                 "constraints":route.constraints,
                 "jit":route.jit,
                 "responseObservation":response_observation,
-            })
+            });
+            if let Some(profile) = route.credential_header.as_ref() {
+                compiled_route["credentialHeader"] = profile.clone();
+            }
+            compiled_route
         })
         .collect::<Vec<_>>();
     sha256_prefixed(
@@ -4714,6 +4721,7 @@ enum AuditPostFailure {
 struct AuditPostError {
     message: String,
     kind: AuditPostFailure,
+    diagnostic: Option<audit_post_diagnostics::Diagnostic>,
 }
 
 impl AuditPostError {
@@ -4722,6 +4730,7 @@ impl AuditPostError {
             message: message.into(),
             // Unclassified transport/native failures remain conservative.
             kind: AuditPostFailure::OutcomeUnknown,
+            diagnostic: None,
         }
     }
 
@@ -4729,15 +4738,16 @@ impl AuditPostError {
         Self {
             message: message.into(),
             kind: AuditPostFailure::NotSent,
+            diagnostic: None,
         }
     }
 
     fn local_too_large(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: AuditPostFailure::LocalTooLarge }
+        Self { message: message.into(), kind: AuditPostFailure::LocalTooLarge, diagnostic: None }
     }
 
     fn authenticated_too_large(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: AuditPostFailure::AuthenticatedTooLarge }
+        Self { message: message.into(), kind: AuditPostFailure::AuthenticatedTooLarge, diagnostic: None }
     }
 
     fn request_too_large(&self) -> bool {
@@ -9927,6 +9937,9 @@ fn validate_optional_response_release_contract(
 }
 
 fn credential_injection_target(injection: &Value) -> Result<CredentialInjectionTarget, String> {
+    if injection.get("existingHeader").is_some() {
+        return Err("credential_existing_header_policy_invalid".to_string());
+    }
     let string_field = |name: &str, default: &str| -> Result<String, String> {
         match injection.get(name) {
             Some(Value::String(value)) => Ok(value.clone()),
@@ -11781,6 +11794,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("credentialRef")
             .and_then(Value::as_str)
             .and_then(|credential_id| credential_targets.get(credential_id));
+        credential_header_replacement::validate_policy_route(
+            route.get("credentialHeader"), credential_policy, request_config,
+            assigned_principals, &principal_required_headers,
+        )?;
         validate_route_identity_header_policy(
             route_id,
             request_config,
@@ -15165,6 +15182,7 @@ fn compile_signed_snapshot_with_expected_key(
                 .get("credentialRef")
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
+            credential_header: item.get("credentialHeader").cloned(),
             adapter_type: adapter
                 .get("type")
                 .and_then(Value::as_str)
@@ -24026,7 +24044,7 @@ fn prepare_upstream_for_forward(
     {
         return Ok(None);
     }
-    let physical_headers = match discard_declared_request_headers(&request.headers, &[]) {
+    let mut physical_headers = match discard_declared_request_headers(&request.headers, &[]) {
         Ok(headers) => headers,
         Err(_) => return Ok(None),
     };
@@ -24050,6 +24068,12 @@ fn prepare_upstream_for_forward(
         return Ok(None);
     }
     if validate_runtime_route_discard_headers(snapshot, route, principal).is_err() {
+        return Ok(None);
+    }
+    if credential_header_replacement::remove_for_route(
+        snapshot, route, principal, &mut physical_headers,
+    ).is_err() {
+        zeroize_string_map(&mut physical_headers);
         return Ok(None);
     }
     let identity_stripped_headers = strip_principal_required_headers(&physical_headers, principal);
@@ -24458,47 +24482,56 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
 fn post_serialized_legacy_audit_batch(
     state: &GateState, body: &[u8], event_count: usize,
 ) -> Result<(), AuditPostError> {
+    use audit_post_diagnostics::Stage;
+    let mut diagnostic = audit_post_diagnostics::Attempt::new(state, event_count);
     if state.measured_audit.is_some() || state.is_production {
-        return Err(AuditPostError::not_sent("production audit requires measured mTLS authorship"));
+        return Err(diagnostic.failure(Stage::Preflight,
+            AuditPostError::not_sent("production audit requires measured mTLS authorship")));
     }
     if body.len() > MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES {
-        return Err(AuditPostError::local_too_large(format!(
+        return Err(diagnostic.failure(Stage::Preflight, AuditPostError::local_too_large(format!(
             "serialized audit batch is {} bytes; maximum is {MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES}",
             body.len()
-        )));
+        ))));
     }
     let url = state
         .audit_url
         .as_ref()
-        .ok_or_else(|| AuditPostError::not_sent("audit URL is not configured"))?;
+        .ok_or_else(|| diagnostic.failure(Stage::Preflight,
+            AuditPostError::not_sent("audit URL is not configured")))?;
     let token = state
         .audit_token
         .as_ref()
-        .ok_or_else(|| AuditPostError::not_sent("audit token is not configured"))?;
+        .ok_or_else(|| diagnostic.failure(Stage::Preflight,
+            AuditPostError::not_sent("audit token is not configured")))?;
     let expected_instance_id = state
         .server_instance_id
         .as_deref()
-        .ok_or_else(|| AuditPostError::not_sent("audit acknowledgement instance is not configured"))?;
+        .ok_or_else(|| diagnostic.failure(Stage::Preflight,
+            AuditPostError::not_sent("audit acknowledgement instance is not configured")))?;
     let expected_count = u64::try_from(event_count).map_err(|_| {
-        AuditPostError::not_sent("audit batch count does not fit acknowledgement contract")
+        diagnostic.failure(Stage::Preflight,
+            AuditPostError::not_sent("audit batch count does not fit acknowledgement contract"))
     })?;
     let body_len = body.len();
     let batch_digest = sha256_prefixed(body);
     let snapshot = current_snapshot(state);
+    diagnostic.snapshot(&snapshot);
     if !snapshot_is_active(state, &snapshot) {
-        return Err(AuditPostError::not_sent(
+        return Err(diagnostic.failure(Stage::SnapshotNotCurrent, AuditPostError::not_sent(
             "audit acknowledgement trust is not current",
-        ));
+        )));
     }
     if snapshot.response_verifying_key.is_none()
         || snapshot.response_signing_key_id.is_none()
         || snapshot.attested_response_context.is_none()
     {
-        return Err(AuditPostError::not_sent(
+        return Err(diagnostic.failure(Stage::Preflight, AuditPostError::not_sent(
             "audit acknowledgement requires an attested response signing key",
-        ));
+        )));
     }
-    let response_nonce = fresh_control_plane_response_nonce().map_err(AuditPostError::not_sent)?;
+    let response_nonce = fresh_control_plane_response_nonce().map_err(|error|
+        diagnostic.failure(Stage::Preflight, AuditPostError::not_sent(error)))?;
     let request = state
         .audit_client
         .post(url)
@@ -24507,25 +24540,29 @@ fn post_serialized_legacy_audit_batch(
         .header("Content-Type", "application/json")
         .body(body.to_vec());
     let (client, request) = bounded_service_request(state, request)
-        .map_err(AuditPostError::not_sent)?
+        .map_err(|error| diagnostic.failure(Stage::ServiceLifetime, AuditPostError::not_sent(error)))?
         .build_split();
-    let request = request.map_err(|_| AuditPostError::not_sent("build audit batch"))?;
+    let request = request.map_err(|_| diagnostic.failure(Stage::Preflight,
+        AuditPostError::not_sent("build audit batch")))?;
     // From execute onward the receiver may have committed, even if no usable
     // response returns. Only an authenticated size rejection proves otherwise.
     let mut response = client.execute(request)
-        .map_err(|err| AuditPostError::other(format!("send audit batch: {err}")))?;
+        .map_err(|err| diagnostic.failure(Stage::Transport,
+            AuditPostError::other(format!("send audit batch: {err}"))))?;
     let status = response.status();
+    diagnostic.status(status);
     let response_body = Zeroizing::new(read_bounded_control_plane_response_body(
         &mut response,
         MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES,
         "audit acknowledgement",
     )
-    .map_err(AuditPostError::other)?);
-    native_service_remaining(state).map_err(AuditPostError::other)?;
+    .map_err(|error| diagnostic.failure(Stage::ResponseBody, AuditPostError::other(error)))?);
+    native_service_remaining(state).map_err(|error|
+        diagnostic.failure(Stage::ServiceLifetime, AuditPostError::other(error)))?;
     if !snapshot_is_active(state, &snapshot) {
-        return Err(AuditPostError::other(
+        return Err(diagnostic.failure(Stage::SnapshotNotCurrent, AuditPostError::other(
             "policy snapshot changed while audit acknowledgement was fetched",
-        ));
+        )));
     }
     verify_control_plane_signed_response(
         &snapshot,
@@ -24537,32 +24574,40 @@ fn post_serialized_legacy_audit_batch(
         &response_body,
         "audit acknowledgement",
     )
-    .map_err(AuditPostError::other)?;
+    .map_err(|error| diagnostic.failure(
+        audit_post_diagnostics::verification_stage(&error, response.headers(), &snapshot),
+        AuditPostError::other(error)))?;
     if status == StatusCode::PAYLOAD_TOO_LARGE {
-        return Err(AuditPostError::authenticated_too_large(format!(
+        return Err(diagnostic.failure(Stage::HttpStatus, AuditPostError::authenticated_too_large(format!(
             "audit ingest rejected {body_len} serialized bytes as too large"
-        )));
+        ))));
     }
     if !status.is_success() {
-        return Err(AuditPostError::other(format!(
+        return Err(diagnostic.failure(Stage::HttpStatus, AuditPostError::other(format!(
             "audit ingest returned {status}"
-        )));
+        ))));
     }
     let acknowledgement = strict_json_from_slice::<DataPlaneAuditAck>(&response_body)
-        .map_err(|_| AuditPostError::other("parse_audit_acknowledgement"))?;
+        .map_err(|_| diagnostic.failure(Stage::AckParse,
+            AuditPostError::other("parse_audit_acknowledgement")))?;
     if acknowledgement.instance_id != expected_instance_id {
-        return Err(AuditPostError::other(
+        return Err(diagnostic.failure(Stage::AckInstanceMismatch, AuditPostError::other(
             "audit acknowledgement instance binding mismatch",
-        ));
+        )));
     }
     if acknowledgement.api_version != "serverware.dataPlaneAuditAck/v1"
         || !acknowledgement.ok
         || acknowledgement.accepted != expected_count
         || acknowledgement.batch_digest != batch_digest
     {
-        return Err(AuditPostError::other(
+        let stage = if acknowledgement.api_version != "serverware.dataPlaneAuditAck/v1" || !acknowledgement.ok {
+            Stage::AckContractMismatch
+        } else if acknowledgement.accepted != expected_count {
+            Stage::AckCountMismatch
+        } else { Stage::AckDigestMismatch };
+        return Err(diagnostic.failure(stage, AuditPostError::other(
             "audit acknowledgement binding mismatch",
-        ));
+        )));
     }
     Ok(())
 }
@@ -24579,15 +24624,21 @@ fn audit_worker(state: Arc<GateState>, interval: Duration) {
         if state.measured_audit.is_some() && native_audit_owner::retry(&state).is_err() {
             thread::sleep(interval); continue;
         }
-        if state.measured_audit.is_none() && legacy_audit_delivery::retry(&state).is_err() {
-            thread::sleep(Duration::from_secs(1)); continue;
+        if state.measured_audit.is_none() {
+            if let Err(error) = legacy_audit_delivery::retry(&state) {
+                audit_post_diagnostics::emit(&error, audit_post_diagnostics::Phase::Retry);
+                thread::sleep(Duration::from_secs(1)); continue;
+            }
         }
         let batch = pop_audit_batch(&state);
         if batch.is_empty() {
             thread::sleep(interval);
             continue;
         }
-        if flush_audit_batch(&state, batch).is_err() {
+        if let Err(error) = flush_audit_batch(&state, batch) {
+            if state.measured_audit.is_none() {
+                audit_post_diagnostics::emit(&error, audit_post_diagnostics::Phase::Initial);
+            }
             eprintln!("audit batch send failed");
             thread::sleep(Duration::from_secs(1));
         }
@@ -35015,6 +35066,14 @@ fn decide_internal_with_mode_and_shadow<'a>(
             started,
         );
     }
+    if let Err(code) = credential_header_replacement::remove_for_route(
+        snapshot, route, principal, &mut req.headers,
+    ) {
+        return deny_for_route(
+            credential_header_replacement::denial_status(code), code,
+            json!({"error":code}), route, started,
+        );
+    }
     let identity_stripped_headers = strip_principal_required_headers(&req.headers, principal);
     replace_string_map(&mut req.headers, identity_stripped_headers);
     let retained_headers = match discard_declared_request_headers(&req.headers, &route.discard_headers) {
@@ -37199,7 +37258,14 @@ fn provider_visible_request_headers(
         .iter()
         .find(|principal| principal.id == principal_id)
         .ok_or("allowed decision principal is not present in the active snapshot")?;
-    Ok(strip_principal_required_headers(headers, principal))
+    let mut retained = strip_principal_required_headers(headers, principal);
+    if let Err(code) = credential_header_replacement::remove_for_decision(
+        snapshot, decision, principal, &mut retained,
+    ) {
+        zeroize_string_map(&mut retained);
+        return Err(code.to_string());
+    }
+    Ok(retained)
 }
 
 fn allowed_decision_discard_headers(
@@ -37880,6 +37946,12 @@ fn validate_and_apply_bound_credential_injection(
 ) -> Result<ResponseSecretGuard, String> {
     let (target, lease_secret) =
         active_credential_injection_binding(snapshot, decision, injection_plan, lease)?;
+    let route = snapshot.routes.iter().find(|route|
+        Some(route.id.as_str()) == decision.get("route_id").and_then(Value::as_str)
+    ).ok_or("credential injection route is not active")?;
+    let credential = snapshot.credentials.get(&lease.scope.credential_id)
+        .ok_or("credential injection credential is not active")?;
+    credential_header_replacement::require_late_target_absent(headers, route, credential)?;
     let response_guard =
         apply_credential_injection(headers, final_url, injection_plan, lease)?;
     validate_final_provider_url_binding(
@@ -38338,6 +38410,7 @@ fn preflight_cached_credential_injection(
     let target = credential_injection_target(&credential.injection)?;
     let lease_secret = secret_for_injection(&lease, &credential.injection)?;
     let mut headers = filtered_forward_headers(request_headers, injection, discard_headers)?;
+    credential_header_replacement::require_late_target_absent(&headers, route, credential)?;
     let precredential_url = request_url.clone();
     let mut upstream_url = precredential_url.clone();
     apply_credential_injection(&mut headers, &mut upstream_url, injection, &lease)?;
@@ -53396,6 +53469,7 @@ mod tests {
                 methods: HashSet::from(["GET".to_string(), "POST".to_string()]),
                 paths: vec![compile_template("/resource").expect("test route template")],
                 credential_ref: None,
+                credential_header: None,
                 adapter_type: "generic.rest".to_string(),
                 adapter_config: json!({
                     "credentialMode":"none",
@@ -59197,46 +59271,12 @@ mod tests {
     }
 
     #[test]
-    fn malformed_generic_policy_cannot_forward_internal_prefix_to_upstream_or_proof() {
+    fn malformed_generic_policy_without_dispatch_authority_refuses_before_upstream() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
         listener
             .set_nonblocking(true)
             .expect("nonblocking upstream listener");
         let upstream = listener.local_addr().expect("test upstream address");
-        let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            loop {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(1)))
-                            .expect("upstream read timeout");
-                        let mut request = Vec::new();
-                        let mut buffer = [0_u8; 1024];
-                        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                            let read = stream.read(&mut buffer).expect("read upstream request");
-                            assert!(read > 0, "upstream request ended before its header block");
-                            request.extend_from_slice(&buffer[..read]);
-                        }
-                        stream
-                            .write_all(
-                                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"safe\":true}",
-                            )
-                            .expect("write upstream response");
-                        return String::from_utf8(request).expect("ASCII upstream request");
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                        assert!(
-                            Instant::now() < deadline,
-                            "request did not reach test upstream"
-                        );
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(err) => panic!("accept test upstream request: {err}"),
-                }
-            }
-        });
-
         let mut snapshot = (*test_snapshot(1)).clone();
         let route = &mut snapshot.routes[0];
         route.scheme = "http".to_string();
@@ -59289,18 +59329,112 @@ mod tests {
             }
             ForwardResult::Streamed => panic!("test response unexpectedly streamed"),
         };
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP response body");
+        assert_eq!(
+            serde_json::from_str::<Value>(body).expect("dispatch refusal JSON"),
+            json!({"error":"dispatch_barrier_unavailable"})
+        );
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("no upstream connection without dispatch authority")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
 
-        let captured = server.join().expect("test upstream thread");
-        assert!(captured
-            .to_ascii_lowercase()
-            .contains("accept: application/json"));
-        assert!(!captured.to_ascii_lowercase().contains("npm-session"));
-        assert!(!captured.contains("must-not-reach-the-buffered-upstream"));
-        assert!(!captured.to_ascii_lowercase().contains("x-serverware-"));
+    #[test]
+    fn malformed_generic_policy_provider_material_and_proof_strip_internal_prefix() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        let route = &mut snapshot.routes[0];
+        route.methods = HashSet::from(["GET".to_string()]);
+        route.adapter_config["request"] = json!({
+            "allowedHeaders":["accept", "x-serverware-response-nonce"],
+            "allowedQueryKeys":[],
+            "bodyMode":"none",
+            "discardHeaders":["npm-session"],
+            "maxBodyBytes":0
+        });
+        route.discard_headers = vec!["npm-session".to_string()];
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let headers = BTreeMap::from([
+            ("Accept".to_string(), "application/json".to_string()),
+            (
+                "Npm-Session".to_string(),
+                "must-not-reach-the-buffered-upstream".to_string(),
+            ),
+            (
+                "X-Serverware-Response-Nonce".to_string(),
+                "must-not-leave-the-data-plane".to_string(),
+            ),
+        ]);
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            DecisionRequest {
+                client_ip: Some("127.0.0.1".to_string()),
+                method: "GET".to_string(),
+                url: "https://example.test/resource".to_string(),
+                headers: headers.clone(),
+                body: String::new(),
+                body_sha256: Some(sha256_prefixed(b"")),
+                forwarded_body_length: Some(0),
+                forwarded_body_utf8_valid: Some(true),
+                credential_metadata: BTreeMap::new(),
+                gmail_proofs: Vec::new(),
+                client_request_digest: None,
+            },
+            Some("agent:test"),
+        );
+        assert_eq!(decision["allowed"], true, "{decision}");
+        assert_eq!(
+            decision["canonical_request"]["request"]["headers"],
+            json!({"host":"example.test", "accept":"application/json"})
+        );
+        let provider_headers = provider_visible_request_headers(&snapshot, &decision, &headers)
+            .expect("provider-visible input");
+        let discard_headers = allowed_decision_discard_headers(&snapshot, &decision)
+            .expect("decision-bound discard policy");
+        assert_eq!(discard_headers, vec!["npm-session".to_string()]);
+        let forwarded = filtered_forward_headers(&provider_headers, &Value::Null, &discard_headers)
+            .expect("sanitized provider headers");
+        // Material construction only: no dispatch permit is manufactured, and no request is sent.
+        let unsent = Client::builder()
+            .no_proxy()
+            .build()
+            .expect("construction-only client")
+            .get("https://example.test/resource")
+            .headers(forwarded)
+            .build()
+            .expect("build unsent provider request");
+        assert_eq!(unsent.method(), reqwest::Method::GET);
+        assert_eq!(unsent.url().as_str(), "https://example.test/resource");
+        assert_eq!(unsent.headers().len(), 1);
+        assert_eq!(unsent.headers().get("accept").unwrap(), "application/json");
+        assert!(!unsent.headers().contains_key("npm-session"));
+        assert!(unsent
+            .headers()
+            .keys()
+            .all(|name| !name.as_str().starts_with("x-serverware-")));
+        for value in unsent.headers().values() {
+            assert!(!value
+                .as_bytes()
+                .windows(b"must-not-".len())
+                .any(|part| part == b"must-not-"));
+        }
+        // The client proof retains ordinary original headers; route discards apply only
+        // to provider material. Internal Serverware headers remain absent from both.
         assert_eq!(
             canonical_client_proof_headers(&headers).expect("proof headers"),
-            BTreeMap::from([("accept".to_string(), "application/json".to_string())])
+            BTreeMap::from([
+                ("accept".to_string(), "application/json".to_string()),
+                (
+                    "npm-session".to_string(),
+                    "must-not-reach-the-buffered-upstream".to_string(),
+                ),
+            ])
         );
     }
 
@@ -65185,6 +65319,7 @@ mod tests {
             methods: HashSet::from(["POST".to_string()]),
             paths: vec![compile_template("/resource").expect("template")],
             credential_ref: None,
+            credential_header: None,
             adapter_type: "generic.rest".to_string(),
             adapter_config: json!({"request":{
                 "allowedHeaders":[],
@@ -75405,7 +75540,7 @@ mod tests {
     fn client_proof_request_binding_is_canonical_and_sanitized() {
         let mut request = IncomingRequest {
             method: "GET".to_string(),
-            target: "https://example.test/resource?b=2&a=~".to_string(),
+            target: "https://example.test/resource?a=~&b=2".to_string(),
             headers: BTreeMap::from([
                 (
                     "Authorization".to_string(),
@@ -75462,10 +75597,11 @@ mod tests {
             client_proof_request_digest(&request, &equivalent_context).expect("equivalent digest");
         assert_eq!(digest, equivalent_digest);
 
+        request.target = "https://example.test/resource?b=2&a=~".to_string();
+        assert!(client_proof_request_digest(&request, &equivalent_context)
+            .expect_err("noncanonical query order must be refused")
+            .contains("canonical query pairs must be strictly ordered"));
         request.target = "https://example.test/resource?a=~&b=2".to_string();
-        let reordered_unique_digest =
-            client_proof_request_digest(&request, &equivalent_context).expect("reordered digest");
-        assert_eq!(digest, reordered_unique_digest);
 
         request
             .headers

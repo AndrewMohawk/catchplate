@@ -38,6 +38,26 @@ function createCredentialsView(workspace) {
 }
 function createAccessRulesView(workspace) {
   const form = element('access-rule-form');
+  function renderCredentialInput() {
+    const mode = element('rule-credential-input').value;
+    const supported = availableCredentialInputModes(workspace.state.catalog).includes(mode);
+    const replacing = supported && mode === 'replace_exact';
+    const credential = workspace.state.catalog?.credentials.find(item => item.id === element('rule-credential-id').value);
+    element('rule-placeholder-group').hidden = !replacing;
+    element('rule-placeholder').disabled = !replacing;
+    element('rule-placeholder').required = replacing;
+    element('rule-placeholder').setCustomValidity('');
+    element('rule-credential-input-help').textContent = !supported ? 'Refresh the workspace to load supported credential input choices. New rules are disabled until these are available.' :
+      replacing ? 'Send exactly one matching dummy header. Missing, different or duplicate values are denied before the real credential is used.' :
+      'Your client sends no provider credential header. Serverware adds the saved credential after authorizing the request.';
+    if (!replacing) return;
+    try { element('rule-credential-header').textContent = credentialHeaderTarget(credential); }
+    catch (_) {
+      element('rule-credential-header').textContent = 'This saved credential does not support dummy header replacement.';
+      element('rule-placeholder').setCustomValidity('Choose a saved credential with a supported header target.');
+    }
+    element('rule-placeholder').placeholder = credential?.auth_type === 'bearer' ? 'Bearer SERVERWARE_DUMMY' : 'SERVERWARE_DUMMY';
+  }
   function renderResponseMode() {
     const mode = element('rule-response-mode').value;
     const supported = availableResponseModes(workspace.state.catalog).includes(mode);
@@ -50,12 +70,22 @@ function createAccessRulesView(workspace) {
       'Successful JSON responses contain only the fields you list below. Error responses retain only error, code and message fields. Destination, method and request restrictions still apply.';
   }
   element('rule-response-mode').addEventListener('change', renderResponseMode);
+  for (const id of ['rule-credential-input', 'rule-credential-id']) element(id).addEventListener('change', renderCredentialInput);
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (!workspace.ready('access_rules') || !form.reportValidity()) return;
     const catalog = workspace.state.catalog; const origin = element('rule-upstream-origin').value;
     const path = element('rule-path').value.trim();
     const responseMode = element('rule-response-mode').value;
     const responseFields = responseMode === 'projected_json' ? fieldLines('rule-response-fields') : [];
+    const credentialInput = element('rule-credential-input').value;
+    const placeholder = credentialInput === 'replace_exact' ? element('rule-placeholder').value : undefined;
+    const credential = catalog.credentials.find(item => item.id === element('rule-credential-id').value);
+    try {
+      if (!availableCredentialInputModes(catalog).includes(credentialInput)) throw new Error();
+      clientCredentialInput({credentialInput, placeholder, credential});
+    } catch (_) {
+      element('access-rule-form-status').textContent = 'Choose a supported credential input. A dummy value must be 1–1024 printable ASCII characters with no leading or trailing spaces; use the complete header value.'; return;
+    }
     const methods = [...document.querySelectorAll('input[name="rule-method"]:checked')].map(input => input.value);
     if (!catalog.allowed_upstreams.includes(origin) || !path.startsWith('/') || path.startsWith('//') || /[?#\\\s*]/.test(path) ||
         !methods.length || methods.some(method => !operatorMethods.includes(method)) || !availableResponseModes(catalog).includes(responseMode) ||
@@ -65,27 +95,36 @@ function createAccessRulesView(workspace) {
     const body = {name: element('rule-name').value.trim(), application_id: element('rule-application-id').value,
       credential_id: element('rule-credential-id').value, upstream_url: origin.replace(/\/$/, '') + path, methods,
       request_fields: fieldLines('rule-request-fields'), response_mode: responseMode, response_fields: responseFields,
-      query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers')};
+      credential_input: credentialInput, query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers')};
+    if (credentialInput === 'replace_exact') body.placeholder = placeholder;
     await workspace.mutate('access-rules', body, 'access-rule-form-status');
   });
   function render() {
     const catalog = workspace.state.catalog;
     const responseModes = availableResponseModes(catalog);
+    const credentialInputModes = availableCredentialInputModes(catalog);
     element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active') ||
-      !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length;
-    if (!catalog) { renderResponseMode(); return; }
+      !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
+    if (!catalog) { renderResponseMode(); renderCredentialInput(); return; }
     chooseOptions('rule-response-mode', responseModes.map(mode => ({id: mode, name: operatorResponseModes[mode]})), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
     chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active'), 'Save a credential first');
+    chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
+    renderCredentialInput();
     chooseOptions('rule-upstream-origin', catalog.allowed_upstreams.map(origin => ({id: origin, name: origin})), 'No approved destination configured');
     renderCards('access-rules-list', catalog.access_rules.map(rule => {
       const application = catalog.applications.find(item => item.id === rule.application_id);
       const credential = catalog.credentials.find(item => item.id === rule.credential_id);
       const enforced = workspace.loaded() && rule.enforcement === (rule.status === 'revoked' ? 'revoked' : 'active');
       const badge = rule.status === 'revoked' ? enforced ? 'Revoked · enforced' : 'Revoked · enforcement pending' : enforced ? 'Active' : 'Saved · activation pending';
+      const credentialValues = [['Client credential input', operatorCredentialInputModes[rule.credential_input] || 'Unsupported credential input']];
+      try {
+        const dummy = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
+        if (dummy) credentialValues.push(['Exact dummy header', dummy.name + ': ' + dummy.value]);
+      } catch (_) { credentialValues.push(['Client setup', 'Invalid credential input configuration']); }
       const card = resourceCard(rule, badge, [['Application', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
-        ['Exact URL', rule.upstream_url], ['Methods', rule.methods.join(', ')],
+        ...credentialValues, ['Exact URL', rule.upstream_url], ['Methods', rule.methods.join(', ')],
         ['Response content', operatorResponseModes[rule.response_mode] || 'Unsupported response mode'],
         [rule.response_mode === 'unfiltered_json' ? 'Response fields' : 'Success response fields',
           rule.response_mode === 'unfiltered_json' ? 'All JSON content (no field filtering)' : rule.response_fields.join(', ')], ['Rule ID', rule.id]]);

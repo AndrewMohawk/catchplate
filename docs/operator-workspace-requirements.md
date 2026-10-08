@@ -127,16 +127,19 @@ acceptance before rollout. An old gate must reject an unsupported policy; never
 silently substitute another response mode. Saved state is not active until the
 backend reports active publication and the loaded hash matches the saved hash.
 
-Exact placeholder replacement, Google profile integration and the real-provider
-consent/refresh journey are also separate open requirements. Do not present
-inactive OAuth controls, a health check, fixture-only browser success or a
-JSON-only response mode as completion of those journeys.
+Per-rule header replacement is implemented in the catalog, UI and Rust source;
+actual proxy acceptance remains separate. Google profile integration and the
+real-provider consent/refresh journey are still open requirements. Do not
+present inactive OAuth controls, a health check, fixture-only browser success
+or a JSON-only response mode as completion of those journeys.
 
 Client placeholder matching belongs to an access rule, not the reusable secret.
 Two applications sharing a credential may use different dummy values, or one
 may need insertion without any dummy header. The provider header target still
 comes from the credential's injection contract. The placeholder is public client
 configuration, never a provider secret or an application authentication token.
+The [replacement guide](exact-header-replacement.md) describes that client
+journey and its exact supported header contract.
 
 ## What the original examples imply
 

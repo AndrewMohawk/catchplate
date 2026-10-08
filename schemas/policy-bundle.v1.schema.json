@@ -146,6 +146,21 @@
         }
       ]
     },
+    "credentialHeaderReplacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "expectedValue"],
+      "properties": {
+        "mode": {"const": "replaceExact"},
+        "expectedValue": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[!-~](?:[ -~]*[!-~])?(?![\\s\\S])"
+        }
+      },
+      "$comment": "Per-route public dummy selector, never a real credential. The credentialRef supplies the existing injection target (bearer/custom header only). Match exactly one complete header value without trimming; missing, mismatched or duplicate fields deny before credential access. Absence preserves insertion-only behavior. Compiler/runtime additionally reject reserved target aliases and principal identity collisions."
+    },
     "credentialCustomInjectionHeaderName": {
       "allOf": [
         {"$ref": "#/$defs/credentialInjectionHeaderName"},
@@ -1327,6 +1342,7 @@
             "maxLength": 128,
             "$comment": "Admission must resolve this ID exactly once and prove that the referenced credential's type, provider, subject, OAuth client ID, and scopes satisfy the selected adapter config credentialBinding."
           },
+          "credentialHeader": {"$ref": "#/$defs/credentialHeaderReplacement"},
           "responseObservation": {
             "type": "object",
             "required": ["version"],
@@ -1533,6 +1549,10 @@
           }
         },
         "allOf": [
+          {
+            "if": {"required": ["credentialHeader"]},
+            "then": {"required": ["credentialRef"]}
+          },
           {
             "if": {
               "properties": {

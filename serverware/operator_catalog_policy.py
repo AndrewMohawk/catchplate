@@ -56,6 +56,9 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
         route = generated['routes'][0]
         route['adapter']['config']['credentialBinding']['subjects'] = [credential['provider_subject']]
         _response_profile(rule, route)
+        replacement = schema.rule_credential_header(rule, credential)
+        if replacement is not None:
+            route['credentialHeader'] = replacement
         routes.append(route)
     bundle = generated
     bundle['principals'] = [principals[row['id']] for row in catalog['applications'] if row['id'] in principals]

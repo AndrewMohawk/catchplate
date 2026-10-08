@@ -79,6 +79,8 @@ class RuleInput(NamedInput):
     query_keys: list[_Item] = Field(default_factory=list, max_length=64)
     allowed_headers: list[_Item] = Field(default_factory=lambda: ["accept", "user-agent"], max_length=32)
     response_mode: Literal["projected_json", "unfiltered_json"] = "projected_json"
+    credential_input: Literal["insert", "replace_exact"] = "insert"
+    placeholder: str | None = Field(default=None, min_length=1, max_length=1024, repr=False)
     _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
 
     @field_validator("methods", "request_fields", "response_fields", "query_keys", "allowed_headers")
@@ -100,4 +102,18 @@ class RuleInput(NamedInput):
     def response_mode_fields(self):
         if (self.response_mode == "projected_json") != bool(self.response_fields):
             raise ValueError("projected JSON requires fields; unfiltered JSON forbids them")
+        return self
+
+    @model_validator(mode="after")
+    def credential_input_placeholder(self):
+        if self.credential_input == "insert":
+            if "placeholder" in self.model_fields_set:
+                raise ValueError("insertion does not accept a placeholder")
+        else:
+            from serverware.policy_bundle import validate_credential_header_replacement
+            # Validate public placeholder grammar here. The actual stored
+            # credential's target is independently checked inside publication.
+            validate_credential_header_replacement(
+                {"mode": "replaceExact", "expectedValue": self.placeholder},
+                {"type": "bearer", "header": "Authorization"})
         return self

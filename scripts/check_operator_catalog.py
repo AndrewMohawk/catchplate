@@ -10,7 +10,6 @@ Success proves this private HTTP CONNECT leg, not public TLS/DNS or production.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 import json
 import os
@@ -22,10 +21,14 @@ import time
 from urllib.parse import urlencode
 
 try:
+    from scripts import operator_catalog_feature_checks as features
+    from scripts.operator_catalog_feature_checks import release_attempt_pairs
     from scripts.check_operator_demo import (
         AUTHORITY, SHA256, CheckFailure, OperatorDemoCheck, require, token_file,
     )
 except ModuleNotFoundError:
+    import operator_catalog_feature_checks as features
+    from operator_catalog_feature_checks import release_attempt_pairs
     from check_operator_demo import (
         AUTHORITY, SHA256, CheckFailure, OperatorDemoCheck, require, token_file,
     )
@@ -37,37 +40,6 @@ CLAIM_NAME = ".operator-catalog-acceptance.claim"
 MARKER = {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}
 TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 WARM_MIN_REMAINING_MS = 1000
-
-
-def release_attempt_pairs(events, needed):
-    """Preserve each successful request, not only its principal/route/policy stage."""
-    pairs, row_ids = {}, set()
-    for row in events:
-        event, kind = row.get("event", {}), row.get("event_type")
-        scope = (event.get("principal_id"), event.get("route_id"), event.get("policy_hash"))
-        if scope not in needed or kind not in {
-                "data_plane.credential.release_started", "data_plane.response.released"}:
-            continue
-        attempt = event.get("attempt_id")
-        require(isinstance(attempt, str) and SHA256.fullmatch(attempt) and event.get("flow_id") == attempt
-                and event.get("method") == "GET", "successful audit request identity differs")
-        require(row.get("id") not in row_ids, "duplicate durable audit row identity")
-        row_ids.add(row["id"])
-        if kind == "data_plane.response.released":
-            require(event.get("upstream_status") == 200 and event.get("outcome") == "released",
-                    "audit response does not represent a successful release")
-        else:
-            require(event.get("outcome") == "release_started", "audit credential release outcome differs")
-        pair = pairs.setdefault(attempt, {"scope": scope, "events": {}})
-        require(pair["scope"] == scope and kind not in pair["events"],
-                "request attempt reused across scopes or audit events")
-        pair["events"][kind] = row["id"]
-    complete = {attempt: pair for attempt, pair in pairs.items() if len(pair["events"]) == 2}
-    observed = Counter(pair["scope"] for pair in pairs.values())
-    require(not observed - needed, "more audit request identities than observed dispatches")
-    actual = Counter(pair["scope"] for pair in complete.values())
-    require(not actual - needed, "more successful audit request pairs than observed dispatches")
-    return actual, complete
 
 
 def claim_fixture(marker: Path, claim: Path) -> None:
@@ -251,6 +223,7 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         digest = "sha256:" + hashlib.sha256(("Bearer " + self.credential).encode("ascii")).hexdigest()
         status, payload = self.request("/echo?" + urlencode({"expectedAuthorizationSha256": digest}))
         require(status == 200 and isinstance(payload, dict)
+                and set(payload) == features.PROJECTED_FIELDS
                 and payload.get("authorization_present") is True and payload.get("authorization_scheme") == "Bearer"
                 and payload.get("authorization_matches_expected") is True
                 and payload.get("proxy_authorization_seen") is False
@@ -260,34 +233,7 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         self.successes.append((application["principal_id"], rule["route_id"], self.policy_hash))
 
     def verify_catalog_audit(self):
-        needed_mutations = set(self.mutations)
-        needed_releases = Counter(self.successes)
-        while True:
-            events = self.audit()
-            mutations, retained = set(), set()
-            for row in events:
-                event, kind = row.get("event", {}), row.get("event_type")
-                key = (kind, event.get("resource_id"), event.get("policy_hash"))
-                if key in needed_mutations:
-                    mutations.add(key)
-                    retained.add(row["id"])
-            actual_releases, pairs = release_attempt_pairs(events, needed_releases)
-            retained.update(identifier for pair in pairs.values() for identifier in pair["events"].values())
-            health = self.health()
-            audit = health.get("audit", {})
-            require(all(audit.get(key) == 0 for key in ("dropped", "required_failed", "send_failed")),
-                    "audit delivery reported a failure in the normal fixture")
-            drained = all(audit.get(key) == 0 for key in (
-                "queue_depth", "reserved", "in_flight_optional", "pending_retry_batches", "pending_retry_events"))
-            if needed_mutations <= mutations and needed_releases == actual_releases and drained:
-                break
-            time.sleep(min(0.25, self.timeout()))
-        require(retained <= {row["id"] for row in self.audit()}, "audit rows did not survive fresh read")
-        chain = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
-        require(chain.get("ok") is True and chain.get("complete") is True and chain.get("backend") == "sqlite",
-                "complete persisted audit chain verification failed")
-        self.results.append("six_distinct_request_attempt_pairs_with_drained_verified_audit_chain")
-        return sorted(retained), sorted(pairs)
+        return features.verify_audit(self)
 
     def run(self):
         self.health()  # Profile and exact binary before loading the administrator token.
@@ -361,15 +307,17 @@ class OperatorCatalogCheck(OperatorDemoCheck):
                 and len(snapshot["applications"]) == 2 and len(snapshot["access_rules"]) == 2
                 and self.count() == 6, "shared credential, resource retention, or total dispatch count differs")
         self.results.append("app2_old_token_403_no_dispatch_new_token_200_shared_credential_unchanged")
+        features.checkpoint(self, "lifecycle")
+        feature_app, feature_rule = features.run_features(self, credential)
         audit_ids, attempt_ids = self.verify_catalog_audit()
         result = {"ok": True, "schema": "serverware.operatorCatalogCheck/v1", "mode": "operator-development",
             "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
             "proxyTransport": "private-http-connect-leg" if self.proxy.scheme == "http" else "verified-private-https-edge",
             "originTlsVerified": True, "runId": self.run_id, "checks": self.results,
-            "credentialId": credential["id"], "applicationIds": [row["id"] for row in applications],
-            "ruleIds": [row["id"] for row in rules], "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
-            "policyObservations": self.observations, "warmLeaseInvalidations": self.warm_observations,
-            "upstreamDispatches": 6, "durableAuditEventIds": audit_ids, "successfulRequestAttemptIds": attempt_ids}
+            "credentialId": credential["id"], "applicationIds": [row["id"] for row in applications] + [feature_app],
+            "ruleIds": [row["id"] for row in rules] + [feature_rule], "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
+            **features.safe_evidence(self), "upstreamDispatches": 9, "responsesReleased": 7, "responsesBlocked": 2,
+            "durableAuditEventIds": audit_ids, "auditedRequestAttemptIds": attempt_ids}
         self.clean(json.dumps(result, sort_keys=True).encode("utf-8"))
         return result
 
@@ -386,7 +334,14 @@ def run_checks(args):
         check = OperatorCatalogCheck(args)
         return check.run()
     except Exception as error:
+        evidence = {}
+        if check is not None:
+            try:
+                evidence = features.safe_evidence(check)
+            except Exception:
+                evidence = {"safeEvidenceUnavailable": True}
         return {"ok": False, "mode": "operator-development", "checks": list(check.results) if check else [],
+            **evidence,
             "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__}
 
 

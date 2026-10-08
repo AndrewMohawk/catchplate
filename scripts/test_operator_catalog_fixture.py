@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Pure/mocked acceptance-harness tests: no sockets, containers or fixture data."""
 from copy import deepcopy
+from collections import Counter
+import ast
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -11,9 +14,11 @@ from unittest.mock import Mock, mock_open, patch
 try:
     from scripts import check_operator_catalog as checker
     from scripts import prepare_operator_catalog_fixture as fixture
+    from scripts import operator_catalog_feature_checks as features
 except ModuleNotFoundError:
     import check_operator_catalog as checker
     import prepare_operator_catalog_fixture as fixture
+    import operator_catalog_feature_checks as features
 
 
 SOURCE = Path("/srv/catchplate-fast/projects/serverware-operator-workspace")
@@ -181,7 +186,34 @@ class AcceptanceTests(unittest.TestCase):
                 if outcome == "released":
                     event["upstream_status"] = 200
                 rows.append({"id": len(rows) + 1, "event_type": "data_plane." + kind, "event": event})
-        return rows, checker.Counter(scopes)
+        return rows, Counter(scopes)
+
+    def test_reflection_terminal_pairs_are_distinct_from_success(self):
+        rows, needed = self.audit_fixture()
+        scope = ("features", "rule3", "policy4")
+        needed[scope] = 1
+        blocked = Counter({scope: 2})
+        for number, outcome in ((7, "released"), (8, "blocked"), (9, "blocked")):
+            attempt = "sha256:" + str(number) * 64
+            for terminal in (False, True):
+                event = dict(zip(("principal_id", "route_id", "policy_hash"), scope))
+                event.update(attempt_id=attempt, flow_id=attempt, method="GET",
+                    outcome=outcome if terminal else "release_started")
+                if terminal:
+                    event["upstream_status"] = 200
+                    if outcome == "blocked":
+                        event["response_validation"] = {"ok": False, "error": "response_credential_reflection"}
+                kind = "response." + outcome if terminal else "credential.release_started"
+                rows.append({"id": len(rows) + 1, "event_type": "data_plane." + kind, "event": event})
+        actual, pairs = features.release_attempt_pairs(rows, needed, blocked)
+        self.assertEqual(actual, needed)
+        self.assertEqual(len(pairs), 9)
+        self.assertEqual(sum(pair["outcome"] == "blocked" for pair in pairs.values()), 2)
+        with self.assertRaises(checker.CheckFailure):
+            features.release_attempt_pairs(rows, needed)  # Blocked responses cannot stand in for a success.
+        rows[-1]["event"]["response_validation"]["error"] = "other-error"
+        with self.assertRaises(checker.CheckFailure):
+            features.release_attempt_pairs(rows, needed, blocked)
 
     def test_six_request_pairs_preserve_repeated_stage_multiplicity(self):
         rows, needed = self.audit_fixture()
@@ -271,6 +303,159 @@ class AcceptanceTests(unittest.TestCase):
                     self.assertEqual(synced.call_count, 2)
                 flags = opened.call_args_list[1].args[1]
                 self.assertEqual(flags & (os.O_EXCL | os.O_NOFOLLOW), os.O_EXCL | os.O_NOFOLLOW)
+
+
+class FeatureTests(unittest.TestCase):
+    def test_full_json_and_decoded_only_oracles(self):
+        authorization = "Bearer synthetic-operator-" + "A" * 40
+        self.assertEqual(features.fixture_body("full", authorization, matched=True, proxy_seen=False), features.FULL_JSON)
+        self.assertNotEqual(features.fixture_body("full", authorization, matched=False, proxy_seen=False), features.FULL_JSON)
+        self.assertNotEqual(features.fixture_body("full", authorization, matched=True, proxy_seen=True), features.FULL_JSON)
+        raw = features.fixture_body("reflect_raw", authorization, matched=True, proxy_seen=False)
+        decoded = features.fixture_body("reflect_decoded", authorization, matched=True, proxy_seen=False)
+        self.assertIn(authorization.encode(), raw)
+        self.assertNotIn(authorization.encode(), decoded)
+        self.assertEqual(json.loads(decoded)["credential_reflection"], authorization)
+        for case in ("reflect_raw", "reflect_decoded"):
+            with self.assertRaises(checker.CheckFailure):
+                features.fixture_body(case, "Bearer not-a-synthetic-key", matched=True, proxy_seen=False)
+
+    def test_fixture_echo_defaults_unchanged_and_new_cases_opt_in(self):
+        tree = ast.parse((SOURCE / "scripts/demo_upstream.py").read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "echo")
+        function.decorator_list, function.returns = [], None
+        function.args.args[0].annotation = None
+        authorization = "Bearer synthetic-operator-" + "A" * 40
+        digest = "sha256:" + features.hashlib.sha256(authorization.encode()).hexdigest()
+        record = Mock()
+        class Response:
+            def __init__(self, *, content, media_type):
+                self.body, self.media_type = content, media_type
+        context = {"_record_request": record, "request_view": lambda request: {"method": "GET", "path": "/echo",
+            "query": dict(request.query_params), "authorization": authorization, "authorization_sha256": digest},
+            "hashlib": features.hashlib, "hmac": __import__("hmac"), "Response": Response}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "fixture-echo-only", "exec"), context)
+        for case in (None, "unknown", "full", "reflect_raw", "reflect_decoded"):
+            query = {"expectedAuthorizationSha256": digest}
+            if case is not None:
+                query["catalogProof"] = case
+            request = SimpleNamespace(headers={}, query_params=query)
+            value = asyncio.run(context["echo"](request))
+            if case in {None, "unknown"}:
+                self.assertIsInstance(value, dict)
+                self.assertNotIn("credential_reflection", value)
+                self.assertNotIn("authorization", value)
+            else:
+                self.assertEqual(value.media_type, "application/json")
+                self.assertEqual(value.body, features.fixture_body(case, authorization, matched=True, proxy_seen=False))
+        self.assertEqual(record.call_count, 5)
+
+    def feature_fixture(self):
+        value = SimpleNamespace(run_id="operator-check-test", credential="synthetic-operator-" + "A" * 40,
+            policy_hash="sha256:" + "a" * 64, successes=[], mutations=[], results=[], dispatches=6,
+            args=SimpleNamespace(expected_binary_sha256="sha256:" + "b" * 64))
+        credential = {"id": "credential1", "version": 1}
+        def mutate(route, payload, **_):
+            if route == "/applications":
+                return {"id": "app3", "principal_id": "principal3"}, "one-time-token", {}
+            self.assertEqual(payload["allowed_headers"], ["accept", "user-agent"])
+            self.assertEqual(payload["credential_input"], "replace_exact")
+            return {**payload, "id": "rule3", "route_id": "operator.rule3"}, None, {}
+        value.mutate, value.wait_catalog_loaded = mutate, Mock()
+        value.count, value.audit = lambda: value.dispatches, lambda: []
+        value.catalog = lambda: {"credentials": [credential]}
+        value.resource = lambda *_: {**credential, "status": "active", "active_rule_count": 2}
+        seen = []
+        def request(check, path, supplied):
+            seen.append((path, supplied))
+            if supplied != "Bearer serverware-placeholder-operator-check-test":
+                code = "credential_existing_header_missing" if supplied is None else "credential_existing_header_mismatch"
+                return 403, {"allowed": False, "action": "deny", "payload": {"error": code}}, b"{}"
+            value.dispatches += 1
+            if "catalogProof=full" in path:
+                return 200, json.loads(features.FULL_JSON), features.FULL_JSON
+            return 502, {"error": "response_credential_reflection"}, b'{"error":"response_credential_reflection"}'
+        return value, credential, seen, request
+
+    def test_feature_phase_has_three_dispatches_two_denials_and_no_header_allowlist_bypass(self):
+        value, credential, seen, request = self.feature_fixture()
+        with patch.object(features, "request", side_effect=request), patch.object(features, "checkpoint") as checkpoint:
+            self.assertEqual(features.run_features(value, credential), ("app3", "rule3"))
+        self.assertEqual(value.dispatches, 9)
+        self.assertEqual(len(seen), 5)
+        self.assertEqual(len(value.successes), 1)
+        self.assertEqual(len(value.blocked_responses), 2)
+        self.assertEqual(len(value.negative_observations), 2)
+        self.assertEqual([call.args[1] for call in checkpoint.call_args_list], ["negative-phase", "features"])
+
+    def test_denial_with_no_dispatch_or_release_start_but_scoped_lease_fails(self):
+        value, credential, seen, request = self.feature_fixture()
+        value.audit = lambda: [{"id": "lease-row", "event_hash": "sha256:" + "c" * 64,
+            "event_type": "data_plane.credential_lease.issued", "event": {
+                "purpose": "dispatchSecret", "principal_id": "principal3", "route_id": "operator.rule3",
+                "credential_id": credential["id"], "policy_hash": value.policy_hash,
+                "data_plane_binary_digest": value.args.expected_binary_sha256}}]
+        with patch.object(features, "request", side_effect=request), patch.object(features, "checkpoint"), \
+                self.assertRaisesRegex(checker.CheckFailure, "scoped dispatchSecret credential lease"):
+            features.run_features(value, credential)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(value.dispatches, 6)
+        self.assertEqual(value.negative_observations[0]["issuedLeaseAuditEventIds"], ["lease-row"])
+
+    def test_negative_cutoff_reconciliation_uses_exact_rows_not_uuid_order(self):
+        scope = {"purpose": "dispatchSecret", "principal_id": "principal3", "route_id": "operator.rule3",
+            "credential_id": "credential1", "policy_hash": "sha256:" + "a" * 64,
+            "data_plane_binary_digest": "sha256:" + "b" * 64}
+        sibling = {"id": "ffffffff-row", "event_hash": "sha256:" + "c" * 64,
+            "event_type": "data_plane.credential_lease.issued", "event": {**scope, "principal_id": "sibling"}}
+        value = SimpleNamespace(negative_observations=[], audit=lambda: [sibling])
+        features.record_negative_phase(value, "credential_existing_header_missing", scope)
+        later = {"id": "00000000-row", "event_hash": "sha256:" + "d" * 64,
+            "event_type": "data_plane.credential_lease.issued", "event": scope}
+        features.reconcile_negative_phases(value, [sibling, later])
+        with self.assertRaisesRegex(checker.CheckFailure, "appeared in the final audit chain"):
+            features.reconcile_negative_phases(value, [{**sibling, "event": scope}, later])
+        with self.assertRaisesRegex(checker.CheckFailure, "did not survive"):
+            features.reconcile_negative_phases(value, [later])
+        with self.assertRaisesRegex(checker.CheckFailure, "saturated"):
+            features.audit_cutoff([sibling] * 500)
+
+    def test_failure_counters_remain_strict_and_safe_evidence_survives(self):
+        value = AcceptanceTests().check()
+        value.successes, value.mutations, value.observations = [], [], []
+        value.warm_observations = [{"capturedAtEpochMs": 1000, "denialVerifiedAtEpochMs": 1500}]
+        value.audit = Mock(return_value=[])
+        value.health = Mock(return_value={"audit": {"dropped": 0, "required_failed": 0, "send_failed": 3,
+            "unexpected": "must-not-copy"}})
+        with self.assertRaises(checker.CheckFailure):
+            features.verify_audit(value)
+        saved = features.safe_evidence(value)
+        self.assertEqual(saved["auditCounters"]["send_failed"], 3)
+        self.assertNotIn("unexpected", saved["auditCounters"])
+        self.assertEqual(saved["warmLeaseInvalidations"], value.warm_observations)
+
+    def test_observation_checkpoint_is_exclusive_fsynced_and_does_not_claim_acceptance(self):
+        value = AcceptanceTests().check()
+        value.args = SimpleNamespace(run_claim_file=Path("/data/.operator-catalog-acceptance.claim"))
+        info = SimpleNamespace(st_mode=0o40700, st_uid=os.geteuid())
+        opened_file = mock_open()
+        with patch.object(Path, "stat", return_value=info), patch.object(Path, "resolve", lambda path: path), \
+                patch.object(features.os, "open", side_effect=[10, 11]) as opened, \
+                patch.object(features.os, "fdopen", opened_file), patch.object(features.os, "fsync") as synced, \
+                patch.object(features.os, "close"):
+            features.checkpoint(value, "lifecycle")
+        self.assertEqual(synced.call_count, 2)
+        self.assertTrue(opened.call_args_list[0].args[1] & os.O_EXCL)
+        body = "".join(call.args[0] for call in opened_file().write.call_args_list)
+        self.assertFalse(json.loads(body)["acceptanceComplete"])
+
+    def test_diagnostic_parser_only_returns_fixed_safe_categories(self):
+        line = ("audit_post_failure phase=initial stage=snapshot_changed outcome=outcome_unknown "
+            "status=200 event_count=2 elapsed_ms=50 same_snapshot=false same_policy_sequence=false")
+        self.assertEqual(features.parse_diagnostic(line)["stage"], "snapshot_changed")
+        for invalid in (line + " raw-secret", line.replace("snapshot_changed", "raw-secret"),
+                        line.replace("status=200", "status=raw-secret"), line + " phase=retry", "unrelated log"):
+            self.assertIsNone(features.parse_diagnostic(invalid))
 
 
 if __name__ == "__main__":

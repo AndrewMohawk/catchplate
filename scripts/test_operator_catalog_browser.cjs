@@ -67,7 +67,8 @@ function catalog(state) {
       return {...item, active_rule_count: count, access_status: item.status === 'revoked' ? loaded ? 'revoked' : 'pending' :
         count === 0 ? 'unassigned' : loaded && item.token_status === 'valid' ? 'active' : 'pending'};
     }), access_rules: state.rules.map(item => ({...item, enforcement: loaded ? item.status === 'revoked' ? 'revoked' : 'active' : 'pending'})),
-    capabilities: {credential_types: ['bearer', 'header'], response_modes: state.responseModes, oauth: false,
+    capabilities: {credential_types: ['bearer', 'header'], response_modes: state.responseModes,
+      credential_input_modes: state.credentialInputModes, oauth: false,
       token_lifetime_seconds: {min: 3600, max: 7776000, default: 2592000}}};
   value.limits = Object.fromEntries(['credentials', 'applications', 'access_rules'].map(key => [key,
     {active: value[key].filter(item => item.status === 'active').length, retained: value[key].length, active_max: 32, retained_max: 1024}]));
@@ -90,6 +91,14 @@ function mutation(state, name, body) {
     state.applications.push(selected); collection = 'applications'; clientToken = token(id);
   } else if (name === 'access-rules') {
     assert(!Object.hasOwn(payload, 'secret') && !Object.hasOwn(payload, 'client_token'));
+    const credentialInput = Object.hasOwn(payload, 'credential_input') ? payload.credential_input : 'insert';
+    assert(['insert', 'replace_exact'].includes(credentialInput), 'supported credential input mode');
+    if (credentialInput === 'insert') assert(!Object.hasOwn(payload, 'placeholder'), 'insertion omits placeholder');
+    else {
+      assert(state.credentialInputModes?.includes('replace_exact'), 'exact replacement must be explicitly advertised');
+      assert(typeof payload.placeholder === 'string' && /^[\x20-\x7e]{1,1024}$/.test(payload.placeholder) &&
+        payload.placeholder === payload.placeholder.trim(), 'replacement requires a bounded exact printable header value');
+    }
     const responseMode = payload.response_mode || 'projected_json';
     assert(['projected_json', 'unfiltered_json'].includes(responseMode), 'supported response mode');
     if (responseMode === 'unfiltered_json') {
@@ -99,7 +108,7 @@ function mutation(state, name, body) {
     assert(state.credentials.some(item => item.id === payload.credential_id && item.status === 'active'));
     assert(state.applications.some(item => item.id === payload.application_id && item.status === 'active'));
     const id = state.rules.length ? '55555555-5555-4555-8555-555555555555' : IDS.rule;
-    selected = rule({...payload, id, route_id: 'operator.' + id});
+    selected = rule({...payload, credential_input: credentialInput, id, route_id: 'operator.' + id});
     state.rules.push(selected); collection = 'access_rules'; authorityChanged = true;
   } else {
     collection = name.split('/')[0].replace('-', '_');
@@ -132,6 +141,7 @@ function mutation(state, name, body) {
 async function fixture(browser, options, exercise) {
   const state = {credentials: copy(options.credentials || []), applications: copy(options.applications || []), rules: copy(options.rules || []),
     responseModes: Object.hasOwn(options, 'responseModes') ? options.responseModes : ['projected_json'],
+    credentialInputModes: Object.hasOwn(options, 'credentialInputModes') ? options.credentialInputModes : ['insert'],
     activationOverride: options.activationOverride,
     revision: 1, sequence: 1, active: digest(1), loaded: options.pending ? digest(0) : digest(1), autoLoad: options.autoLoad !== false,
     posts: [], requests: [], errors: [], unexpected: [], consoleErrors: [], expectedFailures: new Set(), dialogs: [], catalogCalls: 0,

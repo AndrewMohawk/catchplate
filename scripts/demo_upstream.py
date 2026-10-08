@@ -262,6 +262,15 @@ async def echo(request: Request) -> dict[str, Any]:
         view["proxy_authorization_seen"] = "proxy-authorization" in request.headers
     view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
     view["query"]["_cookie_seen"] = "cookie" in request.headers
+    case = request.query_params.get("catalogProof")
+    if case in {"full", "reflect_raw", "reflect_decoded"}:
+        try:
+            from scripts.operator_catalog_feature_checks import fixture_body
+        except ModuleNotFoundError:
+            from operator_catalog_feature_checks import fixture_body
+        return Response(content=fixture_body(case, authorization,
+            matched=view.get("authorization_matches_expected") is True,
+            proxy_seen="proxy-authorization" in request.headers), media_type="application/json")
     if request.query_params.get("reflectCredential") == "1":
         view["credential_reflection"] = authorization
     return view

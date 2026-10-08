@@ -7,6 +7,11 @@ function availableResponseModes(catalog) {
   const advertised = catalog?.capabilities?.response_modes;
   return Array.isArray(advertised) ? Object.keys(operatorResponseModes).filter(mode => advertised.includes(mode)) : [];
 }
+const operatorCredentialInputModes = Object.freeze({insert: 'Add credential automatically', replace_exact: 'Replace a dummy header value'});
+function availableCredentialInputModes(catalog) {
+  const advertised = catalog?.capabilities?.credential_input_modes;
+  return Array.isArray(advertised) ? Object.keys(operatorCredentialInputModes).filter(mode => advertised.includes(mode)) : [];
+}
 const operatorViews = {overview: 'Overview', credentials: 'Credentials', applications: 'Applications',
   'access-rules': 'Access rules', proxy: 'Proxy setup', audit: 'Audit log'};
 const element = id => document.getElementById(id);
@@ -52,7 +57,8 @@ function projectCatalog(value) {
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin']);
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
-    'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'enforcement']);
+    'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'placeholder', 'enforcement']);
+  for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';
   for (const rule of accessRules) for (const name of ['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers']) {
     if (!Array.isArray(rule[name]) || rule[name].some(item => typeof item !== 'string')) throw operatorError('Saved rule metadata is incomplete.');
   }

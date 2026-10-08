@@ -191,6 +191,27 @@ def save_resource(conn, collection: str, record: dict, create: bool = False) -> 
     return value
 
 
+def rule_credential_header(rule: dict, credential: dict) -> dict | None:
+    """Translate public per-rule input without opening the encrypted credential."""
+    mode = rule.get('credential_input', 'insert')
+    if mode == 'insert':
+        if 'placeholder' in rule:
+            raise CatalogIntegrityError('insertion rule retains a placeholder')
+        return None
+    if mode != 'replace_exact':
+        raise CatalogIntegrityError('catalog credential input mode refused')
+    if credential.get('auth_type') not in {'bearer', 'header'}:
+        raise CatalogIntegrityError('catalog replacement credential type refused')
+    from serverware.policy_bundle import PolicyBundleError, validate_credential_header_replacement
+    injection = {'type': 'bearer', 'header': 'Authorization'} if credential.get('auth_type') == 'bearer' else {
+        'type': 'header', 'name': credential.get('header_name'), 'prefix': ''}
+    try:
+        return validate_credential_header_replacement(
+            {'mode': 'replaceExact', 'expectedValue': rule.get('placeholder')}, injection)
+    except PolicyBundleError as error:
+        raise CatalogIntegrityError('catalog credential placeholder or target refused') from error
+
+
 def validate_bindings(conn, catalog: dict | None = None) -> None:
     catalog = read_catalog(conn) if catalog is None else catalog
     credentials = {row['id']: row for row in catalog['credentials']}
@@ -237,6 +258,7 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
         app, credential = applications.get(row['application_id']), credentials.get(row['credential_id'])
         if app is None or credential is None or row.get('route_id') != 'operator.' + row['id']:
             raise CatalogIntegrityError('catalog rule binding refused')
+        rule_credential_header(row, credential)
         if row['status'] == 'active' and (app['status'] != 'active' or credential['status'] != 'active'):
             raise CatalogIntegrityError('active rule has an inactive parent')
 

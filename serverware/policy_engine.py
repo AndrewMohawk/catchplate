@@ -2724,6 +2724,13 @@ def _legacy_mitm_route_admission(
     flow: http.HTTPFlow,
     route: RoutePolicy,
 ) -> PolicyDecision | None:
+    if route.credential_header is not None:
+        return PolicyDecision(
+            False,
+            "credential header replacement requires the Rust decision gate",
+            503,
+            {"error": "python_credential_header_replacement_unsupported"},
+        )
     if flow.metadata.get(LEGACY_MITM_TRANSPORT_METADATA_KEY) is not True:
         return None
     if route.credential_ref:

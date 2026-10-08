@@ -657,6 +657,11 @@ CREDENTIAL_INJECTION_FIELDS = {
     "query": frozenset({"type", "name", "field"}),
     "cookie": frozenset({"type", "name", "field"}),
 }
+CREDENTIAL_REPLACEMENT_RESERVED_HEADERS = frozenset({
+    "cookie", "host", "content-type", "content-length", "content-encoding",
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
+})
 REQUIRED_REQUEST_HEADER_RULE_FIELDS = {"type", "minLength", "maxLength", "pattern"}
 FIELD_RULE_FIELDS = {
     "required",
@@ -884,6 +889,37 @@ def credential_injection_target(injection: dict[str, Any]) -> tuple[str, str] | 
         value = target_value("name", "access_token")
         return ("query", value) if value is not None else None
     return None
+
+
+def validate_credential_header_replacement(replacement: Any, injection: Any) -> dict[str, str]:
+    """Validate the public signed placeholder grammar and replacement target."""
+    if (
+        not isinstance(injection, dict)
+        or injection.get("type") not in ("bearer", "header")
+        or not isinstance(replacement, dict)
+        or set(replacement) != {"mode", "expectedValue"}
+        or replacement.get("mode") != "replaceExact"
+    ):
+        raise PolicyBundleError("route credentialHeader requires a bearer/header credential and the closed replaceExact contract")
+    expected = replacement.get("expectedValue")
+    if (
+        not isinstance(expected, str)
+        or not 1 <= len(expected) <= 1024
+        or any(ord(character) < 32 or ord(character) > 126 for character in expected)
+        or expected != expected.strip(" ")
+    ):
+        raise PolicyBundleError("route credentialHeader expectedValue must be bounded printable ASCII without outer whitespace")
+    target = credential_injection_target(injection)
+    if target is None or target[0] != "header":
+        raise PolicyBundleError("route credentialHeader requires a header injection target")
+    name = target[1].replace("_", "-")
+    if (
+        name in CREDENTIAL_REPLACEMENT_RESERVED_HEADERS
+        or name.startswith("x-serverware-")
+        or (name == "authorization" and injection.get("type") != "bearer")
+    ):
+        raise PolicyBundleError("route credentialHeader injection target is reserved")
+    return {"mode": "replaceExact", "expectedValue": expected}
 
 
 def canonical_json(value: Any) -> str:
@@ -3466,6 +3502,7 @@ class RoutePolicy:
     resolved_cidrs: tuple[str, ...] | None = None
     constraints: tuple[dict[str, Any], ...] = ()
     jit: dict[str, Any] = field(default_factory=dict)
+    credential_header: dict[str, str] | None = None
 
     def match_path(self, path: str) -> dict[str, str] | None:
         candidate = self.match_path_with_specificity(path)
@@ -3593,6 +3630,10 @@ def _fresh_policy_snapshot(snapshot: PolicySnapshot) -> PolicySnapshot:
                 for constraint in route.constraints
             ),
             jit=_deep_freeze(copy.deepcopy(route.jit)),
+            credential_header=(
+                _deep_freeze(copy.deepcopy(route.credential_header))
+                if route.credential_header is not None else None
+            ),
         )
         for route in snapshot.routes
     )
@@ -6499,6 +6540,13 @@ def compile_policy_bundle(
         credential_ref = item.get("credentialRef")
         if credential_ref and credential_ref not in credentials:
             raise PolicyBundleError(f"route {route_id} references unknown credential {credential_ref}")
+        credential_header_replacement = None
+        if "credentialHeader" in item:
+            if not credential_ref:
+                raise PolicyBundleError(f"route {route_id} credentialHeader requires credentialRef")
+            credential_header_replacement = validate_credential_header_replacement(
+                item["credentialHeader"], credentials[credential_ref].injection
+            )
         _validate_route_credential_binding(
             route_id,
             adapter_type,
@@ -6692,6 +6740,16 @@ def compile_policy_bundle(
                         raise PolicyBundleError(
                             f"route {route_id} generic.rest agent header {name} collides with credential injection"
                         )
+                    if (
+                        location == "header"
+                        and credential_header_replacement is not None
+                        and _normalized_header_aliases({name}).intersection(
+                            _normalized_header_aliases(allowed_header_set | required_headers)
+                        )
+                    ):
+                        raise PolicyBundleError(
+                            f"route {route_id} generic.rest request headers collide with credential replacement"
+                        )
                     if location == "query" and name in set(raw_allowed_query):
                         raise PolicyBundleError(
                             f"route {route_id} generic.rest agent query key {name} collides with credential injection"
@@ -6723,6 +6781,17 @@ def compile_policy_bundle(
             if "*" in route_principals or principal_id in route_principals
             for name in principal_policy.required_headers
         }
+        if (
+            credential_ref
+            and credential_header_replacement is not None
+            and credential_header is not None
+            and _normalized_header_aliases({credential_header}).intersection(
+                _normalized_header_aliases(principal_identity_headers)
+            )
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} credential replacement collides with principal identity headers"
+            )
         provider_identity_collisions = _normalized_header_aliases(
             allowed_headers_for_discard | required_headers_for_discard
         ).intersection(_normalized_header_aliases(principal_identity_headers))
@@ -6913,6 +6982,7 @@ def compile_policy_bundle(
                 resolved_cidrs=resolved_cidrs,
                 constraints=constraints,
                 jit=jit,
+                credential_header=credential_header_replacement,
             )
         )
 
@@ -6978,6 +7048,10 @@ def compile_policy_bundle(
                 _deep_freeze(constraint) for constraint in route.constraints
             ),
             jit=_deep_freeze(route.jit),
+            credential_header=(
+                _deep_freeze(route.credential_header)
+                if route.credential_header is not None else None
+            ),
         )
         for route in routes
     )

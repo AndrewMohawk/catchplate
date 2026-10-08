@@ -14,6 +14,8 @@ mod gate_state_init;
 mod control_plane_client_config;
 mod development_sandbox;
 mod operator_demo;
+mod operator_google_profile;
+mod operator_google_reconciliation;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
@@ -21362,6 +21364,20 @@ fn fetch_scoped_credential_lease_on_deadline(
     request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>, original_deadline: Option<Instant>,
 ) -> Result<CredentialLeaseMaterial, String> {
+    match fetch_scoped_credential_lease_attempt_on_deadline(state, snapshot, scope, purpose,
+        expected_generation, request_authority, release_authorization, original_deadline)? {
+        operator_google_reconciliation::FetchOutcome::Material(material) => Ok(material),
+        operator_google_reconciliation::FetchOutcome::GenerationAdvanced(_) =>
+            Err("operator Google generation advance requires its original flight leader".to_owned()),
+    }
+}
+
+fn fetch_scoped_credential_lease_attempt_on_deadline(
+    state: &GateState, snapshot: &Arc<Snapshot>, scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose, expected_generation: Option<&CredentialLeaseGeneration>,
+    request_authority: Option<&CredentialLeaseRequestAuthority>,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>, original_deadline: Option<Instant>,
+) -> Result<operator_google_reconciliation::FetchOutcome, String> {
     let opening = Instant::now();
     check_credential_operation_deadline(original_deadline)?;
     let profile = credential_lease_profile(state, &snapshot.hash)?;
@@ -21385,6 +21401,9 @@ fn fetch_scoped_credential_lease_on_deadline(
                 Some(opening.checked_add(remaining).ok_or("credential operation deadline overflow")?)
             },
         }
+    } else if operator_google_reconciliation::admitted(state, snapshot, scope,
+        request_authority, release_authorization)?.is_some() {
+        Some(original_deadline.ok_or("operator Google acquisition lost its original deadline")?)
     } else {
         if original_deadline.is_some() { return Err("native credential operation cannot use a standalone owner".to_owned()); }
         None
@@ -21623,6 +21642,14 @@ fn fetch_scoped_credential_lease_on_deadline(
     )?;
     check_credential_operation_deadline(deadline)?;
     if !status.is_success() {
+        if status == StatusCode::CONFLICT && purpose == CredentialLeasePurpose::DispatchSecret
+            && operator_google_reconciliation::admitted(state, snapshot, scope,
+                request_authority, release_authorization)?.is_some() {
+            let expected = expected_generation.ok_or("operator Google generation pin missing")?;
+            let proof = operator_google_reconciliation::verify_outcome(state, snapshot, scope,
+                &request_body, &request_wire, &request_binding_sha256, expected, body.as_ref(), deadline)?;
+            return Ok(operator_google_reconciliation::FetchOutcome::GenerationAdvanced(proof));
+        }
         return Err(format!(
             "credential lease control plane returned HTTP {status}"
         ));
@@ -21708,7 +21735,7 @@ fn fetch_scoped_credential_lease_on_deadline(
         return Err("credential recipient runtime profile changed".to_owned());
     }
     check_credential_operation_deadline(deadline)?;
-    Ok(lease)
+    Ok(operator_google_reconciliation::FetchOutcome::Material(lease))
 }
 
 fn run_bounded_json_command(command: &str, request: &Value, label: &str) -> Result<Value, String> {
@@ -22031,6 +22058,7 @@ fn generate_recipient_attestation(command: &str, request: &Value) -> Result<Valu
     )
 }
 
+#[derive(Clone)]
 struct CredentialLeaseInfo {
     version: u64,
     metadata_sha256: String,
@@ -22184,6 +22212,13 @@ fn cache_scoped_credential_generation(
     scope: &CredentialLeaseScope,
     generation: CredentialLeaseGeneration,
 ) -> Result<(), String> {
+    cache_scoped_credential_generation_on_deadline(state, snapshot, scope, generation, None)
+}
+
+fn cache_scoped_credential_generation_on_deadline(
+    state: &GateState, snapshot: &Arc<Snapshot>, scope: &CredentialLeaseScope,
+    generation: CredentialLeaseGeneration, deadline: Option<Instant>,
+) -> Result<(), String> {
     if generation.profile != credential_lease_profile(state, &snapshot.hash)? {
         return Err("credential generation owner profile changed before caching".to_owned());
     }
@@ -22191,7 +22226,10 @@ fn cache_scoped_credential_generation(
     if !credential_generation_valid_after(&generation, snapshot, now_epoch_ms(), Instant::now()) {
         return Err("credential generation binding or expiry is invalid".to_string());
     }
-    let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
+    let _dispatch_authority = match deadline {
+        Some(deadline) => state.upstream_dispatch_authority.begin_mutation_on_deadline(deadline)?,
+        None => state.upstream_dispatch_authority.begin_mutation(),
+    };
     let active = state
         .snapshot
         .read()
@@ -22220,6 +22258,7 @@ fn cache_scoped_credential_generation(
     } else if generations.len() >= state.credential_lease_cache_max {
         return Err("credential generation cache capacity exhausted".to_string());
     }
+    check_credential_operation_deadline(deadline)?;
     leases.retain(|key, lease| {
         key.scope != *scope
             || (lease.profile == generation.profile && lease.version == generation.version
@@ -22235,6 +22274,13 @@ fn cache_scoped_credential_lease(
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
     lease: SecretLease,
+) -> Result<(), String> {
+    cache_scoped_credential_lease_on_deadline(state, snapshot, scope, lease, None)
+}
+
+fn cache_scoped_credential_lease_on_deadline(
+    state: &GateState, snapshot: &Arc<Snapshot>, scope: &CredentialLeaseScope,
+    lease: SecretLease, deadline: Option<Instant>,
 ) -> Result<(), String> {
     if lease.profile != credential_lease_profile(state, &snapshot.hash)? {
         return Err("credential secret owner profile changed before caching".to_owned());
@@ -22272,7 +22318,10 @@ fn cache_scoped_credential_lease(
     ) {
         return Err("credential lease metadata or expiry is invalid".to_string());
     }
-    let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
+    let _dispatch_authority = match deadline {
+        Some(deadline) => state.upstream_dispatch_authority.begin_mutation_on_deadline(deadline)?,
+        None => state.upstream_dispatch_authority.begin_mutation(),
+    };
     state.credential_currentness.require_send(&scope.credential_id, lease.version)?;
     let active = state
         .snapshot
@@ -22331,6 +22380,7 @@ fn cache_scoped_credential_lease(
     } else {
         return Err("credential secret lease has no cached generation".to_string());
     }
+    check_credential_operation_deadline(deadline)?;
     leases.insert(cache_key, lease);
     Ok(())
 }
@@ -22375,7 +22425,9 @@ fn refresh_scoped_credential_material_on_deadline(
     } else {
         None
     };
-    let result = fetch_scoped_credential_lease_on_deadline(
+    let operator_google = operator_google_reconciliation::admitted(state, snapshot, scope,
+        request_authority, release_authorization)?.is_some();
+    let result = fetch_scoped_credential_lease_attempt_on_deadline(
         state,
         snapshot,
         scope,
@@ -22385,12 +22437,25 @@ fn refresh_scoped_credential_material_on_deadline(
         release_authorization,
         deadline,
     )
+    .and_then(|outcome| match outcome {
+        operator_google_reconciliation::FetchOutcome::Material(material) => Ok(material),
+        operator_google_reconciliation::FetchOutcome::GenerationAdvanced(proof) => {
+            // This failed acquisition is retained in the counters. Reconciliation
+            // never clears historical failures, nonce reservations or claims.
+            state.credential_lease_refresh_failed.fetch_add(1, Ordering::Relaxed);
+            operator_google_reconciliation::reconcile(state, snapshot, scope,
+                expected_generation.as_ref().ok_or("operator Google generation pin missing")?,
+                proof, deadline.ok_or("operator Google acquisition deadline missing")?)
+        },
+    })
     .and_then(|material| { check_credential_operation_deadline(deadline)?; match material {
         CredentialLeaseMaterial::GenerationMetadata(generation) => {
-            cache_scoped_credential_generation(state, snapshot, scope, generation)
+            cache_scoped_credential_generation_on_deadline(state, snapshot, scope, generation,
+                if operator_google { deadline } else { None })
         }
         CredentialLeaseMaterial::DispatchSecret(lease) => {
-            cache_scoped_credential_lease(state, snapshot, scope, *lease)
+            cache_scoped_credential_lease_on_deadline(state, snapshot, scope, *lease,
+                if operator_google { deadline } else { None })
         }
     }});
     if let Err(err) = result {
@@ -22422,6 +22487,8 @@ fn refresh_scoped_credential_material_singleflight_on_deadline(
     purpose: CredentialLeasePurpose, request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>, original_deadline: Option<Instant>,
 ) -> Result<(), String> {
+    let original_deadline = operator_google_reconciliation::operation_deadline(state, snapshot, scope,
+        request_authority, release_authorization, original_deadline)?;
     check_credential_operation_deadline(original_deadline)?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot was revoked before credential lease refresh".to_string());
@@ -22520,22 +22587,35 @@ fn ensure_scoped_credential_generation(
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Result<CredentialLeaseInfo, String> {
+    ensure_scoped_credential_generation_on_deadline(state, snapshot, scope, None)
+}
+
+fn ensure_scoped_credential_generation_on_deadline(
+    state: &GateState, snapshot: &Arc<Snapshot>, scope: &CredentialLeaseScope,
+    deadline: Option<Instant>,
+) -> Result<CredentialLeaseInfo, String> {
+    let deadline = operator_google_reconciliation::operation_deadline(state, snapshot, scope,
+        None, None, deadline)?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot was revoked before credential generation lookup".to_string());
     }
     if let Some(info) = peek_cached_credential_lease_info(state, snapshot, scope) {
+        check_credential_operation_deadline(deadline)?;
         return Ok(info);
     }
-    refresh_scoped_credential_material_singleflight(
+    refresh_scoped_credential_material_singleflight_on_deadline(
         state,
         snapshot,
         scope,
         CredentialLeasePurpose::GenerationMetadata,
         None,
+        None,
+        deadline,
     )?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot changed during credential generation lookup".to_string());
     }
+    check_credential_operation_deadline(deadline)?;
     peek_cached_credential_lease_info(state, snapshot, scope).ok_or_else(|| {
         "credential generation refresh completed without cached metadata".to_string()
     })
@@ -22557,6 +22637,10 @@ fn ensure_scoped_credential_lease_on_deadline(
     request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>, deadline: Option<Instant>,
 ) -> Result<CredentialLeaseInfo, String> {
+    let deadline = operator_google_reconciliation::operation_deadline(state, snapshot, scope,
+        request_authority, release_authorization, deadline)?;
+    let operator_google = operator_google_reconciliation::admitted(state, snapshot, scope,
+        request_authority, release_authorization)?.is_some();
     check_credential_operation_deadline(deadline)?;
     let profile = credential_lease_profile(state, &snapshot.hash)?;
     if !snapshot_is_active(state, snapshot) {
@@ -22569,9 +22653,11 @@ fn ensure_scoped_credential_lease_on_deadline(
         release_authorization,
         profile,
     )?;
-    let generation = if profile.has_approver_policy() && request_authority.is_some() {
+    let mut generation = if profile.has_approver_policy() && request_authority.is_some() {
         peek_cached_credential_lease_info(state, snapshot, scope)
             .ok_or("native controlled credential generation expired; no renewed allowance")?
+    } else if operator_google {
+        ensure_scoped_credential_generation_on_deadline(state, snapshot, scope, deadline)?
     } else { ensure_scoped_credential_generation(state, snapshot, scope)? };
     if let Some(authorization) = release_authorization {
         validate_credential_lease_release_scope_profile(
@@ -22634,6 +22720,13 @@ fn ensure_scoped_credential_lease_on_deadline(
     }
     let current_generation = peek_cached_credential_lease_info(state, snapshot, scope)
         .ok_or("credential generation changed during credential lease lookup")?;
+    if operator_google {
+        // Waiters reuse only a normally validated cached result. No waiter is
+        // given the leader's request-bound outcome or permission to retry.
+        operator_google_reconciliation::admitted(state, snapshot, scope,
+            request_authority, release_authorization)?.ok_or("operator Google profile changed")?;
+        generation = current_generation.clone();
+    }
     if current_generation.version != generation.version
         || current_generation.metadata_sha256 != generation.metadata_sha256
         || current_generation.metadata != generation.metadata
@@ -23029,6 +23122,11 @@ fn acquire_upstream_send_authority<'a>(
     snapshot: &Arc<Snapshot>,
     binding: Option<&CredentialLeaseReleaseBinding>,
 ) -> Result<UpstreamSendAuthority<'a>, &'static str> {
+    if let Some(binding) = binding {
+        operator_google_reconciliation::admitted(state, snapshot, &binding.scope,
+            binding.request_authority.as_ref(), binding.release_authorization.as_ref())
+            .map_err(|_| "operator_google_authorization_changed_before_upstream_send")?;
+    }
     native_secret_broker::check(state).map_err(|_| "native_broker_owner_unavailable_before_upstream_send")?;
     let profile = credential_lease_profile(state, &snapshot.hash)
         .map_err(|_| "credential_runtime_owner_changed_before_upstream_send")?;
@@ -56958,7 +57056,7 @@ mod tests {
         })
     }
 
-    fn signed_control_plane_test_response(
+    pub(super) fn signed_control_plane_test_response(
         signing_key: &SigningKey,
         snapshot: &Snapshot,
         request: &IncomingRequest,
@@ -57106,7 +57204,7 @@ mod tests {
         )
     }
 
-    fn signed_encrypted_dispatch_credential_response(
+    pub(super) fn signed_encrypted_dispatch_credential_response(
         signing_key: &SigningKey,
         snapshot: &Snapshot,
         request: &IncomingRequest,

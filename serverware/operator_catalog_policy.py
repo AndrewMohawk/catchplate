@@ -46,6 +46,11 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
             'token_sha256': application['token_sha256'],
             'token_expires_at_epoch_ms': application['token_expires_at_epoch_ms'],
             'auth_type': credential['auth_type'], 'header_name': credential['header_name']}
+        google = credential['auth_type'] == 'google_oauth'
+        if google:
+            # Reuse only the established envelope; replace the complete static
+            # binding below with the verified account's OAuth contract.
+            flat['auth_type'] = 'bearer'
         generated = legacy._build([flat], sequence, initial_hash)
         principal = generated['principals'][0]
         principal['proxyAuthorization']['tokenId'] = application['id']
@@ -55,6 +60,11 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
         credential_policies[credential['id']] = credential_policy
         route = generated['routes'][0]
         route['adapter']['config']['credentialBinding']['subjects'] = [credential['provider_subject']]
+        if google:
+            from serverware import operator_catalog_google
+            operator_catalog_google.validate_rule(rule, credential)
+            credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
+            route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
         _response_profile(rule, route)
         replacement = schema.rule_credential_header(rule, credential)
         if replacement is not None:

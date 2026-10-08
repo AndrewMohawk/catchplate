@@ -3,6 +3,8 @@
 // deployment Selection::admit or live startup marker provisioning.
 #[path = "operator_audit_publication_integration_tests.rs"]
 mod publication_integration;
+#[path = "operator_google_reconciliation_tests.rs"]
+mod google_reconciliation;
 
 use super::*;
 use crate::tests::{generic_policy_route, policy_with_route, test_gate_state, test_snapshot};
@@ -37,6 +39,7 @@ fn snapshot(sequence: u64) -> Snapshot {
 fn profile(snapshot: &Snapshot, deployment: Deployment) -> Profile {
     let profile = Profile {
         deployment: Arc::new(deployment),
+        google: None,
         active: Arc::new(RwLock::new(ApprovedPolicy {
             high_water: policy_high_water_for(snapshot),
             targets: BTreeSet::new(),

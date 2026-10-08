@@ -200,10 +200,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
         return None
     if mode != 'replace_exact':
         raise CatalogIntegrityError('catalog credential input mode refused')
-    if credential.get('auth_type') not in {'bearer', 'header'}:
+    if credential.get('auth_type') not in {'bearer', 'header', 'google_oauth'}:
         raise CatalogIntegrityError('catalog replacement credential type refused')
     from serverware.policy_bundle import PolicyBundleError, validate_credential_header_replacement
-    injection = {'type': 'bearer', 'header': 'Authorization'} if credential.get('auth_type') == 'bearer' else {
+    injection = {'type': 'bearer', 'header': 'Authorization'} if credential.get('auth_type') in {'bearer', 'google_oauth'} else {
         'type': 'header', 'name': credential.get('header_name'), 'prefix': ''}
     try:
         return validate_credential_header_replacement(
@@ -213,6 +213,8 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 
 def validate_bindings(conn, catalog: dict | None = None) -> None:
+    from serverware import operator_catalog_google
+    operator_catalog_google.validate_profile_binding(conn)
     catalog = read_catalog(conn) if catalog is None else catalog
     credentials = {row['id']: row for row in catalog['credentials']}
     applications = {row['id']: row for row in catalog['applications']}
@@ -230,6 +232,10 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
         if row['status'] == 'revoked':
             if core is not None:
                 raise CatalogIntegrityError('revoked catalog credential retains a secret row')
+            continue
+        if row.get('auth_type') == 'google_oauth':
+            from serverware import operator_catalog_google
+            operator_catalog_google.validate_record(row, core)
             continue
         bearer = row.get('auth_type') == 'bearer'
         try:
@@ -259,6 +265,9 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
         if app is None or credential is None or row.get('route_id') != 'operator.' + row['id']:
             raise CatalogIntegrityError('catalog rule binding refused')
         rule_credential_header(row, credential)
+        if row['status'] == 'active' and credential.get('auth_type') == 'google_oauth':
+            from serverware import operator_catalog_google
+            operator_catalog_google.validate_rule(row, credential)
         if row['status'] == 'active' and (app['status'] != 'active' or credential['status'] != 'active'):
             raise CatalogIntegrityError('active rule has an inactive parent')
 
@@ -266,6 +275,8 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
 def initialize(conn) -> None:
     """Upgrade only catalog metadata inside the admitted bootstrap transaction."""
     _transaction(conn)
+    from serverware import operator_catalog_google
+    operator_catalog_google.initialize_profile(conn)
     if active(conn):
         validate_bindings(conn)
         return

@@ -9263,6 +9263,15 @@ impl ShadowRuntime {
 
     pub(crate) fn is_operator_demo(&self) -> bool { self.operator_demo.is_some() }
 
+    pub(crate) fn operator_google_profile(&self, snapshot: &Snapshot,
+        scope: &super::CredentialLeaseScope)
+        -> Result<Option<&super::operator_google_profile::Profile>, String> {
+        match &self.operator_demo {
+            Some(profile) => profile.google_profile(snapshot, scope),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn operator_effect_permit(&self, snapshot: &Snapshot, route_id: &str)
         -> Result<Option<super::operator_demo::EffectPermit>, String> {
         self.operator_demo.as_ref().map(|profile| profile.effect(snapshot, route_id)).transpose()

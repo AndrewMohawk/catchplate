@@ -174,6 +174,7 @@ impl Deployment {
 
 pub(crate) struct Selection {
     deployment: Arc<Deployment>,
+    google: Option<super::operator_google_profile::Profile>,
 }
 
 fn selected(
@@ -219,14 +220,16 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
                 || name.ends_with("_FD")
                 || name.contains("_FD_"))
     });
-    if !selected(
+    let operator = selected(
         env::var("SERVERWARE_OPERATOR_DEMO").ok().as_deref(),
         env::var("SERVERWARE_RELEASE_CHANNEL").ok().as_deref(),
         env::var("SERVERWARE_PRODUCTION_IMAGE").ok().as_deref(),
         env::var("SERVERWARE_DEVELOPMENT_SANDBOX").ok().as_deref(),
         env::args_os().nth(1).is_some(),
         forbidden,
-    )? {
+    )?;
+    let google = super::operator_google_profile::Profile::from_environment(operator)?;
+    if !operator {
         return Ok(None);
     }
     let deployment = Deployment::parse(
@@ -235,8 +238,12 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
             .ok()
             .as_deref(),
     )?;
+    if google.is_some() && !deployment.origins.contains(&Target::parse(super::operator_google_profile::ORIGIN)?) {
+        return Err(refused());
+    }
     Ok(Some(Selection {
         deployment: Arc::new(deployment),
+        google,
     }))
 }
 
@@ -297,6 +304,7 @@ struct ApprovedPolicy {
 pub(crate) struct Profile {
     deployment: Arc<Deployment>,
     active: Arc<RwLock<ApprovedPolicy>>,
+    google: Option<super::operator_google_profile::Profile>,
 }
 pub(crate) struct PreparedReload {
     previous_hash: String,
@@ -321,6 +329,9 @@ impl Selection {
                 != Some("spiffe://operator-demo.serverware/decision-gate/local")
             || !audit_enabled(state)
             || state.policy_high_water_path.is_none()
+            || (self.google.is_some() && (state.credential_currentness.enabled()
+                || state.credential_lease_recipient_attestation_command.is_some()
+                || state.response_proof_signer.release_profile() != super::ReleaseProfile::Legacy))
         {
             return Err(refused());
         }
@@ -328,6 +339,7 @@ impl Selection {
         let snapshot = current_snapshot(state);
         let profile = Profile {
             deployment: self.deployment,
+            google: self.google,
             active: Arc::new(RwLock::new(ApprovedPolicy {
                 high_water: policy_high_water_for(&snapshot),
                 targets: BTreeSet::new(),
@@ -341,6 +353,7 @@ impl Selection {
 
 impl Profile {
     fn validate_snapshot(&self, snapshot: &Snapshot) -> Result<ApprovedPolicy, String> {
+        if let Some(google) = &self.google { google.validate_snapshot(snapshot)?; }
         if snapshot.policy_id != "serverware-operator-demo"
             || !is_sha256_digest(&snapshot.hash)
             || snapshot.policy_sequence == 0
@@ -403,6 +416,13 @@ impl Profile {
         self.active
             .read()
             .is_ok_and(|active| active.high_water.policy_hash == policy_hash)
+    }
+
+    pub(crate) fn google_profile(&self, snapshot: &Snapshot, scope: &super::CredentialLeaseScope)
+        -> Result<Option<&super::operator_google_profile::Profile>, String> {
+        let Some(google) = &self.google else { return Ok(None); };
+        if !self.matches(&snapshot.hash) { return Err(refused()); }
+        Ok(if google.scope_admitted(snapshot, scope)? { Some(google) } else { None })
     }
 
     pub(crate) fn status(&self) -> Value {

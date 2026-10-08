@@ -117,6 +117,8 @@ def activate() -> None:
     directory = Path(os.getenv("SERVERWARE_DATA_DIR", ""))
     if not directory.is_absolute() or directory == Path("/") or ".." in directory.parts:
         raise RuntimeError("operator demo requires a dedicated absolute data directory")
+    from serverware import operator_catalog_oauth_profile as google_profile
+    google_selected = google_profile.selected()
     forbidden = ("SERVERWARE_AUTHORITY_", "SERVERWARE_POLICY_AUTHORITY_", "SERVERWARE_NATIVE_",
         "SERVERWARE_NITRO_", "SERVERWARE_AWS_", "SERVERWARE_CONTROL_PLANE_CUSTODY_",
         "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_WORKLOAD_IDENTITY_",
@@ -127,6 +129,8 @@ def activate() -> None:
     for name, value in _environment():
         if not value or name in disabled and value == "0":
             continue
+        if google_selected and name in google_profile.GOOGLE_CONFIGURATION_KEYS:
+            continue  # Strict preflight runs before config reads the secret file.
         if name in _FIXED_PATHS:
             if Path(value) != directory / _FIXED_PATHS[name]:
                 raise RuntimeError("operator demo state paths must remain in its private directory")
@@ -163,6 +167,8 @@ def activate() -> None:
     proxy = os.environ.get("SERVERWARE_OPERATOR_DEMO_PROXY_URL", "")
     proxy_origin, _ = origin(proxy)
     from serverware import config
+    if google_selected:
+        google_profile.validate_imported_configuration(config)
     if (config.PRODUCTION_IMAGE or config.RELEASE_CHANNEL != "dev" or config.DATA_DIR != directory
             or config.METADATA_STORE_BACKEND != "sqlite" or config.AUDIT_STORE_BACKEND != "sqlite"
             or config.GRANT_STORE_BACKEND != "sqlite" or config.ATOMIC_RELEASE_AUTHORIZATION_ENABLED
@@ -208,6 +214,14 @@ def settings() -> dict:
 
 
 def request_allowed(method: str, path: str) -> bool:
+    from serverware import operator_catalog_oauth_profile as google_profile
+    if google_profile.selected():
+        if path == "/api/oauth/callback/google":
+            google_profile.require_profile()
+            return method.upper() == "GET"
+        if path == "/api/operator-demo/oauth/google/start":
+            google_profile.require_profile()
+            return method.upper() == "POST"
     if path.startswith(("/api/auth/oidc/", "/api/oauth/callback/")):
         return False
     mutations = {

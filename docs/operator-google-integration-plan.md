@@ -2,9 +2,15 @@
 
 ## Status and objective
 
-Design checkpoint against workspace commit `10879772`; not implemented or
-deployed. Read with `operator-workspace-requirements.md` and the OAuth onboarding
-section of `goal.md`. R96 remains terminal: no restart, new enrollment, provider
+Originally designed against workspace commit `10879772`. The 2026-10-08 shared
+working-tree checkpoint now contains in-progress cold profile, consent/catalog,
+and generation-reconciliation implementation. It is **not releasable or
+deployed**: the durable cleanup-fence contract below is planned remediation, not
+an implemented or verified guarantee. Individual source checks or focused tests
+do not establish complete end-to-end acceptance.
+
+Read with `operator-workspace-requirements.md` and the OAuth onboarding section
+of `goal.md`. R96 remains terminal: no restart, new enrollment, real provider
 contact, configuration change or native authority is authorized by this plan.
 
 The journey is connect Google once, choose an application, allow its operations,
@@ -29,6 +35,18 @@ Do not disable configured mutation MFA or two-person activation. Unsupported
 protected combinations fail closed before provider contact, not by silently
 switching to immediate development activation.
 
+The current cold-profile source selects only the exact
+`SERVERWARE_OPERATOR_GOOGLE_PROFILE=operator-google-v1` opt-in. Its initial
+permission preset is `gmail_readonly`, with canonical scopes `email`,
+`https://www.googleapis.com/auth/gmail.readonly`, and `openid`, and the API origin
+`https://gmail.googleapis.com` must already be in the deployment allowlist.
+The client ID, private secret file and exact HTTPS callback use the existing
+Google configuration names. Only the operator start POST and exact Google
+callback GET gain route exceptions; generic OAuth mutation namespaces remain
+closed. The initial capability refuses configured mutation MFA/two-person
+combinations it cannot fulfill. Supporting the protected journey remains a
+requirement, not a permission to disable those controls.
+
 ## Implementation slices
 
 1. **Cold profile admission:** `operator_demo.py`, `config.py`, and a focused
@@ -45,7 +63,9 @@ switching to immediate development activation.
    browser-bound Secure/HttpOnly cookie, verified Google subject and granted
    scopes. Validate intent after state consumption but before exchange. Preserve
    retained issuance/cleanup work, duplicate-account checks and configured MFA.
-   Harden state-file durability; current atomic replacement lacks fsync and its
+   Harden state-file durability. The checkpoint includes a shared state-file
+   fsync writer, also affecting legacy state persistence; crash/failure and
+   regression evidence are still required, and its
    private-file PKCE verifier must not be described as encrypted storage.
 4. **Atomic registration:** retain `db.credentials` as the only token store.
    `db.create_credential(..., _connection=conn)` permits active credential,
@@ -68,14 +88,103 @@ switching to immediate development activation.
    reauthorization-required from bounded provider evidence, not every 503 or
    timeout. Temporary and uncertain refresh outcomes must remain distinct.
 
+## Blocking repair: durable operator cleanup fencing
+
+This section specifies **required, not yet implemented remediation**. Do not
+deploy or enable real Google contact while this blocker remains. The current
+duplicate-account callback can poison the whole catalog: the existing
+grant-family quarantine changes an already connected core credential to
+`revocation_pending`, but its catalog credential and rules remain active.
+`schema.validate_bindings` then rejects the core/catalog mismatch before catalog
+reads and mutations, including operations on unrelated static credentials.
+Keeping the existing grant-wide collision guard is mandatory; bypassing it is
+not a repair.
+
+A callback-only quarantine transaction also does not establish cleanup safety.
+`db.claim_oauth_revocations` automatically promotes expired `held` work to
+`pending` and the background reconciler can revoke it independently. The token
+exchange/refresh retention-failure paths can invoke immediate revocation, and
+other post-contact failures can mark work pending. Google grant-wide revocation
+can therefore affect a previously connected account before its local access is
+fenced, even when the callback itself skips generic cleanup.
+
+The minimum required protocol is:
+
+1. **Reserve an immutable operator cleanup source before contact.** Both initial
+   authorization-code exchange and managed-account refresh must reserve work
+   under a server-owned, immutable operator source and atomically retain a
+   token-free association before any provider request. Bind the actual work ID,
+   operation kind, admitted profile/client, consent intent or existing credential
+   and generation, and verified account identity when available. Codes, tokens,
+   PKCE verifiers and browser nonces do not belong in this association. Caller
+   metadata cannot select the source or create the association. A missing,
+   malformed or mismatched association on operator-tagged work fails closed;
+   it never converts the work into ordinary legacy cleanup.
+2. **Make cleanup eligibility durable, not a callback-local decision.** Generic
+   held-work promotion, pending claims, background/restart reconciliation, and
+   every immediate revocation fallback must refuse operator work without its
+   matching committed cleanup fence. A timer extension, delayed callback or
+   transient boolean is insufficient. Preserve ordinary/native cleanup owners;
+   do not make this development capability an alternate enrolled revoker.
+3. **Retain uncertain work without guessing the account.** Before verified
+   identity is available, or when a fence cannot commit, retain available
+   encrypted material and issuance-uncertainty evidence for bounded manual
+   review. Do not automatically revoke a guessed family, retry the provider
+   exchange, release retained work, or infer that no token was issued. If durable
+   material retention itself failed, report that uncertainty rather than claim
+   the token was retained or safely revoked. Bounds and exhausted-capacity
+   refusal remain mandatory; unavailable cleanup authority does not justify
+   unbounded work accumulation.
+4. **Fence known-family access in one publication transaction.** Use the existing
+   operator order: process-local publication lock, shared-volume EX lock, then
+   one SQLite transaction. A caller-owned form of the existing grant-family
+   quarantine must retain its identity, generation, encryption, collision and
+   audit effects without opening another connection or committing independently.
+   In that same transaction, bind affected managed catalog credentials to the
+   real quarantined core rows, revoke their active rules, publish the reduced
+   signed policy, advance catalog revision, record the failed consent/operation
+   disposition and audit, and durably authorize only the matching cleanup work.
+   Preserve unrelated applications, static credentials and rules. A quarantined
+   account is neither a deleted secret nor proof of completed provider revocation.
+   Keep its retained core/catalog identity verifiable so the remaining workspace
+   stays usable. Do not weaken active-credential validation globally.
+5. **Separate committed and deferred outcomes explicitly.** Failure before a
+   successful commit rolls back the whole fence and leaves cleanup ineligible,
+   including after the old held-work timeout and a process restart. An uncertain
+   commit outcome is not proof of rollback: reobserve the existing durable fence
+   under its owner before deciding eligibility, without replaying provider work.
+   A typed deferred result must not fall through the generic persistence-error
+   handler that revokes rejected exchanges. Once committed, keep a typed
+   committed receipt containing the exact fence/work/policy/revision bindings.
+   Materialize the committed policy while still holding EX; a materialization or
+   post-commit guard failure is pending publication, not rollback and not
+   permission to run duplicate generic quarantine. Retain the database's
+   authoritative fence for restart recovery. Neither a successful file write
+   nor a receipt alone proves the gate loaded the reduced policy.
+6. **Release publication/SQLite ownership before provider cleanup.** Only the
+   existing provider-aware cleanup mechanism, after checking durable eligibility,
+   may contact Google. Never perform provider I/O while holding EX or the
+   registration/quarantine transaction. Preserve its bounded retry, uncertain
+   outcome and retained-work semantics; do not replay consent, refresh, upstream
+   application operations or controlled issuance claims as a cleanup shortcut.
+
+These controls cover both initial exchange and refresh: identity/scope refusal,
+duplicate-family collision, stale catalog review, registration/update failure,
+retention failure, crash recovery and rejected refreshed material. Handling
+only the explicit duplicate-collision exception leaves other cleanup sinks open.
+The admitted operator profile is SQLite-only; the proposed caller-owned helper
+does not authorize changing PostgreSQL/native lock ordering or ownership.
+
 ## Generation reconciliation: a separate correctness prerequisite
 
-The current legacy lease path refreshes in `_credential_for_lease`, then checks
+The baseline legacy lease path refreshes in `_credential_for_lease`, then checks
 the resulting generation against the caller's earlier metadata pin. A changed
-generation returns 409 before secret-envelope creation. Rust's
+generation returns 409 before secret-envelope creation. The original Rust
 `fetch_scoped_credential_lease_on_deadline` and
-`ensure_scoped_credential_lease_on_deadline` propagate the failure rather than
-reconcile it. Direct refresh tests therefore do not prove unattended proxy use.
+`ensure_scoped_credential_lease_on_deadline` behavior propagates that failure
+rather than reconciling it. The checkpoint's new reconciliation source still
+requires the full protocol and evidence below; direct refresh tests do not prove
+unattended proxy use.
 Do not move refresh into the authority-free `generationMetadata` read.
 
 An ordinary or even signed **409 is not retry authority**. Current source:
@@ -117,8 +226,9 @@ A candidate reconciliation protocol is acceptable only with all these checks:
    provider exchange. Missing/malformed signatures, mismatched bindings, timeout,
    interrupted response, post-encryption errors or a second conflict fail closed.
 
-This protocol requires implementation and deterministic evidence; the existing
-409 branch alone cannot safely enable it. Keep native behavior unchanged.
+This protocol requires complete implementation and deterministic evidence;
+neither the existing 409 branch nor in-progress helper code alone can safely
+enable it. Keep native behavior unchanged.
 
 ## Disconnect and reconnect
 
@@ -139,6 +249,17 @@ generation-race controls; no-envelope proof and negative retry controls; shared
 account revocation; restart recovery; and token non-disclosure in UI/logs/leases.
 Assert the failed attempt's nonce stays reserved, a fresh nonce succeeds once,
 controlled claims are never retried, and an ambiguous outcome sends no retry.
+
+Cleanup-fence acceptance must additionally exercise the real background claimant
+with aged held work, restart and missing-association controls; immediate
+retention-failure paths; unknown identity; both initial and refresh operations;
+and signing/catalog/audit/commit rollback. Before a committed fence, assert zero
+provider revocation attempts and no cleanup eligibility. After a commit followed
+by materialization failure, assert a retained committed/pending receipt, no
+duplicate quarantine, no newly granted access, and recoverable publication.
+After duplicate-family quarantine, assert the affected rules are absent from the
+new signed policy while catalog reads and unrelated static/application changes
+still work. Provider cleanup success/failure must not corrupt those bindings.
 
 Real Google proof still requires administrator provisioning of the OAuth Web
 application, enabled intended API, exact registered HTTPS callback and private

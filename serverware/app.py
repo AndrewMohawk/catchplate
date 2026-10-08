@@ -15815,6 +15815,50 @@ def oauth_enrolled_consent_options(payload: OAuthStartRequest, request: Request,
         raise HTTPException(status_code=409, detail="enrolled OAuth consent options unavailable; no automatic retry") from None
 
 
+def _operator_google_admin(request: Request) -> AdminIdentity:
+    return _operator_catalog_api._admin_identity(request)
+
+
+@app.post("/api/operator-demo/oauth/google/start")
+async def operator_google_start(request: Request, response: Response,
+        identity: AdminIdentity = Depends(_operator_google_admin)) -> dict[str, Any]:
+    from serverware import operator_catalog_oauth as catalog_oauth
+    from serverware import operator_catalog_oauth_profile as profiles
+    from serverware.operator_catalog_schema import CatalogConflict
+    _operator_catalog_api._admit(request, mutation=True)
+    payload = await _operator_catalog_api._payload(request, catalog_oauth.GoogleStartInput, 2048)
+    try:
+        profile = profiles.require_profile()
+        legacy_payload = OAuthStartRequest(provider="google", credential_name=payload.name,
+            scopes=list(profile.scopes), metadata={})
+        result = await _operator_catalog_api._blocking(
+            _oauth_start, legacy_payload, request, response, identity, payload)
+        response.headers.update(_operator_catalog_api._HEADERS)
+        return result
+    except HTTPException:
+        raise
+    except (CatalogConflict, catalog_oauth.GoogleConsentError):
+        _operator_catalog_api._reject(409, "Google consent changed or unavailable; inspect saved status before starting again")
+    except profiles.OperatorGoogleProfileError:
+        _operator_catalog_api._reject(409, "Google consent profile is unavailable; no provider request was authorized")
+    except Exception:
+        _operator_catalog_api._reject(503, "Google consent status is uncertain; inspect saved status before starting again")
+
+
+@app.get("/api/operator-demo/oauth/google/intents")
+async def operator_google_intents(request: Request,
+        identity: AdminIdentity = Depends(_operator_google_admin)) -> JSONResponse:
+    from serverware import operator_catalog_oauth as catalog_oauth
+    _operator_catalog_api._admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _operator_catalog_api._reject(400, "Google consent status accepts no body")
+    try:
+        result = await _operator_catalog_api._blocking(catalog_oauth.status, identity.user_id)
+        return JSONResponse(result, headers=_operator_catalog_api._HEADERS)
+    except Exception:
+        _operator_catalog_api._reject(503, "Google consent status unavailable")
+
+
 @app.post("/api/oauth/start")
 def oauth_start(
     payload: OAuthEnrolledStartRequest | OAuthStartRequest,
@@ -15824,6 +15868,12 @@ def oauth_start(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    return _oauth_start(payload, request, response, identity)
+
+
+def _oauth_start(payload: OAuthEnrolledStartRequest | OAuthStartRequest,
+        request: Request, response: Response, identity: AdminIdentity,
+        operator_catalog_request=None) -> dict[str, Any]:
     from serverware import control_plane_oauth_exchange as enrolled
     if type(payload) is OAuthEnrolledStartRequest:
         try:
@@ -15955,6 +16005,10 @@ def oauth_start(
     # The account identity is unknown here. Two-person review is deferred until
     # the callback binds the exact provider subject and granted scopes.
     two_person = None
+    catalog_intent = None
+    if operator_catalog_request is not None:
+        from serverware import operator_catalog_oauth as catalog_oauth
+        catalog_intent = catalog_oauth.begin(operator_catalog_request, identity.user_id)
     browser_nonce = secrets.token_urlsafe(32)
     try:
         started = create_authorization_url(
@@ -15968,9 +16022,22 @@ def oauth_start(
             control_plane_approval=two_person,
             reconnect_binding=reconnect_binding,
             setup_session_id=payload.setup_session_id,
+            **({"operator_catalog_intent_id": catalog_intent["id"]} if catalog_intent is not None else {}),
         )
     except OAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if catalog_intent is not None:
+        try:
+            started["operatorGoogleIntent"] = catalog_oauth.bind_started(
+                catalog_intent["id"], identity.user_id, started)
+        except Exception:
+            # No provider contact has happened. Never hand out an authorization
+            # URL whose metadata/state binding did not finish durably.
+            try:
+                consume_state(provider_id=payload.provider, state=started["state"], browser_nonce=browser_nonce)
+            except OAuthError:
+                pass
+            raise
     if setup_session is not None:
         state_digest = (
             "sha256:" + hashlib.sha256(started["state"].encode("ascii")).hexdigest()
@@ -16136,6 +16203,9 @@ def oauth_callback(
                 headers={"Cache-Control": "no-store"},
             )
         setup_session_id = denied_state.get("setup_session_id")
+        if denied_state.get("operator_catalog_intent_id") is not None:
+            from serverware import operator_catalog_oauth as catalog_oauth
+            catalog_oauth.fail_state(provider_id, state, "consent_denied")
         _fail_bound_oauth_setup_session(
             setup_session_id=setup_session_id,
             actor_id=denied_state.get("actor_id"),
@@ -16172,6 +16242,12 @@ def oauth_callback(
         )
         if not isinstance(exchanged, dict):
             raise OAuthError("OAuth token exchange result is malformed")
+        if exchanged.get("_operator_catalog_intent") is not None:
+            from serverware import operator_catalog_oauth as catalog_oauth
+            try:
+                catalog_oauth._profile()
+            except Exception as exc:
+                raise OAuthError("Operator Google consent profile changed") from exc
         actor_id = str(exchanged.get("createdBy") or "oauth-callback")
         setup_session_id = exchanged.get("setupSessionId")
         if setup_session_id is not None:
@@ -16232,6 +16308,8 @@ def oauth_callback(
             exchanged.get("createdBy") if isinstance(exchanged, dict) else exc.actor_id
         )
         if isinstance(exchanged, dict):
+            if exchanged.get("_operator_catalog_intent") is not None:
+                catalog_oauth.fail_state(provider_id, state, "exchange_failed")
             _revoke_rejected_oauth_exchange(
                 exchanged,
                 actor_id=str(exchanged.get("createdBy") or "oauth-callback"),
@@ -16420,7 +16498,9 @@ def oauth_callback(
         )
     else:
         try:
-            if reconnect_binding is not None:
+            if exchanged.get("_operator_catalog_intent") is not None:
+                credential = catalog_oauth.register_active(exchanged, credential_metadata)
+            elif reconnect_binding is not None:
                 credential = db.reconnect_oauth_credential(
                     reconnect_binding["credential_id"],
                     expected_version=reconnect_binding["credential_version"],
@@ -16465,6 +16545,8 @@ def oauth_callback(
                     )
                 _drain_setup_session_audit_outbox()
         except db.OAuthGrantCollisionError as exc:
+            if exchanged.get("_operator_catalog_intent") is not None:
+                catalog_oauth.fail_state(provider_id, state, "identity_conflict")
             return _oauth_grant_collision_response(
                 exc,
                 exchanged=exchanged,
@@ -16506,6 +16588,8 @@ def oauth_callback(
             db.MetadataStoreError,
             ValueError,
         ) as exc:
+            if exchanged.get("_operator_catalog_intent") is not None:
+                catalog_oauth.fail_state(provider_id, state, "persistence_failed")
             _revoke_rejected_oauth_exchange(
                 exchanged,
                 actor_id=str(actor_id),
@@ -16554,10 +16638,15 @@ def oauth_callback(
             if reconnect_binding is not None
             else "OAuth credential connected"
         )
+        connection_message = (
+            "The Google account is encrypted in Serverware. No application access has been granted. Return to the workspace to create an access rule."
+            if exchanged.get("_operator_catalog_intent") is not None
+            else "The credential is encrypted in Serverware and remains assigned to its policy routes."
+        )
         connected = HTMLResponse(
             f"""
             <h1>{heading}</h1>
-            <p>The credential is encrypted in Serverware and remains assigned to its policy routes.</p>
+            <p>{connection_message}</p>
             <script>
               setTimeout(() => {{ window.location.href = {json.dumps("/?setup=" + setup_session["id"] if setup_session is not None else "/")}; }}, 1200);
             </script>
@@ -20219,6 +20308,24 @@ def data_plane_credential_leases(
                     payload.expected_metadata_sha256 or "",
                 )
             ):
+                from serverware import operator_google_lease_reconciliation
+                no_envelope = operator_google_lease_reconciliation.pre_encryption_generation_conflict(
+                    request, payload, prepared_credential=prepared_credential,
+                    prepared_metadata_sha256=prepared_metadata_sha256,
+                    request_binding_sha256=request_binding_sha256,
+                    recipient_nonce_sha256=recipient_nonce_sha256,
+                    dispatch_authority=dispatch_authority,
+                    claimed_release_authorization=claimed_release_authorization,
+                    profile=profile, wrapped=wrapped, broker=broker,
+                    refresh_opening=refresh_opening, currentness_opening=currentness_opening)
+                if no_envelope is not None:
+                    # The real metadata mutation snapshot has been released;
+                    # audit storage must not nest a second SQLite writer in it.
+                    _record_credential_lease_audit("rejected", payload,
+                        authenticated=authenticated, status_code=409,
+                        reason=operator_google_lease_reconciliation.REASON)
+                    return Response(content=no_envelope, status_code=409,
+                        media_type="application/json", headers={"Cache-Control": "no-store"})
                 raise HTTPException(
                     status_code=409,
                     detail="credential generation or metadata changed before secret release",

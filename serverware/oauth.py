@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 import urllib.error
@@ -400,14 +401,33 @@ def _oauth_state_lock():
 
 def _write_states(payload: dict[str, Any]) -> None:
     OAUTH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = OAUTH_STATE_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n")
-    tmp.chmod(0o600)
-    tmp.replace(OAUTH_STATE_PATH)
+    temporary = None
     try:
-        OAUTH_STATE_PATH.chmod(0o600)
-    except OSError:
-        pass
+        # All callers hold the existing state lock. A unique private sibling
+        # avoids reusing a leftover temporary inode after interrupted writes.
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                dir=OAUTH_STATE_PATH.parent, prefix=".oauth-state-", delete=False) as output:
+            temporary = output.name
+            os.fchmod(output.fileno(), 0o600)
+            output.write(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, OAUTH_STATE_PATH)
+        directory = os.open(OAUTH_STATE_PATH.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError as exc:
+        # In particular, a directory-sync failure after replace is uncertain,
+        # not success. State consumption cannot continue to provider contact.
+        raise OAuthError("OAuth state persistence is uncertain; no automatic retry") from exc
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def _prune_expired(payload: dict[str, Any]) -> None:
@@ -433,6 +453,7 @@ def create_authorization_url(
     control_plane_approval: dict[str, Any] | None = None,
     reconnect_binding: dict[str, Any] | None = None,
     setup_session_id: str | None = None,
+    operator_catalog_intent_id: str | None = None,
 ) -> dict[str, Any]:
     provider = provider_for(provider_id)
     if not provider.configured:
@@ -458,6 +479,10 @@ def create_authorization_url(
         require_application_metadata(metadata_value, operation)
     reconnect_value = _bounded_reconnect_binding(provider, reconnect_binding)
     setup_session_value = _canonical_setup_session_id(setup_session_id)
+    catalog_intent = _canonical_setup_session_id(operator_catalog_intent_id)
+    if catalog_intent is not None and (provider.id != "google" or operation is not None
+            or setup_session_value is not None or reconnect_value is not None or metadata_value):
+        raise OAuthError("Operator Google consent binding refused")
     if (
         not isinstance(browser_nonce, str)
         or _OAUTH_BROWSER_NONCE_RE.fullmatch(browser_nonce) is None
@@ -485,6 +510,8 @@ def create_authorization_url(
     }
     if setup_session_value is not None:
         record["setup_session_id"] = setup_session_value
+    if catalog_intent is not None:
+        record["operator_catalog_intent_id"] = catalog_intent
     if operation is not None:
         record[application_owner.ASSOCIATION_KEY] = operation.association()
     _application_check(operation)
@@ -743,6 +770,14 @@ def exchange_authorization_code(
     record = consume_state(
         provider_id=provider.id, state=state, browser_nonce=browser_nonce
     )
+    # The browser/state check is consumed first. The durable catalog claim then
+    # precedes cleanup reservation and every provider request; generic flows
+    # retain their original owner when the operator profile is absent.
+    from serverware import operator_catalog_oauth
+    try:
+        catalog_claim = operator_catalog_oauth.claim_consumed_state(record, state)
+    except Exception as exc:
+        raise OAuthError("Operator Google consent is unavailable or changed") from exc
     operation = _application_begin(provider, record.get(application_owner.ASSOCIATION_KEY), bound=True)
     if operation is not None and record.get("redirect_uri") != provider.redirect_uri:
         raise OAuthError("OAuth state redirect no longer matches the enrolled application")
@@ -754,6 +789,8 @@ def exchange_authorization_code(
             source="authorization_code_exchange",
         )
     except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+        if catalog_claim is not None:
+            operator_catalog_oauth.fail_state(provider.id, state, "exchange_failed")
         raise OAuthError(
             "OAuth token exchange is unavailable while revocation capacity is exhausted",
             setup_session_id=_stored_setup_session_id(record),
@@ -872,10 +909,15 @@ def exchange_authorization_code(
                 raise OAuthError("OAuth token endpoint returned an invalid scope")
             scope_string = response_scope
         else:
+            if catalog_claim is not None:
+                raise OAuthError("Operator Google token response omitted granted scopes")
             if not provider.token_response_scope_optional:
                 raise OAuthError("OAuth token endpoint omitted its required scope")
             scope_string = " ".join(record.get("scopes") or [])
         scopes = [scope for scope in scope_string.split(" ") if scope]
+        if catalog_claim is not None:
+            # Retain scope_string in encrypted token storage as received.
+            scopes = operator_catalog_oauth.canonical_granted_scopes(scope_string)
         requested_scopes = {
             scope
             for scope in record.get("scopes") or []
@@ -950,9 +992,13 @@ def exchange_authorization_code(
             result["setupSessionId"] = setup_session_id
         if operation is not None:
             result["_application_operation"] = operation
+        if catalog_claim is not None:
+            result["_operator_catalog_intent"] = catalog_claim
         _application_check(operation)
         return result
     except Exception as exc:
+        if catalog_claim is not None:
+            operator_catalog_oauth.fail_state(provider.id, state, "exchange_failed")
         if material_attached:
             try:
                 db.mark_oauth_revocation_work_pending(
@@ -1002,6 +1048,11 @@ def refresh_access_token(
         raise OAuthError("OAuth credential is malformed")
     operation = require_application_metadata(metadata)
     _require_application_lifecycle(operation)
+    from serverware import operator_catalog_oauth
+    try:
+        catalog_profile = operator_catalog_oauth.profile_for_refresh(metadata)
+    except Exception as exc:
+        raise OAuthError("Operator Google refresh account binding refused") from exc
     if token_secret.get(application_owner.ASSOCIATION_KEY) != metadata.get(application_owner.ASSOCIATION_KEY):
         raise OAuthError("OAuth token and metadata application ownership differ")
     refresh_token = token_secret.get("refresh_token")
@@ -1136,6 +1187,8 @@ def refresh_access_token(
         else:
             scope_string = existing_scope or " ".join(sorted(existing_scopes))
         refreshed_scopes = {scope for scope in scope_string.split(" ") if scope}
+        if catalog_profile is not None:
+            refreshed_scopes = set(operator_catalog_oauth.canonical_granted_scopes(scope_string))
         if refreshed_scopes != existing_scopes:
             raise OAuthError(
                 "OAuth refresh response changed the credential scope binding"

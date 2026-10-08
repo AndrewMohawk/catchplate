@@ -397,12 +397,20 @@ WEB_TLS_KEY_FILE = os.getenv("SERVERWARE_WEB_TLS_KEY_FILE", "").strip()
 PROXY_HOST = os.getenv("SERVERWARE_PROXY_HOST", "0.0.0.0")
 PROXY_PORT = int(os.getenv("SERVERWARE_PROXY_PORT", "8080"))
 PUBLIC_URL = os.getenv("SERVERWARE_PUBLIC_URL", f"http://localhost:{WEB_PORT}").strip()
-GOOGLE_OAUTH_CLIENT_ID = os.getenv("SERVERWARE_GOOGLE_OAUTH_CLIENT_ID", "").strip()
-GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_CLIENT_SECRET_FILE = _oauth_client_secret(
-    value_name="SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
-    file_name="SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-)
-GOOGLE_OAUTH_REDIRECT_URI = os.getenv("SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI", f"{PUBLIC_URL}/api/oauth/callback/google").strip()
+from serverware import operator_catalog_oauth_profile as _operator_google_profile
+if _operator_google_profile.selected():
+    # Validate raw ownership, callback and private file before any Google secret
+    # read. The disabled profile retains its existing configuration semantics.
+    (GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET,
+     GOOGLE_OAUTH_CLIENT_SECRET_FILE, GOOGLE_OAUTH_REDIRECT_URI) = _operator_google_profile.load_configuration(
+        production_image=PRODUCTION_IMAGE, release_channel=RELEASE_CHANNEL)
+else:
+    GOOGLE_OAUTH_CLIENT_ID = os.getenv("SERVERWARE_GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_CLIENT_SECRET_FILE = _oauth_client_secret(
+        value_name="SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+        file_name="SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+    )
+    GOOGLE_OAUTH_REDIRECT_URI = os.getenv("SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI", f"{PUBLIC_URL}/api/oauth/callback/google").strip()
 X_OAUTH_CLIENT_ID = os.getenv("SERVERWARE_X_OAUTH_CLIENT_ID", os.getenv("SERVERWARE_TWITTER_OAUTH_CLIENT_ID", "")).strip()
 _X_OAUTH_LEGACY_CLIENT_SECRET = os.getenv("SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET", "").strip()
 if _production_release() and _X_OAUTH_LEGACY_CLIENT_SECRET and os.getenv("SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE", "").strip():

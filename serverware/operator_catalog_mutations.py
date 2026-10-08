@@ -94,6 +94,9 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
     if collection == "credentials":
         result.update(auth_type=record["auth_type"], header_name=record["header_name"],
             active_rule_count=len(_active_rules(catalog, "credential_id", record["id"])))
+        if record["auth_type"] == "google_oauth":
+            from serverware import operator_catalog_google
+            result.update(operator_catalog_google.public_fields(record))
     elif collection == "applications":
         count = len(_active_rules(catalog, "application_id", record["id"]))
         revoked = record["status"] == "revoked"
@@ -220,6 +223,10 @@ def create_rule(payload: RuleInput, actor_id: str) -> dict:
 def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "credentials", payload.id)
+        if record.get("auth_type") == "google_oauth":
+            # A shared OAuth grant needs provider-aware disconnect and retained
+            # cleanup; the static deletion endpoint cannot substitute for it.
+            raise CatalogConflict()
         if _active_rules(catalog, "credential_id", payload.id):
             raise CatalogConflict()
         if not db.delete_credential(payload.id, _connection=conn):

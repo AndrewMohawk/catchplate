@@ -5,7 +5,13 @@
 const {createServer, request: httpRequest} = require('node:http');
 const {isIP} = require('node:net');
 const {readFileSync} = require('node:fs');
+const {mkdtemp, writeFile, rm} = require('node:fs/promises');
+const {lookup} = require('node:dns/promises');
+const {execFile} = require('node:child_process');
+const {promisify} = require('node:util');
+const {join, resolve} = require('node:path');
 const {randomBytes, randomUUID, X509Certificate, createHash} = require('node:crypto');
+const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
 
 const READ_PATHS = new Set(['/', '/ca.pem', '/api/operator-demo/status', '/api/audit/search', '/api/audit/verify']);
 const WRITE_PATH = '/api/operator-demo/connections';
@@ -92,6 +98,53 @@ async function downloadedBytes(download, maximum) {
   for await (const chunk of stream) { size += chunk.length; requireCondition(size <= maximum, 'download exceeds bound'); chunks.push(chunk); }
   return Buffer.concat(chunks);
 }
+async function validateClientProxy(proxyUrl, expectedProxyUrl) {
+  requireCondition(typeof expectedProxyUrl === 'string' && proxyUrl === expectedProxyUrl,
+    'client execution requires the exact requested proxy URL');
+  const proxy = new URL(proxyUrl);
+  requireCondition(proxy.protocol === 'https:' && !proxy.username && !proxy.password &&
+    !proxy.search && !proxy.hash && proxy.pathname === '/' && !isIP(proxy.hostname) && proxy.hostname.includes('.'),
+  'client proxy must be an exact HTTPS hostname origin');
+  const addresses = await lookup(proxy.hostname, {all: true});
+  requireCondition(addresses.length > 0 && addresses.every(({address, family}) => {
+    const parts = address.split('.').map(Number);
+    return family === 4 && (parts[0] === 10 || parts[0] === 192 && parts[1] === 168 ||
+      parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31);
+  }), 'client proxy DNS must resolve only to private LAN IPv4 addresses');
+}
+async function executeCopiedClient({command, proxyUrl, expectedProxyUrl, fixtureOrigin, caBytes, clientToken, providerSecret}) {
+  await validateClientProxy(proxyUrl, expectedProxyUrl);
+  requireCondition(fixtureOrigin === 'https://demo-upstream:8443' && command === buildCurlCommand({
+    proxyUrl, upstreamUrl: fixtureOrigin + '/echo', method: 'GET', caPath: './serverware-ca.pem',
+    allowedHeaders: ['accept', 'user-agent'],
+  }), 'copied command does not match the exact approved fixture request');
+  const scratch = resolve(process.env.TMPDIR || '/srv/catchplate-fast/tmp');
+  requireCondition(scratch !== '/tmp' && !scratch.startsWith('/tmp/'), 'client scratch must use the approved non-root filesystem');
+  const directory = await mkdtemp(join(scratch, 'operator-demo-client-'));
+  try {
+    await writeFile(join(directory, 'serverware-ca.pem'), caBytes, {mode: 0o600, flag: 'wx'});
+    // The copied command is unchanged. Private curl configuration only bounds
+    // execution/output and appends the HTTP status; trust and routing stay intact.
+    await writeFile(join(directory, '.curlrc'), 'connect-timeout = 5\nmax-time = 20\nmax-filesize = 65536\nsilent\nwrite-out = "\\n%{http_code}"\n',
+      {mode: 0o600, flag: 'wx'});
+    let result;
+    try {
+      result = await promisify(execFile)('/bin/sh', ['-c', command], {cwd: directory,
+        env: {PATH: '/usr/bin:/bin', LC_ALL: 'C', CURL_HOME: directory, SERVERWARE_PROXY_TOKEN: clientToken},
+        timeout: 25000, killSignal: 'SIGKILL', maxBuffer: 65536, encoding: 'utf8'});
+    } catch (_) { throw new VerificationFailure('generated client request failed; private diagnostics suppressed'); }
+    requireCondition(![clientToken, providerSecret].some(secret => result.stdout.includes(secret) || result.stderr.includes(secret)),
+      'generated client output contained secret material');
+    const boundary = result.stdout.lastIndexOf('\n');
+    requireCondition(boundary >= 0 && result.stdout.slice(boundary + 1) === '200', 'generated client did not receive HTTP 200');
+    let body;
+    try { body = JSON.parse(result.stdout.slice(0, boundary)); }
+    catch (_) { throw new VerificationFailure('generated client did not receive projected JSON'); }
+    const expected = {method: 'GET', path: '/echo', authorization_present: true, authorization_scheme: 'Bearer', credential_marker: 'other'};
+    requireCondition(body && JSON.stringify(Object.keys(body).sort()) === JSON.stringify(Object.keys(expected).sort()) &&
+      Object.entries(expected).every(([key, value]) => body[key] === value), 'generated client response projection or upstream authentication differed');
+  } finally { await rm(directory, {recursive: true, force: true}); }
+}
 async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-upstream:8443'}) {
   const origin = privateOrigin(baseUrl);
   requireCondition(new URL(origin).hostname === '127.0.0.1', 'browser must use the script-owned loopback relay');
@@ -102,6 +155,9 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
   const checks = []; let stage = 'initial load'; let errorCount = 0; let consoleErrorCount = 0; let unexpectedRequests = 0;
   let providerSecret = randomBytes(32).toString('base64url'); let clientToken = '';
   let connectionId; let policyHash; let caFingerprint; let commandDigest;
+  const executeClient = process.env.OPERATOR_DEMO_EXECUTE_CLIENT === '1';
+  const expectedProxyUrl = process.env.OPERATOR_DEMO_EXPECTED_PROXY_URL;
+  let generatedClientExecuted = false;
   const downloads = [];
   page.on('pageerror', () => errorCount++);
   page.on('console', message => { if (message.type() === 'error') consoleErrorCount++; });
@@ -114,6 +170,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     requireCondition(initial.mode === 'operator-development' && initial.syntheticOnly === false &&
       initial.productionReady === false && initial.hardwareVerified === false && initial.allowed_upstreams.includes(fixtureOrigin),
     'isolated operator-development profile not established');
+    if (executeClient) await validateClientProxy(initial.proxy_url, expectedProxyUrl);
     await page.waitForFunction(() => !document.querySelector('#connection-fields').disabled);
     requireCondition((await page.title()).includes('Serverware operator demo'), 'wrong browser document');
     requireCondition(await page.locator('#overview-title').isVisible(), 'overview is blank');
@@ -174,7 +231,8 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     commandDigest = createHash('sha256').update(command).digest('hex');
     await page.locator('#copy-command').click();
     await page.waitForFunction(() => document.querySelector('#client-copy-status').textContent.includes('Copied.'));
-    requireCondition(await page.evaluate(() => navigator.clipboard.readText()) === command, 'real clipboard does not match example');
+    const copiedCommand = await page.evaluate(() => navigator.clipboard.readText());
+    requireCondition(copiedCommand === command, 'real clipboard does not match example');
     const pendingConfig = page.waitForEvent('download'); await page.locator('#download-config').click();
     const configDownload = await pendingConfig; downloads.push(configDownload);
     requireCondition(configDownload.suggestedFilename() === 'serverware-client.private.json', 'unexpected private config filename');
@@ -182,6 +240,13 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     requireCondition(config.proxy_authorization === 'Bearer ' + clientToken && config.upstream_url === fixtureOrigin + '/echo' &&
       !configBytes.includes(Buffer.from(providerSecret)), 'private configuration has wrong credential boundary');
     checks.push('rendered_client_clipboard_and_private_download');
+    if (executeClient) {
+      stage = 'actual copied client request through the configured HTTPS proxy';
+      requireCondition(config.proxy_url === status.proxy_url, 'private config proxy differs from active configuration');
+      await executeCopiedClient({command: copiedCommand, proxyUrl: status.proxy_url, expectedProxyUrl,
+        fixtureOrigin, caBytes, clientToken, providerSecret});
+      generatedClientExecuted = true; checks.push('actual_copied_client_https_proxy_and_projected_response');
+    }
 
     stage = 'persisted connection audit';
     await navigate(page, 'audit'); await page.locator('#audit-query').fill(connectionId);
@@ -223,7 +288,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     return {ok: true, scope: 'Real isolated operator-demo UI/API and gate activation; synthetic fixture only',
       checks, connection_id: connectionId, policy_hash: policyHash, ca_sha256: caFingerprint, client_command_sha256: commandDigest,
       page_errors: errorCount, console_errors: consoleErrorCount, unexpected_requests: unexpectedRequests,
-      public_ingress_verified: false, human_sso_verified: false, generated_client_executed: false,
+      public_ingress_verified: false, human_sso_verified: false, generated_client_executed: generatedClientExecuted,
       screenshots: ['/tmp/serverware-operator-demo-live-mobile.png', '/tmp/serverware-operator-demo-live-desktop.png']};
   } catch (error) { return {ok: false, stage, reason: error instanceof VerificationFailure ? error.message : 'browser action failed; private diagnostics suppressed', completed_checks: checks, page_errors: errorCount,
     console_errors: consoleErrorCount, unexpected_requests: unexpectedRequests, connection_id: connectionId || null}; }

@@ -306,6 +306,15 @@ class AcceptanceTests(unittest.TestCase):
 
 
 class FeatureTests(unittest.TestCase):
+    def test_feature_query_has_exact_canonical_order_and_encoding(self):
+        digest = "sha256:" + "a" * 64
+        for case in ("full", "reflect_raw", "reflect_decoded"):
+            self.assertEqual(features.feature_path(digest, case),
+                "/echo?catalogProof=" + case + "&expectedAuthorizationSha256=sha256%3A" + "a" * 64)
+        for invalid_digest, invalid_case in (("not-a-digest", "full"), (digest, "unexpected")):
+            with self.assertRaises(checker.CheckFailure):
+                features.feature_path(invalid_digest, invalid_case)
+
     def test_full_json_and_decoded_only_oracles(self):
         authorization = "Bearer synthetic-operator-" + "A" * 40
         self.assertEqual(features.fixture_body("full", authorization, matched=True, proxy_seen=False), features.FULL_JSON)
@@ -368,6 +377,9 @@ class FeatureTests(unittest.TestCase):
         seen = []
         def request(check, path, supplied):
             seen.append((path, supplied))
+            # Exercise the real call site's target, not merely the pure helper.
+            self.assertTrue(path.startswith("/echo?catalogProof="))
+            self.assertEqual(path.count("&expectedAuthorizationSha256=sha256%3A"), 1)
             if supplied != "Bearer serverware-placeholder-operator-check-test":
                 code = "credential_existing_header_missing" if supplied is None else "credential_existing_header_mismatch"
                 return 403, {"allowed": False, "action": "deny", "payload": {"error": code}}, b"{}"
@@ -387,6 +399,28 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(len(value.blocked_responses), 2)
         self.assertEqual(len(value.negative_observations), 2)
         self.assertEqual([call.args[1] for call in checkpoint.call_args_list], ["negative-phase", "features"])
+
+    def test_unexpected_denial_status_retains_safe_shape_and_dispatch_observations(self):
+        malformed = {"error": "raw-error-must-not-escape", "payload": {"error": "raw-nested-error-must-not-escape"}}
+        matching = {"allowed": False, "action": "deny", "payload": {"error": "credential_existing_header_missing"},
+            "detail": "raw-detail-must-not-escape"}
+        for after, document, matches in ((6, malformed, False), (7, malformed, False), (6, matching, True)):
+            with self.subTest(upstream_count_after=after, expected_shape_matches=matches):
+                value, credential, _, _ = self.feature_fixture()
+                value.count, value.clean = Mock(side_effect=[6, after]), Mock()
+                response = (400, document, b"raw-body-must-not-escape")
+                with patch.object(features, "request", return_value=response), \
+                        patch.object(features, "record_negative_phase") as leases, \
+                        patch.object(features, "checkpoint") as checkpoint, \
+                        self.assertRaisesRegex(checker.CheckFailure, "not denied before dispatch"):
+                    features.run_features(value, credential)
+                self.assertEqual(value.count.call_count, 2)
+                self.assertEqual(value.feature_observations, [{"case": "credential_existing_header_missing",
+                    "status": 400, "expectedDenialEnvelope": matches, "expectedErrorMatched": matches,
+                    "upstreamCountBefore": 6, "upstreamCountAfter": after, "upstreamDispatches": after - 6}])
+                self.assertNotIn("must-not-escape", json.dumps(features.safe_evidence(value)))
+                leases.assert_not_called()
+                checkpoint.assert_not_called()
 
     def test_denial_with_no_dispatch_or_release_start_but_scoped_lease_fails(self):
         value, credential, seen, request = self.feature_fixture()

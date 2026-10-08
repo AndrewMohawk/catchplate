@@ -164,3 +164,31 @@ not renew an expired Serverware application token. A temporary refresh failure
 must not be labeled lost consent without provider evidence. Existing Google
 disconnect/reconnect and native ownership boundaries remain explicit; do not
 work around them with a pasted refresh token or a hidden legacy fallback.
+
+## Remaining ordinary-client usability gaps
+
+The current source is not yet a general "just replace authentication" proxy.
+Removing mandatory response projection solves only one part of that journey:
+
+- An empty request-field list currently forbids a body. Ordinary JSON POSTs
+  still need field declarations; a future unchanged-request-content mode needs
+  an explicit backend contract, not merely a collapsed form section.
+- Query names default to none, and forwarded client headers default to
+  `accept` and `user-agent`. An example-request importer could suggest those
+  names locally for explicit approval; it must not silently broaden access.
+- Saved-rule summaries should include body, query and header restrictions as
+  well as destination, exact path and methods. Collapsing advanced editors must
+  not hide what the application will actually be allowed to send.
+- Generated cURL is currently a connection template, without body or query
+  values. Lead with settings for an existing client, or explicitly build a
+  complete example from supplied sample input without executing it.
+- Whole-JSON responses retain status-code, body-presence, size and safe-header
+  restrictions; `204 No Content` is not supported by the current envelope.
+  Text, binary and streaming remain open compatibility work. The current
+  CONNECT parser also requires canonical query ordering. Ordinary-client
+  compatibility needs explicit implementation and proof, not a claim that
+  "no response filter" removes these protocol restrictions.
+
+Destination and operation permissions remain necessary even in the simple
+journey. Optional content restrictions and provider-specific presets should be
+separate choices, with a short effective-permission summary before publication.

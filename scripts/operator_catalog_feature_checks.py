@@ -231,6 +231,13 @@ def request(check, path, placeholder):
         raw.close()
 
 
+def feature_path(digest, case):
+    """The proxy requires exact lexicographic query order before policy checks."""
+    require(isinstance(digest, str) and SHA256.fullmatch(digest)
+            and case in {"full", "reflect_raw", "reflect_decoded"}, "invalid synthetic feature query")
+    return "/echo?" + urlencode([("catalogProof", case), ("expectedAuthorizationSha256", digest)])
+
+
 def run_features(check, credential):
     check.feature_observations, check.blocked_responses, check.negative_observations = [], [], []
     application, token, _ = check.mutate("/applications", {"name": check.run_id + "-features",
@@ -255,21 +262,25 @@ def run_features(check, credential):
         "route_id": rule["route_id"], "credential_id": credential["id"], "policy_hash": check.policy_hash,
         "data_plane_binary_digest": check.args.expected_binary_sha256}
     digest = "sha256:" + hashlib.sha256(("Bearer " + check.credential).encode("ascii")).hexdigest()
-    def path(case):
-        return "/echo?" + urlencode({"expectedAuthorizationSha256": digest, "catalogProof": case})
     for supplied, code in ((None, "credential_existing_header_missing"),
                            (placeholder + "x", "credential_existing_header_mismatch")):
         before = check.count()
-        status, document, _ = request(check, path("full"), supplied)
-        require(status == 403 and document.get("allowed") is False and document.get("action") == "deny"
-                and document.get("payload", {}).get("error") == code and check.count() == before,
+        status, document, _ = request(check, feature_path(digest, "full"), supplied)
+        after = check.count()  # Always observe dispatch, including an unexpected status/body shape.
+        envelope_matches = (isinstance(document, dict) and document.get("allowed") is False
+            and document.get("action") == "deny")
+        payload = document.get("payload") if isinstance(document, dict) else None
+        error_matches = isinstance(payload, dict) and payload.get("error") == code
+        check.feature_observations.append({"case": code, "status": status,
+            "expectedDenialEnvelope": envelope_matches, "expectedErrorMatched": error_matches,
+            "upstreamCountBefore": before, "upstreamCountAfter": after, "upstreamDispatches": after - before})
+        require(status == 403 and envelope_matches and error_matches and after == before,
                 "placeholder mismatch or absence was not denied before dispatch")
         record_negative_phase(check, code, lease_scope)
-        check.feature_observations.append({"case": code, "status": status, "upstreamDispatches": 0})
     checkpoint(check, "negative-phase")
     for case in ("full", "reflect_raw", "reflect_decoded"):
         before = check.count()
-        status, document, body = request(check, path(case), placeholder)
+        status, document, body = request(check, feature_path(digest, case), placeholder)
         require(check.count() == before + 1, "feature request dispatch count differs")
         if case == "full":
             require(status == 200 and body == FULL_JSON, "unfiltered response bytes or exact credential replacement differs")

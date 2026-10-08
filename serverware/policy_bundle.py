@@ -500,7 +500,10 @@ STRUCTURED_STREAMING_MODES = STREAMING_RESPONSE_MODES - {"stream"}
 CREDENTIAL_BEARING_GENERIC_REQUEST_BODY_MODES = frozenset(
     {"none", "json", "formUrlencoded"}
 )
-CREDENTIAL_BEARING_GENERIC_RESPONSE_MODES = frozenset({"headersOnly", "json"})
+BUFFERED_PASSTHROUGH_RESPONSE_MODE = "bufferedPassthrough"
+CREDENTIAL_BEARING_GENERIC_RESPONSE_MODES = frozenset(
+    {"headersOnly", "json", BUFFERED_PASSTHROUGH_RESPONSE_MODE}
+)
 GENERIC_REQUEST_MEDIA_TYPES = {
     "json": "application/json",
     "formUrlencoded": "application/x-www-form-urlencoded",
@@ -513,7 +516,9 @@ GENERIC_REQUEST_MEDIA_TYPES = {
 }
 PROJECTED_RESPONSE_MODES = {"json"} | STRUCTURED_STREAMING_MODES
 BUFFERED_RESPONSE_MODES = {"any", "headersOnly", "json"}
-SUPPORTED_RESPONSE_MODES = BUFFERED_RESPONSE_MODES | STREAMING_RESPONSE_MODES
+SUPPORTED_RESPONSE_MODES = (
+    BUFFERED_RESPONSE_MODES | STREAMING_RESPONSE_MODES | {BUFFERED_PASSTHROUGH_RESPONSE_MODE}
+)
 FORBIDDEN_AGENT_CREDENTIAL_HEADERS = {
     "authorization",
     "cookie",
@@ -5578,11 +5583,62 @@ def _validate_bounded_response_profiles(
     return fields
 
 
+def validate_buffered_passthrough_response(
+    route_id: str,
+    adapter_type: str,
+    response: Any,
+    constraints: tuple[dict[str, Any], ...] = (),
+) -> None:
+    """Validate the opt-in whole-JSON contract, independently of schema loading."""
+    if not isinstance(response, dict):
+        return
+    error = response.get("error")
+    if response.get("mode") != BUFFERED_PASSTHROUGH_RESPONSE_MODE:
+        if "bodyFormat" in response or (
+            isinstance(error, dict)
+            and ("bodyFormat" in error or error.get("mode") == BUFFERED_PASSTHROUGH_RESPONSE_MODE)
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} bufferedPassthrough requires paired explicit success and error profiles"
+            )
+        return
+    if adapter_type != "generic.rest":
+        raise PolicyBundleError(f"route {route_id} bufferedPassthrough is supported only by generic.rest")
+    if any(
+        constraint.get("type")
+        in {"slidingWindowLimit", "weightedBudget", "traversalBudget", "responseBinding"}
+        for constraint in constraints
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} bufferedPassthrough does not support durable claims or responseBinding"
+        )
+    common_fields = {"mode", "bodyFormat", "maxBodyBytes", "contentTypes", "allowedHeaders"}
+    for profile, terminal_field, maximum in (
+        (response, "error", 16 * 1024 * 1024),
+        (error, "onInvalid", MAX_PROVIDER_ERROR_BODY_BYTES),
+    ):
+        label = f"bufferedPassthrough {'success' if terminal_field == 'error' else 'error'} response"
+        if not isinstance(profile, dict) or set(profile) != common_fields | {terminal_field}:
+            raise PolicyBundleError(f"route {route_id} {label} must define exactly its closed profile fields")
+        if (
+            profile.get("mode") != BUFFERED_PASSTHROUGH_RESPONSE_MODE
+            or profile.get("bodyFormat") != "json"
+            or profile.get("contentTypes") != ["application/json"]
+            or (terminal_field == "onInvalid" and profile.get("onInvalid") != "block")
+        ):
+            raise PolicyBundleError(f"route {route_id} {label} must use bounded JSON and block on invalid")
+        _validate_response_body_limit(route_id, profile, label, maximum)
+        _validate_response_headers(route_id, profile, label)
+
+
 def _validate_optional_response_release_contract(
     route_id: str,
     response: dict[str, Any],
     adapter_name: str,
 ) -> None:
+    if response.get("mode") == BUFFERED_PASSTHROUGH_RESPONSE_MODE:
+        validate_buffered_passthrough_response(route_id, adapter_name, response)
+        return
     if response.get("mode") in PROJECTED_RESPONSE_MODES:
         _validate_response_field_paths(route_id, response, f"{adapter_name} success response")
     if "allowedHeaders" in response:
@@ -6450,6 +6506,9 @@ def compile_policy_bundle(
             credentials.get(credential_ref) if credential_ref else None,
             paths,
         )
+        validate_buffered_passthrough_response(
+            route_id, adapter_type, adapter_config.get("response")
+        )
         if adapter_type != "gmail.v1":
             response_config = adapter_config.get("response")
             if not isinstance(response_config, dict):
@@ -6500,7 +6559,7 @@ def compile_policy_bundle(
         ):
             raise PolicyBundleError(
                 f"route {route_id} credential-bearing generic.rest response mode "
-                "must be headersOnly or json"
+                "must be headersOnly, json or bufferedPassthrough"
             )
         if credential_ref and response_mode in {"any", "stream"}:
             raise PolicyBundleError(
@@ -6745,6 +6804,9 @@ def compile_policy_bundle(
                 }
             )
         constraints = _validate_constraints(route_id, raw_constraints)
+        validate_buffered_passthrough_response(
+            route_id, adapter_type, adapter_config.get("response"), constraints
+        )
         shared_rate_limits = [
             constraint
             for constraint in constraints

@@ -15,10 +15,12 @@ from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 from serverware import db, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
+    BUFFERED_PASSTHROUGH_RESPONSE_MODE,
     GMAIL_V1_OPERATION_QUERY_KEYS,
     NPM_PUBLIC_REGISTRY_HOST,
     NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT,
     NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS,
+    PolicyBundleError,
     X_V2_RECENT_SEARCH_PATHS,
     adapter_operation_field_names,
     bounded_pattern_matches,
@@ -26,6 +28,7 @@ from serverware.policy_bundle import (
     is_serverware_internal_header,
     provider_request_profile,
     strict_json_loads,
+    validate_buffered_passthrough_response,
     validate_raw_absolute_target,
     validated_request_urlsplit,
 )
@@ -72,6 +75,7 @@ _SAFE_RESPONSE_HEADERS = {
 }
 _RESPONSE_CONTENT_TYPES = {
     "json": "application/json",
+    BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     "jsonlStream": "application/x-ndjson",
     "jsonArrayStream": "application/json",
     "jsonSseStream": "text/event-stream",
@@ -913,8 +917,11 @@ class ApiAdapter:
     ) -> PolicyDecision:
         if not flow.response:
             return PolicyDecision(allowed=True)
+        passthrough_error = self._buffered_passthrough_policy_error(route)
+        if passthrough_error is not None:
+            return passthrough_error
         response_cfg, _profile_error = self._response_profile(flow, route)
-        if response_cfg is not None and response_cfg.get("mode") == "json":
+        if response_cfg is not None and response_cfg.get("mode") in {"json", BUFFERED_PASSTHROUGH_RESPONSE_MODE}:
             media_type_error = self._json_response_media_type_error(flow)
             if media_type_error is not None:
                 return media_type_error
@@ -923,11 +930,14 @@ class ApiAdapter:
     def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         if not flow.response:
             return PolicyDecision(allowed=True)
+        passthrough_error = self._buffered_passthrough_policy_error(route)
+        if passthrough_error is not None:
+            return passthrough_error
         response_cfg, profile_error = self._response_profile(flow, route)
         if profile_error is not None:
             return profile_error
         assert response_cfg is not None
-        if response_cfg.get("mode") == "json":
+        if response_cfg.get("mode") in {"json", BUFFERED_PASSTHROUGH_RESPONSE_MODE}:
             media_type_error = self._json_response_media_type_error(flow)
             if media_type_error is not None:
                 return media_type_error
@@ -948,6 +958,8 @@ class ApiAdapter:
             )
         mode = response_cfg.get("mode")
         supported_modes = {"any", "headersOnly", "json"} | _STREAMING_RESPONSE_MODES
+        if self.id == "generic.rest":
+            supported_modes.add(BUFFERED_PASSTHROUGH_RESPONSE_MODE)
         if mode not in supported_modes:
             return PolicyDecision(
                 allowed=False,
@@ -1004,7 +1016,7 @@ class ApiAdapter:
                 )
             self._normalize_response_headers(flow, response_cfg, mode)
             return PolicyDecision(allowed=True)
-        if mode == "json" or allowed_fields:
+        if mode in {"json", BUFFERED_PASSTHROUGH_RESPONSE_MODE} or allowed_fields:
             try:
                 payload = strict_json_loads(flow.response.raw_content or b"")
             except Exception:
@@ -1016,6 +1028,34 @@ class ApiAdapter:
                 )
             if allowed_fields:
                 payload = self._redact_json(payload, allowed_fields)
+            if mode == BUFFERED_PASSTHROUGH_RESPONSE_MODE:
+                try:
+                    inspection = json.dumps(
+                        payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ).encode("utf-8")
+                except (TypeError, ValueError, UnicodeError, RecursionError):
+                    return PolicyDecision(
+                        allowed=False,
+                        status_code=502,
+                        reason="response JSON inspection serialization failed",
+                        payload={"error": "response_serialization_failed"},
+                    )
+                if len(inspection) > int(max_body):
+                    return PolicyDecision(
+                        allowed=False,
+                        status_code=502,
+                        reason="normalized response inspection exceeded policy limit",
+                        payload={"error": "response_inspection_body_too_large", "maxBodyBytes": int(max_body)},
+                    )
+                # The prototype has no credential-bearing forwarding authority.
+                # Rust additionally scans this decoded representation for secrets.
+                # Preserve the received bytes: JSON serialization can round numbers.
+                self._normalize_response_headers(flow, response_cfg, mode)
+                return PolicyDecision(allowed=True)
             flow.response.headers["Content-Type"] = "application/json"
             flow.response.set_text(canonical_json(payload))
         self._normalize_response_headers(flow, response_cfg, mode)
@@ -1023,6 +1063,23 @@ class ApiAdapter:
 
     def finalize_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         return PolicyDecision(allowed=True)
+
+    def _buffered_passthrough_policy_error(self, route: Any) -> PolicyDecision | None:
+        try:
+            validate_buffered_passthrough_response(
+                str(getattr(route, "id", "runtime")),
+                self.id if self.id != "generic.rest" else getattr(route, "adapter_type", self.id),
+                route.adapter_config.get("response"),
+                tuple(getattr(route, "constraints", ()) or ()),
+            )
+        except PolicyBundleError:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="buffered passthrough response policy is invalid",
+                payload={"error": "response_passthrough_policy_invalid"},
+            )
+        return None
 
     def _response_profile(
         self, flow: Any, route: Any

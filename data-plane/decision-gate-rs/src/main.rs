@@ -9,6 +9,7 @@ mod policy_shadow_generation_publication_protocol;
 mod native_canary_opening;
 mod native_canary_runtime;
 mod response_v2;
+mod buffered_response;
 mod gate_state_init;
 mod control_plane_client_config;
 mod development_sandbox;
@@ -11849,7 +11850,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     ));
                 }
             }
-            if !matches!(response_mode, Some("headersOnly" | "json")) {
+            if !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough")) {
                 return Err(format!(
                     "route {route_id} credential-bearing generic.rest response mode must be explicitly buffered"
                 ));
@@ -11903,7 +11904,8 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 .ok_or_else(|| format!("route {route_id} response mode missing or non-string"))?;
             let mode_supported = BUFFERED_RESPONSE_MODES.contains(&response_mode)
                 || (adapter_type == "generic.rest"
-                    && STREAMING_RESPONSE_MODES.contains(&response_mode))
+                    && (STREAMING_RESPONSE_MODES.contains(&response_mode)
+                        || response_mode == buffered_response::MODE))
                 || (adapter_type != "generic.rest" && response_mode == "stream");
             if !mode_supported {
                 return Err(format!(
@@ -11922,10 +11924,15 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            validate_optional_response_release_contract(
-                response,
-                &format!("route {route_id} {adapter_type}"),
-            )?;
+            if response_mode == buffered_response::MODE {
+                buffered_response::validate_contract(adapter_type, response)?;
+                buffered_response::validate_constraints(constraints)?;
+            } else {
+                validate_optional_response_release_contract(
+                    response,
+                    &format!("route {route_id} {adapter_type}"),
+                )?;
+            }
             if STREAMING_RESPONSE_MODES.contains(&response_mode)
                 && response
                     .get("allowedHeaders")
@@ -42394,6 +42401,14 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
     let response_mode = route_response_mode(route);
+    if response_mode == Some(buffered_response::MODE) {
+        buffered_response::validate_contract(
+            &route.adapter_type,
+            route.adapter_config.get("response").and_then(Value::as_object)
+                .ok_or("bufferedPassthrough response profile missing")?,
+        )?;
+        buffered_response::validate_constraints(&route.constraints)?;
+    }
     if route_has_durable_policy_claim(route)
         && !matches!(response_mode, Some("headersOnly" | "json"))
     {
@@ -42406,7 +42421,7 @@ fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
             .credential_ref
             .as_deref()
             .is_some_and(|credential_ref| !credential_ref.is_empty())
-        && !matches!(response_mode, Some("headersOnly" | "json"))
+        && !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough"))
     {
         return Err(
             "credential-bearing generic.rest requires an explicitly buffered response mode"
@@ -42639,7 +42654,8 @@ fn validate_selected_json_response_content_type(
     upstream_headers: &HeaderMap,
     adapter_type: &str,
 ) -> Result<(), Value> {
-    if effective_response_mode(adapter_type, Some(response_config)) != Some("json") {
+    if !matches!(effective_response_mode(adapter_type, Some(response_config)),
+        Some("json" | "bufferedPassthrough")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -43958,6 +43974,23 @@ fn validate_policy_json_response(
         return block_forward_response(state, decision, method, url, status, payload).into();
     }
     let mode = effective_response_mode(adapter_type, Some(response_config)).unwrap_or("any");
+    if mode == buffered_response::MODE {
+        return match buffered_response::inspect_body(
+            adapter_type, response_config, status, content_type, body, response_secret_guard,
+        ) {
+            Ok(bytes) => release_forward_response(
+                state, snapshot, decision, method, url, status, Some("application/json"),
+                released_headers, bytes, response_secret_guard,
+                merge_response_validation(
+                    json!({"ok":true,"mode":buffered_response::MODE,
+                        "bodyFormat":"json","body_bytes_preserved":true,
+                        "allowed_fields_redacted":false,"adapter":adapter_type}),
+                    binding_validation,
+                ),
+            ),
+            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+        };
+    }
     if !matches!(mode, "any" | "headersOnly" | "json") {
         return block_forward_response(
             state,
@@ -68723,6 +68756,9 @@ mod tests {
             "route_id":"route:test",
             "policy_hash":snapshot.hash,
             "snapshot_epoch":snapshot.epoch,
+            "canonical_request":{"request":{
+                "method":"GET","scheme":"https","authority":"example.test","path":"/resource"
+            }},
             "jit":{"required":false},
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation"
@@ -68766,6 +68802,9 @@ mod tests {
                 "route_id":"route:test",
                 "policy_hash":invalid_snapshot.hash,
                 "snapshot_epoch":invalid_snapshot.epoch,
+                "canonical_request":{"request":{
+                    "method":"GET","scheme":"https","authority":"example.test","path":"/resource"
+                }},
                 "request_digest":"sha256:request",
                 "operation_digest":"sha256:operation"
             });
@@ -68798,6 +68837,9 @@ mod tests {
             "route_id":"route:test",
             "policy_hash":projected_snapshot.hash,
             "snapshot_epoch":projected_snapshot.epoch,
+            "canonical_request":{"request":{
+                "method":"GET","scheme":"https","authority":"example.test","path":"/resource"
+            }},
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation"
         });
@@ -68831,6 +68873,9 @@ mod tests {
             "route_id":"route:test",
             "policy_hash":snapshot.hash,
             "snapshot_epoch":snapshot.epoch,
+            "canonical_request":{"request":{
+                "method":"GET","scheme":"https","authority":"example.test","path":"/resource"
+            }},
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation"
         });
@@ -72591,6 +72636,9 @@ mod tests {
             "route_id":"route:test",
             "policy_hash":snapshot.hash,
             "snapshot_epoch":snapshot.epoch,
+            "canonical_request":{"request":{
+                "method":"GET","scheme":"https","authority":"example.test","path":"/resource"
+            }},
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation",
         });

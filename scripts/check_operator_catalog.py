@@ -96,6 +96,7 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         self.mutations: list[tuple[str, str, str]] = []
         self.warm_observations: list[dict] = []
         self.warm_lease_checks: list[dict] = []
+        self.warm_denial_checks: list[dict] = []
 
     def clean(self, content: bytes, *, allow_client_token: bool = False) -> None:
         # Even a token-returning response must never repeat any PREVIOUS token.
@@ -184,19 +185,81 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         return count
 
     def denied_without_dispatch(self, token, *, warm=None):
-        before = self.count()
-        self.tunnel(token, expected_status=403)
-        require(self.count() == before, "denied application token dispatched upstream")
-        if warm is not None:
-            checked = time.time_ns() // 1_000_000
-            elapsed = time.monotonic_ns() - warm["_captured_monotonic_ns"]
-            window_ms = warm["denialDeadlineEpochMs"] - warm["capturedAtEpochMs"]
-            require(warm["capturedAtEpochMs"] <= checked < warm["denialDeadlineEpochMs"]
-                    and 0 <= elapsed < window_ms * 1_000_000,
-                    "old token denial was not proved before captured lease expiry")
-            warm["denialVerifiedAtEpochMs"] = checked
-            warm["denialElapsedMonotonicMs"] = elapsed // 1_000_000
-            self.warm_observations.append({key: value for key, value in warm.items() if not key.startswith("_")})
+        if warm is None:
+            before = self.count()
+            self.tunnel(token, expected_status=403)
+            require(self.count() == before, "denied application token dispatched upstream")
+            return
+
+        observations = getattr(self, "warm_denial_checks", None)
+        if observations is None:
+            observations = self.warm_denial_checks = []
+        require(len(observations) < 2, "warm denial observation bound exceeded")
+        safe_id = lambda value: value if isinstance(value, str) and WARM_ID.fullmatch(value) else None
+        stage = warm.get("stage")
+        observation = {"stage": stage if isinstance(stage, str) and stage in WARM_STAGES else "other_warm_observation",
+            "principalId": safe_id(warm.get("principalId")), "routeId": safe_id(warm.get("routeId")),
+            "scopedLeaseAuditEventId": safe_id(warm.get("scopedLeaseAuditEventId")),
+            "capturedAtEpochMs": _warm_integer(warm["capturedAtEpochMs"]),
+            "capturedMonotonicNs": _warm_integer(warm["_captured_monotonic_ns"]),
+            "healthEarliestUnexpiredLeaseEpochMs": _warm_integer(warm.get("healthEarliestUnexpiredLeaseEpochMs")),
+            "scopedLeaseExpiryEpochMs": _warm_integer(warm.get("scopedLeaseExpiryEpochMs")),
+            "denialDeadlineEpochMs": _warm_integer(warm["denialDeadlineEpochMs"]),
+            "expectedStatus": 403, "headersValidated": False, "completed": False,
+            "conditions": {}, "failedConjuncts": []}
+        self.clean(json.dumps(observation, sort_keys=True).encode("utf-8"))
+        observations.append(observation)
+
+        def timed_phase(name, operation):
+            timing = observation[name] = {"started": _warm_clock(), "completed": False}
+            try:
+                result = operation()
+                timing["completed"] = True
+                return result
+            finally:
+                timing["finished"] = _warm_clock()
+                timing["elapsedMonotonicNs"] = timing["finished"]["monotonicNs"] - timing["started"]["monotonicNs"]
+                observation["conditions"][name + "_completed"] = timing["completed"]
+                if not timing["completed"]:
+                    observation["failedConjuncts"].append(name + "_completed")
+
+        before = timed_phase("preCount", self.count)
+        observation["beforeCount"] = _warm_integer(before)
+        timed_phase("connect403", lambda: self.tunnel(token, expected_status=403))
+        observation["headersValidated"] = True
+        # The successful return proves complete, validated CONNECT 403 headers,
+        # not a complete response body. This conservative timestamp precedes the
+        # independent post-count reads, whose latency is not denial latency.
+        denied_at = observation["connect403"]["finished"]
+        checked = denied_at["epochMs"]
+        elapsed = denied_at["monotonicNs"] - warm["_captured_monotonic_ns"]
+        window_ms = warm["denialDeadlineEpochMs"] - warm["capturedAtEpochMs"]
+        timing_conditions = {
+            "wall_not_before_capture": warm["capturedAtEpochMs"] <= checked,
+            "wall_before_original_expiry": checked < warm["denialDeadlineEpochMs"],
+            "monotonic_nonnegative": 0 <= elapsed,
+            "monotonic_before_original_window": elapsed < window_ms * 1_000_000,
+        }
+        observation["conditions"].update(timing_conditions)
+        observation["failedConjuncts"].extend(name for name, passed in timing_conditions.items() if not passed)
+        observation["denialElapsedMonotonicNs"] = elapsed
+        observation["denialRemainingWallMs"] = warm["denialDeadlineEpochMs"] - checked
+        # Even a late denial still needs the independent no-dispatch observation.
+        # count() continues to require agreement of global and per-run counters.
+        after = timed_phase("postCount", self.count)
+        observation["afterCount"] = _warm_integer(after)
+        observation["conditions"]["upstream_count_unchanged"] = after == before
+        if after != before:
+            observation["failedConjuncts"].append("upstream_count_unchanged")
+        observation["comparison"] = _warm_clock()
+        observation["completed"] = True
+        require(after == before, "denied application token dispatched upstream: upstream_count_unchanged")
+        require(all(timing_conditions.values()),
+                "old token denial was not proved before captured lease expiry: "
+                + ",".join(name for name, passed in timing_conditions.items() if not passed))
+        warm["denialVerifiedAtEpochMs"] = checked
+        warm["denialElapsedMonotonicMs"] = elapsed // 1_000_000
+        self.warm_observations.append({key: value for key, value in warm.items() if not key.startswith("_")})
 
     def observe_live_lease(self, stage, application, rule, credential, *, minimum_scopes):
         require(type(minimum_scopes) is int and 1 <= minimum_scopes <= 2,
@@ -292,8 +355,10 @@ class OperatorCatalogCheck(OperatorDemoCheck):
 
     def warm_lease_evidence(self):
         """Retain partial failure-time observations without any response body."""
-        value = {"warmLeaseChecks": getattr(self, "warm_lease_checks", [])}
-        require(len(value["warmLeaseChecks"]) <= 2, "warm lease evidence count exceeds bound")
+        value = {"warmLeaseChecks": getattr(self, "warm_lease_checks", []),
+            "warmDenialChecks": getattr(self, "warm_denial_checks", [])}
+        require(len(value["warmLeaseChecks"]) <= 2 and len(value["warmDenialChecks"]) <= 2,
+                "warm lease evidence count exceeds bound")
         encoded = json.dumps(value, sort_keys=True).encode("utf-8")
         require(len(encoded) <= 16384, "warm lease evidence exceeds bound")
         self.clean(encoded)

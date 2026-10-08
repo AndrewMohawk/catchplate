@@ -257,8 +257,134 @@ def assert_production_validation() -> None:
             raise AssertionError("production service-auth validation disclosed a token")
 
 
+def audit_retry_regressions() -> None:
+    """Exercise the legacy HTTP receiver and real SQLite transactions, not a mock store."""
+    token = TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+
+    def request_body(events: list[dict]) -> bytes:
+        return json.dumps({"events": events}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def ingest(body: bytes, request_token: str = token) -> dict:
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/data-plane/audit",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+            },
+            receive,
+        )
+        return asyncio.run(app_module.data_plane_audit(request, request_token))
+
+    def snapshot() -> list[dict]:
+        with db.connect() as conn:
+            return [dict(row) for row in conn.execute("SELECT * FROM audit_events ORDER BY rowid")]
+
+    def expected_ack(body: bytes, count: int) -> dict:
+        # These are route-body assertions; middleware signature verification is separate.
+        return {
+            "apiVersion": "serverware.dataPlaneAuditAck/v1",
+            "ok": True,
+            "accepted": count,
+            "batchDigest": "sha256:" + hashlib.sha256(body).hexdigest(),
+            "instanceId": INSTANCE_ID,
+        }
+
+    first = audit_event(100, "data_plane.test.retry_batch.first", {"marker": "first"})
+    second = audit_event(101, "data_plane.test.retry_batch.second", {"marker": "second"})
+    third = audit_event(102, "data_plane.test.retry_batch.third", {"marker": "third"})
+    fourth = audit_event(103, "data_plane.test.retry_batch.fourth", {"marker": "fourth"})
+    original_body = request_body([first, second])
+    initial = snapshot()
+    expect_http_error(lambda: ingest(b"not-json"), 422)
+    expect_http_error(
+        lambda: ingest(original_body, TOKENS["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"]),
+        401,
+    )
+    assert snapshot() == initial, "invalid body or wrong-scope token appended audit history"
+
+    with patch.object(db, "iso_now", return_value="2026-01-01T00:00:00+00:00"):
+        first_ack = ingest(original_body)
+    assert first_ack == expected_ack(original_body, 2), "initial ACK did not bind both events and exact body"
+    committed = snapshot()
+    assert len(committed) == len(initial) + 2, "initial batch did not append exactly two rows"
+    for row, event in zip(committed[-2:], [first, second], strict=True):
+        assert row["id"] == db._data_plane_audit_row_id(INSTANCE_ID, event["eventId"])
+        assert row["event_type"] == event["eventType"]
+        assert row["actor_type"] == "data-plane" and row["actor_id"] == INSTANCE_ID
+        assert json.loads(row["event_json"]) == event["event"]
+
+    # The first response is treated as lost after commit; preserve the original batch.
+    with patch.object(db, "iso_now", return_value="2026-01-01T00:00:01+00:00"):
+        replay_ack = ingest(original_body)
+    assert replay_ack == first_ack, "lost-ACK whole-batch replay was not acknowledged"
+    assert snapshot() == committed, "whole-batch replay changed immutable rows, timestamps, or head"
+
+    expect_http_error(lambda: ingest(request_body([first, third])), 409)
+    assert snapshot() == committed, "mixed existing/new batch appended its fresh suffix"
+    changed = {**second, "event": {"marker": "changed"}}
+    expect_http_error(lambda: ingest(request_body([first, changed])), 409)
+    assert snapshot() == committed, "changed existing event body mutated immutable history"
+    expect_http_error(lambda: ingest(request_body([third, third])), 400)
+    assert snapshot() == committed, "duplicate event IDs appended audit history"
+    assert ingest(original_body) == first_ack, "rejected batches poisoned an exact retry"
+    assert snapshot() == committed, "retry after rejection changed audit history"
+
+    fresh_body = request_body([third, fourth])
+    with patch.object(db, "iso_now", return_value="2026-01-01T00:00:02+00:00"):
+        fresh_ack = ingest(fresh_body)
+    assert fresh_ack == expected_ack(fresh_body, 2), "separate fresh batch was not acknowledged"
+    complete = snapshot()
+    assert complete[:-2] == committed and len(complete) == len(initial) + 4
+    assert complete[-2]["prev_event_hash"] == committed[-1]["event_hash"]
+    assert complete[-1]["prev_event_hash"] == complete[-2]["event_hash"]
+    assert [row["id"] for row in complete[-2:]] == [
+        db._data_plane_audit_row_id(INSTANCE_ID, event["eventId"])
+        for event in [third, fourth]
+    ]
+    assert ingest(original_body) == first_ack, "older committed batch stopped being replayable"
+    assert ingest(fresh_body) == fresh_ack, "fresh batch stopped being replayable"
+    assert snapshot() == complete, "replay after a fresh batch changed the chain head"
+    verification = db.verify_audit_chain()
+    assert verification["ok"] and verification["complete"], "final audit chain did not verify"
+    assert verification["count"] == len(complete) and verification["head"] == complete[-1]["event_hash"]
+    print(
+        "audit receiver retry regressions passed: 11 route requests, 4 appended rows, "
+        "4 immutable replays, 5 rejected requests, exact-body ACKs, complete verified chain"
+    )
+
+
+def initialize_audit_retry_fixture() -> None:
+    """Minimal temporary SQLite schema; no full application bootstrap or external stores."""
+    with db.connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE audit_events (
+                id TEXT PRIMARY KEY, event_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL, actor_id TEXT, event_json TEXT NOT NULL,
+                encrypted_canonical_event_json TEXT, storage_format_version INTEGER,
+                prev_event_hash TEXT, event_hash TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE serverware_store_migrations (
+                migration TEXT PRIMARY KEY, version INTEGER NOT NULL
+            );
+            """
+        )
+
+
 def main() -> None:
     db.init_db()
+    audit_retry_regressions()
     rust_source = (
         ROOT / "data-plane" / "decision-gate-rs" / "src" / "main.rs"
     ).read_text(encoding="utf-8")
@@ -1229,7 +1355,6 @@ def main() -> None:
     signed_ack = asyncio.run(
         app_module.data_plane_audit(
             audit_request,
-            batch,
             TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
         )
     )
@@ -2245,9 +2370,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] not in ([], ["--audit-retry-only"]):
+        raise SystemExit("usage: test_internal_service_auth.py [--audit-retry-only]")
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
         os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
+        os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
         os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = INSTANCE_ID
         os.environ.update(TOKENS)
         os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
@@ -2271,4 +2399,8 @@ if __name__ == "__main__":
             data_plane_release_authorization_reserve,
         )
 
-        main()
+        if sys.argv[1:] == ["--audit-retry-only"]:
+            initialize_audit_retry_fixture()
+            audit_retry_regressions()
+        else:
+            main()

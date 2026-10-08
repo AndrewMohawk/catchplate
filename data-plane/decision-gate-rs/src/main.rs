@@ -16,6 +16,7 @@ mod operator_demo;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
+mod legacy_audit_delivery;
 mod native_audit_assignment;
 mod native_postboot_assignment;
 mod native_canary_transport;
@@ -2702,6 +2703,10 @@ struct GateState {
     management_token: Option<String>,
     audit_queue: Mutex<VecDeque<AuditEvent>>,
     audit_reserved: AtomicU64,
+    audit_inflight_optional: AtomicU64,
+    audit_pending_batches: AtomicU64,
+    audit_pending_events: AtomicU64,
+    legacy_audit_pending: Mutex<legacy_audit_delivery::PendingDelivery>,
     audit_queue_max: usize,
     audit_batch_max: usize,
     audit_enqueued: AtomicU64,
@@ -4696,25 +4701,46 @@ struct DataPlaneAuditAck {
     instance_id: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuditPostFailure {
+    NotSent,
+    LocalTooLarge,
+    AuthenticatedTooLarge,
+    OutcomeUnknown,
+}
+
 #[derive(Debug)]
 struct AuditPostError {
     message: String,
-    request_too_large: bool,
+    kind: AuditPostFailure,
 }
 
 impl AuditPostError {
     fn other(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            request_too_large: false,
+            // Unclassified transport/native failures remain conservative.
+            kind: AuditPostFailure::OutcomeUnknown,
         }
     }
 
-    fn request_too_large(message: impl Into<String>) -> Self {
+    fn not_sent(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            request_too_large: true,
+            kind: AuditPostFailure::NotSent,
         }
+    }
+
+    fn local_too_large(message: impl Into<String>) -> Self {
+        Self { message: message.into(), kind: AuditPostFailure::LocalTooLarge }
+    }
+
+    fn authenticated_too_large(message: impl Into<String>) -> Self {
+        Self { message: message.into(), kind: AuditPostFailure::AuthenticatedTooLarge }
+    }
+
+    fn request_too_large(&self) -> bool {
+        matches!(self.kind, AuditPostFailure::LocalTooLarge | AuditPostFailure::AuthenticatedTooLarge)
     }
 }
 
@@ -4765,7 +4791,7 @@ impl AuditReservation<'_> {
             .expect("audit queue mutex poisoned");
         self.state.audit_reserved.fetch_sub(1, Ordering::Relaxed);
         self.active = false;
-        if queue.len() >= self.state.audit_queue_max {
+        if queue.len().saturating_add(audit_held_slots(self.state)) >= self.state.audit_queue_max {
             self.state
                 .audit_required_failed
                 .fetch_add(1, Ordering::Relaxed);
@@ -24146,6 +24172,14 @@ fn audit_enabled(state: &GateState) -> bool {
     state.audit_url.is_some() && (state.measured_audit.is_some() || (!state.is_production && state.audit_token.is_some())) && state.audit_queue_max > 0
 }
 
+// Capacity changes and observations are serialized by audit_queue's mutex.
+// A sent legacy optional event stays reserved until its exact batch resolves;
+// it cannot be evicted merely because the receiver's acknowledgement was lost.
+fn audit_held_slots(state: &GateState) -> usize {
+    (state.audit_reserved.load(Ordering::Relaxed) as usize)
+        .saturating_add(state.audit_inflight_optional.load(Ordering::Relaxed) as usize)
+}
+
 fn audit_event_serialized_len(event: &AuditEvent) -> Option<usize> {
     let serialized = Zeroizing::new(serde_json::to_vec(event).ok()?);
     Some(serialized.len())
@@ -24264,7 +24298,7 @@ fn reserve_required_audit(state: &GateState) -> Option<AuditReservation<'_>> {
         .audit_queue
         .lock()
         .expect("audit queue mutex poisoned");
-    let reserved = state.audit_reserved.load(Ordering::Relaxed) as usize;
+    let reserved = audit_held_slots(state);
     if queue.len().saturating_add(reserved) >= state.audit_queue_max {
         state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
         return None;
@@ -24300,7 +24334,7 @@ fn enqueue_audit_event(state: &GateState, event_type: &str, event: Value, requir
         .audit_queue
         .lock()
         .expect("audit queue mutex poisoned");
-    let reserved = state.audit_reserved.load(Ordering::Relaxed) as usize;
+    let reserved = audit_held_slots(state);
     if queue.len().saturating_add(reserved) >= state.audit_queue_max {
         let Some(index) = queue.iter().position(|queued| !queued.required) else {
             state.audit_dropped.fetch_add(1, Ordering::Relaxed);
@@ -24350,6 +24384,8 @@ fn pop_audit_batch(state: &GateState) -> Vec<AuditEvent> {
         let event = queue.pop_front().expect("audit queue front disappeared");
         if event.required {
             state.audit_reserved.fetch_add(1, Ordering::Relaxed);
+        } else if state.measured_audit.is_none() {
+            state.audit_inflight_optional.fetch_add(1, Ordering::Relaxed);
         }
         batch.push(event);
     }
@@ -24364,8 +24400,10 @@ fn requeue_audit_batch(state: &GateState, batch: Vec<AuditEvent>) {
     for event in batch.into_iter().rev() {
         if event.required {
             state.audit_reserved.fetch_sub(1, Ordering::Relaxed);
+        } else if state.measured_audit.is_none() {
+            state.audit_inflight_optional.fetch_sub(1, Ordering::Relaxed);
         }
-        let reserved = state.audit_reserved.load(Ordering::Relaxed) as usize;
+        let reserved = audit_held_slots(state);
         if queue.len().saturating_add(reserved) >= state.audit_queue_max {
             if let Some(index) = queue.iter().rposition(|queued| !queued.required) {
                 queue.remove(index);
@@ -24385,12 +24423,14 @@ fn requeue_audit_batch(state: &GateState, batch: Vec<AuditEvent>) {
 
 fn release_audit_batch_reservations(state: &GateState, batch: &[AuditEvent]) {
     let required = batch.iter().filter(|event| event.required).count() as u64;
-    if required > 0 {
+    let optional = if state.measured_audit.is_none() { batch.len() as u64 - required } else { 0 };
+    if required > 0 || optional > 0 {
         let _queue = state
             .audit_queue
             .lock()
             .expect("audit queue mutex poisoned");
         state.audit_reserved.fetch_sub(required, Ordering::Relaxed);
+        state.audit_inflight_optional.fetch_sub(optional, Ordering::Relaxed);
     }
 }
 
@@ -24399,14 +24439,23 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
         return native_audit_owner::deliver(state,batch,false).map_err(AuditPostError::other);
     }
     if state.is_production {
-        return Err(AuditPostError::other("production audit requires measured mTLS authorship"));
+        return Err(AuditPostError::not_sent("production audit requires measured mTLS authorship"));
     }
-    let mut body = Zeroizing::new(
+    let body = Zeroizing::new(
         serde_json::to_vec(&json!({"events": batch}))
-            .map_err(|_| AuditPostError::other("serialize audit batch"))?,
+            .map_err(|_| AuditPostError::not_sent("serialize audit batch"))?,
     );
+    post_serialized_legacy_audit_batch(state, &body, batch.len())
+}
+
+fn post_serialized_legacy_audit_batch(
+    state: &GateState, body: &[u8], event_count: usize,
+) -> Result<(), AuditPostError> {
+    if state.measured_audit.is_some() || state.is_production {
+        return Err(AuditPostError::not_sent("production audit requires measured mTLS authorship"));
+    }
     if body.len() > MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES {
-        return Err(AuditPostError::request_too_large(format!(
+        return Err(AuditPostError::local_too_large(format!(
             "serialized audit batch is {} bytes; maximum is {MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES}",
             body.len()
         )));
@@ -24414,20 +24463,23 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
     let url = state
         .audit_url
         .as_ref()
-        .ok_or_else(|| AuditPostError::other("audit URL is not configured"))?;
+        .ok_or_else(|| AuditPostError::not_sent("audit URL is not configured"))?;
     let token = state
         .audit_token
         .as_ref()
-        .ok_or_else(|| AuditPostError::other("audit token is not configured"))?;
+        .ok_or_else(|| AuditPostError::not_sent("audit token is not configured"))?;
     let expected_instance_id = state
         .server_instance_id
         .as_deref()
-        .ok_or_else(|| AuditPostError::other("audit acknowledgement instance is not configured"))?;
+        .ok_or_else(|| AuditPostError::not_sent("audit acknowledgement instance is not configured"))?;
+    let expected_count = u64::try_from(event_count).map_err(|_| {
+        AuditPostError::not_sent("audit batch count does not fit acknowledgement contract")
+    })?;
     let body_len = body.len();
-    let batch_digest = sha256_prefixed(&body);
+    let batch_digest = sha256_prefixed(body);
     let snapshot = current_snapshot(state);
     if !snapshot_is_active(state, &snapshot) {
-        return Err(AuditPostError::other(
+        return Err(AuditPostError::not_sent(
             "audit acknowledgement trust is not current",
         ));
     }
@@ -24435,21 +24487,25 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
         || snapshot.response_signing_key_id.is_none()
         || snapshot.attested_response_context.is_none()
     {
-        return Err(AuditPostError::other(
+        return Err(AuditPostError::not_sent(
             "audit acknowledgement requires an attested response signing key",
         ));
     }
-    let response_nonce = fresh_control_plane_response_nonce().map_err(AuditPostError::other)?;
+    let response_nonce = fresh_control_plane_response_nonce().map_err(AuditPostError::not_sent)?;
     let request = state
         .audit_client
         .post(url)
         .header("X-Serverware-Data-Plane-Token", token.as_str())
         .header("X-Serverware-Response-Nonce", response_nonce.as_str())
         .header("Content-Type", "application/json")
-        .body(std::mem::take(&mut *body));
-    let mut response = bounded_service_request(state, request)
-        .map_err(AuditPostError::other)?
-        .send()
+        .body(body.to_vec());
+    let (client, request) = bounded_service_request(state, request)
+        .map_err(AuditPostError::not_sent)?
+        .build_split();
+    let request = request.map_err(|_| AuditPostError::not_sent("build audit batch"))?;
+    // From execute onward the receiver may have committed, even if no usable
+    // response returns. Only an authenticated size rejection proves otherwise.
+    let mut response = client.execute(request)
         .map_err(|err| AuditPostError::other(format!("send audit batch: {err}")))?;
     let status = response.status();
     let response_body = Zeroizing::new(read_bounded_control_plane_response_body(
@@ -24476,7 +24532,7 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
     )
     .map_err(AuditPostError::other)?;
     if status == StatusCode::PAYLOAD_TOO_LARGE {
-        return Err(AuditPostError::request_too_large(format!(
+        return Err(AuditPostError::authenticated_too_large(format!(
             "audit ingest rejected {body_len} serialized bytes as too large"
         )));
     }
@@ -24487,9 +24543,6 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
     }
     let acknowledgement = strict_json_from_slice::<DataPlaneAuditAck>(&response_body)
         .map_err(|_| AuditPostError::other("parse_audit_acknowledgement"))?;
-    let expected_count = u64::try_from(batch.len()).map_err(|_| {
-        AuditPostError::other("audit batch count does not fit acknowledgement contract")
-    })?;
     if acknowledgement.instance_id != expected_instance_id {
         return Err(AuditPostError::other(
             "audit acknowledgement instance binding mismatch",
@@ -24511,43 +24564,16 @@ fn flush_audit_batch(state: &GateState, batch: Vec<AuditEvent>) -> Result<(), Au
     if state.measured_audit.is_some() {
         return native_audit_owner::flush(state,batch).map_err(AuditPostError::other);
     }
-    let mut pending = VecDeque::from([batch]);
-    while let Some(mut batch) = pending.pop_front() {
-        let count = batch.len() as u64;
-        match post_audit_batch(state, &batch) {
-            Ok(()) => {
-                release_audit_batch_reservations(state, &batch);
-                state.audit_sent.fetch_add(count, Ordering::Relaxed);
-            }
-            Err(err) if err.request_too_large && batch.len() > 1 => {
-                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
-                let later = batch.split_off(batch.len() / 2);
-                pending.push_front(later);
-                pending.push_front(batch);
-            }
-            Err(err) if err.request_too_large => {
-                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
-                release_audit_batch_reservations(state, &batch);
-                discard_unsendable_queued_audit_event(state, &batch[0]);
-                eprintln!("discarding unsendable audit event");
-            }
-            Err(err) => {
-                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
-                for later in pending {
-                    batch.extend(later);
-                }
-                requeue_audit_batch(state, batch);
-                return Err(err);
-            }
-        }
-    }
-    Ok(())
+    legacy_audit_delivery::flush(state, batch)
 }
 
 fn audit_worker(state: Arc<GateState>, interval: Duration) {
     loop {
         if state.measured_audit.is_some() && native_audit_owner::retry(&state).is_err() {
             thread::sleep(interval); continue;
+        }
+        if state.measured_audit.is_none() && legacy_audit_delivery::retry(&state).is_err() {
+            thread::sleep(Duration::from_secs(1)); continue;
         }
         let batch = pop_audit_batch(&state);
         if batch.is_empty() {
@@ -24679,6 +24705,9 @@ fn audit_status(state: &GateState) -> Value {
         "enabled": audit_enabled(state),
         "queue_depth": state.audit_queue.lock().expect("audit queue mutex poisoned").len(),
         "reserved": state.audit_reserved.load(Ordering::Relaxed),
+        "in_flight_optional": state.audit_inflight_optional.load(Ordering::Relaxed),
+        "pending_retry_batches": state.audit_pending_batches.load(Ordering::Relaxed),
+        "pending_retry_events": state.audit_pending_events.load(Ordering::Relaxed),
         "queue_max": state.audit_queue_max,
         "batch_max": state.audit_batch_max,
         "batch_body_max_bytes": MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES,
@@ -53285,11 +53314,11 @@ mod tests {
         (format!("http://{address}"), server)
     }
 
-    fn test_audit_event_id(marker: u64) -> String {
+    pub(super) fn test_audit_event_id(marker: u64) -> String {
         format!("sha256:{marker:064x}")
     }
 
-    fn test_audit_event(marker: u64, event_type: &str, event: Value, required: bool) -> AuditEvent {
+    pub(super) fn test_audit_event(marker: u64, event_type: &str, event: Value, required: bool) -> AuditEvent {
         AuditEvent {
             event_id: test_audit_event_id(marker),
             event_type: event_type.to_string(),
@@ -53625,6 +53654,10 @@ mod tests {
             management_token: None,
             audit_queue: Mutex::new(VecDeque::new()),
             audit_reserved: AtomicU64::new(0),
+            audit_inflight_optional: AtomicU64::new(0),
+            audit_pending_batches: AtomicU64::new(0),
+            audit_pending_events: AtomicU64::new(0),
+            legacy_audit_pending: Mutex::new(legacy_audit_delivery::PendingDelivery::default()),
             audit_queue_max: 16,
             audit_batch_max: 4,
             audit_enqueued: AtomicU64::new(0),
@@ -57080,7 +57113,7 @@ mod tests {
         Arc::new(snapshot)
     }
 
-    fn test_snapshot_with_control_plane_response_key(
+    pub(super) fn test_snapshot_with_control_plane_response_key(
         epoch: u64,
         signing_key: &SigningKey,
     ) -> Arc<Snapshot> {
@@ -57117,7 +57150,7 @@ mod tests {
         )
     }
 
-    fn signed_audit_test_response(
+    pub(super) fn signed_audit_test_response(
         signing_key: &SigningKey,
         snapshot: &Snapshot,
         request: &IncomingRequest,
@@ -75827,6 +75860,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        state.audit_queue.lock().expect("audit queue").extend(batch);
+        let batch = pop_audit_batch(&state);
         flush_audit_batch(&state, batch).expect("split audit batch flush");
         let event_batches = server.join().expect("audit server");
         assert_eq!(
@@ -75844,6 +75879,8 @@ mod tests {
         );
         assert_eq!(state.audit_sent.load(Ordering::Relaxed), 4);
         assert_eq!(state.audit_send_failed.load(Ordering::Relaxed), 4);
+        assert_eq!(state.audit_inflight_optional.load(Ordering::Relaxed), 0);
+        assert_eq!(state.audit_pending_events.load(Ordering::Relaxed), 0);
         assert!(state.audit_queue.lock().expect("audit queue").is_empty());
     }
 

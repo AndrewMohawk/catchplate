@@ -90,7 +90,9 @@ class AuthorityApiClassificationTests(unittest.TestCase):
     def test_actual_registry_has_explicit_disjoint_classifications(self):
         namespace = classifications()
         groups = [set(namespace[name]) for name in CATEGORIES]
-        self.assertEqual(len(namespace[CATEGORIES[-1]]), 147)
+        # Current inventory adds three static rotation and six Setup lifecycle
+        # operations to the original 147 dedicated-workflow classifications.
+        self.assertEqual(len(namespace[CATEGORIES[-1]]), 156)
         for index, group in enumerate(groups):
             for other in groups[index + 1:]:
                 self.assertFalse(group & other)

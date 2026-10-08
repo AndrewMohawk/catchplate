@@ -1,5 +1,6 @@
 // The exported pure generator is also the browser's only client-example path.
 // It accepts public metadata and never accepts a provider secret or client token.
+const CLIENT_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders = ['accept', 'user-agent']}) {
   const quote = value => "'" + String(value).replace(/'/g, "'\\''") + "'";
   for (const value of [proxyUrl, upstreamUrl]) {
@@ -7,7 +8,7 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
     if (url.protocol !== 'https:' || url.username || url.password || url.hash)
       throw new Error('Client configuration requires credential-free HTTPS URLs');
   }
-  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(method)) throw new Error('Invalid client method');
+  if (!CLIENT_METHODS.includes(method)) throw new Error('Invalid client method');
   const accept = allowedHeaders.some(name => name.toLowerCase() === 'accept') ? 'Accept: application/json' : 'Accept:';
   return ['curl --fail-with-body --show-error --http1.1', "  --noproxy ''", `  --proxy ${quote(proxyUrl)}`,
     '  --proxy-header "Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN"',
@@ -22,7 +23,8 @@ else (() => {
   const views = {overview: 'Overview', credentials: 'Credentials & access', proxy: 'Proxy setup', audit: 'Audit log'};
   const state = {status: null, selected: '', token: '', tokenConnection: '', submitting: false,
     statusEpoch: 0, poll: null, polls: 0, command: '', auditEpoch: 0, auditCursor: null,
-    auditSelection: '', auditCount: 0, auditLoaded: false};
+    auditSelection: '', auditCount: 0, auditLoaded: false, expiryTimer: null,
+    tokenExpiresAt: null, tokenClientStatus: null};
   const text = value => typeof value === 'string' ? value : '';
   const fields = id => [...new Set($(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean))];
   function node(tag, content, className) {
@@ -34,10 +36,11 @@ else (() => {
   function problem(message) { const error = new Error('Operator UI request failed'); error.uiMessage = message; return error; }
   function message(error) { return error.uiMessage || 'Could not reach the service. Check your connection, then refresh status. Do not resubmit a credential until you have checked saved connections.'; }
   function clearToken() {
-    state.token = ''; state.tokenConnection = '';
+    state.token = ''; state.tokenConnection = ''; state.tokenExpiresAt = null; state.tokenClientStatus = null;
     $('client-token').value = ''; $('client-token').type = 'password';
     $('one-time-access').hidden = true; $('reveal-token').textContent = 'Reveal';
     $('reveal-token').setAttribute('aria-pressed', 'false');
+    for (const id of ['client-token', 'reveal-token', 'copy-token', 'dismiss-token']) $(id).disabled = true;
     $('download-config').disabled = true;
   }
   async function api(path, options = {}) {
@@ -71,13 +74,49 @@ else (() => {
     return Boolean(status && typeof status.active_policy_hash === 'string' && status.active_policy_hash &&
       status.loaded_policy_hash === status.active_policy_hash);
   }
-  function connectionActive(connection) {
+  function policyLoaded(connection) {
     return active() && connection.policy_hash === state.status.active_policy_hash && connection.activation === 'active';
+  }
+  function validExpiry(value) { return Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000; }
+  function supportedMethods(connection) { return connection.methods.length > 0 && connection.methods.every(method => CLIENT_METHODS.includes(method)); }
+  function clientStatus(connection) {
+    if (connection.client_status === 'expired' || validExpiry(connection.token_expires_at_epoch_ms) && Date.now() >= connection.token_expires_at_epoch_ms) return 'expired';
+    if (!validExpiry(connection.token_expires_at_epoch_ms)) return 'unavailable';
+    if (!supportedMethods(connection)) return 'unsupported';
+    if (connection.client_status !== undefined && !['ready', 'pending'].includes(connection.client_status)) return 'unavailable';
+    return policyLoaded(connection) && connection.client_status !== 'pending' ? 'ready' : 'pending';
+  }
+  function connectionReady(connection) { return clientStatus(connection) === 'ready'; }
+  function syncTokenControls() {
+    if (state.token && (!validExpiry(state.tokenExpiresAt) || Date.now() >= state.tokenExpiresAt || state.tokenClientStatus === 'expired')) {
+      const expired = state.tokenClientStatus === 'expired' || validExpiry(state.tokenExpiresAt) && Date.now() >= state.tokenExpiresAt;
+      clearToken();
+      $('token-expiry-status').textContent = expired ? 'Client token expired and was cleared from this page. It has not been renewed.' :
+        'Client token cleared because its expiry could not be verified. Check saved connection status.';
+    }
+    for (const id of ['client-token', 'reveal-token', 'copy-token', 'dismiss-token']) $(id).disabled = !state.token;
+  }
+  function scheduleExpiry() {
+    clearTimeout(state.expiryTimer); state.expiryTimer = null;
+    const now = Date.now();
+    const deadlines = [...(state.status?.connections || []).map(connection => connection.token_expires_at_epoch_ms),
+      ...(state.token ? [state.tokenExpiresAt] : [])].filter(value => validExpiry(value) && value > now);
+    if (deadlines.length) {
+      // One local deadline, not a network poll. The cap avoids browser timer
+      // overflow for older metadata; no timer remains once all tokens expire.
+      state.expiryTimer = setTimeout(refreshClientLifecycle, Math.min(Math.min(...deadlines) - now, 2147483647));
+    }
+  }
+  function refreshClientLifecycle() {
+    syncTokenControls();
+    if (state.status) renderConnections();
+    else { state.command = ''; $('copy-command').disabled = true; $('download-config').disabled = true; }
+    scheduleExpiry();
   }
   function metadata(connection) {
     // Explicit public metadata projection. Never retain unknown response fields.
     const allowed = ['id', 'name', 'upstream_url', 'auth_type', 'header_name', 'credential_id', 'principal_id',
-      'created_at', 'token_expires_at_epoch_ms', 'policy_hash', 'activation'];
+      'created_at', 'token_expires_at_epoch_ms', 'policy_hash', 'activation', 'client_status'];
     const result = Object.fromEntries(allowed.map(key => [key, connection[key]]));
     for (const key of ['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers'])
       result[key] = Array.isArray(connection[key]) ? connection[key].filter(value => typeof value === 'string') : [];
@@ -115,16 +154,23 @@ else (() => {
     else if (status.allowed_upstreams.length === 1) $('upstream-origin').value = status.allowed_upstreams[0];
     $('connection-fields').disabled = state.submitting || !status.allowed_upstreams.length;
     if (!status.allowed_upstreams.length) $('form-status').textContent = 'No upstream is configured. Ask the deployment operator to approve a destination.';
+    refreshClientLifecycle();
+  }
+  function renderConnections() {
+    const status = state.status;
     const cards = status.connections.map(connection => {
       const card = node('article', undefined, 'card'); card.dataset.connectionId = text(connection.id);
-      const head = node('div', undefined, 'connection-head'); const ready = connectionActive(connection);
-      head.append(node('h3', connection.name), node('span', ready ? 'Active' : 'Pending activation', 'badge' + (ready ? ' active' : '')));
+      const head = node('div', undefined, 'connection-head'); const readiness = clientStatus(connection);
+      const label = {ready: 'Ready', expired: 'Token expired', pending: 'Pending activation', unsupported: 'Unsupported method', unavailable: 'Expiry / status unavailable'}[readiness];
+      head.append(node('h3', connection.name), node('span', label, 'badge' + (readiness === 'ready' ? ' active' : '')));
       card.append(head);
-      const expires = new Date(connection.token_expires_at_epoch_ms);
-      appendMetadata(card, [['Exact URL', connection.upstream_url], ['Methods', connection.methods.join(', ')],
+      const expires = validExpiry(connection.token_expires_at_epoch_ms) ? new Date(connection.token_expires_at_epoch_ms).toLocaleString() : 'Not reported';
+      appendMetadata(card, [['Proxy policy', policyLoaded(connection) ? 'Policy loaded' : 'Pending activation'],
+        ['Exact URL', connection.upstream_url], ['Methods', connection.methods.join(', ')],
         ['Provider auth', connection.auth_type === 'bearer' ? 'Bearer token' : connection.header_name],
         ['Response fields', connection.response_fields.join(', ')], ['Request fields', connection.request_fields.join(', ')],
-        ['Query keys', connection.query_keys.join(', ')], ['Client token expiry', Number.isNaN(expires.getTime()) ? 'Not reported' : expires.toLocaleString()]]);
+        ['Query keys', connection.query_keys.join(', ')], ['Client token expiry', expires]]);
+      if (!supportedMethods(connection)) card.append(node('p', 'Unsupported saved method. This connection cannot generate a client configuration; other connections are unaffected.', 'small muted'));
       const button = node('button', 'Configure this client', 'secondary'); button.type = 'button';
       button.addEventListener('click', () => { state.selected = connection.id; $('client-connection').value = connection.id; renderClient(); location.hash = 'proxy'; });
       card.append(node('p', 'Provider credential stored. Its value is never returned by this page.', 'small muted'), button);
@@ -156,6 +202,12 @@ else (() => {
       state.status = {mode: result.mode, proxy_url: proxyValid ? proxy.href.replace(/\/$/, '') : '',
         allowed_upstreams: result.allowed_upstreams.filter(value => typeof value === 'string' && httpsUrl(value, true)),
         connections: result.connections.map(metadata), active_policy_hash: result.active_policy_hash, loaded_policy_hash: result.loaded_policy_hash};
+      const held = state.status.connections.find(connection => connection.id === state.tokenConnection);
+      if (state.token && held) {
+        state.tokenExpiresAt = validExpiry(held.token_expires_at_epoch_ms) && validExpiry(state.tokenExpiresAt) ?
+          Math.min(state.tokenExpiresAt, held.token_expires_at_epoch_ms) : null;
+        state.tokenClientStatus = held.client_status;
+      }
       $('load-error').hidden = true; renderStatus();
       if ($('form-status').textContent === 'Loading workspace...') $('form-status').textContent = 'Ready. Use a disposable, least-privilege provider credential.';
       if (!active() && state.status.connections.length && state.polls++ < 30)
@@ -164,6 +216,7 @@ else (() => {
     } catch (error) {
       if (epoch !== state.statusEpoch) return;
       state.status = null; $('connection-fields').disabled = true;
+      syncTokenControls(); scheduleExpiry();
       $('load-error-text').textContent = message(error); $('load-error').hidden = false;
       $('overview-policy').textContent = 'Activation unknown. Status could not be loaded.';
       $('activation-status').textContent = 'Activation unknown. Refresh status before use.';
@@ -176,7 +229,7 @@ else (() => {
     if (state.submitting || !state.status || !$('connection-form').reportValidity()) return;
     const methods = [...document.querySelectorAll('input[name="method"]:checked')].map(input => input.value);
     const path = $('upstream-path').value.trim(); const origin = $('upstream-origin').value;
-    if (!methods.length || !path.startsWith('/') || path.startsWith('//') || /[?#\\\s*]/.test(path) ||
+    if (!methods.length || methods.some(method => !CLIENT_METHODS.includes(method)) || !path.startsWith('/') || path.startsWith('//') || /[?#\\\s*]/.test(path) ||
         !state.status.allowed_upstreams.includes(origin) || !fields('response-fields').length) {
       $('form-status').textContent = 'Select at least one method, an approved upstream, an exact path and at least one response field.'; return;
     }
@@ -194,7 +247,9 @@ else (() => {
       if (!result.connection || typeof result.connection.id !== 'string' || !text(result.client_token))
         throw problem('The response did not include a complete one-time token. Check saved connections; do not assume the save failed.');
       state.token = result.client_token; state.tokenConnection = result.connection.id; state.selected = result.connection.id;
+      state.tokenExpiresAt = result.connection.token_expires_at_epoch_ms; state.tokenClientStatus = result.connection.client_status;
       result.client_token = ''; $('client-token').value = state.token; $('one-time-access').hidden = false;
+      $('token-expiry-status').textContent = ''; syncTokenControls(); scheduleExpiry();
       $('token-status').textContent = 'Save the token now. Clipboard and downloaded files are outside Serverware; keep them private.';
       $('form-status').textContent = 'Credential saved. Save the one-time client token below; checking proxy activation...';
       $('connection-form').reset(); $('header-field').hidden = true; $('header-name').required = false;
@@ -209,17 +264,32 @@ else (() => {
   function renderClient() {
     const connection = selectedConnection(); const proxy = state.status?.proxy_url;
     state.command = ''; $('copy-command').disabled = true; $('download-config').disabled = true;
-    if (!connection || !proxy || !httpsUrl(connection.upstream_url) || !connection.methods.length) {
+    if (!connection || !proxy || !httpsUrl(connection.upstream_url)) {
       $('client-command').textContent = connection ? 'A valid public HTTPS proxy endpoint is not configured.' : 'Add a credential to generate a scoped example.';
       $('client-guidance').textContent = ''; return;
     }
+    if (!supportedMethods(connection)) {
+      $('client-command').textContent = 'Unsupported saved method: ' + (connection.methods.join(', ') || 'not reported') + '.';
+      $('client-guidance').textContent = 'Select another connection. This demo cannot generate a supported configuration for these saved methods.'; return;
+    }
+    const readiness = clientStatus(connection);
+    if (readiness === 'expired' || readiness === 'unavailable') {
+      $('client-command').textContent = readiness === 'expired' ? 'Client token expired. This connection cannot authenticate requests.' : 'Client token expiry or status is unavailable.';
+      $('client-guidance').textContent = readiness === 'expired' ? 'The policy may remain loaded, but this token is no longer usable. Select another unexpired connection; no token has been renewed.' :
+        'Refresh connection status before using this client. Copy and download are disabled.'; return;
+    }
     const method = connection.methods[0];
-    state.command = buildCurlCommand({proxyUrl: proxy, upstreamUrl: connection.upstream_url,
-      method, caPath: $('ca-path').value, allowedHeaders: connection.allowed_headers});
+    try {
+      state.command = buildCurlCommand({proxyUrl: proxy, upstreamUrl: connection.upstream_url,
+        method, caPath: $('ca-path').value, allowedHeaders: connection.allowed_headers});
+    } catch {
+      $('client-command').textContent = 'This saved connection cannot generate a supported client configuration.';
+      $('client-guidance').textContent = 'Select another connection or refresh its status.'; return;
+    }
     $('client-command').textContent = state.command;
-    $('copy-command').disabled = !connectionActive(connection);
-    $('download-config').disabled = !connectionActive(connection) || !state.token || state.tokenConnection !== connection.id;
-    $('client-guidance').textContent = (connectionActive(connection) ? 'Active policy confirmed. This command is a configuration example, not a successful request test.' :
+    $('copy-command').disabled = !connectionReady(connection);
+    $('download-config').disabled = !connectionReady(connection) || !state.token || state.tokenConnection !== connection.id;
+    $('client-guidance').textContent = (connectionReady(connection) ? 'Policy loaded and client token not expired. This command is a configuration example, not a successful request test.' :
       'Waiting for the saved policy to be loaded. Copy/download will be available after activation.') +
       (connection.request_fields.length ? ' If your endpoint requires a body, send application/json using only the approved request fields. Media type is controlled by the JSON policy; do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden for this connection.');
   }
@@ -228,9 +298,10 @@ else (() => {
     catch { $(target).textContent = 'Clipboard access was denied. Select and copy the displayed value manually.'; }
   }
   function downloadConfig() {
+    refreshClientLifecycle();
     if ($('download-config').disabled) return;
     const connection = selectedConnection();
-    if (!connection || !state.token || state.tokenConnection !== connection.id || !connectionActive(connection)) return;
+    if (!connection || !state.token || state.tokenConnection !== connection.id || !connectionReady(connection)) return;
     const config = {proxy_url: state.status.proxy_url, upstream_url: connection.upstream_url, methods: connection.methods,
       ca_file: $('ca-path').value || './serverware-ca.pem', proxy_authorization: 'Bearer ' + state.token,
       token_expires_at_epoch_ms: connection.token_expires_at_epoch_ms,
@@ -281,16 +352,19 @@ else (() => {
     finally { $('audit-verify').disabled = false; }
   }
   window.addEventListener('hashchange', navigate);
-  window.addEventListener('pagehide', () => { clearTimeout(state.poll); clearToken(); $('provider-secret').value = ''; });
+  window.addEventListener('pagehide', () => { clearTimeout(state.poll); clearTimeout(state.expiryTimer); clearToken(); $('provider-secret').value = ''; });
+  window.addEventListener('focus', refreshClientLifecycle);
+  window.addEventListener('pageshow', refreshClientLifecycle);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshClientLifecycle(); });
   $('connection-form').addEventListener('submit', submit);
   $('auth-type').addEventListener('change', () => { const custom = $('auth-type').value === 'header'; $('header-field').hidden = !custom; $('header-name').required = custom; });
   for (const id of ['retry-load', 'refresh-status', 'proxy-refresh']) $(id).addEventListener('click', () => loadStatus());
-  $('reveal-token').addEventListener('click', () => { const reveal = $('client-token').type === 'password'; $('client-token').type = reveal ? 'text' : 'password'; $('reveal-token').textContent = reveal ? 'Hide' : 'Reveal'; $('reveal-token').setAttribute('aria-pressed', String(reveal)); });
-  $('copy-token').addEventListener('click', () => { if (state.token) copy(state.token, 'token-status'); });
-  $('dismiss-token').addEventListener('click', () => { if (window.confirm('Clear this one-time token? You must have saved it to use this connection.')) clearToken(); });
+  $('reveal-token').addEventListener('click', () => { refreshClientLifecycle(); if (!state.token) return; const reveal = $('client-token').type === 'password'; $('client-token').type = reveal ? 'text' : 'password'; $('reveal-token').textContent = reveal ? 'Hide' : 'Reveal'; $('reveal-token').setAttribute('aria-pressed', String(reveal)); });
+  $('copy-token').addEventListener('click', () => { refreshClientLifecycle(); if (state.token) copy(state.token, 'token-status'); });
+  $('dismiss-token').addEventListener('click', () => { if (state.token && window.confirm('Clear this one-time token? You must have saved it to use this connection.')) { clearToken(); refreshClientLifecycle(); } });
   $('client-connection').addEventListener('change', () => { state.selected = $('client-connection').value; renderClient(); });
   $('ca-path').addEventListener('input', renderClient);
-  $('copy-command').addEventListener('click', () => { if (!$('copy-command').disabled && state.command) copy(state.command, 'client-copy-status'); });
+  $('copy-command').addEventListener('click', () => { refreshClientLifecycle(); if (!$('copy-command').disabled && state.command) copy(state.command, 'client-copy-status'); });
   $('download-config').addEventListener('click', downloadConfig);
   $('audit-refresh').addEventListener('click', () => loadAudit());
   $('audit-more').addEventListener('click', () => loadAudit(true));

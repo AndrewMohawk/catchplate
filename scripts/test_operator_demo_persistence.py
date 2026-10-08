@@ -68,10 +68,10 @@ def backend(*, initialize=True):
     return config, db, operator_demo_store, policy_bundle
 
 
-def create_connection(store):
+def create_connection(store, *, methods=None):
     return store.create_connection(store.ConnectionInput(
         name="Persistence fixture", upstream_url="https://api.example.com/v1/items",
-        methods=["GET"], auth_type="bearer", secret=_PROVIDER_SECRET,
+        methods=["GET"] if methods is None else methods, auth_type="bearer", secret=_PROVIDER_SECRET,
         response_fields=["status"],
     ), actor_id=_ACTOR)
 
@@ -242,6 +242,40 @@ def rollback_check(config, db, store, bundles):
     return verify_committed(config, db, store, bundles)
 
 
+def client_status_check(config, db, store, bundles):
+    result = verify_committed(config, db, store, bundles)
+    before = transaction_state(db)
+    previous_file = config.POLICY_BUNDLE_PATH.read_bytes()
+    with closing(db.connect()) as connection:
+        row = json.loads(connection.execute("SELECT metadata_json FROM operator_demo_connections").fetchone()[0])
+    expiry = row["token_expires_at_epoch_ms"]
+    committed = result["policy_hash"]
+    mismatched = "sha256:" + "0" * 64
+    assert mismatched != committed
+    # Only external health observation and wall time are controlled. The status
+    # function reads the real committed SQLite connection and signed policy.
+    for loaded in (committed, mismatched, None):
+        for delta_ns in (-1, 0, 1):
+            now_ns = expiry * 1_000_000 + delta_ns
+            activation = "active" if loaded == committed else "pending"
+            expected = "expired" if delta_ns >= 0 else "ready" if loaded == committed else "pending"
+            with patch.object(store, "loaded_policy_hash", return_value=loaded), \
+                    patch.object(store.time, "time_ns", return_value=now_ns):
+                status = store.status()
+            assert status["active_policy_hash"] == committed
+            assert status["loaded_policy_hash"] == loaded
+            assert len(status["connections"]) == 1
+            public = status["connections"][0]
+            assert public["activation"] == activation, (loaded, delta_ns, public)
+            assert public["client_status"] == expected, (loaded, delta_ns, public)
+            assert public["token_expires_at_epoch_ms"] == expiry
+            assert public["policy_hash"] == committed
+            assert "token_sha256" not in public and "secret" not in public
+            assert transaction_state(db) == before, "status read changed durable state or renewed token"
+            assert config.POLICY_BUNDLE_PATH.read_bytes() == previous_file
+    return {**result, "token_expires_at_epoch_ms": expiry}
+
+
 def worker(operation):
     config, db, store, bundles = backend(initialize=not operation.startswith("nonce-"))
     if operation == "bootstrap" or operation == "reopen":
@@ -251,6 +285,17 @@ def worker(operation):
         assert "secret" not in public and "token_sha256" not in public
         result = verify_committed(config, db, store, bundles, client_token=token)
         assert result["policy_hash"] == digest
+    elif operation == "options-policy":
+        public, token, digest = create_connection(store, methods=["OPTIONS"])
+        result = verify_committed(config, db, store, bundles, client_token=token)
+        signed = json.loads(config.POLICY_BUNDLE_PATH.read_bytes())
+        assert public["methods"] == signed["routes"][0]["match"]["methods"] == ["OPTIONS"]
+        assert signed["routes"][0]["adapter"]["config"]["response"]["mode"] == "json"
+        assert result["policy_hash"] == digest
+    elif operation in {"client-status", "client-status-reopen"}:
+        if operation == "client-status":
+            create_connection(store)
+        result = client_status_check(config, db, store, bundles)
     elif operation.startswith("fail-"):
         result = fail_transaction(config, db, store, bundles, operation.removeprefix("fail-"))
     elif operation in {"replace-error", "crash"}:
@@ -313,6 +358,16 @@ class OperatorDemoPersistenceTests(unittest.TestCase):
         created = self.run_worker("create")
         self.assertEqual(created["connections"], 1)
         self.assertEqual(self.run_worker("reopen"), created)
+
+    def test_options_connection_commits_schema_valid_signed_policy(self):
+        created = self.run_worker("options-policy")
+        self.assertEqual(created["connections"], 1)
+        self.assertEqual(self.run_worker("reopen"), created)
+
+    def test_client_readiness_expiry_and_policy_mismatch_never_renew_on_restart(self):
+        created = self.run_worker("client-status")
+        self.assertEqual(created["connections"], 1)
+        self.assertEqual(self.run_worker("client-status-reopen"), created)
 
     def test_credential_write_failure_rolls_back_all_transaction_state(self):
         self.run_worker("fail-credential")

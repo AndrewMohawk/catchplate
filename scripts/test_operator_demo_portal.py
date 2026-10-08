@@ -75,6 +75,13 @@ class OperatorPortalTests(unittest.TestCase):
         self.assertEqual(indexed["ca-download"][1]["href"], "/ca.pem")
         self.assertIn("download", indexed["ca-download"][1])
 
+    def test_method_controls_match_the_json_response_contract(self):
+        items = Elements(operator_demo_portal.render()).items
+        methods = [attrs["value"] for tag, attrs in items
+                   if tag == "input" and attrs.get("name") == "method"]
+        self.assertEqual(methods, ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+        self.assertNotIn("HEAD", methods)
+
     def test_no_secret_persistence_or_unsafe_client_transport(self):
         script = (ASSETS / "app.js").read_text()
         for forbidden in ("localStorage", "sessionStorage", "indexedDB", "innerHTML", "--insecure", "--proxy-insecure", "decision-gate-rs:"):

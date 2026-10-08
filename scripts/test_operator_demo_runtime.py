@@ -125,6 +125,15 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
             code, body, _ = self.request("POST", "/api/operator-demo/connections", body=invalid, origin=self.origin)
             self.assertEqual(code, 422)
             self.assertNotIn(self.provider_secret.encode(), body)
+            for methods in (["HEAD"], ["GET", "HEAD"], ["OPTIONS", "HEAD"]):
+                with self.subTest(methods=methods):
+                    code, body, _ = self.request("POST", "/api/operator-demo/connections",
+                        body=dict(self.payload(), methods=methods), origin=self.origin)
+                    self.assertEqual(code, 422)
+                    self.assertNotIn(self.provider_secret.encode(), body)
+            code, body, _ = self.request("GET", "/api/operator-demo/status")
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(body)["connections"], [])
             code, _, _ = self.request("POST", "/api/operator-demo/connections", body=b"x" * 32769, origin=self.origin)
             self.assertEqual(code, 413)
             code, body, headers = self.request("POST", "/api/operator-demo/connections", body=self.payload(), origin=self.origin)
@@ -140,6 +149,8 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
             self.assertEqual(code, 200)
             saved = json.loads(body)
             self.assertEqual(len(saved["connections"]), 1)
+            self.assertEqual(saved["connections"][0]["activation"], "pending")
+            self.assertEqual(saved["connections"][0]["client_status"], "pending")
             self.assertNotIn(client_token.encode(), body)
             self.assertNotIn(self.provider_secret.encode(), body)
             self.assertEqual(saved["active_policy_hash"], result["policy_hash"])

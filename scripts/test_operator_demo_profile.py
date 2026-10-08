@@ -46,6 +46,20 @@ class OperatorDemoProfileTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 origin("https://api.example.com" + path, target=True)
 
+    def test_methods_reject_head_and_preserve_options(self):
+        from pydantic import ValidationError
+        from serverware.operator_demo_store import ConnectionInput
+        payload = {"name": "Method fixture", "upstream_url": "https://api.example.com/v1/data",
+            "auth_type": "bearer", "secret": "synthetic-method-fixture", "response_fields": ["status"]}
+        supported = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+        for methods in ([method] for method in supported):
+            with self.subTest(methods=methods):
+                self.assertEqual(ConnectionInput(**payload, methods=methods).methods, methods)
+        self.assertEqual(ConnectionInput(**payload, methods=supported).methods, supported)
+        for methods in (["HEAD"], ["GET", "HEAD"], ["OPTIONS", "HEAD"]):
+            with self.subTest(methods=methods), self.assertRaises(ValidationError):
+                ConnectionInput(**payload, methods=methods)
+
     def test_production_native_provider_and_mixed_profiles_refused(self):
         for change in ({"SERVERWARE_RELEASE_CHANNEL": "production"}, {"SERVERWARE_PRODUCTION_IMAGE": "1"},
                        {"SERVERWARE_DEVELOPMENT_SANDBOX": "1"}, {"SERVERWARE_CONTROL_PLANE_CUSTODY_CONFIG_FD": "4"},

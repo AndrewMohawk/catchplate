@@ -29,7 +29,7 @@ class ConnectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     name: str = Field(min_length=1, max_length=128)
     upstream_url: str = Field(min_length=1, max_length=2048)
-    methods: list[Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]] = Field(min_length=1, max_length=7)
+    methods: list[Literal["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]] = Field(min_length=1, max_length=6)
     auth_type: Literal["bearer", "header"]
     header_name: str | None = Field(default=None, max_length=128)
     secret: str = Field(min_length=1, max_length=8192)
@@ -316,12 +316,15 @@ def status() -> dict:
     committed = state["policy_hash"] if state else None
     loaded = loaded_policy_hash()
     activation = "active" if loaded is not None and loaded == committed else "pending"
+    now_epoch_ms = time.time_ns() // 1_000_000
     settings = operator_demo.settings()
     return {"schema": operator_demo.SCHEMA, "mode": "operator-development", "syntheticOnly": False,
         "productionReady": False, "hardwareVerified": False, "proxy_url": settings["proxy_url"],
         "allowed_upstreams": settings["allowed_upstreams"], "active_policy_hash": committed,
         "loaded_policy_hash": loaded, "connections": [{**_public(row), "policy_hash": committed,
-            "activation": activation} for row in rows]}
+            "activation": activation,
+            "client_status": "expired" if now_epoch_ms >= row["token_expires_at_epoch_ms"] else
+                "ready" if activation == "active" else "pending"} for row in rows]}
 
 
 def _nonce_values(key, nonce, now):

@@ -133,9 +133,12 @@ class Fixture:
         code, raw, headers = self.request("POST", START, body={**self.review(),
             "name": "Synthetic Google account " + str(self.account_number), "permission_preset": "gmail_readonly"})
         assert code == 200, (code, raw)
-        assert dict(headers).get(b"cache-control") == b"no-store"
+        # The outer response signer emits its owned header names in title
+        # case. HTTP field names are case-insensitive; retain the strict
+        # exactly-one no-store requirement without assuming ASGI casing.
+        assert [value for name, value in headers if name.lower() == b"cache-control"] == [b"no-store"]
         self.started = json.loads(raw)
-        cookies = [value.decode() for name, value in headers if name == b"set-cookie"]
+        cookies = [value.decode() for name, value in headers if name.lower() == b"set-cookie"]
         assert len(cookies) == 1 and all(word in cookies[0].lower() for word in ("secure", "httponly", "samesite=lax"))
         parsed = SimpleCookie(cookies[0])
         name = self.oauth.browser_cookie_name(self.started["state"])

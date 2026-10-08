@@ -14,6 +14,24 @@ This is for ordinary application authentication as well as agentic workflows.
 The application asks to use an API; it does not need possession of that API's
 long-lived credential.
 
+## Try the development console
+
+The persistent [sandbox console](https://serverware-sandbox.example.com/)
+uses the homelab login and synthetic credentials only. Its workspaces are
+**Overview, Proxy setup, Credentials, Access rules, and Audit log**.
+Proxy setup includes the public CA download and configurable cURL/Python client
+examples. The forward proxy is private to the sandbox Docker network; the
+public website is its management console, not a public proxy endpoint.
+Server listener settings remain deployment-managed, and real-provider setup
+is not enabled in this fixed sandbox. The [operator experience](docs/operator-experience.md)
+describes both the current UI and the full product workflow.
+
+The sandbox does not establish native-pilot, hardware or production acceptance.
+The production status and historical pilot evidence below are separate from
+this persistent testing environment.
+
+## What it controls
+
 For example, an application or CI job can publish an updated version of
 `@acme/widgets` with `npm publish`, while policy permits that package's releases
 only **09:00–17:00 UTC daily**. The workload authenticates to Serverware, not with

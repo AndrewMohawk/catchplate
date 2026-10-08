@@ -271,41 +271,7 @@ def run_proxy_check() -> dict:
 def decorate_portal(document: str) -> str:
     if not active():
         return document
-    # Keep the real portal's read views and audit interaction, but do not offer
-    # enrollment/provider/production controls that this profile cannot execute.
-    start = document.index('<nav class="workspace-nav"')
-    end = document.index('</nav>', start) + len('</nav>')
-    navigation = document[start:end].replace('href="#credential-workspace"', 'href="#credentials"')
-    navigation = navigation.replace('href="#policy-workspace">Policies', 'href="#routes">Demo routes')
-    document = document[:start] + navigation + document[end:]
-    document = document.replace('</head>', '''<style>
-        #main-content {grid-template-columns:minmax(0,1fr)}
-        #credential-workspace {display:none!important}
-        .workspace-nav a:not([href="#credentials"]):not([href="#routes"]):not([href="#audit-workspace"]) {display:none!important}
-        .main-grid > section {grid-column:1}
-        .main-grid > section:not(.credentials-section):not(.routes-section):not(.traffic-section):not(#audit-workspace) {display:none!important}
-        .credentials-section button,.routes-section button,button[onclick*="seedDemo"] {display:none!important}
-        </style></head>''', 1)
-    banner = ('<aside id="development-sandbox-banner" role="note" '
-        'style="padding:1rem;background:#fff1c2;color:#382900;border-bottom:2px solid #a66b00">'
-        '<strong>Persistent development sandbox - synthetic credentials only.</strong> '
-        'Local test keys; no hardware, enclave or production-authority verification. '
-        'The fixed demo policy is isolated from real providers. Reloads and restarts keep test data. '
-        'Production setup and configuration writes are unavailable here. '
-        'Streaming request transformations are unsupported and refused.'
-        '<div style="margin-top:.6rem"><button id="sandbox-run-check" type="button" '
-        'onclick="runSandboxProxyCheck()">Run synthetic proxy check</button> '
-        '<span id="sandbox-check-result" role="status" aria-live="polite">No setup required.</span></div>'
-        '</aside><script>'
-        'async function runSandboxProxyCheck(){'
-        'const b=document.getElementById("sandbox-run-check"),r=document.getElementById("sandbox-check-result");'
-        'b.disabled=true;r.textContent="Checking real TLS proxy, filtering and stored audit…";'
-        'try{const response=await fetch("/api/sandbox/check",{method:"POST",credentials:"same-origin",'
-        'cache:"no-store",signal:AbortSignal.timeout(55000)});const result=await response.json();'
-        'if(!response.ok||result.ok!==true)throw new Error(result.error||result.detail||"Check failed");'
-        'r.textContent="Passed "+result.checks.length+" checks: TLS, synthetic credential injection, '
-        'denials, response filtering and stored audit. Streaming request transformations remain '
-        'unsupported. No production or hardware claim.";'
-        '}catch(e){r.textContent="Check failed: "+e.message;}finally{b.disabled=false;}}'
-        '</script>')
-    return document.replace("<body>", "<body>" + banner, 1)
+    # Render a purpose-built console; never run the hidden production setup UI
+    # or its background polling in the explicit synthetic profile.
+    from serverware.sandbox_portal import render
+    return render()

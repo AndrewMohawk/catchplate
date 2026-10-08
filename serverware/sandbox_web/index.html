@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Serverware</title>
+  <style>__SANDBOX_STYLE__</style>
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<aside class="sidebar">
+  <a class="brand" href="#overview" aria-label="Serverware overview"><span class="brand-mark" aria-hidden="true">S</span>Serverware</a>
+  <div class="workspace-label">WORKSPACE</div>
+  <nav aria-label="Main navigation">
+    <a href="#overview" aria-current="page"><span aria-hidden="true">01</span>Overview</a>
+    <a href="#proxy"><span aria-hidden="true">02</span>Proxy setup</a>
+    <a href="#credentials"><span aria-hidden="true">03</span>Credentials</a>
+    <a href="#access"><span aria-hidden="true">04</span>Access rules</a>
+    <a href="#audit"><span aria-hidden="true">05</span>Audit log</a>
+  </nav>
+  <div class="sidebar-note"><span class="status-dot" aria-hidden="true"></span> Persistent sandbox<p>Your test data stays here when you refresh.</p></div>
+</aside>
+<div class="workspace">
+  <header class="topbar"><span id="page-label">Overview</span><span id="operator-auth-status" class="muted">Checking session...</span></header>
+  <div id="development-sandbox-banner" class="workspace-banner"><strong>Demo workspace</strong><span>Test credentials only. No real provider connected.</span><a href="#limitations">What this means</a></div>
+  <main id="main-content" tabindex="-1">
+    <div id="load-error" class="notice error" role="alert" hidden><span id="load-error-text"></span> <button id="retry-load" class="secondary">Try again</button> <a href="/">Reload / sign in</a></div>
+    <noscript><p class="notice">Enable JavaScript to load the proxy console. The <a href="/ca.pem">CA certificate</a> is also available directly after sign-in.</p></noscript>
+
+    <section id="overview" class="page" aria-labelledby="overview-title">
+      <div class="page-heading"><div><p class="eyebrow">CREDENTIAL CONTROL, WITHOUT THE KEY SHARING</p><h1 id="overview-title">Your apps use the API.<br>Serverware keeps the keys.</h1><p class="intro">Decide what each application can do, keep provider credentials out of its code, and see what happened.</p></div></div>
+      <div class="flow" aria-label="An application sends a request to Serverware, which checks permissions and adds the provider credential before contacting the API.">
+        <div><span class="step-number">1</span><strong>Your application</strong><p>Uses its Serverware identity</p></div>
+        <span class="flow-arrow" aria-hidden="true">&rarr;</span>
+        <div class="flow-gateway"><span class="step-number">2</span><strong>Serverware</strong><p>Checks access. Adds the key.</p></div>
+        <span class="flow-arrow" aria-hidden="true">&rarr;</span>
+        <div><span class="step-number">3</span><strong>The API</strong><p>Serverware checks its response</p></div>
+      </div>
+      <div class="overview-grid">
+        <article class="card demo-card">
+          <p class="eyebrow">TRY THE WORKING DEMO</p><h2>See the rules in action</h2>
+          <p>Send allowed and disallowed requests through the real proxy to a test API. See the results here and the saved events in your audit log.</p>
+          <div class="actions"><button id="sandbox-run-check" disabled>Run demo <span aria-hidden="true">&rarr;</span></button><span class="muted">No setup or real API key needed</span></div>
+          <p id="sandbox-check-result" class="run-status" role="status" aria-live="polite">Loading workspace...</p>
+        </article>
+        <article class="card setup-card"><span class="small-icon" aria-hidden="true">&harr;</span><h2>Configure a client</h2><p>Find the proxy address, download its CA and get a client configuration you can use.</p><a class="text-link" href="#proxy">Open proxy setup <span aria-hidden="true">&rarr;</span></a><p class="small muted">This sandbox's proxy is private to its Docker network.</p></article>
+      </div>
+      <div id="demo-results" class="results-grid" hidden></div>
+      <div id="demo-followup" class="actions" hidden><a class="button secondary" href="#audit">View audit log</a><details><summary>Technical check results</summary><pre id="check-json"></pre></details></div>
+      <div class="section-heading"><h2>Your workspace</h2><span class="muted small">Configuration, not a production-readiness claim</span></div>
+      <div class="workspace-cards">
+        <a class="card link-card" href="#credentials"><span class="eyebrow">CREDENTIALS</span><strong id="credential-count">Loading...</strong><span>Stored keys and account details &rarr;</span></a>
+        <a class="card link-card" href="#access"><span class="eyebrow">ACCESS RULES</span><strong id="policy-summary">Loading...</strong><span>Who can call which API &rarr;</span></a>
+        <a class="card link-card" href="#audit"><span class="eyebrow">AUDIT LOG</span><strong>Trace each request</strong><span>Allowed, blocked and recorded &rarr;</span></a>
+      </div>
+    </section>
+
+    <section id="proxy" class="page" aria-labelledby="proxy-title" hidden>
+      <div class="page-heading"><div><p class="eyebrow">CONNECT YOUR CLIENT</p><h1 id="proxy-title">Proxy setup</h1><p class="intro">The connection settings and CA your client needs to send HTTPS traffic through Serverware.</p></div></div>
+      <div class="notice"><strong>Private network only.</strong> These settings work inside the sandbox Docker network. Your laptop cannot use this address directly. This website is the management console, not the forward proxy.</div>
+      <div class="two-column">
+        <article class="card"><div class="section-heading"><h2>Proxy configuration</h2><span class="badge neutral">Deployment-managed</span></div>
+          <dl class="settings"><dt>Proxy URL</dt><dd><code>http://decision-gate-rs:9090</code></dd><dt>Protocol</dt><dd>HTTP CONNECT for HTTPS destinations</dd><dt>Listener</dt><dd><code>0.0.0.0:9090</code> inside the container</dd><dt>Network</dt><dd>Private sandbox network; no published host port</dd><dt>Allowed upstream</dt><dd><code>https://demo-upstream:8443</code></dd><dt>Client identity</dt><dd>Fixed demo identity, scoped to this isolated network</dd></dl>
+          <details><summary>Changing server settings</summary><p>Listener, network and destination changes are managed in the sandbox deployment, not saved from this page. Changing the client example below does not change the server. No public proxy or real-provider access is enabled.</p><p>The private management port <code>9091</code> is not a client proxy endpoint.</p></details>
+        </article>
+        <article class="card"><p class="eyebrow">HTTPS TRUST</p><h2>Certificate authority</h2><p>Your client must trust this CA to verify the HTTPS connections intercepted by this proxy.</p>
+          <a id="ca-download" class="button" href="/ca.pem" download="serverware-ca.pem">Download CA certificate <span aria-hidden="true">&darr;</span></a>
+          <p class="small">PEM format &middot; public certificate only</p>
+          <label>Certificate SHA-256 fingerprint</label><code id="ca-fingerprint" class="fingerprint">Open this section to load the certificate.</code><p id="ca-error" class="error-text" role="status"></p>
+          <p class="small muted">Trust this development CA only in your test client. Do not install it system-wide or disable TLS verification. Production uses a separate verified CA installation flow.</p>
+        </article>
+      </div>
+      <article class="card client-card"><div class="section-heading"><div><h2>Client configuration</h2><p class="muted">For a client already attached to the sandbox network.</p></div></div>
+        <div class="form-row"><div><label for="client-type">Client</label><select id="client-type"><option value="curl">cURL</option><option value="python">Python 3 (standard library)</option></select></div><div class="grow"><label for="ca-path">CA file path in your client</label><input id="ca-path" value="./serverware-ca.pem" maxlength="512" autocomplete="off" spellcheck="false"></div></div>
+        <p class="small muted">Download the certificate above, then place it at this path inside your client environment. This field changes only the generated example.</p>
+        <pre id="proxy-command" tabindex="0"></pre><div class="actions"><button id="copy-proxy-command" class="secondary">Copy configuration</button><span id="copy-status" role="status" class="small"></span></div>
+        <p class="small muted">The demo identity header is accepted only in this isolated test network. It is not production authentication. No provider credential belongs in this client configuration.</p>
+      </article>
+    </section>
+
+    <section id="credentials" class="page" aria-labelledby="credentials-title" hidden>
+      <div class="page-heading"><div><p class="eyebrow">KEEP KEYS OUT OF APPLICATIONS</p><h1 id="credentials-title">Credentials</h1><p class="intro">Serverware holds the provider credential and uses it only for requests the access rules allow.</p></div></div>
+      <div class="notice">This workspace uses a fixed test credential. Adding, rotating or connecting real provider credentials is unavailable in the sandbox.</div>
+      <div id="credentials-list" class="stack"><p class="muted">Loading stored credentials...</p></div>
+    </section>
+
+    <section id="access" class="page" aria-labelledby="access-title" hidden>
+      <div class="page-heading"><div><p class="eyebrow">DECIDE WHAT APPLICATIONS MAY DO</p><h1 id="access-title">Access rules</h1><p class="intro">Readable rules from the current signed policy. Anything outside that policy is denied.</p></div></div>
+      <div class="notice">The demo policy is fixed. Configured rules are not proof that every feature is implemented. Streaming request transformations are unsupported and refused.</div>
+      <article class="card"><h2>The rule used by the demo</h2><div id="demo-rule"><p class="muted">Loading signed policy...</p></div></article>
+      <details class="card"><summary id="other-rules-label">Other configured rules</summary><label for="rule-search">Find a rule</label><input id="rule-search" type="search" placeholder="Search by destination, method or path"><div id="other-rules" class="stack"></div></details>
+      <details id="policy-details" class="card"><summary>Signed policy &amp; technical details</summary><p class="small muted">This is the control plane's signed configuration, not a live feature-coverage report.</p><pre id="policy-json" tabindex="0"></pre></details>
+    </section>
+
+    <section id="audit" class="page" aria-labelledby="audit-title" hidden>
+      <div class="page-heading"><div><p class="eyebrow">UNDERSTAND WHAT HAPPENED</p><h1 id="audit-title">Audit log</h1><p class="intro">Persisted request outcomes, with the decision and its details in one place.</p></div><button id="audit-refresh" class="secondary">Refresh log</button></div>
+      <div class="card audit-toolbar"><div class="form-row"><div><label for="audit-filter">Show</label><select id="audit-filter"><option value="">Request outcomes</option><option value="released">Allowed responses</option><option value="blocked">Blocked responses</option><option value="all">All audit events</option></select></div><form id="audit-search-form" class="grow"><label for="audit-query">Search stored events</label><div class="search-row"><input id="audit-query" type="search" placeholder="Application, rule or event text"><button class="secondary" type="submit">Search</button></div></form></div><p class="small muted">Request outcomes are searched one page at a time. Use Load older events to continue, or choose a specific response type to search its full history.</p><p id="audit-status" class="small muted" role="status">Open this section to load the log.</p></div>
+      <div id="audit-list" class="stack"></div><div class="actions"><button id="audit-more" class="secondary" hidden>Load older events</button></div>
+      <article class="card verify-card"><div><h2>Verify the audit log</h2><p class="muted">Check the stored event chain for gaps or changed entries. This is local log verification, not hardware attestation.</p><p id="audit-verification" role="status">Not checked in this session.</p></div><button id="audit-verify" class="secondary">Verify audit log</button></article>
+    </section>
+
+    <details id="limitations" class="limitations"><summary>About this demo workspace</summary><p>This is a persistent, synthetic development sandbox. The Rust proxy, HTTPS interception and local audit storage are real; the upstream service and credentials are test-only. No real provider is connected.</p><p>It does not establish production readiness, enclave or hardware verification, native authority, or atomic release authorization. Streaming request transformations are unsupported and refused. Rejected test requests are expected in a successful demo.</p><p>The full product workflow is to connect a provider, set allowed actions, give an application scoped access, then review its activity. The sandbox does not yet enable that production onboarding flow.</p></details>
+  </main>
+</div>
+<script>__SANDBOX_SCRIPT__</script>
+</body>
+</html>

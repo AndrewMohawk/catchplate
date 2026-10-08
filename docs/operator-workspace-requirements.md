@@ -87,6 +87,9 @@ account owner still performs initial consent. The interface should show the
 verified account, permissions, refresh/reconnection state and affected
 applications, not access or refresh tokens. An OAuth source implementation is
 not evidence of a working deployed provider integration.
+The [Google integration plan](operator-google-integration-plan.md) records the
+remaining catalog, consent and unattended-refresh work, including why a generic
+generation-conflict response is not permission to retry credential issuance.
 
 ## Compatibility and migration
 

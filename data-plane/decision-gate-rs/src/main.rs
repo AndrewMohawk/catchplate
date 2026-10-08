@@ -2574,7 +2574,34 @@ enum MitmAuthorityIdentity {
 
 struct LeafConfigEntry {
     authority: MitmAuthorityIdentity,
+    validity: LeafConfigValidity,
     config: Arc<ServerConfig>,
+}
+
+enum LeafConfigValidity {
+    Development {
+        not_before: OffsetDateTime,
+        not_after: OffsetDateTime,
+    },
+    NativeOriginalScope,
+}
+
+impl LeafConfigValidity {
+    fn permits_cache_hit(&self, identity: MitmAuthorityIdentity, now: OffsetDateTime) -> bool {
+        match (self, identity) {
+            (Self::Development { not_before, not_after }, MitmAuthorityIdentity::Pem(_)) => {
+                // Renew development leaves before expiry, leaving time for the
+                // pending TLS handshake. Also reject reuse after clock rollback
+                // outside this certificate's actual not-before interval.
+                *not_before <= now && now < *not_after - TimeDuration::minutes(5)
+            }
+            // Native leaves retain their original issuer interval. This only
+            // permits lookup: the actual owner must still verify its live scope
+            // on every cache hit. Never apply development renewal to that owner.
+            (Self::NativeOriginalScope, MitmAuthorityIdentity::Native(_)) => true,
+            _ => false,
+        }
+    }
 }
 
 impl MitmAuthority {
@@ -24683,31 +24710,36 @@ fn mitm_server_config(state: &GateState, host: &str) -> Result<Arc<ServerConfig>
         .lock()
         .map_err(|_| "MITM authority mutex poisoned".to_owned())?;
     let identity = authority.cache_identity();
+    let now = OffsetDateTime::now_utc();
     let cached = state.leaf_configs.lock()
         .map_err(|_| "leaf config cache mutex poisoned".to_owned())?
         .get(&cache_key)
-        .filter(|entry| entry.authority == identity)
+        .filter(|entry| entry.authority == identity && entry.validity.permits_cache_hit(identity, now))
         .map(|entry| Arc::clone(&entry.config));
     if let Some(config) = cached {
         authority.verify_current_tls_scope()?;
         return Ok(config);
     }
-    let now = OffsetDateTime::now_utc();
-    let config = match &mut *authority {
-        MitmAuthority::Pem(authority) => authority.leaf_server_config(
-            &cache_key, state.server_instance_id.as_deref(),
-            now - TimeDuration::minutes(5), now + TimeDuration::hours(24))?,
+    let (config, validity) = match &mut *authority {
+        MitmAuthority::Pem(authority) => {
+            let not_before = now - TimeDuration::minutes(5);
+            let not_after = now + TimeDuration::hours(24);
+            let config = authority.leaf_server_config(
+                &cache_key, state.server_instance_id.as_deref(), not_before, not_after)?;
+            (config, LeafConfigValidity::Development { not_before, not_after })
+        }
         MitmAuthority::Native(authority) => {
             let deadline = authority.deadline();
-            authority.runtime_leaf_server_config(&cache_key,
-                state.server_instance_id.as_deref(), now, deadline)?
+            let config = authority.runtime_leaf_server_config(&cache_key,
+                state.server_instance_id.as_deref(), now, deadline)?;
+            (config, LeafConfigValidity::NativeOriginalScope)
         }
     };
     state
         .leaf_configs
         .lock()
         .map_err(|_| "leaf config cache mutex poisoned".to_owned())?
-        .insert(cache_key, LeafConfigEntry { authority: identity, config: Arc::clone(&config) });
+        .insert(cache_key, LeafConfigEntry { authority: identity, validity, config: Arc::clone(&config) });
     // Recheck after issuance and cache publication, still under owner custody.
     // A late failure can leave a cache entry, but no later native hit bypasses
     // this same original scope/lifetime check.
@@ -52198,6 +52230,79 @@ fn main() -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn development_leaf_cache_refreshes_before_expiry_and_refuses_clock_rollback() {
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let not_before = now - TimeDuration::minutes(5);
+        let not_after = now + TimeDuration::hours(24);
+        let validity = LeafConfigValidity::Development { not_before, not_after };
+        let identity = MitmAuthorityIdentity::Pem([1; 32]);
+        assert!(validity.permits_cache_hit(identity, not_before));
+        assert!(validity.permits_cache_hit(identity, now));
+        assert!(validity.permits_cache_hit(identity,
+            not_after - TimeDuration::minutes(5) - TimeDuration::seconds(1)));
+        assert!(!validity.permits_cache_hit(identity, not_after - TimeDuration::minutes(5)));
+        assert!(!validity.permits_cache_hit(identity, not_after));
+        assert!(!validity.permits_cache_hit(identity, not_after + TimeDuration::days(1)));
+        assert!(!validity.permits_cache_hit(identity, not_before - TimeDuration::seconds(1)));
+    }
+
+    #[test]
+    fn leaf_cache_validity_cannot_cross_development_and_native_authorities() {
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let development = LeafConfigValidity::Development {
+            not_before: now - TimeDuration::minutes(5),
+            not_after: now + TimeDuration::hours(24),
+        };
+        assert!(!development.permits_cache_hit(MitmAuthorityIdentity::Native([1; 32]), now));
+        assert!(!LeafConfigValidity::NativeOriginalScope.permits_cache_hit(
+            MitmAuthorityIdentity::Pem([1; 32]), now));
+        // A native lookup remains eligible only for the mandatory live-owner
+        // scope check in mitm_server_config; this is not native TLS admission.
+        assert!(LeafConfigValidity::NativeOriginalScope.permits_cache_hit(
+            MitmAuthorityIdentity::Native([1; 32]), now));
+    }
+
+    fn test_development_mitm_authority() -> MitmAuthority {
+        let key = KeyPair::generate().expect("test development CA key");
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        let certificate = params.self_signed(&key).expect("test development CA certificate");
+        MitmAuthority::Pem(TlsAuthorityV1::from_development_pem(
+            &certificate.pem(), &key.serialize_pem()).expect("test development authority"))
+    }
+
+    #[test]
+    fn development_leaf_cache_reuses_fresh_leaf_and_replaces_stale_or_changed_authority() {
+        let mut state = test_gate_state(test_snapshot(1));
+        state.mitm_authority = Some(Mutex::new(test_development_mitm_authority()));
+        let first = mitm_server_config(&state, "DEMO-UPSTREAM.").expect("first leaf");
+        let cached = mitm_server_config(&state, "demo-upstream").expect("fresh cached leaf");
+        assert!(Arc::ptr_eq(&first, &cached));
+        let now = OffsetDateTime::now_utc();
+        for (not_before, not_after) in [
+            (now - TimeDuration::hours(24), now + TimeDuration::minutes(4)),
+            (now - TimeDuration::hours(25), now - TimeDuration::seconds(1)),
+            (now + TimeDuration::minutes(10), now + TimeDuration::hours(24)),
+        ] {
+            let old = {
+                let mut cache = state.leaf_configs.lock().unwrap();
+                let entry = cache.get_mut("demo-upstream").expect("cached host");
+                entry.validity = LeafConfigValidity::Development { not_before, not_after };
+                Arc::clone(&entry.config)
+            };
+            let renewed = mitm_server_config(&state, "demo-upstream").expect("renewed leaf");
+            assert!(!Arc::ptr_eq(&old, &renewed));
+            assert!(Arc::ptr_eq(&renewed, &mitm_server_config(&state, "demo-upstream").unwrap()));
+        }
+        let old = mitm_server_config(&state, "demo-upstream").unwrap();
+        state.mitm_authority = Some(Mutex::new(test_development_mitm_authority()));
+        let changed = mitm_server_config(&state, "demo-upstream").expect("new authority leaf");
+        assert!(!Arc::ptr_eq(&old, &changed));
+        state.mitm_authority = None;
+        assert!(mitm_server_config(&state, "demo-upstream").is_err());
+    }
 
     #[test]
     fn proof_verification_rejects_small_order_ed25519_identity_vector() {

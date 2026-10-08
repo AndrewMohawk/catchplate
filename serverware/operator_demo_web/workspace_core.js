@@ -40,6 +40,28 @@ function resourceCard(item, badge, values) {
   card.append(heading, list); return card;
 }
 function renderCards(id, cards, empty) { element(id).replaceChildren(...(cards.length ? cards : [textNode('p', empty, 'muted')])); }
+function projectGoogleAccount(item) {
+  const text = (value, maximum) => typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
+  const scopes = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
+  if (!['active', 'quarantined'].includes(item.status) || item.header_name !== 'Authorization' ||
+      !text(item.provider_account, 256) || !text(item.provider_subject, 256) ||
+      !text(item.oauth_client_id, 256) || !/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(item.oauth_client_id) ||
+      item.permission_preset !== 'gmail_readonly' || !Array.isArray(item.scopes) ||
+      item.scopes.length !== scopes.length || item.scopes.some((scope, index) => scope !== scopes[index]) ||
+      !Number.isSafeInteger(item.active_rule_count) || item.active_rule_count < 0)
+    throw operatorError('Saved Google account metadata is incomplete. Changes are disabled.');
+  const result = {provider_account: item.provider_account, provider_subject: item.provider_subject,
+    oauth_client_id: item.oauth_client_id, permission_preset: item.permission_preset, scopes: [...item.scopes]};
+  if (item.status === 'quarantined') {
+    if (!text(item.quarantined_at, 64) || !Number.isFinite(Date.parse(item.quarantined_at)) ||
+        item.quarantine_reason !== 'operator_google_cleanup_fence' || item.provider_revocation_status !== 'not_proven' ||
+        item.active_rule_count !== 0)
+      throw operatorError('Saved Google quarantine metadata is incomplete. Changes are disabled.');
+    Object.assign(result, {quarantined_at: item.quarantined_at, quarantine_reason: item.quarantine_reason,
+      provider_revocation_status: item.provider_revocation_status});
+  }
+  return result;
+}
 function projectCatalog(value) {
   if (value?.schema !== 'serverware.operatorCatalog/v1' || value.mode !== 'operator-development' ||
       value.productionReady !== false || value.hardwareVerified !== false || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
@@ -49,12 +71,13 @@ function projectCatalog(value) {
     throw operatorError('This page did not receive the expected workspace catalog. Changes are disabled.');
   const pick = (item, names) => Object.fromEntries(names.map(name => [name, item[name]]));
   const base = ['id', 'name', 'status', 'created_at', 'revoked_at'];
-  const project = (items, names) => items.map(item => {
-    if (!item || typeof item.id !== 'string' || typeof item.name !== 'string' || !['active', 'revoked'].includes(item.status))
+  const project = (items, names, credentialRecords = false) => items.map(item => {
+    if (!item || typeof item.id !== 'string' || typeof item.name !== 'string' ||
+        !(['active', 'revoked'].includes(item.status) || credentialRecords && item.auth_type === 'google_oauth' && item.status === 'quarantined'))
       throw operatorError('Saved resource metadata is incomplete. Refresh before making changes.');
-    return pick(item, [...base, ...names]);
+    return {...pick(item, [...base, ...names]), ...(credentialRecords && item.auth_type === 'google_oauth' ? projectGoogleAccount(item) : {})};
   });
-  const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin']);
+  const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'placeholder', 'enforcement']);
@@ -62,6 +85,9 @@ function projectCatalog(value) {
   for (const rule of accessRules) for (const name of ['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers']) {
     if (!Array.isArray(rule[name]) || rule[name].some(item => typeof item !== 'string')) throw operatorError('Saved rule metadata is incomplete.');
   }
+  const quarantinedAccounts = new Set(credentials.filter(item => item.status === 'quarantined').map(item => item.id));
+  if (accessRules.some(rule => rule.status === 'active' && quarantinedAccounts.has(rule.credential_id)))
+    throw operatorError('Saved Google account and access-rule states disagree. Changes are disabled.');
   return {schema: value.schema, revision: value.revision, policy: pick(value.policy, ['policy_hash', 'loaded_policy_hash', 'sequence', 'activation']),
     proxy_url: value.proxy_url, allowed_upstreams: value.allowed_upstreams.filter(item => typeof item === 'string'),
     credentials, applications, access_rules: accessRules, limits: value.limits, capabilities: value.capabilities};

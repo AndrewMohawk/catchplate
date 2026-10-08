@@ -13,6 +13,19 @@ function createConnectView(workspace, applications, proxy) {
   const matchingRules = () => catalog()?.access_rules.filter(item => item.status === 'active' && item.application_id === selectedApplication && item.credential_id === selectedCredential) || [];
   const message = text => { element('connect-status').textContent = text; };
   renderOperatorCompatibility('connect-compatibility-content');
+  const accountSummary = textNode('article', undefined, 'notice'); accountSummary.id = 'connect-google-account-summary';
+  accountSummary.hidden = true; element('connect-progress').after(accountSummary);
+  function renderGoogleAccount() {
+    const id = step === 0 ? element('connect-credential-choice').value : selectedCredential;
+    const item = catalog()?.credentials.find(item => item.id === id);
+    accountSummary.hidden = item?.auth_type !== 'google_oauth';
+    accountSummary.replaceChildren();
+    if (accountSummary.hidden) return;
+    const details = textNode('dl', undefined, 'metadata');
+    details.append(...operatorGoogleAccountRows(item, catalog()).flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
+    accountSummary.append(textNode('h2', item.status === 'quarantined' ? 'Google account quarantined — unavailable' : 'Saved Google account'),
+      details, textNode('p', operatorGoogleAccountNotice(item), 'small muted'));
+  }
 
   // A vanished choice remains visibly unavailable: never silently pick another
   // resource, permission or capability after refresh.
@@ -65,7 +78,9 @@ function createConnectView(workspace, applications, proxy) {
   }
   function renderInputs() {
     const value = catalog(); if (!value) return;
-    choices('connect-credential-choice', [...value.credentials.filter(item => item.status === 'active').map(item => ({id: item.id, name: item.name + ' · ' + item.id})), {id: 'new', name: 'Save a new provider key'}], 'new');
+    choices('connect-credential-choice', [...value.credentials.filter(item => item.status === 'active').map(item => ({id: item.id,
+      name: item.name + (item.auth_type === 'google_oauth' ? ' · Google account ' + item.provider_account : '') + ' · ' + item.id})),
+    {id: 'new', name: 'Save a new provider key'}], 'new');
     choices('connect-application-choice', [...value.applications.filter(item => item.status === 'active').map(item => ({id: item.id, name: item.name + ' · ' + item.id})), {id: 'new', name: 'Create a new application'}], 'new');
     choices('connect-rule-choice', [{id: 'new', name: 'Grant a new permission'}, ...matchingRules().map(item => ({id: item.id, name: item.name + ' · ' + item.id}))], 'new');
     choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
@@ -83,13 +98,15 @@ function createConnectView(workspace, applications, proxy) {
     fields('connect-placeholder-group', replacing); element('connect-placeholder').required = replacing;
     try { element('connect-header-target').textContent = credentialHeaderTarget(credential()); }
     catch (_) { element('connect-header-target').textContent = 'Unsupported credential header'; }
-    element('connect-placeholder').placeholder = credential()?.auth_type === 'bearer' ? 'Bearer SERVERWARE_DUMMY' : 'SERVERWARE_DUMMY';
+    element('connect-placeholder').placeholder = element('connect-header-target').textContent === 'Authorization' ? 'Bearer SERVERWARE_DUMMY' : 'SERVERWARE_DUMMY';
     element('connect-input-help').textContent = !availableCredentialInputModes(catalog()).includes(element('connect-credential-input').value) ?
       'Choose an advertised credential-input mode. Unavailable choices cannot grant access.' : replacing ? 'Replacement applies only to this exact rule, not every use of the saved credential.' :
       'Automatic insertion: your client sends no provider credential header; Serverware supplies it after authorization.';
     const projected = newRule && element('connect-response-mode').value === 'projected_json';
     fields('connect-response-fields-group', projected); element('connect-response-fields').required = projected;
     element('connect-credential-next').textContent = newCredential ? 'Save credential & continue' : 'Use saved credential';
+    element('connect-credential-next').disabled = !newCredential && !catalog()?.credentials.some(item =>
+      item.id === element('connect-credential-choice').value && item.status === 'active');
     element('connect-application-next').textContent = newApp ? 'Create app and show token' : 'Use this application';
     const selected = catalog()?.applications.find(item => item.id === element('connect-application-choice').value);
     element('connect-application-note').textContent = newApp ? '' : selected ?
@@ -114,6 +131,13 @@ function createConnectView(workspace, applications, proxy) {
   }
   function renderSetup() {
     const rule = matchingRules().find(item => item.id === selectedRule);
+    const provider = catalog()?.credentials.find(item => item.id === selectedCredential);
+    element('connect-provider-status').textContent = (!provider ? 'Provider status is unavailable; refresh saved state.' :
+      provider.auth_type === 'google_oauth' ? provider.status === 'quarantined' ?
+        'Google account: quarantined and unavailable for use. Provider revocation is not proven. This setup does not start consent or cleanup.' :
+        'Google account: saved metadata only. This setup has not tested consent, token refresh or a Google request. Google account connection remains disabled here.' :
+        'Provider key: stored, not tested here.') +
+      ' Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.';
     const active = writable() && activePair() && workspace.loaded() && rule?.enforcement === 'active' && application()?.access_status === 'active' && supported(rule);
     element('connect-activation').textContent = active ? 'Rule active in the proxy. Configure your client below; no upstream request has been tested here.' :
       !catalog() ? 'Status unavailable. Refresh saved state before using this setup.' : !activePair() || !rule ?
@@ -123,7 +147,7 @@ function createConnectView(workspace, applications, proxy) {
     if (open && step === 4) { proxy.mount(element('connect-setup-slot')); if (active) proxy.select(selectedApplication, selectedRule); }
   }
   function render() {
-    renderInputs(); confirmCheckpoint(); renderForms(); renderReview();
+    renderInputs(); confirmCheckpoint(); renderForms(); renderReview(); renderGoogleAccount();
     steps.forEach((name, index) => { element('connect-' + name + '-step').hidden = index !== step; });
     element('connect-progress').textContent = (step + 1) + ' of 5 · ' + labels[step];
     element('connect-back').hidden = step === 0 || step === 4;

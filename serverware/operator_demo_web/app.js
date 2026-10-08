@@ -2,15 +2,16 @@
 // It accepts public metadata and never accepts a provider secret or client token.
 const CLIENT_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 function credentialHeaderTarget(credential) {
-  const name = credential?.auth_type === 'bearer' && credential.header_name === 'Authorization' ? 'Authorization' :
+  const bearer = ['bearer', 'google_oauth'].includes(credential?.auth_type);
+  const name = bearer && credential.header_name === 'Authorization' ? 'Authorization' :
     credential?.auth_type === 'header' ? credential.header_name : null;
   if (typeof name !== 'string' || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(name))
-    throw new Error('A saved bearer or custom-header credential is required');
+    throw new Error('A saved bearer, Google account or custom-header credential is required');
   const canonical = name.toLowerCase().replace(/_/g, '-');
   const reserved = ['cookie', 'host', 'content-type', 'content-length', 'content-encoding', 'connection', 'keep-alive',
     'proxy-authenticate', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
   if (reserved.includes(canonical) || canonical.startsWith('x-serverware-') ||
-      canonical === 'authorization' && credential.auth_type !== 'bearer') throw new Error('The credential header cannot be replaced');
+      canonical === 'authorization' && !bearer) throw new Error('The credential header cannot be replaced');
   return name;
 }
 function clientCredentialInput({credentialInput = 'insert', placeholder, credential} = {}) {

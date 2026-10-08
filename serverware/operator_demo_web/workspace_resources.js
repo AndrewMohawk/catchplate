@@ -28,6 +28,21 @@ function operatorRuleCredentialRows(rule, credential) {
   } catch (_) { rows.push(['Client setup', 'Invalid credential input configuration']); }
   return rows;
 }
+function operatorGoogleAccountRows(credential, catalog) {
+  const rules = catalog.access_rules.filter(rule => rule.credential_id === credential.id);
+  const names = status => [...new Set(rules.filter(rule => rule.status === status).map(rule => rule.application_id))].map(id => {
+    const application = catalog.applications.find(item => item.id === id);
+    return (application?.name || 'Retained application') + ' (' + id + ')';
+  }).join(', ') || 'None';
+  return [['Google account', credential.provider_account], ['Permission preset', credential.permission_preset],
+    ['Granted Google scopes', credential.scopes.join(', ')],
+    ['Saved active assignments', names('active')], ['Former assignments', names('revoked')]];
+}
+function operatorGoogleAccountNotice(credential) {
+  return credential.status === 'quarantined' ?
+    'Quarantined: unavailable for grants and client setup. Provider revocation is not proven. Former assignments are retained references, not current access. This is not a successful Google disconnect.' :
+    'Saved Google account metadata, not a refresh-health check. Granted Google scopes do not grant access to applications; each app still needs its own exact access rule. Assignments listed here are saved configuration, not proof of proxy activation.';
+}
 function createCredentialsView(workspace) {
   const form = element('credential-form');
   element('credential-auth-type').addEventListener('change', () => {
@@ -47,11 +62,25 @@ function createCredentialsView(workspace) {
     element('credential-fields').disabled = !workspace.ready('credentials');
     if (!catalog) { element('credential-secret').value = ''; return; }
     renderCards('credentials-list', catalog.credentials.map(credential => {
-      const card = resourceCard(credential, credential.status === 'active' ? 'Saved' : 'Revoked locally',
-        [['Authentication', credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
+      const google = credential.auth_type === 'google_oauth';
+      const badge = credential.status === 'quarantined' ? 'Quarantined · unusable' : credential.status === 'active' ? 'Saved' : 'Revoked locally';
+      const card = resourceCard(credential, badge,
+        [['Authentication', google ? 'Google account (OAuth)' : credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
+          ...(google ? operatorGoogleAccountRows(credential, catalog) : []),
           ['Active rules', String(credential.active_rule_count)], ['Credential ID', credential.id]]);
+      if (google) {
+        card.dataset.credentialType = 'google_oauth';
+        const notice = textNode('p', operatorGoogleAccountNotice(credential), 'small muted'); notice.dataset.googleAccountNotice = '';
+        const details = textNode('details'); details.dataset.googleIdentity = ''; details.append(textNode('summary', 'Google identity details'));
+        const identity = textNode('dl', undefined, 'metadata');
+        const values = [['Provider subject', credential.provider_subject], ['OAuth client ID', credential.oauth_client_id]];
+        if (credential.status === 'quarantined') values.push(['Quarantined at', credential.quarantined_at], ['Provider revocation', 'Not proven']);
+        identity.append(...values.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
+        details.append(identity); card.append(notice, details);
+        card.append(textNode('p', 'Google account removal requires provider-aware cleanup. This interface does not start consent or cleanup; ordinary credential revocation is not applicable.', 'small muted'));
+      }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
-      if (credential.status === 'active') {
+      if (credential.status === 'active' && !google) {
         const button = textNode('button', 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';
         button.disabled = workspace.state.busy || workspace.state.uncertain || credential.active_rule_count > 0;
         button.addEventListener('click', () => {
@@ -107,7 +136,7 @@ function createAccessRulesView(workspace) {
       element('rule-credential-header').textContent = 'This saved credential does not support dummy header replacement.';
       element('rule-placeholder').setCustomValidity('Choose a saved credential with a supported header target.');
     }
-    element('rule-placeholder').placeholder = credential?.auth_type === 'bearer' ? 'Bearer SERVERWARE_DUMMY' : 'SERVERWARE_DUMMY';
+    element('rule-placeholder').placeholder = element('rule-credential-header').textContent === 'Authorization' ? 'Bearer SERVERWARE_DUMMY' : 'SERVERWARE_DUMMY';
   }
   function renderResponseMode() {
     const mode = element('rule-response-mode').value;

@@ -2,9 +2,12 @@
 // Real deployed responses through a secret-safe local transport adapter. This
 // verifies the rendered UI/API flow, NOT human Authelia or hardware acceptance.
 // Optional SANDBOX_BROWSER_CHECK_PROXY=1 sends the fixed synthetic demo requests.
+// Optional SANDBOX_BROWSER_CHECK_CLIENTS=1 executes the rendered fixed clients.
 const { execFileSync } = require('node:child_process');
-const { X509Certificate } = require('node:crypto');
+const { X509Certificate, createHash, randomUUID } = require('node:crypto');
 const { createServer } = require('node:http');
+const { mkdtempSync, mkdirSync, chmodSync, unlinkSync, rmdirSync } = require('node:fs');
+const path = require('node:path');
 const { chromium, request } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const ORIGIN = 'https://serverware-sandbox.example.com';
@@ -115,12 +118,86 @@ async function startRelay({ backend, address, token, documents, failures }) {
   return { server, origin };
 }
 
+function validateClientResponse(output, token) {
+  requireCondition(output.length <= 65536 && !output.includes(token) && !output.includes('demo-token-from-vault'));
+  const result = JSON.parse(output);
+  requireCondition(result.authorization_present === true && result.authorization_scheme === 'Bearer' &&
+    result.credential_marker === 'initial');
+  requireCondition(!['authorization', 'authorization_sha256', 'proxy_authorization',
+    'serverware_agent', 'cookie', 'x_api_key'].some(key => Object.hasOwn(result, key)));
+  return { httpStatus: 200, credentialInjected: true, credentialNotReturned: true };
+}
+
+async function checkRenderedClients({ download, python, curl, token, setStage }) {
+  // These artifacts are one public certificate, not source edits or a bulk
+  // workspace. Its relative path matches both unchanged rendered snippets.
+  const directory = mkdtempSync('/tmp/serverware-browser-clients-');
+  const clientDirectory = path.join(directory, 'test client');
+  const caFile = path.join(clientDirectory, 'serverware-ca.pem');
+  const clientName = `serverware-browser-client-${randomUUID()}`;
+  const bounded = { encoding: 'utf8', timeout: 20000, maxBuffer: 65536, stdio: ['pipe', 'pipe', 'pipe'] };
+  let certificateSaved = false;
+  let directoryCreated = false;
+  try {
+    mkdirSync(clientDirectory, { mode: 0o700 }); directoryCreated = true;
+    await download.saveAs(caFile); certificateSaved = true;
+    chmodSync(caFile, 0o644); // Public CA must be readable by the isolated UID.
+    const gate = JSON.parse(execFileSync('docker', ['inspect', 'serverware-sandbox-decision-gate-rs-1'], bounded))[0];
+    const gateAddress = gate.NetworkSettings.Networks['serverware-sandbox_sandbox'].IPAddress;
+    requireCondition(/^172\.16\.249\.[0-9]+$/.test(gateAddress));
+    const network = JSON.parse(execFileSync('docker', ['network', 'inspect', 'serverware-sandbox_sandbox'], bounded))[0];
+    requireCondition(network.Internal === true);
+    const args = JSON.parse(execFileSync('python3', ['-B', '-c',
+      'import json,shlex,sys; print(json.dumps(shlex.split(sys.stdin.read().replace(chr(92)+chr(10), ""), comments=True)))'],
+    { ...bounded, input: curl }));
+    requireCondition(JSON.stringify(args) === JSON.stringify(['curl', '--fail-with-body', '--max-time', '10',
+      '--noproxy', '', '--proxy', 'http://decision-gate-rs:9090', '--cacert', './test client/serverware-ca.pem',
+      '--proxy-header', 'X-Serverware-Agent: demo-agent', '--header', 'X-Serverware-Agent: demo-agent',
+      'https://demo-upstream:8443/echo']));
+    requireCondition(python.includes('ssl.create_default_context(cafile="./test client/serverware-ca.pem")') &&
+      python.includes('http.client.HTTPSConnection("decision-gate-rs", 9090') &&
+      python.includes('connection.set_tunnel("demo-upstream", 8443') && !python.includes('CERT_NONE'));
+
+    setStage('execute unchanged rendered Python client with downloaded CA');
+    const pythonOutput = execFileSync('docker', ['run', '--rm', '-i', '--name', clientName,
+      '--pull', 'never', '--network', 'serverware-sandbox_sandbox', '--dns', '127.0.0.1',
+      '--user', '10001:10001', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+      '--cpus', '0.25', '--memory', '128m', '--pids-limit', '32', '--log-driver', 'none',
+      '--workdir', '/client', '--mount', `type=bind,src=${caFile},dst=/client/test client/serverware-ca.pem,readonly`,
+      '--entrypoint', 'python', 'sha256:ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01', '-B', '-'],
+    { ...bounded, input: python });
+    requireCondition(pythonOutput.startsWith('200 '));
+    const pythonResult = validateClientResponse(pythonOutput.slice(4).trim(), token);
+    pythonResult.renderedCommandSha256 = createHash('sha256').update(python).digest('hex');
+
+    setStage('execute parsed rendered cURL client with proxy DNS override and downloaded CA');
+    // The sole connection change is proxy DNS resolution. --write-out adds
+    // response-status instrumentation without changing the request or trust.
+    const curlOutput = execFileSync('/usr/bin/curl', [...args.slice(1), '--resolve', `decision-gate-rs:9090:${gateAddress}`,
+      '--write-out', '\n%{http_code}'],
+      { ...bounded, cwd: directory, env: { PATH: '/usr/bin:/bin', CURL_HOME: directory } });
+    requireCondition(curlOutput.endsWith('\n200'));
+    const curlResult = validateClientResponse(curlOutput.slice(0, -4).trim(), token);
+    curlResult.renderedCommandSha256 = createHash('sha256').update(curl).digest('hex');
+    return { python: pythonResult, curl: curlResult,
+      boundary: 'Python in private sandbox network; host cURL uses explicit proxy DNS override, not laptop reachability' };
+  } finally {
+    // Timeout can leave `docker run`'s container alive. Resolve only our unique
+    // task name, remove that container if present, then its public-CA artifact.
+    const remaining = execFileSync('docker', ['ps', '--all', '--quiet', '--filter', `name=^/${clientName}$`], bounded).trim();
+    if (remaining) execFileSync('docker', ['rm', '--force', clientName], bounded);
+    if (certificateSaved) unlinkSync(caFile);
+    if (directoryCreated) rmdirSync(clientDirectory);
+    rmdirSync(directory);
+  }
+}
+
 async function main() {
   let stage = 'transport initialization';
   let backend, browser, context, page, relay;
   const errors = [], failures = [], documents = new Map(), checks = [];
   const screenshots = [];
-  let firstLoadMs, reloadMs, proxyCheckPassed = false;
+  let firstLoadMs, reloadMs, proxyCheckPassed = false, clientExamples = null;
   try {
     const container = 'serverware-sandbox-serverware-1';
     const topology = JSON.parse(execFileSync('docker', ['inspect', container], { encoding: 'utf8' }))[0];
@@ -223,7 +300,9 @@ async function main() {
     await page.waitForFunction(() => document.getElementById('copy-status').textContent === 'Copied.');
     requireCondition(await page.evaluate(() => navigator.clipboard.readText()) === python);
     checks.push('curl_python_configuration_and_clipboard');
-    await page.screenshot({ path: '/tmp/serverware-sandbox-proxy.png', fullPage: false });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.mouse.move(0, 0);
+    await page.screenshot({ path: '/tmp/serverware-sandbox-proxy.png', fullPage: true });
     screenshots.push('/tmp/serverware-sandbox-proxy.png');
 
     stage = 'stored credentials and signed effective policy';
@@ -262,6 +341,11 @@ async function main() {
       requireCondition(await page.locator('#demo-followup').isVisible());
       proxyCheckPassed = true;
       checks.push('real_eight_checks_and_four_user_outcomes');
+    }
+
+    if (process.env.SANDBOX_BROWSER_CHECK_CLIENTS === '1') {
+      clientExamples = await checkRenderedClients({ download, python, curl, token, setStage: value => { stage = value; } });
+      checks.push('rendered_python_and_curl_clients_with_browser_downloaded_ca');
     }
 
     stage = 'persisted audit navigation and filters';
@@ -324,15 +408,22 @@ async function main() {
       }
       await navigate(page, 'overview');
       await page.evaluate(() => window.scrollTo(0, 0));
+      await page.mouse.move(0, 0);
+      if (width === 390) {
+        const button = await page.locator('#sandbox-run-check').boundingBox();
+        requireCondition(button && button.x >= 0 && button.y >= 0 &&
+          button.x + button.width <= 390 && button.y + button.height <= 844);
+      }
       const path = width === 390 ? '/tmp/serverware-sandbox-mobile.png' : '/tmp/serverware-sandbox-browser.png';
       await page.screenshot({ path, fullPage: false });
       screenshots.push(path);
     }
     checks.push('all_five_sections_desktop_and_mobile_no_overflow');
+    checks.push('mobile_demo_button_visible_without_scrolling');
     requireCondition(!(await page.content()).includes(token));
     requireCondition(errors.length === 0 && failures.length === 0);
     console.log(JSON.stringify({ ok: true, boundary: 'real backend through ephemeral localhost HTTP relay; not human SSO',
-      title: await page.title(), url: page.url(), firstLoadMs, reloadMs, proxyCheckPassed,
+      title: await page.title(), url: page.url(), firstLoadMs, reloadMs, proxyCheckPassed, clientExamples,
       auditChainVerified: true, checks, screenshots, errors, failures }));
   } catch (error) {
     if (page) await page.screenshot({ path: '/tmp/serverware-sandbox-browser-failed.png', fullPage: false }).catch(() => {});

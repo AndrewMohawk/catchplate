@@ -98,6 +98,8 @@ def verify_retained_policy(conn, catalog: dict) -> None:
 def publish(conn) -> dict:
     """Publish inside the caller transaction; caller materializes only after commit."""
     from serverware import db, policy_bundle
+    from serverware.operator_publication import assert_held
+    assert_held()
     schema._transaction(conn)
     catalog = schema.read_catalog(conn)
     schema.validate_bindings(conn, catalog)

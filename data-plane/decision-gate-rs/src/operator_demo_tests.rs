@@ -1,4 +1,9 @@
 //! Offline, synthetic fixtures only. No provider traffic or process environment mutation.
+// The child controls exercise validated Profile admission, not the fixed-path
+// deployment Selection::admit or live startup marker provisioning.
+#[path = "operator_audit_publication_integration_tests.rs"]
+mod publication_integration;
+
 use super::*;
 use crate::tests::{generic_policy_route, policy_with_route, test_gate_state, test_snapshot};
 use crate::{
@@ -355,6 +360,11 @@ fn operator_demo_signed_reload_changes_ready_hash_without_restarting_or_losing_h
     state.policy_trust_root_source = trust;
     state.policy_high_water_path = Some(high_water_path.clone());
     state.policy_shadow = ShadowRuntime::new_operator_demo(profile(&old, public_deployment()));
+    let publication_lock = scratch.0.join(crate::operator_audit_publication::LOCK_NAME);
+    fs::write(&publication_lock, []).unwrap();
+    fs::set_permissions(&publication_lock, fs::Permissions::from_mode(0o600)).unwrap();
+    state.operator_audit_publication = Some(Arc::new(
+        crate::operator_audit_publication::Owner::open(&path).unwrap()));
     assert!(state.policy_shadow.serving_ready(&old));
     let bootstrap_headers =
         BTreeMap::from([("proxy-authorization".into(), format!("Bearer {TOKEN}"))]);

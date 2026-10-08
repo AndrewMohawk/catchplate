@@ -1,3 +1,33 @@
+const operatorJsonResponseLimits = 'A non-empty application/json response is required. HTTP 204 and other empty responses, text, binary, streaming and HEAD are unsupported. Success bodies: at most 1 MiB; error bodies: at most 64 KiB. Upstream response headers are not forwarded.';
+const operatorJsonResponseStatuses = 'Only 200, 201, 202, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 and 504 are allowed by the current profile.';
+function renderOperatorCompatibility(id) {
+  element(id).replaceChildren(...[
+    operatorJsonResponseLimits, operatorJsonResponseStatuses,
+    'When request fields are listed, the request body must use application/json and is limited to 64 KiB. Proxy authentication, provider credential handling and JSON Content-Type are controlled separately from the client-header allowlist.',
+    'Selected-field filtering applies to successful responses; error responses retain only error, code and message. Whole-JSON mode includes all JSON content, including errors, but does not remove size, status or transport limits.',
+  ].map(value => textNode('p', value, 'small muted')));
+}
+function operatorRuleRestrictions(rule) {
+  return [
+    ['Destination / methods', (rule.upstream_url || 'Choose an exact destination') + ' · ' +
+      (rule.methods.length ? rule.methods.join(', ') + ' only' : 'Choose a method')],
+    ['Request body', rule.request_fields.length ? 'JSON fields only: ' + rule.request_fields.join(', ') + '.' : 'No body, including POST, PUT and PATCH.'],
+    ['Query parameters', rule.query_keys.length ? 'Names only: ' + rule.query_keys.join(', ') + '.' : 'None allowed.'],
+    ['Client headers', rule.allowed_headers.length ? rule.allowed_headers.join(', ') : 'No extra client headers.'],
+    ['Response', (operatorResponseModes[rule.response_mode] || 'Choose a supported response mode') + '. ' +
+      (rule.response_mode === 'unfiltered_json' ? 'All JSON content (no field filtering), including errors.' :
+        'Success fields: ' + (rule.response_fields.length ? rule.response_fields.join(', ') + '.' : 'none selected; cannot save.')) +
+      ' JSON only; no empty/204 responses.'],
+  ];
+}
+function operatorRuleCredentialRows(rule, credential) {
+  const rows = [['Client credential input', operatorCredentialInputModes[rule.credential_input] || 'Unsupported credential input']];
+  try {
+    const dummy = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
+    if (dummy) rows.push(['Exact dummy header', dummy.name + ': ' + dummy.value]);
+  } catch (_) { rows.push(['Client setup', 'Invalid credential input configuration']); }
+  return rows;
+}
 function createCredentialsView(workspace) {
   const form = element('credential-form');
   element('credential-auth-type').addEventListener('change', () => {
@@ -38,6 +68,27 @@ function createCredentialsView(workspace) {
 }
 function createAccessRulesView(workspace) {
   const form = element('access-rule-form');
+  renderOperatorCompatibility('rule-compatibility-content');
+  function renderSummary() {
+    const catalog = workspace.state.catalog;
+    const list = element('rule-effective-restrictions');
+    if (!catalog) {
+      element('rule-effective-context').textContent = 'Workspace status is unavailable. Refresh before reviewing or saving a rule.';
+      list.replaceChildren(); return;
+    }
+    const application = catalog.applications.find(item => item.id === element('rule-application-id').value);
+    const credential = catalog.credentials.find(item => item.id === element('rule-credential-id').value);
+    element('rule-effective-context').textContent = application && credential ?
+      application.name + ' may use ' + credential.name + ' only within the restrictions below. This draft is not yet saved or validated.' :
+      'Choose an application and saved credential. This draft is not yet saved or validated.';
+    const origin = element('rule-upstream-origin').value; const path = element('rule-path').value.trim();
+    const draft = {upstream_url: origin && path ? origin.replace(/\/$/, '') + path : '',
+      methods: [...document.querySelectorAll('input[name="rule-method"]:checked')].map(input => input.value),
+      request_fields: fieldLines('rule-request-fields'), query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers'),
+      response_mode: element('rule-response-mode').value, response_fields: fieldLines('rule-response-fields')};
+    const rows = operatorRuleRestrictions(draft);
+    list.replaceChildren(...rows.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
+  }
   function renderCredentialInput() {
     const mode = element('rule-credential-input').value;
     const supported = availableCredentialInputModes(workspace.state.catalog).includes(mode);
@@ -71,6 +122,8 @@ function createAccessRulesView(workspace) {
   }
   element('rule-response-mode').addEventListener('change', renderResponseMode);
   for (const id of ['rule-credential-input', 'rule-credential-id']) element(id).addEventListener('change', renderCredentialInput);
+  form.addEventListener('input', renderSummary);
+  form.addEventListener('change', renderSummary);
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (!workspace.ready('access_rules') || !form.reportValidity()) return;
     const catalog = workspace.state.catalog; const origin = element('rule-upstream-origin').value;
@@ -105,7 +158,7 @@ function createAccessRulesView(workspace) {
     const credentialInputModes = availableCredentialInputModes(catalog);
     element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active') ||
       !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
-    if (!catalog) { renderResponseMode(); renderCredentialInput(); return; }
+    if (!catalog) { renderResponseMode(); renderCredentialInput(); renderSummary(); return; }
     chooseOptions('rule-response-mode', responseModes.map(mode => ({id: mode, name: operatorResponseModes[mode]})), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
@@ -113,21 +166,14 @@ function createAccessRulesView(workspace) {
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     chooseOptions('rule-upstream-origin', catalog.allowed_upstreams.map(origin => ({id: origin, name: origin})), 'No approved destination configured');
+    renderSummary();
     renderCards('access-rules-list', catalog.access_rules.map(rule => {
       const application = catalog.applications.find(item => item.id === rule.application_id);
       const credential = catalog.credentials.find(item => item.id === rule.credential_id);
       const enforced = workspace.loaded() && rule.enforcement === (rule.status === 'revoked' ? 'revoked' : 'active');
       const badge = rule.status === 'revoked' ? enforced ? 'Revoked · enforced' : 'Revoked · enforcement pending' : enforced ? 'Active' : 'Saved · activation pending';
-      const credentialValues = [['Client credential input', operatorCredentialInputModes[rule.credential_input] || 'Unsupported credential input']];
-      try {
-        const dummy = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
-        if (dummy) credentialValues.push(['Exact dummy header', dummy.name + ': ' + dummy.value]);
-      } catch (_) { credentialValues.push(['Client setup', 'Invalid credential input configuration']); }
       const card = resourceCard(rule, badge, [['Application', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
-        ...credentialValues, ['Exact URL', rule.upstream_url], ['Methods', rule.methods.join(', ')],
-        ['Response content', operatorResponseModes[rule.response_mode] || 'Unsupported response mode'],
-        [rule.response_mode === 'unfiltered_json' ? 'Response fields' : 'Success response fields',
-          rule.response_mode === 'unfiltered_json' ? 'All JSON content (no field filtering)' : rule.response_fields.join(', ')], ['Rule ID', rule.id]]);
+        ...operatorRuleCredentialRows(rule, credential), ...operatorRuleRestrictions(rule), ['Rule ID', rule.id]]);
       if (rule.status === 'active') {
         const button = textNode('button', 'Revoke access rule', 'secondary'); button.dataset.action = 'revoke-rule';
         button.disabled = workspace.state.busy || workspace.state.uncertain;

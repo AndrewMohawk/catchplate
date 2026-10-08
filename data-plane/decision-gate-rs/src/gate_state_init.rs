@@ -150,6 +150,7 @@ impl GateStateInputs {
             native_runtime_lifetime: None,
             native_enrollment_authorizer: None,
             audit_client: runtime.audit_client,
+            operator_audit_publication: None,
             measured_audit: None,
             measured_canary_delivery: None,
             credential_lease_client: runtime.credential_lease_client,

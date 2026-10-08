@@ -7,8 +7,8 @@ as Google for unattended application use, or specify credential replacement
 without having to author a response-field projection. The product remains a
 credential-control proxy, not a mechanism for distributing provider tokens.
 
-The existing combined demo form stores a credential, creates a 24-hour client
-identity, and grants one projected-JSON route together. Those are distinct
+The original combined demo form stored a credential, created a 24-hour client
+identity, and granted one projected-JSON route together. Those are distinct
 resources. Simplifying labels without separating their lifecycles would not
 meet the requirement.
 
@@ -50,6 +50,26 @@ each resource should link to its assignments. Advanced controls belong behind
 an explicit restriction choice, with a plain-language summary of what will be
 allowed before publication.
 
+The primary action should be **Connect an app**, with inline choices to reuse or
+create its account/credential and application identity. The separate resource
+pages are management views, not three mandatory stops in onboarding. Present
+provider operations in the operator's language; do not expose a policy compiler
+form as the default journey.
+
+| Step | Required in the normal journey | Only when applicable |
+| --- | --- | --- |
+| Connect or save | Named API credential, or provider consent and verified account | Custom header name; administrator OAuth application setup is separate |
+| Choose the app | Existing application or a new scoped client identity with a visible finite lifetime | Custom token lifetime and rotation; never provider-token copying |
+| Allow its use | Credential/account, approved destination and operation | Exact public placeholder when the client requires dummy authentication |
+| Add restrictions | None beyond the selected operation's necessary scope and protocol limits | Response fields, age, quota, schedule or human approval, each an explicit choice |
+| Review and use | Effective permission summary, actual activation status, proxy endpoint and client-scoped CA | A complete sample request when the user supplies its body/query values |
+
+"No content filtering" is not "no authentication or destination restriction."
+Conversely, a transport limitation is not an optional policy preference: show it
+before saving, and do not suggest hiding an unsupported request format makes it
+work. The current editor still requires request-field declarations for JSON
+bodies; removing that requirement needs implementation, not different wording.
+
 The two basic onboarding paths are:
 
 1. **API key or password:** name the credential and store its value. When granting
@@ -77,10 +97,13 @@ cannot silently disappear when content filtering is disabled.
 | Remove one application's access | After the new policy is actually loaded, the revoked client cannot dispatch, including with a previously warmed credential cache; the other application still works. |
 | Rotate a client token | The new token is disclosed once, the old verifier is replaced in the signed policy, and old-token rejection is verified after activation. No provider refresh or reconnection occurs. |
 | Restart or migrate | Existing credential ciphertext, IDs, token verifiers/expiry, nonce history, policy bytes/hash/sequence and high-water state are preserved; a restart neither renews tokens nor grants new access. |
+| Replace a saved provider secret | Preserve the shared credential's assignments and application identities; make the version change and affected applications explicit. Prove old cached material cannot be used after activation. This is distinct from rotating an application's client token and remains unimplemented in the catalog. |
 | Connect Google | Real consent identifies the account and granted permissions; a proxy request obtains only an injected access token, with no provider token handed to the application. |
 | Run Google unattended | A request after access-token expiry completes through actual refresh, generation reconciliation and durable storage; concurrent callers do not race token rotation. Provider-required reauthorization is distinct from transient failure. |
 | Replace a configured value | A normal client with the configured placeholder succeeds; unrelated, ambiguous or mismatching input does not select or reveal a credential. Existing insertion-only rules retain their behavior. |
 | Apply no response content filter | Supported responses retain their logical content without a user-written field allowlist; protocol, size, timeout, target, safe-header and disclosure controls still apply. Unsupported formats are explicit, not silently transformed or advertised as supported. |
+| Complete a provider workflow | One understandable preset covers the necessary bounded operation bundle, such as Gmail list, pagination and message reads, or npm prerequisite reads plus publish. Prove the ordinary client can complete the operation, not just one hand-crafted endpoint call. |
+| Approve a requested action | A real attempted operation creates a pending review showing the exact action, expiry and affected account; approve, deny and timeout produce visible outcomes. Fresh one-use approval admits only the bound action, and the client has a supported continuation or explicit retry path. This workspace integration remains open. |
 
 Google OAuth application configuration belongs to administrator setup. An
 account owner still performs initial consent. The interface should show the
@@ -158,6 +181,15 @@ integration open. Selecting a restriction still requires its actual request and
 response enforcement, and choosing an unfiltered mode must not silently discard
 it.
 
+The approval journey is a first-class workflow, not a checkbox on a credential.
+Request-triggered approval, as in the ECR example, requires a pending-actions view, an exact-action review,
+the configured hardware ceremony, and a visible terminal result. A rejected,
+expired or uncertain action must not silently resubmit. Whether a client waits
+or deliberately retries depends on the implemented provider protocol; the UI
+must not promise transparent continuation where only an explicit retry exists.
+An approval notification contains no provider secret. Current operator catalog
+routes and navigation do not provide this workflow.
+
 Account connectivity/refresh health, application-token validity and actual rule
 activation must be three separately visible states. A healthy Google grant does
 not renew an expired Serverware application token. A temporary refresh failure
@@ -176,12 +208,9 @@ Removing mandatory response projection solves only one part of that journey:
 - Query names default to none, and forwarded client headers default to
   `accept` and `user-agent`. An example-request importer could suggest those
   names locally for explicit approval; it must not silently broaden access.
-- Saved-rule summaries should include body, query and header restrictions as
-  well as destination, exact path and methods. Collapsing advanced editors must
-  not hide what the application will actually be allowed to send.
-- Generated cURL is currently a connection template, without body or query
-  values. Lead with settings for an existing client, or explicitly build a
-  complete example from supplied sample input without executing it.
+- Generated cURL remains a connection template, without body or query values.
+  A complete example would need supplied sample input and must not execute
+  automatically.
 - Whole-JSON responses retain status-code, body-presence, size and safe-header
   restrictions; `204 No Content` is not supported by the current envelope.
   Text, binary and streaming remain open compatibility work. The current
@@ -192,3 +221,11 @@ Removing mandatory response projection solves only one part of that journey:
 Destination and operation permissions remain necessary even in the simple
 journey. Optional content restrictions and provider-specific presets should be
 separate choices, with a short effective-permission summary before publication.
+
+The current UI clarity slice shows the same five essential restrictions in the
+draft and saved rule: destination/methods, body, query, headers and response.
+Bodyless POST defaults and the JSON/empty-response limit remain visible; detailed
+compatibility limits are expandable. Client setup leads with the existing
+client's settings and explicitly labels cURL as an incomplete connection
+template. This is presentation support, not new protocol compatibility or the
+complete inline onboarding/provider-preset journey described above.

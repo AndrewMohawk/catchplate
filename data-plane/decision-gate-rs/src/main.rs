@@ -19,6 +19,7 @@ mod native_audit_owner;
 mod native_audit_transport;
 mod legacy_audit_delivery;
 mod audit_post_diagnostics;
+mod operator_audit_publication;
 mod native_audit_assignment;
 mod native_postboot_assignment;
 mod native_canary_transport;
@@ -2694,6 +2695,7 @@ struct GateState {
     native_runtime_lifetime: Option<Arc<NativeRuntimeLifetimeV1>>,
     native_enrollment_authorizer: Option<Arc<native_enrollment_authorizer::NativeEnrollmentAuthorizer>>,
     audit_client: Client,
+    operator_audit_publication: Option<Arc<operator_audit_publication::Owner>>,
     measured_audit: Option<Mutex<native_audit_owner::Owner>>,
     measured_canary_delivery: Option<Mutex<native_canary_delivery::Owner>>,
     credential_lease_client: Client,
@@ -8126,7 +8128,14 @@ fn fetch_attested_policy_trust_root(
     expected_quote_key_id: &Option<String>,
     verifier: &Option<ControlPlaneAttestationVerifier>,
     native_transport: Option<&NativeControlPlaneTransport>,
+    original_deadline: Option<Instant>,
 ) -> Result<PolicyTrustRoot, String> {
+    if original_deadline.is_some() && native_transport.is_some() {
+        return Err("operator publication deadline cannot govern native trust".to_owned());
+    }
+    if original_deadline.is_some() && verifier.is_some() {
+        return Err("operator publication does not admit external attestation verifiers".to_owned());
+    }
     let nonce = format!(
         "decision-gate-policy-trust-{}-{}",
         std::process::id(),
@@ -8137,9 +8146,12 @@ fn fetch_attested_policy_trust_root(
         Some(transport) => { transport.relays.remaining()?; transport.client.clone() }
         None => build_control_plane_client(Duration::from_secs(5))?,
     };
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = original_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(15));
     let (attestation_bytes, peer_spki_sha256) = loop {
         let mut request = client.get(&request_url);
+        if let Some(deadline) = original_deadline {
+            request = request.timeout(operator_audit_publication::remaining(deadline)?.min(Duration::from_secs(5)));
+        }
         if let Some(transport) = native_transport {
             request = request.timeout(transport.relays.remaining()?.min(Duration::from_secs(5)));
         }
@@ -8165,8 +8177,12 @@ fn fetch_attested_policy_trust_root(
                 "control-plane policy trust root was not available after retry: {attempt_error}"
             ));
         }
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(match original_deadline {
+            Some(deadline) => operator_audit_publication::remaining(deadline)?.min(Duration::from_millis(250)),
+            None => Duration::from_millis(250),
+        });
     };
+    if let Some(deadline) = original_deadline { operator_audit_publication::remaining(deadline)?; }
     if let Some(transport) = native_transport { transport.relays.remaining()?; }
     let attestation = strict_json_value_from_slice(&attestation_bytes)
         .map_err(|_| "parse_control_plane_attestation".to_string())?;
@@ -8350,6 +8366,13 @@ fn fetch_attested_policy_trust_root(
 }
 
 fn load_policy_trust_root(source: &PolicyTrustRootSource) -> Result<PolicyTrustRoot, String> {
+    load_policy_trust_root_on_deadline(source, None)
+}
+
+fn load_policy_trust_root_on_deadline(
+    source: &PolicyTrustRootSource, original_deadline: Option<Instant>,
+) -> Result<PolicyTrustRoot, String> {
+    if let Some(deadline) = original_deadline { operator_audit_publication::remaining(deadline)?; }
     match source {
         PolicyTrustRootSource::File(path) => {
             let (verifying_key, key_id) = public_key_from_spki_pem(path)?;
@@ -8368,7 +8391,7 @@ fn load_policy_trust_root(source: &PolicyTrustRootSource) -> Result<PolicyTrustR
             expected_quote_key_id,
             verifier,
             native_transport,
-        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verifier, native_transport.as_ref()),
+        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verifier, native_transport.as_ref(), original_deadline),
     }
 }
 
@@ -14769,6 +14792,14 @@ fn load_snapshot(
     trust_root_source: &PolicyTrustRootSource,
     running_binary_digest: &str,
 ) -> Result<Snapshot, String> {
+    load_snapshot_on_deadline(path, trust_root_source, running_binary_digest, None)
+}
+
+fn load_snapshot_on_deadline(
+    path: &str, trust_root_source: &PolicyTrustRootSource,
+    running_binary_digest: &str, original_deadline: Option<Instant>,
+) -> Result<Snapshot, String> {
+    if let Some(deadline) = original_deadline { operator_audit_publication::remaining(deadline)?; }
     if matches!(trust_root_source, PolicyTrustRootSource::AttestedControlPlane {
         native_transport: Some(_), ..
     }) {
@@ -14777,13 +14808,15 @@ fn load_snapshot(
     let text = fs::read_to_string(path).map_err(|err| format!("read policy bundle: {err}"))?;
     let raw =
         strict_json_value_from_str(&text).map_err(|err| format!("parse policy bundle: {err}"))?;
-    let trust_root = load_policy_trust_root(trust_root_source)?;
-    compile_signed_snapshot(
+    let trust_root = load_policy_trust_root_on_deadline(trust_root_source, original_deadline)?;
+    let snapshot = compile_signed_snapshot(
         raw,
         trust_root,
         running_binary_digest,
         true,
-    )
+    )?;
+    if let Some(deadline) = original_deadline { operator_audit_publication::remaining(deadline)?; }
+    Ok(snapshot)
 }
 
 fn load_shadow_snapshot_pair(
@@ -15554,6 +15587,16 @@ fn clear_local_grants_if_signed_policy_changed(
 }
 
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
+    let publication = operator_audit_publication::acquire(state)?;
+    let changed = refresh_policy_snapshot_guarded(state, force, publication.as_ref())?;
+    if let Some(permit) = publication.as_ref() { permit.check()?; }
+    Ok(changed)
+}
+
+fn refresh_policy_snapshot_guarded(
+    state: &GateState, force: bool, publication: Option<&operator_audit_publication::Permit<'_>>,
+) -> Result<bool, String> {
+    let original_deadline = operator_audit_publication::require_permit(state, publication)?;
     if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
         trust.require_live()?;
     }
@@ -15598,7 +15641,8 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 Ok(snapshot)
             })
     } else {
-        load_snapshot(&state.policy_path, &state.policy_trust_root_source, &state.binary_digest)
+        load_snapshot_on_deadline(&state.policy_path, &state.policy_trust_root_source,
+            &state.binary_digest, original_deadline)
     };
     match loaded {
         Ok(mut snapshot) => {
@@ -15656,8 +15700,11 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 );
                 return Err(err);
             }
-            let _active_policy_mutation =
-                state.upstream_dispatch_authority.begin_mutation();
+            let _active_policy_mutation = match original_deadline {
+                Some(deadline) => state.upstream_dispatch_authority.begin_mutation_on_deadline(deadline)?,
+                None => state.upstream_dispatch_authority.begin_mutation(),
+            };
+            if let Some(permit) = publication { permit.check()?; }
             let previous = current_snapshot(state);
             snapshot = bind_next_active_runtime_identity(
                 snapshot,
@@ -15701,6 +15748,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 return Err(err);
             }
             let high_water_update = (|| -> Result<(), String> {
+                if let Some(permit) = publication { permit.check()?; }
                 if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
                     trust.check_snapshot(&snapshot)?;
                 }
@@ -15781,6 +15829,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     .snapshot
                     .write()
                     .expect("policy snapshot lock poisoned");
+                if let Some(permit) = publication { permit.check()?; }
                 state.policy_shadow.commit_operator_reload(operator_reload)?;
                 *current = Arc::clone(&next);
                 let grants_cleared =
@@ -24515,6 +24564,19 @@ fn post_serialized_legacy_audit_batch(
     })?;
     let body_len = body.len();
     let batch_digest = sha256_prefixed(body);
+    let publication = operator_audit_publication::acquire(state).map_err(|_| {
+        diagnostic.failure(Stage::Preflight,
+            AuditPostError::not_sent("operator audit publication coordination refused"))
+    })?;
+    if let Some(permit) = publication.as_ref() {
+        // Always authenticate the settled file while holding SH. The ordinary
+        // mtime fast path cannot prove that a same-timestamp replacement is current.
+        refresh_policy_snapshot_guarded(state, true, Some(permit)).map_err(|_| {
+            diagnostic.failure(Stage::Preflight,
+                AuditPostError::not_sent("operator audit publication synchronization refused"))
+        })?;
+        permit.check().map_err(|error| diagnostic.failure(Stage::Preflight, AuditPostError::not_sent(error)))?;
+    }
     let snapshot = current_snapshot(state);
     diagnostic.snapshot(&snapshot);
     if !snapshot_is_active(state, &snapshot) {
@@ -24532,13 +24594,18 @@ fn post_serialized_legacy_audit_batch(
     }
     let response_nonce = fresh_control_plane_response_nonce().map_err(|error|
         diagnostic.failure(Stage::Preflight, AuditPostError::not_sent(error)))?;
-    let request = state
+    let mut request = state
         .audit_client
         .post(url)
         .header("X-Serverware-Data-Plane-Token", token.as_str())
         .header("X-Serverware-Response-Nonce", response_nonce.as_str())
         .header("Content-Type", "application/json")
         .body(body.to_vec());
+    if let Some(permit) = publication.as_ref() {
+        request = request.timeout(operator_audit_publication::remaining(permit.deadline())
+            .map_err(|error| diagnostic.failure(Stage::Preflight, AuditPostError::not_sent(error)))?
+            .min(Duration::from_secs(2)));
+    }
     let (client, request) = bounded_service_request(state, request)
         .map_err(|error| diagnostic.failure(Stage::ServiceLifetime, AuditPostError::not_sent(error)))?
         .build_split();
@@ -24559,6 +24626,9 @@ fn post_serialized_legacy_audit_batch(
     .map_err(|error| diagnostic.failure(Stage::ResponseBody, AuditPostError::other(error)))?);
     native_service_remaining(state).map_err(|error|
         diagnostic.failure(Stage::ServiceLifetime, AuditPostError::other(error)))?;
+    if let Some(permit) = publication.as_ref() {
+        permit.check().map_err(|error| diagnostic.failure(Stage::ServiceLifetime, AuditPostError::other(error)))?;
+    }
     if !snapshot_is_active(state, &snapshot) {
         return Err(diagnostic.failure(Stage::SnapshotNotCurrent, AuditPostError::other(
             "policy snapshot changed while audit acknowledgement was fetched",
@@ -24608,6 +24678,11 @@ fn post_serialized_legacy_audit_batch(
         return Err(diagnostic.failure(stage, AuditPostError::other(
             "audit acknowledgement binding mismatch",
         )));
+    }
+    if let Some(permit) = publication.as_ref() {
+        #[cfg(test)]
+        permit.test_checkpoint(operator_audit_publication::TestPhase::AckVerified);
+        permit.check().map_err(|error| diagnostic.failure(Stage::ServiceLifetime, AuditPostError::other(error)))?;
     }
     Ok(())
 }
@@ -52161,14 +52236,26 @@ fn main() -> Result<(), String> {
         .clamp(1, 256);
     let release_provenance_path = env::var("SERVERWARE_RELEASE_PROVENANCE").ok();
     let image_signatures_path = env::var("SERVERWARE_IMAGE_SIGNATURES").ok();
+    // The selected operator profile is the only legacy mode that shares a
+    // mutable policy with its audit receiver. Pin and lock before the FIRST load,
+    // not merely before starting workers, so restart cannot cross publication.
+    let operator_publication_owner = if operator_selection.is_some() {
+        if is_production || policy_path != "/data/policy-bundle.json" {
+            return Err("operator publication startup profile refused".to_owned());
+        }
+        operator_audit_publication::require_local_verifier(&policy_trust_root_source)?;
+        Some(Arc::new(operator_audit_publication::Owner::open(Path::new(&policy_path))?))
+    } else { None };
+    let operator_startup_guard = operator_publication_owner.as_ref()
+        .map(|owner| owner.acquire(operator_audit_publication::deadline())).transpose()?;
     let initial_policy_mtime = file_mtime(&policy_path);
     let initial_release_evidence_mtimes = release_evidence_mtimes(
         release_provenance_path.as_deref(),
         image_signatures_path.as_deref(),
     );
     let binary_digest = current_binary_digest()?;
-    let mut initial_snapshot =
-        load_snapshot(&policy_path, &policy_trust_root_source, &binary_digest)?;
+    let mut initial_snapshot = load_snapshot_on_deadline(&policy_path, &policy_trust_root_source,
+        &binary_digest, operator_startup_guard.as_ref().map(|permit| permit.deadline()))?;
     initial_snapshot.epoch = 1;
     initial_snapshot.trust_generation = 1;
     validate_production_release_authorization_policy(
@@ -52312,6 +52399,7 @@ fn main() -> Result<(), String> {
         initialized_state.policy_shadow = ShadowRuntime::new_development_sandbox(profile);
     }
     if let Some(selection) = operator_selection {
+        operator_startup_guard.as_ref().ok_or("operator publication startup ownership missing")?.check()?;
         let profile = selection.admit(&initialized_state)?;
         let snapshot = current_snapshot(&initialized_state);
         let high_water = initialize_policy_high_water_after_response_proof_binding(
@@ -52321,7 +52409,10 @@ fn main() -> Result<(), String> {
         )?;
         *initialized_state.policy_high_water.get_mut().map_err(|_| "operator demo high-water lock poisoned")? = high_water;
         initialized_state.policy_shadow = ShadowRuntime::new_operator_demo(profile);
+        initialized_state.operator_audit_publication = operator_publication_owner.as_ref().map(Arc::clone);
+        operator_startup_guard.as_ref().ok_or("operator publication startup ownership missing")?.check()?;
     }
+    drop(operator_startup_guard);
     let state = Arc::new(initialized_state);
     if let Some(control) =
         state.policy_shadow_generation_control.as_ref()
@@ -53744,6 +53835,7 @@ mod tests {
             native_runtime_lifetime: None,
             native_enrollment_authorizer: None,
             audit_client: client.clone(),
+            operator_audit_publication: None,
             measured_audit: None,
             credential_lease_client: client,
             measured_canary_delivery: None,
@@ -55688,8 +55780,15 @@ mod tests {
 
         let mut same_policy = (*snapshot).clone();
         same_policy.epoch = snapshot.epoch + 1;
-        same_policy.trust_generation = snapshot.trust_generation + 1;
-        same_policy.response_signing_key_id = Some("sha256:rotated-response-key".to_string());
+        assert!(same_signed_policy_identity(&snapshot, &same_policy));
+        // A local snapshot epoch can change without changing signed trust.
+        // Trust-generation or response-key rotation is not that same identity.
+        let mut changed_trust = same_policy.clone();
+        changed_trust.trust_generation += 1;
+        assert!(!same_signed_policy_identity(&same_policy, &changed_trust));
+        let mut changed_response_key = same_policy.clone();
+        changed_response_key.response_signing_key_id = Some("sha256:rotated-response-key".to_string());
+        assert!(!same_signed_policy_identity(&same_policy, &changed_response_key));
         assert!(!clear_local_grants_if_signed_policy_changed(
             &state,
             &snapshot,

@@ -122,7 +122,7 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
 def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict:
     db = store._require()
     publication_failed = False
-    with store._LOCK, db.connect() as conn:
+    with store.operator_publication.exclusive(), db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         schema.require_revision(conn, payload.expected_revision)
         state = _state(conn)

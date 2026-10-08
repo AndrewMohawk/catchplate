@@ -1,5 +1,6 @@
 function createProxyView(workspace, applications) {
   let command = '';
+  renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     const catalog = workspace.state.catalog;
@@ -37,20 +38,23 @@ function createProxyView(workspace, applications) {
     const ready = workspace.loaded() && rule.enforcement === 'active' && application.access_status === 'active' && !workspace.state.busy && !workspace.state.uncertain;
     element('copy-command').disabled = !ready;
     element('download-config').disabled = !ready || !applications.tokenFor(application.id);
-    element('client-guidance').textContent = (ready ? 'Policy loaded and token not expired. This is a configuration example, not a successful request test.' :
+    element('client-guidance').textContent = (ready ? 'Policy loaded and token not expired. This is a connection template, not a successful request test.' :
       'Saved configuration is not currently confirmed for use. Wait for activation and resolve any uncertain change.') +
+      ' The template supplies no request body or query parameter values. Use your existing client to provide the endpoint-specific data within this rule.' +
       (dummyHeader ? ' Send the displayed exact dummy ' + dummyHeader.name + ' header once. It is not a provider secret or your Serverware application token.' :
         ' Do not send a provider credential header; Serverware adds it automatically.') +
       (rule.response_mode === 'unfiltered_json' ? ' Response content: all JSON fields, including error responses; no field filtering.' :
         ' Successful JSON responses contain only the selected fields. Error responses retain only error, code and message fields.') +
-      ' Both modes require bounded JSON responses; text, binary and streaming responses are unsupported.' +
-      (rule.request_fields.length ? ' If the endpoint requires a body, send application/json using only approved fields; do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule.');
+      ' JSON only; no empty/204 responses. See Compatibility limits for sizes, supported statuses and transport restrictions.' +
+      (rule.request_fields.length ? ' If the endpoint requires a body, send application/json using only these fields: ' + rule.request_fields.join(', ') +
+        '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
+      (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
   for (const id of ['proxy-application', 'proxy-rule', 'proxy-method']) element(id).addEventListener('change', render);
   element('ca-path').addEventListener('input', render);
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
-    try { await navigator.clipboard.writeText(command); element('client-copy-status').textContent = 'Copied. Set the real application token in your client environment.'; }
+    try { await navigator.clipboard.writeText(command); element('client-copy-status').textContent = 'Copied. This connection template has no request body or query values. Set the application token in your client environment.'; }
     catch (_) { element('client-copy-status').textContent = 'Clipboard access was denied. Select and copy the displayed example manually.'; }
   });
   element('download-config').addEventListener('click', () => {

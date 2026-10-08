@@ -9,7 +9,6 @@ from pathlib import Path
 import re
 import secrets
 import tempfile
-import threading
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -17,7 +16,9 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 
-_LOCK = threading.RLock()
+from serverware import operator_publication
+
+_LOCK = operator_publication.LOCAL_LOCK
 _SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _RETENTION_MS = 24 * 60 * 60 * 1000
 MAX_ACTIVE_CONNECTIONS = 32
@@ -168,7 +169,7 @@ def _state(row) -> dict:
 def initialize() -> None:
     db = _require()
     from serverware import operator_demo
-    with _LOCK, db.connect() as conn:
+    with operator_publication.exclusive(startup=True), db.connect() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS operator_demo_settings (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), settings_json TEXT NOT NULL);
@@ -207,7 +208,7 @@ def materialize() -> None:
     """DB is authoritative after commit; durable atomic replace is recoverable on startup."""
     db = _require()
     from serverware.config import POLICY_BUNDLE_PATH
-    with _LOCK, db.connect() as conn:
+    with operator_publication.exclusive(), db.connect() as conn:
         row = conn.execute("SELECT signed_bundle_json FROM operator_demo_policy WHERE singleton=1").fetchone()
         if row is None:
             raise RuntimeError("operator demo committed policy unavailable")
@@ -282,7 +283,7 @@ def create_connection(payload: ConnectionInput, actor_id: str) -> tuple[dict, st
         token_sha256="sha256:" + hashlib.sha256(token.encode("ascii")).hexdigest(),
         token_expires_at_epoch_ms=time.time_ns() // 1_000_000 + _RETENTION_MS,
         created_at=db.iso_now())
-    with _LOCK, db.connect() as conn:
+    with operator_publication.exclusive(), db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         from serverware import operator_catalog_schema
         if operator_catalog_schema.active(conn):
@@ -330,7 +331,7 @@ def revoke_connection(payload: RevocationInput, actor_id: str) -> dict:
     not revoke that credential with its provider or undo an upstream request.
     """
     db = _require()
-    with _LOCK, db.connect() as conn:
+    with operator_publication.exclusive(), db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         from serverware import operator_catalog_schema
         if operator_catalog_schema.active(conn):

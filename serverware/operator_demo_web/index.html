@@ -9,14 +9,76 @@
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to content</a>
-<aside class="sidebar"><a class="brand" href="#overview"><span aria-hidden="true">S</span>Serverware</a><p class="eyebrow">OPERATOR WORKSPACE</p><nav aria-label="Main navigation"><a href="#overview" aria-current="page">Overview</a><a href="#credentials">Credentials</a><a href="#applications">Applications</a><a href="#access-rules">Access rules</a><a href="#proxy">Proxy setup</a><a href="#audit">Audit log</a></nav><p class="sidebar-note">Save a credential once.<br>Decide which apps can use it.</p></aside>
+<aside class="sidebar"><a class="brand" href="#connect"><span aria-hidden="true">S</span>Serverware</a><p class="eyebrow">OPERATOR WORKSPACE</p><nav aria-label="Main navigation"><a href="#connect" aria-current="page">Connect an app</a><a href="#overview">Overview</a><a href="#credentials">Credentials</a><a href="#applications">Applications</a><a href="#access-rules">Access rules</a><a href="#proxy">Proxy setup</a><a href="#audit">Audit log</a></nav><p class="sidebar-note">Save a credential once.<br>Decide which apps can use it.</p></aside>
 <div class="workspace"><header class="topbar"><span id="page-label">Overview</span><span class="muted">Operator development</span></header><div class="warning"><strong>Development only.</strong> Local keys, not hardware-verified or production-ready. Use disposable, least-privilege provider credentials.</div>
   <main id="main-content" tabindex="-1">
     <div id="load-error" class="notice error" role="alert" hidden><span id="load-error-text"></span><div class="actions"><button id="retry-load" class="secondary">Refresh workspace</button><a href="/">Reload / sign in</a></div></div>
     <div id="mutation-review" class="notice" hidden><p id="mutation-review-text" role="status" aria-live="polite"></p><button id="mutation-review-confirm" class="secondary" disabled>I reviewed the saved state</button></div>
     <noscript><p class="notice">Enable JavaScript to configure the workspace. <a href="/ca.pem">Download the public CA</a> after sign-in.</p></noscript>
+    <section id="connect" class="page" aria-labelledby="connect-title" hidden>
+      <h1 id="connect-title">Connect an app</h1>
+      <p class="intro">Choose a provider credential, choose your app, then review exactly what it may do. We keep these resources separate so you can reuse them later.</p>
+      <p id="connect-progress" class="eyebrow" role="status">1 of 5 · Provider credential</p>
+      <div id="connect-credential-step">
+        <form id="connect-credential-form" class="card" autocomplete="off"><fieldset id="connect-credential-fields" disabled>
+          <h2>Which provider credential should it use?</h2>
+          <label for="connect-credential-choice">Saved credential or new key</label><select id="connect-credential-choice"></select>
+          <div id="connect-credential-new">
+            <label for="connect-credential-name">Give this credential a name</label><input id="connect-credential-name" maxlength="128" placeholder="My test API key" required>
+            <label for="connect-credential-auth-type">How the provider expects it</label><select id="connect-credential-auth-type"><option value="bearer">Bearer token</option><option value="header">API key in a custom header</option></select>
+            <div id="connect-credential-header-group" hidden><label for="connect-credential-header-name">Provider header name</label><input id="connect-credential-header-name" maxlength="128" placeholder="X-API-Key" disabled></div>
+            <label for="connect-credential-secret">Provider key or token</label><input id="connect-credential-secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" required>
+            <p class="small muted">Stored encrypted by this development server. Cleared when submitted, never returned to apps. Saving it does not test the provider key or grant access.</p>
+          </div>
+          <button id="connect-credential-next" type="submit">Save credential &amp; continue</button>
+        </fieldset></form>
+        <p class="small muted">Google account connection is not available in this build. Consent and refresh-token handling are not connected; do not paste a Google refresh token here.</p><button id="connect-google" class="secondary" disabled>Google connection unavailable</button>
+      </div>
+      <div id="connect-application-step" hidden>
+        <form id="connect-application-form" class="card" autocomplete="off"><fieldset id="connect-application-fields" disabled>
+          <h2>Which app will use it?</h2>
+          <label for="connect-application-choice">Existing application or new identity</label><select id="connect-application-choice"></select>
+          <div id="connect-application-new"><label for="connect-application-name">Application name</label><input id="connect-application-name" maxlength="128" placeholder="My reporting script" required>
+            <label for="connect-token-ttl">Client token lifetime</label><select id="connect-token-ttl"><option value="3600">1 hour</option><option value="86400">1 day</option><option value="604800">7 days</option><option value="2592000" selected>30 days</option><option value="7776000">90 days</option></select>
+            <p class="small muted">Shown once; save the token before leaving. It expires automatically and is not a provider credential. Creating an app alone grants no access.</p></div>
+          <p id="connect-application-note" class="small muted"></p>
+          <button id="connect-application-next" type="submit">Create app and show token</button>
+        </fieldset></form>
+      </div>
+      <div id="connect-token-slot"></div>
+      <p id="connect-token-note" class="notice" hidden></p>
+      <div id="connect-access-step" hidden>
+        <form id="connect-access-form" class="card" autocomplete="off"><fieldset id="connect-access-fields" disabled>
+          <h2>What may this app do?</h2>
+          <label for="connect-rule-choice">Access for this app and credential</label><select id="connect-rule-choice"></select>
+          <div id="connect-rule-new">
+            <label for="connect-rule-name">Name this permission</label><input id="connect-rule-name" maxlength="128" placeholder="Read account status" required>
+            <div class="two-column"><div><label for="connect-origin">Approved destination</label><select id="connect-origin"></select></div><div><label for="connect-path">Exact URL path</label><input id="connect-path" maxlength="1024" placeholder="/v1/status" required></div></div>
+            <p class="small muted">Only deployment-approved destinations. One exact path, with no wildcard or query string. This build does not supply complete provider-operation bundles.</p>
+            <fieldset class="method-fieldset"><legend>Allowed methods</legend><div class="method-options"><label><input type="checkbox" name="connect-method" value="GET" checked> GET</label><label><input type="checkbox" name="connect-method" value="POST"> POST</label><label><input type="checkbox" name="connect-method" value="PUT"> PUT</label><label><input type="checkbox" name="connect-method" value="PATCH"> PATCH</label><label><input type="checkbox" name="connect-method" value="DELETE"> DELETE</label><label><input type="checkbox" name="connect-method" value="OPTIONS"> OPTIONS</label></div></fieldset>
+            <label for="connect-credential-input">How your existing client sends provider authentication</label><select id="connect-credential-input" required></select>
+            <div id="connect-placeholder-group" hidden><p>Send this header: <code id="connect-header-target"></code></p><label for="connect-placeholder">Exact dummy header value</label><input id="connect-placeholder" maxlength="1024" autocomplete="off" spellcheck="false" disabled><p class="small muted">Full value, for example Bearer SERVERWARE_DUMMY. Exact case and spaces; no leading/trailing spaces. Never use a real provider secret or app token. Missing or different values are denied.</p></div>
+            <p id="connect-input-help" class="small muted"></p>
+            <label for="connect-response-mode">Response content</label><select id="connect-response-mode" required></select>
+            <div id="connect-response-fields-group" hidden><label for="connect-response-fields">Allowed successful-response JSON fields</label><textarea id="connect-response-fields" rows="3" disabled></textarea><p class="small muted">One field path per line. Error responses retain only error, code and message.</p></div>
+            <p class="small muted">JSON only; no empty/204 responses. Whole-JSON mode does not remove size, status, authentication or destination limits.</p>
+            <p id="connect-body-warning" class="notice">No request body is allowed by default, even for POST, PUT or PATCH. Selecting a method does not allow its usual API payload.</p>
+            <label for="connect-request-fields">Allowed request JSON fields, if a body is needed</label><textarea id="connect-request-fields" rows="2" placeholder="Empty means no request body"></textarea>
+            <details><summary>Query parameters and client headers</summary><label for="connect-query-keys">Allowed query parameter names</label><textarea id="connect-query-keys" rows="2" placeholder="Empty means no query parameters"></textarea><label for="connect-allowed-headers">Allowed client headers</label><textarea id="connect-allowed-headers" rows="2">accept
+user-agent</textarea><p class="small muted">Provider authentication and JSON Content-Type are controlled separately.</p></details>
+          </div>
+          <button id="connect-review" type="submit">Review access</button>
+        </fieldset></form>
+      </div>
+      <div id="connect-review-step" class="card" hidden><h2>Review before granting access</h2><p id="connect-review-context"></p><dl id="connect-review-details" class="metadata"></dl><p class="small muted">No permissions outside this summary are added. Saving is not confirmation of proxy activation or a successful upstream request.</p><button id="connect-grant">Grant access</button></div>
+      <div id="connect-setup-step" hidden><article class="card"><h2>Activate, then configure your client</h2><p id="connect-activation" role="status" aria-live="polite"></p><p>Provider key: stored, not tested here. Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.</p></article><div id="connect-setup-slot" hidden></div></div>
+      <details id="connect-compatibility"><summary>Compatibility limits</summary><div id="connect-compatibility-content"></div><p class="small muted">Queries must use the current proxy's canonical name ordering. Exact paths do not cover pagination or a provider's other operations automatically.</p></details>
+      <p id="connect-status" role="status" aria-live="polite"></p>
+      <div class="actions"><button id="connect-back" class="secondary" hidden>Back</button><button id="connect-status-refresh" class="secondary">Refresh saved state</button><button id="connect-start-over" class="secondary" hidden>Connect another app</button><button id="connect-cancel" class="secondary">Leave setup</button></div>
+      <p class="small muted">Leaving or going back does not delete confirmed resources or revoke access. Use the management pages for explicit changes.</p>
+    </section>
     <section id="overview" class="page" aria-labelledby="overview-title">
-      <h1 id="overview-title">Your credentials. Your rules.</h1><p class="intro">Store a provider credential, create an application token, then grant access through a rule. Saving a credential alone grants no access.</p>
+      <h1 id="overview-title">Your credentials. Your rules.</h1><p class="intro">Connect an app in one guided flow. Credentials, applications and access rules below are management views; saving a credential alone grants no access.</p><p><a href="#connect" class="button">Connect an app</a></p>
 <article class="card next-step"><h2>Your next step</h2><a id="overview-next-action" class="button" href="#credentials">Save your first provider credential</a></article><ol class="steps"><li><strong>Save a credential</strong><span>A reusable provider key. No endpoint or response fields needed.</span><a href="#credentials">Open credentials →</a></li><li><strong>Create an application</strong><span>A separate client identity and expiring token.</span><a href="#applications">Open applications →</a></li><li><strong>Add an access rule</strong><span>Choose which credential, destination and operations the app may use.</span><a href="#access-rules">Open access rules →</a></li></ol><div class="three-column"><article class="card"><h2>Credentials</h2><p id="overview-credentials-count" class="stat">Loading...</p></article><article class="card"><h2>Applications</h2><p id="overview-applications-count" class="stat">Loading...</p></article><article class="card"><h2>Rules</h2><p id="overview-rules-count" class="stat">Loading...</p></article></div><article class="card"><h2>Proxy policy</h2><p id="overview-policy" role="status" aria-live="polite"></p><p class="small muted">Saved configuration is not confirmed enforcement. A ready policy is not proof that an upstream request succeeded.</p><a href="#proxy">Configure a client →</a></article>
     </section>
     <section id="credentials" class="page" aria-labelledby="credentials-title" hidden>

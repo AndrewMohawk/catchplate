@@ -12,7 +12,7 @@ function availableCredentialInputModes(catalog) {
   const advertised = catalog?.capabilities?.credential_input_modes;
   return Array.isArray(advertised) ? Object.keys(operatorCredentialInputModes).filter(mode => advertised.includes(mode)) : [];
 }
-const operatorViews = {overview: 'Overview', credentials: 'Credentials', applications: 'Applications',
+const operatorViews = {connect: 'Connect an app', overview: 'Overview', credentials: 'Credentials', applications: 'Applications',
   'access-rules': 'Access rules', proxy: 'Proxy setup', audit: 'Audit log'};
 const element = id => document.getElementById(id);
 function textNode(tag, text, className) {

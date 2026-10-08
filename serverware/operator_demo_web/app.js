@@ -51,17 +51,19 @@ else {
   const workspace = createOperatorWorkspace();
   createCredentialsView(workspace); createAccessRulesView(workspace);
   const applications = createApplicationsView(workspace);
-  createProxyView(workspace, applications); const audit = createAuditView(workspace);
+  const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
+  const connect = createConnectView(workspace, applications, proxy);
   function navigate() {
-    let view = location.hash.slice(1) || 'overview';
+    let view = location.hash.slice(1) || 'connect';
     if (view === 'main-content') { element('main-content').focus(); return; }
-    if (!Object.hasOwn(operatorViews, view)) { view = 'overview'; history.replaceState(null, '', '#overview'); }
+    if (!Object.hasOwn(operatorViews, view)) { view = 'connect'; history.replaceState(null, '', '#connect'); }
     for (const name of Object.keys(operatorViews)) {
       element(name).hidden = name !== view;
       const link = document.querySelector('nav a[href="#' + name + '"]');
       if (name === view) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     }
     element('page-label').textContent = operatorViews[view]; document.title = operatorViews[view] + ' - Serverware operator workspace';
+    connect.show(view === 'connect');
     if (view === 'audit') audit.open();
   }
   workspace.subscribe(() => {
@@ -74,9 +76,9 @@ else {
       element('overview-' + name + '-count').textContent = catalog ? String(catalog[collection].filter(item => item.status === 'active').length) : 'Unavailable';
     if (catalog) {
       const validApps = catalog.applications.filter(item => item.status === 'active' && item.token_status === 'valid' && item.token_expires_at_epoch_ms > Date.now());
-      const step = !catalog.credentials.some(item => item.status === 'active') ? ['Save your first provider credential', '#credentials'] :
-        !validApps.length ? ['Create an application or rotate an expired token', '#applications'] :
-        !catalog.access_rules.some(item => item.status === 'active' && validApps.some(app => app.id === item.application_id)) ? ['Grant an application access with a rule', '#access-rules'] :
+      const step = !catalog.credentials.some(item => item.status === 'active') ? ['Connect your first app', '#connect'] :
+        !validApps.length ? ['Connect an app with a saved credential', '#connect'] :
+        !catalog.access_rules.some(item => item.status === 'active' && validApps.some(app => app.id === item.application_id)) ? ['Choose permitted access for your app', '#connect'] :
         !workspace.loaded() ? ['Check pending proxy activation', '#proxy'] : ['Configure your app and send a scoped test request', '#proxy'];
       element('overview-next-action').textContent = step[0]; element('overview-next-action').href = step[1];
     }

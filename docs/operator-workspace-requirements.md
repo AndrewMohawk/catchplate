@@ -1,5 +1,49 @@
 # Credential-first operator workspace
 
+## Product decisions from the original examples
+
+The primary question is **let this app use this account or key for these
+actions**. A credential form should not ask the operator to design an API
+firewall. Keep the independent resources below, but compose them in one guided
+journey rather than making the user visit three management pages.
+
+The two first-class journeys are:
+
+- **Use an API key:** save or reuse a key, select the app and destination,
+  choose automatic insertion or an exact dummy authentication value to replace,
+  then copy client configuration. No response-field list should be mandatory.
+- **Use a connected account:** choose Google, consent to a supported permission
+  preset, select the app, then use its normal API client. Refresh is Serverware's
+  responsibility. The account owner should not manage refresh tokens, expiry
+  arithmetic or token endpoints.
+
+Provider application setup is an administrator task performed once per
+deployment. Account consent is a separate task for each account owner. An app's
+Serverware identity, provider authentication and an optional dummy value are
+three different things; the UI must not call all three a "credential".
+
+Default to **no optional content filtering** for new rules, with the supported
+formats stated plainly. Destination and operation permissions, app identity,
+secret-disclosure protection and transport bounds still apply. Existing rules
+must not be broadened. An unsupported request/response format is a compatibility
+gap, not an optional restriction that can be hidden in Advanced.
+
+Response fields, mail age, quotas, schedules and approval are optional
+restrictions on use, not properties required to save a credential. When chosen,
+they remain real enforcement obligations. For example, disabling field
+projection cannot disable the response evidence needed to enforce mail age.
+
+Prioritize complete ordinary-client authentication replacement and unattended
+Google mail before expanding the generic editor. Then present the original
+examples as understandable operation bundles: read mail, post to X, publish a
+specific npm package, or approve a particular ECR image. A single exact endpoint
+is not a complete provider workflow.
+
+Keep routine screens concise. Show the effective permission summary and relevant
+compatibility limits before saving; keep raw IDs, policy hashes and detailed
+diagnostics available through details, not as the main explanation. The new
+guided UI is an incremental implementation, not the final provider-preset UI.
+
 ## Requirement and scope
 
 The operator's October 8 feedback is the design input: connect an account such

@@ -1,0 +1,227 @@
+// Guided composition of the same independent resources and mutation gate.
+// Only public IDs/drafts live here; the applications controller owns all tokens.
+function createConnectView(workspace, applications, proxy) {
+  const steps = ['credential', 'application', 'access', 'review', 'setup'];
+  const labels = ['Provider credential', 'Application', 'Allowed use', 'Review access', 'Client setup'];
+  let step = 0; let selectedCredential = ''; let selectedApplication = ''; let selectedRule = '';
+  let review = null; let checkpoint = null; let open = false;
+  const catalog = () => workspace.state.catalog;
+  const writable = () => Boolean(catalog() && !workspace.state.busy && !workspace.state.uncertain);
+  const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active');
+  const application = () => catalog()?.applications.find(item => item.id === selectedApplication && item.status === 'active');
+  const validApp = item => item?.token_status === 'valid' && Number.isSafeInteger(item.token_expires_at_epoch_ms) && item.token_expires_at_epoch_ms > Date.now();
+  const matchingRules = () => catalog()?.access_rules.filter(item => item.status === 'active' && item.application_id === selectedApplication && item.credential_id === selectedCredential) || [];
+  const message = text => { element('connect-status').textContent = text; };
+  renderOperatorCompatibility('connect-compatibility-content');
+
+  // A vanished choice remains visibly unavailable: never silently pick another
+  // resource, permission or capability after refresh.
+  function choices(id, items, initial) {
+    const control = element(id); const previous = control.value;
+    const value = previous || initial;
+    const options = items.map(item => { const option = textNode('option', item.name); option.value = item.id; return option; });
+    if (value && !items.some(item => item.id === value)) {
+      const missing = textNode('option', 'Previous choice unavailable — choose again'); missing.value = value; missing.disabled = true; options.push(missing);
+    }
+    if (!options.length) { const empty = textNode('option', 'No supported choice available'); empty.value = ''; options.push(empty); }
+    control.replaceChildren(...options); control.value = value || options[0].value;
+  }
+  function fields(id, active) {
+    element(id).hidden = !active;
+    for (const control of element(id).querySelectorAll('input,select,textarea')) control.disabled = !active;
+  }
+  function goto(next) { step = next; render(); if (open) element('connect-progress').scrollIntoView({block: 'nearest'}); }
+  function activePair() { return credential() && validApp(application()); }
+  function supported(rule) {
+    if (!rule || !availableCredentialInputModes(catalog()).includes(rule.credential_input) ||
+        !availableResponseModes(catalog()).includes(rule.response_mode) ||
+        !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
+        (rule.response_mode === 'projected_json' ? !rule.response_fields.length : rule.response_fields.length)) return false;
+    try { clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential: credential()}); return true; }
+    catch (_) { return false; }
+  }
+  function confirmCheckpoint() {
+    if (!checkpoint || !catalog() || workspace.state.busy || workspace.state.uncertain || catalog().revision < checkpoint.revision) return;
+    const item = catalog()[checkpoint.collection].find(item => item.id === checkpoint.id && item.status === 'active');
+    if (!item) { message('The exact saved resource cannot be confirmed. Review saved state; no repeat request was sent.'); return; }
+    if (checkpoint.collection === 'credentials') {
+      selectedCredential = item.id; selectedApplication = ''; selectedRule = ''; review = null;
+      element('connect-credential-choice').value = item.id; step = 1;
+    }
+    if (checkpoint.collection === 'applications') {
+      if (!validApp(item)) { message('The saved application token is not currently valid. Use Applications for explicit rotation.'); return; }
+      selectedApplication = item.id; selectedRule = ''; review = null; element('connect-application-choice').value = item.id; step = 2;
+    }
+    if (checkpoint.collection === 'access_rules') {
+      if (item.application_id !== selectedApplication || item.credential_id !== selectedCredential) { message('Saved rule references did not match this setup. Review saved state.'); return; }
+      selectedRule = item.id; step = 4;
+    }
+    checkpoint = null; message('Saved resource confirmed in the refreshed catalog.');
+  }
+  function receipt(result, collection, key) {
+    if (!result[key] || typeof result[key].id !== 'string' || !Number.isSafeInteger(result.revision))
+      throw operatorError('The saved resource receipt was incomplete. Review saved state; do not repeat automatically.');
+    checkpoint = {collection, id: result[key].id, revision: result.revision};
+  }
+  function renderInputs() {
+    const value = catalog(); if (!value) return;
+    choices('connect-credential-choice', [...value.credentials.filter(item => item.status === 'active').map(item => ({id: item.id, name: item.name + ' · ' + item.id})), {id: 'new', name: 'Save a new provider key'}], 'new');
+    choices('connect-application-choice', [...value.applications.filter(item => item.status === 'active').map(item => ({id: item.id, name: item.name + ' · ' + item.id})), {id: 'new', name: 'Create a new application'}], 'new');
+    choices('connect-rule-choice', [{id: 'new', name: 'Grant a new permission'}, ...matchingRules().map(item => ({id: item.id, name: item.name + ' · ' + item.id}))], 'new');
+    choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
+    choices('connect-credential-input', availableCredentialInputModes(value).map(id => ({id, name: operatorCredentialInputModes[id]})), 'insert');
+    choices('connect-response-mode', availableResponseModes(value).map(id => ({id, name: operatorResponseModes[id]})), availableResponseModes(value)[0]);
+  }
+  function renderForms() {
+    const newCredential = element('connect-credential-choice').value === 'new';
+    const newApp = element('connect-application-choice').value === 'new';
+    const newRule = element('connect-rule-choice').value === 'new';
+    fields('connect-credential-new', newCredential); fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
+    const custom = newCredential && element('connect-credential-auth-type').value === 'header';
+    fields('connect-credential-header-group', custom); element('connect-credential-header-name').required = custom;
+    const replacing = newRule && element('connect-credential-input').value === 'replace_exact';
+    fields('connect-placeholder-group', replacing); element('connect-placeholder').required = replacing;
+    try { element('connect-header-target').textContent = credentialHeaderTarget(credential()); }
+    catch (_) { element('connect-header-target').textContent = 'Unsupported credential header'; }
+    element('connect-placeholder').placeholder = credential()?.auth_type === 'bearer' ? 'Bearer SERVERWARE_DUMMY' : 'SERVERWARE_DUMMY';
+    element('connect-input-help').textContent = !availableCredentialInputModes(catalog()).includes(element('connect-credential-input').value) ?
+      'Choose an advertised credential-input mode. Unavailable choices cannot grant access.' : replacing ? 'Replacement applies only to this exact rule, not every use of the saved credential.' :
+      'Automatic insertion: your client sends no provider credential header; Serverware supplies it after authorization.';
+    const projected = newRule && element('connect-response-mode').value === 'projected_json';
+    fields('connect-response-fields-group', projected); element('connect-response-fields').required = projected;
+    element('connect-credential-next').textContent = newCredential ? 'Save credential & continue' : 'Use saved credential';
+    element('connect-application-next').textContent = newApp ? 'Create app and show token' : 'Use this application';
+    const selected = catalog()?.applications.find(item => item.id === element('connect-application-choice').value);
+    element('connect-application-note').textContent = newApp ? '' : selected ?
+      'Expires ' + new Date(selected.token_expires_at_epoch_ms).toLocaleString() + '. Use the token already configured in your app. If lost or expired, rotate explicitly in Applications; this flow does not retrieve or renew it.' : 'Select an available application.';
+    element('connect-credential-fields').disabled = !writable() || Boolean(checkpoint) || newCredential && !workspace.ready('credentials');
+    element('connect-application-fields').disabled = !writable() || Boolean(checkpoint) || !credential() || newApp && !workspace.ready('applications');
+    element('connect-access-fields').disabled = !writable() || Boolean(checkpoint) || !activePair() || newRule &&
+      (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length || !availableResponseModes(catalog()).length || !catalog()?.allowed_upstreams.length);
+  }
+  function reviewCurrent() {
+    return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule);
+  }
+  function renderReview() {
+    if (!review) return;
+    const rows = [...operatorRuleCredentialRows(review.rule, credential()), ...operatorRuleRestrictions(review.rule)];
+    element('connect-review-details').replaceChildren(...rows.flatMap(([name, value]) => [textNode('dt', name), textNode('dd', value)]));
+    element('connect-review-context').textContent = reviewCurrent() ?
+      `${application().name} (${selectedApplication}) may use ${credential().name} (${selectedCredential}) only as follows.` :
+      'Saved state changed or a selected resource is unavailable. Go Back, verify your choices and Review access again. No grant was sent.';
+    element('connect-grant').textContent = review.existing ? 'Use this saved rule' : 'Grant access';
+    element('connect-grant').disabled = !writable() || Boolean(checkpoint) || !reviewCurrent();
+  }
+  function renderSetup() {
+    const rule = matchingRules().find(item => item.id === selectedRule);
+    const active = writable() && activePair() && workspace.loaded() && rule?.enforcement === 'active' && application()?.access_status === 'active' && supported(rule);
+    element('connect-activation').textContent = active ? 'Rule active in the proxy. Configure your client below; no upstream request has been tested here.' :
+      !catalog() ? 'Status unavailable. Refresh saved state before using this setup.' : !activePair() || !rule ?
+        'A selected credential, app token or rule is no longer available. Return to your choices or explicitly rotate an expired token in Applications.' :
+        'Waiting for the proxy to confirm this exact saved rule and policy. No request has been tested. Refresh saved state if automatic observation has stopped.';
+    element('connect-setup-slot').hidden = !active;
+    if (open && step === 4) { proxy.mount(element('connect-setup-slot')); if (active) proxy.select(selectedApplication, selectedRule); }
+  }
+  function render() {
+    renderInputs(); confirmCheckpoint(); renderForms(); renderReview();
+    steps.forEach((name, index) => { element('connect-' + name + '-step').hidden = index !== step; });
+    element('connect-progress').textContent = (step + 1) + ' of 5 · ' + labels[step];
+    element('connect-back').hidden = step === 0 || step === 4;
+    element('connect-back').disabled = workspace.state.busy || Boolean(checkpoint);
+    element('connect-cancel').disabled = workspace.state.busy;
+    element('connect-status-refresh').disabled = workspace.state.busy;
+    element('connect-start-over').hidden = step !== 4;
+    element('connect-start-over').disabled = workspace.state.busy || Boolean(checkpoint);
+    const missingToken = selectedApplication && !applications.tokenFor(selectedApplication);
+    element('connect-token-note').hidden = !missingToken;
+    element('connect-token-note').textContent = 'This page does not hold this application’s one-time token. Use the token you already saved. If it was lost or cleared, explicitly rotate it in Applications; no token is retrieved or renewed by this flow.';
+    if (!catalog()) element('connect-credential-secret').value = '';
+    if (checkpoint) message('Save received, but the exact resource is not yet confirmed in refreshed state. Refresh; do not submit again.');
+    renderSetup();
+  }
+
+  element('connect-credential-form').addEventListener('submit', async event => {
+    event.preventDefault(); if (step !== 0 || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
+    const choice = element('connect-credential-choice').value;
+    if (choice !== 'new') {
+      if (!catalog().credentials.some(item => item.id === choice && item.status === 'active')) return;
+      selectedCredential = choice; selectedApplication = ''; selectedRule = ''; review = null; goto(1); return;
+    }
+    if (!workspace.ready('credentials')) return;
+    const body = {name: element('connect-credential-name').value.trim(), auth_type: element('connect-credential-auth-type').value,
+      header_name: element('connect-credential-auth-type').value === 'bearer' ? 'Authorization' : element('connect-credential-header-name').value.trim(), secret: element('connect-credential-secret').value};
+    element('connect-credential-secret').value = '';
+    await workspace.mutate('credentials', body, 'connect-status', result => receipt(result, 'credentials', 'credential')); render();
+  });
+  element('connect-application-form').addEventListener('submit', async event => {
+    event.preventDefault(); if (step !== 1 || !writable() || checkpoint || !credential() || !event.currentTarget.reportValidity()) return;
+    const choice = element('connect-application-choice').value;
+    if (choice !== 'new') {
+      const item = catalog().applications.find(item => item.id === choice && item.status === 'active');
+      if (!validApp(item)) { message('This application token is expired or unavailable. Rotate explicitly in Applications, then refresh.'); return; }
+      selectedApplication = choice; selectedRule = ''; review = null; goto(2); return;
+    }
+    const saved = await applications.create(element('connect-application-name').value.trim(), Number(element('connect-token-ttl').value), 'connect-status');
+    if (saved) checkpoint = {collection: 'applications', ...saved};
+    render();
+  });
+  function draftRule() {
+    const origin = element('connect-origin').value; const path = element('connect-path').value.trim();
+    const rule = {name: element('connect-rule-name').value.trim(), application_id: selectedApplication, credential_id: selectedCredential,
+      upstream_url: origin.replace(/\/$/, '') + path,
+      methods: [...document.querySelectorAll('input[name="connect-method"]:checked')].map(input => input.value),
+      credential_input: element('connect-credential-input').value, response_mode: element('connect-response-mode').value,
+      response_fields: element('connect-response-mode').value === 'projected_json' ? fieldLines('connect-response-fields') : [],
+      request_fields: fieldLines('connect-request-fields'), query_keys: fieldLines('connect-query-keys'), allowed_headers: fieldLines('connect-allowed-headers')};
+    if (rule.credential_input === 'replace_exact') rule.placeholder = element('connect-placeholder').value;
+    if (!catalog().allowed_upstreams.includes(origin) || !path.startsWith('/') || path.startsWith('//') || /[?#\\\s*]/.test(path) ||
+        credential()?.legacy_upstream_origin && credential().legacy_upstream_origin !== origin || !supported(rule))
+      throw operatorError('Choose an approved exact path and supported methods, response and credential-input choices. Exact dummy values must be printable ASCII with no outer spaces; selected-field responses require fields.');
+    return rule;
+  }
+  element('connect-access-form').addEventListener('submit', event => {
+    event.preventDefault(); if (step !== 2 || !writable() || checkpoint || !activePair() || !event.currentTarget.reportValidity()) return;
+    try {
+      const existing = element('connect-rule-choice').value !== 'new';
+      const rule = existing ? matchingRules().find(item => item.id === element('connect-rule-choice').value) : draftRule();
+      if (!supported(rule)) throw operatorError('The selected saved rule is unavailable or unsupported. Choose again; no permissions were changed.');
+      review = {existing, rule: JSON.parse(JSON.stringify(rule)), revision: catalog().revision, policyHash: catalog().policy.policy_hash};
+      message('Review the exact effective permissions before continuing.'); goto(3);
+    } catch (error) { message(operatorMessage(error)); }
+  });
+  element('connect-grant').addEventListener('click', async () => {
+    if (step !== 3 || !writable() || checkpoint || !reviewCurrent()) { renderReview(); return; }
+    if (review.existing) {
+      if (!matchingRules().some(item => item.id === review.rule.id)) return;
+      selectedRule = review.rule.id; goto(4); return;
+    }
+    if (!workspace.ready('access_rules')) return;
+    await workspace.mutate('access-rules', {...review.rule}, 'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
+  });
+  for (const id of ['connect-credential-choice', 'connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode'])
+    element(id).addEventListener('change', render);
+  element('connect-back').addEventListener('click', () => { if (step > 0 && step < 4 && !workspace.state.busy && !checkpoint) { review = null; goto(step - 1); } });
+  element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
+  function resetDraft() {
+    selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null;
+    for (const id of ['connect-credential-form', 'connect-application-form', 'connect-access-form']) element(id).reset();
+    for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
+    element('connect-credential-secret').value = ''; proxy.mount(null); step = 0;
+  }
+  element('connect-cancel').addEventListener('click', () => {
+    if (workspace.state.busy || !window.confirm('Leave setup and discard this local draft? Saved credentials, applications and access rules remain. An uncertain operation must still be reconciled before another change. Any held one-time token remains under Applications until cleared or reloaded; save it before leaving the page. Nothing will be deleted, retried or renewed.')) return;
+    resetDraft(); location.hash = 'overview';
+  });
+  element('connect-start-over').addEventListener('click', () => {
+    if (workspace.state.busy || checkpoint || !window.confirm('Start another setup? Confirmed resources remain saved. Save any one-time token before creating another application. Nothing will be revoked.')) return;
+    resetDraft(); message('Start a new setup. Existing resources and any held token remain.'); goto(0);
+  });
+  window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; });
+  workspace.subscribe(render);
+  return {show(active) {
+    open = active;
+    applications.mount(active ? element('connect-token-slot') : null);
+    if (!active || step !== 4) proxy.mount(null);
+    render();
+  }};
+}

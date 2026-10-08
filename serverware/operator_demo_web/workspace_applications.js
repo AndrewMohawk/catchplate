@@ -1,4 +1,6 @@
 function createApplicationsView(workspace) {
+  const tokenHome = document.createComment('shared application token panel');
+  element('one-time-access').before(tokenHome);
   let held = null; let expiryTimer; let channel;
   const rotationLifetimes = new Map();
   const lifetimes = [[3600, '1 hour'], [86400, '1 day'], [604800, '7 days'], [2592000, '30 days'], [7776000, '90 days']];
@@ -51,12 +53,22 @@ function createApplicationsView(workspace) {
     });
   }
   connectChannel();
+  async function create(name, lifetime, statusId) {
+    if (!workspace.ready('applications') || !validLifetime(lifetime)) return null;
+    if (held && !window.confirm('Creating another application clears the held one-time token from this page. Have you saved it?')) return null;
+    clear(); let receipt = null;
+    await workspace.mutate('applications', {name, token_lifetime_seconds: lifetime}, statusId, result => {
+      if (!Number.isSafeInteger(result.revision)) throw operatorError('The saved application revision was unavailable. Review saved state before continuing.');
+      hold(result);
+      receipt = {id: result.application.id, revision: result.revision};
+    });
+    return receipt;
+  }
   const form = element('application-form');
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (!workspace.ready('applications') || !form.reportValidity()) return;
     const lifetime = Number(element('application-token-ttl').value); if (!validLifetime(lifetime)) return;
-    if (held && !window.confirm('Creating another application clears the held one-time token from this page. Have you saved it?')) return;
-    clear(); await workspace.mutate('applications', {name: element('application-name').value.trim(), token_lifetime_seconds: lifetime}, 'application-form-status', hold);
+    await create(element('application-name').value.trim(), lifetime, 'application-form-status');
   });
   async function copyHeld() {
     reconcile(); if (!held) return;
@@ -110,5 +122,10 @@ function createApplicationsView(workspace) {
   window.addEventListener('pageshow', event => { if (event.persisted) { connectChannel(); workspace.refresh(); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { reconcile(); workspace.refresh(); } });
   window.addEventListener('focus', () => { reconcile(); workspace.refresh(); });
-  workspace.subscribe(render); return {tokenFor, clear, render};
+  function mount(container) {
+    if (container) container.append(element('one-time-access'), element('token-expiry-status'));
+    else tokenHome.after(element('one-time-access'), element('token-expiry-status'));
+    for (const link of element('one-time-access').querySelectorAll('a')) link.hidden = Boolean(container);
+  }
+  workspace.subscribe(render); return {tokenFor, clear, render, create, mount};
 }

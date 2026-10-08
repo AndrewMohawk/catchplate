@@ -1,4 +1,6 @@
 function createProxyView(workspace, applications) {
+  const home = element('proxy'); const content = textNode('div'); content.id = 'proxy-setup-content';
+  content.append(...[...home.children].slice(2)); home.append(content);
   let command = '';
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
@@ -73,7 +75,18 @@ function createProxyView(workspace, applications) {
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000); element('client-copy-status').textContent = 'Downloaded private client configuration. Keep it out of source control.';
   });
-  workspace.subscribe(render); return {render};
+  function select(applicationId, ruleId) {
+    const catalog = workspace.state.catalog;
+    if (!catalog?.access_rules.some(rule => rule.id === ruleId && rule.application_id === applicationId && rule.status === 'active')) return false;
+    element('proxy-application').value = applicationId; render();
+    element('proxy-rule').value = ruleId; render();
+    return element('proxy-application').value === applicationId && element('proxy-rule').value === ruleId;
+  }
+  function mount(container) {
+    (container || home).append(content);
+    for (const id of ['proxy-application', 'proxy-rule']) element(id).disabled = Boolean(container);
+  }
+  workspace.subscribe(render); return {render, select, mount};
 }
 function createAuditView(workspace) {
   let loaded = false; let cursor = null; let count = 0; let epoch = 0; let selection = '';

@@ -69,6 +69,10 @@ pub(super) fn start<'scope, 'env: 'scope>(
                     if !audit_lifetime.wait(Duration::from_secs(1))? { return Ok(()); }
                     continue;
                 }
+                if audit_state.measured_audit.is_none() && super::legacy_audit_delivery::retry(&audit_state).is_err() {
+                    if !audit_lifetime.wait(Duration::from_secs(1))? { return Ok(()); }
+                    continue;
+                }
                 let batch = pop_audit_batch(&audit_state);
                 if batch.is_empty() {
                     if !audit_lifetime.wait(audit_interval)? { return Ok(()); }
@@ -86,8 +90,8 @@ pub(super) fn start<'scope, 'env: 'scope>(
                 let failed = flush_audit_batch(&audit_state, batch).is_err();
                 if !keep_running(&audit_lifetime)? { return Ok(()); }
                 if failed {
-                    // flush already requeues retryable failures and preserves
-                    // the existing oversized-batch splitting/drop accounting.
+                    // Sent originals remain with their protocol's pending
+                    // owner. Only pre-send cancellation above requeues events.
                     eprintln!("native audit batch send failed");
                     if !audit_lifetime.wait(Duration::from_secs(1))? { return Ok(()); }
                 }

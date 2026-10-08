@@ -114,7 +114,7 @@
       "$comment": "Closed buffered allowlist for credential-bearing generic.rest requests. Named streaming modes and unknown future modes deny for every HTTP method."
     },
     "credentialResponseMode": {
-      "enum": ["headersOnly", "json"],
+      "enum": ["headersOnly", "json", "bufferedPassthrough"],
       "$comment": "Closed response allowlist for credential-bearing generic.rest routes."
     },
     "jsonOperationFields": {
@@ -122,6 +122,33 @@
       "maxItems": 16,
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$"}
+    },
+    "bufferedPassthroughErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "bodyFormat", "maxBodyBytes", "contentTypes", "allowedHeaders", "onInvalid"],
+      "properties": {
+        "mode": {"const": "bufferedPassthrough"},
+        "bodyFormat": {"const": "json"},
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "contentTypes": {"const": ["application/json"]},
+        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "onInvalid": {"const": "block"}
+      }
+    },
+    "bufferedPassthroughResponse": {
+      "$comment": "Strictly inspect bounded JSON, then release the exact received body bytes; maxBodyBytes also bounds the normalized inspection representation. Only generic.rest supports this additive mode.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "bodyFormat", "maxBodyBytes", "contentTypes", "allowedHeaders", "error"],
+      "properties": {
+        "mode": {"const": "bufferedPassthrough"},
+        "bodyFormat": {"const": "json"},
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "contentTypes": {"const": ["application/json"]},
+        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "error": {"$ref": "#/$defs/bufferedPassthroughErrorResponse"}
+      }
     },
     "errorResponse": {
       "type": "object",
@@ -396,6 +423,14 @@
       "additionalProperties": false,
       "allOf": [
         {
+          "if": {"properties": {"mode": {"const": "bufferedPassthrough"}}, "required": ["mode"]},
+          "then": {"$ref": "#/$defs/bufferedPassthroughResponse"},
+          "else": {
+            "not": {"required": ["bodyFormat"]},
+            "properties": {"error": {"$ref": "#/$defs/errorResponse"}}
+          }
+        },
+        {
           "if": {
             "properties": {
               "mode": {
@@ -421,7 +456,8 @@
         }
       ],
       "properties": {
-        "mode": {"enum": ["headersOnly", "json", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "mode": {"enum": ["headersOnly", "json", "bufferedPassthrough", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "bodyFormat": {"const": "json"},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "contentTypes": {"$ref": "#/$defs/contentTypes"},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
@@ -432,7 +468,7 @@
         "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "allowedFields": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
         "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
-        "error": {"$ref": "#/$defs/errorResponse"}
+        "error": {"oneOf": [{"$ref": "#/$defs/errorResponse"}, {"$ref": "#/$defs/bufferedPassthroughErrorResponse"}]}
       }
     }
   }

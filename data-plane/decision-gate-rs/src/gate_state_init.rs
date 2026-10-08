@@ -5,7 +5,7 @@
 //! Empty state and clocks preserve the existing main-constructor defaults.
 
 use super::{
-    Client, GateState, MitmAuthority, PinnedUpstreamClientCache,
+    legacy_audit_delivery, Client, GateState, MitmAuthority, PinnedUpstreamClientCache,
     PolicyHighWater, PolicyShadowGenerationControl, PolicyTrustRootSource,
     ProxyIngressAttestation, ResponseObservationV2Client, ResponseProofSigningMaterial,
     ShadowRuntime, Snapshot, UpstreamClientConfig, UpstreamDispatchAuthority,
@@ -167,6 +167,10 @@ impl GateStateInputs {
             management_token: self.management_token,
             audit_queue: Mutex::new(VecDeque::new()),
             audit_reserved: AtomicU64::new(0),
+            audit_inflight_optional: AtomicU64::new(0),
+            audit_pending_batches: AtomicU64::new(0),
+            audit_pending_events: AtomicU64::new(0),
+            legacy_audit_pending: Mutex::new(legacy_audit_delivery::PendingDelivery::default()),
             audit_queue_max: self.audit_queue_max,
             audit_batch_max: self.audit_batch_max,
             audit_enqueued: AtomicU64::new(0),

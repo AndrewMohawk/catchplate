@@ -3,11 +3,13 @@
 ## Status and objective
 
 Originally designed against workspace commit `10879772`. The 2026-10-08 shared
-working-tree checkpoint now contains in-progress cold profile, consent/catalog,
-and generation-reconciliation implementation. It is **not releasable or
-deployed**: the durable cleanup-fence contract below is planned remediation, not
-an implemented or verified guarantee. Individual source checks or focused tests
-do not establish complete end-to-end acceptance.
+working-tree checkpoint now contains cold profile, consent/catalog,
+generation-reconciliation and local cleanup-fence source. It is **not releasable
+or deployed**: backend and Rust acceptance remain incomplete. The first focused
+cleanup batch passed one case and failed the next during Google rule schema
+admission, before its cleanup assertions; 18 cases were unattempted. That
+failure is retained separately from subsequent corrections. Individual source
+checks or focused tests do not establish complete end-to-end acceptance.
 
 Read with `operator-workspace-requirements.md` and the OAuth onboarding section
 of `goal.md`. R96 remains terminal: no restart, new enrollment, real provider
@@ -88,14 +90,16 @@ requirement, not a permission to disable those controls.
    reauthorization-required from bounded provider evidence, not every 503 or
    timeout. Temporary and uncertain refresh outcomes must remain distinct.
 
-## Blocking repair: durable operator cleanup fencing
+## Cleanup fencing: source implementation, acceptance open
 
-This section specifies **required, not yet implemented remediation**. Do not
-deploy or enable real Google contact while this blocker remains. The current
-duplicate-account callback can poison the whole catalog: the existing
+The required protocol below now has a source implementation in
+`operator_google_cleanup.py`, `operator_google_cleanup_store.py` and the existing
+OAuth/database owners. Do not deploy or enable real Google contact while its
+acceptance remains open. At the preceding checkpoint, the duplicate-account
+callback could poison the whole catalog: the existing
 grant-family quarantine changes an already connected core credential to
 `revocation_pending`, but its catalog credential and rules remain active.
-`schema.validate_bindings` then rejects the core/catalog mismatch before catalog
+`schema.validate_bindings` then rejected the core/catalog mismatch before catalog
 reads and mutations, including operations on unrelated static credentials.
 Keeping the existing grant-wide collision guard is mandatory; bypassing it is
 not a repair.
@@ -135,6 +139,13 @@ The minimum required protocol is:
    the token was retained or safely revoked. Bounds and exhausted-capacity
    refusal remain mandatory; unavailable cleanup authority does not justify
    unbounded work accumulation.
+   A verified identity with **no retained local family** also stays deferred for
+   manual review. An empty snapshot is not a durable ownership exclusion: a
+   second consent could issue/adopt tokens between a cleanup permit check and
+   provider revocation. The current source refuses empty-family fences and
+   existing empty receipts rather than enabling that race. A future automatic
+   cleanup design needs durable exchange/family lifecycle serialization; an
+   adoption-time check alone does not close issuance-before-cleanup races.
 4. **Fence known-family access in one publication transaction.** Use the existing
    operator order: process-local publication lock, shared-volume EX lock, then
    one SQLite transaction. A caller-owned form of the existing grant-family
@@ -172,8 +183,15 @@ These controls cover both initial exchange and refresh: identity/scope refusal,
 duplicate-family collision, stale catalog review, registration/update failure,
 retention failure, crash recovery and rejected refreshed material. Handling
 only the explicit duplicate-collision exception leaves other cleanup sinks open.
-The admitted operator profile is SQLite-only; the proposed caller-owned helper
+The admitted operator profile is SQLite-only; the caller-owned helper
 does not authorize changing PostgreSQL/native lock ordering or ownership.
+
+Known-family fences retain quarantined core rows as the local exclusion against
+new adoption; successful provider cleanup does not delete that exclusion or
+claim external project-wide ownership. Publication failures retain a committed,
+pending receipt. Public presentation keeps provider revocation `not_proven`.
+The [presentation checkpoint](operator-google-presentation-verification.md)
+does not substitute for backend or provider verification.
 
 ## Generation reconciliation: a separate correctness prerequisite
 

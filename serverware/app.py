@@ -5777,9 +5777,12 @@ def _reconcile_oauth_revocations(
             token_secret = json.loads(item["secret"])
             if not isinstance(token_secret, dict):
                 raise OAuthError("OAuth revocation material is malformed")
+            from serverware import operator_google_cleanup
             revoke_oauth_token(
                 provider_id=str(item["provider_id"]),
                 token_secret=token_secret,
+                **({"_operator_cleanup_work_id": item["id"]}
+                    if item.get("source") in operator_google_cleanup.SOURCES else {}),
             )
         except (OAuthError, json.JSONDecodeError, TypeError, ValueError) as exc:
             error = str(exc)[:500] or type(exc).__name__
@@ -15430,6 +15433,15 @@ def _ensure_oauth_exchange_revocation_work(
     actor_id: str,
 ) -> str:
     existing = exchanged.get("revocationWorkId")
+    from serverware import operator_google_cleanup
+    if operator_google_cleanup.operator_context(exchanged.get("provider"), result=exchanged, work_id=existing):
+        try:
+            work = operator_google_cleanup._store().get_work(existing)
+            if work is None:
+                raise ValueError("missing protected cleanup association")
+            return work["work_id"]
+        except Exception as exc:
+            raise OAuthError("Operator Google cleanup association is unavailable") from exc
     if isinstance(existing, str) and re.fullmatch(r"[0-9a-f-]{36}", existing):
         return existing
     provider_id = exchanged.get("provider")
@@ -15463,6 +15475,11 @@ def _revoke_rejected_oauth_exchange(
     rejection_reason: str = "callback_validation_failed",
 ) -> dict[str, Any]:
     provider_id = exchanged.get("provider")
+    from serverware import operator_google_cleanup
+    if operator_google_cleanup.operator_context(provider_id, result=exchanged,
+            work_id=exchanged.get("revocationWorkId")):
+        outcome = operator_google_cleanup.fence(exchanged.get("revocationWorkId"))
+        return _operator_google_cleanup_disposition(outcome)
     result = "retained"
     reason = None
     work_id = exchanged.get("revocationWorkId")
@@ -15528,6 +15545,30 @@ def _revoke_rejected_oauth_exchange(
         "reason": reason,
         "durableRetryRetained": result in {"retained", "retained_for_retry"},
     }
+
+
+def _operator_google_cleanup_disposition(outcome) -> dict[str, Any]:
+    """Called after publication/SQLite ownership has ended; no immediate fallback."""
+    result = outcome.public()
+    if outcome.status == "committed":
+        for identifier in outcome.receipt.get("credential_ids", []):
+            runtime.invalidate_secret_leases(identifier)
+        try:
+            from serverware import operator_google_cleanup
+            operator_google_cleanup.require_provider_io_unlocked()
+            _reconcile_oauth_revocations()
+        except Exception:
+            pass  # Durable eligibility/work remains with the existing bounded worker.
+    return result
+
+
+def _operator_google_cleanup_response(outcome, cookie_name: str | None) -> JSONResponse:
+    response = JSONResponse({"detail": "Google account operation did not complete; inspect retained status",
+        "operator_google_cleanup": _operator_google_cleanup_disposition(outcome)},
+        status_code=409, headers={"Cache-Control": "no-store"})
+    if cookie_name:
+        response.delete_cookie(cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 def _oauth_grant_collision_response(
@@ -15602,6 +15643,8 @@ def _revoke_rejected_oauth_refresh(
         "createdBy": "oauth-refresh",
         "revocationWorkId": refreshed.get("revocationWorkId"),
     }
+    if refreshed.get("_operator_google_work") is not None:
+        exchange["_operator_google_work"] = refreshed["_operator_google_work"]
     _revoke_rejected_oauth_exchange(
         exchange,
         actor_id="oauth-refresh",
@@ -16299,6 +16342,14 @@ def oauth_callback(
             reconnect_binding,
         )
     except OAuthError as exc:
+        from serverware import operator_google_cleanup
+        outcome = getattr(exc, "operator_google_outcome", None)
+        if isinstance(outcome, operator_google_cleanup.CleanupOutcome):
+            return _operator_google_cleanup_response(outcome, oauth_cookie_name)
+        if isinstance(exchanged, dict) and operator_google_cleanup.operator_context(
+                provider_id, result=exchanged, work_id=exchanged.get("revocationWorkId")):
+            return _operator_google_cleanup_response(
+                operator_google_cleanup.fence(exchanged.get("revocationWorkId")), oauth_cookie_name)
         failed_setup_id = (
             exchanged.get("setupSessionId")
             if isinstance(exchanged, dict)
@@ -16497,6 +16548,7 @@ def oauth_callback(
             headers={"Cache-Control": "no-store"},
         )
     else:
+        from serverware import operator_google_cleanup
         try:
             if exchanged.get("_operator_catalog_intent") is not None:
                 credential = catalog_oauth.register_active(exchanged, credential_metadata)
@@ -16544,9 +16596,12 @@ def oauth_callback(
                         "setup session disappeared after atomic OAuth activation"
                     )
                 _drain_setup_session_audit_outbox()
+        except operator_google_cleanup.CleanupDisposition as exc:
+            return _operator_google_cleanup_response(exc.outcome, oauth_cookie_name)
         except db.OAuthGrantCollisionError as exc:
             if exchanged.get("_operator_catalog_intent") is not None:
-                catalog_oauth.fail_state(provider_id, state, "identity_conflict")
+                return _operator_google_cleanup_response(operator_google_cleanup.fence(
+                    exchanged.get("revocationWorkId"), reason="google_grant_collision"), oauth_cookie_name)
             return _oauth_grant_collision_response(
                 exc,
                 exchanged=exchanged,
@@ -18860,8 +18915,12 @@ def _credential_for_lease(
                             provider_id=provider_id,
                             rejection_reason="OAuth credential changed during refresh",
                         )
+                        operator_work = refreshed.get("_operator_google_work") is not None
                         refreshed = None
                         runtime.invalidate_secret_leases(credential_id)
+                        if operator_work:
+                            raise HTTPException(status_code=503,
+                                detail="Google refresh disposition is retained; no automatic exchange retry")
                         continue
                     refreshed = None
                     runtime.invalidate_secret_leases(credential_id)
@@ -18890,6 +18949,10 @@ def _credential_for_lease(
                 return persisted
         raise OAuthError("OAuth credential changed repeatedly during refresh")
     except (OAuthError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        from serverware import operator_google_cleanup
+        outcome = getattr(exc, "operator_google_outcome", None)
+        if isinstance(outcome, operator_google_cleanup.CleanupOutcome):
+            _operator_google_cleanup_disposition(outcome)
         if isinstance(refreshed, dict) and isinstance(provider_id, str):
             _revoke_rejected_oauth_refresh(
                 refreshed,

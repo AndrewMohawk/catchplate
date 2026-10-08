@@ -224,7 +224,10 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
         if len({row['id'] for row in rows}) != len(rows) or len({row['ordinal'] for row in rows}) != len(rows):
             raise CatalogIntegrityError('catalog identity/order collision')
         for row in rows:
-            if (row.get('status') not in {'active', 'revoked'} or not isinstance(row.get('name'), str) or not row['name']
+            statuses = {'active', 'revoked'}
+            if collection == 'credentials' and row.get('auth_type') == 'google_oauth':
+                statuses = {'active', 'quarantined'}
+            if (row.get('status') not in statuses or not isinstance(row.get('name'), str) or not row['name']
                     or type(row.get('version')) is not int or row['version'] < 1):
                 raise CatalogIntegrityError('catalog resource state refused')
     for identifier, row in credentials.items():
@@ -235,7 +238,10 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
             continue
         if row.get('auth_type') == 'google_oauth':
             from serverware import operator_catalog_google
-            operator_catalog_google.validate_record(row, core)
+            if row['status'] == 'quarantined':
+                operator_catalog_google.validate_quarantined_record(row, core)
+            else:
+                operator_catalog_google.validate_record(row, core)
             continue
         bearer = row.get('auth_type') == 'bearer'
         try:

@@ -96,6 +96,8 @@ def initialize(conn) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS operator_catalog_oauth_intents (
         id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, state_digest TEXT UNIQUE,
         metadata_json TEXT NOT NULL)""")
+    from serverware import operator_google_cleanup_store
+    operator_google_cleanup_store.initialize(conn)
 
 
 def _read(row) -> dict:
@@ -275,55 +277,80 @@ def claim_consumed_state(record: dict, state: str) -> dict | None:
 
 def register_active(exchanged: dict, metadata: dict) -> dict:
     """One commit owns encrypted core storage, registration, revision and audit."""
+    from serverware import operator_google_cleanup as cleanup
     claim = exchanged.get("_operator_catalog_intent")
     if not isinstance(claim, dict):
         raise GoogleConsentError("Google consent registration binding refused")
+    work_id = exchanged.get("revocationWorkId")
+    fence_receipt, fence_committed, outcome = None, False, None
+    fence_attempted, registration_committed = False, False
     try:
-        with exclusive(), db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            value = _checked(conn, claim.get("id"), status="exchanging", actor_id=exchanged.get("createdBy"))
-            profile = _profile()
-            if (claim != {"id": value["id"], "actor_id": value["actor_id"], "catalog_revision": value["catalog_revision"],
-                    "state_digest": value["state_digest"], "oauth_profile_binding_digest": value["oauth_profile_binding_digest"]}
-                    or exchanged.get("provider") != "google" or exchanged.get("kind") != "oauth2"
-                    or exchanged.get("name") != value["name"] or exchanged.get("reconnect") is not None
-                    or exchanged.get("_application_operation") is not None
-                    or metadata.get("oauth") is not True or metadata.get("refreshable") is not True
-                    or metadata.get("provider_id") != "google" or metadata.get("provider_identity_verified") is not True
-                    or metadata.get("provider") != "google.oauth2"
-                    or metadata.get("oauth_client_id") != profile.client_id
-                    or metadata.get("injection_field") != "access_token"
-                    or metadata.get("scopes") != list(profile.scopes)
-                    or sorted(exchanged.get("scopes", [])) != list(profile.scopes)):
-                raise GoogleConsentError("Google verified account or permissions do not match consent")
-            provider, subject, account = db.validate_managed_oauth_account_identity(metadata)
-            if provider != "google" or exchanged.get("providerSubject") != subject or exchanged.get("providerAccount") != account:
-                raise GoogleConsentError("Google verified account does not match consent")
-            from serverware.operator_catalog_mutations import _admit_create
-            _admit_create(conn, schema.read_catalog(conn), "credentials")
-            # The server alone supplies the catalog association. It is never
-            # accepted as caller metadata or copied from a provider response.
-            metadata = {**metadata, "oauth_intent_id": value["id"],
-                "oauth_profile_binding_digest": profile.binding_digest}
-            credential = db.create_credential(value["name"], "oauth2", exchanged["secret"], metadata,
-                revocation_work_id=exchanged["revocationWorkId"], _connection=conn,
-                _application_operation=exchanged.get("_application_operation"))
-            record = {"id": credential["id"], "name": value["name"], "auth_type": "google_oauth",
-                "header_name": "Authorization", "provider_subject": subject, "provider_account": account,
-                "oauth_client_id": profile.client_id, "scopes": list(profile.scopes),
-                "permission_preset": profile.permission_preset, "oauth_profile_binding_digest": profile.binding_digest,
-                "oauth_intent_id": value["id"], "created_at": db.iso_now(), "status": "active"}
-            schema.save_resource(conn, "credentials", record, create=True)
-            schema.validate_bindings(conn)
-            value.update(status="connected", credential_id=credential["id"])
-            _advance(conn, value, "account_connected")
-            _profile()  # Refuse changed cold profile before committing.
-            conn.commit()
+        with exclusive():
+            with db.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                value, profile, metadata = _registration(conn, exchanged, metadata, claim)
+                try:
+                    credential = db.create_credential(value["name"], "oauth2", exchanged["secret"], metadata,
+                        revocation_work_id=work_id, _connection=conn,
+                        _application_operation=exchanged.get("_application_operation"))
+                except db.OAuthGrantCollisionError:
+                    # The existing collision guard runs before INSERT. Fence
+                    # core/catalog/policy while the same owner and TX remain.
+                    fence_attempted = True
+                    fence_receipt = cleanup.fence_in_transaction(conn, work_id, reason="google_grant_collision")
+                else:
+                    record = {"id": credential["id"], "name": value["name"], "auth_type": "google_oauth",
+                        "header_name": "Authorization", "provider_subject": metadata["provider_subject"],
+                        "provider_account": metadata["provider_account"], "oauth_client_id": profile.client_id,
+                        "scopes": list(profile.scopes), "permission_preset": profile.permission_preset,
+                        "oauth_profile_binding_digest": profile.binding_digest, "oauth_intent_id": value["id"],
+                        "created_at": db.iso_now(), "status": "active"}
+                    schema.save_resource(conn, "credentials", record, create=True)
+                    schema.validate_bindings(conn)
+                    value.update(status="connected", credential_id=credential["id"])
+                    _advance(conn, value, "account_connected")
+                _profile()
+                conn.commit()
+                fence_committed = fence_receipt is not None
+                registration_committed = not fence_committed
+            if fence_committed:
+                outcome = cleanup.materialize_committed(fence_receipt)
+        if outcome is not None:
+            raise cleanup.CleanupDisposition(outcome)
         return credential
-    except db.OAuthGrantCollisionError:
-        raise  # Existing grant-wide Google collision cleanup must remain authoritative.
+    except cleanup.CleanupDisposition:
+        raise
     except Exception as error:
-        raise GoogleConsentError("Google account could not be registered atomically") from error
+        # No exception may fall through to legacy grant-wide cleanup. A
+        # definite commit survives later guard failure; unknown commit is read
+        # back before any separate protective transaction is considered.
+        outcome = cleanup.committed(fence_receipt) if fence_committed else cleanup.observe(work_id)
+        if outcome.status != "committed" and not fence_attempted and not registration_committed:
+            outcome = cleanup.fence(work_id, reason="registration_failed")
+        raise cleanup.CleanupDisposition(outcome) from error
+
+
+def _registration(conn, exchanged: dict, metadata: dict, claim: dict):
+    value = _checked(conn, claim.get("id"), status="exchanging", actor_id=exchanged.get("createdBy"))
+    profile = _profile()
+    if (claim != {"id": value["id"], "actor_id": value["actor_id"], "catalog_revision": value["catalog_revision"],
+            "state_digest": value["state_digest"], "oauth_profile_binding_digest": value["oauth_profile_binding_digest"]}
+            or exchanged.get("provider") != "google" or exchanged.get("kind") != "oauth2"
+            or exchanged.get("name") != value["name"] or exchanged.get("reconnect") is not None
+            or exchanged.get("_application_operation") is not None
+            or metadata.get("oauth") is not True or metadata.get("refreshable") is not True
+            or metadata.get("provider_id") != "google" or metadata.get("provider_identity_verified") is not True
+            or metadata.get("provider") != "google.oauth2" or metadata.get("oauth_client_id") != profile.client_id
+            or metadata.get("injection_field") != "access_token" or metadata.get("scopes") != list(profile.scopes)
+            or sorted(exchanged.get("scopes", [])) != list(profile.scopes)):
+        raise GoogleConsentError("Google verified account or permissions do not match consent")
+    provider, subject, account = db.validate_managed_oauth_account_identity(metadata)
+    if provider != "google" or exchanged.get("providerSubject") != subject or exchanged.get("providerAccount") != account:
+        raise GoogleConsentError("Google verified account does not match consent")
+    from serverware.operator_catalog_mutations import _admit_create
+    _admit_create(conn, schema.read_catalog(conn), "credentials")
+    return value, profile, {**metadata, "oauth_intent_id": value["id"],
+        "oauth_profile_binding_digest": profile.binding_digest}
 
 
 def fail_state(provider_id: str, state: str | None, reason: str) -> None:

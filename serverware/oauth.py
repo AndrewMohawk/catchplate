@@ -783,11 +783,13 @@ def exchange_authorization_code(
         raise OAuthError("OAuth state redirect no longer matches the enrolled application")
     actor_id = str(record.get("actor_id") or "oauth-callback")
     try:
-        revocation_work_id = db.reserve_oauth_revocation_work(
-            provider_id=provider.id,
-            actor_id=actor_id,
-            source="authorization_code_exchange",
-        )
+        if catalog_claim is not None:
+            from serverware import operator_google_cleanup_store
+            revocation_work_id = operator_google_cleanup_store.reserve_initial(
+                intent_id=catalog_claim["id"], actor_id=actor_id)
+        else:
+            revocation_work_id = db.reserve_oauth_revocation_work(
+                provider_id=provider.id, actor_id=actor_id, source="authorization_code_exchange")
     except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
         if catalog_claim is not None:
             operator_catalog_oauth.fail_state(provider.id, state, "exchange_failed")
@@ -830,6 +832,9 @@ def exchange_authorization_code(
                     secret=revocable_secret_json,
                 )
             except Exception as retention_exc:
+                if catalog_claim is not None:
+                    raise OAuthError("Operator Google issued material retention is uncertain",
+                        issuance_uncertain=True) from retention_exc
                 try:
                     revoke_oauth_token(
                         provider_id=provider.id,
@@ -876,6 +881,10 @@ def exchange_authorization_code(
         if not isinstance(token_type, str) or token_type.lower() != "bearer":
             raise OAuthError("OAuth token endpoint returned an unsupported token type")
         provider_identity = _fetch_provider_identity(provider, access_token, operation=operation)
+        if catalog_claim is not None:
+            operator_google_cleanup_store.bind_identity(revocation_work_id, {
+                "oauth": True, "provider": "google.oauth2", "provider_id": "google",
+                "oauth_client_id": provider.client_id, **provider_identity})
         now = _now()
         expires_in = token_response.get("expires_in")
         if (
@@ -994,11 +1003,26 @@ def exchange_authorization_code(
             result["_application_operation"] = operation
         if catalog_claim is not None:
             result["_operator_catalog_intent"] = catalog_claim
+            result["_operator_google_work"] = revocation_work_id
         _application_check(operation)
         return result
     except Exception as exc:
         if catalog_claim is not None:
-            operator_catalog_oauth.fail_state(provider.id, state, "exchange_failed")
+            from serverware import operator_google_cleanup
+            outcome = (operator_google_cleanup.fence(revocation_work_id)
+                if material_attached else operator_google_cleanup.retain_uncertain(
+                    revocation_work_id, material_attached=False))
+            if outcome.status == "deferred":
+                # Known-family failure is recorded in the fence transaction.
+                # An unfenced failure may mark consent unusable, but this
+                # metadata-only disposition never grants cleanup eligibility.
+                operator_catalog_oauth.fail_state(provider.id, state, "exchange_failed")
+                if material_attached:
+                    operator_google_cleanup.retain_uncertain(revocation_work_id, material_attached=True)
+            failure = OAuthError("Operator Google exchange failed; inspect retained cleanup status",
+                actor_id=actor_id, issuance_uncertain=not material_attached)
+            failure.operator_google_outcome = outcome
+            raise failure from exc
         if material_attached:
             try:
                 db.mark_oauth_revocation_work_pending(
@@ -1088,11 +1112,12 @@ def refresh_access_token(
 
     actor_id = str(metadata.get("created_by") or "oauth-refresh")
     try:
-        revocation_work_id = db.reserve_oauth_revocation_work(
-            provider_id=provider.id,
-            actor_id=actor_id,
-            source="refresh_token_exchange",
-        )
+        if catalog_profile is not None:
+            from serverware import operator_google_cleanup_store
+            revocation_work_id = operator_google_cleanup_store.reserve_refresh(metadata=metadata, actor_id=actor_id)
+        else:
+            revocation_work_id = db.reserve_oauth_revocation_work(
+                provider_id=provider.id, actor_id=actor_id, source="refresh_token_exchange")
     except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
         raise OAuthError(
             "OAuth refresh is unavailable while revocation capacity is exhausted"
@@ -1128,6 +1153,9 @@ def refresh_access_token(
                     secret=issued_secret_json,
                 )
             except Exception as retention_exc:
+                if catalog_profile is not None:
+                    raise OAuthError("Operator Google refresh material retention is uncertain",
+                        issuance_uncertain=True) from retention_exc
                 try:
                     revoke_oauth_token(
                         provider_id=provider.id,
@@ -1256,9 +1284,22 @@ def refresh_access_token(
         }
         if operation is not None:
             result["_application_operation"] = operation
+        if catalog_profile is not None:
+            result["_operator_google_work"] = revocation_work_id
         _application_check(operation)
         return result
     except Exception as exc:
+        if catalog_profile is not None:
+            from serverware import operator_google_cleanup
+            outcome = (operator_google_cleanup.fence(revocation_work_id, reason="refresh_failed")
+                if material_attached else operator_google_cleanup.retain_uncertain(
+                    revocation_work_id, material_attached=False))
+            if outcome.status == "deferred" and material_attached:
+                operator_google_cleanup.retain_uncertain(revocation_work_id, material_attached=True)
+            failure = OAuthError("Operator Google refresh failed; inspect retained cleanup status",
+                actor_id=actor_id, issuance_uncertain=not material_attached)
+            failure.operator_google_outcome = outcome
+            raise failure from exc
         if material_attached:
             try:
                 db.mark_oauth_revocation_work_pending(
@@ -1287,13 +1328,22 @@ def refresh_access_token(
 
 
 def revoke_oauth_token(
-    *, provider_id: str, token_secret: dict[str, Any]
+    *, provider_id: str, token_secret: dict[str, Any], _operator_cleanup_work_id: str | None = None
 ) -> dict[str, Any]:
     provider = provider_for(provider_id)
     if not provider.configured:
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
     if not isinstance(token_secret, dict):
         raise OAuthError("OAuth credential is malformed")
+    from serverware import operator_google_cleanup
+    if (_operator_cleanup_work_id is not None
+            or operator_google_cleanup.operator_context(provider.id, work_id=_operator_cleanup_work_id)):
+        try:
+            operator_google_cleanup.require_provider_io_unlocked()
+            operator_google_cleanup._store().require_permit(
+                work_id=_operator_cleanup_work_id, secret=token_secret)
+        except Exception as exc:
+            raise OAuthError("Operator Google revocation requires a committed matching cleanup fence") from exc
     operation = _application_begin(provider, token_secret.get(application_owner.ASSOCIATION_KEY), bound=True)
     _require_application_lifecycle(operation)
     if provider.id == "x":

@@ -73,7 +73,8 @@ class Fixture:
 
     def snapshot(self):
         tables = (*workspace.LEGACY_TABLES, *workspace.CATALOG_TABLES,
-            "operator_catalog_oauth_profile", "operator_catalog_oauth_intents", "oauth_revocation_work")
+            "operator_catalog_oauth_profile", "operator_catalog_oauth_intents", "oauth_revocation_work",
+            "operator_google_cleanup_work")
         with closing(self.db.connect()) as conn:
             return {table: sorted(tuple(row) for row in conn.execute("SELECT * FROM " + table)) for table in tables}
 
@@ -311,6 +312,7 @@ def before_contact(change):
 
 def rollback(target):
     f = Fixture()
+    from serverware import operator_google_cleanup as cleanup, operator_google_cleanup_store as cleanup_store
     targets = {"core": ("INSERT", "credentials", ""),
         "catalog": ("INSERT", "operator_catalog_credentials", ""),
         "revision": ("UPDATE", "operator_catalog_state", ""),
@@ -324,10 +326,22 @@ def rollback(target):
         with closing(f.db.connect()) as conn, conn:
             conn.execute("CREATE TRIGGER consent_abort BEFORE " + operation + " ON " + table + condition
                 + " BEGIN SELECT RAISE(ABORT, 'synthetic registration rollback'); END")
-        refused(lambda: f.consent.register_active(exchanged, exchanged["metadata"]), f.consent.GoogleConsentError)
-        assert f.snapshot() == before
+        try:
+            f.consent.register_active(exchanged, exchanged["metadata"])
+        except cleanup.CleanupDisposition as error:
+            outcome = error.outcome
+        else:
+            raise AssertionError("registration fault did not return its cleanup disposition")
+        after = f.snapshot()
+        # An empty family cannot authorize asynchronous revocation: a later
+        # consent could adopt the same identity after a read-only permit check.
+        assert outcome.status == "deferred" and outcome.receipt is None
+        assert after == before, "registration/fence failure left partial state"
         work = f.rows("oauth_revocation_work")
-        assert len(work) == 1 and work[0]["status"] == "held" and work[0]["secret_ciphertext"]
+        assert len(work) == 1 and work[0]["secret_ciphertext"]
+        retained = cleanup_store.get_work(work[0]["id"])
+        assert retained["fence"] == outcome.receipt
+        assert work[0]["status"] == "held"
         assert not f.rows("credentials") and not f.rows("operator_catalog_credentials")
         assert len(f.calls) == 2
         f.assert_redacted()
@@ -336,6 +350,7 @@ def rollback(target):
 
 def callback_cleanup():
     f = Fixture()
+    from serverware import operator_google_cleanup_store as cleanup_store
     with patch.object(f.oauth, "request_bytes", side_effect=f.transport):
         f.begin()
         with closing(f.db.connect()) as conn, conn:
@@ -343,13 +358,19 @@ def callback_cleanup():
                 "BEGIN SELECT RAISE(ABORT, 'synthetic catalog refusal'); END")
         code, raw, _ = f.callback()
         assert code == 409 and b"synthetic catalog refusal" not in raw
+        disposition = json.loads(raw)["operator_google_cleanup"]
+        assert disposition["status"] == "deferred" and "fence" not in disposition
         assert not f.rows("credentials") and not f.rows("operator_catalog_credentials")
-        assert f.calls[-1] == ("POST", "https://oauth2.googleapis.com/revoke")
-        assert not f.rows("oauth_revocation_work")
+        assert not any(url.endswith("/revoke") for _method, url in f.calls)
+        work = f.rows("oauth_revocation_work")
+        assert len(work) == 1 and work[0]["status"] == "held" and work[0]["secret_ciphertext"]
+        assert cleanup_store.get_work(work[0]["id"])["fence"] is None
+        f.app._reconcile_oauth_revocations(limit=8)
+        assert not any(url.endswith("/revoke") for _method, url in f.calls)
         value = json.loads(f.rows("operator_catalog_oauth_intents")[0]["metadata_json"])
-        assert value["status"] == "failed" and value["reason"] == "persistence_failed"
+        assert value["status"] == "exchanging" and value["credential_id"] is None
         f.assert_redacted()
-    return {"provider_cleanup": True, "half_registration": False}
+    return {"provider_cleanup": False, "cleanup_deferred": True, "half_registration": False}
 
 
 def invalid_grant(change):
@@ -368,14 +389,45 @@ def invalid_grant(change):
         raise AssertionError("unknown fixture")
     with patch.object(f.oauth, "request_bytes", side_effect=f.transport):
         f.begin()
-        code, _, _ = f.callback()
-        assert code == 400 and not f.rows("credentials") and not f.rows("operator_catalog_credentials")
+        code, raw, _ = f.callback()
+        assert code == 409 and not f.rows("credentials") and not f.rows("operator_catalog_credentials")
+        disposition = json.loads(raw)["operator_google_cleanup"]
         work = f.rows("oauth_revocation_work")
-        assert len(work) == 1 and work[0]["secret_ciphertext"] and work[0]["status"] == "pending"
+        assert disposition["status"] == "deferred" and "fence" not in disposition
+        assert len(work) == 1 and work[0]["secret_ciphertext"] and work[0]["status"] == "held"
+        assert not any(url.endswith("/revoke") for _method, url in f.calls)
         value = json.loads(f.rows("operator_catalog_oauth_intents")[0]["metadata_json"])
         assert value["status"] == "failed" and value["reason"] == "exchange_failed"
         f.assert_redacted()
-    return {"invalid_grant": change, "encrypted_cleanup_retained": True}
+    return {"invalid_grant": change, "cleanup_deferred": True, "encrypted_cleanup_retained": True}
+
+
+def scope_schema_contract():
+    """Validate the actual shared schema; no compiler/provider success is inferred."""
+    from jsonschema import Draft202012Validator
+    schema = json.loads((ROOT / "schemas/adapters/generic.rest.schema.json").read_text())
+    validator = Draft202012Validator(schema["$defs"]["credentialBinding"])
+    scopes = ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"]
+    binding = {"credentialType": "oauth2", "provider": "google", "subjects": ["synthetic-subject"],
+        "clientIds": ["synthetic-client.apps.googleusercontent.com"], "requiredScopes": scopes}
+    validator.validate(binding)
+    validator.validate({**binding, "requiredScopes": [scopes[1]]})
+    validator.validate({**binding, "provider": "x", "requiredScopes": ["tweet.read"]})
+    refused_values = [
+        {**binding, "provider": "x"},
+        {**binding, "requiredScopes": scopes[:2]},
+        {**binding, "requiredScopes": list(reversed(scopes))},
+        {**binding, "requiredScopes": [*scopes, "extra"]},
+        {**binding, "requiredScopes": [scopes[0], scopes[0], scopes[2]]},
+        {**binding, "requiredScopes": [scopes[0], "https://www.googleapis.com/auth/gmail.modify", scopes[2]]},
+        {**binding, "requiredScopes": [ALIAS, *scopes[1:]]},
+        {**binding, "clientIds": [*binding["clientIds"], "another-client"]},
+        {**binding, "subjects": [*binding["subjects"], "another-subject"]},
+    ]
+    for value in refused_values:
+        assert not validator.is_valid(value), "generic binding unexpectedly widened"
+    return {"exact_google_three_scope_schema": True, "legacy_singleton_preserved": True,
+        "negative_controls": len(refused_values), "runtime_verified": False}
 
 
 def expired_refresh(*, omit_scope=False):
@@ -469,6 +521,7 @@ def http_guards():
 
 
 OPERATIONS = {"browser-denial": browser_and_denial, "callback-cleanup": callback_cleanup,
+    "scope-schema": scope_schema_contract,
     "expired-refresh": expired_refresh, "refresh-omitted-scope": lambda: expired_refresh(omit_scope=True),
     "http-guards": http_guards, "state-durability": state_durability,
     "state-file-sync-failure": lambda: state_durability("file"),

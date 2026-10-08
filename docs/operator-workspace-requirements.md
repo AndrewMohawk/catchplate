@@ -44,6 +44,35 @@ compatibility limits before saving; keep raw IDs, policy hashes and detailed
 diagnostics available through details, not as the main explanation. The new
 guided UI is an incremental implementation, not the final provider-preset UI.
 
+## Normal use, not just first-run configuration
+
+The everyday account card should answer: **which account, which apps use it,
+and does it need attention?** Present permissions as understandable names;
+raw scope URLs, client IDs, generation numbers and signing details belong in
+expandable diagnostics. A saved-account record alone cannot establish healthy
+refresh. Show known outcomes such as last successful use, a temporary failure,
+or provider-required reconnection only when backed by actual observations.
+
+The basic authentication replacement screen should ask only which app and
+destination may use the selected credential, whether to insert authentication
+or replace an exact dummy value, and where the provider expects it. Default
+new rules to no optional content filtering. Choosing response fields or body
+restrictions is a separate, deliberate action, not a prerequisite to storing
+a key. Copying a normal client's configuration should be the final step, not
+an invitation to understand internal policy JSON.
+
+Changing an app's permission, rotating its Serverware token, replacing a static
+provider key, reconnecting an OAuth account and disconnecting that account are
+distinct actions. Show affected apps before shared-account changes. Restarting
+the console must not require reconnecting accounts or repeating setup; a changed
+provider secret or CA trust root needs its own explicit workflow.
+
+Delivery priority is two complete vertical journeys: ordinary-client auth
+replacement with supported request/response formats, and connect-once Google
+mail with automatic refresh. Then expose the Gmail/X/npm/ECR operation bundles
+and optional restrictions. A larger generic editor, more field names, or more
+disabled buttons is not a substitute for these working journeys.
+
 ## Requirement and scope
 
 The operator's October 8 feedback is the design input: connect an account such

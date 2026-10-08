@@ -52,6 +52,12 @@
           "type": "object",
           "required": ["credentialType", "provider", "subjects", "clientIds", "requiredScopes"],
           "additionalProperties": false,
+          "allOf": [{
+            "if": {"properties": {"requiredScopes": {"const": [
+              "email", "https://www.googleapis.com/auth/gmail.readonly", "openid"
+            ]}}},
+            "then": {"properties": {"provider": {"const": "google"}}}
+          }],
           "properties": {
             "credentialType": {"const": "oauth2"},
             "provider": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9.-]{0,63}$"},
@@ -70,11 +76,15 @@
               "items": {"type": "string", "minLength": 1, "maxLength": 512}
             },
             "requiredScopes": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 1,
-              "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+              "$comment": "Preserve the generic singleton contract. The sole multi-scope exception is the exact canonical operator Google read-only preset; provider, account, client and stored/signed scopes remain independently bound at admission and lease release. Rust embeds this schema, so deployment requires a rebuilt and verified matching artifact.",
+              "oneOf": [
+                {
+                  "type": "array", "minItems": 1, "maxItems": 1,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1, "maxLength": 512}
+                },
+                {"const": ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"]}
+              ]
             }
           }
         },

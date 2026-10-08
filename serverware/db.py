@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from serverware import authority_contract, authority_primary_contract, grants
+from serverware import operator_google_cleanup_store as _operator_google_cleanup
 from serverware.policy_shadow_assignment_fields import LEGACY_FIELDS as _POLICY_SHADOW_ASSIGNMENT_LEGACY_FIELDS
 from serverware import release_authorization_profiles as release_profiles
 from serverware import credential_lease_profiles as lease_profiles
@@ -63506,6 +63507,7 @@ def quarantine_google_oauth_grant_family(
     actor_id: str,
     reason: str = "google_oauth_grant_collision",
     revocation_work_id: str | None = None,
+    _connection: Any | None = None,
 ) -> dict[str, Any]:
     if not isinstance(actor_id, str) or not actor_id or len(actor_id) > 512:
         raise ManagedOAuthCredentialError("Google OAuth quarantine actor is invalid")
@@ -63537,7 +63539,15 @@ def quarantine_google_oauth_grant_family(
     now_s = iso_now()
     quarantined_credentials: list[dict[str, Any]] = []
     quarantined_pending: list[str] = []
-    with connect() as conn:
+    if _connection is not None and (not isinstance(_connection, sqlite3.Connection)
+            or not _connection.in_transaction):
+        raise ManagedOAuthCredentialError("borrowed Google quarantine requires an existing SQLite transaction")
+    connection_scope = connect() if _connection is None else contextlib.nullcontext(_connection)
+    with connection_scope as conn:
+        if revocation_work_id is not None:
+            _operator_google_cleanup.require_quarantine(conn, revocation_work_id,
+                borrowed=_connection is not None, oauth_client_id=oauth_client_id,
+                provider_subject=provider_subject)
         # Preserve the creation lock order so callbacks cannot insert a sibling
         # while the family is being made unusable.
         _lock_pending_oauth_creation(conn)
@@ -64017,7 +64027,7 @@ def create_credential(
             ),
         )
         if revocation_work_id is not None:
-            _consume_oauth_revocation_work(conn, revocation_work_id)
+            _consume_oauth_revocation_work(conn, revocation_work_id, credential_id=item_id)
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
@@ -66047,12 +66057,19 @@ def reserve_oauth_revocation_work(
     provider_id: str,
     actor_id: str,
     source: str,
+    _connection: Any | None = None,
+    _operator_association: dict[str, Any] | None = None,
 ) -> str:
     _validate_oauth_revocation_work_identity(
         provider_id=provider_id,
         actor_id=actor_id,
         source=source,
     )
+    if _operator_google_cleanup.tagged(source) and _operator_association is None:
+        raise ManagedOAuthCredentialError("operator cleanup sources require a durable association")
+    if _connection is not None and (not isinstance(_connection, sqlite3.Connection)
+            or not _connection.in_transaction):
+        raise ManagedOAuthCredentialError("borrowed cleanup reservation requires an existing SQLite transaction")
     item_id = str(uuid.uuid4())
     now = utcnow()
     now_s = now.isoformat()
@@ -66060,7 +66077,8 @@ def reserve_oauth_revocation_work(
         now + timedelta(seconds=_OAUTH_REVOCATION_RESERVED_SECONDS)
     ).isoformat()
     encrypted = _envelope_values(item_id, "{}", 1)
-    with connect() as conn:
+    connection_scope = connect() if _connection is None else contextlib.nullcontext(_connection)
+    with connection_scope as conn:
         _lock_oauth_revocation_work(conn)
         _expire_oauth_exchange_reservations(conn, now_s)
         count_row = conn.execute(
@@ -66098,12 +66116,15 @@ def reserve_oauth_revocation_work(
                 now_s,
             ),
         )
+        _operator_google_cleanup.on_reserve(conn, work_id=item_id, provider_id=provider_id,
+            actor_id=actor_id, source=source, association=_operator_association)
     return item_id
 
 
 def _expire_oauth_exchange_reservations(conn: Any, now_s: str) -> None:
     conn.execute(
-        "DELETE FROM oauth_revocation_work WHERE status = 'reserved' AND next_attempt_at <= ?",
+        "DELETE FROM oauth_revocation_work WHERE status = 'reserved' AND next_attempt_at <= ? "
+        "AND substr(source,1,16) != 'operator_google_'",
         (now_s,),
     )
     conn.execute(
@@ -66126,6 +66147,7 @@ def mark_oauth_exchange_started(work_id: str) -> None:
     deadline = (now + timedelta(seconds=_OAUTH_REVOCATION_RESERVED_SECONDS)).isoformat()
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.require_transition(conn, work_id)
         updated = conn.execute(
             """
             UPDATE oauth_revocation_work
@@ -66147,6 +66169,7 @@ def mark_oauth_issuance_uncertain(work_id: str, *, error: str) -> None:
     now_s = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.require_transition(conn, work_id)
         updated = conn.execute(
             """
             UPDATE oauth_revocation_work
@@ -66170,6 +66193,7 @@ def attach_oauth_revocation_material(work_id: str, *, secret: str) -> None:
     encrypted = _envelope_values(work_id, secret, 1)
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.on_attach(conn, work_id, secret)
         updated = conn.execute(
             """
             UPDATE oauth_revocation_work
@@ -66225,6 +66249,7 @@ def mark_oauth_revocation_work_pending(work_id: str, *, error: str) -> None:
     now_s = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
         updated = conn.execute(
             """
             UPDATE oauth_revocation_work
@@ -66241,6 +66266,7 @@ def mark_oauth_revocation_work_pending(work_id: str, *, error: str) -> None:
 def complete_oauth_revocation_work(work_id: str) -> bool:
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
         deleted = conn.execute(
             "DELETE FROM oauth_revocation_work WHERE id = ?",
             (work_id,),
@@ -66327,6 +66353,7 @@ def resolve_oauth_issuance_uncertainty(
     )
     with connection_scope as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
         row = conn.execute(
             "SELECT id, provider_id, actor_id, source, status, created_at "
             "FROM oauth_revocation_work WHERE id = ?",
@@ -66357,9 +66384,10 @@ def resolve_oauth_issuance_uncertainty(
     }
 
 
-def _consume_oauth_revocation_work(conn: Any, work_id: str) -> None:
+def _consume_oauth_revocation_work(conn: Any, work_id: str, *, credential_id: str | None = None) -> None:
     if not isinstance(work_id, str) or not work_id or len(work_id) > 128:
         raise ManagedOAuthCredentialError("OAuth revocation work binding is invalid")
+    _operator_google_cleanup.require_adoption(conn, work_id, credential_id)
     deleted = conn.execute(
         "DELETE FROM oauth_revocation_work WHERE id = ? AND status = 'held'",
         (work_id,),
@@ -66424,6 +66452,13 @@ def _queue_superseded_oauth_secret(
     replacing_work_id: str | None = None,
     replacement_secret: str | None = None,
 ) -> str | None:
+    # This legacy token-local copy path cannot create a protected source or
+    # retire material on behalf of protected Google work under an ordinary tag.
+    if _operator_google_cleanup.tagged(source) or (
+        replacing_work_id is not None
+        and _operator_google_cleanup.get_work(replacing_work_id, conn=conn) is not None
+    ):
+        raise ManagedOAuthCredentialError("Operator Google cleanup work cannot be copied")
     metadata = loads(credential_row["metadata"], {})
     provider_id, _, _ = validate_managed_oauth_account_identity(metadata)
     if provider_id == "google":
@@ -66537,7 +66572,7 @@ def claim_oauth_revocations(
         _expire_oauth_exchange_reservations(conn, now_s)
         conn.execute(
             "UPDATE oauth_revocation_work SET status = 'pending', updated_at = ? "
-            "WHERE status = 'held' AND next_attempt_at <= ?",
+            "WHERE status = 'held' AND next_attempt_at <= ? AND substr(source,1,16) != 'operator_google_'",
             (now_s, now_s),
         )
         uncertainty_rows = conn.execute(
@@ -66607,12 +66642,15 @@ def claim_oauth_revocations(
                 SELECT * FROM oauth_revocation_work
                 WHERE status = 'pending' AND next_attempt_at <= ?
                   AND (lease_until IS NULL OR lease_until <= ?)
+                  AND """ + _operator_google_cleanup.claim_clause(conn) + """
                 ORDER BY next_attempt_at, created_at
                 LIMIT ?
                 """,
                 (now_s, now_s, remaining),
             ).fetchall()
             for row in work_rows:
+                if not _operator_google_cleanup.eligible(conn, row):
+                    continue
                 conn.execute(
                     "UPDATE oauth_revocation_work SET lease_owner = ?, lease_until = ? WHERE id = ?",
                     (worker_id, lease_until, row["id"]),
@@ -66678,6 +66716,7 @@ def finish_oauth_revocation_work(
             return {"ok": False, "reason": "revocation_work_not_found"}
         if row["status"] != "pending" or row["lease_owner"] != worker_id:
             return {"ok": False, "reason": "revocation_work_not_claimed"}
+        _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
         if succeeded:
             conn.execute("DELETE FROM oauth_revocation_work WHERE id = ?", (work_id,))
             return {"ok": True, "revocation_status": "revoked", "deleted": True}
@@ -67194,7 +67233,7 @@ def reconnect_oauth_credential(
             ),
         )
         if revocation_work_id is not None:
-            _consume_oauth_revocation_work(conn, revocation_work_id)
+            _consume_oauth_revocation_work(conn, revocation_work_id, credential_id=item_id)
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
@@ -67447,7 +67486,7 @@ def update_credential_secret_if_version(
         if current_secret == secret and current_metadata == metadata:
             _check_oauth_application_operation(operation)
             if revocation_work_id is not None:
-                _consume_oauth_revocation_work(conn, revocation_work_id)
+                _consume_oauth_revocation_work(conn, revocation_work_id, credential_id=item_id)
             return row_to_credential(current, include_secret=True), False
 
         if managed_oauth_provider == "x" and current_secret != secret:
@@ -67486,7 +67525,7 @@ def update_credential_secret_if_version(
             ),
         )
         if revocation_work_id is not None:
-            _consume_oauth_revocation_work(conn, revocation_work_id)
+            _consume_oauth_revocation_work(conn, revocation_work_id, credential_id=item_id)
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()

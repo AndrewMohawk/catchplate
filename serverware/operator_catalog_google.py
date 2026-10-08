@@ -82,9 +82,23 @@ def validate_profile_binding(conn):
 
 def validate_record(record: dict, core_credential: dict, profile=None) -> dict:
     """Join immutable catalog identity to the real active encrypted-store row."""
+    core = dict(core_credential) if core_credential is not None else {}
+    _require(record.get("status") == "active" and core.get("lifecycle_status") == "active")
+    return _validate_identity(record, core, profile)
+
+
+def validate_quarantined_record(record: dict, core_credential: dict, profile=None) -> dict:
+    """Quarantine retains a matching unusable core row, never a missing secret."""
+    core = dict(core_credential) if core_credential is not None else {}
+    _require(record.get("status") == "quarantined" and core.get("lifecycle_status") == "revocation_pending"
+        and _uuid(record.get("quarantine_work_id")) and _text(record.get("quarantined_at"), 64)
+        and record.get("quarantine_reason") == "operator_google_cleanup_fence")
+    return _validate_identity(record, core, profile)
+
+
+def _validate_identity(record: dict, core: dict, profile=None) -> dict:
     from serverware import operator_catalog_oauth_profile as profiles
     profile = profiles.require_profile() if profile is None else profile
-    core = dict(core_credential) if core_credential is not None else {}
     metadata = core.get("metadata")
     if isinstance(metadata, str):
         try:
@@ -93,8 +107,7 @@ def validate_record(record: dict, core_credential: dict, profile=None) -> dict:
             metadata = None
     _require(isinstance(metadata, dict))
     _require(record.get("auth_type") == AUTH_TYPE and record.get("header_name") == "Authorization"
-        and record.get("status") == "active" and core.get("id") == record.get("id")
-        and core.get("kind") == "oauth2" and core.get("lifecycle_status") == "active")
+        and core.get("id") == record.get("id") and core.get("kind") == "oauth2")
     if "name" in core:
         _require(core["name"] == record.get("name"))
     _require(metadata.get("oauth") is True and metadata.get("refreshable") is True
@@ -166,6 +179,10 @@ def require_lease_binding(conn, *, principal_id: str, route_id: str,
 
 def public_fields(record: dict) -> dict:
     """No tokens or guessed refresh-health states in the management response."""
-    return {key: record[key] for key in (
+    result = {key: record[key] for key in (
         "provider_account", "provider_subject", "oauth_client_id", "scopes", "permission_preset"
     )}
+    if record.get("status") == "quarantined":
+        result.update(quarantined_at=record["quarantined_at"],
+            quarantine_reason=record["quarantine_reason"], provider_revocation_status="not_proven")
+    return result

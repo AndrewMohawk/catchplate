@@ -219,8 +219,11 @@
         `context = ssl.create_default_context(cafile=${JSON.stringify(ca)})\n` +
         'connection = http.client.HTTPSConnection("decision-gate-rs", 9090, context=context, timeout=10)\n' +
         'connection.set_tunnel("demo-upstream", 8443, headers={"X-Serverware-Agent": "demo-agent"})\n' +
-        'try:\n    connection.request("GET", "/echo", headers={"Host": "demo-upstream:8443",\n' +
-        '        "X-Serverware-Agent": "demo-agent", "Connection": "close"})\n' +
+        'try:\n    # Send only the headers allowed by this demo policy.\n' +
+        '    connection.putrequest("GET", "/echo", skip_host=True, skip_accept_encoding=True)\n' +
+        '    connection.putheader("Host", "demo-upstream:8443")\n' +
+        '    connection.putheader("X-Serverware-Agent", "demo-agent")\n' +
+        '    connection.putheader("Connection", "close")\n    connection.endheaders()\n' +
         '    response = connection.getresponse()\n    print(response.status, response.read().decode())\n' +
         'finally:\n    connection.close()';
     } else {

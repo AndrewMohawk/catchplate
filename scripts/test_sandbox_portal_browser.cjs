@@ -267,6 +267,30 @@ tests.push(['client examples preserve a quoted CA path without executing it', br
   assert(await page.locator('#copy-proxy-command').isDisabled());
 })]);
 
+tests.push(['Python example omits implicit Accept-Encoding without weakening TLS', browser => fixture(browser, {}, async page => {
+  await ready(page);
+  await page.locator('nav a[href="#proxy"]').click();
+  await page.locator('#client-type').selectOption('python');
+  const python = await page.locator('#proxy-command').textContent();
+  // Exercise Python's actual HTTP serializer, but replace all socket I/O and
+  // the CA-file read. This fixture never creates a connection or trusts a CA.
+  const result = JSON.parse(execFileSync(process.env.PYTHON || 'python3', ['-B', '-c',
+    'import contextlib,http.client,io,json,socket,ssl,sys\n' +
+    'from unittest.mock import patch,MagicMock\n' +
+    'source=sys.stdin.read(); wire=[]; context=ssl.create_default_context()\n' +
+    'response=MagicMock(); response.status=200; response.read.return_value=b"{}"\n' +
+    'def record(self,data): wire.append(bytes(data))\n' +
+    'with patch("socket.create_connection", side_effect=AssertionError("network prohibited")), patch("ssl.create_default_context", return_value=context) as trust, patch.object(http.client.HTTPSConnection,"send",record), patch.object(http.client.HTTPSConnection,"getresponse",return_value=response), contextlib.redirect_stdout(io.StringIO()):\n' +
+    ' exec(compile(source,"<rendered-client>","exec"), {})\n' +
+    'print(json.dumps({"wire":b"".join(wire).decode("ascii"), "ca":trust.call_args.kwargs.get("cafile"), "tlsVerification":context.verify_mode==ssl.CERT_REQUIRED, "hostnameVerification":context.check_hostname}))'],
+  {input: python, encoding: 'utf8'}));
+  assert.equal(result.ca, './serverware-ca.pem');
+  assert.equal(result.tlsVerification, true);
+  assert.equal(result.hostnameVerification, true);
+  assert.equal(result.wire, 'GET /echo HTTP/1.1\r\nHost: demo-upstream:8443\r\n' +
+    'X-Serverware-Agent: demo-agent\r\nConnection: close\r\n\r\n');
+})]);
+
 tests.push(['empty filtered audit page still allows searching older events', browser => fixture(browser, {
   override: url => {
     if (url.pathname !== '/api/audit/search') return null;

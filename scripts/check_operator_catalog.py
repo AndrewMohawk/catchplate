@@ -40,6 +40,17 @@ CLAIM_NAME = ".operator-catalog-acceptance.claim"
 MARKER = {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}
 TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 WARM_MIN_REMAINING_MS = 1000
+WARM_STAGES = {"before_app1_revoke", "before_app2_rotate"}
+WARM_ID = re.compile(r"[A-Za-z0-9._:-]{1,256}\Z")
+
+
+def _warm_integer(value):
+    """Telemetry admits bounded numbers only, never arbitrary response values."""
+    return value if type(value) is int and 0 <= value <= (1 << 64) - 1 else None
+
+
+def _warm_clock():
+    return {"epochMs": time.time_ns() // 1_000_000, "monotonicNs": time.monotonic_ns()}
 
 
 def claim_fixture(marker: Path, claim: Path) -> None:
@@ -84,6 +95,7 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         self.successes: list[tuple[str, str, str]] = []
         self.mutations: list[tuple[str, str, str]] = []
         self.warm_observations: list[dict] = []
+        self.warm_lease_checks: list[dict] = []
 
     def clean(self, content: bytes, *, allow_client_token: bool = False) -> None:
         # Even a token-returning response must never repeat any PREVIOUS token.
@@ -187,10 +199,38 @@ class OperatorCatalogCheck(OperatorDemoCheck):
             self.warm_observations.append({key: value for key, value in warm.items() if not key.startswith("_")})
 
     def observe_live_lease(self, stage, application, rule, credential, *, minimum_scopes):
-        health = self.health()
+        require(type(minimum_scopes) is int and 1 <= minimum_scopes <= 2,
+                "unexpected warm lease observation scope")
+        observations = getattr(self, "warm_lease_checks", None)
+        if observations is None:
+            observations = self.warm_lease_checks = []
+        require(len(observations) < 2, "warm lease observation bound exceeded")
+        safe_id = lambda value: value if isinstance(value, str) and WARM_ID.fullmatch(value) else None
+        safe_stage = stage if isinstance(stage, str) and stage in WARM_STAGES else "other_warm_observation"
+        observation = {"stage": safe_stage, "principalId": safe_id(application["principal_id"]),
+            "routeId": safe_id(rule["route_id"]), "credentialId": safe_id(credential["id"]),
+            "minimumScopes": minimum_scopes, "minimumRemainingMsExclusive": WARM_MIN_REMAINING_MS,
+            "completed": False, "conditions": {}, "failedConjuncts": []}
+        self.clean(json.dumps(observation, sort_keys=True).encode("utf-8"))
+        observations.append(observation)
+
+        def timed_read(name, operation):
+            timing = observation[name] = {"started": _warm_clock(), "completed": False}
+            try:
+                result = operation()
+                timing["completed"] = True
+                return result
+            finally:
+                timing["finished"] = _warm_clock()
+                timing["elapsedMonotonicNs"] = timing["finished"]["monotonicNs"] - timing["started"]["monotonicNs"]
+                if not timing["completed"]:
+                    observation["failedConjuncts"] = [name + "_completed"]
+
+        health = timed_read("healthFetch", self.health)
         # This minimum excludes expired entries and is NOT scoped to a principal.
         # Bind it to this app's real dispatchSecret issuance receipt as well.
-        receipts = [row for row in self.audit() if row.get("event_type") == "data_plane.credential_lease.issued"
+        events = timed_read("auditFetch", self.audit)
+        receipts = [row for row in events if row.get("event_type") == "data_plane.credential_lease.issued"
             and all(row.get("event", {}).get(key) == value for key, value in {
                 "purpose": "dispatchSecret", "principal_id": application["principal_id"],
                 "route_id": rule["route_id"], "credential_id": credential["id"],
@@ -198,24 +238,66 @@ class OperatorCatalogCheck(OperatorDemoCheck):
             }.items())]
         now, monotonic = time.time_ns() // 1_000_000, time.monotonic_ns()
         expiry = health.get("credential_lease_earliest_expiry_epoch_ms")
-        require(type(expiry) is int and expiry > now + WARM_MIN_REMAINING_MS
-                and health.get("policy_hash") == self.policy_hash
-                and type(health.get("credential_leases")) is int and health["credential_leases"] >= minimum_scopes
-                and health.get("credential_generation_hot_scopes", 0) >= minimum_scopes,
-                "live credential lease freshness window unavailable")
+        lease_count = health.get("credential_leases")
+        hot_scopes = health.get("credential_generation_hot_scopes", 0)
+        conditions = {"health_expiry_integer": type(expiry) is int,
+            "health_remaining_gt_1000ms": type(expiry) is int and expiry > now + WARM_MIN_REMAINING_MS,
+            "health_policy_hash_matches": health.get("policy_hash") == self.policy_hash,
+            "health_lease_count_integer": type(lease_count) is int,
+            "health_lease_count_at_least_minimum": type(lease_count) is int and lease_count >= minimum_scopes,
+            "health_hot_scope_count_at_least_minimum": type(hot_scopes) is int and hot_scopes >= minimum_scopes}
+        observation.update({"comparison": {"epochMs": now, "monotonicNs": monotonic},
+            "healthEarliestExpiryEpochMs": _warm_integer(expiry),
+            "healthRemainingMsAtComparison": expiry - now if _warm_integer(expiry) is not None else None,
+            "healthAgeAtComparisonMonotonicNs": monotonic - observation["healthFetch"]["finished"]["monotonicNs"],
+            "credentialLeases": _warm_integer(lease_count), "hotScopes": _warm_integer(hot_scopes),
+            "auditRowCount": len(events), "matchingScopedReceiptCount": len(receipts), "conditions": conditions})
+        failed = [name for name, passed in conditions.items() if not passed]
+        if failed:
+            observation["failedConjuncts"] = failed
+            observation["completed"] = True
+            require(False, "live credential lease freshness window unavailable: " + ",".join(failed))
         valid = [row for row in receipts if type(row["event"].get("issued_at_epoch_ms")) is int
             and type(row["event"].get("expires_at_epoch_ms")) is int
             and row["event"]["issued_at_epoch_ms"] <= now
             and row["event"]["expires_at_epoch_ms"] > now + WARM_MIN_REMAINING_MS]
-        require(bool(valid), "app-scoped live dispatch lease receipt unavailable")
+        typed = [row for row in receipts if type(row["event"].get("issued_at_epoch_ms")) is int
+            and type(row["event"].get("expires_at_epoch_ms")) is int]
+        issued = [row for row in typed if row["event"]["issued_at_epoch_ms"] <= now]
+        receipt_conditions = {"scoped_dispatch_receipt_present": bool(receipts),
+            "scoped_receipt_timestamps_integer": bool(typed),
+            "scoped_receipt_issued_not_future": bool(issued),
+            "scoped_receipt_remaining_gt_1000ms": bool(valid)}
+        conditions.update(receipt_conditions)
+        observation.update({"typedScopedReceiptCount": len(typed), "issuedScopedReceiptCount": len(issued),
+            "warmScopedReceiptCount": len(valid)})
+        if not valid:
+            failed = [name for name, passed in receipt_conditions.items() if not passed]
+            observation["failedConjuncts"] = failed
+            observation["completed"] = True
+            require(False, "app-scoped live dispatch lease receipt unavailable: " + ",".join(failed))
         receipt = max(valid, key=lambda row: row["event"]["expires_at_epoch_ms"])
         scoped_expiry = receipt["event"]["expires_at_epoch_ms"]
+        observation.update({"completed": True, "scopedLeaseAuditEventId": safe_id(receipt.get("id")),
+            "scopedLeaseIssuedAtEpochMs": _warm_integer(receipt["event"]["issued_at_epoch_ms"]),
+            "scopedLeaseExpiryEpochMs": _warm_integer(scoped_expiry),
+            "scopedLeaseRemainingMsAtComparison": scoped_expiry - now if _warm_integer(scoped_expiry) is not None else None,
+            "denialDeadlineEpochMs": _warm_integer(min(expiry, scoped_expiry))})
         return {"stage": stage, "principalId": application["principal_id"], "routeId": rule["route_id"],
             "policyHash": self.policy_hash, "capturedAtEpochMs": now, "_captured_monotonic_ns": monotonic,
             "healthEarliestUnexpiredLeaseEpochMs": expiry, "scopedLeaseIssuedAtEpochMs": receipt["event"]["issued_at_epoch_ms"],
             "scopedLeaseExpiryEpochMs": scoped_expiry, "scopedLeaseAuditEventId": receipt["id"],
             "denialDeadlineEpochMs": min(expiry, scoped_expiry),
             "credentialLeases": health["credential_leases"], "hotScopes": health["credential_generation_hot_scopes"]}
+
+    def warm_lease_evidence(self):
+        """Retain partial failure-time observations without any response body."""
+        value = {"warmLeaseChecks": getattr(self, "warm_lease_checks", [])}
+        require(len(value["warmLeaseChecks"]) <= 2, "warm lease evidence count exceeds bound")
+        encoded = json.dumps(value, sort_keys=True).encode("utf-8")
+        require(len(encoded) <= 16384, "warm lease evidence exceeds bound")
+        self.clean(encoded)
+        return value
 
     def injected(self, token, application, rule):
         self.client_token = token
@@ -316,7 +398,8 @@ class OperatorCatalogCheck(OperatorDemoCheck):
             "originTlsVerified": True, "runId": self.run_id, "checks": self.results,
             "credentialId": credential["id"], "applicationIds": [row["id"] for row in applications] + [feature_app],
             "ruleIds": [row["id"] for row in rules] + [feature_rule], "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
-            **features.safe_evidence(self), "upstreamDispatches": 9, "responsesReleased": 7, "responsesBlocked": 2,
+            **features.safe_evidence(self), **self.warm_lease_evidence(),
+            "upstreamDispatches": 9, "responsesReleased": 7, "responsesBlocked": 2,
             "durableAuditEventIds": audit_ids, "auditedRequestAttemptIds": attempt_ids}
         self.clean(json.dumps(result, sort_keys=True).encode("utf-8"))
         return result
@@ -340,6 +423,10 @@ def run_checks(args):
                 evidence = features.safe_evidence(check)
             except Exception:
                 evidence = {"safeEvidenceUnavailable": True}
+            try:
+                evidence.update(check.warm_lease_evidence())
+            except Exception:
+                evidence["warmLeaseEvidenceUnavailable"] = True
         return {"ok": False, "mode": "operator-development", "checks": list(check.results) if check else [],
             **evidence,
             "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__}

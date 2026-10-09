@@ -1,0 +1,31 @@
+# Explicit opt-in only: base + exactly one reviewed app/gate source override +
+# this file. Never use the old accepted app merely because this layer renders.
+# The retained-store first-enable transition must be prepared before startup.
+# Requires Compose support for !reset; inspect the resolved model before use.
+services:
+  serverware:
+    # Remove the base demo's external-DNS sink. Docker's normal resolver is used;
+    # this changes container egress, not public DNS records or inbound routing.
+    dns: !reset []
+    networks:
+      outbound: {}
+    environment:
+      SERVERWARE_OPERATOR_GOOGLE_PROFILE: operator-google-v1
+      SERVERWARE_GOOGLE_OAUTH_CLIENT_ID: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_ID:?Set the reviewed Google OAuth web-client ID}
+      SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI: https://serverware-demo.example.com/api/oauth/callback/google
+      SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/serverware-google/client.secret
+      SERVERWARE_PUBLIC_URL: https://serverware-demo.example.com
+      SERVERWARE_OPERATOR_DEMO_UPSTREAMS: ${SERVERWARE_OPERATOR_GOOGLE_UPSTREAMS:?Set the exact reviewed retained-plus-Google JSON origin list}
+    volumes:
+      - type: bind
+        source: ${OPERATOR_GOOGLE_CLIENT_SECRET_FILE:?Set the absolute private Google OAuth client-secret file path}
+        target: /run/secrets/serverware-google/client.secret
+        read_only: true
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    environment:
+      SERVERWARE_OPERATOR_GOOGLE_PROFILE: operator-google-v1
+      SERVERWARE_GOOGLE_OAUTH_CLIENT_ID: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_ID:?Set the reviewed Google OAuth web-client ID}
+      SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI: https://serverware-demo.example.com/api/oauth/callback/google
+      SERVERWARE_OPERATOR_DEMO_UPSTREAMS: ${SERVERWARE_OPERATOR_GOOGLE_UPSTREAMS:?Set the exact reviewed retained-plus-Google JSON origin list}

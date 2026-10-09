@@ -564,6 +564,14 @@ destination-migration workflow, plus bounded control-plane DNS/TLS egress and
 the private Google secret mount. No retained database pin should be edited to
 make an environment-only change appear valid.
 
+The working source now provides an explicit
+[reviewed first-Google setup transition](operator-google-setup.md), with an
+[optional deployment layer](../docker/serverware-operator-demo/GOOGLE-SETUP.md).
+Preparation leaves Google disabled; a controlled restart validates and applies
+only the exact reviewed public configuration. These additions do not establish
+a real-provider deployment or account consent. Their focused verification status
+is recorded in the setup document.
+
 For ordinary clients, distinguish the isolated HTTP-proxy CONNECT check from
 the public HTTPS-proxy connection. Current workload identity uses proxy Bearer
 authentication; standard Requests proxy-URL credentials generate Basic instead.

@@ -24,6 +24,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
+    "/oauth/google/setup", "/oauth/google/setup/cancel",
 ))
 router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
@@ -381,4 +382,70 @@ async def enable_google_reauthorization_storage(request: Request,
     _admit(request, mutation=True)
     payload = await _payload(request, setup.SetupInput, 2048)
     result = await _google_reauthorization_result(setup.enable, payload, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)
+
+
+async def _google_setup_result(function, *args):
+    from serverware import operator_google_setup as setup
+    from serverware.operator_catalog_schema import CatalogConflict
+
+    try:
+        return await _blocking(function, *args)
+    except setup.SetupNotFound:
+        _reject(404, "Google setup operation not found")
+    except CatalogConflict:
+        _reject(409, "Google setup review changed; inspect saved status before preparing again")
+    except setup.SetupUnavailable:
+        _reject(409, "Google setup unavailable for this deployment state")
+    except ValueError:
+        _reject(422, "invalid Google setup input")
+    except Exception:
+        _reject(503, "Google setup status unavailable; inspect the operation without repeating the action")
+
+
+def _google_setup_read_admission(request: Request) -> None:
+    _admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _reject(400, "Google setup status accepts no body")
+
+
+@router.get("/oauth/google/setup")
+async def google_setup_review(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_setup as setup
+
+    _google_setup_read_admission(request)
+    result = await _google_setup_result(setup.review, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)
+
+
+@router.post("/oauth/google/setup")
+async def prepare_google_setup(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_setup as setup
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, setup.SetupInput, 4096)
+    result = await _google_setup_result(setup.prepare, payload, identity.user_id)
+    return JSONResponse(result, status_code=201, headers=_HEADERS)
+
+
+@router.get("/oauth/google/setup/{operation_id}")
+async def google_setup_status(operation_id: str, request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_setup as setup
+
+    _google_setup_read_admission(request)
+    result = await _google_setup_result(setup.status, operation_id, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)
+
+
+@router.post("/oauth/google/setup/cancel")
+async def cancel_google_setup(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_setup as setup
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, setup.CancelInput, 2048)
+    result = await _google_setup_result(setup.cancel, payload, identity.user_id)
     return JSONResponse(result, headers=_HEADERS)

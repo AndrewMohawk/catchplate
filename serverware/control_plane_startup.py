@@ -217,6 +217,8 @@ def validate_control_plane_configuration() -> None:
 def validate_control_plane_startup() -> None:
     """Apply the common configuration and persistent-state startup gate."""
     validate_control_plane_configuration()
+    from serverware.operator_google_setup_preflight import validate_before_database_initialization
+    validate_before_database_initialization()
     ensure_data_dirs()
     db.init_db()
     from serverware import development_sandbox

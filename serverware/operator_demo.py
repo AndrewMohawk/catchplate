@@ -215,6 +215,8 @@ def settings() -> dict:
 
 def request_allowed(method: str, path: str) -> bool:
     from serverware import operator_catalog_oauth_profile as google_profile
+    if path == "/api/operator-demo/oauth/google/setup":
+        return method.upper() in {"GET", "POST"}
     if google_profile.selected():
         if path == "/api/oauth/callback/google":
             google_profile.require_profile()
@@ -236,6 +238,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/applications/rotate-token", "/api/operator-demo/access-rules",
         "/api/operator-demo/access-rules/revoke", "/api/operator-demo/access-rules/gmail-read",
         "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",
+        "/api/operator-demo/oauth/google/setup/cancel",
         "/api/data-plane/credential-leases", "/api/data-plane/audit"}
     if path in mutations:
         return method.upper() == "POST"

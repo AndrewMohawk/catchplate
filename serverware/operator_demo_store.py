@@ -170,6 +170,8 @@ def initialize() -> None:
     db = _require()
     from serverware import operator_demo
     with operator_publication.exclusive(startup=True), db.connect() as conn:
+        retained_authority = any(row[0].lower().startswith(("operator_demo_", "operator_catalog_", "operator_google_"))
+            for row in conn.execute("SELECT name FROM sqlite_master"))
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS operator_demo_settings (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), settings_json TEXT NOT NULL);
@@ -189,9 +191,12 @@ def initialize() -> None:
         settings = operator_demo.settings()
         pinned = json.dumps({key: settings[key] for key in ("allowed_upstreams", "fixture_cidrs")}, sort_keys=True)
         previous = conn.execute("SELECT settings_json FROM operator_demo_settings WHERE singleton=1").fetchone()
+        from serverware import operator_google_setup
+        setup_applied = operator_google_setup.startup(conn, previous[0] if previous else None, pinned,
+            retained_authority=retained_authority)
         if previous is None:
             conn.execute("INSERT INTO operator_demo_settings VALUES(1,?)", (pinned,))
-        elif previous[0] != pinned:
+        elif previous[0] != pinned and not setup_applied:
             raise RuntimeError("operator demo deployment allowlist changed; separate data required")
         if conn.execute("SELECT 1 FROM operator_demo_policy").fetchone() is None:
             initial_hash = "sha256:" + hashlib.sha256(secrets.token_bytes(32)).hexdigest()
@@ -199,7 +204,8 @@ def initialize() -> None:
             conn.execute("INSERT INTO operator_demo_policy VALUES(1,1,?,?,?,?)",
                 (digest, raw, initial_hash, db.iso_now()))
         from serverware import operator_catalog_schema
-        operator_catalog_schema.initialize(conn)
+        if not setup_applied:
+            operator_catalog_schema.initialize(conn)
         conn.commit()
         materialize()
 

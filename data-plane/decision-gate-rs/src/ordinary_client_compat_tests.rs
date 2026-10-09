@@ -421,7 +421,10 @@ fn ordinary_compat_204_transport_never_reuses_a_connection_with_hidden_trailing_
             // A distinct accepted socket is required, including the legal nearby
             // control. No claim is made that Reqwest exposes all illegal bytes.
             let mut second = accept_bounded(&listener); read_request_head_from(&mut second, None).unwrap();
-            second.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"fresh\":true}").unwrap();
+            let fresh_body = b"{\"fresh\":true}";
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", fresh_body.len());
+            second.write_all(head.as_bytes()).unwrap();
+            second.write_all(fresh_body).unwrap();
         });
         let mut route = test_snapshot(1).routes[0].clone();
         assert!(reuse_idle_upstream_connections(&route, "GET"), "legacy safe-method policy unchanged");

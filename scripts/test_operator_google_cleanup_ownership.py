@@ -8,7 +8,7 @@ Run only in the isolated network-none backend harness selected by the root.
 """
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
@@ -24,6 +24,16 @@ import test_operator_google_consent as consent_tests
 ROOT = Path(__file__).resolve().parents[1]
 WORK_TABLE = cleanup_tests.WORK_TABLE
 Fixture = cleanup_tests.Fixture
+
+
+@contextmanager
+def runtime_profile_drift(f):
+    """Removing an already admitted capability is drift, not cold disablement."""
+    with patch.dict(os.environ):
+        os.environ.pop("SERVERWARE_OPERATOR_GOOGLE_PROFILE", None)
+        consent_tests.refused(f.profiles.selected, f.profiles.OperatorGoogleProfileError)
+        consent_tests.refused(f.profiles.require_profile, f.profiles.OperatorGoogleProfileError)
+        yield
 
 
 def core_schema(db):
@@ -97,35 +107,40 @@ def owned_corruption(change):
         else:
             raise AssertionError("unknown ownership refusal fixture")
         before = f.snapshot()
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_GOOGLE_PROFILE": ""}):
-            consent_tests.refused(lambda: f.cleanup_store.get_work(work_id), ValueError)
-            # Identity/source and a disabled profile never outrank durable work.
-            assert f.cleanup.operator_context("x", work_id=work_id)
-            assert f.cleanup.operator_context("x", result={"_operator_google_work": work_id})
-            for action in (
-                lambda: f.cleanup_store.require_permit(work_id=work_id, secret=secret),
-                lambda: f.db.mark_oauth_revocation_work_pending(work_id, error="synthetic refusal"),
-                lambda: f.db.complete_oauth_revocation_work(work_id),
-                lambda: f.db.resolve_oauth_issuance_uncertainty(work_id, actor_id="synthetic-reviewer"),
-                lambda: f.oauth.revoke_oauth_token(provider_id="google", token_secret=secret,
-                    _operator_cleanup_work_id=work_id),
-                lambda: f.oauth.revoke_oauth_token(provider_id="google", token_secret=secret),
-                lambda: f.db.reserve_oauth_revocation_work(provider_id="google", actor_id="synthetic-reviewer",
-                    source="authorization_code_exchange"),
-            ):
-                consent_tests.refused(action, (ValueError, f.oauth.OAuthError))
-            disposition = f.app._revoke_rejected_oauth_exchange({"provider": "x", "secret": json.dumps(secret),
-                "revocationWorkId": work_id, "_operator_google_work": work_id}, actor_id="synthetic-reviewer")
-            assert disposition["status"] == "deferred"
-            assert not f.db.claim_oauth_revocations(worker_id="ownership-refusal", limit=1)
-            assert f.app._reconcile_oauth_revocations(limit=1)["revoked"] == 0
-            if change == "orphan":
-                with patch.object(f.db, "_OAUTH_REVOCATION_BACKLOG_MAX_COUNT", 1):
-                    consent_tests.refused(lambda: f.db.reserve_oauth_revocation_work(provider_id="x",
-                        actor_id="synthetic-reviewer", source="authorization_code_exchange"), ValueError)
+        assert f.profiles.selected() is True
+        consent_tests.refused(lambda: f.cleanup_store.get_work(work_id), ValueError)
+        # Mutable provider/source never outrank the admitted durable owner.
+        assert f.cleanup.operator_context("x", work_id=work_id)
+        assert f.cleanup.operator_context("x", result={"_operator_google_work": work_id})
+        for action in (
+            lambda: f.cleanup_store.require_permit(work_id=work_id, secret=secret),
+            lambda: f.db.mark_oauth_revocation_work_pending(work_id, error="synthetic refusal"),
+            lambda: f.db.complete_oauth_revocation_work(work_id),
+            lambda: f.db.resolve_oauth_issuance_uncertainty(work_id, actor_id="synthetic-reviewer"),
+            lambda: f.oauth.revoke_oauth_token(provider_id="google", token_secret=secret,
+                _operator_cleanup_work_id=work_id),
+            lambda: f.oauth.revoke_oauth_token(provider_id="google", token_secret=secret),
+            lambda: f.db.reserve_oauth_revocation_work(provider_id="google", actor_id="synthetic-reviewer",
+                source="authorization_code_exchange"),
+        ):
+            consent_tests.refused(action, (ValueError, f.oauth.OAuthError))
+        disposition = f.app._revoke_rejected_oauth_exchange({"provider": "x", "secret": json.dumps(secret),
+            "revocationWorkId": work_id, "_operator_google_work": work_id}, actor_id="synthetic-reviewer")
+        assert disposition["status"] == "deferred"
+        assert not f.db.claim_oauth_revocations(worker_id="ownership-refusal", limit=1)
+        assert f.app._reconcile_oauth_revocations(limit=1)["revoked"] == 0
+        if change == "orphan":
+            with patch.object(f.db, "_OAUTH_REVOCATION_BACKLOG_MAX_COUNT", 1):
+                consent_tests.refused(lambda: f.db.reserve_oauth_revocation_work(provider_id="x",
+                    actor_id="synthetic-reviewer", source="authorization_code_exchange"), ValueError)
+        with runtime_profile_drift(f):
+            consent_tests.refused(lambda: f.db.reserve_oauth_revocation_work(provider_id="google",
+                actor_id="synthetic-reviewer", source="authorization_code_exchange"),
+                f.profiles.OperatorGoogleProfileError)
         assert f.snapshot() == before and f.revocations == 0
         f.assert_redacted_cleanup()
-    return {"corruption": change, "disabled_profile_refused": True, "revocations": 0}
+    return {"work_id": work_id, "corruption": change, "active_owner_refused": True,
+        "runtime_drift_refused": True, "revocations": 0}
 
 
 def direct_deletion():
@@ -325,7 +340,7 @@ def worker_private_identity():
         with f.store.operator_publication.exclusive():
             consent_tests.refused(lambda: f.oauth.revoke_oauth_token(provider_id="google", token_secret=secret,
                 _operator_cleanup_work_id=work_id), f.oauth.OAuthError)
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_GOOGLE_PROFILE": ""}):
+        with runtime_profile_drift(f):
             for kwargs in ({}, {"_operator_cleanup_work_id": work_id}):
                 consent_tests.refused(lambda: f.oauth.revoke_oauth_token(provider_id="google",
                     token_secret=secret, **kwargs), f.oauth.OAuthError)
@@ -417,6 +432,79 @@ def guard_check():
     return before
 
 
+def valid_owned_prepare():
+    f = Fixture()
+    with patch.object(f.oauth, "request_bytes", side_effect=f.transport):
+        f.begin()
+        work_id = f.held()
+        assert f.cleanup_store.get_work(work_id)["fence"] is None
+        f.assert_redacted_cleanup()
+    return {"work_id": work_id}
+
+
+def cold_disabled_check(change):
+    """A new process has never admitted Google; retained ownership still denies."""
+    from serverware import operator_catalog_oauth_profile as profiles
+    assert "SERVERWARE_OPERATOR_GOOGLE_PROFILE" not in os.environ
+    assert all(key not in os.environ for key in profiles.GOOGLE_CONFIGURATION_KEYS)
+    assert profiles.selected() is False
+    # This is original static-profile activation, not Fixture() or an admission
+    # reset. The existing core schema initializes normally; its Google catalog
+    # pin must then refuse being reopened as an unconfigured Google workspace.
+    config, db, store, _bundles = cleanup_tests.workspace.common.backend(initialize=False)
+    from serverware import app, oauth, operator_catalog_schema as schema
+    from serverware import operator_google_cleanup as cleanup, operator_google_cleanup_store as cleanup_store
+    db.init_db()
+
+    def retained_snapshot():
+        with closing(db.connect()) as conn:
+            rows = {table: sorted(tuple(row) for row in conn.execute("SELECT * FROM " + table))
+                for table in cleanup_tests.TABLES}
+        return rows, config.POLICY_BUNDLE_PATH.read_bytes(), owner_schema(db)
+
+    before = retained_snapshot()  # Do not treat normal init timestamps as guard effects.
+    consent_tests.refused(store.initialize, schema.CatalogIntegrityError)
+    assert profiles.selected() is False and retained_snapshot() == before
+    with closing(db.connect()) as conn:
+        identifiers = {row[0] for row in conn.execute("SELECT work_id FROM " + WORK_TABLE)}
+        identifiers.update(row[0] for row in conn.execute("SELECT id FROM oauth_revocation_work"))
+    assert len(identifiers) == 1
+    work_id = identifiers.pop()
+    assert cleanup_store.retained_ownership() is True
+    assert cleanup.operator_context("google")
+    assert cleanup.operator_context("x", work_id=work_id)
+    if change == "valid":
+        assert cleanup_store.get_work(work_id)["work_id"] == work_id
+    else:
+        consent_tests.refused(lambda: cleanup_store.get_work(work_id), cleanup_store.CleanupStoreError)
+    secret = {"access_token": consent_tests.ACCESS, "refresh_token": consent_tests.REFRESH, "token_type": "Bearer"}
+    consent_tests.refused(lambda: cleanup_store.require_permit(work_id=work_id, secret=secret),
+        cleanup_store.CleanupStoreError)
+    consent_tests.refused(lambda: db.reserve_oauth_revocation_work(provider_id="google", actor_id="cold-refusal",
+        source="authorization_code_exchange"), cleanup_store.CleanupStoreError)
+    calls = []
+
+    def no_transport(request, **_options):
+        calls.append(request.full_url)
+        raise AssertionError("unconfigured retained workspace attempted provider contact")
+
+    with patch.object(oauth, "request_bytes", side_effect=no_transport):
+        # No Google client exists in this process. These low-level refusals are
+        # NOT sole proof of the permit guard: the ownership/permit/reservation
+        # assertions above independently verify the retained boundary.
+        for kwargs in ({}, {"_operator_cleanup_work_id": work_id}):
+            consent_tests.refused(lambda: oauth.revoke_oauth_token(provider_id="google",
+                token_secret=secret, **kwargs), oauth.OAuthError)
+        disposition = app._revoke_rejected_oauth_exchange({"provider": "x", "secret": json.dumps(secret),
+            "revocationWorkId": work_id, "_operator_google_work": work_id}, actor_id="cold-refusal")
+        assert disposition["status"] == "deferred"
+        assert not db.claim_oauth_revocations(worker_id="cold-refusal", limit=1)
+        assert app._reconcile_oauth_revocations(limit=1)["revoked"] == 0
+    assert not calls and profiles.selected() is False and retained_snapshot() == before
+    return {"work_id": work_id, "cold_unconfigured": True, "startup_refused_retained_pin": True,
+        "ownership_refused_without_profile": True, "provider_calls": 0}
+
+
 OPERATIONS = {"cold-start": cold_start, "invalid-core-prepare": invalid_core_prepare,
     "invalid-core-check": invalid_core_check, "direct-deletion": direct_deletion,
     "replacement-ownership": replacement_ownership,
@@ -424,17 +512,26 @@ OPERATIONS = {"cold-start": cold_start, "invalid-core-prepare": invalid_core_pre
     "worker-private-identity": worker_private_identity, "retirement-rollback": retirement_rollback,
     "guard-missing-prepare": lambda: guard_prepare("missing"),
     "guard-changed-prepare": lambda: guard_prepare("changed"),
-    "guard-table-prepare": lambda: guard_prepare("table-missing"), "guard-check": guard_check}
+    "guard-table-prepare": lambda: guard_prepare("table-missing"), "guard-check": guard_check,
+    "valid-owned-cold": valid_owned_prepare}
 for _change in ("orphan", "missing-association", "retag"):
     OPERATIONS["owned-" + _change] = lambda change=_change: owned_corruption(change)
+for _change in ("orphan", "missing-association", "retag", "valid"):
+    OPERATIONS["cold-disabled-" + _change] = lambda change=_change: cold_disabled_check(change)
 
 
 class OperatorGoogleCleanupOwnershipTests(unittest.TestCase):
     setUp = consent_tests.OperatorGoogleConsentTests.setUp
 
-    def worker(self, operation):
+    def worker(self, operation, *, unconfigured=False):
+        environment = self.environment.copy()
+        if unconfigured:
+            for name in ("SERVERWARE_OPERATOR_GOOGLE_PROFILE", "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
+                    "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE", "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+                    "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET"):
+                environment.pop(name, None)
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
-            cwd=ROOT, env=self.environment, capture_output=True, text=True, timeout=90)
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-45:]))
         return json.loads(result.stdout)
 
@@ -456,7 +553,11 @@ class OperatorGoogleCleanupOwnershipTests(unittest.TestCase):
 
 def _test(operation):
     def check(self):
-        self.worker(operation)
+        prepared = self.worker(operation)
+        if operation.startswith("owned-") or operation == "valid-owned-cold":
+            change = operation.removeprefix("owned-") if operation.startswith("owned-") else "valid"
+            observed = self.worker("cold-disabled-" + change, unconfigured=True)
+            self.assertEqual(prepared["work_id"], observed["work_id"])
     return check
 
 

@@ -348,6 +348,14 @@ Removing mandatory response projection solves only one part of that journey:
 - Generated cURL remains a connection template, without body or query values.
   A complete example would need supplied sample input and must not execute
   automatically.
+- Ordinary provider response headers need an explicit compatibility contract,
+  separate from which headers are forwarded to the client. The isolated normal
+  Google run returned upstream HTTP 200 but the signed response envelope blocked
+  its headers even with `unfiltered_json` selected. Basic setup must not require
+  operators to reverse-engineer provider metadata. Fix the supported simple mode
+  with bounded admission/forwarding and regression coverage, without weakening
+  existing signed rules or removing the fixture metadata to hide the gap. See
+  [the retained failure](operator-google-backend-verification.md#corrected-joined-run-response-header-blocker).
 - Whole-JSON responses retain status-code, body-presence, size and safe-header
   restrictions. The existing UI and legacy whole-JSON envelope do not support
   `204 No Content`; the additive source contract admits it only through an

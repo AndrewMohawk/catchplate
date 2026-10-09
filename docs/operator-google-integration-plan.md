@@ -2,6 +2,15 @@
 
 ## Status and objective
 
+Current joined checkpoint, 2026-10-09: the isolated normal-binary run passes
+application consent/callback/account storage and access-denial controls against
+a synthetic provider. Its first allowed request reaches upstream HTTP 200 but
+is blocked by the response-header envelope; actual expiry and refresh are not
+reached. Google remains disabled in the live demo and is not releasable. The
+[retained result](operator-google-backend-verification.md#corrected-joined-run-response-header-blocker)
+supersedes earlier startup-only uncertainty, not the open provider/browser and
+lifecycle acceptance requirements. Historical checkpoints follow.
+
 Originally designed against workspace commit `10879772`. The 2026-10-08 shared
 working-tree checkpoint now contains cold profile, consent/catalog,
 generation-reconciliation and local cleanup-fence source. It is **not releasable

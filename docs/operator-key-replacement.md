@@ -119,9 +119,9 @@ to `private-fixture-retained/` within the evidence directory, preserving its
 ownership and private permissions. Its claimed checker must not be replayed.
 The completed browser scopes left no processes; their empty scratch was removed.
 
-## Retained demo rollout, 2026-10-09
+## Historical ca08 demo rollout, 2026-10-09
 
-The demo now runs immutable app source
+This rollout selected immutable app source
 `ca08fd353da6188bc4c0849974403f7b9189f8f7` with the same f430 Rust executable.
 Only the app container was recreated. A fresh stopped-consistent backup and
 independent observer preserved all seven credentials, generation rows, catalog
@@ -134,7 +134,7 @@ The console maintenance window was 10:45:07–10:46:45 UTC. Public console/catal
 kept their authentication redirects; lab health returned 200, and monitoring
 confirmed successful checks at 10:47:20 and 10:48:20 UTC. All four services are
 healthy with zero restarts and no host-published ports. See the
-[deployment checkpoint](../docker/serverware-operator-demo/README.md#current-live-ca08fd35f4307347-checkpoint).
+[historical deployment checkpoint](../docker/serverware-operator-demo/README.md#historical-live-ca08fd35f4307347-checkpoint).
 
 The bounded internal read-only browser check used actual deployed HTML/catalog
 and kept administrator authentication out of the browser. Attempt 1 stopped at
@@ -164,8 +164,8 @@ test SHA-256 is
 The result is `layout.log` in the rollout evidence directory below. Desktop and
 320-pixel screenshots were inspected in
 `/srv/catchplate-fast/projects/serverware-operator-artifacts/key-replacement-browser-synthetic-avW5sC`.
-This regression uses intercepted fixtures. The fix is **not deployed**;
-follow-up rollout and actual deployed mobile acceptance remain open.
+This regression used intercepted fixtures. At that checkpoint the fix was not
+deployed; the separate follow-up rollout and actual layout result are below.
 
 Rollout evidence is
 `/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/key-replacement-live.63FFg1d3`.
@@ -175,3 +175,46 @@ The live read-only browser receipts are `runtime-browser/receipt.json` and
 separate from this rollout: no saved live key was replaced during verification.
 Provider-key validity/revocation, real Google consent/refresh, external-Internet,
 native and production acceptance remain unproven.
+
+## Current c838 layout rollout and actual browser result
+
+The demo now runs immutable app source
+`c8387a66bc773f984bbd1ab661309b4f8368f7f2` with the same f430 Rust executable.
+The only production-source delta from ca08 is the scoped wrapping rule.
+A fresh stopped-consistent backup and independent observer again preserved
+all seven resource/generation sets, 92 nonces, 176 audits, 29 non-SQLite files,
+the CA, tokens, policy and publication-lock identity. Revision 10 and policy
+sequence 8 remain active with zero audit pending/errors. The app alone was
+recreated; the same gate and edge restarted, without initialization or a build.
+The maintenance window was 11:08:08–11:09:36 UTC. Normal TLS routes recovered,
+and monitoring recorded successful checks after the two maintenance failures.
+
+The focused actual-browser check passed once at 390, 320 and 1280 pixels.
+It selected the longest eligible saved credential name from the real catalog,
+checked the exact affected-application IDs, complete title/list/caveat text,
+blank password field, usable control geometry and Open/Cancel at each width.
+Document width exactly matched all three viewports. Five actual API/HTML GETs
+returned 200; a manual refresh and final read preserved the full catalog except
+its observation clock. There were zero console/page errors, refused/external
+requests or mutations. No key was entered, Submit clicked or DOM property
+modified. All three panel screenshots were inspected. The browser/context
+closed normally and the isolated scope ended with no remaining processes.
+
+Evidence is
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/key-layout-live.0Bx1bANa`:
+`runtime-layout-browser/receipt.json` has SHA-256
+`eac5d2a1a67eb8246a541a12c8e3151e6b4bfa8268f654eb57afe408c549ca44`.
+The checker hash is
+`7f4b8b8d3ad1aff794dbbc4556c6a2cc0c74fa300fa87025f249bdd5c1d86b63`;
+its 14-file deployed-source manifest is
+`6527f73b94293b385dafa20d7ca1c9ffecb40c882be7331721dcd0de7c5aea32`.
+The app/proxy pair receipt after the browser is byte-identical to its baseline.
+Completed helper containers and empty task browser scratch were removed;
+backups, source snapshots and evidence remain retained.
+
+This resolves the deployed long-name review-layout failure, not every feature's
+browser acceptance. The browser used an internal GET-only bridge with the
+administrator token confined to the app process; it did not establish an
+authenticated public SSO session, external-Internet reachability, a live key
+change, real Google use, native or production acceptance. The earlier private
+key-change/lease-expiry proof remains attributed to its original source.

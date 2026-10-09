@@ -125,7 +125,7 @@ saved-resource reuse, token handling and uncertain-mutation guards. Its evidence
 is `connect-regression.vt9d2W/browser.log`; that scope also exited zero with
 unchanged sources. No provider or live API requests, consent, token refresh or
 generated client commands ran in those fixtures. The change was absent from the
-then-deployed `d2f645f6` snapshot; it is now included in the retained `e19f8b5a`
+then-deployed `d2f645f6` snapshot; it was included in the retained `e19f8b5a`
 deployment alongside the subsequently tested activity display. See
 [current activity and live verification](operator-account-activity-verification.md).
 
@@ -358,7 +358,7 @@ cannot silently disappear when content filtering is disabled.
 | Remove one application's access | After the new policy is actually loaded, the revoked client cannot dispatch, including with a previously warmed credential cache; the other application still works. |
 | Rotate a client token | The new token is disclosed once, the old verifier is replaced in the signed policy, and old-token rejection is verified after activation. No provider refresh or reconnection occurs. |
 | Restart or migrate | Existing credential ciphertext, IDs, token verifiers/expiry, nonce history, policy bytes/hash/sequence and high-water state are preserved; a restart neither renews tokens nor grants new access. |
-| Replace a saved provider secret | Preserve the shared credential's assignments and application identities; make the version change and affected applications explicit. Verify new issuance and subsequent proxy use of the new generation without implying instant remote invalidation or provider revocation. The catalog/UI implementation, private two-application lease-expiry proof and retained-state rollout are recorded in the [key replacement workflow](operator-key-replacement.md). Full live browser acceptance remains open after a mobile long-name layout failure. |
+| Replace a saved provider secret | Preserve the shared credential's assignments and application identities; make the version change and affected applications explicit. Verify new issuance and subsequent proxy use of the new generation without implying instant remote invalidation or provider revocation. The catalog/UI implementation, private two-application lease-expiry proof and retained-state rollout are recorded in the [key replacement workflow](operator-key-replacement.md). The deployed long-name review/Cancel flow now passes at 320/390/1280 pixels; no live key was changed during that read-only browser check. |
 | Connect Google | Real consent identifies the account and granted permissions; a proxy request obtains only an injected access token, with no provider token handed to the application. |
 | Run Google unattended | A request after access-token expiry completes through actual refresh, generation reconciliation and durable storage; concurrent callers do not race token rotation. Provider-required reauthorization is distinct from transient failure. |
 | Replace a configured value | A normal client with the configured placeholder succeeds; unrelated, ambiguous or mismatching input does not select or reveal a credential. Existing insertion-only rules retain their behavior. |
@@ -506,6 +506,18 @@ workflow. Account-level repair must show which applications it affects.
 The current source is not yet a general "just replace authentication" proxy.
 Removing mandatory response projection solves only one part of that journey:
 
+- Standard proxy username/password configuration is not yet supported for
+  catalog applications. The signed policy and Rust CONNECT identity capture
+  accept their scoped Bearer tokens; stock Requests proxy URL credentials emit
+  Basic instead. The Gmail job therefore uses a custom adapter. This is a real
+  ordinary-client authentication gap, separate from provider Basic injection.
+  Add an explicit signed transport choice with hash/expiry checks and unchanged
+  legacy semantics, not literal app credentials in policy or a hidden header
+  rewrite. Acceptance needs unmodified Requests and curl over a verified HTTPS
+  proxy, correct outer/inner CA trust, wrong/expired-identity denial before
+  upstream contact, continued Bearer compatibility and proof that workload
+  credentials never reach the provider. Test the named clients without claiming
+  arbitrary SDK support or real Google acceptance.
 - Legacy rules can interpret an empty request-field list as forbidding a body.
   New supported rules explicitly preserve bounded strict JSON without field
   declarations; the deployed UI selects the advertised contract automatically.

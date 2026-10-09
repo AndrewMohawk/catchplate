@@ -4,6 +4,8 @@ This is an additive source contract, not a deployment or acceptance receipt.
 Implementation began separately from the static-acceptance candidate in the
 `serverware/ordinary-client-compat` worktree at `0717103b`. The existing static
 fixture does not establish acceptance of these new modes.
+See the [verification record](ordinary-client-verification.md) for exact tested
+snapshots, retained failures and the remaining user-facing acceptance boundary.
 
 ## Product boundary
 

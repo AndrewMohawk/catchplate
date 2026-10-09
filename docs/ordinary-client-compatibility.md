@@ -255,7 +255,15 @@ mode change grants no access. Neither enabling the mode nor changing transport
 may silently renew the token. Disabling Basic must retain the existing Bearer
 path, not rotate or recreate the application.
 
-### Acceptance still required
+### Acceptance contract and current boundary
+
+The October 9 private run on source `c4611550` and normal gate `e7529b44…`
+passed stock Requests/curl Basic authentication, eight authentication refusals,
+four TLS trust refusals and two Bearer controls, with four joined successful
+dispatches and zero negative-case upstream effects. See the
+[exact evidence and limitations](ordinary-client-verification.md#private-stock-requestscurl-https-acceptance-october-9).
+This does not close retained live deployment, public routing, real providers or
+fresh API-token natural expiry. The requirements below retain those boundaries.
 
 Acceptance must use stock Requests and curl through the actual **HTTPS** proxy,
 including their ordinary proxy-username/password handling; a custom CONNECT

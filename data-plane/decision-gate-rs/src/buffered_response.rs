@@ -10,11 +10,16 @@ use std::io::{self, Write};
 
 pub(crate) const MODE: &str = "bufferedPassthrough";
 pub(crate) const JSON_OR_EMPTY_204_MODE: &str = "bufferedJsonOrEmpty204V1";
+pub(crate) const JSON_OR_EMPTY_204_V2_MODE: &str = "bufferedJsonOrEmpty204V2";
 pub(crate) const JSON_OR_EMPTY_204_PRESENCE: &str = "jsonOrEmpty204V1";
 const MAX_ERROR_BYTES: u64 = 65_536;
 
 pub(crate) fn supported_mode(mode: &str) -> bool {
-    matches!(mode, MODE | JSON_OR_EMPTY_204_MODE)
+    matches!(mode, MODE | JSON_OR_EMPTY_204_MODE | JSON_OR_EMPTY_204_V2_MODE)
+}
+
+pub(crate) fn json_or_empty_204_mode(mode: &str) -> bool {
+    matches!(mode, JSON_OR_EMPTY_204_MODE | JSON_OR_EMPTY_204_V2_MODE)
 }
 
 fn validate_profile(profile: &Map<String, Value>, error: bool) -> Result<u64, String> {
@@ -112,9 +117,18 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if constraints.iter().any(|constraint| constraint.get("unlistedHeaderPolicy").is_some()
+        && constraint.get("type").and_then(Value::as_str) != Some("responseEnvelope"))
+    {
+        return Err("unlistedHeaderPolicy is only valid on an explicit V2 response envelope".into());
+    }
     let envelopes = constraints.iter().filter(|constraint|
         constraint.get("type").and_then(Value::as_str) == Some("responseEnvelope")).collect::<Vec<_>>();
-    if mode != Some(JSON_OR_EMPTY_204_MODE) {
+    let v2 = mode == Some(JSON_OR_EMPTY_204_V2_MODE);
+    if envelopes.iter().any(|envelope| envelope.get("unlistedHeaderPolicy").is_some()) && !v2 {
+        return Err("unlistedHeaderPolicy requires its explicit generic.rest V2 response profile".into());
+    }
+    if !mode.is_some_and(json_or_empty_204_mode) {
         if envelopes.iter().any(|envelope|
             envelope.get("bodyPresence").and_then(Value::as_str) == Some(JSON_OR_EMPTY_204_PRESENCE))
         {
@@ -125,6 +139,7 @@ pub(crate) fn validate_envelope_pairing(
     if adapter_type != "generic.rest" || envelopes.is_empty() || envelopes.iter().any(|envelope|
         envelope.get("phase").and_then(Value::as_str) != Some("response")
             || envelope.get("bodyPresence").and_then(Value::as_str) != Some(JSON_OR_EMPTY_204_PRESENCE)
+            || (v2 && envelope.get("unlistedHeaderPolicy").and_then(Value::as_str) != Some(crate::response_metadata::POLICY))
             || envelope.get("contentTypes") != Some(&json!(["application/json"]))
             || !envelope.get("statusCodes").and_then(Value::as_array).is_some_and(|statuses| {
                 let mut seen = std::collections::HashSet::new();
@@ -136,6 +151,30 @@ pub(crate) fn validate_envelope_pairing(
             })
     ) {
         return Err("bufferedJsonOrEmpty204V1 requires exact JSON-or-empty-204 response envelopes".into());
+    }
+    Ok(())
+}
+
+/// Both success and error selections must be admitted by EVERY envelope, even
+/// when their operation scopes differ. V1 and all older contracts are unchanged.
+pub(crate) fn validate_v2_header_selection(response: &Value, constraints: &[Value]) -> Result<(), String> {
+    if response.get("mode").and_then(Value::as_str) != Some(JSON_OR_EMPTY_204_V2_MODE) { return Ok(()); }
+    let selected = [Some(response), response.get("error")].into_iter().flatten()
+        .flat_map(|profile| profile.get("allowedHeaders").and_then(Value::as_array).into_iter().flatten())
+        .filter_map(Value::as_str).collect::<std::collections::HashSet<_>>();
+    for envelope in constraints.iter().filter(|constraint|
+        constraint.get("type").and_then(Value::as_str) == Some("responseEnvelope"))
+    {
+        crate::validate_response_envelope_constraint("V2", "V2", envelope.as_object()
+            .ok_or("V2 response envelope must be an object")?)?;
+        let names = envelope.get("allowedResponseHeaderNames").and_then(Value::as_array)
+            .ok_or("V2 response envelope header names missing")?;
+        if names.iter().any(|name| name.as_str().is_none_or(|name|
+            name.len() > 128 || crate::response_metadata::forbidden_listed_name(name)))
+            || selected.iter().any(|name| !names.iter().any(|value| value.as_str() == Some(*name)))
+        {
+            return Err("V2 selected response headers must be admitted by every envelope".into());
+        }
     }
     Ok(())
 }
@@ -231,7 +270,7 @@ pub(crate) fn inspect_body(
         .as_object()
         .and_then(|profile| validate_profile(profile, error).ok())
         .ok_or_else(|| json!({"error":"response_buffered_passthrough_profile_invalid"}))?;
-    if config.get("mode").and_then(Value::as_str) == Some(JSON_OR_EMPTY_204_MODE) {
+    if config.get("mode").and_then(Value::as_str).is_some_and(json_or_empty_204_mode) {
         if status == StatusCode::RESET_CONTENT {
             return Err(json!({"error":"response_status_invalid"}));
         }
@@ -255,7 +294,7 @@ pub(crate) fn inspect_body(
     if secret_guard.detects(&body) {
         return Err(json!({"error":"response_credential_reflection"}));
     }
-    if config.get("mode").and_then(Value::as_str) == Some(JSON_OR_EMPTY_204_MODE) {
+    if config.get("mode").and_then(Value::as_str).is_some_and(json_or_empty_204_mode) {
         crate::buffered_request::validate_container_depth(&body)
             .map_err(|()| json!({"error":"response_invalid_json","adapter":adapter_type}))?;
     }

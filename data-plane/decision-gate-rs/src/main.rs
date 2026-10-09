@@ -10,9 +10,12 @@ mod native_canary_opening;
 mod native_canary_runtime;
 mod response_v2;
 mod buffered_response;
+mod response_metadata;
 mod buffered_request;
 #[cfg(test)]
 mod ordinary_client_compat_tests;
+#[cfg(test)]
+mod response_metadata_tests;
 mod gate_state_init;
 mod control_plane_client_config;
 mod development_sandbox;
@@ -11897,6 +11900,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             adapter_config.get("response").and_then(|profile| profile.get("mode")).and_then(Value::as_str),
             constraints,
         )?;
+        if let Some(response) = adapter_config.get("response") {
+            buffered_response::validate_v2_header_selection(response, constraints)?;
+        }
         if adapter_type == "generic.rest" && credential_bound {
             let Some(body_mode) = request_mode else {
                 return Err(format!(
@@ -11915,7 +11921,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     ));
                 }
             }
-            if !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1")) {
+            if !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2")) {
                 return Err(format!(
                     "route {route_id} credential-bearing generic.rest response mode must be explicitly buffered"
                 ));
@@ -12733,6 +12739,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 "responseEnvelope" => &[
                     "statusCodes",
                     "bodyPresence",
+                    "unlistedHeaderPolicy",
                     "contentTypes",
                     "allowedResponseHeaderNames",
                     "responseHeaderRules",
@@ -24133,7 +24140,7 @@ fn validate_resolved_addresses(
 
 fn reuse_idle_upstream_connections(route: &Route, method: &str) -> bool {
     matches!(method, "GET" | "HEAD" | "OPTIONS")
-        && route_response_mode(route) != Some(buffered_response::JSON_OR_EMPTY_204_MODE)
+        && !route_response_mode(route).is_some_and(buffered_response::json_or_empty_204_mode)
 }
 
 fn prepare_upstream(
@@ -34538,6 +34545,11 @@ fn enforce_response_envelope(
     if !response_constraint_applies_to_operation(constraint, operation)? {
         return Ok(());
     }
+    let v2_headers;
+    let headers = if constraint.get("unlistedHeaderPolicy").and_then(Value::as_str) == Some(response_metadata::POLICY) {
+        v2_headers = response_metadata::for_envelope(headers, constraint)?;
+        &v2_headers
+    } else { headers };
     let status_allowed = constraint
         .get("statusCodes")
         .and_then(Value::as_array)
@@ -42520,7 +42532,7 @@ fn release_forward_response(
         ),
     ]);
     if status == StatusCode::NO_CONTENT
-        && validation.get("mode").and_then(Value::as_str) == Some(buffered_response::JSON_OR_EMPTY_204_MODE)
+        && validation.get("mode").and_then(Value::as_str).is_some_and(buffered_response::json_or_empty_204_mode)
         && body.is_empty()
     {
         return buffered_response::serialize_empty_204(content_type, &headers);
@@ -42706,6 +42718,9 @@ fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
         route.adapter_config.pointer("/response/mode").and_then(Value::as_str),
         &route.constraints,
     )?;
+    if let Some(response) = route.adapter_config.get("response") {
+        buffered_response::validate_v2_header_selection(response, &route.constraints)?;
+    }
     if response_mode.is_some_and(buffered_response::supported_mode) {
         buffered_response::validate_contract(
             &route.adapter_type,
@@ -42726,7 +42741,7 @@ fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
             .credential_ref
             .as_deref()
             .is_some_and(|credential_ref| !credential_ref.is_empty())
-        && !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1"))
+        && !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2"))
     {
         return Err(
             "credential-bearing generic.rest requires an explicitly buffered response mode"
@@ -42960,7 +42975,7 @@ fn validate_selected_json_response_content_type(
     adapter_type: &str,
 ) -> Result<(), Value> {
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
-        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1")) {
+        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -43121,6 +43136,11 @@ fn validate_response_proof_route_preflight(
     route_match: &RouteMatch<'_>,
     proof_kind: ResponseProofKind,
 ) -> Result<(), &'static str> {
+    if route_match.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
+        == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE)
+    {
+        return Err("response_metadata_v2_proof_unsupported");
+    }
     if gmail_metadata_fetch_for_list_route_match(route_match).is_some() {
         return Err("gmail_metadata_fetch_response_proof_unsupported");
     }
@@ -44285,7 +44305,7 @@ fn validate_policy_json_response(
         ) {
             Ok(bytes) => release_forward_response(
                 state, snapshot, decision, method, url, status,
-                if mode == buffered_response::JSON_OR_EMPTY_204_MODE && status == StatusCode::NO_CONTENT { content_type } else { Some("application/json") },
+                if buffered_response::json_or_empty_204_mode(mode) && status == StatusCode::NO_CONTENT { content_type } else { Some("application/json") },
                 released_headers, bytes, response_secret_guard,
                 merge_response_validation(
                     json!({"ok":true,"mode":mode,
@@ -45018,8 +45038,30 @@ fn finalize_upstream_response(
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
+    // V2 alone bounds and scans the complete parsed physical header set before
+    // shadow observation, metadata selection, proof capture or a 204 early path.
+    let mut metadata_v2 = false;
+    let mut metadata_v2_error = None;
+    if let Ok(route_match) = decision_route_context(snapshot, decision, request_method, upstream_url) {
+        if route_match.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
+            == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE)
+        {
+            metadata_v2 = true;
+            let inspected = validate_route_response_release_mode(route_match.route)
+                .map_err(|_| json!({"error":"response_release_mode_invalid"}))
+                .and_then(|()| response_metadata::prepare(response.headers(), &route_match.route.constraints, response_secret_guard));
+            match inspected {
+                Ok(headers) => *response.headers_mut() = headers,
+                Err(payload) => metadata_v2_error = Some(payload),
+            }
+        }
+    }
     let mut shadow_response_attempt = match shadow_response_hook {
-        Some(hook) => match hook.begin(snapshot, status, response.headers()) {
+        Some(hook) => match if metadata_v2 {
+            hook.begin_unavailable(snapshot)
+        } else {
+            hook.begin(snapshot, status, response.headers())
+        } {
             Ok(attempt) => Some(attempt),
             Err(error) => {
                 hook.record_unavailable(
@@ -45031,6 +45073,12 @@ fn finalize_upstream_response(
         },
         None => None,
     };
+    if let Some(payload) = metadata_v2_error {
+        let blocked = block_forward_response(state, decision, request_method, upstream_url, status, payload);
+        finish_shadow_parsed_response_unavailable(snapshot, &mut shadow_response_attempt, &blocked,
+            policy_core::PolicyShadowTerminalReason::ResponsePolicyRejected);
+        return ForwardResult::buffered(blocked);
+    }
     if let Some(observation) = response_observation.as_deref_mut() {
         observation.observe_upstream_headers(status, response.headers());
     }
@@ -45127,7 +45175,7 @@ fn finalize_upstream_response(
                 block_buffered_upstream!(payload, "response-status-policy-denied")
             }
         };
-    let empty_204 = response_config.get("mode").and_then(Value::as_str) == Some(buffered_response::JSON_OR_EMPTY_204_MODE)
+    let empty_204 = response_config.get("mode").and_then(Value::as_str).is_some_and(buffered_response::json_or_empty_204_mode)
         && status == StatusCode::NO_CONTENT;
     if empty_204 {
         if let Err(payload) = buffered_response::validate_empty_204_headers(response.headers()) {
@@ -45909,6 +45957,21 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             )))
         }
     };
+    // The inner entry also refuses V2 proofs before any decision can acquire
+    // credential authority. In particular observation-v2 has a separate path.
+    let v2_proof_requested = response_proof_authorization_output.is_some()
+        || response_proof_upstream_output.is_some() || streaming_response_proof_request.is_some()
+        || response_observation.is_some() || response_observation_v2.is_some()
+        || request.headers.keys().any(|name| [RESPONSE_PROOF_NONCE_HEADER,
+            STREAM_RESPONSE_PROOF_NONCE_HEADER, RESPONSE_OBSERVATION_NONCE_HEADER]
+            .iter().any(|reserved| name.eq_ignore_ascii_case(reserved)));
+    if v2_proof_requested && matched_response_proof_route(snapshot, &request, authenticated_principal_id)
+        .is_some_and(|matched| matched.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
+            == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE))
+    {
+        buffered!(json_status_response(StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"error":"response_metadata_v2_proof_unsupported"})));
+    }
     let decision_request = precomputed_decision_request.unwrap_or_else(|| {
         buffered_forward_decision_request(&request, client_request_digest)
     });
@@ -46079,7 +46142,11 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             .ok()
             .and_then(|route_match| gmail_metadata_fetch_for_list_route_match(&route_match))
             .is_some();
-    let proof_route_error = match (response_proof_kind, gmail_metadata_list, route_streaming) {
+    let v2_proof_denied = response_proof_requested
+        && decision_route_context(snapshot, &decision, &request.method, &upstream_url).is_ok_and(|matched|
+            matched.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
+                == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE));
+    let proof_route_error = if v2_proof_denied { Some("response_metadata_v2_proof_unsupported") } else { match (response_proof_kind, gmail_metadata_list, route_streaming) {
         (Some(_), true, _) => Some("gmail_metadata_fetch_response_proof_unsupported"),
         (Some(ResponseProofKind::Buffered), false, true) => {
             Some("response_proof_requires_buffered_response_route")
@@ -46091,7 +46158,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             Some("response_observation_proof_requires_buffered_response_route")
         }
         _ => None,
-    };
+    } };
     if let Some(error) = proof_route_error {
         enqueue_audit(
             state,

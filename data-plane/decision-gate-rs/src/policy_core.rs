@@ -8624,10 +8624,14 @@ impl ActiveGmailMetadataEvidence {
     }
 }
 
+enum ShadowResponseCapture {
+    Parsed { status: u16, headers: HeaderMap },
+    Unavailable,
+}
+
 pub(crate) struct ShadowResponseAttempt {
     hook: ShadowResponseHook,
-    status: u16,
-    parsed_headers: HeaderMap,
+    capture: ShadowResponseCapture,
     completed: bool,
 }
 
@@ -8647,8 +8651,25 @@ impl ShadowResponseHook {
         }
         Ok(ShadowResponseAttempt {
             hook: self.clone(),
-            status: status.as_u16(),
-            parsed_headers: headers.clone(),
+            capture: ShadowResponseCapture::Parsed {
+                status: status.as_u16(), headers: headers.clone(),
+            },
+            completed: false,
+        })
+    }
+
+    /// Preserve unavailable terminal accounting without claiming an upstream
+    /// capture. In particular, V2's selected metadata is not a full header set.
+    pub(crate) fn begin_unavailable(
+        &self,
+        snapshot: &Arc<Snapshot>,
+    ) -> Result<ShadowResponseAttempt, String> {
+        if !self.inner.generation_is_current_for(snapshot) {
+            return Err("active snapshot changed before response capture".to_string());
+        }
+        Ok(ShadowResponseAttempt {
+            hook: self.clone(),
+            capture: ShadowResponseCapture::Unavailable,
             completed: false,
         })
     }
@@ -8811,8 +8832,11 @@ impl ShadowResponseAttempt {
         if !self.hook.inner.generation_is_current_for(snapshot) {
             return Err("active snapshot changed before exact response finalization".to_string());
         }
-        if capture.status != self.status
-            || capture.parsed_headers != self.parsed_headers
+        let ShadowResponseCapture::Parsed { status, headers } = &self.capture else {
+            return Err("unavailable response capture cannot authorize exact comparison".to_string());
+        };
+        if capture.status != *status
+            || capture.parsed_headers != *headers
             || capture.body.as_ref() != parsed_upstream_body
         {
             return Err("raw transport capture does not match parsed response".to_string());
@@ -8822,7 +8846,7 @@ impl ShadowResponseAttempt {
         let response_facts = json!({
             "domain":"serverware.policyShadowExactResponseFacts/v1",
             "capturedAtEpochMs":captured_at_epoch_ms,
-            "status":self.status,
+            "status":status,
             "physicalHeaderCount":capture.physical_header_count,
             "physicalHeadersSha256":sha256_prefixed(&capture.raw_response_head),
             "rawResponseHeadBytes":capture.raw_response_head.len(),
@@ -8938,7 +8962,7 @@ impl ShadowResponseAttempt {
         let enqueue_gate = Arc::new((Mutex::new(None), Condvar::new()));
         let work = ShadowWork::Response(ShadowResponseJob {
             lifecycle: Arc::clone(&self.hook.inner),
-            status: self.status,
+            status: *status,
             headers: capture.parsed_headers,
             body: capture.body,
             physical_headers_sha256: sha256_prefixed(&capture.raw_response_head),

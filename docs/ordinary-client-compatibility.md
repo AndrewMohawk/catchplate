@@ -1,4 +1,4 @@
-# Ordinary-client JSON compatibility, version 1
+# Ordinary-client JSON compatibility
 
 This is an additive source contract, not a deployment or acceptance receipt.
 Implementation began separately from the static-acceptance candidate in the
@@ -116,6 +116,80 @@ the legacy Python proxy does not yet own the required connection-isolation
 boundary. Marked legacy-transport requests therefore refuse the new 204 profile
 before dispatch; existing profiles are unchanged. Implementing and verifying
 that legacy transport capability remains open.
+
+## Additive version 2: ordinary response metadata
+
+The isolated Google run exposed a separate incompatibility: its upstream
+returned HTTP 200, but ordinary response metadata was outside the catalog's
+empty exact header envelope. Hiding response-field controls does not fix this.
+Version 2 is an explicit new contract; implementation and verification status
+must be recorded separately, not inferred from this specification.
+
+| Layer | Version 2 value |
+| --- | --- |
+| Catalog `response_mode` | `unfiltered_json_or_empty_v2` |
+| Success and error profile `mode` | `bufferedJsonOrEmpty204V2` |
+| Every response envelope `bodyPresence` | `jsonOrEmpty204V1` |
+| Every response envelope `unlistedHeaderPolicy` | `discardUnselectedV1` |
+
+Only `generic.rest` admits this paired contract. Both success/error modes must
+match; their independently bounded size limits and selected safe-header lists
+need not be identical. Every envelope requires the new header marker, and the
+marker is forbidden on all older profiles. Both directions are validated before
+any profile-specific early return. Version 1 JSON/empty-204, request-body,
+status, timeout, credential, approval and secret-disclosure obligations remain.
+Existing records, omitted fields, compiler output and signed policy hashes must
+not change merely because this mode becomes available. New rules select it
+explicitly; the UI may prefer it only when advertised. Existing rules retain
+their saved mode, including on edit. Google remains exact GET/no-request-body.
+
+Admission of upstream metadata and release to the client are distinct:
+
+- Bound **all parsed physical header occurrences**, before discarding anything:
+  at most 128 fields, 65,536 total name/value bytes, 128 bytes per name and 8,192
+  per value. Names use ASCII HTTP-token syntax; values admit visible ASCII,
+  spaces and tabs, not CR/LF or other controls.
+- Scan every physical name and value for reflected credential material before
+  discard, shadow/observation processing or an empty-204 early return. Failure
+  evidence uses fixed reasons and counts, not arbitrary metadata names/values.
+  Do not copy discarded raw metadata into public audit or proof fields.
+- Unlisted, nonreserved semantic metadata may be discarded, including repeated
+  occurrences. It never becomes an output header merely because admission
+  succeeded. Listed headers and all existing predicates remain enforced.
+- Each success/error output-header list must be a subset of **every** envelope's
+  listed names. Selected output still uses the existing safe-header allowlist
+  and disclosure checks. The operator catalog continues to select no additional
+  output headers; this is not an unrestricted HTTP-header passthrough.
+- Protocol/transport headers retain singleton and dedicated framing/encoding
+  checks. Authorization, proxy authorization, Cookie, Set-Cookie and
+  `X-Serverware-*` are refused, not generically discarded. Version 2 checks
+  lowercase/underscore-to-hyphen aliases for these reserved names; transport
+  aliases are also refused. This classifier does not normalize the raw evidence
+  or the exact names used by policy predicates.
+
+This describes bounded **parsed** header evidence, not proof of raw bytes hidden
+or rejected by the HTTP library. Python validation requires physical fields,
+never a dictionary fallback that erases duplicates; the unsupported legacy
+Python transport must refuse the mode before dispatch.
+
+The initial V2 implementation must also refuse requests for any existing
+buffered/observation proof kind **before credential release or upstream
+dispatch**. Existing buffered proofs commit only to selected raw headers, not
+the newly consulted discarded metadata; existing observation serializers do
+not establish the required empty-204 framing. Do not silently reuse those proof
+contracts, export raw discarded metadata, or discover this incompatibility only
+after an upstream action. A versioned aggregate-header commitment and verifier,
+no-content proof serialization, and native/shadow conformance remain required
+full-goal work. Ordinary proxy use without those requested proofs is a separate
+supported journey, not a substitute for completing the proof-backed product.
+
+Required new controls include Date/Server/arbitrary metadata admitted but absent
+from output; repeated unlisted metadata discarded; selected/listed/protocol
+ambiguity, reserved aliases, size/count/control-character violations and
+reflected secrets denied; all old modes still refusing the same unlisted
+metadata; and real JSON/error/204 finalizer paths. The joined Google fixture
+must retain its ordinary upstream headers and reach actual expiry/refresh; do
+not alter its response merely to conceal a compatibility failure.
 
 ## Required cross-layer acceptance
 

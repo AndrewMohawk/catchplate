@@ -98,12 +98,42 @@ OOM. Evidence is `google-reauthorization.8I0mQ6rR/corrected` under the operator
 workspace evidence directory. Result SHA-256:
 `bae90c7d9fd303187d7bf69e9f61b24f59acc16f094578aa7ee0a06d2d1bfa50`.
 
-Rendered browser acceptance remains in progress. These changes do not establish
-a deployed UI, a real Google consent/refresh journey, ordinary SDK compatibility,
-native commissioning or production acceptance. No live service or terminal R96
-pilot state was changed by this work.
+Rendered checks also passed in first-failure continuations: one pure group and
+groups 1–5 on `458fcbc1`; groups 6–15 on `0aacfe99`; and groups 16–18 on
+`d0c2118e`. This is combined coverage, not a single full-suite pass on the final
+revision. The final fixture has 37 contexts, including exact saved-operation
+recovery, adopted-receipt/current-account joins, held application tokens and
+initial-consent return precedence. Desktop review/adoption and mobile held-state
+screenshots were inspected; the mobile check also refused horizontal overflow.
 
-Acceptance must join start, actual browser-state/PKCE handling, token custody,
+The original VM-stub and same-document-navigation fixture failures are retained.
+A genuine startup coordination issue was then corrected: an unselected initial
+consent observer must not supersede the selected reauthorization's catalog
+refresh. Explicit initial-consent returns take precedence without erasing a
+stored reauthorization reference. The deterministic reload and late-response
+controls passed. A final message-wording assertion was corrected to match the
+exact existing text, without changing production behavior.
+
+On the coordinated production UI, the unchanged initial Google connection suite
+also passed all 21 rendered groups plus its pure group. Browser inputs remained
+unchanged; all bounded browser scopes terminated. The browser skill's shared
+service was busy, so isolated cached Playwright contexts were used. These were
+intercepted UI fixtures, not a browser joined to the real backend/provider.
+Evidence is `corrected/browser.log`, `browser-coordinated/browser.log`,
+`browser-coordinated/initial-regression.log` and `browser-final/browser.log`
+beneath the same evidence directory. Final browser-log SHA-256:
+`4dca84b80ecff64893ae7d62e1e9bbbd89f8bddbaf998cdaa3f11a15644bbc50`.
+
+Both stopped test containers and about 1009 MiB of task-only scratch were
+removed after source/result preservation and terminal/mount/open-file checks.
+`cleanup-receipt.json` records verified removal and the unprivileged open-file
+visibility limit. Source, evidence and screenshots remain available.
+
+These changes do not establish a deployed UI, a real Google consent/refresh
+journey, ordinary SDK compatibility, native commissioning or production
+acceptance. No live service or terminal R96 pilot state was changed by this work.
+
+The backend acceptance joins start, actual browser-state/PKCE handling, token custody,
 same-account generation replacement, unchanged application authority and a
 subsequent refresh. Negative controls cover stale review, wrong account/scopes,
 denial/expiry/replay, conflicting work, unavailable ownership, audit rollback,

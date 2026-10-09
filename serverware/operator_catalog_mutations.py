@@ -291,9 +291,11 @@ def catalog_status() -> dict:
         **{collection: [_public(collection, row, catalog, observation, now) for row in catalog[collection]]
            for collection in _RESULT_KEYS}, "limits": limits,
         # Source capability, not proof of a deployed gate version. Publication
-        # requires the co-versioned request/response/replacement gate; never downgrade.
+        # requires the co-versioned request/response/replacement gate (including
+        # V2 metadata discard for that explicit mode); never downgrade.
         "capabilities": {"credential_types": ["bearer", "header"],
-            "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1"], "oauth": False,
+            "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
+                "unfiltered_json_or_empty_v2"], "oauth": False,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],
             "token_lifetime_seconds": {"min": MIN_TOKEN_LIFETIME_SECONDS, "max": MAX_TOKEN_LIFETIME_SECONDS,

@@ -11,7 +11,11 @@ def _response_profile(rule: dict, route: dict) -> None:
     _, mode = schema.rule_content_modes(rule)
     if mode == 'projected_json':
         return  # Preserve the complete legacy profile byte-for-byte.
-    profile_mode = 'bufferedJsonOrEmpty204V1' if mode == 'unfiltered_json_or_empty_v1' else 'bufferedPassthrough'
+    profile_mode = {
+        'unfiltered_json': 'bufferedPassthrough',
+        'unfiltered_json_or_empty_v1': 'bufferedJsonOrEmpty204V1',
+        'unfiltered_json_or_empty_v2': 'bufferedJsonOrEmpty204V2',
+    }[mode]
     config = route['adapter']['config']
     previous = config['response']
     config['response'] = {
@@ -23,13 +27,17 @@ def _response_profile(rule: dict, route: dict) -> None:
             'allowedHeaders': [], 'onInvalid': 'block',
         },
     }
-    if mode == 'unfiltered_json_or_empty_v1':
+    if mode in {'unfiltered_json_or_empty_v1', 'unfiltered_json_or_empty_v2'}:
         envelopes = [item for item in route['constraints'] if item.get('type') == 'responseEnvelope']
         if not envelopes:
             raise schema.CatalogIntegrityError('catalog JSON-or-empty response envelope missing')
         for envelope in envelopes:
             envelope['bodyPresence'] = 'jsonOrEmpty204V1'
             envelope['contentTypes'] = ['application/json']
+            if mode == 'unfiltered_json_or_empty_v2':
+                # Admission may discard bounded unselected metadata; it does
+                # not grant output headers. Old envelopes remain unchanged.
+                envelope['unlistedHeaderPolicy'] = 'discardUnselectedV1'
             if 204 not in envelope['statusCodes']:
                 envelope['statusCodes'].append(204)
 

@@ -223,7 +223,8 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     if 'request_body_mode' in rule and (request_mode != 'preserve_json_v1' or request_fields):
         raise CatalogIntegrityError('catalog request preservation mode/fields refused')
     if (not isinstance(response_mode, str)
-            or response_mode not in {'projected_json', 'unfiltered_json', 'unfiltered_json_or_empty_v1'}
+            or response_mode not in {'projected_json', 'unfiltered_json', 'unfiltered_json_or_empty_v1',
+                'unfiltered_json_or_empty_v2'}
             or not isinstance(response_fields, list)
             or (response_mode == 'projected_json') != bool(response_fields)):
         raise CatalogIntegrityError('catalog response mode/fields refused')

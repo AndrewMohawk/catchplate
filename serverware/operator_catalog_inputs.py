@@ -81,7 +81,8 @@ class RuleInput(NamedInput):
     response_fields: list[_Item] = Field(default_factory=list, max_length=64)
     query_keys: list[_Item] = Field(default_factory=list, max_length=64)
     allowed_headers: list[_Item] = Field(default_factory=lambda: ["accept", "user-agent"], max_length=32)
-    response_mode: Literal["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1"] = "projected_json"
+    response_mode: Literal["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
+        "unfiltered_json_or_empty_v2"] = "projected_json"
     credential_input: Literal["insert", "replace_exact"] = "insert"
     placeholder: str | None = Field(default=None, min_length=1, max_length=1024, repr=False)
     _canonical_ids = field_validator("application_id", "credential_id")(_identifier)

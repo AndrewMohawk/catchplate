@@ -16,9 +16,11 @@ from serverware import db, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
+    BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE,
     BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE,
     BUFFERED_PASSTHROUGH_RESPONSE_MODE,
     GMAIL_V1_OPERATION_QUERY_KEYS,
+    JSON_OR_EMPTY_204_RESPONSE_MODES,
     NPM_PUBLIC_REGISTRY_HOST,
     NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT,
     NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS,
@@ -34,6 +36,9 @@ from serverware.policy_bundle import (
     validate_buffered_passthrough_response,
     validate_raw_absolute_target,
     validated_request_urlsplit,
+)
+from serverware.response_header_compat import (
+    HeaderCompatibilityError, inspect_physical_headers, listed_response_headers,
 )
 
 
@@ -67,6 +72,7 @@ _PROJECTED_RESPONSE_MODES = {"json"} | _STRUCTURED_STREAMING_MODES
 _WHOLE_JSON_RESPONSE_MODES = {
     BUFFERED_PASSTHROUGH_RESPONSE_MODE,
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
+    BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE,
 }
 _BUFFERED_REQUEST_CONSTRAINTS = {
     "json": "jsonBody",
@@ -84,6 +90,7 @@ _RESPONSE_CONTENT_TYPES = {
     "json": "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
+    BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE: "application/json",
     "jsonlStream": "application/x-ndjson",
     "jsonArrayStream": "application/json",
     "jsonSseStream": "text/event-stream",
@@ -1021,11 +1028,14 @@ class ApiAdapter:
         passthrough_error = self._buffered_passthrough_policy_error(route)
         if passthrough_error is not None:
             return passthrough_error
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
         response_cfg, profile_error = self._response_profile(flow, route)
         if (
             profile_error is not None
             and (route.adapter_config.get("response") or {}).get("mode")
-            == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+            in JSON_OR_EMPTY_204_RESPONSE_MODES
         ):
             return profile_error
         if response_cfg is not None and response_cfg.get("mode") in {"json"} | _WHOLE_JSON_RESPONSE_MODES:
@@ -1040,6 +1050,9 @@ class ApiAdapter:
         passthrough_error = self._buffered_passthrough_policy_error(route)
         if passthrough_error is not None:
             return passthrough_error
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
         response_cfg, profile_error = self._response_profile(flow, route)
         if profile_error is not None:
             return profile_error
@@ -1081,7 +1094,7 @@ class ApiAdapter:
                 reason="credential-bearing response requires structured projection",
                 payload={"error": "credential_response_projection_required", "mode": mode},
             )
-        if mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE and flow.response.status_code == 204:
+        if mode in JSON_OR_EMPTY_204_RESPONSE_MODES and flow.response.status_code == 204:
             # The body/framing contract was checked above; do not manufacture a
             # JSON value or assign content (the HTTP object may synthesize CL).
             # Engine envelope/semantic and final release guards still run.
@@ -1134,7 +1147,7 @@ class ApiAdapter:
                 raw_body = flow.response.raw_content or b""
                 payload = (
                     _strict_buffered_json(raw_body)
-                    if mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+                    if mode in JSON_OR_EMPTY_204_RESPONSE_MODES
                     else strict_json_loads(raw_body)
                 )
             except Exception:
@@ -1206,7 +1219,7 @@ class ApiAdapter:
         response_cfg = route.adapter_config.get("response") or {}
         if 200 <= status_code < 300:
             if (
-                response_cfg.get("mode") == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+                response_cfg.get("mode") in JSON_OR_EMPTY_204_RESPONSE_MODES
                 and not self._response_envelope_admits_status(flow, route, status_code)
             ):
                 return None, PolicyDecision(
@@ -1253,6 +1266,19 @@ class ApiAdapter:
             reason="provider returned an invalid response status",
             payload={"error": "response_status_invalid", "upstreamStatus": status_code},
         )
+
+    @staticmethod
+    def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
+        if (route.adapter_config.get("response") or {}).get("mode") != BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE:
+            return None
+        try:
+            inspect_physical_headers(getattr(flow.response.headers, "fields", None),
+                listed_names=listed_response_headers(route.constraints))
+        except HeaderCompatibilityError as error:
+            return PolicyDecision(False, "upstream response metadata refused", 502, error.payload())
+        # This isolated adapter is not forwarding authority. The engine requires
+        # the live credential guard and scans every physical field before here.
+        return None
 
     @staticmethod
     def _response_envelope_admits_status(
@@ -1316,7 +1342,7 @@ class ApiAdapter:
     def _json_response_body_contract_error(
         self, flow: Any, response_cfg: dict[str, Any]
     ) -> PolicyDecision | None:
-        if response_cfg.get("mode") != BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE:
+        if response_cfg.get("mode") not in JSON_OR_EMPTY_204_RESPONSE_MODES:
             return self._json_response_media_type_error(flow)
         if not isinstance(flow.response.raw_content, bytes):
             return PolicyDecision(
@@ -1363,7 +1389,7 @@ class ApiAdapter:
                 released[name] = text
 
         empty_204 = (
-            mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+            mode in JSON_OR_EMPTY_204_RESPONSE_MODES
             and flow.response.status_code == 204
         )
         content_type = (

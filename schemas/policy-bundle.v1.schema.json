@@ -713,6 +713,7 @@
           "items": {"type": "integer", "minimum": 100, "maximum": 599}
         },
         "bodyPresence": {"enum": ["required", "forbidden", "jsonOrEmpty204V1"]},
+        "unlistedHeaderPolicy": {"const": "discardUnselectedV1"},
         "allowedResponseHeaderNames": {
           "type": "array",
           "maxItems": 32,
@@ -1004,7 +1005,7 @@
           "if": {"properties": {"type": {"const": "responseEnvelope"}}, "required": ["type"]},
           "then": {
             "required": ["phase", "statusCodes", "bodyPresence", "contentTypes", "allowedResponseHeaderNames", "responseHeaderRules"],
-            "$comment": "Semantic admission requires responseHeaderRules names to equal allowedResponseHeaderNames exactly, with one rule per name. Runtime rejects every duplicate physical occurrence.",
+            "$comment": "Semantic admission requires responseHeaderRules names to equal allowedResponseHeaderNames exactly, with one rule per name. Only the paired V2 profile may discard bounded unlisted nonreserved physical duplicates; listed and transport duplicates remain denied.",
             "oneOf": [
               {
                 "properties": {
@@ -1019,7 +1020,7 @@
                 }
               },
               {
-                "$comment": "Only paired with generic.rest bufferedJsonOrEmpty204V1. An admitted 204 has no body or transfer framing and optional single admitted JSON Content-Type metadata; every other admitted status requires JSON.",
+                "$comment": "Only paired with generic.rest bufferedJsonOrEmpty204V1 or V2. An admitted 204 has no body or transfer framing and optional single admitted JSON Content-Type metadata; every other admitted status requires JSON.",
                 "properties": {
                   "phase": {"const": "response"},
                   "bodyPresence": {"const": "jsonOrEmpty204V1"},
@@ -1608,7 +1609,7 @@
                     "required": ["response"],
                     "properties": {"response": {
                       "required": ["mode"],
-                      "properties": {"mode": {"const": "bufferedJsonOrEmpty204V1"}}
+                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V1", "bufferedJsonOrEmpty204V2"]}}
                     }}
                   }
                 }
@@ -1635,6 +1636,35 @@
                   "bodyPresence": {"const": "jsonOrEmpty204V1"}
                 }
               }
+            }}}}
+          },
+          {
+            "if": {
+              "required": ["adapter"],
+              "properties": {"adapter": {
+                "required": ["type", "config"],
+                "properties": {
+                  "type": {"const": "generic.rest"},
+                  "config": {
+                    "required": ["response"],
+                    "properties": {"response": {
+                      "required": ["mode"],
+                      "properties": {"mode": {"const": "bufferedJsonOrEmpty204V2"}}
+                    }}
+                  }
+                }
+              }}
+            },
+            "then": {"properties": {"constraints": {"items": {
+              "if": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+              "then": {
+                "required": ["unlistedHeaderPolicy"],
+                "properties": {"unlistedHeaderPolicy": {"const": "discardUnselectedV1"}}
+              },
+              "else": {"not": {"required": ["unlistedHeaderPolicy"]}}
+            }}}},
+            "else": {"properties": {"constraints": {"items": {
+              "not": {"required": ["unlistedHeaderPolicy"]}
             }}}}
           },
           {

@@ -499,13 +499,17 @@ STREAMING_RESPONSE_MODES = {
 STRUCTURED_STREAMING_MODES = STREAMING_RESPONSE_MODES - {"stream"}
 BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE = "bufferedJsonPassthroughV1"
 BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE = "bufferedJsonOrEmpty204V1"
+BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE = "bufferedJsonOrEmpty204V2"
+JSON_OR_EMPTY_204_RESPONSE_MODES = frozenset({
+    BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE, BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE,
+})
 JSON_OR_EMPTY_204_BODY_PRESENCE = "jsonOrEmpty204V1"
 CREDENTIAL_BEARING_GENERIC_REQUEST_BODY_MODES = frozenset(
     {"none", "json", "formUrlencoded", BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE}
 )
 BUFFERED_PASSTHROUGH_RESPONSE_MODE = "bufferedPassthrough"
 WHOLE_JSON_RESPONSE_MODES = frozenset(
-    {BUFFERED_PASSTHROUGH_RESPONSE_MODE, BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE}
+    {BUFFERED_PASSTHROUGH_RESPONSE_MODE} | JSON_OR_EMPTY_204_RESPONSE_MODES
 )
 CREDENTIAL_BEARING_GENERIC_RESPONSE_MODES = frozenset(
     {"headersOnly", "json"} | WHOLE_JSON_RESPONSE_MODES
@@ -744,6 +748,7 @@ CONSTRAINT_TYPE_FIELDS = {
         "allowedResponseHeaderNames",
         "responseHeaderRules",
         "operations",
+        "unlistedHeaderPolicy",
     },
 }
 
@@ -5725,8 +5730,8 @@ def validate_buffered_passthrough_response(
     if not isinstance(mode, str) or mode not in WHOLE_JSON_RESPONSE_MODES:
         if "bodyFormat" in response or (
             isinstance(error, dict)
-            and ("bodyFormat" in error or error.get("mode") in (
-                BUFFERED_PASSTHROUGH_RESPONSE_MODE, BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE))
+            and ("bodyFormat" in error or (isinstance(error.get("mode"), str)
+                and error["mode"] in WHOLE_JSON_RESPONSE_MODES))
         ):
             raise PolicyBundleError(
                 f"route {route_id} bufferedPassthrough requires paired explicit success and error profiles"
@@ -5759,6 +5764,24 @@ def validate_buffered_passthrough_response(
             raise PolicyBundleError(f"route {route_id} {label} must use bounded JSON and block on invalid")
         _validate_response_body_limit(route_id, profile, label, maximum)
         _validate_response_headers(route_id, profile, label)
+    if mode == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE and constraints is not None:
+        from serverware.response_header_compat import reserved_policy_name
+        # Runtime adapter/envelope callers need the same closed rules as the
+        # compiler, not merely an already-compiled-policy assumption.
+        _validate_constraints(route_id, list(constraints))
+        selected = set(response["allowedHeaders"]) | set(error["allowedHeaders"])
+        for envelope in constraints:
+            if envelope.get("type") != "responseEnvelope":
+                continue
+            names = envelope.get("allowedResponseHeaderNames")
+            if (not isinstance(names, list) or len(names) > 32
+                    or any(not isinstance(name, str) or len(name) > 128
+                        or name != name.lower() or HTTP_HEADER_NAME_RE.fullmatch(name) is None
+                        or reserved_policy_name(name) for name in names)
+                    or len(names) != len(set(names))):
+                raise PolicyBundleError(f"route {route_id} V2 envelope header list is invalid")
+            if not selected.issubset(set(names)):
+                raise PolicyBundleError(f"route {route_id} response selection exceeds an envelope")
 
 
 def _validate_json_or_empty_204_envelopes(
@@ -5771,7 +5794,12 @@ def _validate_json_or_empty_204_envelopes(
     if any(not isinstance(item, dict) for item in constraints):
         raise PolicyBundleError(f"route {route_id} response constraints must be objects")
     envelopes = [item for item in constraints if item.get("type") == "responseEnvelope"]
-    enabled = response_mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+    v2 = response_mode == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE
+    if any("unlistedHeaderPolicy" in item and (
+            item.get("type") != "responseEnvelope" or not v2
+            or item["unlistedHeaderPolicy"] != "discardUnselectedV1") for item in constraints):
+        raise PolicyBundleError(f"route {route_id} unlisted header policy requires its explicit V2 response profile")
+    enabled = isinstance(response_mode, str) and response_mode in JSON_OR_EMPTY_204_RESPONSE_MODES
     if not enabled:
         if any(item.get("bodyPresence") == JSON_OR_EMPTY_204_BODY_PRESENCE for item in envelopes):
             raise PolicyBundleError(f"route {route_id} jsonOrEmpty204V1 requires its explicit response profile")
@@ -5781,6 +5809,7 @@ def _validate_json_or_empty_204_envelopes(
     for envelope in envelopes:
         statuses = envelope.get("statusCodes")
         if (envelope.get("phase") != "response"
+                or (v2 and envelope.get("unlistedHeaderPolicy") != "discardUnselectedV1")
                 or envelope.get("bodyPresence") != JSON_OR_EMPTY_204_BODY_PRESENCE
                 or envelope.get("contentTypes") != ["application/json"]
                 or not isinstance(statuses, list) or not 1 <= len(statuses) <= 16

@@ -29,8 +29,10 @@ from serverware.constraints import (
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
+    BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE,
     CredentialPolicy,
     JSON_OR_EMPTY_204_BODY_PRESENCE,
+    JSON_OR_EMPTY_204_RESPONSE_MODES,
     PolicyBundleError,
     PolicySnapshot,
     PrincipalPolicy,
@@ -52,6 +54,9 @@ from serverware.policy_bundle import (
     validated_request_urlsplit,
     validate_discard_headers,
     validate_buffered_passthrough_response,
+)
+from serverware.response_header_compat import (
+    HeaderCompatibilityError, inspect_physical_headers, listed_response_headers,
 )
 
 
@@ -584,6 +589,12 @@ def _validate_response_content_encoding(
             502,
             {"error": "upstream_response_missing"},
         )
+    route = flow.metadata.get("serverware_route")
+    if route and (route.adapter_config.get("response") or {}).get("mode") == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE:
+        try:
+            _v2_response_header_entries(flow, route)
+        except HeaderCompatibilityError as error:
+            return PolicyDecision(False, "upstream response metadata refused", 502, error.payload())
     headers = response.headers
     entries: list[tuple[Any, Any]]
     fields = getattr(headers, "fields", None)
@@ -2738,7 +2749,7 @@ def _legacy_mitm_route_admission(
         return None
     if (
         (route.adapter_config.get("response") or {}).get("mode")
-        == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+        in JSON_OR_EMPTY_204_RESPONSE_MODES
     ):
         # OPEN legacy transport capability: parsed response objects cannot prove
         # that hidden bytes after a 204 will not enter a reused connection.
@@ -4431,9 +4442,24 @@ def _physical_response_header_entries(flow: http.HTTPFlow) -> list[tuple[str, st
     return entries
 
 
+def _v2_response_header_entries(
+    flow: http.HTTPFlow,
+    route: RoutePolicy,
+    guard: _ResponseCredentialGuard | None = None,
+) -> list[tuple[str, str]]:
+    if guard is None:
+        guard = getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
+    return inspect_physical_headers(getattr(flow.response.headers, "fields", None),
+        listed_names=listed_response_headers(route.constraints),
+        detects_secret=guard.detects if isinstance(guard, _ResponseCredentialGuard) else None,
+        require_secret_guard=bool(route.credential_ref))
+
+
 def _evaluate_response_envelope(
     flow: http.HTTPFlow,
     route: RoutePolicy,
+    *,
+    credential_guard: _ResponseCredentialGuard | None = None,
 ) -> PolicyDecision:
     if flow.response is None:
         return PolicyDecision(
@@ -4444,9 +4470,10 @@ def _evaluate_response_envelope(
         )
     response_cfg = route.adapter_config.get("response") or {}
     if (
-        response_cfg.get("mode") == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+        response_cfg.get("mode") in JSON_OR_EMPTY_204_RESPONSE_MODES
         or any(
             constraint.get("bodyPresence") == JSON_OR_EMPTY_204_BODY_PRESENCE
+            or "unlistedHeaderPolicy" in constraint
             for constraint in route.constraints
         )
     ):
@@ -4483,8 +4510,12 @@ def _evaluate_response_envelope(
             502,
             {"error": "response_envelope_policy_missing"},
         )
+    v2 = response_cfg.get("mode") == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE
     try:
-        entries = _physical_response_header_entries(flow)
+        entries = (_v2_response_header_entries(flow, route, credential_guard)
+            if v2 else _physical_response_header_entries(flow))
+    except HeaderCompatibilityError as error:
+        return PolicyDecision(False, "upstream response metadata refused", 502, error.payload())
     except ValueError:
         return PolicyDecision(
             False,
@@ -4619,7 +4650,7 @@ def _evaluate_response_envelope(
         allowed_names = set(
             constraint.get("allowedResponseHeaderNames") or []
         )
-        if not semantic_names.issubset(allowed_names):
+        if not v2 and not semantic_names.issubset(allowed_names):
             return PolicyDecision(
                 False,
                 "upstream response header is not allowed",
@@ -5205,7 +5236,7 @@ def _evaluate_response(
             "serverware_discarded_request_headers"
         ),
     }
-    envelope_decision = _evaluate_response_envelope(flow, route)
+    envelope_decision = _evaluate_response_envelope(flow, route, credential_guard=response_credential_guard)
     if not envelope_decision.allowed:
         runtime.log_request(
             route_id,

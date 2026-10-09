@@ -391,7 +391,8 @@ def catalog_migration():
         status = mutations.catalog_status()
     assert all("request_body_mode" not in item for item in status["access_rules"][:2])
     assert status["capabilities"]["request_body_modes"] == [fx.REQUEST_API_MODE]
-    assert status["capabilities"]["response_modes"] == ["projected_json", "unfiltered_json", fx.RESPONSE_API_MODE]
+    assert status["capabilities"]["response_modes"] == ["projected_json", "unfiltered_json", fx.RESPONSE_API_MODE,
+        "unfiltered_json_or_empty_v2"]
     return {"migration_preserved": True, "new_route_compiled": True}
 
 

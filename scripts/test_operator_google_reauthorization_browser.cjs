@@ -22,6 +22,7 @@ const ORIGINAL = '88888888-8888-4888-8888-888888888888';
 const OTHER = '99999999-9999-4999-8999-999999999999';
 const SECOND_RULE = '55555555-5555-4555-8555-555555555555';
 const STATIC = '66666666-6666-4666-8666-666666666666';
+const INITIAL_OPERATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const PRIVATE = ['synthetic-provider-secret-NEVER-PERSIST', 'synthetic-refresh-token-NEVER-PERSIST', 'synthetic-provider-error-NEVER-DISPLAY'];
 const STATE = 'synthetic-reauthorization-state-' + 'a'.repeat(43);
@@ -83,6 +84,8 @@ const INPUTS = ['scripts/test_operator_google_reauthorization_browser.cjs', 'scr
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
     'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
+let activeGroup = 0;
+const checkpointStates = new WeakMap();
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async path =>
   [path, createHash('sha256').update(await readFile(join(ROOT, path))).digest('hex')]))); }
 async function screenshot(page, name) {
@@ -105,9 +108,10 @@ async function refreshCatalog(page) {
 async function fixture(browser, options, exercise) {
   return baseFixture(browser, supplied(options), async (page, state, controls) => {
     state.allowedUpstreams = ['https://gmail.googleapis.com'];
-    const observed = {posts: [], reads: [], navigations: 0, returns: 0, oldConsentReads: 0,
+    const observed = {posts: [], reads: [], navigations: 0, returns: 0, oldConsentReads: 0, initialIntents: [],
       capability: Object.hasOwn(options, 'capability') ? options.capability : clone(CAPABILITY),
       reviewChanges: {}, catalogTransform: null, operationTransform: null, current: null, catalogStatus: 200, statusCode: 200};
+    checkpointStates.set(page, {state, observed});
     const answer = (route, value, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(value)});
     let catalogReads = 0; let releaseOld; let oldArrived;
     const oldArrival = new Promise(resolve => { oldArrived = resolve; });
@@ -131,7 +135,7 @@ async function fixture(browser, options, exercise) {
         assert.equal(route.request().url(), ORIGIN + GOOGLE_CAPABILITY.intents_path);
         assert.equal(route.request().method(), 'GET'); assert(!route.request().postDataBuffer()?.length);
         assert(++observed.oldConsentReads <= 12); oldArrived(); await oldGate;
-        await answer(route, {apiVersion: 'serverware.operatorGoogleConsent/v1', intents: [], limits: {active: 32, retained: 1024},
+        await answer(route, {apiVersion: 'serverware.operatorGoogleConsent/v1', intents: observed.initialIntents, limits: {active: 32, retained: 1024},
           productionReady: false, protectedActivationSupported: false});
       } catch (_) { state.errors.push('old consent observation boundary refused'); await route.abort(); }
     });
@@ -180,8 +184,9 @@ async function fixture(browser, options, exercise) {
         await route.fulfill({status: 200, contentType: 'text/html', body: '<link rel="icon" href="data:,"><h1>Synthetic reauthorization destination</h1>'});
       } catch (_) { state.errors.push('reauthorization navigation boundary refused'); await route.abort(); }
     });
-    async function landing(id = observed.current?.operation_id || OPERATION, extra = '') {
-      const target = ORIGIN + '/?operator_google_reauthorization=' + id + extra + '#credentials';
+    async function landing(id = observed.current?.operation_id || OPERATION, extra = '', initial = false) {
+      const target = ORIGIN + '/?' + (initial ? 'operator_google_intent=' : 'operator_google_reauthorization=') +
+        id + extra + (initial ? '#connect' : '#credentials');
       const document = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
         {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
       await controls.context.route(target.split('#')[0], async route => {
@@ -190,8 +195,8 @@ async function fixture(browser, options, exercise) {
         await route.fulfill({status: 200, contentType: 'text/html', body: document});
       }, {times: 1});
       await page.goto(target, {waitUntil: 'networkidle'}); assert.equal(new URL(page.url()).search, '', 'marker removed before API observation');
-      await panel(page).waitFor({state: 'visible'});
-      await page.locator('#google-reauthorization-leave:enabled').waitFor({state: 'visible'});
+      await page.locator(initial ? '#google-consent-panel' : '#google-reauthorization-panel').waitFor({state: 'visible'});
+      await page.locator(initial ? '#google-consent-leave:enabled' : '#google-reauthorization-leave:enabled').waitFor({state: 'visible'});
     }
     try {
       await ready(page); await view(page, 'credentials');
@@ -202,14 +207,14 @@ async function fixture(browser, options, exercise) {
       } else { await refreshCatalog(page); await ready(page); }
       const preserved = clone({credentials: state.credentials, applications: state.applications, rules: state.rules, revision: state.revision,
         sequence: state.sequence, active: state.active, loaded: state.loaded});
-      await exercise(page, state, observed, {...controls, landing, releaseOld: () => releaseOld?.()});
+      await exercise(page, state, observed, {...controls, landing, initialLanding: id => landing(id, '', true), releaseOld: () => releaseOld?.()});
       assert(observed.posts.length <= 1 && observed.navigations <= 1);
       assert.deepEqual(state.posts.map(item => item.name), options.allowApplicationCreation ? ['applications'] : [],
         'reauthorization never creates credentials/apps/rules, rotates tokens, revokes or starts initial consent');
       if (!options.allowApplicationCreation && !options.allowCatalogDrift) assert.deepEqual({credentials: state.credentials, applications: state.applications,
         rules: state.rules, revision: state.revision, sequence: state.sequence, active: state.active, loaded: state.loaded}, preserved);
       if (new URL(page.url()).origin === ORIGIN) await noMaterial(page);
-    } finally { releaseOld?.(); }
+    } finally { releaseOld?.(); checkpointStates.delete(page); }
   });
 }
 async function open(page) {
@@ -217,8 +222,39 @@ async function open(page) {
   await page.locator('#google-reauthorization-leave:enabled').waitFor({state: 'visible'});
 }
 async function checkStatus(page, pattern) {
-  await page.locator('#google-reauthorization-status').filter({hasText: pattern}).waitFor({state: 'visible'});
-  await page.locator('#google-reauthorization-leave:enabled').waitFor({state: 'visible'});
+  try {
+    await page.locator('#google-reauthorization-status').filter({hasText: pattern}).waitFor({state: 'visible'});
+    await page.locator('#google-reauthorization-leave:enabled').waitFor({state: 'visible'});
+  } catch (_) {
+    // Fixed categories and bounded counters only: never status text, URLs,
+    // account identity, operation UUID, OAuth state, request bodies or tokens.
+    const ui = await page.evaluate(() => {
+      const text = document.querySelector('#google-reauthorization-status')?.textContent || '';
+      const prefixes = [['Checking the exact account', 'checking'], ['Waiting for Google consent.', 'awaiting-consent'],
+        ['Saved reauthorization status or the current account could not be verified.', 'unverified'],
+        ['The start response or current operation was not confirmed.', 'start-unconfirmed'],
+        ['Reauthorization saved for the same account.', 'adopted-confirmed'], ['A replacement receipt exists,', 'adopted-unconfirmed'],
+        ['Reauthorization prepared;', 'prepared'], ['Confirming the Google exchange.', 'exchanging'],
+        ['A replacement is retained but not active.', 'candidate-held'], ['Reauthorization needs server-side review.', 'review-required'],
+        ['Google consent was declined.', 'denied'], ['This consent attempt expired.', 'expired'],
+        ['Reauthorization did not complete.', 'failed'], ['Reauthorization is unavailable', 'capability-unavailable'],
+        ['Invalid return reference.', 'invalid-return'], ['The operation outcome is unconfirmed.', 'operation-unconfirmed']];
+      return {status: prefixes.find(([prefix]) => text.startsWith(prefix))?.[1] || 'other',
+        operatorOrigin: location.origin === 'https://operator-catalog.example.test',
+        panelVisible: document.querySelector('#google-reauthorization-panel')?.hidden === false,
+        leaveEnabled: document.querySelector('#google-reauthorization-leave')?.disabled === false,
+        mutationReviewVisible: document.querySelector('#mutation-review')?.hidden === false,
+        catalogUnavailable: document.querySelector('#load-error')?.hidden === false};
+    }).catch(() => ({status: 'document-unavailable'}));
+    const checkpoint = checkpointStates.get(page);
+    const counts = checkpoint ? {posts: checkpoint.observed.posts.length,
+      reviewReads: checkpoint.observed.reads.filter(path => path.endsWith('/review')).length,
+      operationReads: checkpoint.observed.reads.filter(path => !path.endsWith('/review')).length,
+      initialConsentReads: checkpoint.observed.oldConsentReads, catalogReads: checkpoint.state.catalogCalls,
+      navigations: checkpoint.observed.navigations, returns: checkpoint.observed.returns} : {};
+    console.log(JSON.stringify({phase: 'reauthorization-status-checkpoint-failed', group: activeGroup, ui, counts}));
+    throw new Error('Reauthorization status checkpoint failed; see fixed-category diagnostic');
+  }
 }
 async function start(page, observed, navigation) {
   try {
@@ -335,18 +371,41 @@ const tests = [
     await refreshCatalog(page); await page.locator('#mutation-review-confirm').click(); await ready(page);
     assert.equal(observed.posts.length, 1); assert.match(state.dialogs.at(-1), /does not cancel.*disconnect.*retry/is);
   })],
-  ['reload resumes the stored exact operation without a second start or authorization URL replay', browser => fixture(browser, {startFault: 'lost'}, async (page, state, observed) => {
-    await open(page); await start(page, observed, false); const id = observed.posts[0].operation_id;
-    const priorReads = observed.reads.length;
-    // open() already selected #credentials; goto of that same hash-bearing URL
-    // may be same-document navigation and cannot prove session restoration.
-    const response = await page.reload({waitUntil: 'networkidle'});
-    assert(response && response.status() === 200 && response.request().isNavigationRequest(), 'a new main document is required');
-    await checkStatus(page, /^Waiting for Google consent\./);
-    assert(observed.reads.length > priorReads, 'the new document performs fresh exact-operation recovery');
-    assert(observed.reads.slice(1).every(path => path === PATH + '/' + id));
-    assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0); assert(await page.locator('#credential-save').isDisabled());
-  })],
+  ['reload recovers the exact operation while an explicit initial-consent return retains precedence', async browser => {
+    await fixture(browser, {startFault: 'lost'}, async (page, state, observed) => {
+      await open(page); await start(page, observed, false); const id = observed.posts[0].operation_id;
+      const priorReads = observed.reads.length; const priorInitialConsentReads = observed.oldConsentReads;
+      // open() already selected #credentials; goto of that same hash-bearing URL
+      // may be same-document navigation and cannot prove session restoration.
+      const response = await page.reload({waitUntil: 'networkidle'});
+      assert(response && response.status() === 200 && response.request().isNavigationRequest(), 'a new main document is required');
+      await checkStatus(page, /^Waiting for Google consent\./);
+      assert(observed.reads.length > priorReads, 'the new document performs fresh exact-operation recovery');
+      assert.equal(observed.oldConsentReads, priorInitialConsentReads, 'unselected initial consent does not start a competing recovery read');
+      assert(observed.reads.slice(1).every(path => path === PATH + '/' + id));
+      assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0); assert(await page.locator('#credential-save').isDisabled());
+    });
+    await fixture(browser, {}, async (page, state, observed, controls) => {
+      observed.current = operation(review(state));
+      observed.initialIntents = [{id: INITIAL_OPERATION, name: 'Earlier Google connection', provider_id: 'google',
+        permission_preset: 'gmail_readonly', scopes: [...SCOPES], created_at: new Date(NOW).toISOString(),
+        expires_at_epoch: NOW / 1000 + 600, status: 'awaiting_consent'}];
+      // Seed only the documented public recovery locator from a prior document.
+      // The preceding context proves its real one-POST write before navigation.
+      await page.evaluate(([key, value]) => sessionStorage.setItem(key, value), [STORAGE, OPERATION]);
+      await controls.initialLanding(INITIAL_OPERATION);
+      assert(await page.locator('#google-consent-panel').isVisible()); assert(await panel(page).isHidden());
+      assert.match(await page.locator('#google-consent-status').innerText(), /^Waiting for Google consent/);
+      assert.equal(new URL(page.url()).search, ''); assert.equal(observed.reads.length, 0, 'explicit initial return suppresses automatic reauthorization reads');
+      assert.equal(await page.evaluate(key => sessionStorage.getItem(key), STORAGE), OPERATION);
+      assert(await page.locator('#credential-save').isDisabled()); assert.equal(observed.posts.length, 0);
+      await page.locator('#google-consent-leave').click(); await ready(page); await view(page, 'credentials');
+      await open(page); await checkStatus(page, /^Waiting for Google consent\./);
+      assert.deepEqual(observed.reads, [PATH + '/' + OPERATION]); assert(await page.locator('#google-reauthorization-start').isHidden());
+      assert.equal(observed.posts.length, 0); assert.equal(observed.navigations, 0);
+      assert.equal(await page.evaluate(key => sessionStorage.getItem(key), STORAGE), OPERATION);
+    });
+  }],
   ['untrusted start link and mismatched saved operation refuse navigation and require review', async browser => {
     for (const options of [{startFault: 'wrong-client'}, {afterStart(observed) { observed.operationTransform = item => ({...item, expected_credential_generation: 8}); }}])
       await fixture(browser, options, async (page, state, observed) => {
@@ -434,8 +493,10 @@ const tests = [
   ['a late initial-consent observation cannot release the selected reauthorization hold', browser => fixture(browser,
     {deferOldConsent: true, startFault: 'lost'}, async (page, state, observed, controls) => {
       await open(page); await start(page, observed, false); assert(await page.locator('#credential-save').isDisabled());
+      const priorCatalogReads = state.catalogCalls;
       const completed = page.waitForResponse(item => item.url() === ORIGIN + GOOGLE_CAPABILITY.intents_path);
       controls.releaseOld(); await (await completed).finished(); await page.waitForLoadState('networkidle');
+      assert.equal(state.catalogCalls, priorCatalogReads, 'a late unselected consent read cannot supersede selected recovery with another catalog refresh');
       // Clear only generic mutation uncertainty while the reauthorization hold
       // remains: its review-confirm control is intentionally ineffective.
       assert(await page.locator('#credential-save').isDisabled()); await page.locator('#mutation-review-confirm').click();
@@ -485,6 +546,7 @@ async function main() {
   const deadline = setTimeout(() => { expired = true; browser.close().catch(() => {}); }, 150000);
   try {
     for (let index = selected.from - 1; index < tests.length; index++) {
+      activeGroup = index + 1;
       assert(!expired, 'absolute suite deadline'); const [name, execute] = tests[index];
       await execute(browser); console.log(JSON.stringify({ok: true, group: index + 1, name}));
     }

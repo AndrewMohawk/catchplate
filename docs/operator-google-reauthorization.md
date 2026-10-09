@@ -77,10 +77,31 @@ not another field or step in an account owner's consent form.
 
 ## Verification status
 
-Implementation and focused synthetic acceptance are in progress. Source changes
-do not establish a deployed UI, a real Google consent/refresh journey, ordinary
-SDK compatibility, native commissioning or production acceptance. The existing
-synthetic deployment and terminal R96 pilot are unchanged by this work.
+The focused synthetic backend passed eight groups across fifteen cold workers
+on source `2897498d` (2026-10-09): real ASGI/browser-state/PKCE handling,
+encrypted custody, signed policy, SQLite transactions and audit, with only the
+provider transport substituted. The successful path replaced the same account,
+preserved application authority and then refreshed the replacement token through
+the ordinary credential-lease path. The short synthetic lifetime exercised its
+actual refresh window; it is not a natural-expiry or live-provider claim.
+
+Controls covered wrong identity/scopes, stale generation, a concurrent refresh,
+orphan ownership, SQL replacement guards, reviewed older-schema upgrade,
+denial/expiry/replay, HTTP admission, rollback, a real commit followed by a lost
+acknowledgement, and separate-process restart. The original harness permission
+failure occurred before account setup and is retained separately. The corrected
+run used new 0700 scratch directories; no application guard was relaxed.
+
+Unittest time was 218.286 seconds, with no failures, errors or skips. The
+network-none, read-only-source/root container exited zero with PID zero and no
+OOM. Evidence is `google-reauthorization.8I0mQ6rR/corrected` under the operator
+workspace evidence directory. Result SHA-256:
+`bae90c7d9fd303187d7bf69e9f61b24f59acc16f094578aa7ee0a06d2d1bfa50`.
+
+Rendered browser acceptance remains in progress. These changes do not establish
+a deployed UI, a real Google consent/refresh journey, ordinary SDK compatibility,
+native commissioning or production acceptance. No live service or terminal R96
+pilot state was changed by this work.
 
 Acceptance must join start, actual browser-state/PKCE handling, token custody,
 same-account generation replacement, unchanged application authority and a

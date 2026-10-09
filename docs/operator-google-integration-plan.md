@@ -364,10 +364,12 @@ treating a superseded token as independently revocable; it does not require
 revocation before same-account reauthorization.
 
 The current generic reconnect writer queues superseded-token revocation and
-therefore correctly refuses Google. Do not remove that guard. The operator
-needs a separate same-account adoption operation, preserving the original
-enrollment binding, advancing the credential generation atomically, and keeping
-unadopted or uncertain candidate tokens in non-revoking custody. No provider
+therefore correctly refuses Google. Do not remove that guard. The operator now
+has a separate [same-account reauthorization workflow](operator-google-reauthorization.md),
+preserving the original enrollment binding, advancing the credential generation
+atomically, and keeping unadopted or uncertain candidate tokens in non-revoking
+custody. Its source and focused verification status are recorded separately;
+this does not establish deployed or real-provider acceptance. No provider
 exchange may be replayed merely because its response or commit was lost.
 
 An explicitly disconnected or quarantined account is a different recovery
@@ -375,8 +377,8 @@ case. Reauthorization must not bypass its retained cleanup exclusion, silently
 restore revoked rules, or interpret provider revocation acceptance as proof
 that revocation has fully propagated. Do not bypass duplicate-account guards;
 prefer reuse of an already connected account. Local removal is not forensic
-erasure or provider-side revocation. Active-account reauthorization and
-disconnected-family succession remain separate unfinished workflows.
+erasure or provider-side revocation. Disconnected-family succession remains
+unfinished and is not implemented by active-account reauthorization.
 
 ### Definite refresh rejection and uncertain retirement
 

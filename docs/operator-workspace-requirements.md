@@ -184,6 +184,13 @@ replacing a dummy authentication value in an app's outbound requests, and from
 reconnecting an OAuth account; deployment and proxy verification are recorded
 in that workflow's verification section.
 
+The [active Google account reauthorization workflow](operator-google-reauthorization.md)
+renews consent for the same account without rebuilding its applications or
+permissions. It preserves the original account binding and application tokens;
+it neither broadens Google scopes nor restores disconnected or quarantined
+accounts. Its focused synthetic verification is separate from real-provider
+and deployed acceptance. Account owners do not configure refresh-token fields.
+
 Delivery priority is two complete vertical journeys: ordinary-client auth
 replacement with supported request/response formats, and connect-once Google
 mail with automatic refresh. Then expose the Gmail/X/npm/ECR operation bundles

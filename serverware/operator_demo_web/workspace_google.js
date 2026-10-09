@@ -131,10 +131,13 @@ function createGoogleView(workspace, applications, connect) {
     element('google-consent-history').hidden = !intents.length;
   }
   async function observe() {
-    if (checking || !capability()) return false;
+    if (checking || !capability() || !attempted && workspace.state.consentHold) return false;
     checking = true; checked = false; const version = ++generation; const before = JSON.stringify(capability()); render();
     try {
       const values = projectGoogleIntents(await workspace.api(capability().intents_path));
+      // Unselected history must not supersede a selected account operation's
+      // required catalog refresh, including when this GET began before its hold.
+      if (!attempted && workspace.state.consentHold) return false;
       const refreshed = await workspace.refresh({manual: true});
       if (version !== generation || !refreshed || JSON.stringify(capability()) !== before) throw googleInvalid();
       intents = values; checked = true; notice = '';

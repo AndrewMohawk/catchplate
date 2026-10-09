@@ -112,13 +112,17 @@ function googleReauthorizationReturnHint(href) {
 function createGoogleReauthorizationView(workspace, applications) {
   const storageKey = 'serverware.googleReauthorization.operation';
   const hint = googleReauthorizationReturnHint(location.href);
+  const initialConsentReturn = !hint.present && googleReturnHint(location.href).present;
   if (hint.present) history.replaceState(null, '', hint.clean);
   let operationId = hint.id;
   if (!hint.present) {
     try { const saved = sessionStorage.getItem(storageKey); if (reauthorizationUuid(saved)) operationId = saved; }
     catch (_) { /* Storage availability is checked before any start request. */ }
   }
-  let opened = hint.present || Boolean(operationId); let attempted = opened; let checking = false;
+  // An explicit initial-consent return takes precedence over background recovery.
+  // Keep the saved locator so a later explicit open recovers, rather than restarts.
+  let opened = hint.present || Boolean(operationId) && !initialConsentReturn;
+  let attempted = hint.present || Boolean(operationId); let checking = false;
   let target = null; let review = null; let operation = null; let confirmed = false; let serial = 0; let capabilityKey = '';
   let notice = hint.present && !hint.id ? 'Invalid return reference. No reauthorization was verified or retried.' : '';
   const capability = () => workspace.state.catalog?.capabilities.google_reauthorization;

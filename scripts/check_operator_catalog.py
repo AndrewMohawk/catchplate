@@ -129,6 +129,15 @@ class OperatorCatalogCheck(OperatorDemoCheck):
     def mutate(self, route, payload, *, collection, result_key, event, creates=False, token=False,
                authority_changed=False):
         before = self.catalog()
+        resource, issued, result = self.submit_mutation(before, route, payload, result_key=result_key,
+            creates=creates, token=token, authority_changed=authority_changed)
+        after = self.catalog()
+        self.finalize_mutation(result, after, collection=collection, result_key=result_key, event=event)
+        return resource, issued, result
+
+    def submit_mutation(self, before, route, payload, *, result_key, creates=False, token=False,
+                        authority_changed=False):
+        """One POST against an already read CAS snapshot; never retries a mutation."""
         payload = {**payload, "expected_revision": before["revision"],
                    "expected_policy_hash": before["policy"]["policy_hash"]}
         status, result = self.json_request(self.control, PREFIX + route, context=self.control_ca,
@@ -144,32 +153,62 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         self.clean(json.dumps(result, sort_keys=True).encode("utf-8"))
         resource = result.get(result_key)
         require(isinstance(resource, dict) and isinstance(resource.get("id"), str)
-                and result.get("revision") == before["revision"] + 1,
+                and ("id" not in payload or resource["id"] == payload["id"])
+                and type(resource.get("version")) is int and resource["version"] > 0
+                and type(result.get("revision")) is int and result["revision"] == before["revision"] + 1,
                 "mutation resource or revision differs")
-        after = self.catalog()
-        require(after["revision"] == result["revision"]
-                and after["policy"]["policy_hash"] == result.get("policy", {}).get("policy_hash")
-                and self.resource(after, collection, resource["id"])["version"] == resource.get("version"),
-                "mutation did not survive fresh catalog read")
-        old_policy, new_policy = before["policy"], after["policy"]
+        old_policy, new_policy = before["policy"], result.get("policy", {})
+        require(isinstance(new_policy, dict)
+                and isinstance(new_policy.get("policy_hash"), str) and SHA256.fullmatch(new_policy["policy_hash"])
+                and type(new_policy.get("sequence")) is int and new_policy["sequence"] > 0,
+                "mutation signed policy metadata is invalid")
         require((new_policy["policy_hash"] != old_policy["policy_hash"]
                  and new_policy["sequence"] == old_policy["sequence"] + 1) if authority_changed else
                 (new_policy["policy_hash"] == old_policy["policy_hash"]
                  and new_policy["sequence"] == old_policy["sequence"]),
                 "store-only or authority-changing policy publication differs")
-        self.mutations.append((event, resource["id"], new_policy["policy_hash"]))
-        self.policy_hash = new_policy["policy_hash"]
         return resource, issued, result
 
-    def wait_catalog_loaded(self, label):
+    def finalize_mutation(self, result, after, *, collection, result_key, event):
+        """Record acceptance only after the mandatory fresh persistence checks."""
+        resource, new_policy = result[result_key], result["policy"]
+        require(after["revision"] == result["revision"]
+                and after["policy"]["policy_hash"] == new_policy["policy_hash"]
+                and after["policy"]["sequence"] == new_policy["sequence"]
+                and self.resource(after, collection, resource["id"])["version"] == resource.get("version"),
+                "mutation did not survive fresh catalog read")
+        self.mutations.append((event, resource["id"], new_policy["policy_hash"]))
+        self.policy_hash = new_policy["policy_hash"]
+
+    def warm_cas_snapshot(self):
+        snapshot = self.catalog()
+        policy = snapshot["policy"]
+        require(policy["policy_hash"] == self.policy_hash == policy.get("loaded_policy_hash")
+                and policy.get("activation") == "active", "warm CAS snapshot is not the current loaded policy")
+        return snapshot
+
+    def wait_health_loaded(self, expected_policy_hash):
+        while True:
+            health = self.health()
+            if health.get("policy_hash") == expected_policy_hash == health.get("policy_shadow", {}).get("operator_policy_sha256"):
+                return health
+            time.sleep(min(0.25, self.timeout()))
+
+    def wait_catalog_loaded(self, label, *, expected_mutation=None):
+        expected_hash = self.policy_hash if expected_mutation is None else expected_mutation["policy"]["policy_hash"]
         while True:
             snapshot, health = self.catalog(), self.health()
             policy = snapshot["policy"]
-            if (policy.get("activation") == "active" and policy["policy_hash"] == self.policy_hash
+            if expected_mutation is not None:
+                require(snapshot["revision"] == expected_mutation["revision"]
+                        and policy["policy_hash"] == expected_hash
+                        and policy["sequence"] == expected_mutation["policy"]["sequence"],
+                        "warm mutation changed before persistence verification")
+            if (policy.get("activation") == "active" and policy["policy_hash"] == expected_hash
                     == policy.get("loaded_policy_hash") == health.get("policy_hash")
                     == health.get("policy_shadow", {}).get("operator_policy_sha256")):
                 self.observations.append({"stage": label, "revision": snapshot["revision"],
-                    "policyHash": self.policy_hash, "sequence": policy["sequence"]})
+                    "policyHash": expected_hash, "sequence": policy["sequence"]})
                 return snapshot, health
             time.sleep(min(0.25, self.timeout()))
 
@@ -423,36 +462,60 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         for _ in range(2):
             for application, token, rule in zip(applications, tokens, rules):
                 self.injected(token, application, rule)
+        revoke_before = self.warm_cas_snapshot()
         revoke_warm = self.observe_live_lease("before_app1_revoke", applications[0], rules[0], credential, minimum_scopes=2)
         self.results.append("one_shared_credential_two_apps_two_rules_both_200_with_warm_leases")
-        _, _, revoked = self.mutate("/applications/revoke", {"id": applications[0]["id"]},
-            collection="applications", result_key="application", event="operator_catalog.application.revoked",
-            authority_changed=True)
-        require(revoked.get("affected_rule_ids") == [rules[0]["id"]], "application revoke affected sibling rules")
-        snapshot, _ = self.wait_catalog_loaded("app1_revoked")
+        revoked_app, _, revoked = self.submit_mutation(revoke_before, "/applications/revoke", {"id": applications[0]["id"]},
+            result_key="application", authority_changed=True)
+        require(revoked.get("affected_rule_ids") == [rules[0]["id"]]
+                and revoked_app.get("status") == "revoked"
+                and revoked_app["version"] == self.resource(revoke_before, "applications", applications[0]["id"])["version"] + 1,
+                "application revoke affected sibling rules or target version differs")
+        self.wait_health_loaded(revoked["policy"]["policy_hash"])
+        self.denied_without_dispatch(tokens[0], warm=revoke_warm)
+        snapshot, _ = self.wait_catalog_loaded("app1_revoked", expected_mutation=revoked)
         require(self.resource(snapshot, "applications", applications[0]["id"])["status"] == "revoked"
                 and self.resource(snapshot, "access_rules", rules[0]["id"])["enforcement"] == "revoked"
                 and self.resource(snapshot, "access_rules", rules[1]["id"])["enforcement"] == "active",
                 "per-application revocation state differs")
-        self.denied_without_dispatch(tokens[0], warm=revoke_warm)
+        retained = self.resource(snapshot, "credentials", credential["id"])
+        require(retained["status"] == "active" and retained["version"] == credential["version"]
+                and retained["active_rule_count"] == 1, "revocation changed the shared credential")
+        self.finalize_mutation(revoked, snapshot, collection="applications", result_key="application",
+            event="operator_catalog.application.revoked")
         self.injected(tokens[1], applications[1], rules[1])
         self.results.append("warm_app1_revoked_403_no_dispatch_while_app2_still_200")
+        rotate_before = self.warm_cas_snapshot()
         rotate_warm = self.observe_live_lease("before_app2_rotate", applications[1], rules[1], credential, minimum_scopes=1)
-        rotated, replacement, _ = self.mutate("/applications/rotate-token",
-            {"id": applications[1]["id"], "token_lifetime_seconds": 3600}, collection="applications",
-            result_key="application", event="operator_catalog.application.token_rotated", token=True,
-            authority_changed=True)
-        require(rotated.get("token_generation") == 2 and rotated.get("principal_id") == applications[1]["principal_id"],
+        rotated, replacement, rotation = self.submit_mutation(rotate_before, "/applications/rotate-token",
+            {"id": applications[1]["id"], "token_lifetime_seconds": 3600}, result_key="application",
+            token=True, authority_changed=True)
+        require(rotated.get("token_generation") == 2 and rotated.get("principal_id") == applications[1]["principal_id"]
+                and rotated["version"] == self.resource(rotate_before, "applications", applications[1]["id"])["version"] + 1,
                 "rotation changed identity or failed to advance token generation")
-        snapshot, _ = self.wait_catalog_loaded("app2_rotated")
+        self.wait_health_loaded(rotation["policy"]["policy_hash"])
         self.denied_without_dispatch(tokens[1], warm=rotate_warm)
-        self.denied_without_dispatch(tokens[0])
-        self.injected(replacement, applications[1], rules[1])
+        snapshot, _ = self.wait_catalog_loaded("app2_rotated", expected_mutation=rotation)
+        # Persistence checks precede both a completed mutation record and any
+        # authorized request using the new token. No lost-response POST retry.
         retained = self.resource(snapshot, "credentials", credential["id"])
+        persisted_app = self.resource(snapshot, "applications", applications[1]["id"])
+        require(persisted_app["status"] == "active" and persisted_app.get("token_status") == "valid"
+                and persisted_app.get("access_status") == "active"
+                and persisted_app.get("principal_id") == rotated["principal_id"]
+                and persisted_app.get("token_generation") == rotated["token_generation"]
+                and self.resource(snapshot, "access_rules", rules[0]["id"])["enforcement"] == "revoked"
+                and self.resource(snapshot, "access_rules", rules[1]["id"])["enforcement"] == "active",
+                "rotated application persistence or sibling activation differs")
         require(len(snapshot["credentials"]) == 1 and retained["status"] == "active"
                 and retained["version"] == credential["version"] and retained["active_rule_count"] == 1
-                and len(snapshot["applications"]) == 2 and len(snapshot["access_rules"]) == 2
-                and self.count() == 6, "shared credential, resource retention, or total dispatch count differs")
+                and len(snapshot["applications"]) == 2 and len(snapshot["access_rules"]) == 2,
+                "shared credential or resource retention differs")
+        self.finalize_mutation(rotation, snapshot, collection="applications", result_key="application",
+            event="operator_catalog.application.token_rotated")
+        self.denied_without_dispatch(tokens[0])
+        self.injected(replacement, applications[1], rules[1])
+        require(self.count() == 6, "shared credential, resource retention, or total dispatch count differs")
         self.results.append("app2_old_token_403_no_dispatch_new_token_200_shared_credential_unchanged")
         features.checkpoint(self, "lifecycle")
         feature_app, feature_rule = features.run_features(self, credential)

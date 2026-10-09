@@ -508,7 +508,9 @@ const tests = [
   ['capability withdrawal preserves recovery and requires explicit exit rather than clearing a pending attempt', browser => fixture(browser, {}, async (page, state, observed, controls) => {
     observed.current = operation(review(state)); await controls.landing(); await checkStatus(page, /Waiting for Google consent/);
     observed.capability = null; await refreshCatalog(page); assert(await page.locator('#google-reauthorization-refresh').isDisabled());
-    assert(await page.locator('#credential-save').isDisabled()); assert.match(await page.locator('#google-reauthorization-status').innerText(), /unavailable.*not.*retried/is);
+    assert(await page.locator('#credential-save').isDisabled());
+    assert.equal(await page.locator('#google-reauthorization-status').innerText(),
+      'Reauthorization is unavailable in this deployment. No request will be retried.');
     await page.locator('#google-reauthorization-leave').click(); await ready(page); assert.equal(observed.posts.length, 0);
     assert(await panel(page).isHidden());
   })],

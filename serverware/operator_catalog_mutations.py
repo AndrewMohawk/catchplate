@@ -16,6 +16,7 @@ from serverware import operator_catalog_schema as schema
 from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
+    ReplaceCredentialKeyInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -42,6 +43,7 @@ class _Change:
     authority_changed: bool = False
     client_token: str | None = field(default=None, repr=False)
     affected_rule_ids: list[str] = field(default_factory=list)
+    key_replacement: dict | None = None
 
 
 def _state(conn) -> dict:
@@ -88,7 +90,30 @@ def _policy_observation(state: dict, *, publication_failed: bool = False) -> dic
         if not publication_failed and loaded is not None and loaded == current == state["policy_hash"] else "pending"}
 
 
-def _public(collection: str, record: dict, catalog: dict, observation: dict, now: int) -> dict:
+def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
+    """Core generations from the SAME catalog snapshot, never a lease/decrypt."""
+    result = {}
+    for record in catalog["credentials"]:
+        if record["auth_type"] not in {"bearer", "header"}:
+            continue
+        if record["status"] == "revoked":
+            result[record["id"]] = None
+            continue
+        core = conn.execute(
+            "SELECT c.credential_version,g.last_version FROM credentials c "
+            "LEFT JOIN credential_generations g ON g.credential_id=c.id WHERE c.id=?",
+            (record["id"],)).fetchone()
+        if (core is None or type(core["credential_version"]) is not int
+                or not 1 <= core["credential_version"] <= 9_007_199_254_740_991
+                or type(core["last_version"]) is not int
+                or core["last_version"] != core["credential_version"]):
+            raise CatalogIntegrityError("static credential generation binding refused")
+        result[record["id"]] = core["credential_version"]
+    return result
+
+
+def _public(collection: str, record: dict, catalog: dict, observation: dict, now: int,
+        static_generations: dict | None = None) -> dict:
     result = {key: record[key] for key in _COMMON_PUBLIC if key in record}
     loaded = observation["activation"] == "active"
     if collection == "credentials":
@@ -97,6 +122,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
         if record["auth_type"] == "google_oauth":
             from serverware import operator_catalog_google
             result.update(operator_catalog_google.public_fields(record))
+        elif static_generations is not None:
+            result["credential_generation"] = static_generations[record["id"]]
+            if "key_replaced_at" in record:
+                result["key_replaced_at"] = record["key_replaced_at"]
     elif collection == "applications":
         count = len(_active_rules(catalog, "application_id", record["id"]))
         revoked = record["status"] == "revoked"
@@ -152,18 +181,38 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
             audit.update(application_id=changed.resource["application_id"], credential_id=changed.resource["credential_id"])
         if changed.affected_rule_ids:
             audit["affected_rule_ids"] = changed.affected_rule_ids
+        if changed.key_replacement is not None:
+            audit.update({key: changed.key_replacement[key] for key in
+                ("previous_credential_generation", "credential_generation")})
         db.append_audit_event(conn, event_type="operator_catalog." + event,
             actor_type="admin", actor_id=actor_id, event=audit)
         catalog = schema.read_catalog(conn)
+        static_generations = _static_generations(conn, catalog)
         conn.commit()
         if publication["changed"]:
             try:
                 store.materialize()
             except Exception:
                 publication_failed = True
+    replacement_receipt = None
+    if changed.key_replacement is not None:
+        # COMMIT and all publication/DB ownership ended. This clears only this
+        # Python process's cache; issued Rust leases and in-flight work survive.
+        cache_invalidation = "local_unconfirmed"
+        try:
+            from serverware import runtime
+            runtime.invalidate_secret_leases(changed.resource["id"])
+            cache_invalidation = "local_completed"
+        except Exception:
+            pass  # Durable replacement remains committed; never claim rollback.
+        replacement_receipt = {key: changed.key_replacement[key] for key in
+            ("previous_credential_generation", "credential_generation")}
+        replacement_receipt.update(cache_invalidation=cache_invalidation, in_flight_requests="not_recalled")
     observation = _policy_observation(publication, publication_failed=publication_failed)
     result = {_RESULT_KEYS[collection]: _public(collection, changed.resource, catalog, observation,
-        time.time_ns() // 1_000_000), "revision": revision, "policy": observation}
+        time.time_ns() // 1_000_000, static_generations), "revision": revision, "policy": observation}
+    if replacement_receipt is not None:
+        result["key_replacement"] = replacement_receipt
     if changed.client_token is not None:
         result["client_token"] = changed.client_token
     if changed.affected_rule_ids:
@@ -183,6 +232,20 @@ def create_credential(payload: CredentialInput, actor_id: str) -> dict:
             "provider_subject": subject, "created_at": db.iso_now(), "status": "active"}
         return _Change(schema.save_resource(conn, "credentials", record, create=True))
     return _mutate(payload, actor_id, "credentials", "credential.created", change)
+
+
+def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) -> dict:
+    def change(db, conn, catalog):
+        record = _target(catalog, "credentials", payload.id)
+        if record["auth_type"] not in {"bearer", "header"}:
+            raise CatalogConflict()
+        receipt = db.replace_operator_static_credential_secret_if_version(conn, payload.id,
+            expected_version=payload.expected_credential_generation, secret=payload.secret)
+        if receipt is None:
+            raise CatalogConflict()
+        record["key_replaced_at"] = receipt["key_replaced_at"]
+        return _Change(schema.save_resource(conn, "credentials", record), key_replacement=receipt)
+    return _mutate(payload, actor_id, "credentials", "credential.key_replaced", change)
 
 
 def _new_token(lifetime: int) -> tuple[str, dict]:
@@ -305,6 +368,7 @@ def catalog_status() -> dict:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
         schema.validate_bindings(conn, catalog)
+        static_generations = _static_generations(conn, catalog)
         google_oauth = operator_catalog_capabilities.google_oauth(conn)
         operation_bundles = operator_catalog_gmail.capabilities(conn)
         state = _state(conn)
@@ -318,12 +382,14 @@ def catalog_status() -> dict:
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
-        **{collection: [_public(collection, row, catalog, observation, now) for row in catalog[collection]]
+        **{collection: [_public(collection, row, catalog, observation, now, static_generations) for row in catalog[collection]]
            for collection in _RESULT_KEYS}, "limits": limits, "observed_activity": observed_activity,
         # Source capability, not proof of a deployed gate version. Publication
         # requires the co-versioned request/response/replacement gate (including
         # V2 metadata discard for that explicit mode); never downgrade.
         "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else []),
+            "static_key_replacement": {"schema": "serverware.operatorStaticKeyReplacement/v1",
+                "path": "/api/operator-demo/credentials/replace-key", "credential_types": ["bearer", "header"]},
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
                 "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None,
             "google_oauth": google_oauth,

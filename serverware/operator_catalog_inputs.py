@@ -65,6 +65,18 @@ class TargetInput(RevisionInput):
     _canonical_id = field_validator("id")(_identifier)
 
 
+class ReplaceCredentialKeyInput(TargetInput):
+    expected_credential_generation: int = Field(ge=1, lt=9_007_199_254_740_991)
+    secret: str = Field(min_length=1, max_length=8192, repr=False)
+
+    @field_validator("secret")
+    @classmethod
+    def printable_key(cls, value: str) -> str:
+        if any(ord(char) < 32 or ord(char) > 126 for char in value):
+            raise ValueError("credential requires printable ASCII")
+        return value
+
+
 class RotateApplicationInput(TargetInput):
     token_lifetime_seconds: _Lifetime
 

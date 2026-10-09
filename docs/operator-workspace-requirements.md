@@ -177,6 +177,13 @@ distinct actions. Show affected apps before shared-account changes. Restarting
 the console must not require reconnecting accounts or repeating setup; a changed
 provider secret or CA trust root needs its own explicit workflow.
 
+The [static key replacement workflow](operator-key-replacement.md) now preserves
+the saved credential and all assigned apps/rules while changing its encrypted
+value. It requires no new response configuration. This is separate from
+replacing a dummy authentication value in an app's outbound requests, and from
+reconnecting an OAuth account; deployment and proxy verification are recorded
+in that workflow's verification section.
+
 Delivery priority is two complete vertical journeys: ordinary-client auth
 replacement with supported request/response formats, and connect-once Google
 mail with automatic refresh. Then expose the Gmail/X/npm/ECR operation bundles

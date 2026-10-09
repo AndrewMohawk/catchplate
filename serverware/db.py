@@ -67433,6 +67433,96 @@ def update_credential(
     return row_to_credential(row) if row else None
 
 
+def replace_operator_static_credential_secret_if_version(
+    conn: Any,
+    item_id: str,
+    *,
+    expected_version: int,
+    secret: str,
+) -> dict[str, Any] | None:
+    """Replace an operator key inside its caller-owned publication transaction.
+
+    No old ciphertext is read or decrypted. Every accepted replacement advances
+    the generation, including identical input. The caller owns catalog revision,
+    audit and COMMIT; this helper never opens or commits another connection.
+    """
+    from serverware import operator_catalog_schema, operator_demo, operator_publication
+
+    if (not operator_demo.active() or metadata_uses_postgres()
+            or type(conn) is not sqlite3.Connection or not conn.in_transaction):
+        raise MetadataStoreError("operator static replacement transaction refused")
+    operator_publication.assert_held()
+    databases = conn.execute("PRAGMA database_list").fetchall()
+    if [row[2] for row in databases if row[1] == "main"] != [str(DB_PATH)]:
+        raise MetadataStoreError("operator static replacement store refused")
+    if not operator_catalog_schema.active(conn):
+        raise MetadataStoreError("operator static replacement catalog refused")
+    if (type(expected_version) is not int or not 1 <= expected_version < 9_007_199_254_740_991
+            or not isinstance(item_id, str) or str(uuid.UUID(item_id)) != item_id):
+        raise ValueError("operator static replacement review refused")
+    secret = validate_credential_secret(secret)
+    if len(secret) > 8192 or any(ord(char) < 32 or ord(char) > 126 for char in secret):
+        raise ValueError("operator static replacement value refused")
+    _lock_credential_mutation(conn, item_id)
+    current = conn.execute(
+        "SELECT id,name,kind,metadata,lifecycle_status,credential_version "
+        "FROM credentials WHERE id=?", (item_id,),
+    ).fetchone()
+    retained = conn.execute(
+        "SELECT data_json FROM operator_catalog_credentials WHERE id=?", (item_id,),
+    ).fetchone()
+    if current is None or retained is None:
+        return None
+    try:
+        metadata = loads(current["metadata"], {})
+        catalog = loads(retained["data_json"], {})
+        bearer = current["kind"] == "bearer"
+        if (current["kind"] not in {"bearer", "header"}
+                or current["lifecycle_status"] != "active"
+                or not isinstance(metadata, dict)
+                or set(metadata) != {"provider_id", "provider_subject", "secret_class"}
+                or metadata["provider_id"] != "operator-demo"
+                or metadata["secret_class"] != ("bearerToken" if bearer else "customHeader")
+                or not isinstance(catalog, dict) or catalog.get("status") != "active"
+                or catalog.get("auth_type") != current["kind"]
+                or catalog.get("name") != current["name"]
+                or not isinstance(metadata["provider_subject"], str) or not metadata["provider_subject"]
+                or catalog.get("provider_subject") != metadata["provider_subject"]):
+            raise ValueError("static binding refused")
+    except (KeyError, TypeError, ValueError) as error:
+        raise MetadataStoreError("operator static replacement binding refused") from error
+    current_version = current["credential_version"]
+    if type(current_version) is not int or not 1 <= current_version < 9_007_199_254_740_991:
+        raise MetadataStoreError("operator static replacement generation refused")
+    floor = conn.execute(
+        "SELECT last_version FROM credential_generations WHERE credential_id=?", (item_id,),
+    ).fetchone()
+    if floor is None or type(floor["last_version"]) is not int or floor["last_version"] != current_version:
+        raise MetadataStoreError("operator static replacement generation history refused")
+    if current_version != expected_version:
+        return None
+    next_version = current_version + 1
+    encrypted = _envelope_values(item_id, secret, next_version)
+    changed = conn.execute(
+        "UPDATE credentials SET encrypted_secret=?,encrypted_dek=?,secret_nonce=?,"
+        "secret_ciphertext=?,secret_kek_id=?,credential_version=?,secret_updated_at=?,updated_at=? "
+        "WHERE id=? AND credential_version=? AND lifecycle_status='active'",
+        (encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+         encrypted["secret_ciphertext"], encrypted["secret_kek_id"], next_version,
+         encrypted["secret_updated_at"], encrypted["secret_updated_at"], item_id, expected_version),
+    ).rowcount
+    if changed != 1:
+        raise MetadataStoreError("operator static replacement compare-and-swap refused")
+    _record_credential_generation(conn, item_id, next_version)
+    advanced = conn.execute(
+        "SELECT last_version FROM credential_generations WHERE credential_id=?", (item_id,),
+    ).fetchone()
+    if advanced is None or type(advanced["last_version"]) is not int or advanced["last_version"] != next_version:
+        raise MetadataStoreError("operator static replacement generation update refused")
+    return {"previous_credential_generation": current_version, "credential_generation": next_version,
+            "key_replaced_at": encrypted["secret_updated_at"]}
+
+
 def update_credential_secret_if_version(
     item_id: str,
     *,

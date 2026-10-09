@@ -209,8 +209,105 @@ function operatorGoogleAccountCard(credential, catalog) {
   card.append(notice, details);
   return card;
 }
+function keyReplacementBindings(catalog) {
+  const omit = (item, names) => Object.fromEntries(Object.entries(item).filter(([name]) => !names.includes(name)));
+  // Clock-derived expiry and loaded-policy observations are not identity changes.
+  return JSON.stringify({applications: catalog.applications.map(item => omit(item, ['token_status', 'access_status'])),
+    access_rules: catalog.access_rules.map(item => omit(item, ['enforcement']))});
+}
+function keyReplacementIdentity(credential) {
+  return JSON.stringify(Object.fromEntries(['id', 'name', 'status', 'created_at', 'revoked_at', 'auth_type',
+    'header_name', 'active_rule_count', 'legacy_upstream_origin'].map(name => [name, credential[name]])));
+}
+function createStaticKeyReplacementView(workspace) {
+  const panel = element('credential-replace-panel'); const form = element('credential-replace-form');
+  const secret = element('credential-replace-secret'); let draft = null;
+  const caveat = 'Previously issued proxy leases and requests already in flight may still use the old key. Replacing it here does not revoke it at the provider.';
+  const message = value => {
+    const status = element('credential-action-status'); status.textContent = value;
+    if (value && location.hash === '#credentials') status.scrollIntoView({block: 'nearest'});
+  };
+  const writable = () => Boolean(workspace.state.catalog && !workspace.state.busy && !workspace.state.uncertain);
+  function review(id) {
+    const catalog = workspace.state.catalog;
+    const credential = catalog?.credentials.find(item => item.id === id);
+    if (!staticKeyReplacementAvailable(catalog, credential)) return null;
+    return {id, generation: credential.credential_generation, revision: catalog.revision,
+      policyHash: catalog.policy.policy_hash, sequence: catalog.policy.sequence,
+      identity: keyReplacementIdentity(credential), bindings: keyReplacementBindings(catalog),
+      replacedAt: credential.key_replaced_at,
+      capability: JSON.stringify(catalog.capabilities.static_key_replacement)};
+  }
+  function close() {
+    secret.value = ''; draft = null; panel.hidden = true; element('credential-replace-fields').disabled = true;
+  }
+  function render() {
+    if (draft && (!writable() || JSON.stringify(review(draft.id)) !== JSON.stringify(draft))) {
+      close(); message('Saved state changed or became unavailable. The new key was cleared. Review the credential and open Replace key again; no request was retried.');
+    }
+    element('credential-replace-fields').disabled = !draft || !writable();
+  }
+  function open(id) {
+    close(); if (!writable()) return;
+    draft = review(id); if (!draft) return;
+    const catalog = workspace.state.catalog;
+    const names = operatorConnectResourceChoices(catalog.credentials.filter(item => item.status === 'active'));
+    element('credential-replace-title').textContent = 'Replace key · ' + names.find(item => item.id === id).name;
+    const rules = catalog.access_rules.filter(item => item.status === 'active' && item.credential_id === id);
+    const ids = new Set(rules.map(item => item.application_id));
+    const apps = operatorConnectResourceChoices(catalog.applications.filter(item => ids.has(item.id)));
+    element('credential-replace-count').textContent = apps.length + ' affected app' + (apps.length === 1 ? '' : 's') +
+      ' · ' + rules.length + ' active access rule' + (rules.length === 1 ? '' : 's') + '. Existing permissions stay unchanged.';
+    element('credential-replace-apps').replaceChildren(...(apps.length ? apps.map(item => {
+      const row = textNode('li', item.name); row.dataset.applicationId = item.id; return row;
+    }) : [textNode('li', 'No apps currently have access through this key.')]));
+    message(''); panel.hidden = false; render(); secret.focus();
+  }
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!draft || !writable()) { secret.value = ''; return; }
+    if (JSON.stringify(review(draft.id)) !== JSON.stringify(draft)) { render(); return; }
+    if (!form.reportValidity()) return;
+    const reviewed = draft;
+    const body = {id: reviewed.id, expected_credential_generation: reviewed.generation, secret: secret.value};
+    close(); // Never retain a secret in the form across the async mutation.
+    element('credential-action-status').scrollIntoView({block: 'nearest'});
+    let receipt = null;
+    const accepted = await workspace.mutate('credentials/replace-key', body, 'credential-action-status', result => {
+      const replacement = result.key_replacement; const credential = result.credential;
+      if (!credential || keyReplacementIdentity(credential) !== reviewed.identity ||
+          projectStaticKeyMetadata(credential).credential_generation !== reviewed.generation + 1 ||
+          !Object.hasOwn(credential, 'key_replaced_at') || result.revision !== reviewed.revision + 1 ||
+          result.policy?.policy_hash !== reviewed.policyHash || result.policy.sequence !== reviewed.sequence ||
+          replacement?.previous_credential_generation !== reviewed.generation ||
+          replacement.credential_generation !== reviewed.generation + 1 ||
+          !['local_completed', 'local_unconfirmed'].includes(replacement.cache_invalidation) ||
+          replacement.in_flight_requests !== 'not_recalled')
+        throw operatorError('The replacement receipt could not be confirmed. Review saved state; do not assume rollback or repeat the request.');
+      receipt = {generation: replacement.credential_generation, cache: replacement.cache_invalidation,
+        replacedAt: credential.key_replaced_at};
+    }).finally(() => { body.secret = ''; });
+    if (!accepted) return; // Existing refresh/review uncertainty remains authoritative.
+    const catalog = workspace.state.catalog;
+    const current = catalog?.credentials.find(item => item.id === reviewed.id);
+    const confirmed = receipt && current && catalog.revision === reviewed.revision + 1 &&
+      catalog.policy.policy_hash === reviewed.policyHash && catalog.policy.sequence === reviewed.sequence &&
+      keyReplacementIdentity(current) === reviewed.identity && keyReplacementBindings(catalog) === reviewed.bindings &&
+      current.credential_generation === receipt.generation && current.key_replaced_at === receipt.replacedAt;
+    const notice = (confirmed ? 'Replacement saved in Serverware. App identities and saved access rules are unchanged. ' :
+      'Replacement acknowledged, but the refreshed saved state could not be confirmed. Refresh and review it before another replacement; do not assume rollback. ') +
+      (receipt?.cache === 'local_unconfirmed' ? 'Local cache invalidation was not confirmed. ' : '') + caveat;
+    if (!confirmed) workspace.requireReview(notice);
+    message(notice);
+  });
+  element('credential-replace-cancel').addEventListener('click', () => { close(); message('Replacement cancelled. No key was submitted.'); });
+  window.addEventListener('hashchange', close);
+  window.addEventListener('pagehide', close);
+  return {open, render};
+}
 function createCredentialsView(workspace) {
   const form = element('credential-form');
+  const replacement = createStaticKeyReplacementView(workspace);
   element('credential-auth-type').addEventListener('change', () => {
     const custom = element('credential-auth-type').value === 'header';
     element('credential-header-field').hidden = !custom; element('credential-header-name').required = custom;
@@ -225,6 +322,7 @@ function createCredentialsView(workspace) {
   });
   function render() {
     const catalog = workspace.state.catalog;
+    replacement.render();
     element('credential-fields').disabled = !workspace.ready('credentials');
     if (!catalog) { element('credential-secret').value = ''; return; }
     renderCards('credentials-list', catalog.credentials.map(credential => {
@@ -235,10 +333,22 @@ function createCredentialsView(workspace) {
           ['Active rules', String(credential.active_rule_count)], ['Credential ID', credential.id]]);
       if (!google) {
         const details = textNode('details'); details.append(textNode('summary', 'Activity details'));
+        if (Object.hasOwn(credential, 'credential_generation')) {
+          const metadata = textNode('dl', undefined, 'metadata'); metadata.dataset.keyReplacementDetails = '';
+          for (const [label, value] of [['Stored key generation', credential.credential_generation === null ? 'Unavailable after local revocation' : String(credential.credential_generation)],
+            ['Last replacement saved', credential.key_replaced_at ? new Date(credential.key_replaced_at).toLocaleString() : 'No replacement recorded']])
+            metadata.append(textNode('dt', label), textNode('dd', value));
+          details.append(metadata);
+        }
         appendOperatorAccountActivity(card, details, credential, catalog); card.append(details);
       }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
       if (credential.status === 'active' && !google) {
+        if (staticKeyReplacementAvailable(catalog, credential)) {
+          const replace = textNode('button', 'Replace key', 'secondary'); replace.dataset.action = 'replace-key';
+          replace.disabled = workspace.state.busy || workspace.state.uncertain;
+          replace.addEventListener('click', () => replacement.open(credential.id)); card.append(replace);
+        }
         const button = textNode('button', 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';
         button.disabled = workspace.state.busy || workspace.state.uncertain || credential.active_rule_count > 0;
         button.addEventListener('click', () => {

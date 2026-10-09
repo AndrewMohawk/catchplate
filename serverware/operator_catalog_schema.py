@@ -5,6 +5,7 @@ rewrites legacy rows. Legacy connection/receipt tables become retained history.
 """
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import re
 from urllib.parse import urlsplit
@@ -265,6 +266,16 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                 raise CatalogIntegrityError('catalog resource state refused')
     for identifier, row in credentials.items():
         core = conn.execute('SELECT id,name,kind,metadata,lifecycle_status FROM credentials WHERE id=?', (identifier,)).fetchone()
+        if 'key_replaced_at' in row:
+            try:
+                stamp = row['key_replaced_at']
+                if (row.get('auth_type') not in {'bearer', 'header'} or not isinstance(stamp, str)
+                        or not 1 <= len(stamp) <= 64 or not stamp.isascii()
+                        or any(ord(char) < 32 or ord(char) == 127 for char in stamp)
+                        or datetime.fromisoformat(stamp).tzinfo is None):
+                    raise ValueError('replacement timestamp refused')
+            except (TypeError, ValueError) as error:
+                raise CatalogIntegrityError('static replacement metadata refused') from error
         if row['status'] == 'revoked':
             if core is not None:
                 raise CatalogIntegrityError('revoked catalog credential retains a secret row')

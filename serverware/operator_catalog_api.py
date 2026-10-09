@@ -20,7 +20,7 @@ from serverware.setup_receipts import JsonLimits, parse_strict_json_object
 PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
-    "/credentials", "/credentials/revoke", "/applications", "/applications/revoke",
+    "/credentials", "/credentials/revoke", "/credentials/replace-key", "/applications", "/applications/revoke",
     "/applications/rotate-token", "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
 ))
 router = APIRouter(prefix=PREFIX)
@@ -192,6 +192,11 @@ async def create_credential(request: Request, identity: auth.AdminIdentity = Dep
 @router.post("/credentials/revoke")
 async def revoke_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "TargetInput", "revoke_credential", 1024)
+
+
+@router.post("/credentials/replace-key")
+async def replace_credential_key(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "ReplaceCredentialKeyInput", "replace_credential_key", 16384)
 
 
 @router.post("/applications")

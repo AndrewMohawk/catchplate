@@ -237,6 +237,33 @@ function projectObservedAccountActivity(value, credentials, applications, access
   }
   return result;
 }
+function projectStaticKeyReplacementCapability(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !== 'credential_types,path,schema' ||
+      value.schema !== 'serverware.operatorStaticKeyReplacement/v1' ||
+      value.path !== '/api/operator-demo/credentials/replace-key' ||
+      !Array.isArray(value.credential_types) || value.credential_types.length !== 2 ||
+      value.credential_types[0] !== 'bearer' || value.credential_types[1] !== 'header') return null;
+  return {schema: value.schema, path: value.path, credential_types: ['bearer', 'header']};
+}
+function projectStaticKeyMetadata(item) {
+  if (!['bearer', 'header'].includes(item.auth_type) || !Object.hasOwn(item, 'credential_generation')) return {};
+  const generation = item.credential_generation;
+  const valid = item.status === 'active' ? Number.isSafeInteger(generation) && generation > 0 :
+    item.status === 'revoked' && generation === null;
+  const hasTime = Object.hasOwn(item, 'key_replaced_at'); const time = item.key_replaced_at;
+  if (!valid || hasTime && (typeof time !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(time) ||
+      !Number.isFinite(Date.parse(time)) || new Date(time).toISOString().slice(0, 19) !== time.slice(0, 19))) return {};
+  return {credential_generation: generation, ...(hasTime ? {key_replaced_at: time} : {})};
+}
+function staticKeyReplacementAvailable(catalog, credential) {
+  const metadata = credential ? projectStaticKeyMetadata(credential) : {};
+  return Boolean(projectStaticKeyReplacementCapability(catalog?.capabilities?.static_key_replacement) &&
+    credential?.status === 'active' && ['bearer', 'header'].includes(credential.auth_type) &&
+    Number.isSafeInteger(metadata.credential_generation) && metadata.credential_generation > 0 &&
+    metadata.credential_generation < Number.MAX_SAFE_INTEGER);
+}
 function projectCatalog(value) {
   if (value?.schema !== 'serverware.operatorCatalog/v1' || value.mode !== 'operator-development' ||
       value.productionReady !== false || value.hardwareVerified !== false || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
@@ -250,7 +277,8 @@ function projectCatalog(value) {
     if (!item || typeof item.id !== 'string' || typeof item.name !== 'string' ||
         !(['active', 'revoked'].includes(item.status) || credentialRecords && item.auth_type === 'google_oauth' && item.status === 'quarantined'))
       throw operatorError('Saved resource metadata is incomplete. Refresh before making changes.');
-    return {...pick(item, [...base, ...names]), ...(credentialRecords && item.auth_type === 'google_oauth' ? projectGoogleAccount(item) : {})};
+    return {...pick(item, [...base, ...names]), ...(credentialRecords ?
+      item.auth_type === 'google_oauth' ? projectGoogleAccount(item) : projectStaticKeyMetadata(item) : {})};
   });
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
@@ -276,6 +304,7 @@ function projectCatalog(value) {
     throw operatorError('Saved Google account and access-rule states disagree. Changes are disabled.');
   const capabilities = pick(value.capabilities || {}, ['credential_types', 'response_modes', 'request_body_modes',
     'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
+  capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
     throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
   capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;
@@ -339,6 +368,12 @@ function createOperatorWorkspace() {
       element('mutation-review-confirm').disabled = true; emit(); return false;
     }
   }
+  function requireReview(message) {
+    state.uncertain = true; element('mutation-review').hidden = false;
+    element('mutation-review-text').textContent = message + ' No automatic retry was sent. Review the resource lists below before allowing another change. A lost one-time token cannot be recovered; replacing it requires explicit rotation.';
+    element('mutation-review-confirm').disabled = true;
+    emit();
+  }
   async function mutate(path, body, statusId, onSuccess = () => {}) {
     if (!state.catalog || state.busy || state.uncertain) return false;
     const reviewed = {expected_revision: state.catalog.revision, expected_policy_hash: state.catalog.policy.policy_hash};
@@ -350,8 +385,7 @@ function createOperatorWorkspace() {
       const result = await pending; await onSuccess(result); success = true;
       element(statusId).textContent = 'Saved. Refreshing the current state and proxy enforcement...';
     } catch (error) {
-      state.uncertain = true; element('mutation-review').hidden = false;
-      element('mutation-review-text').textContent = operatorMessage(error) + ' No automatic retry was sent. Review the resource lists below before allowing another change. A lost one-time token cannot be recovered; replacing it requires explicit rotation.';
+      requireReview(operatorMessage(error));
       element(statusId).textContent = operatorMessage(error);
     } finally { if (Object.hasOwn(body, 'secret')) body.secret = ''; }
     await refresh(); state.busy = false; emit(); return success;
@@ -361,7 +395,7 @@ function createOperatorWorkspace() {
     state.uncertain = false; element('mutation-review').hidden = true; emit();
   });
   window.addEventListener('pagehide', () => clearTimeout(poll));
-  return {state, api, refresh, mutate, ready, loaded, emit, writeInFlight: () => writeInFlight,
+  return {state, api, refresh, mutate, requireReview, ready, loaded, emit, writeInFlight: () => writeInFlight,
     setConsentHold(value) { if (state.consentHold !== value) { state.consentHold = value; emit(); } },
     subscribe: callback => listeners.push(callback)};
 }

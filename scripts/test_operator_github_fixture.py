@@ -8,6 +8,7 @@ independently checked and the real manifest/hash code processes the files.
 """
 from contextlib import ExitStack
 from copy import deepcopy
+import base64
 import hashlib
 import json
 import os
@@ -340,6 +341,109 @@ class GithubFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fixture.prepare(args)
         self.assertFalse(args.job_root.exists())
+
+    def test_block_failure_diagnostics_are_closed_bounded_and_never_echo_material(self):
+        from scripts import check_operator_github as checker
+        categories = {"github_response_link_denied", "provider_operation_outcome_unknown",
+            "upstream_request_failed", "upstream_body_failed", "response_credential_reflection",
+            "response_metadata_limit_exceeded", "response_metadata_invalid", "response_metadata_reserved_header",
+            "response_metadata_duplicate", "response_release_mode_invalid", "response_body_too_large", "response_invalid_json",
+            "credential_lease_changed_before_release", "credential_lease_lifetime_insufficient_for_upstream_send",
+            "credential_generation_changed_before_upstream_send", "credential_lease_expired_before_upstream_send",
+            "credential_lease_changed_before_upstream_send"}
+        self.assertEqual(checker.BLOCK_ERROR_CATEGORIES, categories)
+        secret = "synthetic-private-response-material-NEVER-ECHO"
+        request, operation = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        keys = {"case", "status", "bodyBytes", "errorCategory", "hasLink", "requestDigest", "operationDigest"}
+        for category in categories:
+            body = json.dumps({"error": category, "message": secret, "headers": {secret: secret}}).encode()
+            observed = checker.block_failure_observation("cross_repo_link", 502, body,
+                {"LiNk": secret, secret: secret}, request, operation)
+            self.assertEqual(observed, {"case": "cross_repo_link", "status": 502,
+                "bodyBytes": len(body), "errorCategory": category, "hasLink": True,
+                "requestDigest": request, "operationDigest": operation})
+            self.assertNotIn(secret, json.dumps(observed))
+        for body in (secret.encode(), b"[]", b"null", b'{"error":[]}', b'{"error":null}',
+                     json.dumps({"error": secret}).encode(), b"\xff", b"{" * 32,
+                     None, secret, b" " * 1048577):
+            with self.subTest(body_type=type(body).__name__):
+                observed = checker.block_failure_observation(secret, 502, body,
+                    {secret: secret}, secret, secret)
+                self.assertEqual(set(observed), keys)
+                self.assertEqual(observed["case"], "unrecognized")
+                self.assertEqual(observed["errorCategory"], "unrecognized")
+                self.assertEqual(observed["bodyBytes"],
+                    len(body) if isinstance(body, bytes) and len(body) <= 1048576 else None)
+                self.assertIs(observed["hasLink"], False)
+                self.assertIsNone(observed["requestDigest"])
+                self.assertIsNone(observed["operationDigest"])
+                self.assertNotIn(secret, json.dumps(observed))
+        for status in (None, True, False, "502", 502.0, 99, 600, secret):
+            self.assertIsNone(checker.block_failure_observation("cross_origin_link", status,
+                b"{}", None, request, operation)["status"])
+        for status in (100, 502, 599):
+            self.assertEqual(checker.block_failure_observation("cross_origin_link", status,
+                b"{}", None, request, operation)["status"], status)
+
+    def test_hostile_link_oracle_keeps_exact_block_status_code_and_request_count(self):
+        from scripts import check_operator_github as checker
+        scope = ("synthetic-app", "synthetic-route", "sha256:" + "c" * 64)
+        credential = "synthetic-credential"
+        secret = "synthetic-private-error-body-NEVER-ECHO"
+
+        def fresh():
+            value = checker.GithubCheck.__new__(checker.GithubCheck)
+            value.proxy = SimpleNamespace(address="127.0.0.1")
+            value.wire, value.failed_observation = [], None
+            # This group tests the acceptance/diagnostic oracle, not the separate
+            # live credential-disclosure guard. No credential or transport exists.
+            value.clean = lambda _body: None
+            return value
+
+        def row(case, status=502, error="github_response_link_denied"):
+            spec = checker.fixture.SPECS[case]
+            return {"method": spec["method"], "target": spec["target"], "status": status,
+                "requestBodyBase64": base64.b64encode(spec["request"]).decode(),
+                "requestBodySha256": checker.digest(spec["request"]),
+                "responseBodyBase64": base64.b64encode(json.dumps({"error": error, "message": secret}).encode()).decode(),
+                "headers": {}, "clientHeaders": {"accept": "application/vnd.github.v3+json"}}
+
+        for case in ("cross_repo_link", "cross_origin_link"):
+            value, incoming = fresh(), row(case)
+            value.accept_wire([incoming], (case,), scope, credential, sdk_status=502)
+            self.assertEqual(len(value.wire), 1)
+            self.assertEqual(value.wire[0]["case"], case)
+            self.assertIsNone(value.failed_observation)
+            self.assertNotIn(secret, json.dumps(value.wire))
+            for sdk_status, wire_status, error in ((200, 200, "github_response_link_denied"),
+                    (200, 502, "github_response_link_denied"), (502, 200, "github_response_link_denied"),
+                    (None, 502, "github_response_link_denied"), ("502", 502, "github_response_link_denied"),
+                    (True, 502, "github_response_link_denied"), (502, 502.0, "github_response_link_denied"),
+                    (502, True, "github_response_link_denied"), (502, 502, "provider_operation_outcome_unknown"),
+                    (502, 502, "response_blocked"), (502, 502, secret), (502, 502, None)):
+                with self.subTest(case=case, sdk_type=type(sdk_status).__name__, wire_type=type(wire_status).__name__):
+                    value, incoming = fresh(), row(case, wire_status, error)
+                    with self.assertRaises(checker.CheckFailure) as caught:
+                        value.accept_wire([incoming], (case,), scope, credential, sdk_status=sdk_status)
+                    self.assertEqual(value.wire, [])
+                    self.assertEqual(value.failed_observation["case"], case)
+                    self.assertNotIn(secret, str(caught.exception))
+                    self.assertNotIn(secret, json.dumps(value.failed_observation))
+                    request, operation = checker.canonical_digests(incoming, scope, credential, "127.0.0.1")
+                    self.assertEqual(value.failed_observation["requestDigest"], request)
+                    self.assertEqual(value.failed_observation["operationDigest"], operation)
+            for rows in ([], [row(case), row(case)]):
+                value = fresh()
+                with self.assertRaises(checker.CheckFailure):
+                    value.accept_wire(rows, (case,), scope, credential, sdk_status=502)
+                self.assertEqual(value.wire, [])
+                self.assertIsNone(value.failed_observation)
+            value, incoming = fresh(), row(case)
+            incoming["target"] += "&unexpected=1"
+            with self.assertRaises(checker.CheckFailure):
+                value.accept_wire([incoming], (case,), scope, credential, sdk_status=502)
+            self.assertEqual(value.wire, [])
+            self.assertIsNone(value.failed_observation)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,34 @@ NEGATIVES = ("wrong_app", "wrong_repo", "wrong_dummy", "numeric")
 SDK_PHASES = frozenset((*NEGATIVES, "job", *fixture.BLOCK_CASES))
 SDK_STAGES = frozenset(("initializing", "pagination", "read_issue", "read_comments", "read_comment",
     "create_issue", "create_comment", "not_found", "rate_limit", "final_checks", "negative"))
+BLOCK_ERROR_CATEGORIES = frozenset(("github_response_link_denied", "provider_operation_outcome_unknown",
+    "upstream_request_failed", "upstream_body_failed", "response_credential_reflection",
+    "response_metadata_limit_exceeded", "response_metadata_invalid", "response_metadata_reserved_header",
+    "response_metadata_duplicate", "response_release_mode_invalid", "response_body_too_large", "response_invalid_json",
+    "credential_lease_changed_before_release", "credential_lease_lifetime_insufficient_for_upstream_send",
+    "credential_generation_changed_before_upstream_send", "credential_lease_expired_before_upstream_send",
+    "credential_lease_changed_before_upstream_send"))
 NODE_SHA256 = "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d"
+
+
+def block_failure_observation(case, status, body, headers, request_digest, operation_digest):
+    """Fixed categories only; never persist arbitrary response material on failure."""
+    bounded = isinstance(body, bytes) and len(body) <= 1048576
+    category = "unrecognized"
+    if bounded:
+        try:
+            document = json.loads(body)
+            error = document.get("error") if isinstance(document, dict) else None
+            if isinstance(error, str) and error in BLOCK_ERROR_CATEGORIES:
+                category = error
+        except (ValueError, TypeError):
+            pass
+    pinned_digest = lambda value: value if isinstance(value, str) and SHA256.fullmatch(value) else None
+    return {"case": case if case in fixture.BLOCK_CASES else "unrecognized",
+        "status": status if type(status) is int and 100 <= status <= 599 else None,
+        "bodyBytes": len(body) if bounded else None, "errorCategory": category,
+        "hasLink": isinstance(headers, dict) and any(isinstance(name, str) and name.lower() == "link" for name in headers),
+        "requestDigest": pinned_digest(request_digest), "operationDigest": pinned_digest(operation_digest)}
 
 
 def run_sdk(phase, application, token, run_id, seconds):
@@ -124,6 +151,7 @@ class GithubCheck(OrdinaryClientCheck):
         self.github = Endpoint(fixture.ORIGIN, address=isolated.LOOPBACK)
         self.github.address = isolated.FIXTURE_IP
         self.wire = []
+        self.failed_observation = None
         self.negative_cutoffs = []
 
     def catalog(self):
@@ -181,7 +209,7 @@ class GithubCheck(OrdinaryClientCheck):
                 return
             time.sleep(min(0.1, self.timeout()))
 
-    def accept_wire(self, rows, cases, scope, credential_id):
+    def accept_wire(self, rows, cases, scope, credential_id, *, sdk_status=None):
         require(len(rows) == len(cases), "SDK attempted an unexpected number of requests")
         for row, case in zip(rows, cases):
             spec = fixture.SPECS[case]
@@ -194,6 +222,10 @@ class GithubCheck(OrdinaryClientCheck):
             headers = row["headers"]
             self.clean(json.dumps(headers).encode())
             if case in fixture.BLOCK_CASES:
+                self.failed_observation = block_failure_observation(
+                    case, row["status"], body, headers, request_digest, operation_digest)
+                require(type(sdk_status) is int and type(row["status"]) is int and sdk_status == row["status"],
+                    "hostile pagination SDK and observed HTTP statuses differ")
                 require(row["status"] == 502 and json.loads(body).get("error") == "github_response_link_denied",
                     "hostile pagination link was not blocked before SDK follow")
             else:
@@ -216,6 +248,7 @@ class GithubCheck(OrdinaryClientCheck):
                 "requestDigest": request_digest, "operationDigest": operation_digest,
                 "bodySha256": digest(spec["request"]), "upstreamStatus": spec["status"],
                 "responseBodySha256": digest(spec["body"]), "responseBodyBytes": len(spec["body"])})
+            self.failed_observation = None
 
     def verify_audits(self, baseline, scope, credential_id):
         expected = {(item["requestDigest"], item["operationDigest"]): item for item in self.wire}
@@ -336,7 +369,8 @@ class GithubCheck(OrdinaryClientCheck):
             self.checkpoint(baseline, phase, index)
         self.accept_wire(self.sdk("job", app, token)["observations"], fixture.RELEASE_CASES, scope, credential["id"])
         for phase in fixture.BLOCK_CASES:
-            self.accept_wire(self.sdk(phase, app, token)["observations"], (phase,), scope, credential["id"])
+            result = self.sdk(phase, app, token)
+            self.accept_wire(result["observations"], (phase,), scope, credential["id"], sdk_status=result.get("status"))
         observed = self.observe()
         require(observed["total"] == 11 and [row["case"] for row in observed["attempts"]] == list(fixture.SPECS)
             and all(row["accepted"] is True and row["allParsedHeadersValidated"] is True
@@ -380,6 +414,8 @@ def main():
                 safe["completedSdkRequests"] = check.wire
             except Exception:
                 safe = {"safeEvidenceUnavailable": True}
+            if check.failed_observation is not None:
+                safe["failedObservation"] = check.failed_observation
         result = {"ok": False, "syntheticOnly": True, "productionReady": False,
                   "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__, **safe}
     finally:

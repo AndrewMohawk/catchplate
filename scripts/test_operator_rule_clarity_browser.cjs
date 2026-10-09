@@ -87,6 +87,7 @@ const tests = [
     assert.equal(summary['Destination / methods'], UPSTREAM + '/v1/status · POST only'); assert(summary['Request body'].startsWith('No body'));
     assert(summary['Query parameters'].startsWith('None allowed')); assert(summary['Client headers'].startsWith('No extra client headers'));
     assert(summary.Response.includes('All JSON content')); compactResponse(summary);
+    await openRestrictions(page, 'rule');
     assert.equal(await page.locator('#rule-response-limits').innerText(), 'JSON only; no empty/204 responses.');
     await compatibility(page, 'rule');
     assert.equal(state.posts.length, 0);
@@ -114,7 +115,11 @@ const tests = [
 ];
 
 async function main() {
-  assert.equal(process.argv.length, 2, 'clarity fixtures do not accept live targets or credentials');
+  const args = process.argv.slice(2);
+  assert(args.length === 0 || args.length === 2 && args[0] === '--from-group' && args[1] === '3',
+    'usage: test_operator_rule_clarity_browser.cjs [--from-group 3]');
+  const firstGroup = args.length === 0 ? 1 : 3;
+  const selected = tests.slice(firstGroup - 1);
   const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory());
   artifacts = await mkdtemp(join(artifactRoot, 'rule-clarity-synthetic-'));
@@ -123,8 +128,8 @@ async function main() {
   let deadline;
   try {
     await Promise.race([(async () => {
-      for (const [name, run] of tests) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'intercepted synthetic rule-clarity browser fixtures only',
+      for (const [name, run] of selected) { await run(browser); console.log('PASS ' + name); }
+      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length, firstGroup, scope: 'intercepted synthetic rule-clarity browser fixtures only',
         liveRequests: 0, otherBrowserSuitesExecuted: false, generatedCommandsExecuted: false, productionAcceptance: false, screenshots: artifacts}));
     })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('rule-clarity fixture deadline')), 55000); })]);
   } finally { clearTimeout(deadline); await browser.close(); }

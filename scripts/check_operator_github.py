@@ -26,19 +26,23 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.check_operator_catalog import COLLECTIONS, PREFIX, claim_fixture, features
-from scripts.check_operator_demo import AUTHORITY, SHA256, CheckFailure, Endpoint, require, token_file
+from scripts.check_operator_demo import SHA256, CheckFailure, Endpoint, require, token_file
 from scripts.check_operator_key_replacement import authority_projection
 from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, LEASE, RELEASE, RELOAD, START, OrdinaryClientCheck, digest
 from scripts import operator_github_fixture as fixture
+from scripts import operator_github_fixture_network as isolated
 
 PROXY = "https://proxy.operator-basic.example.test:8443"
 CONNECT_DENIED, KEEP_ALIVE = "data_plane.connect.denied", "data_plane.connect.keep_alive"
 NEGATIVES = ("wrong_app", "wrong_repo", "wrong_dummy", "numeric")
+SDK_PHASES = frozenset((*NEGATIVES, "job", *fixture.BLOCK_CASES))
+SDK_STAGES = frozenset(("initializing", "pagination", "read_issue", "read_comments", "read_comment",
+    "create_issue", "create_comment", "not_found", "rate_limit", "final_checks", "negative"))
 NODE_SHA256 = "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d"
 
 
 def run_sdk(phase, application, token, run_id, seconds):
-    require(0 < seconds <= 70, "SDK deadline invalid")
+    require(phase in SDK_PHASES and 0 < seconds <= 70, "SDK phase or deadline invalid")
     payload = json.dumps({"phase": phase, "applicationId": application, "token": token, "runId": run_id}).encode()
     deadline = time.monotonic() + seconds
     process = subprocess.Popen(["/node", "/app/scripts/operator_github_job.mjs"],
@@ -60,7 +64,18 @@ def run_sdk(phase, application, token, run_id, seconds):
                         output[key.data].extend(chunk)
                         require(len(output[key.data]) <= (262144 if key.data == "out" else 8192), "SDK output bound exceeded")
         code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
-        require(code == 0 and not output["err"], "stock SDK process failed; raw error suppressed")
+        if code != 0 or output["err"]:
+            stage = None
+            try:
+                failure = json.loads(output["out"])
+                if (isinstance(failure, dict) and failure.get("schema") == "serverware.privateGithubSdk/v1"
+                        and failure.get("ok") is False and failure.get("phase") == phase
+                        and failure.get("stage") in SDK_STAGES):
+                    stage = failure["stage"]
+            except (ValueError, TypeError):
+                pass
+            raise CheckFailure("stock SDK process failed: " + phase + "/" + (stage or "unknown")
+                               + "; raw error suppressed")
         return bytes(output["out"])
     finally:
         if process.poll() is None:
@@ -92,12 +107,22 @@ def canonical_digests(row, scope, credential_id, peer):
 
 class GithubCheck(OrdinaryClientCheck):
     def __init__(self, args):
-        super().__init__(args)
+        # This guard precedes inherited endpoint resolution and every HTTP/SDK
+        # operation. The public-looking provider address is local to this netns.
+        isolated.assert_isolated_network()
+        require(args.control_base == "http://serverware:3000" and args.management_base == "http://127.0.0.1:9091"
+            and args.proxy_url == PROXY and args.upstream_address is None,
+            "fixed isolated GitHub endpoints required")
+        # The inherited unused demo endpoint is only constructed, never called.
+        super().__init__(argparse.Namespace(**{**vars(args), "upstream_address": isolated.LOOPBACK}))
         self.credential = fixture.TOKEN
         require(args.proxy_url == PROXY and Path("/node").is_file()
             and hashlib.sha256(Path("/node").read_bytes()).hexdigest() == NODE_SHA256,
             "private HTTPS proxy or pinned Node differs")
-        self.github = Endpoint(fixture.ORIGIN)
+        require(self.control.address == self.management.address == self.proxy.address == isolated.LOOPBACK,
+                "isolated control/proxy/actual relay peer differs")
+        self.github = Endpoint(fixture.ORIGIN, address=isolated.LOOPBACK)
+        self.github.address = isolated.FIXTURE_IP
         self.wire = []
         self.negative_cutoffs = []
 
@@ -105,7 +130,7 @@ class GithubCheck(OrdinaryClientCheck):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
         require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("productionReady") is False and value.get("hardwareVerified") is False
-            and value.get("allowed_upstreams") == ["https://" + AUTHORITY, fixture.ORIGIN]
+            and value.get("allowed_upstreams") == [fixture.ORIGIN]
             and type(value.get("revision")) is int and all(isinstance(value.get(key), list) for key in COLLECTIONS),
             "fresh synthetic GitHub catalog contract differs")
         policy = value.get("policy", {})

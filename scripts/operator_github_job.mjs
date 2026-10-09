@@ -66,23 +66,33 @@ const fullIssue = (number) => ({ id: 1700 + number, number, title: `Fixture issu
 const same = (a, b) => require(JSON.stringify(a) === JSON.stringify(b));
 
 let result;
+// Public, fixed operation labels only. Never derive diagnostics from SDK errors,
+// request arguments, response bodies or credentials.
+let stage = 'initializing';
 try {
   if (input.phase === 'job') {
+    stage = 'pagination';
     const values = await sdk.paginate(sdk.issues.listForRepo, { ...scope,
       per_page: 1, state: 'open', labels: 'fixture,triaged', page: 1 });
     same(values, [fullIssue(11), fullIssue(12)]);
+    stage = 'read_issue';
     same((await sdk.issues.get({ ...scope, issue_number: values[0].number })).data, fullIssue(11));
+    stage = 'read_comments';
     same((await sdk.issues.listComments({ ...scope, issue_number: 11, per_page: 1, page: 1 })).data,
       [{ id: 101, body: 'Fixture comment', user: { login: 'fixture-user' }, extra: [1, 2] }]);
+    stage = 'read_comment';
     same((await sdk.issues.getComment({ ...scope, comment_id: 101 })).data,
       { id: 101, body: 'Fixture comment', user: { login: 'fixture-user' }, extra: [1, 2] });
+    stage = 'create_issue';
     const created = await sdk.issues.create({ ...scope,
       title: 'Synthetic fixture issue', body: 'Fixture body ☃', labels: ['fixture'] });
     require(created.status === 201); same(created.data, fullIssue(13));
+    stage = 'create_comment';
     const comment = await sdk.issues.createComment({ ...scope, issue_number: 11, body: 'Synthetic fixture comment' });
     require(comment.status === 201);
     same(comment.data, { id: 103, body: 'Synthetic fixture comment', extra: { preserved: true } });
     for (const status of [404, 429]) {
+      stage = status === 404 ? 'not_found' : 'rate_limit';
       let error;
       try { await sdk.issues.get({ ...scope, issue_number: status }); } catch (caught) { error = caught; }
       require(error?.status === status && error.response?.status === status);
@@ -93,9 +103,11 @@ try {
       if (status === 429) require(error.response.headers['retry-after'] === '2'
         && error.response.headers['x-ratelimit-remaining'] === '0');
     }
+    stage = 'final_checks';
     require(observations.length === 9);
     result = { ok: true, phase: input.phase, observations, sdkDataVerified: true };
   } else {
+    stage = 'negative';
     let error;
     try {
       if (input.phase === 'numeric') await sdk.request('GET /repositories/1729/issues');
@@ -110,7 +122,7 @@ try {
   }
 } catch {
   // RequestError can contain raw request credentials: never stringify it.
-  result = { ok: false, phase: input.phase, error: 'stock SDK fixture operation failed' };
+  result = { ok: false, phase: input.phase, stage, error: 'stock SDK fixture operation failed' };
 } finally {
   await proxy.destroy();
   clearTimeout(deadline);

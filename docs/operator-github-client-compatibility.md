@@ -91,9 +91,13 @@ Recorded for this source slice:
 - The focused GitHub UI suite passes one pure group and eight intercepted-browser
   groups across 11 synthetic contexts. Selected existing Connect, proxy-login,
   Gmail-bundle and Google-reauthorization regressions also pass.
-- Acceptance of the 18 focused Rust cases and the isolated stock-SDK → normal
-  proxy → synthetic-provider job is still pending. Browser fixtures do not prove
-  those paths, deployment, real GitHub permission validity or provider behavior.
+- All 18 selected Rust checks pass; the normal binary has SHA-256 prefix
+  `61c312f1`, built from source `6ee45a31`.
+- The first isolated stock-SDK → normal proxy → synthetic-provider fixture
+  stopped at startup: its two-CIDR configuration violated the demo-only/private
+  address guards. The SDK never ran. A fixture-only correction is in progress;
+  the joined client job remains pending. Browser and Rust checks do not prove
+  that job, deployment, real GitHub permission validity or provider behavior.
 
 Complete that runtime acceptance and pair-provenance review before deployment;
 then separately verify the intended real repository job with authorized provider

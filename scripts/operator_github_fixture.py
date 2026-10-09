@@ -12,7 +12,6 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -21,6 +20,8 @@ import signal
 import socket
 import ssl
 import time
+
+from scripts.operator_github_fixture_network import FIXTURE_IP, assert_isolated_network, prepare_network_files
 
 OWNER, REPO = "serverware-fixture", "operator-demo"
 ORIGIN = "https://api.github.com"
@@ -79,7 +80,7 @@ def require(condition):
         raise ValueError("private GitHub fixture contract refused")
 
 
-def setup(root, demo_ca, marker):
+def setup(root, marker):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -87,12 +88,8 @@ def setup(root, demo_ca, marker):
 
     require(root == Path("/upstream-data/github") and not root.exists()
         and root.parent.is_dir() and root.parent.stat().st_uid == os.geteuid() == 10001)
-    require({name for _, name in socket.if_nameindex()} == {"lo"})
+    assert_isolated_network(attached=False)
     require(json.loads(marker.read_bytes()) == {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
-    require(demo_ca == Path("/demo-ca.pem") and demo_ca.is_file() and demo_ca.stat().st_size < 16384)
-    public = demo_ca.read_bytes()
-    require(public.count(b"BEGIN CERTIFICATE") == 1 and b"PRIVATE KEY" not in public)
-    x509.load_pem_x509_certificate(public)
     now = datetime.now(timezone.utc)
     key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Private synthetic GitHub fixture CA")])
@@ -110,13 +107,13 @@ def setup(root, demo_ca, marker):
     root.mkdir(mode=0o700)
     for name, data in {"ca.pem": ca_bytes, "cert.pem": leaf.public_bytes(serialization.Encoding.PEM),
             "key.pem": leaf_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                               serialization.NoEncryption()),
-            "gate-ca.pem": public + ca_bytes}.items():
+                                               serialization.NoEncryption())}.items():
         descriptor = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         with os.fdopen(descriptor, "wb") as output:
             output.write(data)
             output.flush()
             os.fsync(output.fileno())
+    prepare_network_files()
     print('{"ok":true,"syntheticOnly":true,"providerContact":false}', flush=True)
 
 
@@ -203,21 +200,19 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--setup", action="store_true")
-    parser.add_argument("--listen-address")
     parser.add_argument("--lifetime-seconds", type=int, default=240)
     args = parser.parse_args()
     if args.setup:
         signal.alarm(20)
-        setup(Path("/upstream-data/github"), Path("/demo-ca.pem"), Path("/private-fixture.json"))
+        setup(Path("/upstream-data/github"), Path("/private-fixture.json"))
         return
-    address = ipaddress.ip_address(args.listen_address)
-    require(address.version == 4 and address in ipaddress.ip_network("172.16.0.0/12")
-            and 60 <= args.lifetime_seconds <= 300)
+    assert_isolated_network()
+    require(60 <= args.lifetime_seconds <= 300)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain("/github/cert.pem", "/github/key.pem")
     signal.alarm(args.lifetime_seconds + 5)
-    with Fixture((str(address), 443), context) as server:
+    with Fixture((FIXTURE_IP, 443), context) as server:
         deadline = time.monotonic() + args.lifetime_seconds
         while time.monotonic() < deadline:
             server.handle_request()

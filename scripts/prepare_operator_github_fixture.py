@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -18,50 +17,68 @@ import re
 
 from scripts import prepare_operator_proxy_basic_fixture as basic
 from scripts.prepare_operator_catalog_fixture import bind, digest, require, validated_binary_sha256
+from scripts.operator_github_fixture_network import FIXTURE_IP, HOSTS, RESOLV, KEEPER_SECONDS, EDGE_SECONDS
 
 base = basic.base
 NODE_SHA256 = "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d"
 LOCK_SHA256 = "1d4b07947867c9476eccda94c4673d73212092f3c2ccea6980d2c5dbf8126092"
 CHECKER, JOB, FIXTURE = ("scripts/" + name for name in
     ("check_operator_github.py", "operator_github_job.mjs", "operator_github_fixture.py"))
+NETWORK_HELPER = "scripts/operator_github_fixture_network.py"
 
 
-def build(source, binary, initializer, root, subnet, node, sdk, *, expected_binary_sha256):
+def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha256):
     require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-github-private\.[A-Za-z0-9]{6,32}", root.name),
             "fresh private GitHub NVMe root required")
     template = root.with_name("serverware-proxy-basic-private." + root.name.split(".", 1)[1])
-    config = basic.build(source, binary, initializer, template, subnet, expected_binary_sha256=expected_binary_sha256)
+    # Reuse hardened base services; its temporary bridge manifest is NEVER used.
+    config = basic.build(source, binary, initializer, template, "172.16.249.48/28",
+                         expected_binary_sha256=expected_binary_sha256)
     for service in config["services"].values():
         for mount in service["volumes"]:
             path = Path(mount["source"])
             if path.is_relative_to(template): mount["source"] = str(root / path.relative_to(template))
     config["name"] = "serverware-github-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config.pop("networks")
     services, runtime = config["services"], root / "runtime"
-    network = ipaddress.ip_network(subnet, strict=True)
-    demo_ip, gate_ip, github_ip = (str(network.network_address + number) for number in (2, 4, 7))
-    for name in ("serverware", "decision-gate-rs"):
-        environment = services[name]["environment"]
-        environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://demo-upstream:8443","https://api.github.com"]'
-        environment["SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS"] = json.dumps([demo_ip + "/32", github_ip + "/32"])
-        services[name]["extra_hosts"] = ["api.github.com:" + github_ip]
-    gate = services["decision-gate-rs"]
-    gate["environment"]["SERVERWARE_UPSTREAM_CA_BUNDLE"] = "/github-public/gate-ca.pem"
-    gate["volumes"].append(bind(runtime / "upstream-data/github/gate-ca.pem", "/github-public/gate-ca.pem"))
-    common = deepcopy(services["demo-upstream"])
-    for key in ("command", "environment", "volumes", "healthcheck", "depends_on", "networks"):
+    common = deepcopy(services.pop("demo-upstream"))
+    for key in ("command", "environment", "volumes", "healthcheck", "depends_on", "networks", "dns"):
         common.pop(key, None)
     common.update(image=base.APP_IMAGE, environment={"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app"},
                   cpus=0.5, mem_limit="256m", memswap_limit="256m", pids_limit=32)
+    hosts = [bind(runtime / "upstream-data/github-network/hosts", "/etc/hosts"),
+             bind(runtime / "upstream-data/github-network/resolv.conf", "/etc/resolv.conf")]
+    for name in ("serverware", "decision-gate-rs"):
+        environment = services[name]["environment"]
+        environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.github.com"]'
+        environment.pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS")
+        services[name]["volumes"] = [mount for mount in services[name]["volumes"] if mount["target"] != "/demo-upstream"]
+    app = services["serverware"]
+    app["depends_on"] = {"github": {"condition": "service_healthy"}}
+    app["environment"]["SERVERWARE_DECISION_GATE_BASE"] = "http://127.0.0.1:9091"
+    gate = services["decision-gate-rs"]
+    gate["environment"].update(SERVERWARE_UPSTREAM_CA_BUNDLE="/github-public/ca.pem",
+        SERVERWARE_DECISION_GATE_HOST="127.0.0.1", SERVERWARE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
+    gate["volumes"].append(bind(runtime / "upstream-data/github/ca.pem", "/github-public/ca.pem"))
+    gate["healthcheck"] = base.health("http://127.0.0.1:9091/healthz", start=20)
     services["github-pki"] = {**deepcopy(common), "profiles": ["github-pki"], "network_mode": "none",
-        "command": ["python", "-B", "/app/" + FIXTURE, "--setup"],
+        "command": ["python", "-B", "-m", "scripts.operator_github_fixture", "--setup"],
         "volumes": [bind(source, "/app"), bind(runtime / "upstream-data", "/upstream-data", False),
-            bind(runtime / "upstream-data/demo-upstream/ca.pem", "/demo-ca.pem"),
             bind(runtime / ".private-fixture.json", "/private-fixture.json")]}
-    services["github-pki"].pop("dns", None)
+    services["network"] = {**deepcopy(common), "user": "0:0", "init": False, "network_mode": "none",
+        "cap_add": ["NET_ADMIN", "SETUID", "SETGID"], "cpus": 0.25, "pids_limit": 16,
+        "command": ["python", "-B", "-m", "scripts.operator_github_fixture_network", "network"],
+        "sysctls": {"net.ipv4.ip_unprivileged_port_start": "0", "net.ipv4.ip_nonlocal_bind": "0"},
+        "volumes": [bind(source, "/app"), bind(runtime / "upstream-data/github-network", "/fixture-network", False), *hosts],
+        "healthcheck": {"test": ["CMD", "python", "-c",
+            "import os,stat; os.setgroups([]); os.setgid(10001); os.setuid(10001); "
+            "s=os.stat('/fixture-network/ready',follow_symlinks=False); "
+            "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and stat.S_IMODE(s.st_mode)==0o400 "
+            "and s.st_uid==s.st_gid==10001 and s.st_nlink==1 and 0<s.st_size<=1024 else 1)"],
+            "interval": "2s", "timeout": "3s", "retries": 10, "start_period": "3s"}}
     services["github"] = {**deepcopy(common),
-        "networks": {"fixture": {"ipv4_address": github_ip, "aliases": ["api.github.com"]}},
-        "sysctls": {"net.ipv4.ip_unprivileged_port_start": "0"},
-        "command": ["python", "-B", "/app/" + FIXTURE, "--listen-address", github_ip, "--lifetime-seconds", "300"],
+        "depends_on": {"network": {"condition": "service_healthy"}},
+        "command": ["python", "-B", "-m", "scripts.operator_github_fixture", "--lifetime-seconds", "300"],
         "volumes": [bind(source, "/app")] + [bind(runtime / "upstream-data/github" / name, "/github/" + name)
             for name in ("cert.pem", "key.pem", "ca.pem")],
         "healthcheck": {"test": ["CMD", "python", "-c",
@@ -69,12 +86,13 @@ def build(source, binary, initializer, root, subnet, node, sdk, *, expected_bina
             "o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=c)); "
             "r=o.open('https://api.github.com/_fixture/observations',timeout=2); raise SystemExit(0 if r.status==200 else 1)"],
             "interval": "3s", "timeout": "3s", "retries": 10, "start_period": "3s"}}
-    services["serverware"]["depends_on"]["github"] = {"condition": "service_healthy"}
+    edge = services["edge"]
+    edge["entrypoint"] = ["python", "-B"]
+    edge["command"] = ["-m", "scripts.operator_github_fixture_network", "edge"]
     check = services["check"]
-    check["extra_hosts"] = ["api.github.com:" + github_ip]
     check["environment"] = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app"}
     check["command"] = ["/app/" + CHECKER, "--control-base", "http://serverware:3000",
-        "--management-base", "http://" + gate_ip + ":9091", "--proxy-url", "https://" + basic.PROXY_HOST + ":8443",
+        "--management-base", "http://127.0.0.1:9091", "--proxy-url", "https://" + basic.PROXY_HOST + ":8443",
         "--operator-origin", base.ORIGIN, "--expected-binary-sha256", "sha256:" + expected_binary_sha256,
         "--ca-file", "/client-trust/inner-ca.pem", "--proxy-ca-file", "/client-trust/outer-ca.pem",
         "--upstream-ca-file", "/client-trust/github-ca.pem", "--admin-token-file", "/client-secrets/admin.token",
@@ -85,17 +103,29 @@ def build(source, binary, initializer, root, subnet, node, sdk, *, expected_bina
         bind(runtime / ".private-fixture.json", "/private-fixture.json"),
         bind(runtime / "upstream-data/github/ca.pem", "/client-trust/github-ca.pem")]
     check["volumes"] += [bind(runtime / "basic-pki" / name, "/client-trust/" + name) for name in ("inner-ca.pem", "outer-ca.pem")]
+    for name in ("serverware", "decision-gate-rs", "github", "edge", "check"):
+        service = services[name]
+        service.pop("networks", None)
+        service.pop("dns", None)
+        service["network_mode"] = "service:network"
+        service["volumes"] += deepcopy(hosts)
+    services["initialize"].pop("dns", None)
     return config
 
 
+def validate(config, source, binary, initializer, root, node, sdk, *, expected_binary_sha256):
+    require(config == build(source, binary, initializer, root, node, sdk,
+        expected_binary_sha256=expected_binary_sha256), "isolated GitHub recipe differs")
+
+
 def prepare(args):
-    config = build(args.source, args.binary, args.initializer, args.job_root, args.subnet,
+    config = build(args.source, args.binary, args.initializer, args.job_root,
         args.node_binary, args.sdk_root, expected_binary_sha256=args.expected_binary_sha256)
     base.fresh_root(args.job_root, must_exist=args.write)
     # Reuse detached full-source validation, not base.prepare's live Git reader.
     source_files = basic.source_inventory(args.source, args.source_manifest,
         args.expected_source_manifest_sha256, args.expected_source_commit)
-    require({CHECKER, JOB, FIXTURE, "scripts/prepare_operator_github_fixture.py"} <= source_files.keys(),
+    require({CHECKER, JOB, FIXTURE, NETWORK_HELPER, "scripts/prepare_operator_github_fixture.py"} <= source_files.keys(),
         "paired GitHub fixture sources absent")
     for path, expected in ((args.binary, args.expected_binary_sha256), (args.node_binary, NODE_SHA256),
                            (args.initializer, base.INITIALIZER_SHA256)):
@@ -117,13 +147,18 @@ def prepare(args):
         "nodeBinary": str(args.node_binary), "nodeSha256": NODE_SHA256, "sdkRoot": str(args.sdk_root),
         "sdkManifestSha256": args.expected_sdk_manifest_sha256, "sdkLockSha256": LOCK_SHA256,
         "sdkPackages": {"@octokit/rest": "22.0.1", "undici": "8.11.2"},
-        "clientImage": basic.CLIENT_IMAGE, "composeSha256": hashlib.sha256(compose.encode()).hexdigest(), "subnet": args.subnet,
-        "phaseOrder": ["initialize", "demo-upstream-only", "github-pki-network-none", "github-app-gate-startup",
+        "clientImage": basic.CLIENT_IMAGE, "composeSha256": hashlib.sha256(compose.encode()).hexdigest(),
+        "network": {"mode": "none", "interfaces": ["lo"], "fixtureOnlyAddress": FIXTURE_IP,
+            "hostPorts": [], "defaultRoute": False, "externalProviderContact": False,
+            "hostsSha256": hashlib.sha256(HOSTS).hexdigest(), "resolvSha256": hashlib.sha256(RESOLV).hexdigest()},
+        "phaseOrder": ["initialize", "github-pki-network-none", "network-keeper-startup", "github-app-gate-startup",
             "basic-pki-network-none", "edge-startup", "isolation-and-executable-inspection", "one-shot-check", "teardown"],
-        "rootPreflightRequired": ["capacity", "subnet-conflicts", "cached-images", "new-normal-binary-acceptance",
-            "source-and-sdk-readable-by-10001", "actual-mounts-bounds-internal-network-no-ports", "actual-binary-digest",
-            "shared-publication-lock", "Node-startup-and-SDK-imports", "fixture-and-edge-lifetime-budget"],
-        "checkerDeadlineSeconds": 180, "automaticExecution": False, "launched": False,
+        "rootPreflightRequired": ["capacity", "cached-images", "new-normal-binary-acceptance",
+            "source-and-sdk-readable-by-10001", "actual-mounts-bounds-shared-network-none-no-ports", "actual-binary-digest",
+            "shared-publication-lock", "Node-startup-and-SDK-imports", "keeper-fixture-and-edge-lifetime-budget"],
+        "checkerDeadlineSeconds": 180, "keeperLifetimeSeconds": KEEPER_SECONDS,
+        "providerLifetimeSeconds": 300, "edgeLifetimeSeconds": EDGE_SECONDS,
+        "automaticExecution": False, "launched": False,
         "syntheticOnly": True, "productionReady": False, "realGithubVerified": False}
     if args.write:
         base.fresh_root(args.job_root, must_exist=True)
@@ -142,7 +177,6 @@ def main():
     for name in ("expected-source-manifest-sha256", "expected-sdk-manifest-sha256", "expected-binary-sha256"):
         parser.add_argument("--" + name, type=validated_binary_sha256, required=True)
     parser.add_argument("--expected-source-commit", required=True)
-    parser.add_argument("--subnet", required=True)
     parser.add_argument("--write", action="store_true")
     try:
         print(json.dumps(prepare(parser.parse_args()), indent=2, sort_keys=True))

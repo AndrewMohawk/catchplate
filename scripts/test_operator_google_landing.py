@@ -12,6 +12,7 @@ from __future__ import annotations
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -185,6 +186,7 @@ class OperatorGoogleLandingASGITests(unittest.TestCase):
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--worker":
+        os.umask(0o077)
         print(json.dumps(OPERATIONS[sys.argv[2]](), sort_keys=True))
     else:
         unittest.main()

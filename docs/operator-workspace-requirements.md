@@ -302,6 +302,16 @@ integration open. Selecting a restriction still requires its actual request and
 response enforcement, and choosing an unfiltered mode must not silently discard
 it.
 
+The broader [policy examples](../policies/credential-limits.examples.json) also
+use Basic, query-token and cookie authentication, and form bodies for Stripe and
+Twilio. Those are conditional provider/client requirements, not more mandatory
+fields on every saved key. A simple header-replacement implementation must not
+be advertised as supporting those other placements or formats. Likewise, an
+optional usage limit needs an understandable unit, reset window and sharing
+scope: request count, payment amount and reserved requested output tokens are
+different limits. A requested-token allowance is not measured token usage or
+provider billing. Show these details only when that restriction is selected.
+
 The approval journey is a first-class workflow, not a checkbox on a credential.
 Request-triggered approval, as in the ECR example, requires a pending-actions view, an exact-action review,
 the configured hardware ceremony, and a visible terminal result. A rejected,

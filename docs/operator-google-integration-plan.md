@@ -12,19 +12,26 @@ failure is retained separately from subsequent corrections. Individual source
 checks or focused tests do not establish complete end-to-end acceptance.
 
 The corrected clean `71aa1ec5` batch passed five focused cases, then failed cold
-restart because the new cleanup trigger is attached to a v9 schema-pinned core
-table but absent from its expected manifest. Sixteen selected cases remain
-unattempted. Do not bypass that guard or repair a retained/live database in place.
+restart because the new cleanup trigger was attached to a v9 schema-pinned core
+table but absent from its expected manifest. Sixteen selected cases were
+unattempted in that batch. Do not bypass that guard or repair a retained/live
+database in place.
 See [backend verification](operator-google-backend-verification.md) for exact
-evidence and the still-open schema-ownership repair.
+historical failures and subsequent repair evidence.
 
-The repair under review makes the operator-owned association the durable source
-of cleanup ownership. It places no trigger on the v9 core table. The core source
+The reviewed `51ee05e6` repair makes the operator-owned association the durable
+source of cleanup ownership. It places no trigger on the v9 core table. The core source
 is a checked mirror: changing it cannot turn owned work into legacy work. A
 persistent side-table deletion guard admits only validated transactional
 adoption or fenced cleanup completion. Missing or changed retained ownership
 schema is refused, not recreated; only a genuinely new profile initializes it.
-This is a source design until its fresh-start, restart and lifecycle tests pass.
+Eight selected checks passed on that repair before a test misclassified runtime
+profile drift as cold unconfigured startup. The corrected `0bcfac30` batch then
+passed the remaining 26 selected cases plus a new cold-start group. Production
+Python inputs stayed identical between the two batches. These are 35 distinct
+focused successes across two runs, not one full-suite pass. Twelve compiled
+Rust reconciliation tests also passed separately against synthetic transport;
+a current deployable gate and real consent/refresh acceptance remain open.
 
 Read with `operator-workspace-requirements.md` and the OAuth onboarding section
 of `goal.md`. R96 remains terminal: no restart, new enrollment, real provider

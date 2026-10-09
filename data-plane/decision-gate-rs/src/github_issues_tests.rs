@@ -198,6 +198,36 @@ fn github_contract_is_closed_and_exactly_repository_bound() {
         changed["credentialBinding"][field] = value;
         assert!(validate_config(&changed, &[envelope("github-response")]).is_err());
     }
+    for marker in [Value::Null, json!("unknown"), json!(false)] {
+        let mut changed = policy(WRITE);
+        changed["routes"][0]["constraints"][0]["contentTypePolicy"] = marker;
+        assert!(validate_policy_capabilities(&changed).is_err());
+    }
+    let mut missing = policy(WRITE);
+    missing["routes"][0]["constraints"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("contentTypePolicy");
+    assert!(validate_policy_capabilities(&missing).is_err());
+    let mut legacy_route = legacy.routes[0].clone();
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    validate_response_envelopes(&legacy_route, StatusCode::OK, &headers, Some(2), None).unwrap();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    assert_eq!(
+        validate_response_envelopes(&legacy_route, StatusCode::OK, &headers, Some(2), None)
+            .unwrap_err()["error"],
+        "response_envelope_content_type_denied"
+    );
+    legacy_route.constraints[0]["contentTypePolicy"] = json!(CONTENT_TYPE_POLICY);
+    assert!(validate_route_response_release_mode(&legacy_route).is_err());
+    assert!(
+        validate_response_envelopes(&legacy_route, StatusCode::OK, &headers, Some(2), None)
+            .is_err()
+    );
 }
 
 #[test]
@@ -733,15 +763,37 @@ fn finalized(
 fn github_real_finalizer_keeps_json_status_rate_metadata_and_normalized_pagination() {
     let snapshot = snapshot(WRITE);
     let state = test_gate_state(Arc::clone(&snapshot));
-    for (method, status, body) in [
+    for (method, status, content_type, body) in [
         (
             "GET",
             200,
+            "application/json",
             br#" [ {"id":11,"number":11,"extra":{"kept":true}} ] "#.as_slice(),
         ),
-        ("POST", 201, br#" {"id":12,"number":12,"body":"kept"} "#),
-        ("GET", 404, br#"{"message":"Not Found"}"#),
-        ("GET", 429, br#"{"message":"rate limited","extra":true}"#),
+        (
+            "GET",
+            200,
+            "application/json; charset=utf-8",
+            br#"[{"id":11,"number":11}]"#,
+        ),
+        (
+            "POST",
+            201,
+            "Application/JSON;Charset=UTF-8",
+            br#" {"id":12,"number":12,"body":"kept"} "#,
+        ),
+        (
+            "GET",
+            404,
+            "application/json;\tcharset=utf-8",
+            br#"{"message":"Not Found"}"#,
+        ),
+        (
+            "GET",
+            429,
+            "application/json; charset=utf-8",
+            br#"{"message":"rate limited","extra":true}"#,
+        ),
     ] {
         let request_body = if method == "POST" {
             r#"{"title":"new"}"#
@@ -754,7 +806,7 @@ fn github_real_finalizer_keeps_json_status_rate_metadata_and_normalized_paginati
         } else {
             ""
         };
-        let headers=format!("Content-Type: application/json; charset=utf-8\r\nServer: synthetic\r\n{link}Retry-After: 1\r\nX-RateLimit-Remaining: 42\r\nX-GitHub-Request-Id: SYNTHETIC:1\r\n");
+        let headers=format!("Content-Type: {content_type}\r\nServer: synthetic\r\n{link}Retry-After: 1\r\nX-RateLimit-Remaining: 42\r\nX-GitHub-Request-Id: SYNTHETIC:1\r\n");
         let wire = finalized(
             &snapshot,
             &state,
@@ -788,6 +840,73 @@ fn github_real_finalizer_retains_disclosure_framing_link_and_freshness_guards() 
     let (_, url, _, decision) = material(&snapshot, "GET", BASE, "");
     let mut guard = ResponseSecretGuard::default();
     guard.add_text_encodings("synthetic-provider-secret");
+    for value in [
+        "application/json; charset=iso-8859-1",
+        "application/json; charset=utf-8; charset=utf-8",
+        "application/json; profile=fixture",
+        "application/json; charset=\"utf-8\"",
+        "application/json; charset =utf-8",
+        "application/problem+json",
+        " application/json",
+        "application/json ",
+        "application/json; charset=utf-8 ",
+    ] {
+        assert!(!is_json_content_type(value), "{value}");
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_str(value).unwrap());
+        assert!(
+            validate_response_envelopes(
+                &snapshot.routes[0],
+                StatusCode::OK,
+                &headers,
+                Some(2),
+                None
+            )
+            .is_err(),
+            "{value}"
+        );
+        assert!(
+            validate_response_envelopes(
+                &snapshot.routes[0],
+                StatusCode::NO_CONTENT,
+                &headers,
+                Some(0),
+                None
+            )
+            .is_err(),
+            "{value}"
+        );
+        assert!(
+            buffered_response::inspect_github_body(
+                &snapshot.routes[0],
+                &response_profile(false),
+                StatusCode::OK,
+                Some(value),
+                b"[]".to_vec().into(),
+                &guard
+            )
+            .is_err(),
+            "{value}"
+        );
+    }
+    for value in [
+        None,
+        Some("application/json"),
+        Some("application/json; charset=utf-8"),
+    ] {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert("content-type", HeaderValue::from_str(value).unwrap());
+        }
+        validate_response_envelopes(
+            &snapshot.routes[0],
+            StatusCode::NO_CONTENT,
+            &headers,
+            Some(0),
+            None,
+        )
+        .unwrap();
+    }
     for extra in [
         "X-Unselected: synthetic-provider-secret\r\n",
         "Content-Encoding: gzip\r\n",

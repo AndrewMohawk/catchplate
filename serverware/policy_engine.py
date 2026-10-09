@@ -4616,6 +4616,7 @@ def _evaluate_response_envelope(
         or any(
             constraint.get("bodyPresence") == JSON_OR_EMPTY_204_BODY_PRESENCE
             or "unlistedHeaderPolicy" in constraint
+            or "contentTypePolicy" in constraint
             for constraint in route.constraints
         )
     ):
@@ -4762,6 +4763,15 @@ def _evaluate_response_envelope(
                         "constraint_id": constraint_id,
                     },
                 )
+        elif "contentTypePolicy" in constraint:
+            if (constraint["contentTypePolicy"] != github_issues.CONTENT_TYPE_POLICY
+                    or not github_issues.selected(route.adapter_config)
+                    or content_types != ["application/json"]
+                    or not (empty_204 and not physical_content_types) and (
+                        len(physical_content_types) != 1
+                        or not github_issues.is_json_content_type(physical_content_types[0]))):
+                return PolicyDecision(False, "GitHub response Content-Type is not allowed", 502,
+                    {"error": "response_envelope_content_type_denied", "constraint_id": constraint_id})
         elif json_or_empty or response_cfg.get("mode") == GMAIL_READ_RESPONSE_MODE:
             # Content-Type is optional representation metadata for 204, not
             # evidence of a body. A present value must still strictly match the

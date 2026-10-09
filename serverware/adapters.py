@@ -1339,6 +1339,9 @@ class ApiAdapter:
             try:
                 github_issues.validate_route(route)
                 for name, value in entries:
+                    if name == "content-type" and not github_issues.is_json_content_type(value):
+                        return PolicyDecision(False, "GitHub response Content-Type refused", 502,
+                            {"error": "github_response_content_type_denied"})
                     if name == "link":
                         github_issues.normalize_link(value, url=flow.request.pretty_url,
                             method=flow.request.method, repository=route.adapter_config["githubRepository"])

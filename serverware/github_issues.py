@@ -11,6 +11,7 @@ from serverware.request_query_compat import parse_query
 
 
 QUERY_MODE = "githubRestV1"
+CONTENT_TYPE_POLICY = "githubJsonUtf8V1"
 READ = "github_issues_read_v1"
 WRITE = "github_issues_write_v1"
 BUNDLES = frozenset({READ, WRITE})
@@ -81,8 +82,16 @@ def response_envelope(identifier):
             "predicate": {"kind": "pattern", "pattern": pattern, "maxLength": maximum}})
     return {"id": identifier, "type": "responseEnvelope", "phase": "response",
         "bodyPresence": "jsonOrEmpty204V1", "unlistedHeaderPolicy": "discardUnselectedV1",
+        "contentTypePolicy": CONTENT_TYPE_POLICY,
         "statusCodes": list(STATUSES), "contentTypes": ["application/json"],
         "allowedResponseHeaderNames": list(RESPONSE_HEADERS), "responseHeaderRules": rules}
+
+
+def is_json_content_type(value):
+    """The explicit GitHub envelope allows only a singleton UTF-8 JSON type."""
+    return (isinstance(value, str) and value.isascii() and len(value) <= 8192
+        and re.fullmatch(r"application/json(?:;[ \t]*charset=utf-8)?", value,
+            flags=re.ASCII | re.IGNORECASE) is not None)
 
 
 def validate_config(config):

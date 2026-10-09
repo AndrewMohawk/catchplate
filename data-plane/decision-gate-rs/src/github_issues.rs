@@ -10,6 +10,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
 
 pub(crate) const MODE: &str = "githubRestV1";
+pub(crate) const CONTENT_TYPE_POLICY: &str = "githubJsonUtf8V1";
 pub(crate) const READ: &str = "github_issues_read_v1";
 pub(crate) const WRITE: &str = "github_issues_write_v1";
 pub(crate) const PLACEHOLDER: &str = "token serverware-github-placeholder-v1";
@@ -47,6 +48,23 @@ pub(crate) const STATUSES: &[u16] = &[
     200, 201, 204, 400, 401, 403, 404, 409, 410, 415, 422, 429, 500, 502, 503, 504,
 ];
 const DISCARD: &[&str] = &["accept-encoding"];
+
+/// Explicit provider media grammar, not a change to legacy envelope matching.
+/// Parameter spelling is case-insensitive; only OWS after the semicolon is allowed.
+pub(crate) fn is_json_content_type(value: &str) -> bool {
+    if !value.is_ascii() || value.len() > 8192 {
+        return false;
+    }
+    match value.split_once(';') {
+        None => value.eq_ignore_ascii_case("application/json"),
+        Some((media, parameter)) => {
+            media.eq_ignore_ascii_case("application/json")
+                && parameter
+                    .trim_start_matches([' ', '\t'])
+                    .eq_ignore_ascii_case("charset=utf-8")
+        }
+    }
+}
 
 fn exact(object: &Map<String, Value>, keys: &[&str]) -> bool {
     object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
@@ -144,6 +162,7 @@ pub(crate) fn envelope(id: &str) -> Value {
         json!({"name":name,"required":false,"predicate":{"kind":"pattern","pattern":pattern,"maxLength":maximum}})
     }).collect::<Vec<_>>();
     json!({"id":id,"type":"responseEnvelope","phase":"response","statusCodes":STATUSES,
+        "contentTypePolicy":CONTENT_TYPE_POLICY,
         "bodyPresence":"jsonOrEmpty204V1","contentTypes":["application/json"],
         "allowedResponseHeaderNames":RESPONSE_HEADERS,"responseHeaderRules":rules,
         "unlistedHeaderPolicy":crate::response_metadata::POLICY})
@@ -294,6 +313,21 @@ pub(crate) fn validate_route(route: &Route) -> Result<(), String> {
         return Err("GitHub runtime route differs from signed profile".into());
     }
     Ok(())
+}
+
+/// The envelope marker is not authority by itself. Runtime callers must prove
+/// the entire selected repository profile before taking its media exception.
+pub(crate) fn media_policy_for_route(route: &Route) -> Result<bool, String> {
+    if route
+        .constraints
+        .iter()
+        .any(|constraint| constraint.get("contentTypePolicy").is_some())
+    {
+        validate_route(route)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

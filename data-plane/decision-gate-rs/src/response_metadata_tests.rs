@@ -274,8 +274,8 @@ fn response_metadata_v2_real_finalizer_blocks_framing_secrets_and_semantic_bypas
 fn response_metadata_v2_keeps_old_envelopes_strict_and_never_reuses_connections() {
     let mut old = envelope(); old.as_object_mut().unwrap().remove("unlistedHeaderPolicy");
     let extra = headers(&[("server",b"synthetic")]);
-    assert!(enforce_response_envelope(&old,StatusCode::NO_CONTENT,&extra,Some(0),None).is_err());
-    enforce_response_envelope(&envelope(),StatusCode::NO_CONTENT,&extra,Some(0),None).unwrap();
+    assert!(enforce_response_envelope(&old,StatusCode::NO_CONTENT,&extra,Some(0),None,false).is_err());
+    enforce_response_envelope(&envelope(),StatusCode::NO_CONTENT,&extra,Some(0),None,false).unwrap();
     let mut route = test_snapshot(1).routes[0].clone(); assert!(reuse_idle_upstream_connections(&route,"GET"));
     route.adapter_config["response"] = profile(); assert!(!reuse_idle_upstream_connections(&route,"GET"));
     for malformed in [false,true] {

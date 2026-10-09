@@ -86,10 +86,12 @@ class GithubIssuesTests(unittest.TestCase):
             discard_headers=discarded)
         return value, canonical
 
-    def response(self, *, body=b' [ {"unprojected":18446744073709551617} ] ', fields=(), secret="synthetic-private-key"):
+    def response(self, *, body=b' [ {"unprojected":18446744073709551617} ] ', fields=(),
+            secret="synthetic-private-key", content_type=b"application/json"):
         value = flow(headers=[])
         value.response = http.Response.make(200, b"")
-        value.response.headers = http.Headers([(b"Content-Type", b"application/json"), *fields])
+        value.response.headers = http.Headers(([(b"Content-Type", content_type)]
+            if content_type is not None else []) + list(fields))
         value.response.raw_content = body
         value.metadata.update(serverware_route=self.route, serverware_route_id=self.route.id,
             serverware_operation={"operation": "github.issues.read"})
@@ -117,7 +119,10 @@ class GithubIssuesTests(unittest.TestCase):
             lambda r: r["adapter"]["config"]["request"].update(queryMode="orderedFormV1"),
             lambda r: r["adapter"]["config"]["request"].update(discardHeaders=[]),
             lambda r: r["adapter"]["config"]["credentialBinding"].update(provider="github"),
-            lambda r: r["adapter"]["config"]["credentialBinding"].update(subjects=["other"])]
+            lambda r: r["adapter"]["config"]["credentialBinding"].update(subjects=["other"]),
+            lambda r: r["constraints"][0].pop("contentTypePolicy"),
+            lambda r: r["constraints"][0].update(contentTypePolicy=None),
+            lambda r: r["constraints"][0].update(contentTypePolicy="unknown")]
         for change in changes:
             value = document(); change(value["routes"][0])
             for schema in (True, False):
@@ -134,6 +139,16 @@ class GithubIssuesTests(unittest.TestCase):
                 gh.validate_route(replace(self.route, credential_header=descriptor))
         self.assertEqual(pb.compile_policy_bundle(old).hash, old_hash)
         self.assertEqual(pb.compile_policy_bundle(gmail.document()).hash, gmail_hash)
+        legacy_route = pb.compile_policy_bundle(old).routes[0]
+        legacy_response = buffered.flow(b"{}", fields=[(b"Content-Type", b"application/json; charset=utf-8")])
+        self.assertFalse(engine._evaluate_response_envelope(legacy_response, legacy_route).allowed)
+        for original in (old, gmail.document()):
+            for marker in (gh.CONTENT_TYPE_POLICY, None, "unknown"):
+                altered = deepcopy(original)
+                altered["routes"][0]["constraints"][0]["contentTypePolicy"] = marker
+                for schema in (True, False):
+                    with self.assertRaises(pb.PolicyBundleError):
+                        pb.compile_policy_bundle(altered, validate_schema=schema)
         old["routes"][0]["adapter"]["config"]["response"]["allowedHeaders"] = ["link"]
         with self.assertRaises(pb.PolicyBundleError):
             pb.compile_policy_bundle(old)
@@ -203,9 +218,12 @@ class GithubIssuesTests(unittest.TestCase):
 
     def test_link_protocol_metadata_normalizes_only_same_list(self):
         numeric = gh.ORIGIN + "/repositories/123/issues?page=2&per_page=1"
-        for raw in ('<' + numeric + '>;rel="next"', ' <' + numeric + '>;   rel="next" '):
+        cases = (("<" + numeric + '>;rel="next"', b"application/json"),
+            (" <" + numeric + '>;   rel="next" ', b"application/json; charset=utf-8"),
+            ("<" + numeric + '>; rel="next"', b"APPLICATION/JSON;\tCHARSET=UTF-8"))
+        for raw, content_type in cases:
             value = self.response(fields=[(b"Link", raw.encode()), (b"X-Ratelimit-Remaining", b"42"),
-                (b"Server", b"discard"), (b"Server", b"also-discard")])
+                (b"Server", b"discard"), (b"Server", b"also-discard")], content_type=content_type)
             original = value.response.raw_content
             self.assertTrue(engine._evaluate_response_envelope(value, self.route).allowed)
             self.assertTrue(self.adapter.prepare_response(value, self.route, {}).allowed)
@@ -214,6 +232,21 @@ class GithubIssuesTests(unittest.TestCase):
             self.assertEqual(value.response.headers["Link"], '<' + LIST + '?page=2&per_page=1>; rel="next"')
             self.assertEqual(value.response.headers["X-Ratelimit-Remaining"], "42")
             self.assertNotIn("Server", value.response.headers)
+        for content_type in (b"application/json; charset=iso-8859-1", b"application/json; charset=ascii",
+                b"application/json; charset=utf-8; charset=utf-8", b"application/json; charset=\"utf-8\"",
+                b"application/json; charset =utf-8", b" application/json", b"application/json ",
+                b"application/json; other=utf-8"):
+            value = self.response(content_type=content_type)
+            self.assertFalse(engine._evaluate_response_envelope(value, self.route).allowed)
+            self.assertFalse(self.adapter.prepare_response(value, self.route, {}).allowed)
+        duplicate = self.response(fields=[(b"content-type", b"application/json; charset=utf-8")])
+        self.assertFalse(engine._evaluate_response_envelope(duplicate, self.route).allowed)
+        self.assertFalse(self.adapter.prepare_response(duplicate, self.route, {}).allowed)
+        no_content = self.response(body=b"", content_type=None)
+        no_content.response.status_code = 204
+        self.assertTrue(engine._evaluate_response_envelope(no_content, self.route).allowed)
+        self.assertTrue(self.adapter.prepare_response(no_content, self.route, {}).allowed)
+        self.assertTrue(self.adapter.validate_response(no_content, self.route, {}).allowed)
         for target in (LIST + "?per_page=1", LIST.replace("fixture-repo", "other") + "?page=2",
                 numeric.replace("/issues?", "/issues/7/comments?"), numeric.replace("api.github.com", "example.com"),
                 numeric + "&page=3"):

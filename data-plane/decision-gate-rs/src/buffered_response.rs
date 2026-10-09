@@ -290,6 +290,9 @@ pub(crate) fn inspect_github_body(route: &crate::Route, config: &Value, status: 
 ) -> Result<SensitiveResponseBytes, Value> {
     crate::github_issues::validate_route(route)
         .map_err(|_| json!({"error":"response_buffered_passthrough_profile_invalid"}))?;
+    if content_type.is_some_and(|value| !crate::github_issues::is_json_content_type(value)) {
+        return Err(json!({"error":"response_json_content_type_mismatch"}));
+    }
     let expected = if status.is_client_error() || status.is_server_error() {
         &route.adapter_config["response"]["error"]
     } else { &route.adapter_config["response"] };

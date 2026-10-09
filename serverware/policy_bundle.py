@@ -769,6 +769,7 @@ CONSTRAINT_TYPE_FIELDS = {
         "responseHeaderRules",
         "operations",
         "unlistedHeaderPolicy",
+        "contentTypePolicy",
     },
 }
 
@@ -4787,6 +4788,9 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 seen_binding_ids.add(binding_id)
                 seen_response_fields.add(response_field)
         elif constraint_type == "responseEnvelope":
+            if ("contentTypePolicy" in constraint
+                    and constraint["contentTypePolicy"] != github_issues.CONTENT_TYPE_POLICY):
+                raise PolicyBundleError(f"route {route_id} responseEnvelope contentTypePolicy is invalid")
             status_codes = constraint.get("statusCodes")
             if (
                 not isinstance(status_codes, list)
@@ -5807,6 +5811,13 @@ def validate_buffered_passthrough_response(
     An actual tuple, including an empty tuple, also checks the envelope binding.
     """
     safe_headers = SAFE_RESPONSE_HEADERS
+    if constraints is not None and any("contentTypePolicy" in item for item in constraints):
+        if (not github_issues.selected(adapter_config)
+                or any("contentTypePolicy" in item and (
+                    item.get("type") != "responseEnvelope"
+                    or item["contentTypePolicy"] != github_issues.CONTENT_TYPE_POLICY)
+                    for item in constraints)):
+            raise PolicyBundleError(f"route {route_id} contentTypePolicy requires the explicit GitHub profile")
     if github_issues.selected(adapter_config):
         try:
             github_issues.validate_config(adapter_config)

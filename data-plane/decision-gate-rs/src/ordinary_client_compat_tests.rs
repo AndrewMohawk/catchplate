@@ -255,7 +255,7 @@ fn ordinary_compat_response_status_media_and_physical_framing_are_explicit() {
     for content_type in [None, Some("application/json"), Some("application/json; charset=utf-8")] {
         let mut headers = HeaderMap::new(); if let Some(value) = content_type { headers.insert("content-type", HeaderValue::from_str(value).unwrap()); }
         buffered_response::validate_empty_204_headers(&headers).unwrap();
-        enforce_response_envelope(&envelope(), StatusCode::NO_CONTENT, &headers, Some(0), None).unwrap();
+        enforce_response_envelope(&envelope(), StatusCode::NO_CONTENT, &headers, Some(0), None, false).unwrap();
         let body = buffered_response::inspect_body("generic.rest", &config, StatusCode::NO_CONTENT,
             content_type, Vec::new().into(), &guard).unwrap(); assert!(body.is_empty());
         let wire = buffered_response::serialize_empty_204(content_type, &Vec::new());

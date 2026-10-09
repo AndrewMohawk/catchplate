@@ -72,6 +72,11 @@ already-authorized named repository; numeric repository URLs do not become an
 additional client grant. Query values, status codes, headers and transport remain
 bounded by [the protocol contract](../serverware/github_issues.py).
 
+The signed GitHub-only `githubJsonUtf8V1` media policy admits JSON with an
+optional single UTF-8 charset parameter. Other charsets, duplicate parameters,
+quoted values and unrelated media types remain rejected; existing policies do
+not acquire this exception implicitly.
+
 Compression offers are discarded before forwarding; compressed responses,
 streaming, redirects and arbitrary endpoints remain unsupported. Provider retry
 metadata does not make an uncertain write safe to replay. A denial before

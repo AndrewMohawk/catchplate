@@ -9556,6 +9556,9 @@ fn validate_response_envelope_constraint(
     constraint_id: &str,
     constraint: &Map<String, Value>,
 ) -> Result<(), String> {
+    if constraint.get("contentTypePolicy").is_some_and(|value| value.as_str() != Some(github_issues::CONTENT_TYPE_POLICY)) {
+        return Err("responseEnvelope contentTypePolicy is invalid".into());
+    }
     let statuses = constraint
         .get("statusCodes")
         .and_then(Value::as_array)
@@ -11962,6 +11965,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             }));
         }
         let constraints = combined_constraints.as_slice();
+        if constraints.iter().any(|constraint| constraint.get("contentTypePolicy").is_some())
+            && !github_issues::marked(&Value::Object(adapter_config.clone())) {
+            return Err("contentTypePolicy requires the closed GitHub profile".into());
+        }
         if github_issues::marked(&Value::Object(adapter_config.clone())) {
             if adapter_type != "generic.rest" {
                 return Err("GitHub profile requires generic.rest".into());
@@ -12849,6 +12856,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "bodyPresence",
                     "unlistedHeaderPolicy",
                     "contentTypes",
+                    "contentTypePolicy",
                     "allowedResponseHeaderNames",
                     "responseHeaderRules",
                     "operations",
@@ -34682,7 +34690,12 @@ fn enforce_response_envelope(
     headers: &HeaderMap,
     body_length: Option<u64>,
     operation: Option<&Value>,
+    github_media: bool,
 ) -> Result<(), Value> {
+    if constraint.get("contentTypePolicy").is_some()
+        && (!github_media || constraint.get("contentTypePolicy").and_then(Value::as_str) != Some(github_issues::CONTENT_TYPE_POLICY)) {
+        return Err(constraint_error(constraint, "constraint_invalid_response_envelope", "response media policy lacks its typed route"));
+    }
     if !response_constraint_applies_to_operation(constraint, operation)? {
         return Ok(());
     }
@@ -34792,6 +34805,10 @@ fn enforce_response_envelope(
         ));
     }
     let content_type_values = headers.get_all("content-type").iter().collect::<Vec<_>>();
+    if github_media && content_type_values.iter().any(|value|
+        value.to_str().ok().is_none_or(|value| !github_issues::is_json_content_type(value))) {
+        return Err(constraint_error(constraint, "response_envelope_content_type_denied", "response content type is outside the provider media policy"));
+    }
     let effective_presence = if presence == buffered_response::JSON_OR_EMPTY_204_PRESENCE {
         if status == StatusCode::NO_CONTENT {
             buffered_response::validate_empty_204_headers(headers)?;
@@ -34811,7 +34828,7 @@ fn enforce_response_envelope(
             }
             let content_type = content_type_values[0].to_str().ok();
             let media_type = content_type.and_then(normalized_provider_request_media_type);
-            if media_type.as_deref() != content_type
+            if (!github_media && media_type.as_deref() != content_type)
                 || !constraint
                     .get("contentTypes")
                     .and_then(Value::as_array)
@@ -34905,6 +34922,8 @@ fn validate_response_envelopes(
     body_length: Option<u64>,
     operation: Option<&Value>,
 ) -> Result<(), Value> {
+    let github_media = github_issues::media_policy_for_route(route)
+        .map_err(|_| json!({"error":"response_envelope_policy_invalid","status_code":502}))?;
     let mut applied = false;
     for constraint in &route.constraints {
         if constraint.get("type").and_then(Value::as_str) != Some("responseEnvelope") {
@@ -34912,7 +34931,7 @@ fn validate_response_envelopes(
         }
         if response_constraint_applies_to_operation(constraint, operation)? {
             applied = true;
-            enforce_response_envelope(constraint, status, headers, body_length, operation)?;
+            enforce_response_envelope(constraint, status, headers, body_length, operation, github_media)?;
         }
     }
     if !applied {
@@ -42876,6 +42895,7 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 }
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
+    github_issues::media_policy_for_route(route)?;
     if github_issues::selected(route) {
         github_issues::validate_route(route)?;
     }

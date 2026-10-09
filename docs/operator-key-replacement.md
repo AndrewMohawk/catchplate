@@ -83,7 +83,42 @@ on the same unchanged production sources. Their logs are `connect-regression.log
 and `google-regression.log` in the same evidence directory. Neither suite
 contacted a live service or executed generated client commands.
 
-The private actual Rust proxy replacement checker has **not** been executed;
-the retained live `e19` deployment is unchanged. These results do not establish
-remote lease/cache transition, provider-key validity or revocation, public-route,
-native, or production acceptance.
+### Actual proxy verification, 2026-10-09
+
+The one-shot private checker passed on committed source
+`a88e0678c7448ffc00276c4c8d1f349451dcae84` and the unchanged actual Rust executable
+`sha256:f430734734cb43fb60eb1e28a863b337c314bb3e5377b23b6671564c62a91d9b`.
+The fixture had three resource-limited, non-root containers, an internal-only
+network, no published ports and no live data mounts. Running executable,
+source hashes and shared publication-lock identity were verified before use.
+
+Two assigned applications each dispatched using generation 1, then used
+generation 2 on their **same original CONNECT/TLS connection** after a measured
+5.250085786-second post-commit wait. The upstream fixture checked the actual
+injected authorization value in all four requests. There were no reconnects,
+functional retries, app-token changes or permission changes. The unchanged
+10-second connection-head deadline remained in force. A third, unassigned
+application was denied before upstream dispatch.
+
+Exactly one key-replacement audit event and four paired release-start/terminal
+records identified the actual credential generations; the audit queue drained
+and the complete durable audit chain verified. The two policy reload events
+belonged to initial rule creation, not key replacement. Issued dispatch-secret
+leases were checked against the five-second per-issuance cap. This proves the
+observed lease-expiry transition, not immediate remote invalidation or recall.
+
+The checker finished successfully in 17 seconds. Evidence in the same directory
+includes `checker.stdout.log`, `checker-receipt.json`, `isolation-result.json`,
+the pinned preparation manifest and private runtime logs. Its source hash is
+`ca43e7a8f051c601b136c8aa6f5f7343b38e257d5d405db264ecdfb41da99192`.
+Production source hashes were unchanged after execution.
+
+All task test containers and the private Compose network were removed after
+successful termination. The private synthetic state was moved out of scratch
+to `private-fixture-retained/` within the evidence directory, preserving its
+ownership and private permissions. Its claimed checker must not be replayed.
+The completed browser scopes left no processes; their empty scratch was removed.
+
+The retained live `e19f8b5a` deployment is unchanged. These results do not
+establish provider-key validity or revocation, real Google consent/refresh,
+public-route, native, or production acceptance.

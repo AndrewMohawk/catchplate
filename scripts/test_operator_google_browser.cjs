@@ -24,6 +24,15 @@ const FORMER_RULE_ID = '77777777-7777-4777-8777-777777777777';
 const ACTIVE_CARD_TEST = 'Google card shows account, friendly permission and app names with one optional Details disclosure';
 const QUARANTINED_CARD_TEST = 'quarantine stays visibly unusable while former assignments and technical metadata stay in Details';
 const UNKNOWN_PRESET_TEST = 'malformed public Google metadata: unknown permission preset';
+const SETUP_SUMMARY_TEST = 'Connect keeps Google account details optional and ordinary selection and review labels concise';
+const DUPLICATE_NAMES_TEST = 'Connect disambiguates duplicate names and preserves exact selected account application and rule across refresh';
+const SECOND_GOOGLE_ID = '11111111-2222-4222-8222-222222222222';
+const SECOND_STATIC_ID = '66666666-7777-4777-8777-777777777777';
+const SECOND_APPLICATION_ID = '22222222-3333-4333-8333-333333333333';
+const SECOND_RULE_ID = '44444444-5555-4555-8555-555555555555';
+const MIMIC_APPLICATION_ID = '88888888-8888-4888-8888-888888888888';
+const ACTION_RULE_ID = '99999999-9999-4999-8999-999999999999';
+const SECOND_ACCOUNT = 'other-operator@example.test';
 const capabilities = {responseModes: ['projected_json', 'unfiltered_json'], credentialInputModes: ['insert', 'replace_exact']};
 const digest = n => 'sha256:' + n.toString(16).padStart(64, '0');
 const google = (changes = {}) => credential({name: 'Saved test Google account', auth_type: 'google_oauth', header_name: 'Authorization',
@@ -100,7 +109,29 @@ function generatorChecks() {
   assert.equal(permission(google()), 'Read Gmail');
   for (const permission_preset of ['gmail_full_access', '', null, undefined])
     assert.equal(permission(google({permission_preset})), 'Unsupported permission preset');
-  return {ok: true, groups: 1, scope: 'pure Google header target, safe command generation and defensive permission labels; commands never executed'};
+  const connect = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_connect.js'), 'utf8');
+  const labels = (input, reserved = []) => JSON.parse(JSON.stringify(runInNewContext(connect + '\noperatorConnectResourceChoices(input, reserved)', {input, reserved}, {timeout: 1000})));
+  assert.deepEqual(labels([application()]), [{id: IDS.application, name: 'Reporting application'}]);
+  const duplicateApps = [application({name: 'Same name'}), application({id: SECOND_APPLICATION_ID, name: 'Same  name'})];
+  const names = labels(duplicateApps); assert.notEqual(names[0].name, names[1].name);
+  assert.deepEqual(labels([...duplicateApps].reverse()), [...names].reverse(), 'disambiguation depends on exact IDs, not list order');
+  assert(names.every(item => item.name.startsWith('Same name · ') && !item.name.includes(item.id)), 'only the necessary unique ID prefix is displayed');
+  const accounts = labels([google(), google({id: SECOND_GOOGLE_ID, provider_account: SECOND_ACCOUNT, provider_subject: 'other-subject'})]);
+  assert(accounts[0].name.includes(ACCOUNT) && accounts[1].name.includes(SECOND_ACCOUNT));
+  assert(accounts.every(item => !item.name.includes(item.id)), 'account email disambiguates before adding an ID');
+  const sameAccountLabel = labels([google(), google({id: SECOND_GOOGLE_ID})]);
+  assert.notEqual(sameAccountLabel[0].name, sameAccountLabel[1].name, 'identical account labels still retain distinct display identities');
+  const mimics = [...duplicateApps, application({id: IDS.other, name: names[0].name}),
+    application({id: MIMIC_APPLICATION_ID, name: '[' + IDS.application + '] Same name'})];
+  const resolved = labels(mimics);
+  assert.equal(new Set(resolved.map(item => item.name)).size, mimics.length, 'literal names cannot imitate generated short or full-ID labels');
+  assert.deepEqual(resolved.map(item => item.id), mimics.map(item => item.id));
+  assert.deepEqual(labels([...mimics].reverse()), [...resolved].reverse());
+  for (const name of ['Choose a saved connection', 'Create a new application', 'Grant a new permission']) {
+    const result = labels([application({name})], ['  ' + name.replaceAll(' ', '  ') + '  ']);
+    assert.equal(result[0].id, IDS.application); assert.notEqual(result[0].name, name, 'saved resources cannot impersonate an action choice');
+  }
+  return {ok: true, groups: 1, scope: 'pure Google header target, safe commands, permission labels and exact-ID display disambiguation; commands never executed'};
 }
 
 const malformed = [
@@ -153,6 +184,97 @@ const tests = [
       assert((await page.locator('#connect-google-account-summary').innerText()).includes(ACCOUNT));
       assert.equal(state.posts.length, 0);
     })],
+  [SETUP_SUMMARY_TEST, browser => fixture(browser, supplied({rules: [googleRule()]}), async (page, state) => {
+    await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+    const option = page.locator('#connect-credential-choice option[value="' + IDS.credential + '"]');
+    assert((await option.innerText()).includes(ACCOUNT)); assert(!(await option.innerText()).includes(IDS.credential));
+    await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+    const summary = page.locator('#connect-google-account-summary');
+    const card = summary.locator('[data-resource-id="' + IDS.credential + '"]');
+    const details = card.locator('[data-google-identity]');
+    assert.equal(await summary.locator('details').count(), 1); assert(!await details.evaluate(item => item.open));
+    const compact = await summary.innerText();
+    for (const value of [ACCOUNT, 'Read Gmail', 'Assigned apps', 'Reporting application']) assert(compact.includes(value));
+    for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application]) assert(!compact.includes(value));
+    assert.match(compact, /refresh health not checked.*do not confirm proxy activation/is);
+    await details.locator('summary').click();
+    for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application]) assert((await details.innerText()).includes(value));
+    await refresh(page); assert(await details.evaluate(item => item.open), 'refresh preserves an explicit Details choice for the same account');
+    await details.locator('summary').click();
+    await page.locator('#connect-credential-next').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#connect-application-choice option[value="' + IDS.application + '"]').innerText(), 'Reporting application');
+    await page.locator('#connect-application-choice').selectOption(IDS.application); await page.locator('#connect-application-next').click();
+    await page.locator('#connect-access-step').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#connect-rule-choice option[value="' + IDS.rule + '"]').innerText(), 'Read Gmail profile');
+    await reviewSaved(page);
+    const review = await page.locator('#connect-review-context').innerText();
+    assert(review.includes('Reporting application') && review.includes(ACCOUNT));
+    for (const id of [IDS.credential, IDS.application, IDS.rule]) assert(!review.includes(id));
+    assert(!await details.evaluate(item => item.open)); await screenshot(page, 'google-connect-summary-desktop');
+    await page.setViewportSize({width: 390, height: 844}); await details.locator('summary').click();
+    assert(await details.evaluate(item => item.open)); await details.locator('summary').click();
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+    await screenshot(page, 'google-connect-summary-mobile');
+    await configured(page); assert.equal(await card.count(), 1);
+    assert(!await page.locator('#one-time-access').isVisible(), 'using a saved application never retrieves or rotates its token');
+    assert.equal(state.posts.length, 0); await privateAbsent(page);
+  })],
+  [DUPLICATE_NAMES_TEST, browser => fixture(browser, supplied({
+    credentials: [google({name: 'Shared mailbox'}), google({id: SECOND_GOOGLE_ID, name: 'Shared mailbox',
+      provider_account: SECOND_ACCOUNT, provider_subject: 'other-subject'}),
+      credential({id: STATIC_ID, name: 'Shared key'}), credential({id: SECOND_STATIC_ID, name: 'Shared key'})],
+    applications: [application({name: 'Inbox worker'}), application({id: SECOND_APPLICATION_ID, name: 'Inbox worker'}),
+      application({id: IDS.other, name: 'Create a new application'}),
+      application({id: MIMIC_APPLICATION_ID, name: 'Inbox worker · 22222222-2'})],
+    rules: [googleRule('insert', {application_id: SECOND_APPLICATION_ID, credential_id: SECOND_GOOGLE_ID}),
+      googleRule('replace_exact', {id: SECOND_RULE_ID, route_id: 'operator.' + SECOND_RULE_ID,
+        application_id: SECOND_APPLICATION_ID, credential_id: SECOND_GOOGLE_ID, placeholder: 'Bearer OTHER_DUMMY',
+        upstream_url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages'}),
+      googleRule('insert', {id: ACTION_RULE_ID, route_id: 'operator.' + ACTION_RULE_ID, name: 'Grant a new permission',
+        application_id: SECOND_APPLICATION_ID, credential_id: SECOND_GOOGLE_ID,
+        upstream_url: 'https://gmail.googleapis.com/gmail/v1/users/me/labels'}),
+      googleRule('insert', {id: FORMER_RULE_ID, route_id: 'operator.' + FORMER_RULE_ID})]
+  }), async (page, state) => {
+    await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+    const label = (control, id) => page.locator('#' + control + ' option[value="' + id + '"]').innerText();
+    const firstAccount = await label('connect-credential-choice', IDS.credential);
+    const secondAccount = await label('connect-credential-choice', SECOND_GOOGLE_ID);
+    assert(firstAccount.includes(ACCOUNT) && secondAccount.includes(SECOND_ACCOUNT)); assert.notEqual(firstAccount, secondAccount);
+    assert(!firstAccount.includes(IDS.credential) && !secondAccount.includes(SECOND_GOOGLE_ID));
+    const firstKey = await label('connect-credential-choice', STATIC_ID); const secondKey = await label('connect-credential-choice', SECOND_STATIC_ID);
+    assert.notEqual(firstKey, secondKey); assert(firstKey.startsWith('Shared key · ') && secondKey.startsWith('Shared key · '));
+    await page.locator('#connect-credential-choice').selectOption(SECOND_GOOGLE_ID);
+    assert.equal(await page.locator('#connect-google-account-summary [data-resource-id="' + SECOND_GOOGLE_ID + '"]').count(), 1);
+    assert((await page.locator('#connect-google-account-summary').innerText()).includes(SECOND_ACCOUNT));
+    await page.locator('#connect-credential-next').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+    const firstApp = await label('connect-application-choice', IDS.application); const secondApp = await label('connect-application-choice', SECOND_APPLICATION_ID);
+    assert.notEqual(firstApp, secondApp); assert(firstApp.startsWith('[' + IDS.application + '] Inbox worker') && secondApp.startsWith('Inbox worker · '));
+    assert.notEqual(await label('connect-application-choice', IDS.other), await label('connect-application-choice', 'new'));
+    const appLabels = await page.locator('#connect-application-choice option').allTextContents();
+    assert.equal(new Set(appLabels).size, appLabels.length, 'literal short-label mimic and action-like name remain visibly distinct');
+    await page.locator('#connect-application-choice').selectOption(SECOND_APPLICATION_ID); await page.locator('#connect-application-next').click();
+    await page.locator('#connect-access-step').waitFor({state: 'visible'});
+    const firstRule = await label('connect-rule-choice', IDS.rule); const secondRule = await label('connect-rule-choice', SECOND_RULE_ID);
+    assert.notEqual(firstRule, secondRule); assert(firstRule.startsWith('Read Gmail profile · ') && secondRule.startsWith('Read Gmail profile · '));
+    assert.notEqual(await label('connect-rule-choice', ACTION_RULE_ID), await label('connect-rule-choice', 'new'));
+    assert.equal(await page.locator('#connect-rule-choice option[value="' + FORMER_RULE_ID + '"]').count(), 0, 'other account/app permissions are not selected by name');
+    await page.locator('#connect-rule-choice').selectOption(SECOND_RULE_ID);
+    state.credentials.reverse(); state.applications.reverse(); state.rules.reverse(); state.revision++; await refresh(page);
+    assert.equal(await page.locator('#connect-credential-choice').inputValue(), SECOND_GOOGLE_ID);
+    assert.equal(await page.locator('#connect-application-choice').inputValue(), SECOND_APPLICATION_ID);
+    assert.equal(await page.locator('#connect-rule-choice').inputValue(), SECOND_RULE_ID);
+    assert.equal(await label('connect-application-choice', SECOND_APPLICATION_ID), secondApp);
+    assert.equal(await label('connect-rule-choice', SECOND_RULE_ID), secondRule);
+    await page.locator('#connect-review').click(); await page.locator('#connect-review-step').waitFor({state: 'visible'});
+    const review = await page.locator('#connect-review-context').innerText();
+    assert(review.includes(secondApp) && review.includes(SECOND_ACCOUNT)); assert(!review.includes(firstApp) && !review.includes(ACCOUNT));
+    await page.locator('#connect-grant').click(); await page.locator('#connect-setup-slot').waitFor({state: 'visible'});
+    await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
+    assert.equal(await page.locator('#proxy-application').inputValue(), SECOND_APPLICATION_ID);
+    assert.equal(await page.locator('#proxy-rule').inputValue(), SECOND_RULE_ID);
+    assert((await page.locator('#client-command').innerText()).includes('Authorization: Bearer OTHER_DUMMY'));
+    assert(!await page.locator('#one-time-access').isVisible()); assert.equal(state.posts.length, 0);
+  })],
   ['Google replacement uses the fixed Authorization header and full Bearer dummy hint in both editors', browser => fixture(browser, supplied(), async (page, state) => {
     await ready(page); await view(page, 'access-rules'); await page.locator('#rule-credential-input').selectOption('replace_exact');
     assert.equal(await page.locator('#rule-credential-header').innerText(), 'Authorization');
@@ -270,10 +392,15 @@ const tests = [
 
 async function main() {
   const args = process.argv.slice(2);
-  assert(args.length === 0 || (args.length === 1 && args[0] === '--cards-only'), 'Google presentation tests accept only --cards-only or no arguments');
+  assert(args.length === 0 || (args.length === 1 && ['--cards-only', '--setup-only'].includes(args[0])), 'Google presentation tests accept only --cards-only, --setup-only or no arguments');
   const cardTests = new Set([ACTIVE_CARD_TEST, QUARANTINED_CARD_TEST, UNKNOWN_PRESET_TEST]);
-  const selected = args.length ? tests.filter(([name]) => cardTests.has(name)) : tests;
-  if (args.length) assert.equal(selected.length, 3, 'focused card selection remains exact');
+  const setupTests = new Set([SETUP_SUMMARY_TEST, DUPLICATE_NAMES_TEST,
+    'quarantining the selected account at step one preserves the unavailable choice and cannot resubmit it',
+    'quarantine during selected Google review disables the exact workflow without switching accounts',
+    'quarantine during selected Google setup disables the exact workflow without switching accounts']);
+  const selection = args[0]?.slice(2) || 'all';
+  const selected = selection === 'all' ? tests : tests.filter(([name]) => (selection === 'cards-only' ? cardTests : setupTests).has(name));
+  if (selection !== 'all') assert.equal(selected.length, selection === 'cards-only' ? 3 : 5, 'focused selection remains exact');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify(generatorChecks()));
   const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
@@ -284,7 +411,7 @@ async function main() {
   try {
     await Promise.race([(async () => {
       for (const [name, run] of selected) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length, selection: args.length ? 'cards-only' : 'all',
+      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length, selection,
         scope: 'intercepted Google public-account presentation fixtures only',
         consentTested: false, cleanupTested: false, otherBrowserSuitesExecuted: false, liveRequests: 0,
         generatedCommandsExecuted: false, productionAcceptance: false}));

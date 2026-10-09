@@ -80,6 +80,37 @@ Neither a short form nor a successful isolated endpoint substitutes for those
 jobs. Do not promise arbitrary passthrough while the implementation supports
 only bounded JSON and selected statuses.
 
+### Guided setup consistency, 2026-10-09
+
+The working source now reuses the compact Google account card inside Connect,
+including its optional Details disclosure. Ordinary selection/review labels
+omit UUIDs; duplicate names receive the shortest distinguishing ID suffix.
+Literal names imitating generated labels or create/grant actions remain visibly
+distinct, with a full-ID prefix only for exceptional collisions. Exact option
+values and account/app/rule relationships, stale-state guards and token custody
+are unchanged. Details stays open across refresh only for the same account.
+
+The existing Google browser suite's `--setup-only` selection passed one pure
+group and five rendered groups: compact summary/details and client setup,
+duplicate-name exact selection through reorder, and three selected-account
+quarantine controls. Desktop/mobile screenshots were inspected, without
+horizontal overflow. Both syntax checks passed, inputs remained unchanged, and
+the bounded browser scope exited zero with no remaining cgroup processes.
+The unchanged guided-connection suite also passed all 24 rendered groups on
+the same frozen production UI, including inline API-key/app/rule creation,
+saved-resource reuse, token handling and uncertain-mutation guards. Its evidence
+is `connect-regression.vt9d2W/browser.log`; that scope also exited zero with
+unchanged sources. No provider or live API requests, consent, token refresh or
+generated client commands ran. This change is source/browser-fixture verified, not deployed in
+the retained `d2f645f6` demo snapshot.
+
+Evidence: `google-connect.FN6xrL/browser.log`; screenshots:
+`serverware-operator-artifacts/google-browser-synthetic-epbCb7` beneath projects.
+Connect SHA-256:
+`a306c455c554a31ae7d2415133e7b2ae575193ea07fefdf9ecd4a57aaef21fe5`;
+test SHA-256:
+`a648108951f8155e1f155d2b8e0be5905d4ef5f801e8bda2b0f6cb2026af9167`.
+
 ### Compact account-card verification, 2026-10-09
 
 The focused `scripts/test_operator_google_browser.cjs --cards-only` check passed
@@ -379,13 +410,13 @@ integration open. Selecting a restriction still requires its actual request and
 response enforcement, and choosing an unfiltered mode must not silently discard
 it.
 
-The next Google delivery boundary is a **usable inbox job**, not merely a
-successful consent callback. Current catalog rules bind one literal path and
-do not admit message-ID templates. Consequently, saving an account and granting
-one list URL does not let a job read newly returned message IDs. A named read-mail
-preset must cover its bounded list, pagination and message-read operations,
-with representative normal-client query ordering and headers. Test the same job
-again after access-token expiry, without new consent or exposing provider tokens.
+The Google delivery boundary is a **usable inbox job**, not merely a successful
+consent callback. Generic catalog rules still bind one literal path; the new
+explicit Read Gmail bundle covers bounded list, pagination and returned-ID
+message reads with its own ordinary query contract. Its isolated Requests job
+passed before and after actual synthetic-token expiry without new consent or
+exposing provider tokens. See [the exact verification boundary](operator-gmail-job-verification.md).
+Real Google, the joined browser journey and stock SDK compatibility remain open.
 Mail-age restrictions remain optional, with their independent response checks
 when selected. Attachments, history and other operations must be named explicitly
 rather than silently included in a vague "Google access" grant.
@@ -443,10 +474,12 @@ workflow. Account-level repair must show which applications it affects.
 The current source is not yet a general "just replace authentication" proxy.
 Removing mandatory response projection solves only one part of that journey:
 
-- In the existing UI and legacy rules, an empty request-field list forbids a
-  body. The additive source mode preserves bounded strict JSON without field
-  declarations; it must pass backend verification and have accurate mode-aware
-  UI summaries before being exposed. Collapsing the form alone is not support.
+- Legacy rules can interpret an empty request-field list as forbidding a body.
+  New supported rules explicitly preserve bounded strict JSON without field
+  declarations; the deployed UI selects the advertised contract automatically.
+  Private ordinary-client acceptance verifies exact bytes, while the separate
+  live smoke verifies injection and audit. Neither establishes form/binary/stream
+  compatibility. Existing restricted rules retain their saved contract.
 - Query names default to none, and forwarded client headers default to
   `accept` and `user-agent`. An example-request importer could suggest those
   names locally for explicit approval; it must not silently broaden access.
@@ -459,7 +492,9 @@ Removing mandatory response projection solves only one part of that journey:
   its headers even with `unfiltered_json` selected. Basic setup must not require
   operators to reverse-engineer provider metadata. Fix the supported simple mode
   with bounded admission/forwarding and regression coverage, without weakening
-  existing signed rules or removing the fixture metadata to hide the gap. See
+  existing signed rules or removing fixture metadata to hide the gap. V2 now
+  repairs admission by safely discarding unselected metadata, with isolated and
+  live evidence; forwarding remains the separate requirement below. See
   [the retained failure](operator-google-backend-verification.md#corrected-joined-run-response-header-blocker).
 - Accepting and discarding response metadata is not transparent client behavior.
   Current catalog profiles forward no selected response headers. A usable
@@ -468,10 +503,11 @@ Removing mandatory response projection solves only one part of that journey:
   Do not require operators to discover missing retry or pagination semantics
   by reverse-engineering a response-field editor.
 - Whole-JSON responses retain status-code, body-presence, size and safe-header
-  restrictions. The existing UI and legacy whole-JSON envelope do not support
-  `204 No Content`; the additive source contract admits it only through an
-  explicit paired mode. Text, binary and streaming remain open compatibility work. The current
-  CONNECT parser also requires canonical query ordering. Ordinary-client
+  restrictions. Legacy whole-JSON envelopes do not support `204 No Content`;
+  the deployed additive contract admits it through an explicit paired mode,
+  covered by private acceptance rather than the live echo smoke. Text, binary
+  and streaming remain open compatibility work. Generic queries still require
+  canonical ordering; the Gmail bundle has its separate ordered query contract. Ordinary-client
   compatibility needs explicit implementation and proof, not a claim that
   "no response filter" removes these protocol restrictions.
 

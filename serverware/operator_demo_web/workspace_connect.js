@@ -1,8 +1,32 @@
 // Guided composition of the same independent resources and mutation gate.
 // Only public IDs/drafts live here; the applications controller owns all tokens.
+function operatorConnectResourceChoices(items, reserved = []) {
+  const actionLabels = reserved.map(value => value.replace(/\s+/g, ' ').trim());
+  const options = items.map(item => ({id: item.id, name: (item.name +
+    (item.auth_type === 'google_oauth' ? ' · ' + item.provider_account : '')).replace(/\s+/g, ' ').trim()}));
+  let result = options.map(item => {
+    const peers = options.filter(other => other.id !== item.id && other.name === item.name);
+    if (!peers.length && !actionLabels.includes(item.name)) return item;
+    let length = Math.min(8, item.id.length);
+    while (length < item.id.length && peers.some(other => other.id.slice(0, length) === item.id.slice(0, length))) length++;
+    return {id: item.id, name: item.name + ' · ' + item.id.slice(0, length)};
+  });
+  // A literal name may imitate a generated label. Prefix the exact ID only for
+  // colliding entries; each pass converts another entry, bounded by list size.
+  // Unique persisted UUIDs make these final prefixes distinct regardless of name.
+  for (let pass = 0; pass < options.length; pass++) {
+    const counts = new Map();
+    for (const name of [...actionLabels, ...result.map(item => item.name)]) counts.set(name, (counts.get(name) || 0) + 1);
+    if (result.every(item => counts.get(item.name) === 1)) break;
+    result = result.map((item, index) => counts.get(item.name) > 1 ?
+      {id: item.id, name: '[' + item.id + '] ' + options[index].name} : item);
+  }
+  return result;
+}
 function createConnectView(workspace, applications, proxy) {
   const steps = ['credential', 'application', 'access', 'review', 'setup'];
   const labels = ['Provider credential', 'Application', 'Allowed use', 'Review access', 'Client setup'];
+  const actionLabels = {credential: 'Choose a saved connection', application: 'Create a new application', rule: 'Grant a new permission'};
   let step = 0; let selectedCredential = ''; let selectedApplication = ''; let selectedRule = '';
   let review = null; let checkpoint = null; let open = false;
   let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
@@ -14,18 +38,18 @@ function createConnectView(workspace, applications, proxy) {
   const matchingRules = () => catalog()?.access_rules.filter(item => item.status === 'active' && item.application_id === selectedApplication && item.credential_id === selectedCredential) || [];
   const message = text => { element('connect-status').textContent = text; };
   renderOperatorCompatibility('connect-compatibility-content');
-  const accountSummary = textNode('article', undefined, 'notice'); accountSummary.id = 'connect-google-account-summary';
+  const accountSummary = textNode('div'); accountSummary.id = 'connect-google-account-summary';
   accountSummary.hidden = true; element('connect-progress').after(accountSummary);
   function renderGoogleAccount() {
     const id = step === 0 ? element('connect-credential-choice').value : selectedCredential;
     const item = catalog()?.credentials.find(item => item.id === id);
+    const expanded = accountSummary.firstElementChild?.dataset.resourceId === id && accountSummary.querySelector('details')?.open;
     accountSummary.hidden = connectionMethod === 'google' || step === 0 && connectionMethod !== 'saved' || item?.auth_type !== 'google_oauth';
     accountSummary.replaceChildren();
     if (accountSummary.hidden) return;
-    const details = textNode('dl', undefined, 'metadata');
-    details.append(...operatorGoogleAccountRows(item, catalog()).flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
-    accountSummary.append(textNode('h2', item.status === 'quarantined' ? 'Google account quarantined — unavailable' : 'Saved Google account'),
-      details, textNode('p', operatorGoogleAccountNotice(item), 'small muted'));
+    const card = operatorGoogleAccountCard(item, catalog());
+    card.querySelector('details').open = Boolean(expanded);
+    accountSummary.append(card);
   }
 
   // A vanished choice remains visibly unavailable: never silently pick another
@@ -80,11 +104,10 @@ function createConnectView(workspace, applications, proxy) {
   function renderInputs() {
     const value = catalog(); if (!value) return;
     if (connectionMethod === 'key') choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
-    if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: 'Choose a saved connection'},
-      ...value.credentials.filter(item => item.status === 'active').map(item => ({id: item.id,
-        name: item.name + (item.auth_type === 'google_oauth' ? ' · Google account ' + item.provider_account : '') + ' · ' + item.id}))], savedChoice);
-    choices('connect-application-choice', [...value.applications.filter(item => item.status === 'active').map(item => ({id: item.id, name: item.name + ' · ' + item.id})), {id: 'new', name: 'Create a new application'}], 'new');
-    choices('connect-rule-choice', [{id: 'new', name: 'Grant a new permission'}, ...matchingRules().map(item => ({id: item.id, name: item.name + ' · ' + item.id}))], 'new');
+    if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: actionLabels.credential},
+      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active'), [actionLabels.credential])], savedChoice);
+    choices('connect-application-choice', [...operatorConnectResourceChoices(value.applications.filter(item => item.status === 'active'), [actionLabels.application]), {id: 'new', name: actionLabels.application}], 'new');
+    choices('connect-rule-choice', [{id: 'new', name: actionLabels.rule}, ...operatorConnectResourceChoices(matchingRules(), [actionLabels.rule])], 'new');
     choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
     choices('connect-credential-input', availableCredentialInputModes(value).map(id => ({id, name: operatorCredentialInputModes[id]})), 'insert');
     const responseChoices = responseFormChoices(value, element('connect-response-mode').value);
@@ -151,8 +174,11 @@ function createConnectView(workspace, applications, proxy) {
     if (!review) return;
     const rows = [...operatorRuleCredentialRows(review.rule, credential()), ...operatorRuleRestrictions(review.rule)];
     element('connect-review-details').replaceChildren(...rows.flatMap(([name, value]) => [textNode('dt', name), textNode('dd', value)]));
-    element('connect-review-context').textContent = reviewCurrent() ?
-      `${application().name} (${selectedApplication}) may use ${credential().name} (${selectedCredential}) only as follows.` :
+    if (reviewCurrent()) {
+      const appName = operatorConnectResourceChoices(catalog().applications.filter(item => item.status === 'active'), [actionLabels.application]).find(item => item.id === selectedApplication).name;
+      const credentialName = operatorConnectResourceChoices(catalog().credentials.filter(item => item.status === 'active'), [actionLabels.credential]).find(item => item.id === selectedCredential).name;
+      element('connect-review-context').textContent = `${appName} may use ${credentialName} only as follows.`;
+    } else element('connect-review-context').textContent =
       'Saved state changed or a selected resource is unavailable. Go Back, verify your choices and Review access again. No grant was sent.';
     element('connect-grant').textContent = review.existing ? 'Use this saved rule' : 'Grant access';
     element('connect-grant').disabled = !writable() || Boolean(checkpoint) || !reviewCurrent();

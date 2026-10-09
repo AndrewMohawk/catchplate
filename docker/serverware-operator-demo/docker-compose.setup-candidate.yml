@@ -1,0 +1,22 @@
+# Prepared Google-OFF app-only candidate; not the deployed selection.
+# Combine with docker-compose.yml and the retained private environment only.
+# Do not combine with another source override or docker-compose.google.yml.
+# Maintenance approval and retained-state checks remain required.
+services:
+  serverware:
+    environment:
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:e7529b4484228ebdbf2be1ebb471a80a78a3e127673f0bc6dcb4921db92489e2
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-1deb896c35d660eb665ac57ad35789c22280edf9
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-e7529b4484228ebdbf2be1ebb471a80a78a3e127673f0bc6dcb4921db92489e2/serverware-decision-gate
+        target: /usr/local/bin/serverware-decision-gate
+        read_only: true
+        bind: {create_host_path: false}

@@ -105,7 +105,18 @@ def _deep_freeze(value: Any) -> Any:
     return value
 
 
-SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "x.v2", "npm.registry"}
+SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry"}
+GMAIL_READ_ADAPTER = "gmail.read.v1"
+ORDERED_FORM_QUERY_MODE = "orderedFormV1"
+GMAIL_READ_RESPONSE_MODE = "gmailReadJsonV1"
+GMAIL_READ_PATHS = ("/gmail/v1/users/me/messages", "/gmail/v1/users/me/messages/{message_id}")
+GMAIL_READ_STATUS_CODES = (200, 400, 401, 403, 404, 429, 500, 502, 503, 504)
+GMAIL_READ_OPERATION_QUERY_KEYS = {
+    "gmail.messages.list": frozenset({"alt", "includeSpamTrash", "labelIds", "maxResults", "pageToken", "prettyPrint", "q"}),
+    "gmail.message.get": frozenset({"alt", "format", "metadataHeaders", "prettyPrint"}),
+}
+GMAIL_READ_REQUEST_HEADERS = ("accept", "accept-encoding", "user-agent", "x-goog-api-client")
+GMAIL_READ_QUERY_KEYS = ("alt", "format", "includeSpamTrash", "labelIds", "maxResults", "metadataHeaders", "pageToken", "prettyPrint", "q")
 MANAGED_OAUTH_PROVIDERS = {
     "google",
     "google.oauth",
@@ -394,6 +405,7 @@ def required_oauth_scopes_for_operation(
 ) -> frozenset[str] | None:
     catalog = {
         "gmail.v1": GMAIL_OPERATION_REQUIRED_OAUTH_SCOPES,
+        GMAIL_READ_ADAPTER: GMAIL_OPERATION_REQUIRED_OAUTH_SCOPES,
         "x.v2": X_OPERATION_REQUIRED_OAUTH_SCOPES,
     }.get(adapter_type)
     if catalog is None:
@@ -408,7 +420,7 @@ def adapter_operation_field_names(
 ) -> frozenset[str] | None:
     if adapter_type == "generic.rest":
         return frozenset({"operation", *generic_fields})
-    if adapter_type == "gmail.v1":
+    if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER}:
         return GMAIL_V1_OPERATION_FIELDS.get(operation)
     if adapter_type == "x.v2":
         return (
@@ -432,6 +444,11 @@ def adapter_operation_query_fields(
         )
     if adapter_type == "gmail.v1":
         return GMAIL_V1_OPERATION_QUERY_KEYS.get(operation)
+    if adapter_type == GMAIL_READ_ADAPTER:
+        if request_query_mode(adapter_type, adapter_config) == ORDERED_FORM_QUERY_MODE:
+            # Existing scalar capture/traversal consumers do not admit v3.
+            return None
+        return GMAIL_READ_OPERATION_QUERY_KEYS.get(operation)
     if adapter_type == "x.v2":
         if operation == "search.read":
             return frozenset(X_V2_RECENT_SEARCH_QUERY_KEYS)
@@ -2529,13 +2546,22 @@ def _validate_route_credential_binding(
             )
         expected_provider = {
             "gmail.v1": "google",
+            GMAIL_READ_ADAPTER: "google",
             "x.v2": "x",
         }.get(adapter_type)
         if expected_provider is not None and credential.provider != expected_provider:
             raise PolicyBundleError(
                 f"route {route_id} {adapter_type} requires provider {expected_provider}"
             )
-        if adapter_type in {"gmail.v1", "x.v2"}:
+        if adapter_type == GMAIL_READ_ADAPTER and (
+            required_scopes != ["https://www.googleapis.com/auth/gmail.readonly"]
+            or credential.injection != {"type": "bearer", "header": "Authorization", "field": "access_token"}
+            or any(127 <= ord(character) <= 159
+                for value in (credential.provider_subject or "", credential.oauth_client_id or "")
+                for character in value)
+        ):
+            raise PolicyBundleError(f"route {route_id} Gmail read scope or injection is invalid")
+        if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2"}:
             required_for_operations: set[str] = set()
             for operation in _declared_route_operations(
                 adapter_type, adapter_config, paths
@@ -2559,7 +2585,7 @@ def _validate_route_credential_binding(
             raise PolicyBundleError(
                 f"route {route_id} X appIds must exactly equal credentialBinding.clientIds"
             )
-    elif adapter_type in {"gmail.v1", "x.v2"}:
+    elif adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2"}:
         raise PolicyBundleError(
             f"route {route_id} {adapter_type} requires an OAuth credential"
         )
@@ -5607,7 +5633,7 @@ def _declared_route_operations(
     adapter_config: dict[str, Any],
     paths: tuple[str, ...],
 ) -> set[str]:
-    if adapter_type == "gmail.v1":
+    if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER}:
         operations: set[str] = set()
         for path in paths:
             if "{message_id}" in path:
@@ -5722,6 +5748,11 @@ def validate_buffered_passthrough_response(
     An actual tuple, including an empty tuple, also checks the envelope binding.
     """
     mode = response.get("mode") if isinstance(response, dict) else None
+    if adapter_type == GMAIL_READ_ADAPTER or mode == GMAIL_READ_RESPONSE_MODE:
+        if adapter_type != GMAIL_READ_ADAPTER:
+            raise PolicyBundleError(f"route {route_id} Gmail read response requires its typed adapter")
+        validate_gmail_read_response(route_id, response, constraints)
+        return
     if constraints is not None:
         _validate_json_or_empty_204_envelopes(route_id, adapter_type, mode, constraints)
     if not isinstance(response, dict):
@@ -5826,6 +5857,9 @@ def _validate_optional_response_release_contract(
     response: dict[str, Any],
     adapter_name: str,
 ) -> None:
+    if adapter_name == GMAIL_READ_ADAPTER:
+        validate_gmail_read_response(route_id, response)
+        return
     if response.get("mode") in WHOLE_JSON_RESPONSE_MODES:
         validate_buffered_passthrough_response(route_id, adapter_name, response)
         return
@@ -5959,7 +5993,72 @@ def _validate_signed_npm_publish_response_contract(
         )
 
 
-def provider_request_profile(adapter_type: str, mode: str | None = None) -> dict[str, Any]:
+def gmail_read_response_profile() -> dict[str, Any]:
+    """The explicit typed read profile is not a generic/V1 mode alias."""
+    return {"mode": GMAIL_READ_RESPONSE_MODE, "maxBodyBytes": 1048576,
+        "contentTypes": ["application/json"], "allowedHeaders": [], "error": {
+            "mode": GMAIL_READ_RESPONSE_MODE, "maxBodyBytes": 65536,
+            "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}}
+
+
+def gmail_read_response_envelope(identifier: str) -> dict[str, Any]:
+    return {"id": identifier, "type": "responseEnvelope", "phase": "response",
+        "statusCodes": list(GMAIL_READ_STATUS_CODES), "bodyPresence": "required",
+        "contentTypes": ["application/json"], "allowedResponseHeaderNames": [],
+        "responseHeaderRules": [], "unlistedHeaderPolicy": "discardUnselectedV1"}
+
+
+def validate_gmail_read_response(route_id: str, response: Any,
+        constraints: tuple[dict[str, Any], ...] | None = None) -> None:
+    if response != gmail_read_response_profile():
+        raise PolicyBundleError(f"route {route_id} Gmail read response profile is invalid")
+    if constraints is None:
+        return
+    if (len(constraints) != 1 or not isinstance(constraints[0], dict)
+            or not isinstance(constraints[0].get("id"), str) or not constraints[0]["id"]
+            or constraints[0] != gmail_read_response_envelope(constraints[0]["id"])):
+        raise PolicyBundleError(f"route {route_id} Gmail read requires its one exact response envelope")
+
+
+def request_query_mode(adapter_type: str, adapter_config: Any) -> str | None:
+    """Only a signed, explicit typed Gmail marker selects ordered form parsing."""
+    request = adapter_config.get("request") if isinstance(adapter_config, dict) else None
+    if not isinstance(request, dict) or "queryMode" not in request:
+        return None
+    if adapter_type != GMAIL_READ_ADAPTER or request["queryMode"] != ORDERED_FORM_QUERY_MODE:
+        raise PolicyBundleError("unsupported request query mode")
+    return ORDERED_FORM_QUERY_MODE
+
+
+def validate_ordered_form_route(route: Any) -> bool:
+    """Refuse non-v3 consumers before request capture, generation or lease work."""
+    if request_query_mode(route.adapter_type, route.adapter_config) is None:
+        return False
+    if (route.scheme != "https" or route.host != "gmail.googleapis.com" or route.port != 443
+            or route.methods != frozenset({"GET"}) or route.path_templates != GMAIL_READ_PATHS
+            or route.jit or not route.credential_ref
+            or set(route.adapter_config) != {"credentialBinding", "request", "agePolicy", "response"}):
+        raise PolicyBundleError("ordered form query authority is unsupported")
+    _validate_adapter_security_invariants(route.id, route.host, route.adapter_type,
+        route.adapter_config, route.credential_ref, route.jit, route.methods,
+        route.path_templates, tuple(route.constraints), True)
+    return True
+
+
+def provider_request_profile(adapter_type: str, mode: str | None = None, *,
+        query_mode: str | None = None) -> dict[str, Any]:
+    if query_mode is not None and (adapter_type != GMAIL_READ_ADAPTER
+            or query_mode != ORDERED_FORM_QUERY_MODE):
+        raise PolicyBundleError("unsupported provider query mode")
+    if adapter_type == GMAIL_READ_ADAPTER:
+        result = {"allowedHeaders": list(GMAIL_READ_REQUEST_HEADERS), "discardHeaders": [],
+            "allowedQueryKeys": list(GMAIL_READ_QUERY_KEYS), "allowedMediaTypes": [],
+            "maxBodyBytes": 0, "valueRules": []}
+        if query_mode is not None:
+            result["queryMode"] = query_mode
+            result["allowedHeaders"] = ["accept", "user-agent", "x-goog-api-client"]
+            result["discardHeaders"] = ["accept-encoding"]
+        return result
     if adapter_type == "gmail.v1":
         return {
             "allowedHeaders": list(GMAIL_V1_REQUEST_HEADERS),
@@ -6014,12 +6113,15 @@ def _validate_provider_request_profile(
         raise PolicyBundleError(
             f"route {route_id} {adapter_type} must define an exact provider request profile"
         )
+    query_mode = request_query_mode(adapter_type, adapter_config)
+    admitted_fields = PROVIDER_REQUEST_PROFILE_FIELDS | (
+        {"queryMode"} if adapter_type == GMAIL_READ_ADAPTER else set())
     if (
         not PROVIDER_REQUEST_PROFILE_REQUIRED_FIELDS.issubset(request)
-        or not set(request).issubset(PROVIDER_REQUEST_PROFILE_FIELDS)
+        or not set(request).issubset(admitted_fields)
     ):
         missing = sorted(PROVIDER_REQUEST_PROFILE_REQUIRED_FIELDS - set(request))
-        unknown = sorted(set(request) - PROVIDER_REQUEST_PROFILE_FIELDS)
+        unknown = sorted(set(request) - admitted_fields)
         raise PolicyBundleError(
             f"route {route_id} {adapter_type} request profile fields are invalid: "
             f"missing={missing} unknown={unknown}"
@@ -6063,14 +6165,20 @@ def _validate_provider_request_profile(
                 f"route {route_id} {adapter_type} request {field_name} must be lower-case"
             )
 
-    expected = provider_request_profile(adapter_type, str(adapter_config.get("mode") or ""))
+    expected = provider_request_profile(adapter_type, str(adapter_config.get("mode") or ""),
+        query_mode=query_mode)
     for field_name in ("allowedHeaders", "allowedQueryKeys", "allowedMediaTypes"):
-        if set(request[field_name]) != set(expected[field_name]):
+        matches = (request[field_name] == expected[field_name]
+            if adapter_type == GMAIL_READ_ADAPTER
+            else set(request[field_name]) == set(expected[field_name]))
+        if not matches:
             raise PolicyBundleError(
                 f"route {route_id} {adapter_type} request {field_name} must match the exact "
                 "provider profile"
             )
     required_discard_headers = set(expected["discardHeaders"])
+    if adapter_type == GMAIL_READ_ADAPTER and discard_headers != expected["discardHeaders"]:
+        raise PolicyBundleError(f"route {route_id} Gmail request discardHeaders must match the exact profile")
     if required_discard_headers and (
         "discardHeaders" not in request
         or not required_discard_headers.issubset(discard_headers)
@@ -6101,10 +6209,22 @@ def _validate_adapter_security_invariants(
     constraints: tuple[dict[str, Any], ...],
     signed_policy: bool,
 ) -> None:
-    if adapter_type in {"gmail.v1", "x.v2", "npm.registry"}:
+    if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2", "npm.registry"}:
         _validate_provider_request_profile(route_id, adapter_type, adapter_config)
 
-    if adapter_type == "gmail.v1":
+    if adapter_type == GMAIL_READ_ADAPTER:
+        request = adapter_config.get("request") or {}
+        expected_request = provider_request_profile(adapter_type,
+            query_mode=request_query_mode(adapter_type, adapter_config))
+        if (not credential_ref or host != "gmail.googleapis.com" or methods != frozenset({"GET"})
+                or paths != GMAIL_READ_PATHS
+                or jit.get("required") is True
+                or adapter_config.get("agePolicy") != {"mode": "unrestricted"}
+                or request.get("valueRules") != []
+                or request.get("discardHeaders", []) != expected_request["discardHeaders"]):
+            raise PolicyBundleError(f"route {route_id} Gmail read authority is invalid")
+        validate_gmail_read_response(route_id, adapter_config.get("response"), constraints)
+    elif adapter_type == "gmail.v1":
         if not credential_ref:
             raise PolicyBundleError(f"route {route_id} Gmail policy must bind a credential")
         if adapter_config.get("forceQuery") is not True:
@@ -6711,7 +6831,8 @@ def compile_policy_bundle(
             if not isinstance(response_config, dict):
                 raise PolicyBundleError(f"route {route_id} response policy missing")
             response_mode = response_config.get("mode")
-            supported_modes = SUPPORTED_RESPONSE_MODES if adapter_type == "generic.rest" else BUFFERED_RESPONSE_MODES | {"stream"}
+            supported_modes = ({GMAIL_READ_RESPONSE_MODE} if adapter_type == GMAIL_READ_ADAPTER
+                else SUPPORTED_RESPONSE_MODES if adapter_type == "generic.rest" else BUFFERED_RESPONSE_MODES | {"stream"})
             if not isinstance(response_mode, str) or response_mode not in supported_modes:
                 raise PolicyBundleError(f"route {route_id} response mode {response_mode!r} is unsupported")
             max_response_bytes = response_config.get("maxBodyBytes")
@@ -7103,6 +7224,12 @@ def compile_policy_bundle(
             constraints,
             signed_policy,
         )
+        if adapter_type == GMAIL_READ_ADAPTER and (
+            match.get("scheme") != "https" or type(match.get("port")) is not int or match["port"] != 443
+            or match.get("methods") != ["GET"]
+            or "jit" in item or "responseObservation" in item
+        ):
+            raise PolicyBundleError(f"route {route_id} Gmail read transport or authority extension is invalid")
         response_mode = str((adapter_config.get("response") or {}).get("mode") or "")
         if response_mode in STREAMING_RESPONSE_MODES and any(
             constraint.get("type")
@@ -9122,6 +9249,48 @@ def validated_request_urlsplit(pretty_url: str) -> SplitResult:
     return validate_raw_absolute_target(pretty_url)
 
 
+def validate_ordered_gmail_target(pretty_url: str) -> SplitResult:
+    """Parse only the fixed Gmail read target; this grants no route authority.
+
+    Keep authority and path under the unchanged strict parser. Query bytes are
+    parsed once by the bounded, versioned form helper, never reserialized.
+    """
+    from serverware.request_query_compat import parse_query
+    if not isinstance(pretty_url, str) or len(pretty_url) > MAX_RAW_ABSOLUTE_TARGET_BYTES:
+        raise ValueError("ordered form request target is invalid")
+    base, separator, wire = pretty_url.partition("?")
+    parts = validate_raw_absolute_target(base, allowed_schemes=("https",))
+    if (parts.netloc != "gmail.googleapis.com"
+            or re.fullmatch(r"/gmail/v1/users/me/messages(?:/[A-Za-z0-9_-]{1,512})?", parts.path) is None):
+        raise ValueError("ordered form query target is not a Gmail read")
+    parse_query(wire if separator else None)
+    parsed = urlsplit(pretty_url)
+    if (parsed.scheme != parts.scheme or parsed.netloc != parts.netloc
+            or parsed.path != parts.path or parsed.query != wire or parsed.fragment):
+        raise ValueError("URL parser changed ordered form request target")
+    return parsed
+
+
+def validated_request_routing_target(pretty_url: str, method: str) -> SplitResult:
+    """Bounded pre-route parsing; the selected route must separately admit mode.
+
+    Legacy admission is tried unchanged. Its sole alternate is a GET to the
+    fixed Gmail message-read paths, not a global query grammar fallback.
+    """
+    try:
+        return validate_raw_absolute_target(pretty_url)
+    except (TypeError, ValueError):
+        if method != "GET":
+            raise
+        return validate_ordered_gmail_target(pretty_url)
+
+
+def validated_request_urlsplit_for_route(pretty_url: str, route: Any) -> SplitResult:
+    if request_query_mode(route.adapter_type, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+        return validate_ordered_gmail_target(pretty_url)
+    return validated_request_urlsplit(pretty_url)
+
+
 def validate_request_target_path(
     pretty_url: str,
     *,
@@ -9210,8 +9379,11 @@ def validate_request_target_path(
 
 def validated_request_url_parts(
     pretty_url: str,
+    *,
+    route: Any = None,
 ) -> tuple[bool, str, str, int, str]:
-    parts = validated_request_urlsplit(pretty_url)
+    parts = (validated_request_urlsplit_for_route(pretty_url, route)
+        if route is not None else validated_request_urlsplit(pretty_url))
     path_has_encoded_slash = validate_request_target_path(
         pretty_url,
         _validated_parts=parts,

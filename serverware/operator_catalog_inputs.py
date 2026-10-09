@@ -128,3 +128,31 @@ class RuleInput(NamedInput):
                 {"mode": "replaceExact", "expectedValue": self.placeholder},
                 {"type": "bearer", "header": "Authorization"})
         return self
+
+
+class GmailReadAgePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    mode: Literal["unrestricted"]
+
+
+class GmailReadRuleInput(NamedInput):
+    """A typed operation bundle, not caller-defined URL or content authority."""
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["gmail_read_v1"]
+    age_policy: GmailReadAgePolicy = Field(default_factory=lambda: GmailReadAgePolicy(mode="unrestricted"))
+    credential_input: Literal["insert", "replace_exact"] = "insert"
+    placeholder: str | None = Field(default=None, min_length=1, max_length=1024, repr=False)
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+    @model_validator(mode="after")
+    def credential_input_placeholder(self):
+        if self.credential_input == "insert":
+            if "placeholder" in self.model_fields_set:
+                raise ValueError("insertion does not accept a placeholder")
+        else:
+            from serverware.policy_bundle import validate_credential_header_replacement
+            validate_credential_header_replacement(
+                {"mode": "replaceExact", "expectedValue": self.placeholder},
+                {"type": "bearer", "header": "Authorization"})
+        return self

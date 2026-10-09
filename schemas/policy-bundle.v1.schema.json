@@ -1419,6 +1419,15 @@
                 "required": ["type", "config"],
                 "additionalProperties": false,
                 "properties": {
+                  "type": {"const": "gmail.read.v1"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "config"],
+                "additionalProperties": false,
+                "properties": {
                   "type": {"const": "x.v2"},
                   "config": {"$ref": "https://serverware.local/schemas/adapters/x.v2.schema.json"}
                 }
@@ -1569,6 +1578,20 @@
             "if": {
               "required": ["adapter"],
               "properties": {"adapter": {
+                "required": ["type"],
+                "properties": {"type": {"const": "gmail.read.v1"}}
+              }}
+            },
+            "then": {
+              "not": {"anyOf": [{"required": ["jit"]}, {"required": ["responseObservation"]}]},
+              "required": ["constraints"],
+              "properties": {"constraints": {"minItems": 1, "maxItems": 1}}
+            }
+          },
+          {
+            "if": {
+              "required": ["adapter"],
+              "properties": {"adapter": {
                 "required": ["type", "config"],
                 "properties": {
                   "type": {"const": "generic.rest"},
@@ -1644,12 +1667,12 @@
               "properties": {"adapter": {
                 "required": ["type", "config"],
                 "properties": {
-                  "type": {"const": "generic.rest"},
+                  "type": {"enum": ["generic.rest", "gmail.read.v1"]},
                   "config": {
                     "required": ["response"],
                     "properties": {"response": {
                       "required": ["mode"],
-                      "properties": {"mode": {"const": "bufferedJsonOrEmpty204V2"}}
+                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1"]}}
                     }}
                   }
                 }
@@ -1676,7 +1699,7 @@
               "properties": {
                 "adapter": {
                   "required": ["type"],
-                  "properties": {"type": {"enum": ["gmail.v1", "x.v2", "npm.registry"]}}
+                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry"]}}
                 }
               },
               "required": ["adapter"]

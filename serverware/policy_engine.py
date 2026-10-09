@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 from mitmproxy import http
 
 from serverware import db, runtime
-from serverware.adapters import _parse_content_type, get_adapter, preflight_request_admission
+from serverware.adapters import _parse_content_type, get_adapter, gmail_read_json_inspection, preflight_request_admission
 from serverware.constraints import (
     _request_value_predicate_matches,
     evaluate_request_constraints,
@@ -30,6 +30,8 @@ from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE,
+    GMAIL_READ_RESPONSE_MODE,
+    ORDERED_FORM_QUERY_MODE,
     CredentialPolicy,
     JSON_OR_EMPTY_204_BODY_PRESENCE,
     JSON_OR_EMPTY_204_RESPONSE_MODES,
@@ -48,12 +50,16 @@ from serverware.policy_bundle import (
     normalized_credential_provider,
     provider_account_scope_value,
     required_oauth_scopes_for_operation,
+    request_query_mode,
     validate_raw_absolute_target,
     validate_request_target_path,
     validated_request_url_parts,
+    validated_request_routing_target,
     validated_request_urlsplit,
+    validated_request_urlsplit_for_route,
     validate_discard_headers,
     validate_buffered_passthrough_response,
+    validate_ordered_form_route,
 )
 from serverware.response_header_compat import (
     HeaderCompatibilityError, inspect_physical_headers, listed_response_headers,
@@ -437,6 +443,23 @@ def _strict_query_pairs(raw_query: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _ordered_form_query(flow: http.HTTPFlow, route: RoutePolicy):
+    from serverware.request_query_compat import parse_gmail_query
+    if not validate_ordered_form_route(route) or flow.request.method != "GET":
+        raise ValueError("ordered form request authority is unsupported")
+    parts = validated_request_urlsplit_for_route(flow.request.pretty_url, route)
+    operation = ("gmail.messages.list" if parts.path == "/gmail/v1/users/me/messages"
+        else "gmail.message.get")
+    _, separator, wire = flow.request.pretty_url.partition("?")
+    return parse_gmail_query(wire if separator else None, operation=operation)
+
+
+def _request_query_pairs(flow: http.HTTPFlow, route: RoutePolicy) -> list[tuple[str, str]]:
+    if request_query_mode(route.adapter_type, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+        return list(_ordered_form_query(flow, route).pairs)
+    return _strict_query_pairs(validated_request_urlsplit(flow.request.pretty_url).query)
+
+
 def _validated_canonical_query_pairs(raw_pairs: Any) -> list[tuple[str, str]]:
     if not isinstance(raw_pairs, (list, tuple)):
         raise ValueError("canonical request query must be an array")
@@ -510,7 +533,12 @@ def _canonicalize_provider_query(
     flow: http.HTTPFlow,
     *,
     trusted_query_view: bool = False,
+    route: RoutePolicy | None = None,
 ) -> list[tuple[str, str]]:
+    if route is not None and request_query_mode(route.adapter_type, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+        # The raw target is authoritative. In particular never copy, sort or
+        # deduplicate a parsed mapping back into this versioned request.
+        return list(_ordered_form_query(flow, route).pairs)
     query_view = getattr(flow.request, "query", None)
     query_items = getattr(query_view, "items", None)
     if trusted_query_view and callable(query_items):
@@ -527,8 +555,9 @@ def _canonicalize_provider_query(
     return pairs
 
 
-def _canonical_authority(url: str) -> str:
-    parts = validated_request_urlsplit(url)
+def _canonical_authority(url: str, route: RoutePolicy | None = None) -> str:
+    parts = (validated_request_urlsplit_for_route(url, route)
+        if route is not None else validated_request_urlsplit(url))
     host = (parts.hostname or "").rstrip(".").lower()
     if ":" in host:
         host = f"[{host}]"
@@ -590,7 +619,8 @@ def _validate_response_content_encoding(
             {"error": "upstream_response_missing"},
         )
     route = flow.metadata.get("serverware_route")
-    if route and (route.adapter_config.get("response") or {}).get("mode") == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE:
+    if route and (route.adapter_config.get("response") or {}).get("mode") in {
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE}:
         try:
             _v2_response_header_entries(flow, route)
         except HeaderCompatibilityError as error:
@@ -699,6 +729,7 @@ def _capture_request_mutation_snapshot(
 def _restore_request_mutation_snapshot(
     flow: http.HTTPFlow,
     snapshot: _RequestMutationSnapshot,
+    route: RoutePolicy | None = None,
 ) -> None:
     flow.request.pretty_url = snapshot.pretty_url
     headers = flow.request.headers
@@ -717,7 +748,8 @@ def _restore_request_mutation_snapshot(
                 headers[name] = value
     flow.request.raw_content = snapshot.raw_content
     query_view = getattr(flow.request, "query", None)
-    if isinstance(query_view, dict):
+    if isinstance(query_view, dict) and (route is None or
+            request_query_mode(route.adapter_type, route.adapter_config) != ORDERED_FORM_QUERY_MODE):
         query_view.clear()
         query_view.update(
             _strict_query_pairs(
@@ -798,6 +830,8 @@ def _discard_declared_request_headers(
 def _canonical_forwarded_request_headers(
     flow: http.HTTPFlow,
     credential_policy: CredentialPolicy | None,
+    *,
+    route: RoutePolicy | None = None,
 ) -> dict[str, str]:
     headers = _normalized_request_headers(flow)
     nominated = {
@@ -822,7 +856,7 @@ def _canonical_forwarded_request_headers(
         and not is_serverware_internal_header(name)
         and name != RESPONSE_PROOF_NONCE_HEADER
     }
-    forwarded["host"] = _canonical_authority(flow.request.pretty_url)
+    forwarded["host"] = _canonical_authority(flow.request.pretty_url, route)
     body_length = len(_request_body(flow))
     configured_length = headers.get("content-length")
     if configured_length is not None:
@@ -1192,6 +1226,11 @@ def _durable_policy_claims(
     credential_version: int,
     operation_fields: dict[str, str],
 ) -> list[dict[str, Any]]:
+    if request_query_mode(route.adapter_type, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+        # Its one exact response envelope excludes every durable/scalar-query
+        # consumer. Do not reinterpret ordered repeated values as scalar claims.
+        validate_ordered_form_route(route)
+        return []
     claims = shared_durable_budget_claims(
         route,
         principal_id=principal.id,
@@ -1301,21 +1340,29 @@ def _canonical_request(
     forwarded_headers: dict[str, str],
     discard_headers: tuple[str, ...],
 ) -> dict[str, Any]:
-    parts = validated_request_urlsplit(flow.request.pretty_url)
-    query = _strict_query_pairs(parts.query)
-    if parts.query != _canonical_query_wire(query):
+    ordered = request_query_mode(route.adapter_type, route.adapter_config) == ORDERED_FORM_QUERY_MODE
+    parts = validated_request_urlsplit_for_route(flow.request.pretty_url, route)
+    form_query = _ordered_form_query(flow, route) if ordered else None
+    query = [list(pair) for pair in form_query.pairs] if form_query is not None else _strict_query_pairs(parts.query)
+    if not ordered and parts.query != _canonical_query_wire(query):
         raise ValueError("request query is not in canonical wire form")
     request = {
         "method": flow.request.method.upper(),
         "scheme": parts.scheme,
-        "authority": _canonical_authority(flow.request.pretty_url),
+        "authority": _canonical_authority(flow.request.pretty_url, route),
         "path": parts.path or "/",
         "query": query,
         "headers": forwarded_headers,
         "body_sha256": _body_sha256(flow),
     }
     version = 1
-    if discard_headers:
+    if form_query is not None:
+        if list(discard_headers) != route.adapter_config["request"]["discardHeaders"]:
+            raise ValueError("ordered form request header discard binding is invalid")
+        version = 3
+        request.update(query_mode=ORDERED_FORM_QUERY_MODE, query_wire=form_query.raw_query,
+            discard_headers=list(discard_headers))
+    elif discard_headers:
         version = 2
         request["discard_headers"] = list(discard_headers)
     return {
@@ -1436,22 +1483,49 @@ def _provider_request_matches_canonical(
     canonical_request: dict[str, Any],
     credential_policy: CredentialPolicy | None,
     credential: dict[str, Any] | None = None,
+    *,
+    route: RoutePolicy | None = None,
 ) -> bool:
     request = canonical_request.get("request")
     if not isinstance(request, dict):
         return False
     try:
-        parts = validated_request_urlsplit(flow.request.pretty_url)
-        query = _strict_query_pairs(parts.query)
-        if parts.query != _canonical_query_wire(query):
-            return False
-        expected_query = _validated_canonical_query_pairs(request.get("query"))
+        if canonical_request.get("v") == 3:
+            if (route is None or not validate_ordered_form_route(route)
+                    or type(canonical_request.get("v")) is not int
+                    or set(canonical_request) != {"v", "principal", "client_ip", "route_id",
+                        "credential_ref", "credential_version", "policy_hash", "request", "operation"}
+                    or set(request) != {"method", "scheme", "authority", "path", "query", "headers",
+                        "body_sha256", "discard_headers", "query_mode", "query_wire"}
+                    or request.get("query_mode") != ORDERED_FORM_QUERY_MODE
+                    or request.get("discard_headers") != route.adapter_config["request"]["discardHeaders"]
+                    or canonical_request.get("route_id") != route.id
+                    or canonical_request.get("credential_ref") != route.credential_ref):
+                return False
+            form_query = _ordered_form_query(flow, route)
+            query = [list(pair) for pair in form_query.pairs]
+            expected_query = request.get("query")
+            if request.get("query_wire") != form_query.raw_query or query != expected_query:
+                return False
+            if set(request["discard_headers"]).intersection(_normalized_request_headers(flow)):
+                return False
+            parts = validated_request_urlsplit_for_route(flow.request.pretty_url, route)
+        else:
+            if route is not None and request_query_mode(route.adapter_type, route.adapter_config) is not None:
+                return False
+            parts = validated_request_urlsplit(flow.request.pretty_url)
+            query = _strict_query_pairs(parts.query)
+            if parts.query != _canonical_query_wire(query):
+                return False
+            expected_query = _validated_canonical_query_pairs(request.get("query"))
         target = (
             credential_injection_target(credential_policy.injection)
             if credential_policy is not None
             else None
         )
         if target is not None and target[0] == "query":
+            if canonical_request.get("v") == 3:
+                return False
             injected = [
                 (key, value) for key, value in query if key == target[1]
             ]
@@ -1470,11 +1544,11 @@ def _provider_request_matches_canonical(
         return (
             flow.request.method.upper() == request.get("method")
             and parts.scheme == request.get("scheme")
-            and _canonical_authority(flow.request.pretty_url)
+            and _canonical_authority(flow.request.pretty_url, route)
             == request.get("authority")
             and (parts.path or "/") == request.get("path")
             and query == expected_query
-            and _canonical_forwarded_request_headers(flow, credential_policy)
+            and _canonical_forwarded_request_headers(flow, credential_policy, route=route)
             == request.get("headers")
             and _body_sha256(flow) == request.get("body_sha256")
         )
@@ -2789,7 +2863,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                 raise ValueError(
                     "validated raw ingress target no longer matches request fields"
                 )
-        validated_target = validate_raw_absolute_target(raw_target)
+        validated_target = validated_request_routing_target(raw_target, flow.request.method)
         path_has_encoded_slash = validate_request_target_path(
             raw_target,
             _validated_parts=validated_target,
@@ -2812,7 +2886,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
 
     safe_url = _validated_pre_policy_audit_url(validated_target)
     try:
-        _normalized_request_headers(flow)
+        ingress_headers = _normalized_request_headers(flow)
     except ValueError as exc:
         flow.metadata["serverware_audit_url"] = safe_url
         decision = PolicyDecision(
@@ -2856,6 +2930,24 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
 
     route = match.route
     params = match.params
+    try:
+        ordered_query = validate_ordered_form_route(route)
+        # A candidate parse above cannot opt a legacy route into new semantics.
+        validated_request_urlsplit_for_route(raw_target, route)
+    except (TypeError, ValueError):
+        return RequestEvaluation(PolicyDecision(False, "request query mode is not admitted", 400,
+            {"error": "request_query_mode_denied"}), snapshot=snapshot, principal=principal,
+            route=route, params=params)
+    if ordered_query and (
+        runtime.atomic_release_authorization_enabled()
+        or any(name in ingress_headers for name in (RESPONSE_PROOF_NONCE_HEADER,
+            "x-serverware-stream-proof-nonce", "x-serverware-observation-nonce"))
+    ):
+        # The v1/v2 approval/controlled/proof consumers are intentionally not
+        # extended by query compatibility. Refuse before metadata or a lease.
+        return RequestEvaluation(PolicyDecision(False, "ordered form consumer is unsupported", 503,
+            {"error": "ordered_form_consumer_unsupported"}), snapshot=snapshot,
+            principal=principal, route=route, params=params)
     transport_denial = _legacy_mitm_route_admission(flow, route)
     if transport_denial is not None:
         runtime.log_request(
@@ -2957,7 +3049,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
 
     def pre_reserve_denial(decision: PolicyDecision) -> RequestEvaluation:
         try:
-            _restore_request_mutation_snapshot(flow, original_request)
+            _restore_request_mutation_snapshot(flow, original_request, route)
         except Exception:
             decision = PolicyDecision(
                 False,
@@ -3048,9 +3140,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     )
     _strip_identity_headers(flow, principal)
     try:
-        _strict_query_pairs(
-            validated_request_urlsplit(flow.request.pretty_url).query
-        )
+        _request_query_pairs(flow, route)
     except ValueError:
         return pre_reserve_denial(
             PolicyDecision(
@@ -3074,7 +3164,9 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     if not decision.allowed:
         return pre_reserve_denial(decision)
     try:
-        _canonicalize_provider_query(flow, trusted_query_view=True)
+        _canonicalize_provider_query(flow, trusted_query_view=True, route=route)
+        if ordered_query and flow.request.pretty_url != original_request.pretty_url:
+            raise ValueError("ordered form request target changed during rewrite")
     except ValueError:
         return pre_reserve_denial(
             PolicyDecision(
@@ -3141,7 +3233,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             rewritten_port,
             rewritten_path,
         ) = validated_request_url_parts(
-            flow.request.pretty_url
+            flow.request.pretty_url, route=route,
         )
     except (TypeError, ValueError):
         return pre_reserve_denial(
@@ -3182,12 +3274,20 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             )
         )
     params = rewritten_match.params
-    safe_url = _pre_policy_audit_url(flow.request.pretty_url)
+    safe_url = (_validated_pre_policy_audit_url(validated_request_urlsplit_for_route(
+        flow.request.pretty_url, route)) if ordered_query else _pre_policy_audit_url(flow.request.pretty_url))
     flow.metadata["serverware_audit_url"] = safe_url
 
     collision_decision = _credential_injection_collision(flow, credential_policy)
     if collision_decision is not None:
         return pre_reserve_denial(collision_decision)
+
+    if ordered_query:
+        # Service value checks remain authoritative, including after the
+        # signed compression-offer discard. No credential work precedes them.
+        decision = adapter.validate_request(flow, route, params)
+        if not decision.allowed:
+            return pre_reserve_denial(decision)
 
     credential_generation: dict[str, Any] | None = None
     credential_generation_digest: str | None = None
@@ -3367,6 +3467,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         forwarded_headers = _canonical_forwarded_request_headers(
             flow,
             credential_policy,
+            route=route,
         )
     except ValueError as exc:
         return pre_reserve_denial(
@@ -3527,7 +3628,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                 {"error": "response_credential_guard_cleanup_failed"},
             )
         try:
-            _restore_request_mutation_snapshot(flow, original_request)
+            _restore_request_mutation_snapshot(flow, original_request, route)
         except Exception:
             decision = PolicyDecision(
                 False,
@@ -4122,6 +4223,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             canonical_request,
             credential_policy,
             credential,
+            route=route,
         )
     except Exception:
         return block_after_reserve(
@@ -4455,6 +4557,31 @@ def _v2_response_header_entries(
         require_secret_guard=bool(route.credential_ref))
 
 
+def _gmail_read_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
+        guard: _ResponseCredentialGuard | None = None) -> PolicyDecision:
+    """Inspect decoded content before release, without changing dispatched bytes."""
+    if (route.adapter_config.get("response") or {}).get("mode") != GMAIL_READ_RESPONSE_MODE:
+        return PolicyDecision(True)
+    guard = guard if guard is not None else getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
+    if route.credential_ref and not isinstance(guard, _ResponseCredentialGuard):
+        return PolicyDecision(False, "response credential guard unavailable", 502,
+            {"error": "response_credential_guard_unavailable"})
+    inspection = bytearray()
+    try:
+        raw = flow.response.raw_content
+        _, inspection = gmail_read_json_inspection(raw,
+            1048576 if flow.response.status_code == 200 else 65536)
+        if guard and (guard.detects(raw) or guard.detects(inspection)):
+            return PolicyDecision(False, "response credential reflection denied", 502,
+                {"error": "response_credential_reflection"})
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return PolicyDecision(False, "Gmail response inspection refused", 502,
+            {"error": "gmail_read_response_invalid"})
+    finally:
+        inspection[:] = b"\x00" * len(inspection)
+    return PolicyDecision(True)
+
+
 def _evaluate_response_envelope(
     flow: http.HTTPFlow,
     route: RoutePolicy,
@@ -4510,7 +4637,10 @@ def _evaluate_response_envelope(
             502,
             {"error": "response_envelope_policy_missing"},
         )
-    v2 = response_cfg.get("mode") == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE
+    v2 = response_cfg.get("mode") in {BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE}
+    inspection_decision = _gmail_read_response_inspection(flow, route, credential_guard)
+    if not inspection_decision.allowed:
+        return inspection_decision
     try:
         entries = (_v2_response_header_entries(flow, route, credential_guard)
             if v2 else _physical_response_header_entries(flow))
@@ -4617,10 +4747,12 @@ def _evaluate_response_envelope(
                         "constraint_id": constraint_id,
                     },
                 )
-        elif json_or_empty:
+        elif json_or_empty or response_cfg.get("mode") == GMAIL_READ_RESPONSE_MODE:
             # Content-Type is optional representation metadata for 204, not
             # evidence of a body. A present value must still strictly match the
             # signed JSON media contract; other admitted statuses require it.
+            # The explicit Gmail read profile also admits strict JSON media
+            # parameters; legacy required-body envelopes keep literal matching.
             if not (empty_204 and not physical_content_types) and (
                 len(physical_content_types) != 1
                 or _parse_content_type(physical_content_types[0]) not in content_types

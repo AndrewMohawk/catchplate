@@ -6,6 +6,9 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub(crate) const POLICY: &str = "discardUnselectedV1";
+pub(crate) fn uses_mode(mode: &str) -> bool {
+    matches!(mode, crate::buffered_response::JSON_OR_EMPTY_204_V2_MODE | crate::gmail_read::MODE)
+}
 const TRANSPORT: &[&str] = &[
     "connection", "content-encoding", "content-length", "content-type", "keep-alive",
     "proxy-authenticate", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",

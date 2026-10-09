@@ -133,9 +133,13 @@ def _validate_identity(record: dict, core: dict, profile=None) -> dict:
 
 
 def validate_rule(rule: dict, credential: dict, profile=None) -> None:
-    """Initial exact Gmail reads; not a complete Gmail operation preset."""
+    """Keep legacy literal reads separate from explicitly versioned bundles."""
     from serverware import operator_catalog_oauth_profile as profiles
     profile = profiles.require_profile() if profile is None else profile
+    from serverware import operator_catalog_gmail
+    if operator_catalog_gmail.selected(rule):
+        operator_catalog_gmail.validate_rule(rule, credential, profile)
+        return
     parsed = urlsplit(rule.get("upstream_url", ""))
     _require(credential.get("auth_type") == AUTH_TYPE
         and credential.get("oauth_profile_binding_digest") == profile.binding_digest

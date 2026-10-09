@@ -54,6 +54,10 @@ def _request_profile(rule: dict, credential: dict, route: dict) -> None:
 
 def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
     from serverware import operator_demo_store as legacy
+    from serverware import operator_catalog_gmail
+    for rule in catalog['access_rules']:
+        if operator_catalog_gmail.selected(rule):
+            operator_catalog_gmail.validate_shape(rule)
     credentials = {row['id']: row for row in catalog['credentials']}
     applications = {row['id']: row for row in catalog['applications']}
     selected = [row for row in catalog['access_rules'] if row['status'] == 'active'
@@ -89,8 +93,11 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
             operator_catalog_google.validate_rule(rule, credential)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
-        _request_profile(rule, credential, route)
-        _response_profile(rule, route)
+        if operator_catalog_gmail.selected(rule):
+            route = operator_catalog_gmail.render_route(rule, credential, application['principal_id'])
+        else:
+            _request_profile(rule, credential, route)
+            _response_profile(rule, route)
         replacement = schema.rule_credential_header(rule, credential)
         if replacement is not None:
             route['credentialHeader'] = replacement

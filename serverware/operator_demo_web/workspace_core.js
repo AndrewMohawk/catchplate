@@ -1,6 +1,57 @@
 // Public catalog state and transport only. Provider secrets and client tokens do
 // not belong in this state. All resource views share one explicit mutation gate.
 const operatorMethods = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+// A typed provider permission is not a generic response-mode alias. Keep the
+// closed source contract here; never infer a bundle from a URL or display name.
+const operatorGmail = Object.freeze({bundle: 'gmail_read_v1', origin: 'https://gmail.googleapis.com',
+  path: '/gmail/v1/users/me/messages', response: 'gmail_read_json_v1',
+  queries: ['alt', 'format', 'includeSpamTrash', 'labelIds', 'maxResults', 'metadataHeaders', 'pageToken', 'prettyPrint', 'q'],
+  headers: ['accept', 'user-agent', 'x-goog-api-client'], legacyHeaders: ['accept', 'accept-encoding', 'user-agent', 'x-goog-api-client']});
+function operatorExact(value, expected) {
+  if (Array.isArray(expected)) return Array.isArray(value) && value.length === expected.length && expected.every((item, i) => operatorExact(value[i], item));
+  if (expected && typeof expected === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === Object.keys(expected).length && Object.keys(expected).every(key => Object.hasOwn(value, key) && operatorExact(value[key], expected[key]));
+  return value === expected;
+}
+function operatorGmailDescriptor() {
+  return {operation_bundle: operatorGmail.bundle, create_path: '/api/operator-demo/access-rules/gmail-read',
+    credential_type: 'google_oauth', permission_preset: 'gmail_readonly', api_origin: operatorGmail.origin,
+    methods: ['GET'], paths: [operatorGmail.path, operatorGmail.path + '/{message_id}'], query_mode: 'orderedFormV1',
+    age_policy: {mode: 'unrestricted'}, response_mode: operatorGmail.response,
+    response_contract: {mode: 'gmailReadJsonV1', body_presence: 'required', content_types: ['application/json'],
+      success_status_codes: [200], error_status_codes: [400, 401, 403, 404, 429, 500, 502, 503, 504],
+      max_body_bytes: 1048576, max_error_body_bytes: 65536, unlisted_header_policy: 'discardUnselectedV1'}};
+}
+function projectOperationBundles(value, google) {
+  if (value === undefined) return []; // Old catalog: no authority to create a bundle.
+  if (!Array.isArray(value) || value.length > 1 || value.some(item => !google || !operatorExact(item, operatorGmailDescriptor())))
+    throw operatorError('Operation capability metadata is unsupported. Refresh before making changes.');
+  return value.map(() => operatorGmailDescriptor());
+}
+function isGmailRule(rule) { return rule?.operation_bundle === operatorGmail.bundle; }
+function gmailAvailable(catalog, credential) {
+  return credential?.status === 'active' && credential.auth_type === 'google_oauth' &&
+    credential.permission_preset === 'gmail_readonly' && Boolean(catalog?.capabilities.google_oauth) &&
+    catalog.capabilities.operation_bundles?.some(item => operatorExact(item, operatorGmailDescriptor()));
+}
+function gmailRuleFields() {
+  return {operation_bundle: operatorGmail.bundle, age_policy: {mode: 'unrestricted'}, query_mode: 'orderedFormV1',
+    upstream_url: operatorGmail.origin + operatorGmail.path, methods: ['GET'], request_fields: [], response_fields: [],
+    query_keys: [...operatorGmail.queries], allowed_headers: [...operatorGmail.headers], response_mode: operatorGmail.response};
+}
+function gmailRuleValid(rule, credential) {
+  const expected = gmailRuleFields(); delete expected.query_mode;
+  if (!Object.hasOwn(rule, 'query_mode')) expected.allowed_headers = [...operatorGmail.legacyHeaders];
+  return credential?.auth_type === 'google_oauth' && credential.header_name === 'Authorization' &&
+    credential.permission_preset === 'gmail_readonly' && !Object.hasOwn(rule, 'request_body_mode') &&
+    (!Object.hasOwn(rule, 'query_mode') || rule.query_mode === 'orderedFormV1') &&
+    Object.entries(expected).every(([key, value]) => operatorExact(rule[key], value));
+}
+function gmailRulePayload(rule) {
+  return {name: rule.name, application_id: rule.application_id, credential_id: rule.credential_id,
+    operation_bundle: operatorGmail.bundle, age_policy: {mode: 'unrestricted'}, credential_input: rule.credential_input,
+    ...(rule.credential_input === 'replace_exact' ? {placeholder: rule.placeholder} : {})};
+}
 const operatorResponseModes = Object.freeze({unfiltered_json_or_empty_v2: 'Keep JSON content or empty response',
   unfiltered_json_or_empty_v1: 'Keep JSON responses and empty 204',
   unfiltered_json: 'Do not filter response content (JSON)',
@@ -43,6 +94,8 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
   return {request_fields: requestFields, ...(choice === 'preserve_json_v1' ? {request_body_mode: choice} : {})};
 }
 function operatorRuleContentValid(rule, credential) {
+  if (rule && Object.hasOwn(rule, 'operation_bundle')) return isGmailRule(rule) && gmailRuleValid(rule, credential);
+  if (rule && ['age_policy', 'query_mode'].some(key => Object.hasOwn(rule, key))) return false;
   if (!rule || !['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers'].every(name =>
       Array.isArray(rule[name]) && rule[name].every(value => typeof value === 'string')) ||
       !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
@@ -68,7 +121,7 @@ function operatorRuleSupported(rule, catalog) {
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
   return Boolean(credential && application && operatorRuleContentValid(rule, credential) && operatorRuleCredentialValid(rule, credential) &&
-    availableResponseModes(catalog).includes(rule.response_mode) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
+    (isGmailRule(rule) ? gmailAvailable(catalog, credential) : availableResponseModes(catalog).includes(rule.response_mode)) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
     (!Object.hasOwn(rule, 'request_body_mode') || availableRequestBodyChoices(catalog, credential).includes(rule.request_body_mode)));
 }
 function chooseModeOptions(id, items, placeholder) {
@@ -149,7 +202,8 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder']) if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode'])
+      if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
   });
   for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';
   for (const rule of accessRules) for (const name of ['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers']) {
@@ -170,6 +224,7 @@ function projectCatalog(value) {
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
     throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
   capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;
+  capabilities.operation_bundles = projectOperationBundles(value.capabilities?.operation_bundles, capabilities.google_oauth);
   if (capabilities.google_oauth && !value.allowed_upstreams.includes('https://gmail.googleapis.com'))
     throw operatorError('Google destination capability is inconsistent. Changes are disabled.');
   return {schema: value.schema, revision: value.revision, policy: pick(value.policy, ['policy_hash', 'loaded_policy_hash', 'sequence', 'activation']),

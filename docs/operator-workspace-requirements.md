@@ -44,6 +44,41 @@ compatibility limits before saving; keep raw IDs, policy hashes and detailed
 diagnostics available through details, not as the main explanation. The new
 guided UI is an incremental implementation, not the final provider-preset UI.
 
+### Interface contract
+
+Lead with **Connect an app**, then present one sentence: "Inbox worker may read
+mail using Andrew's Google account" or "Billing worker may use Billing key at
+this API; replace this exact dummy header." Saving an account/key remains an
+independent action and grants no application access by itself. Separate resource
+ownership in the backend must not become separate mandatory setup exercises.
+
+Account cards should lead with the account name, meaningful permission names,
+affected apps and observed attention state. The rendered Gmail candidate still
+puts raw scope URLs, preset identifiers, historical assignments and repeated
+implementation disclaimers ahead of the task. Move those details into a single
+diagnostic disclosure. Keep material limitations and blocking conditions visible,
+but use concise states such as "Not tested yet", "Setup required", "Temporary
+failure" or "Reconnect required" only when their evidence supports them.
+
+Use the original examples to define complete permissions, not default restrictions:
+read mail; post to X; publish a selected npm package; publish an approved ECR
+image. Mail age, daily quota, publishing hours and human approval are deliberate
+additions. An exact endpoint editor is an advanced option, not the normal way to
+describe a service. The existing example files are demonstrations, not safe
+defaults to copy wholesale.
+
+Keep **Proxy setup** and its CA download first-class, alongside **Accounts and
+keys**, **Applications and access**, and **Audit log**. Provider application
+configuration belongs in administrator settings. Approvals need their own
+pending-action workflow when implemented; do not offer an inert approval option.
+
+Acceptance is two ordinary jobs, including their subsequent use: authentication
+replacement with zero response-configuration interactions, and an inbox worker
+that lists, paginates, reads messages and continues after provider-token expiry.
+Neither a short form nor a successful isolated endpoint substitutes for those
+jobs. Do not promise arbitrary passthrough while the implementation supports
+only bounded JSON and selected statuses.
+
 ## Normal use, not just first-run configuration
 
 The everyday account card should answer: **which account, which apps use it,
@@ -378,6 +413,11 @@ not renew an expired Serverware application token. A temporary refresh failure
 must not be labeled lost consent without provider evidence. Existing Google
 disconnect/reconnect and native ownership boundaries remain explicit; do not
 work around them with a pasted refresh token or a hidden legacy fallback.
+In particular, do not direct an existing account owner to repeat initial consent
+as a repair action: current duplicate-grant handling can quarantine the shared
+grant family and revoke affected rules. Reconnect must preserve and deliberately
+reconcile the existing account identity and assignments through its own supported
+workflow. Account-level repair must show which applications it affects.
 
 ## Remaining ordinary-client usability gaps
 
@@ -402,6 +442,12 @@ Removing mandatory response projection solves only one part of that journey:
   with bounded admission/forwarding and regression coverage, without weakening
   existing signed rules or removing the fixture metadata to hide the gap. See
   [the retained failure](operator-google-backend-verification.md#corrected-joined-run-response-header-blocker).
+- Accepting and discarding response metadata is not transparent client behavior.
+  Current catalog profiles forward no selected response headers. A usable
+  provider workflow may need `Retry-After`, `ETag`, `Location` or pagination
+  headers; add the appropriate bounded forwarding contract and client checks.
+  Do not require operators to discover missing retry or pagination semantics
+  by reverse-engineering a response-field editor.
 - Whole-JSON responses retain status-code, body-presence, size and safe-header
   restrictions. The existing UI and legacy whole-JSON envelope do not support
   `204 No Content`; the additive source contract admits it only through an

@@ -117,6 +117,12 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if adapter_type == crate::gmail_read::ADAPTER {
+        return crate::gmail_read::validate_envelope(mode, constraints);
+    }
+    if mode == Some(crate::gmail_read::MODE) {
+        return Err("gmailReadJsonV1 requires its explicit Gmail read adapter".into());
+    }
     if constraints.iter().any(|constraint| constraint.get("unlistedHeaderPolicy").is_some()
         && constraint.get("type").and_then(Value::as_str) != Some("responseEnvelope"))
     {
@@ -288,13 +294,27 @@ pub(crate) fn inspect_body(
     if content_type.and_then(normalized_media_type).as_deref() != Some("application/json") {
         return Err(json!({"error":"response_json_content_type_mismatch"}));
     }
+    inspect_json_bytes(adapter_type, body, limit, secret_guard,
+        config.get("mode").and_then(Value::as_str).is_some_and(json_or_empty_204_mode))
+        .map(|(body, _inspection)| body)
+}
+
+/// Shared inspection primitive, not adapter admission. Callers independently
+/// admit their exact profile/status/media contract before reaching this point.
+pub(crate) fn inspect_json_bytes(
+    adapter_type: &str,
+    body: SensitiveResponseBytes,
+    limit: u64,
+    secret_guard: &ResponseSecretGuard,
+    check_depth: bool,
+) -> Result<(SensitiveResponseBytes, crate::SensitiveJsonValue), Value> {
     if body.len() as u64 > limit {
         return Err(json!({"error":"response_body_too_large","maxBodyBytes":limit}));
     }
     if secret_guard.detects(&body) {
         return Err(json!({"error":"response_credential_reflection"}));
     }
-    if config.get("mode").and_then(Value::as_str).is_some_and(json_or_empty_204_mode) {
+    if check_depth {
         crate::buffered_request::validate_container_depth(&body)
             .map_err(|()| json!({"error":"response_invalid_json","adapter":adapter_type}))?;
     }
@@ -315,7 +335,7 @@ pub(crate) fn inspect_body(
     if secret_guard.detects(&inspection.bytes) {
         return Err(json!({"error":"response_credential_reflection"}));
     }
-    Ok(body)
+    Ok((body, value))
 }
 
 #[cfg(test)]

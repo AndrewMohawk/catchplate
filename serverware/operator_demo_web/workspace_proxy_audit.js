@@ -2,15 +2,27 @@ function createProxyView(workspace, applications) {
   const home = element('proxy'); const content = textNode('div'); content.id = 'proxy-setup-content';
   content.append(...[...home.children].slice(2)); home.append(content);
   let command = '';
+  let gmailContext = '';
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
+    element('gmail-client-controls').hidden = true;
     const catalog = workspace.state.catalog;
     if (!catalog) { element('client-command').textContent = 'Refresh workspace status before using this client.'; return; }
     chooseOptions('proxy-application', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
     const application = catalog.applications.find(item => item.id === element('proxy-application').value);
     chooseOptions('proxy-rule', catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id), 'Add an access rule for this application');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
+    const gmail = isGmailRule(rule);
+    const context = gmail ? application?.id + ':' + rule.id : '';
+    if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
+    element('gmail-client-controls').hidden = !gmail;
+    const messageRead = gmail && element('gmail-client-operation').value === 'message';
+    element('gmail-message-group').hidden = !messageRead;
+    element('client-template-title').textContent = gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = gmail ?
+      'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
+      'This template includes no request body or query parameter values. It is not a complete API operation or a successful request test. Supply endpoint-specific data in your existing client, using only what the selected rule permits.';
     chooseOptions('proxy-method', (rule?.methods || []).filter(method => operatorMethods.includes(method)).map(method => ({id: method, name: method})), 'No supported method');
     const credential = catalog.credentials.find(item => item.id === rule?.credential_id);
     if (!application || !rule) {
@@ -25,11 +37,16 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = !valid ? 'Use Applications to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;
     }
     let dummyHeader;
+    const messageId = element('gmail-message-id').value;
+    if (messageRead && !/^[A-Za-z0-9_-]{1,512}$/.test(messageId)) {
+      element('client-command').textContent = 'Enter a valid message ID returned by this account’s message list.';
+      element('client-guidance').textContent = 'No command is available until the message ID is valid. Provider tokens and the application token do not belong in this field.'; return;
+    }
     try {
       const proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url, method: element('proxy-method').value,
+      command = buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
         caPath: element('ca-path').value, allowedHeaders: rule.allowed_headers,
         credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
       dummyHeader = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
@@ -38,6 +55,17 @@ function createProxyView(workspace, applications) {
     const ready = workspace.loaded() && rule.enforcement === 'active' && application.access_status === 'active' && !workspace.state.busy && !workspace.state.uncertain;
     element('copy-command').disabled = !ready;
     element('download-config').disabled = !ready || !applications.tokenFor(application.id);
+    if (gmail) {
+      element('client-guidance').textContent = (ready ? 'Policy loaded and app token not expired. No Gmail request or refresh was tested here. ' :
+        'Waiting for the exact policy to load; resolve uncertain changes before use. ') +
+        'Use GET lists and individual message reads; no request body. Your client may follow nextPageToken and request full or metadata message JSON. No age restriction, attachments, history, Calendar or writes. ' +
+        (rule.query_mode === 'orderedFormV1' ? 'Supported query parameters may remain in client order; operation and value limits still apply. ' :
+          'This retained permission still requires legacy canonical query encoding/order. ') +
+        (dummyHeader ? 'Send the displayed exact dummy Authorization header once; it is not the app token or a provider secret. ' :
+          'Do not send a Google token: Serverware adds provider authentication. ') +
+        'Required JSON only, up to 1 MiB success / 64 KiB error; no empty 204 or streaming. Standard metadata is checked and discarded. See Compatibility limits.';
+      return;
+    }
     element('client-guidance').textContent = (ready ? 'Policy loaded and token not expired. This is a connection template, not a successful request test.' :
       'Saved configuration is not currently confirmed for use. Wait for activation and resolve any uncertain change.') +
       ' The template supplies no request body or query parameter values. Use your existing client to provide the endpoint-specific data within this rule.' +
@@ -51,7 +79,8 @@ function createProxyView(workspace, applications) {
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
-  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method']) element(id).addEventListener('change', render);
+  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation']) element(id).addEventListener('change', render);
+  element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
@@ -71,6 +100,13 @@ function createProxyView(workspace, applications) {
       ca_file: element('ca-path').value || './serverware-ca.pem', proxy_authorization: 'Bearer ' + token,
       token_expires_at_epoch_ms: application.token_expires_at_epoch_ms, note: 'Private development client configuration. Never commit or share. Provider credential not included.'};
     if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
+    if (isGmailRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.age_policy = {mode: rule.age_policy.mode};
+      if (Object.hasOwn(rule, 'query_mode')) config.query_mode = rule.query_mode;
+      config.operations = [{name: 'List messages', method: 'GET', url: rule.upstream_url},
+        {name: 'Read message', method: 'GET', url_template: rule.upstream_url + '/{message_id}', message_id_source: 'id returned by this account message list'}];
+      config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
+    }
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2) + '\n'], {type: 'application/json'}));
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000); element('client-copy-status').textContent = 'Downloaded private client configuration. Keep it out of source control.';

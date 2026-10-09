@@ -41,6 +41,21 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isGmailRule(rule)) {
+    element(id).replaceChildren(...[
+      'Read Gmail permits GET message lists, pagination and individual message reads for users/me. No request body, sending, modification, attachments, history, threads or Calendar operations. No age restriction is enforced; a search query is not an age policy.',
+      rule.query_mode === 'orderedFormV1' ?
+        'This permission accepts the supported Gmail query parameters in client order using ordinary form-query encoding. Values, repeated names and operation-specific parameter combinations remain bounded; this is not unrestricted SDK compatibility.' :
+        'Retained legacy permission: strict canonical query encoding and ordering still apply. This permission has not been upgraded to ordinary query compatibility.',
+      'Message reads support full or metadata JSON, not raw mail. Message IDs must come from the selected account. Lists are bounded to at most 500 messages per response; your client follows nextPageToken and makes each message request itself.',
+      'Required JSON object responses only: HTTP 200 up to 1 MiB; errors 400, 401, 403, 404, 429, 500, 502, 503 and 504 up to 64 KiB. No empty 204, text, binary or streaming responses. Identity and credential-disclosure checks still apply; this is not optional field filtering.',
+      'Standard response metadata is checked and discarded; no extra response headers are forwarded. ' +
+        (rule.query_mode === 'orderedFormV1' ? 'Client compression offers are removed before forwarding; compressed responses remain unsupported. ' :
+          'This retained permission requires absent or identity Accept-Encoding; compressed responses remain unsupported. ') +
+        'Proxy activation and finite app-token validity remain required; this page has not tested Gmail or automatic token refresh.'
+    ].map(value => textNode('p', value, 'small muted')));
+    return;
+  }
   const empty204 = operatorResponseAllowsEmpty204(rule.response_mode);
   element(id).replaceChildren(...[
     operatorResponseLimits(rule.response_mode) + ' Success bodies: at most 1 MiB; error bodies: at most 64 KiB. ' + operatorResponseHeaderDetails(rule.response_mode),
@@ -71,6 +86,14 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isGmailRule(rule)) return [
+    ['Permission', 'Read Gmail · this connected account'],
+    ['Allowed operations', 'List messages, follow pagination and read individual messages (GET only; no request body).'],
+    ['Excluded operations', 'Sending, modifications, attachments, history, threads and Calendar.'],
+    ['Mail age', 'Unrestricted. No age policy or optional content filtering.'],
+    ['Queries', rule.query_mode === 'orderedFormV1' ? 'Supported Gmail parameters in client order; bounded values and operation-specific limits.' : 'Retained legacy canonical query rules; no automatic upgrade.'],
+    ['Response', 'Required JSON objects; up to 1 MiB success / 64 KiB error. No empty 204 or streaming. Standard metadata is checked and discarded.'],
+  ];
   return [
     ['Destination / methods', (rule.upstream_url || 'Choose an exact destination') + ' · ' +
       (rule.methods.length ? rule.methods.join(', ') + ' only' : 'Choose a method')],

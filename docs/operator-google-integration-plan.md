@@ -17,10 +17,56 @@ Google profile, the owner explicitly continues to Google, and callback return
 selects an account only after joining the actor's saved intent to a fresh active
 catalog record. Backend callback/discovery checks and intercepted browser checks
 pass separately; they do not establish a joined real-provider browser journey.
-The current panel still needs the exclusive connection-method layout described
-in [the requirements](operator-workspace-requirements.md), and a reusable Gmail
-list/pagination/message-read preset remains missing. The live demo was not
-changed by these checks. See [consent UI verification](operator-google-backend-verification.md#consent-discovery-and-return-ui-checks).
+The exclusive connection-method layout is now deployed with the ordinary
+synthetic demo; this does not enable Google. An additive **Read Gmail** bundle
+is now implemented in the working source, covering list, pagination and
+individual message reads without endpoint or response-field setup. Its separate
+verification status is below. See [consent UI verification](operator-google-backend-verification.md#consent-discovery-and-return-ui-checks).
+
+### Read Gmail source checkpoint, 2026-10-09 UTC
+
+The new closed `gmail_read_v1` catalog bundle uses the `gmail.read.v1` adapter,
+whole required JSON responses, and explicit `orderedFormV1` query handling.
+It does not include mail-age enforcement, sending, mutations, attachments,
+history, threads, Calendar, arbitrary response formats or general SDK support.
+Existing exact rules and retained pre-query bundle rows keep their original
+contracts. Malformed or unavailable capabilities do not silently fall back.
+
+Independent source review covered catalog, Python, Rust and UI changes. The
+browser checks passed one pure group and 17 rendered groups across two runs:
+the initial run passed nine rendered groups, then a Playwright FIELDSET matcher
+assertion failed. A test-only correction checks the native fieldset property
+and disabled child controls; the eight remaining groups passed. Production UI
+files were unchanged between those runs. Screenshots were inspected at desktop
+and mobile sizes. The fixture intercepts backend traffic: no real consent,
+proxy requests or generated client commands ran.
+
+The paired source snapshot is Git tree
+`3ee51abcab363e22fc3fa989eb2f599cab310d08`, with 4,730 files. Its archive SHA-256 is
+`762db37ee4bb4bef5347f711e0b0c58c85ed6e73564f33707c88b696d8460b11`.
+Evidence is retained in `gmail-bundle-ui.McjCz3rt` and
+`gmail-final.1heE61Lq` under the operator workspace evidence directory.
+On the final snapshot, all 32 selected Python groups passed in 75.161 seconds:
+12 query-parser, nine integration, seven catalog and four existing controls.
+They ran without networking, with read-only source/root, one CPU, 1 GiB RAM,
+no additional swap, 96 PIDs and a 900-second deadline. Source and archive were
+unchanged; the container exited normally without OOM. The result receipt
+`gmail-final.1heE61Lq/python.test-result.json` has SHA-256
+`36027fdc74b6858f840036d2a6eb2d98db6a7c328c4c02d220596a208dd5b678`.
+Earlier Gmail batches retain their failures: JSON MIME admission, then a test
+that incorrectly put overlapping old and new routes on the same app. Those
+were corrected separately; this targeted run is not a full-suite pass.
+
+The Gmail Rust changes have not been built or run. A real ordinary-client
+list/paginate/read job and the same job across token expiry remain required
+before this bundle is accepted. A URL-library limitation refuses raw apostrophes
+when parsing would rewrite their spelling; percent-encoded `%27` is the intended
+supported spelling. Query helper tests alone do not establish wire acceptance.
+
+This source checkpoint does not enable Google in the live demo or change native
+pilot status. Account health, provider-aware reconnect/disconnect, managed app
+identity renewal, and ordinary response-header semantics remain product work,
+as documented in [the requirements](operator-workspace-requirements.md).
 
 Originally designed against workspace commit `10879772`. The 2026-10-08 shared
 working-tree checkpoint now contains cold profile, consent/catalog,

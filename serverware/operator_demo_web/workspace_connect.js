@@ -60,9 +60,14 @@ function createConnectView(workspace, applications, proxy) {
     if (checkpoint.collection === 'applications') {
       if (!validApp(item)) { message('The saved application token is not currently valid. Use Applications for explicit rotation.'); return; }
       selectedApplication = item.id; selectedRule = ''; review = null; element('connect-application-choice').value = item.id; step = 2;
+      renderInputs(); // The new app is now an exact confirmed pair; initialize its permission choice before showing access.
     }
     if (checkpoint.collection === 'access_rules') {
       if (item.application_id !== selectedApplication || item.credential_id !== selectedCredential) { message('Saved rule references did not match this setup. Review saved state.'); return; }
+      if (isGmailRule(review?.rule) && (!isGmailRule(item) || item.query_mode !== review.rule.query_mode ||
+          item.credential_input !== review.rule.credential_input || item.placeholder !== review.rule.placeholder)) {
+        message('The saved permission does not match the reviewed Read Gmail configuration. Review saved state; no repeat request was sent.'); return;
+      }
       selectedRule = item.id; step = 4;
     }
     checkpoint = null; message('Saved resource confirmed in the refreshed catalog.');
@@ -84,11 +89,17 @@ function createConnectView(workspace, applications, proxy) {
     choices('connect-credential-input', availableCredentialInputModes(value).map(id => ({id, name: operatorCredentialInputModes[id]})), 'insert');
     const responseChoices = responseFormChoices(value, element('connect-response-mode').value);
     choices('connect-response-mode', responseChoices, responseChoices[0]?.id);
+    if (activePair()) {
+      const bundle = gmailAvailable(value, credential());
+      choices('connect-operation', [...(bundle ? [{id: operatorGmail.bundle, name: 'Read Gmail'}] : []),
+        {id: 'exact', name: 'Advanced: one exact endpoint'}], bundle ? operatorGmail.bundle : 'exact');
+    }
   }
   function renderForms() {
     const newCredential = connectionMethod === 'key';
     const newApp = element('connect-application-choice').value === 'new';
     const newRule = element('connect-rule-choice').value === 'new';
+    const gmail = newRule && element('connect-operation').value === operatorGmail.bundle;
     fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential);
     fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
     const custom = newCredential && element('connect-credential-auth-type').value === 'header';
@@ -107,8 +118,18 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-response-limits').textContent = operatorResponseLimits(element('connect-response-mode').value);
     const content = review && step >= 3 ? review.rule : {response_mode: element('connect-response-mode').value};
     if (!(review && step >= 3) && element('connect-request-body-mode').value === 'preserve_json_v1') content.request_body_mode = 'preserve_json_v1';
-    renderOperatorCompatibility('connect-compatibility-content', content);
+    renderOperatorCompatibility('connect-compatibility-content', gmail && !(review && step >= 3) ? gmailRuleFields() : content);
     renderBasicCompatibility('connect', catalog(), credential());
+    // Apply these last: nested legacy field renderers must not re-enable hidden
+    // required controls. Switching permissions never clears the exact-rule draft.
+    element('connect-operation-group').hidden = !newRule || credential()?.auth_type !== 'google_oauth' && !gmail;
+    fields('connect-exact-destination', newRule && !gmail);
+    element('connect-exact-content').hidden = !newRule || gmail;
+    if (!newRule || gmail) for (const input of element('connect-exact-content').querySelectorAll('input,select,textarea')) input.disabled = true;
+    element('connect-gmail-summary').hidden = !gmail;
+    element('connect-gmail-summary').textContent = gmail && !gmailAvailable(catalog(), credential()) ?
+      'Read Gmail is no longer advertised for this account. Refresh or explicitly choose another permission; no rule is changed automatically.' :
+      'Read Gmail: list messages, follow pagination and read individual messages in this account. No age restriction or optional content filtering. No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.';
     element('connect-credential-next').textContent = newCredential ? 'Save credential & continue' : 'Use saved credential';
     element('connect-credential-next').disabled = !newCredential && !catalog()?.credentials.some(item =>
       item.id === element('connect-credential-choice').value && item.status === 'active');
@@ -119,7 +140,9 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-credential-fields').disabled = !['key', 'saved'].includes(connectionMethod) || !writable() || Boolean(checkpoint) || newCredential && !workspace.ready('credentials');
     element('connect-application-fields').disabled = !writable() || Boolean(checkpoint) || !credential() || newApp && !workspace.ready('applications');
     element('connect-access-fields').disabled = !writable() || Boolean(checkpoint) || !activePair() || newRule &&
-      (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length || !availableResponseModes(catalog()).length || !catalog()?.allowed_upstreams.length);
+      (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length ||
+        (!gmail && !availableResponseModes(catalog()).length) || !catalog()?.allowed_upstreams.length);
+    element('connect-review').disabled = newRule && gmail && !gmailAvailable(catalog(), credential());
   }
   function reviewCurrent() {
     return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule);
@@ -206,6 +229,14 @@ function createConnectView(workspace, applications, proxy) {
     render();
   });
   function draftRule() {
+    if (element('connect-operation').value === operatorGmail.bundle) {
+      const rule = {...gmailRuleFields(), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
+        credential_input: element('connect-credential-input').value};
+      if (rule.credential_input === 'replace_exact') rule.placeholder = element('connect-placeholder').value;
+      if (!supported(rule)) throw operatorError('Read Gmail is unavailable for this account or credential-input choice. Refresh before granting access.');
+      return rule;
+    }
+    if (element('connect-operation').value !== 'exact') throw operatorError('Choose a supported permission. No grant was sent.');
     const origin = element('connect-origin').value; const path = element('connect-path').value.trim();
     const methods = [...document.querySelectorAll('input[name="connect-method"]:checked')].map(input => input.value);
     const rule = {name: operatorPermissionName(element('connect-rule-name').value, methods, path), application_id: selectedApplication, credential_id: selectedCredential,
@@ -238,9 +269,10 @@ function createConnectView(workspace, applications, proxy) {
       selectedRule = review.rule.id; goto(4); return;
     }
     if (!workspace.ready('access_rules')) return;
-    await workspace.mutate('access-rules', {...review.rule}, 'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
+    await workspace.mutate(isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
+      isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule}, 'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
-  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
+  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
     element(id).addEventListener('change', render);
   element('connect-credential-choice').addEventListener('change', () => {
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
@@ -265,7 +297,7 @@ function createConnectView(workspace, applications, proxy) {
     connectionMethod = null; savedChoice = ''; beforeGoogle = null;
     for (const id of ['connect-credential-form', 'connect-application-form', 'connect-access-form']) element(id).reset();
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
-    for (const id of ['connect-response-mode', 'connect-request-body-mode']) element(id).value = '';
+    for (const id of ['connect-response-mode', 'connect-request-body-mode', 'connect-operation']) element(id).value = '';
     element('connect-restrictions').open = false;
     element('connect-credential-secret').value = ''; proxy.mount(null); step = 0;
   }

@@ -11,6 +11,8 @@ mod native_canary_runtime;
 mod response_v2;
 mod buffered_response;
 mod response_metadata;
+mod gmail_read;
+mod request_query_compat;
 mod buffered_request;
 #[cfg(test)]
 mod ordinary_client_compat_tests;
@@ -447,7 +449,7 @@ const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
 const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
-const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
+const SUPPORTED_ADAPTER_TYPES: [&str; 5] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
 const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
 const NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS: [&str; 2] = ["ok", "published"];
@@ -8662,7 +8664,7 @@ fn validate_provider_request_admission(
 ) -> Result<(), Value> {
     if !matches!(
         route.adapter_type.as_str(),
-        "gmail.v1" | "x.v2" | "npm.registry"
+        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry"
     ) {
         return Ok(());
     }
@@ -8682,6 +8684,10 @@ fn validate_provider_request_admission(
                     "status_code":500,
                 })
             })?;
+
+    if route.adapter_type == gmail_read::ADAPTER {
+        gmail_read::normalize_request(req, &req.headers, url, route)?;
+    }
 
     let allowed_headers = profile
         .allowed_headers
@@ -8954,8 +8960,8 @@ fn operation_field_catalog(
     let operations = declared_policy_operations(adapter_type, adapter_config, paths)?;
     let fields_for = |operation: &str| -> Option<HashSet<String>> {
         let fields: &[&str] = match (adapter_type, operation) {
-            ("gmail.v1", "gmail.messages.list") => &["operation", "gmailUser"],
-            ("gmail.v1", "gmail.message.get") => &["operation", "gmailUser", "messageId"],
+            ("gmail.v1" | "gmail.read.v1", "gmail.messages.list") => &["operation", "gmailUser"],
+            ("gmail.v1" | "gmail.read.v1", "gmail.message.get") => &["operation", "gmailUser", "messageId"],
             (
                 "x.v2",
                 "accountActivity.read"
@@ -10527,6 +10533,7 @@ fn provider_request_profile(
     mode: Option<&str>,
 ) -> Result<Option<ProviderRequestProfile>, String> {
     let profile = match adapter_type {
+        gmail_read::ADAPTER => gmail_read::request_profile(false),
         "gmail.v1" => ProviderRequestProfile {
             allowed_headers: GMAIL_V1_REQUEST_HEADERS,
             allowed_query_keys: GMAIL_V1_REQUEST_QUERY_KEYS,
@@ -10614,7 +10621,7 @@ fn validate_provider_request_profile_config(
     adapter_type: &str,
     adapter_config: &Map<String, Value>,
 ) -> Result<ProviderRequestProfile, String> {
-    let profile = provider_request_profile(
+    let mut profile = provider_request_profile(
         adapter_type,
         adapter_config.get("mode").and_then(Value::as_str),
     )?
@@ -10624,12 +10631,18 @@ fn validate_provider_request_profile_config(
         .get("request")
         .and_then(Value::as_object)
         .ok_or_else(|| format!("{label} must define an exact provider request profile"))?;
+    if adapter_type == gmail_read::ADAPTER
+        && request.get("queryMode").and_then(Value::as_str) == Some(request_query_compat::MODE)
+    {
+        profile = gmail_read::request_profile(true);
+    }
     if PROVIDER_REQUEST_PROFILE_REQUIRED_FIELDS
         .iter()
         .any(|field| !request.contains_key(*field))
         || request
             .keys()
-            .any(|field| !PROVIDER_REQUEST_PROFILE_FIELDS.contains(&field.as_str()))
+            .any(|field| !PROVIDER_REQUEST_PROFILE_FIELDS.contains(&field.as_str())
+                && !(adapter_type == gmail_read::ADAPTER && field == "queryMode"))
     {
         return Err(format!(
             "{label} request profile must contain allowedHeaders, allowedQueryKeys, allowedMediaTypes, maxBodyBytes, and valueRules; discardHeaders is the only optional field"
@@ -11099,6 +11112,12 @@ fn declared_policy_operations(
     paths: &[Value],
 ) -> Result<HashSet<String>, String> {
     let operations = match adapter_type {
+        gmail_read::ADAPTER => {
+            if paths != [json!(gmail_read::LIST_PATH), json!(gmail_read::GET_PATH)] {
+                return Err("Gmail read operations require exactly the two closed path shapes".into());
+            }
+            HashSet::from(["gmail.messages.list".to_string(), "gmail.message.get".to_string()])
+        }
         "gmail.v1" => paths
             .iter()
             .map(|path| {
@@ -11180,6 +11199,8 @@ fn traversal_admitted_query_fields_for_policy(
         })
         .collect::<Result<HashSet<_>, _>>()?;
     let exact = match (adapter_type, operation) {
+        (gmail_read::ADAPTER, "gmail.message.get") => gmail_read::GET_KEYS.iter().map(|value| (*value).to_string()).collect(),
+        (gmail_read::ADAPTER, "gmail.messages.list") => gmail_read::LIST_KEYS.iter().map(|value| (*value).to_string()).collect(),
         ("gmail.v1", "gmail.message.get") => [
             "$.xgafv",
             "alt",
@@ -11226,7 +11247,7 @@ fn oauth_scopes_for_operation(adapter_type: &str, operation: &str) -> Option<&'s
     const X_USERS: &[&str] = &["users.read"];
     const X_WRITE: &[&str] = &["tweet.read", "tweet.write", "users.read"];
     match (adapter_type, operation) {
-        ("gmail.v1", "gmail.messages.list" | "gmail.message.get") => Some(GMAIL_READONLY),
+        ("gmail.v1" | "gmail.read.v1", "gmail.messages.list" | "gmail.message.get") => Some(GMAIL_READONLY),
         (
             "x.v2",
             "accountActivity.read"
@@ -11325,6 +11346,14 @@ fn validate_route_credential_binding(
     let binding = binding
         .and_then(Value::as_object)
         .ok_or_else(|| format!("route {route_id} requires credentialBinding"))?;
+    if adapter_type == gmail_read::ADAPTER
+        && (credential.kind() != "oauth2" || credential.provider != "google"
+            || credential.injection.get("type").and_then(Value::as_str) != Some("bearer")
+            || credential.injection.get("header").and_then(Value::as_str) != Some("Authorization")
+            || credential.injection.get("field").and_then(Value::as_str) != Some("access_token"))
+    {
+        return Err("gmail.read.v1 requires verified Google OAuth bearer access-token injection".into());
+    }
     let expected_fields: &[&str] = if credential.kind() == "oauth2" {
         &[
             "credentialType",
@@ -11370,7 +11399,7 @@ fn validate_route_credential_binding(
             ));
         }
         let expected_provider = match adapter_type {
-            "gmail.v1" => Some("google"),
+            "gmail.v1" | "gmail.read.v1" => Some("google"),
             "x.v2" => Some("x"),
             _ => None,
         };
@@ -11410,7 +11439,7 @@ fn validate_route_credential_binding(
                 ));
             }
         }
-    } else if matches!(adapter_type, "gmail.v1" | "x.v2") {
+    } else if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2") {
         return Err(format!(
             "route {route_id} {adapter_type} requires an OAuth credential"
         ));
@@ -11804,7 +11833,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
-        if matches!(adapter_type, "gmail.v1" | "x.v2" | "npm.registry") {
+        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry") {
             validate_provider_request_profile_config(route_id, adapter_type, adapter_config)?;
         }
         let request_config = adapter_config
@@ -11881,6 +11910,13 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             }));
         }
         let constraints = combined_constraints.as_slice();
+        if adapter_type == gmail_read::ADAPTER {
+            gmail_read::validate_policy_match(route_match)?;
+            gmail_read::validate_config(&Value::Object(adapter_config.clone()), constraints)?;
+            if route.get("jit").is_some() || route.get("responseObservation").is_some() {
+                return Err("gmail.read.v1 does not support JIT or response observation".into());
+            }
+        }
         if adapter_type == "generic.rest" {
             buffered_request::validate_contract(request_config, constraints)?;
         }
@@ -11974,6 +12010,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("route {route_id} response mode missing or non-string"))?;
             let mode_supported = BUFFERED_RESPONSE_MODES.contains(&response_mode)
+                || (adapter_type == gmail_read::ADAPTER && response_mode == gmail_read::MODE)
                 || (adapter_type == "generic.rest"
                     && (STREAMING_RESPONSE_MODES.contains(&response_mode)
                         || buffered_response::supported_mode(response_mode)))
@@ -11995,7 +12032,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            if buffered_response::supported_mode(response_mode) {
+            if adapter_type == gmail_read::ADAPTER {
+                // The closed typed contract above owns whole-JSON release;
+                // it is not admitted through generic REST's profile guard.
+            } else if buffered_response::supported_mode(response_mode) {
                 buffered_response::validate_contract(adapter_type, response)?;
                 buffered_response::validate_mode_constraints(response_mode, constraints)?;
             } else {
@@ -14318,6 +14358,9 @@ fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static st
         "https://serverware.local/schemas/adapters/gmail.v1.schema.json" => {
             Some(("adapter_gmail_v1", include_str!("../../../schemas/adapters/gmail.v1.schema.json")))
         }
+        "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json" => {
+            Some(("adapter_gmail_read_v1", include_str!("../../../schemas/adapters/gmail.read.v1.schema.json")))
+        }
         "https://serverware.local/schemas/adapters/npm.registry.schema.json" => {
             Some(("adapter_npm_registry", include_str!("../../../schemas/adapters/npm.registry.schema.json")))
         }
@@ -14382,6 +14425,7 @@ fn closed_embedded_policy_schema() -> Result<Value, String> {
     let adapters = [
         "https://serverware.local/schemas/adapters/generic.rest.schema.json",
         "https://serverware.local/schemas/adapters/gmail.v1.schema.json",
+        "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json",
         "https://serverware.local/schemas/adapters/npm.registry.schema.json",
         "https://serverware.local/schemas/adapters/x.v2.schema.json",
     ];
@@ -24141,6 +24185,7 @@ fn validate_resolved_addresses(
 fn reuse_idle_upstream_connections(route: &Route, method: &str) -> bool {
     matches!(method, "GET" | "HEAD" | "OPTIONS")
         && !route_response_mode(route).is_some_and(buffered_response::json_or_empty_204_mode)
+        && route.adapter_type != gmail_read::ADAPTER
 }
 
 fn prepare_upstream(
@@ -24221,11 +24266,12 @@ fn prepare_upstream_for_forward(
     authenticated_principal_id: Option<&str>,
 ) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
     if validate_canonical_http_method(&request.method).is_err()
-        || validate_request_target_path(&request.target).is_err()
+        || !gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+            request.client_ip.as_deref(), &request.headers, authenticated_principal_id)
+            .is_ok_and(|(_, url)| url == *target_url)
         || !target_url.username().is_empty()
         || target_url.password().is_some()
         || target_url.fragment().is_some()
-        || duplicate_query_key(target_url).is_some()
     {
         return Ok(None);
     }
@@ -24249,6 +24295,12 @@ fn prepare_upstream_for_forward(
         return Ok(None);
     };
     let route = route_match.route;
+    if gmail_read::ordered_query(route)
+        && (state.atomic_release_authorization_enabled
+            || state.response_proof_signer.release_profile() != ReleaseProfile::Legacy)
+    {
+        return Ok(None);
+    }
     if validate_runtime_route_identity_headers(route, principal).is_err() {
         return Ok(None);
     }
@@ -29358,7 +29410,8 @@ fn canonical_request(
     policy_hash: &str,
     operation: &Value,
 ) -> Value {
-    let version = if route.discard_headers.is_empty() { 1 } else { 2 };
+    let version = if gmail_read::ordered_query(route) { 3 }
+        else if route.discard_headers.is_empty() { 1 } else { 2 };
     let canonical_credential_version = if route.credential_ref.is_some() {
         credential_version.to_string()
     } else {
@@ -29373,7 +29426,7 @@ fn canonical_request(
         "headers": forwarded_headers,
         "body_sha256": body_sha(req),
     });
-    if !route.discard_headers.is_empty() {
+    if version == 3 || !route.discard_headers.is_empty() {
         request
             .as_object_mut()
             .expect("canonical request material is an object")
@@ -29381,6 +29434,10 @@ fn canonical_request(
                 "discard_headers".to_string(),
                 json!(route.discard_headers.clone()),
             );
+    }
+    if version == 3 {
+        request["query_mode"] = json!(request_query_compat::MODE);
+        request["query_wire"] = json!(url.query());
     }
     json!({
         "v": version,
@@ -31005,6 +31062,7 @@ fn validate_adapter_with_gmail_proof_mode(
     let route = route_match.route;
     let config = &route.adapter_config;
     match route.adapter_type.as_str() {
+        gmail_read::ADAPTER => gmail_read::normalize_request(req, forwarded_headers, url, route),
         "generic.rest" => {
             if get_object(config, "request").is_none() {
                 return Err(json!({
@@ -35224,7 +35282,8 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     let headers = lower_headers(&req.headers);
-    let (path_validation, url) = match parse_validated_absolute_target(&req.url) {
+    let (path_validation, url) = match gmail_read::parse_target_for_route(snapshot, &req.method,
+        &req.url, req.client_ip.as_deref(), &req.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(_) => {
             eprintln!("rejected malformed decision request target");
@@ -35236,17 +35295,6 @@ fn decide_internal_with_mode_and_shadow<'a>(
             )
         }
     };
-    if duplicate_query_key(&url).is_some() {
-        return deny(
-            400,
-            "duplicate query key denied",
-            json!({
-                "error":"duplicate_query_key_denied",
-                "duplicateQueryKeyCount":1,
-            }),
-            started,
-        );
-    }
     let principal = if let Some(principal_id) = authenticated_principal_id {
         snapshot
             .principals
@@ -35272,6 +35320,25 @@ fn decide_internal_with_mode_and_shadow<'a>(
         );
     };
     let route = route_match.route;
+    if gmail_read::ordered_query(route)
+        && (state.atomic_release_authorization_enabled
+            || state.response_proof_signer.release_profile() != ReleaseProfile::Legacy)
+    {
+        return deny_for_route(422, "ordered query release profile unsupported",
+            json!({"error":"ordered_query_release_profile_unsupported"}), route, started);
+    }
+    if gmail_read::ordered_query(route)
+        && (req.client_request_digest.is_some()
+            || [RESPONSE_PROOF_NONCE_HEADER, STREAM_RESPONSE_PROOF_NONCE_HEADER, RESPONSE_OBSERVATION_NONCE_HEADER]
+                .iter().any(|name| headers.contains_key(*name)))
+    {
+        return deny_for_route(422, "ordered query proof consumer unsupported",
+            json!({"error":"response_metadata_v2_proof_unsupported"}), route, started);
+    }
+    if !gmail_read::ordered_query(route) && duplicate_query_key(&url).is_some() {
+        return deny_for_route(400, "duplicate query key denied",
+            json!({"error":"duplicate_query_key_denied","duplicateQueryKeyCount":1}), route, started);
+    }
     if validate_route_response_release_mode(route).is_err() {
         return deny_for_route(
             500,
@@ -35528,7 +35595,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     let mut provider_url = url.clone();
-    if apply_rewrite(&mut provider_url, &rewrite).is_err() {
+    if gmail_read::apply_route_rewrite(route, &mut provider_url, &rewrite).is_err() {
         return deny_for_route(
             500,
             "adapter query rewrite is invalid",
@@ -35537,7 +35604,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             started,
         );
     }
-    if duplicate_query_key(&provider_url).is_some() {
+    if !gmail_read::ordered_query(route) && duplicate_query_key(&provider_url).is_some() {
         return deny_for_route(
             500,
             "adapter query rewrite produced a duplicate key",
@@ -37372,6 +37439,9 @@ fn provider_url_bound_to_decision(
     method: &str,
     original_url: &Url,
 ) -> Result<Url, String> {
+    if decision.pointer("/canonical_request/v").and_then(Value::as_u64) == Some(3) {
+        return Err("ordered canonical v3 requires its route-aware dispatch validator".into());
+    }
     validate_canonical_raw_path(original_url.path())?;
     let mut provider_url = original_url.clone();
     apply_rewrite(
@@ -37525,6 +37595,9 @@ fn allowed_decision_discard_headers_profile(
         .iter()
         .find(|route| route.id == route_id)
         .ok_or("allowed decision route is not in the active snapshot")?;
+    if gmail_read::ordered_query(route) && profile != ReleaseProfile::Legacy {
+        return Err("ordered query canonical request requires the ordinary release profile".into());
+    }
     let policy_hash = decision
         .get("policy_hash")
         .and_then(Value::as_str)
@@ -37584,7 +37657,7 @@ fn allowed_decision_discard_headers_profile(
         .get("canonical_request")
         .ok_or("allowed decision canonical request missing")?;
     let canonical_headers =
-        canonical_request_discard_headers(canonical_request, &route.discard_headers)?;
+        gmail_read::canonical_discard_headers(canonical_request, route)?;
     let canonical = canonical_request
         .as_object()
         .ok_or("allowed decision canonical request missing or invalid")?;
@@ -42423,6 +42496,11 @@ fn decision_route_context<'a>(
     if route_match.route.id != route_id {
         return Err(json!({"error":"response_route_context_mismatch"}));
     }
+    if gmail_read::ordered_query(route_match.route) {
+        gmail_read::validate_canonical_url(decision.get("canonical_request").unwrap_or(&Value::Null),
+            route_match.route, method, url)
+            .map_err(|_| json!({"error":"response_request_target_context_mismatch"}))?;
+    }
     Ok(route_match)
 }
 
@@ -42712,6 +42790,9 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 }
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
+    if route.adapter_type == gmail_read::ADAPTER {
+        return gmail_read::validate_route(route);
+    }
     let response_mode = route_response_mode(route);
     buffered_response::validate_envelope_pairing(
         &route.adapter_type,
@@ -42975,7 +43056,7 @@ fn validate_selected_json_response_content_type(
     adapter_type: &str,
 ) -> Result<(), Value> {
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
-        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2")) {
+        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -43137,7 +43218,7 @@ fn validate_response_proof_route_preflight(
     proof_kind: ResponseProofKind,
 ) -> Result<(), &'static str> {
     if route_match.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
-        == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE)
+        .is_some_and(response_metadata::uses_mode)
     {
         return Err("response_metadata_v2_proof_unsupported");
     }
@@ -43162,7 +43243,8 @@ fn matched_response_proof_route<'a>(
     request: &IncomingRequest,
     authenticated_principal_id: Option<&str>,
 ) -> Option<RouteMatch<'a>> {
-    let (_, url) = parse_validated_absolute_target(&request.target).ok()?;
+    let (_, url) = gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        request.client_ip.as_deref(), &request.headers, authenticated_principal_id).ok()?;
     let headers = lower_headers(&request.headers);
     let principal = if let Some(principal_id) = authenticated_principal_id {
         snapshot
@@ -44293,6 +44375,17 @@ fn validate_policy_json_response(
     binding_validation: &Value,
     response_secret_guard: &ResponseSecretGuard,
 ) -> SensitiveResponseBytes {
+    if adapter_type == gmail_read::ADAPTER {
+        return match gmail_read::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
+            Ok(bytes) => release_forward_response(
+                state, snapshot, decision, method, url, status, Some("application/json"),
+                released_headers, bytes, response_secret_guard,
+                json!({"ok":true,"mode":gmail_read::MODE,"body_bytes_preserved":true,
+                    "allowed_fields_redacted":false,"adapter":gmail_read::ADAPTER,"age_policy":"unrestricted"}),
+            ),
+            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+        };
+    }
     if let Some(payload) =
         credential_response_projection_error(credential_bearing, response_config, adapter_type)
     {
@@ -45038,13 +45131,13 @@ fn finalize_upstream_response(
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
-    // V2 alone bounds and scans the complete parsed physical header set before
+    // Explicit metadata-discard profiles bound and scan the parsed header set before
     // shadow observation, metadata selection, proof capture or a 204 early path.
     let mut metadata_v2 = false;
     let mut metadata_v2_error = None;
     if let Ok(route_match) = decision_route_context(snapshot, decision, request_method, upstream_url) {
         if route_match.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
-            == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE)
+            .is_some_and(response_metadata::uses_mode)
         {
             metadata_v2 = true;
             let inspected = validate_route_response_release_mode(route_match.route)
@@ -45943,7 +46036,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         }};
     }
 
-    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
+    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(detail) => {
             state.policy_shadow.account_malformed_target(
@@ -45967,7 +46061,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             .iter().any(|reserved| name.eq_ignore_ascii_case(reserved)));
     if v2_proof_requested && matched_response_proof_route(snapshot, &request, authenticated_principal_id)
         .is_some_and(|matched| matched.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
-            == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE))
+            .is_some_and(response_metadata::uses_mode))
     {
         buffered!(json_status_response(StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"response_metadata_v2_proof_unsupported"})));
@@ -46102,7 +46196,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         )),
     };
     let upstream_url =
-        match provider_url_bound_to_decision(&decision, &request.method, &target_url) {
+        match gmail_read::provider_url_for_decision(snapshot, &decision, &request.method, &target_url) {
             Ok(url) => url,
             Err(_) => buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -46145,7 +46239,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let v2_proof_denied = response_proof_requested
         && decision_route_context(snapshot, &decision, &request.method, &upstream_url).is_ok_and(|matched|
             matched.route.adapter_config.pointer("/response/mode").and_then(Value::as_str)
-                == Some(buffered_response::JSON_OR_EMPTY_204_V2_MODE));
+                .is_some_and(response_metadata::uses_mode));
     let proof_route_error = if v2_proof_denied { Some("response_metadata_v2_proof_unsupported") } else { match (response_proof_kind, gmail_metadata_list, route_streaming) {
         (Some(_), true, _) => Some("gmail_metadata_fetch_response_proof_unsupported"),
         (Some(ResponseProofKind::Buffered), false, true) => {
@@ -46548,6 +46642,9 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         |built| {
             let route = decision_route_context(snapshot, &decision, &request_method, &upstream_url)
                 .map_err(|_| "provider_request_body_route_invalid")?.route;
+            if gmail_read::ordered_query(route) {
+                gmail_read::validate_built_request(&decision["canonical_request"], route, &upstream_url, built)?;
+            }
             if route.adapter_config.pointer("/request/bodyMode").and_then(Value::as_str) == Some(buffered_request::MODE) {
                 buffered_request::validate_built_body(&decision, built)
             } else { Ok(()) }
@@ -46809,7 +46906,8 @@ fn forward_absolute_request_inner<'a>(
     response_observation: Option<&mut ResponseObservationTrace>,
     keep_alive: bool,
 ) -> ForwardResult {
-    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
+    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(detail) => {
             state.policy_shadow.account_malformed_target(
@@ -48286,7 +48384,8 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     response_proof: Option<ResponseProofRequestContext<'_>>,
     connection_identity_sha256: Option<&str>,
 ) -> bool {
-    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
+    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(detail) => {
             state.policy_shadow.account_malformed_target(
@@ -48848,7 +48947,8 @@ fn request_streaming_preflight(
     request: &RequestHead,
     authenticated_principal_id: Option<&str>,
 ) -> RequestStreamingPreflight {
-    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
+    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(_) => return RequestStreamingPreflight::Buffer,
     };
@@ -48955,7 +49055,8 @@ fn buffered_route_body_limit(
     request: &RequestHead,
     authenticated_principal_id: Option<&str>,
 ) -> u64 {
-    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
+    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(_) => return MAX_BUFFERED_REQUEST_BODY_BYTES,
     };
@@ -49006,6 +49107,14 @@ fn read_request_head_from<R: Read>(
     reader: &mut R,
     client_ip: Option<String>,
 ) -> Result<RequestHead, String> {
+    read_request_head_with_ordered_query_from(reader, client_ip, false)
+}
+
+fn read_request_head_with_ordered_query_from<R: Read>(
+    reader: &mut R,
+    client_ip: Option<String>,
+    allow_ordered_intake: bool,
+) -> Result<RequestHead, String> {
     let initial_capacity = MAX_REQUEST_HEADER_BYTES.min(16 * 1024).saturating_add(4096);
     let mut buffer = Zeroizing::new(Vec::with_capacity(initial_capacity));
     let mut chunk = Zeroizing::new([0u8; 4096]);
@@ -49047,7 +49156,11 @@ fn read_request_head_from<R: Read>(
         connect_authority(&target)
             .map_err(|err| format!("invalid request target: {err}"))?;
     } else if !target.starts_with('/') {
-        validate_request_target_path(&target)
+        validate_request_target_path(&target).or_else(|error| {
+            if allow_ordered_intake {
+                gmail_read::parse_ordered_target(&method, &target).map(|(path, _)| path)
+            } else { Err(error) }
+        })
             .map_err(|err| format!("invalid request target: {err}"))?;
     }
     let version = parts[2];
@@ -49452,8 +49565,17 @@ fn connect_inner_absolute_target(
     expected_host: &str,
     expected_port: u16,
 ) -> Result<String, String> {
+    connect_inner_target_with_parser(target, expected_host, expected_port, parse_validated_absolute_target)
+}
+
+fn connect_inner_target_with_parser(
+    target: &str,
+    expected_host: &str,
+    expected_port: u16,
+    parse: impl Fn(&str) -> Result<(RequestPathValidation, Url), String>,
+) -> Result<String, String> {
     if absolute_form_target(target) {
-        let (_, url) = parse_validated_absolute_target(target)
+        let (_, url) = parse(target)
             .map_err(|err| format!("invalid absolute inner request target: {err}"))?;
         let host = url
             .host_str()
@@ -49484,7 +49606,7 @@ fn connect_inner_absolute_target(
         format!("{host}:{expected_port}")
     };
     let absolute = format!("https://{canonical_authority}{target}");
-    parse_validated_absolute_target(&absolute)
+    parse(&absolute)
         .map_err(|err| format!("invalid origin-form inner request target: {err}"))?;
     Ok(absolute)
 }
@@ -49681,7 +49803,12 @@ fn handle_connect_request(
     loop {
         tls.sock.reset_read_deadline(state.request_head_deadline);
         tls.sock.reset_write_deadline(state.response_write_deadline);
-        let head = match read_request_head_from(&mut ConnectOperationIo(&mut tls), client_ip.clone()) {
+        // Syntax intake is not authority: genuine CONNECT identity is rechecked
+        // below and the selected inner route must carry the signed query mode.
+        let intake_snapshot = current_snapshot(&state);
+        let ordered_intake = gmail_read::allows_ordered_intake(&intake_snapshot,
+            Some(connect_authentication.principal_id.as_str()));
+        let head = match read_request_head_with_ordered_query_from(&mut ConnectOperationIo(&mut tls), client_ip.clone(), ordered_intake) {
             Ok(head) => head,
             Err(err) if err == "connection closed before headers" => break,
             Err(err) => {
@@ -49871,7 +49998,9 @@ fn handle_connect_request(
         }
         if tls.sock.check_operation_deadline().is_err() { break; }
         tls.sock.reset_read_deadline(state.request_body_deadline);
-        let forwarded = match connect_inner_absolute_target(&authority, &head.target, &host, port) {
+        let forwarded = match connect_inner_target_with_parser(&head.target, &host, port, |target|
+            gmail_read::parse_target_for_route(&request_snapshot, &head.method, target,
+                head.client_ip.as_deref(), &head.headers, Some(connect_authentication.principal_id.as_str()))) {
             Ok(target) => {
                 head.target = target;
                 match request_streaming_preflight(
@@ -50271,7 +50400,9 @@ fn handle_gate_connection(
             return;
         }
     };
-    let mut head = match read_request_head_from(&mut stream, client_ip.clone()) {
+    let intake_snapshot = current_snapshot(&state);
+    let ordered_intake = !management_listener && gmail_read::allows_ordered_intake(&intake_snapshot, None);
+    let mut head = match read_request_head_with_ordered_query_from(&mut stream, client_ip.clone(), ordered_intake) {
         Ok(head) => head,
         Err(err) => {
             let response = request_head_error_response(&err);

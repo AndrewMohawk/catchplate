@@ -15,7 +15,7 @@ from serverware import operator_catalog_policy as policy
 from serverware import operator_catalog_schema as schema
 from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
-    ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput,
+    ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -121,6 +121,9 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["placeholder"] = record["placeholder"]
         if "request_body_mode" in record:
             result["request_body_mode"] = record["request_body_mode"]
+        from serverware import operator_catalog_gmail
+        if operator_catalog_gmail.selected(record):
+            result.update(operator_catalog_gmail.public_fields(record))
     return result
 
 
@@ -225,6 +228,29 @@ def create_rule(payload: RuleInput, actor_id: str) -> dict:
     return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
 
 
+def create_gmail_rule(payload: GmailReadRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_gmail as gmail
+    from serverware import operator_catalog_google, operator_catalog_oauth_profile, operator_demo
+    profile = operator_catalog_oauth_profile.require_profile()
+    if gmail.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("Gmail destination is not deployment-allowlisted")
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        record = gmail.record_fields(payload)
+        try:
+            schema.rule_credential_header(record, credential)
+            operator_catalog_google.validate_rule(record, credential, profile)
+        except CatalogIntegrityError:
+            raise ValueError("Gmail bundle requires a compatible connected account and input mode") from None
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
+
+
 def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "credentials", payload.id)
@@ -274,12 +300,13 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 
 def catalog_status() -> dict:
-    from serverware import operator_catalog_capabilities, operator_demo
+    from serverware import operator_catalog_capabilities, operator_catalog_gmail, operator_demo
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
         schema.validate_bindings(conn, catalog)
         google_oauth = operator_catalog_capabilities.google_oauth(conn)
+        operation_bundles = operator_catalog_gmail.capabilities(conn)
         state = _state(conn)
         limits = {collection: {"active": sum(row["status"] == "active" for row in catalog[collection]),
             "retained": len(catalog[collection]) + schema.retained_legacy_count(conn, collection),
@@ -298,6 +325,7 @@ def catalog_status() -> dict:
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
                 "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None,
             "google_oauth": google_oauth,
+            "operation_bundles": operation_bundles,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],
             "token_lifetime_seconds": {"min": MIN_TOKEN_LIFETIME_SECONDS, "max": MAX_TOKEN_LIFETIME_SECONDS,

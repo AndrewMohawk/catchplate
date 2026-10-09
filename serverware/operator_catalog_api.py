@@ -21,7 +21,7 @@ PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/applications", "/applications/revoke",
-    "/applications/rotate-token", "/access-rules", "/access-rules/revoke",
+    "/applications/rotate-token", "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
 ))
 router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
@@ -217,3 +217,8 @@ async def create_rule(request: Request, identity: auth.AdminIdentity = Depends(_
 @router.post("/access-rules/revoke")
 async def revoke_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "TargetInput", "revoke_rule", 1024)
+
+
+@router.post("/access-rules/gmail-read")
+async def create_gmail_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "GmailReadRuleInput", "create_gmail_rule", 4096, created=True)

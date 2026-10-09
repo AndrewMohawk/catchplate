@@ -214,6 +214,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
+    from serverware import operator_catalog_gmail
+    if operator_catalog_gmail.selected(rule):
+        operator_catalog_gmail.validate_shape(rule)
+        return None, operator_catalog_gmail.RESPONSE_MODE
     request_mode = rule.get('request_body_mode')
     request_fields = rule.get('request_fields')
     response_mode = rule.get('response_mode', 'projected_json')
@@ -234,6 +238,8 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
     request_mode, _ = rule_content_modes(rule)
+    if 'operation_bundle' in rule and credential.get('auth_type') != 'google_oauth':
+        raise CatalogIntegrityError('Gmail bundle requires a connected Google account')
     if request_mode is not None and credential.get('auth_type') == 'google_oauth':
         raise CatalogIntegrityError('Google account request preservation is unsupported')
     return request_mode

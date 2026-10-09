@@ -19,11 +19,16 @@ from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE,
     BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE,
     BUFFERED_PASSTHROUGH_RESPONSE_MODE,
+    GMAIL_READ_ADAPTER,
+    GMAIL_READ_OPERATION_QUERY_KEYS,
+    GMAIL_READ_RESPONSE_MODE,
+    GMAIL_READ_STATUS_CODES,
     GMAIL_V1_OPERATION_QUERY_KEYS,
     JSON_OR_EMPTY_204_RESPONSE_MODES,
     NPM_PUBLIC_REGISTRY_HOST,
     NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT,
     NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS,
+    ORDERED_FORM_QUERY_MODE,
     PolicyBundleError,
     X_V2_RECENT_SEARCH_PATHS,
     adapter_operation_field_names,
@@ -31,11 +36,14 @@ from serverware.policy_bundle import (
     canonical_json,
     is_serverware_internal_header,
     provider_request_profile,
+    request_query_mode,
     strict_json_loads,
     validate_buffered_json_passthrough_request,
     validate_buffered_passthrough_response,
+    validate_gmail_read_response,
     validate_raw_absolute_target,
     validated_request_urlsplit,
+    validated_request_urlsplit_for_route,
 )
 from serverware.response_header_compat import (
     HeaderCompatibilityError, inspect_physical_headers, listed_response_headers,
@@ -88,6 +96,7 @@ _SAFE_RESPONSE_HEADERS = {
 }
 _RESPONSE_CONTENT_TYPES = {
     "json": "application/json",
+    GMAIL_READ_RESPONSE_MODE: "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE: "application/json",
@@ -159,6 +168,25 @@ def _strict_buffered_json(raw: bytes) -> Any:
         elif isinstance(value, list):
             pending.append(iter(value))
     return payload
+
+
+def gmail_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+    """Bounded decoded inspection only; these bytes must never replace the body."""
+    if not isinstance(raw, bytes) or not 1 <= len(raw) <= maximum:
+        raise ValueError("Gmail response body bound")
+    payload = _strict_buffered_json(raw)
+    inspection = bytearray()
+    try:
+        encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        for piece in encoder.iterencode(payload):
+            encoded = piece.encode("utf-8")
+            if len(encoded) > maximum - len(inspection):
+                raise ValueError("Gmail response inspection bound")
+            inspection.extend(encoded)
+        return payload, inspection
+    except Exception:
+        inspection[:] = b"\x00" * len(inspection)
+        raise
 
 
 def _parse_content_type(value: str) -> str | None:
@@ -483,6 +511,7 @@ class ApiAdapter:
             expected = provider_request_profile(
                 self.id,
                 str(route.adapter_config.get("mode") or ""),
+                query_mode=request_query_mode(self.id, route.adapter_config),
             )
         except Exception:
             expected = None
@@ -499,7 +528,8 @@ class ApiAdapter:
                     not isinstance(values, list)
                     or any(not isinstance(value, str) for value in values)
                     or len(values) != len(set(values))
-                    or set(values) != set(expected_values or [])
+                    or (values != expected_values if self.id == GMAIL_READ_ADAPTER
+                        else set(values) != set(expected_values or []))
                 ):
                     valid_lists = False
                     break
@@ -541,6 +571,8 @@ class ApiAdapter:
             or not required_fields.issubset(request_cfg)
             or not set(request_cfg).issubset(expected_fields)
             or not valid_lists
+            or (self.id == GMAIL_READ_ADAPTER
+                and (discard_headers != (expected or {}).get("discardHeaders") or value_rules != []))
             or (
                 bool(required_discard_headers)
                 and (
@@ -576,10 +608,15 @@ class ApiAdapter:
                 )
 
         allowed_query_keys = set(request_cfg["allowedQueryKeys"])
-        for key, _ in parse_qsl(
-            validated_request_urlsplit(flow.request.pretty_url).query,
-            keep_blank_values=True,
-        ):
+        if request_query_mode(self.id, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+            from serverware.request_query_compat import parse_query
+            validated_request_urlsplit_for_route(flow.request.pretty_url, route)
+            _, separator, wire = flow.request.pretty_url.partition("?")
+            query_pairs = parse_query(wire if separator else None).pairs
+        else:
+            query_pairs = parse_qsl(
+                validated_request_urlsplit(flow.request.pretty_url).query, keep_blank_values=True)
+        for key, _ in query_pairs:
             if key not in allowed_query_keys:
                 return PolicyDecision(
                     allowed=False,
@@ -1269,7 +1306,9 @@ class ApiAdapter:
 
     @staticmethod
     def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
-        if (route.adapter_config.get("response") or {}).get("mode") != BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE:
+        if (route.adapter_config.get("response") or {}).get("mode") not in {
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE
+        }:
             return None
         try:
             inspect_physical_headers(getattr(flow.response.headers, "fields", None),
@@ -1695,6 +1734,172 @@ class ApiAdapter:
                 raise ValueError("csv record does not match header width")
             writer.writerow([row[index] for index in indexes])
         return output.getvalue().encode("utf-8")
+
+
+class GmailReadV1Adapter(ApiAdapter):
+    """Explicit read-only bundle, without the legacy age/proof-cache semantics.
+
+    Legacy query admission remains the default. An explicit orderedFormV1
+    policy preserves form-query wire bytes and operation-specific repetitions;
+    neither mode claims forwarding custody or unrestricted SDK compatibility.
+    """
+    id = GMAIL_READ_ADAPTER
+    _identifier = re.compile(r"[A-Za-z0-9_-]{1,512}\Z")
+
+    @staticmethod
+    def _denied(error: str, status: int = 403) -> PolicyDecision:
+        return PolicyDecision(False, "Gmail read contract refused", status, {"error": error})
+
+    @staticmethod
+    def _bounded_text(value: str, minimum: int, maximum: int) -> bool:
+        return (minimum <= len(value.encode("utf-8")) <= maximum
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value))
+
+    @staticmethod
+    def _query_pairs(flow: Any, route: Any, operation: str) -> list[tuple[str, str]]:
+        parsed = validated_request_urlsplit_for_route(flow.request.pretty_url, route)
+        if request_query_mode(GMAIL_READ_ADAPTER, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+            from serverware.request_query_compat import parse_gmail_query
+            _, separator, wire = flow.request.pretty_url.partition("?")
+            return list(parse_gmail_query(wire if separator else None, operation=operation).pairs)
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True,
+            encoding="utf-8", errors="strict", max_num_fields=64)
+        if len({key for key, _ in pairs}) != len(pairs):
+            raise ValueError("Gmail query contains repeated singleton fields")
+        return pairs
+
+    def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        try:
+            decision = self._validate_provider_request_profile(flow, route)
+        except (TypeError, ValueError, UnicodeError):
+            return self._denied("gmail_read_request_invalid", 400)
+        if not decision.allowed:
+            return decision
+        try:
+            parsed = validated_request_urlsplit_for_route(flow.request.pretty_url, route)
+            message_id = params.get("message_id")
+            expected_path = "/gmail/v1/users/me/messages"
+            if message_id is not None:
+                if not isinstance(message_id, str) or self._identifier.fullmatch(message_id) is None:
+                    return self._denied("gmail_read_message_id_invalid")
+                expected_path += "/" + message_id
+            if (flow.request.method != "GET" or parsed.scheme != "https"
+                    or parsed.netloc != "gmail.googleapis.com" or parsed.path != expected_path
+                    or set(params) - {"message_id"}):
+                return self._denied("gmail_read_target_denied")
+            encodings = self._response_header_values(flow.request.headers, "accept-encoding")
+            if encodings not in ([], ["identity"]):
+                return self._denied("gmail_read_encoding_denied")
+            if any(self._header_value(flow.request.headers, name) is not None for name in (
+                    _GMAIL_PROOF_NONCE_HEADER, _GMAIL_STREAM_PROOF_NONCE_HEADER,
+                    "x-serverware-observation-nonce")):
+                return self._denied("gmail_read_response_proof_unsupported")
+            operation = "gmail.messages.list" if message_id is None else "gmail.message.get"
+            pairs = self._query_pairs(flow, route, operation)
+            for key, value in pairs:
+                if key not in GMAIL_READ_OPERATION_QUERY_KEYS[operation]:
+                    return self._denied("gmail_read_query_denied")
+                valid = {
+                    "alt": lambda: value == "json",
+                    "prettyPrint": lambda: value in {"true", "false"},
+                    "includeSpamTrash": lambda: value == "false",
+                    "maxResults": lambda: re.fullmatch(r"[1-9][0-9]{0,2}", value) is not None and int(value) <= 500,
+                    "q": lambda: self._bounded_text(value, 0, 2048),
+                    "pageToken": lambda: self._bounded_text(value, 1, 4096),
+                    "labelIds": lambda: re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) is not None,
+                    "metadataHeaders": lambda: 1 <= len(value) <= 128 and re.fullmatch(_HTTP_TOKEN_PATTERN, value) is not None,
+                    "format": lambda: value in {"full", "metadata"},
+                }[key]()
+                if not valid:
+                    return self._denied("gmail_read_query_value_denied")
+        except (TypeError, ValueError, UnicodeError):
+            return self._denied("gmail_read_request_invalid", 400)
+        return PolicyDecision(allowed=True)
+
+    def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        # No query sorting, hidden request, field projection, or authority rewrite.
+        return PolicyDecision(allowed=True)
+
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        result = {"operation": "gmail.message.get" if "message_id" in params else "gmail.messages.list",
+            "gmailUser": "me"}
+        if "message_id" in params:
+            result["messageId"] = params["message_id"]
+        return result
+
+    def prepare_response(self, flow: Any, route: Any, params: dict[str, str], *,
+            authorization_factory: Callable[[], tuple[str, float]] | None = None) -> PolicyDecision:
+        return self._response_contract(flow, route)
+
+    def _response_contract(self, flow: Any, route: Any) -> PolicyDecision:
+        if not flow.response:
+            return self._denied("gmail_read_response_missing", 502)
+        try:
+            validate_gmail_read_response(route.id, route.adapter_config.get("response"), tuple(route.constraints))
+        except PolicyBundleError:
+            return self._denied("gmail_read_response_policy_invalid", 502)
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
+        if flow.response.status_code not in GMAIL_READ_STATUS_CODES:
+            return self._denied("gmail_read_response_status_denied", 502)
+        media_error = self._json_response_media_type_error(flow)
+        if media_error is not None:
+            return media_error
+        body = flow.response.raw_content
+        maximum = 1048576 if flow.response.status_code == 200 else 65536
+        if not isinstance(body, bytes) or not 1 <= len(body) <= maximum:
+            return self._denied("gmail_read_response_body_denied", 502)
+        return PolicyDecision(allowed=True)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        decision = self._response_contract(flow, route)
+        if not decision.allowed:
+            return decision
+        inspection = bytearray()
+        try:
+            payload, inspection = gmail_read_json_inspection(flow.response.raw_content,
+                1048576 if flow.response.status_code == 200 else 65536)
+            if not isinstance(payload, dict):
+                raise ValueError("object required")
+            if flow.response.status_code == 200:
+                if "message_id" in params:
+                    if (self._identifier.fullmatch(params["message_id"]) is None
+                            or payload.get("id") != params["message_id"]):
+                        raise ValueError("detail identity mismatch")
+                else:
+                    query = self._query_pairs(flow, route, "gmail.messages.list")
+                    maximum = next((int(value) for key, value in query if key == "maxResults"), 500)
+                    messages = payload.get("messages", [])
+                    if not 1 <= maximum <= 500 or not isinstance(messages, list) or len(messages) > maximum:
+                        raise ValueError("list bound")
+                    seen = set()
+                    for message in messages:
+                        if not isinstance(message, dict):
+                            raise ValueError("invalid message")
+                        identifier = message.get("id")
+                        if (not isinstance(identifier, str) or self._identifier.fullmatch(identifier) is None
+                                or identifier in seen):
+                            raise ValueError("invalid message identity")
+                        seen.add(identifier)
+                        if "threadId" in message and (not isinstance(message["threadId"], str)
+                                or self._identifier.fullmatch(message["threadId"]) is None):
+                            raise ValueError("invalid thread identity")
+                    if "nextPageToken" in payload and (not isinstance(payload["nextPageToken"], str)
+                            or not self._bounded_text(payload["nextPageToken"], 1, 4096)):
+                        raise ValueError("invalid cursor")
+                    if "resultSizeEstimate" in payload and (type(payload["resultSizeEstimate"]) is not int
+                            or not 0 <= payload["resultSizeEstimate"] <= (1 << 64) - 1):
+                        raise ValueError("invalid estimate")
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("gmail_read_response_invalid", 502)
+        finally:
+            inspection[:] = b"\x00" * len(inspection)
+        profile = route.adapter_config["response"]
+        if flow.response.status_code != 200:
+            profile = profile["error"]
+        self._normalize_response_headers(flow, profile, GMAIL_READ_RESPONSE_MODE)
+        return PolicyDecision(allowed=True)
 
 
 class GmailV1Adapter(ApiAdapter):
@@ -3789,6 +3994,7 @@ class NpmRegistryAdapter(ApiAdapter):
 ADAPTERS: dict[str, ApiAdapter] = {
     "generic.rest": ApiAdapter(),
     "gmail.v1": GmailV1Adapter(),
+    GMAIL_READ_ADAPTER: GmailReadV1Adapter(),
     "x.v2": XV2Adapter(),
     "npm.registry": NpmRegistryAdapter(),
 }

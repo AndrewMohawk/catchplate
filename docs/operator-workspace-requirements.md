@@ -333,12 +333,16 @@ the new form defaults.
 
 The two basic onboarding paths are:
 
-1. **API key or password:** name the credential and store its value. When granting
-   access, choose the destination and credential placement. A replacement rule
-   identifies one specific header and an exact nonsecret placeholder; it is not
-   a global search-and-replace over arbitrary request bytes. The workload's
-   Serverware identity is separate from that placeholder and must never be
-   forwarded to the provider.
+1. **API key or token:** name and store the secret with its supported provider
+   authentication placement. The current connection owns that placement:
+   Bearer Authorization or a custom header. When granting access, choose the app,
+   destination and either automatic insertion or replacement of one exact
+   nonsecret placeholder in that configured header. The rule does not choose a
+   different injection location or perform arbitrary body/query/byte substitution.
+   Additional placements need an explicit supported contract, not a misleading
+   form option.
+   The workload's Serverware identity is separate from the placeholder and must
+   never be forwarded to the provider.
 2. **Connect Google:** administrator setup supplies the OAuth application once;
    the account owner consents to the chosen permissions. Applications use the
    connected account without receiving its provider tokens. The normal flow
@@ -350,6 +354,37 @@ explicit choice, not an empty or wildcard field projection. The interface must
 state supported formats and remaining transport/disclosure limits. If a selected
 preset requires response-side evidence, such as Gmail message age, that check
 cannot silently disappear when content filtering is disabled.
+
+### Concrete acceptance boundaries still to finish
+
+These are requirements, not claims that the current UI or runtime implements
+them. They must not broaden existing saved rules.
+
+- **Name the job and client.** Each supported preset must name its client and
+  configuration, operation sequence and completion condition. For example,
+  polling Gmail lists through pagination and reading returned messages across
+  token expiry is a specific job; "Google works" is not. Attachments, history,
+  stock SDK support and Serverware running the job are separate promises, not
+  implications of a Read Gmail label. The client remains responsible for the
+  job unless an executor is explicitly implemented.
+- **No response configuration means useful responses.** The default must retain
+  supported provider content, error status/body and the bounded metadata needed
+  by the named client, including retry or pagination semantics, without a
+  user-authored schema. Disclosure and protocol checks remain mandatory. Current
+  JSON limits and discarded response headers are compatibility gaps where they
+  prevent that job; the label must not imply arbitrary transparent passthrough.
+- **Distinguish dispatch outcomes.** A denial before upstream dispatch is not
+  the same as a lost or rejected response after a write may have completed.
+  Client errors and redacted audit correlation must distinguish those outcomes;
+  a generic "blocked" result must not imply safe resubmission. Preserve supported
+  provider idempotency semantics and never automatically replay an uncertain
+  payment, publication or other write merely because response validation failed.
+- **Make account selection explicit.** Current same-app overlapping route
+  matching cannot choose between two Google accounts for the same operation.
+  Until a deliberate selector or reviewed switching workflow exists, bind that
+  app/operation to one exact account and explain conflicts. Account creation
+  order is never a selector; switching must show affected permissions rather
+  than silently replacing the account or inheriting another account's access.
 
 | Journey | Evidence required |
 | --- | --- |

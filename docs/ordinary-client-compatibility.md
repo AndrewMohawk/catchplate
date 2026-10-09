@@ -195,9 +195,11 @@ not alter its response merely to conceal a compatibility failure.
 
 The catalog, Python/schema, Rust and UI implementation is committed and has
 independent source review. Focused Python, Rust and intercepted UI checks passed
-across the [retained verification batches](ordinary-client-verification.md#standard-proxy-login-focused-verification);
-actual stock-client HTTPS-proxy acceptance and deployment remain open. Earlier
-compatibility results do not cover this option. Ordinary clients need a supported way to authenticate
+across the [retained verification batches](ordinary-client-verification.md#standard-proxy-login-focused-verification).
+The paired operator-demo deployment and bounded live stock Requests/curl smoke
+also passed; their [separate evidence and limits](ordinary-client-verification.md#live-stock-client-basic-smoke-october-9)
+do not establish real-provider, external-Internet or native acceptance.
+Ordinary clients need a supported way to authenticate
 to the proxy using their existing application token; this is separate from
 provider-key injection, OAuth consent and console authentication.
 
@@ -262,8 +264,12 @@ passed stock Requests/curl Basic authentication, eight authentication refusals,
 four TLS trust refusals and two Bearer controls, with four joined successful
 dispatches and zero negative-case upstream effects. See the
 [exact evidence and limitations](ordinary-client-verification.md#private-stock-requestscurl-https-acceptance-october-9).
-This does not close retained live deployment, public routing, real providers or
-fresh API-token natural expiry. The requirements below retain those boundaries.
+The subsequent retained deployment and bounded live stock-client smoke also
+passed, with two cold authentication denials and two joined successful dispatches.
+The separate live browser check used actual HTML/catalog through an internal
+GET-only bridge, not external SSO or a browser-created setup. Private TLS-negative
+and header/body oracles are not relabeled as live checks. Real providers,
+external-Internet routing and fresh API-token natural expiry remain open.
 
 Acceptance must use stock Requests and curl through the actual **HTTPS** proxy,
 including their ordinary proxy-username/password handling; a custom CONNECT

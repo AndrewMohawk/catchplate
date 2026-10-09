@@ -275,7 +275,8 @@ function pureChecks() {
   // releasing its observation must never clear another owner's active hold.
   const core = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
   const workspace = runInNewContext(core + '\ncreateOperatorWorkspace()', {
-    element: () => ({addEventListener() {}, querySelectorAll: () => []}), window: {addEventListener() {}}, clearTimeout, setTimeout,
+    document: {getElementById: () => ({addEventListener() {}, querySelectorAll: () => []})},
+    window: {addEventListener() {}}, clearTimeout, setTimeout,
   }, {timeout: 1000});
   workspace.setConsentHold(true, 'google-reauthorization'); workspace.setConsentHold(false, 'google-consent');
   assert.equal(workspace.state.busy, true);

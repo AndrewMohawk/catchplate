@@ -3,6 +3,7 @@
 
 Never launches a stack or contacts a provider. Uses only the fixed synthetic
 upstream, a fresh catalog and the existing durable one-shot fixture claim.
+V1 remains the default; V2 metadata-discard acceptance requires explicit opt-in.
 """
 from __future__ import annotations
 
@@ -25,14 +26,14 @@ try:
     from scripts.check_operator_demo import AUTHORITY, SHA256, CheckFailure, TunnelTLS, require, token_file
     from scripts.operator_ordinary_client_fixture import (
         DUMMY_AUTHORIZATION, EMPTY_RESPONSE_CONTENT_TYPE, FIXTURE_PATH,
-        JSON_RESPONSE_BODY, QUERY_KEYS, REQUEST_BODY, REQUEST_BODY_SHA256, build_target,
+        JSON_RESPONSE_BODY, QUERY_KEYS, REQUEST_BODY, REQUEST_BODY_SHA256, V2_RESPONSE_METADATA, build_target,
     )
 except ModuleNotFoundError:
     from check_operator_catalog import COLLECTIONS, OperatorCatalogCheck, claim_fixture, features
     from check_operator_demo import AUTHORITY, SHA256, CheckFailure, TunnelTLS, require, token_file
     from operator_ordinary_client_fixture import (
         DUMMY_AUTHORIZATION, EMPTY_RESPONSE_CONTENT_TYPE, FIXTURE_PATH,
-        JSON_RESPONSE_BODY, QUERY_KEYS, REQUEST_BODY, REQUEST_BODY_SHA256, build_target,
+        JSON_RESPONSE_BODY, QUERY_KEYS, REQUEST_BODY, REQUEST_BODY_SHA256, V2_RESPONSE_METADATA, build_target,
     )
 
 
@@ -49,20 +50,35 @@ LEASE = "data_plane.credential_lease.issued"
 RELOAD = "data_plane.policy.reloaded"
 ZERO_COUNTERS = ("dropped", "required_failed", "send_failed")
 DRAIN_COUNTERS = ("queue_depth", "reserved", "in_flight_optional", "pending_retry_batches", "pending_retry_events")
+DEFAULT_RESPONSE_MODE = "unfiltered_json_or_empty_v1"
+V2_RESPONSE_MODE = "unfiltered_json_or_empty_v2"
+RESPONSE_MODES = {DEFAULT_RESPONSE_MODE: "bufferedJsonOrEmpty204V1",
+                  V2_RESPONSE_MODE: "bufferedJsonOrEmpty204V2"}
 
 
 def digest(body):
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
-def request_path(case, authorization_sha256, body_sha256=REQUEST_BODY_SHA256):
+def selected_response_mode(value=DEFAULT_RESPONSE_MODE):
+    require(isinstance(value, str) and value in RESPONSE_MODES, "ordinary response mode selection invalid")
+    return value
+
+
+def request_path(case, authorization_sha256, body_sha256=REQUEST_BODY_SHA256, *,
+                 response_mode=DEFAULT_RESPONSE_MODE):
+    selected_response_mode(response_mode)
     require(case in {item[0] for item in CASES} and body_sha256 == REQUEST_BODY_SHA256,
             "ordinary fixture case or body commitment differs")
-    return build_target("empty" if case == "empty" else "json", authorization_sha256)
+    fixture_case = "empty" if case == "empty" else "json"
+    if response_mode == V2_RESPONSE_MODE:
+        fixture_case += "_v2"
+    return build_target(fixture_case, authorization_sha256)
 
 
-def check_response(case, status, headers, body, wire, policy_hash):
+def check_response(case, status, headers, body, wire, policy_hash, *, response_mode=DEFAULT_RESPONSE_MODE):
     """Compare parsed HTTP with independently captured bounded TLS plaintext."""
+    selected_response_mode(response_mode)
     require(case in {item[0] for item in CASES} and isinstance(wire, bytes) and len(wire) <= MAX_WIRE,
             "ordinary response case or wire bound differs")
     head, separator, raw_body = wire.partition(b"\r\n\r\n")
@@ -87,6 +103,9 @@ def check_response(case, status, headers, body, wire, policy_hash):
                 and document.get("action") == "deny" and document.get("payload", {}).get("error") == ERRORS[case],
                 "placeholder request was not denied by its exact policy guard")
     else:
+        if response_mode == V2_RESPONSE_MODE:
+            require(not any(name in values for name, _ in V2_RESPONSE_METADATA),
+                    "ordinary V2 response forwarded unselected fixture metadata")
         require(values.get("x-serverware-policy-hash") == policy_hash,
                 "ordinary response policy hash differs")
         commitments = {"requestDigest": values.get("x-serverware-request-digest"),
@@ -104,7 +123,7 @@ def check_response(case, status, headers, body, wire, policy_hash):
             require(values.get("content-type") == "application/json"
                     and values.get("content-length") == str(len(expected)),
                     "ordinary JSON response framing differs")
-    return {"case": case, "status": status, "responseBodyBytes": len(body),
+    return {"case": case, "status": status, "responseMode": response_mode, "responseBodyBytes": len(body),
             "responseBodySha256": digest(body), "capturedWireBytes": len(wire), **commitments}
 
 
@@ -151,8 +170,9 @@ class CapturedTLS:
         return bytes(self.wire)
 
 
-def audit_attempts(events, scope):
+def audit_attempts(events, scope, *, response_mode=DEFAULT_RESPONSE_MODE):
     """Exact POST starts/terminals, separate from cache-dependent lease receipts."""
+    expected_mode = RESPONSE_MODES[selected_response_mode(response_mode)]
     pairs, counts, row_ids = {}, Counter(), set()
     for row in events:
         kind, event = row.get("event_type"), row.get("event", {})
@@ -186,7 +206,7 @@ def audit_attempts(events, scope):
             require(status in {200, 204} and event.get("outcome") == "released"
                     and event.get("response_body_sha256") == digest(expected)
                     and event.get("response_body_bytes") == len(expected)
-                    and validation.get("ok") is True and validation.get("mode") == "bufferedJsonOrEmpty204V1"
+                    and validation.get("ok") is True and validation.get("mode") == expected_mode
                     and validation.get("body_bytes_preserved") is True,
                     "ordinary audit terminal bytes, status or mode differs")
             pair["status"] = status
@@ -201,6 +221,7 @@ def audit_attempts(events, scope):
 class OrdinaryClientCheck(OperatorCatalogCheck):
     def __init__(self, args):
         super().__init__(args)
+        self.response_mode = selected_response_mode(getattr(args, "response_mode", DEFAULT_RESPONSE_MODE))
         self.negative_observations, self.feature_observations = [], []
 
     def count(self):
@@ -212,7 +233,8 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
         return document["count"]
 
     def dispatch(self, case, placeholder):
-        target = request_path(case, hashlib.sha256(("Bearer " + self.credential).encode("ascii")).hexdigest())
+        target = request_path(case, hashlib.sha256(("Bearer " + self.credential).encode("ascii")).hexdigest(),
+                              response_mode=self.response_mode)
         raw = self.tunnel(self.client_token)
         try:
             with TunnelTLS(raw, self.ca, self.timeout) as tls:
@@ -231,7 +253,8 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
                     require(len(body) <= 65536, "ordinary response body bound exceeded")
                     wire = capture.finish()
                     self.clean(wire)
-                    result = check_response(case, response.status, response.getheaders(), body, wire, self.policy_hash)
+                    result = check_response(case, response.status, response.getheaders(), body, wire, self.policy_hash,
+                                            response_mode=self.response_mode)
                     if case in ERRORS:
                         self.clean(json.dumps(json.loads(body)).encode("utf-8"))
                     return result
@@ -257,7 +280,8 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
             require(len(snapshot[collection]) == 1 and row["version"] == original["version"]
                     and row.get("status") == "active", "ordinary persisted resource changed")
         rule = self.resource(snapshot, "access_rules", pins["resources"]["access_rules"]["id"])
-        require(rule.get("enforcement") == "active", "ordinary rule is not active")
+        require(rule.get("enforcement") == "active" and rule.get("response_mode") == self.response_mode,
+                "ordinary rule is not active or its response mode changed")
         application = self.resource(snapshot, "applications", pins["resources"]["applications"]["id"])
         credential = self.resource(snapshot, "credentials", pins["resources"]["credentials"]["id"])
         require(application.get("principal_id") == pins["resources"]["applications"]["principal_id"]
@@ -280,7 +304,7 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
             require(not set(counts) - (set(expected) | {LEASE, RELOAD}), "unexpected named audit event in ordinary fixture")
             require(all(counts[key] <= amount for key, amount in expected.items()), "extra ordinary request or mutation audit")
             require(counts[RELOAD] <= 1, "ordinary fixture published more than one authority change")
-            pairs, _ = audit_attempts(new, scope)
+            pairs, _ = audit_attempts(new, scope, response_mode=self.response_mode)
             observed = {item["status"]: (item["requestDigest"], item["operationDigest"])
                         for item in self.feature_observations if item["case"] in {"json", "empty"}}
             require(set(observed) == {200, 204}, "ordinary wire response commitments unavailable")
@@ -329,9 +353,15 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
                 "durableAuditEventIds": sorted(row["id"] for row in new), "auditedRequestAttemptIds": sorted(pairs)}
 
     def run(self):
+        self.response_mode = selected_response_mode(getattr(self.args, "response_mode", DEFAULT_RESPONSE_MODE))
         self.health()
         self.admin_token = token_file(self.args.admin_token_file)
         initial = self.catalog()
+        if self.response_mode == V2_RESPONSE_MODE:
+            capabilities = initial.get("capabilities")
+            modes = capabilities.get("response_modes") if isinstance(capabilities, dict) else None
+            require(isinstance(modes, list) and self.response_mode in modes,
+                    "ordinary selected V2 response mode is not advertised")
         require(initial["revision"] == 1 and all(not initial[key] and initial["limits"][key]["retained"] == 0 for key in COLLECTIONS)
                 and self.count() == 0, "ordinary acceptance requires a fresh unused catalog and upstream")
         self.policy_hash = self.initial_policy_hash = initial["policy"]["policy_hash"]
@@ -345,11 +375,11 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
         rule, _, _ = self.mutate("/access-rules", {"name": self.run_id + "-ordinary", "application_id": application["id"],
             "credential_id": credential["id"], "upstream_url": "https://" + AUTHORITY + FIXTURE_PATH, "methods": ["POST"],
-            "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v1", "request_fields": [],
+            "request_body_mode": "preserve_json_v1", "response_mode": self.response_mode, "request_fields": [],
             "response_fields": [], "credential_input": "replace_exact", "placeholder": DUMMY_AUTHORIZATION,
             "query_keys": list(QUERY_KEYS), "allowed_headers": ["accept", "user-agent"]},
             collection="access_rules", result_key="access_rule", event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
-        expected_rule = {"request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v1",
+        expected_rule = {"request_body_mode": "preserve_json_v1", "response_mode": self.response_mode,
             "request_fields": [], "response_fields": [], "credential_input": "replace_exact", "placeholder": DUMMY_AUTHORIZATION}
         require(all(rule.get(key) == value for key, value in expected_rule.items()), "ordinary saved rule differs")
         snapshot, _ = self.wait_catalog_loaded("ordinary_rule_loaded")
@@ -382,7 +412,10 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
             "ordinary_post_preserves_exact_raw_json_and_injects_synthetic_credential",
             "empty204_preserves_optional_json_metadata_without_framing_or_body",
             "two_post_release_pairs_and_complete_drained_verified_audit_chain"])
+        if self.response_mode == V2_RESPONSE_MODE:
+            self.results.append("v2_fixed_unselected_metadata_absent_from_json_and_empty204_responses")
         result = {"ok": True, "schema": "serverware.operatorOrdinaryClientCheck/v1", "mode": "operator-development",
+            "responseMode": self.response_mode, "auditResponseMode": RESPONSE_MODES[self.response_mode],
             "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
             "proxyTransport": "private-http-connect-leg" if self.proxy.scheme == "http" else "verified-private-https-edge",
             "originTlsVerified": True, "runId": self.run_id, "checks": self.results,
@@ -399,6 +432,7 @@ def run_checks(args):
         require(isinstance(args.expected_binary_sha256, str) and SHA256.fullmatch(args.expected_binary_sha256),
                 "expected binary digest must be exact lowercase SHA-256")
         require(type(args.timeout_seconds) is int and 10 <= args.timeout_seconds <= 180, "ordinary timeout must be between 10 and 180 seconds")
+        selected_response_mode(getattr(args, "response_mode", DEFAULT_RESPONSE_MODE))
         claim_fixture(args.fixture_marker_file, args.run_claim_file)
         check = OrdinaryClientCheck(args)
         return check.run()
@@ -409,6 +443,7 @@ def run_checks(args):
                 evidence = features.safe_evidence(check)
             except Exception:
                 evidence = {"safeEvidenceUnavailable": True}
+            evidence.update(responseMode=check.response_mode, auditResponseMode=RESPONSE_MODES[check.response_mode])
         return {"ok": False, "mode": "operator-development", "checks": list(check.results) if check else [], **evidence,
                 "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__}
 
@@ -423,6 +458,7 @@ def main():
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--upstream-address")
     parser.add_argument("--timeout-seconds", type=int, default=120)
+    parser.add_argument("--response-mode", choices=tuple(RESPONSE_MODES), default=DEFAULT_RESPONSE_MODE)
     args = parser.parse_args()
 
     def expired(_signum, _frame):

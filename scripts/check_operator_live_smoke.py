@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Explicit one-shot live demo smoke: three new synthetic resources, no cleanup.
 
-The old /echo fixture proves injection, not request-byte preservation or 204.
+Requires the paired normal V2 binary and explicit V2 response capability.
+The old /echo fixture proves injection, not independent request/response byte
+preservation or 204. A successful V2 audit claim does not close that gap.
 Never retries POSTs or proxy requests. Uses the legitimate local administrator
 API and the actual HTTPS proxy hostname with normal system certificate trust.
 """
@@ -26,19 +28,23 @@ try:
     from scripts.check_operator_demo import AUTHORITY, SHA256, CheckFailure, TunnelTLS, require, token_file
     from scripts.check_operator_ordinary_client import (
         BLOCK, CONNECT, DENIED, DRAIN_COUNTERS, ERRORS, LEASE, RELEASE, START, ZERO_COUNTERS,
+        RESPONSE_MODES, V2_RESPONSE_MODE,
     )
 except ModuleNotFoundError:
     from check_operator_catalog import COLLECTIONS, OperatorCatalogCheck, features
     from check_operator_demo import AUTHORITY, SHA256, CheckFailure, TunnelTLS, require, token_file
     from check_operator_ordinary_client import (
         BLOCK, CONNECT, DENIED, DRAIN_COUNTERS, ERRORS, LEASE, RELEASE, START, ZERO_COUNTERS,
+        RESPONSE_MODES, V2_RESPONSE_MODE,
     )
 
 
 # operator_demo.origin canonicalizes default HTTPS port 443 out of catalog URLs.
 # Endpoint still requires/connects port 443 and verifies this exact TLS hostname.
 PROXY = "https://serverware-proxy.example.com"
-PIN = "sha256:9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4"
+PIN = "sha256:eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d"
+RESPONSE_MODE = V2_RESPONSE_MODE
+RESPONSE_VALIDATION_MODE = RESPONSE_MODES[RESPONSE_MODE]
 DUMMY = "Bearer SERVERWARE_LIVE_SMOKE_DUMMY"
 BODY = b'{"live_smoke":true,"nested":{"kept":"synthetic"}}'
 CASES = (("missing", None), ("wrong", DUMMY + "_WRONG"), ("positive", DUMMY))
@@ -71,8 +77,9 @@ def private_output(path, payload):
 def preflight_catalog(snapshot):
     capabilities = snapshot.get("capabilities", {})
     for key, value in (("credential_types", "bearer"), ("request_body_modes", "preserve_json_v1"),
-                       ("response_modes", "unfiltered_json_or_empty_v1"), ("credential_input_modes", "replace_exact")):
-        require(value in capabilities.get(key, []), "live catalog capability is unavailable")
+                       ("response_modes", RESPONSE_MODE), ("credential_input_modes", "replace_exact")):
+        choices = capabilities.get(key)
+        require(isinstance(choices, list) and value in choices, "live catalog capability is unavailable")
     require(snapshot.get("proxy_url", "").rstrip("/") == PROXY, "catalog advertises another proxy")
     for collection in COLLECTIONS:
         limits = snapshot.get("limits", {}).get(collection, {})
@@ -81,6 +88,21 @@ def preflight_catalog(snapshot):
                 and 0 <= limits["retained"] < limits["retained_max"], "catalog cannot retain one more synthetic resource")
         rows = snapshot[collection]
         require(len({row["id"] for row in rows}) == len(rows), "existing catalog resource identity is duplicated")
+
+
+def access_rule_values(name, application_id, credential_id):
+    """The sole new rule is explicitly V2; there is no legacy-mode fallback."""
+    return {"name": name, "application_id": application_id, "credential_id": credential_id,
+        "upstream_url": "https://" + AUTHORITY + "/echo", "methods": ["POST"], "request_fields": [], "response_fields": [],
+        "request_body_mode": "preserve_json_v1", "response_mode": RESPONSE_MODE,
+        "credential_input": "replace_exact", "placeholder": DUMMY,
+        "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]}
+
+
+def require_rule_contract(rule, expected):
+    require(isinstance(rule, dict) and expected.get("response_mode") == RESPONSE_MODE
+            and all(rule.get(key) == value for key, value in expected.items()),
+            "live smoke V2 rule did not persist exactly")
 
 
 def preserved_rows(before, after, additions):
@@ -99,7 +121,7 @@ def response_evidence(case, status, headers, body, policy_hash):
         require(status == 403 and isinstance(document, dict) and document.get("allowed") is False
                 and document.get("action") == "deny" and document.get("payload", {}).get("error") == ERRORS[case],
                 "live dummy header was not denied by its exact guard")
-        return {"case": case, "status": status, "error": ERRORS[case]}
+        return {"case": case, "status": status, "responseMode": RESPONSE_MODE, "error": ERRORS[case]}
     require(case == "positive" and status == 200 and isinstance(document, dict)
             and document.get("method") == "POST" and document.get("path") == "/echo"
             and document.get("authorization_present") is True and document.get("authorization_scheme") == "Bearer"
@@ -117,11 +139,12 @@ def response_evidence(case, status, headers, body, policy_hash):
                    "operationDigest": values.get("x-serverware-operation-digest")}
     require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments.values()),
             "live response request commitment missing")
-    return {"case": case, "status": status, "responseBodySha256": sha(body),
+    return {"case": case, "status": status, "responseMode": RESPONSE_MODE, "responseBodySha256": sha(body),
             "responseBodyBytes": len(body), **commitments}
 
 
 def scoped_audit(events, scope, positive):
+    require(positive.get("responseMode") == RESPONSE_MODE, "live response selection differs from V2")
     counts, pairs, reasons, retained = Counter(), {}, Counter(), []
     for row in events:
         event, kind = row.get("event", {}), row.get("event_type")
@@ -154,10 +177,12 @@ def scoped_audit(events, scope, positive):
             if kind == START:
                 require(event.get("outcome") == "release_started", "live release start outcome differs")
             else:
+                validation = event.get("response_validation", {})
                 require(event.get("outcome") == "released" and event.get("upstream_status") == 200
                         and event.get("response_body_sha256") == positive["responseBodySha256"]
                         and event.get("response_body_bytes") == positive["responseBodyBytes"]
-                        and event.get("response_validation", {}).get("ok") is True, "live response audit differs")
+                        and validation.get("ok") is True and validation.get("mode") == RESPONSE_VALIDATION_MODE
+                        and validation.get("body_bytes_preserved") is True, "live V2 response audit differs")
     require(counts[CONNECT] <= 3 and counts[DENIED] <= 2 and counts[START] <= 1 and counts[RELEASE] <= 1
             and counts[LEASE] <= 2 and len(pairs) <= 1 and all(value <= 1 for value in reasons.values()),
             "live smoke audit exceeds request budget")
@@ -279,6 +304,7 @@ class LiveSmoke(OperatorCatalogCheck):
         preflight_catalog(initial)
         self.policy_hash = initial["policy"]["policy_hash"]
         initial, _ = self.wait_catalog_loaded("live_baseline_loaded")
+        preflight_catalog(initial)
         self.original = initial
         self.baseline_counts = {key: len(initial[key]) for key in COLLECTIONS}
         require(not any(row.get("name") in {plan["name"] for plan in self.plans}
@@ -292,18 +318,15 @@ class LiveSmoke(OperatorCatalogCheck):
             collection="credentials", result_key="credential", event="operator_catalog.credential.created", creates=True)
         application, token, _ = self.mutate("/applications", {"name": self.plans[1]["name"], "token_lifetime_seconds": 3600},
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
-        rule_values = {"name": self.plans[2]["name"], "application_id": application["id"], "credential_id": credential["id"],
-            "upstream_url": "https://" + AUTHORITY + "/echo", "methods": ["POST"], "request_fields": [], "response_fields": [],
-            "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v1",
-            "credential_input": "replace_exact", "placeholder": DUMMY,
-            "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]}
+        rule_values = access_rule_values(self.plans[2]["name"], application["id"], credential["id"])
         rule, _, _ = self.mutate("/access-rules", rule_values, collection="access_rules", result_key="access_rule",
             event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
+        require_rule_contract(rule, rule_values)
         snapshot, _ = self.wait_catalog_loaded("live_smoke_rule_loaded")
         require(snapshot["revision"] == initial["revision"] + 3 and snapshot["policy"]["sequence"] == initial["policy"]["sequence"] + 1,
                 "catalog changed outside the three smoke mutations")
         saved = self.resource(snapshot, "access_rules", rule["id"])
-        require(all(saved.get(key) == value for key, value in rule_values.items()), "live smoke rule did not persist exactly")
+        require_rule_contract(saved, rule_values)
         preserved_rows(initial, snapshot, self.additions)
         self.client_token = token
         scope = (application["principal_id"], rule["route_id"], self.policy_hash)
@@ -334,7 +357,7 @@ class LiveSmoke(OperatorCatalogCheck):
         preserved_rows(initial, final, self.additions)
         self.results.extend(["existing_catalog_preserved_three_synthetic_resources_added",
             "public_https_proxy_and_interception_tls_verified", "two_placeholder_denials_without_dispatch",
-            "one_post_credential_injection_and_durable_audit_join"])
+            "one_post_credential_injection_and_v2_durable_audit_join"])
         return {**self.receipt(True), **evidence, "upstreamDispatches": 1, "responsesReleased": 1, "responsesBlocked": 0}
 
     def receipt(self, ok):
@@ -343,7 +366,8 @@ class LiveSmoke(OperatorCatalogCheck):
             "requestObservations": self.feature_observations, "clientTokenRetainedPrivately": self.token_retained,
             "resourcesAutomaticallyCleaned": False, "rawBodyPreservationVerified": False, "empty204Verified": False,
             "browserTransactionVerified": False, "externalDnsVerified": False, "productionReady": False,
-            "dataPlaneBinaryDigest": PIN, "proxyUrl": PROXY}
+            "dataPlaneBinaryDigest": PIN, "responseMode": RESPONSE_MODE,
+            "auditResponseMode": RESPONSE_VALIDATION_MODE, "proxyUrl": PROXY}
         self.clean(json.dumps(result, sort_keys=True).encode("utf-8"))
         return result
 

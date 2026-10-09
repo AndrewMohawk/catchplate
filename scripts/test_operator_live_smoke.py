@@ -18,6 +18,17 @@ REQUEST = "sha256:" + "b" * 64
 OPERATION = "sha256:" + "c" * 64
 ATTEMPT = "sha256:" + "d" * 64
 SCOPE = ("new-principal", "new-route", POLICY)
+OLD_PIN = "sha256:9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4"
+
+
+def catalog():
+    value = {"proxy_url": "https://serverware-proxy.example.com", "capabilities": {"credential_types": ["bearer"],
+        "request_body_modes": ["preserve_json_v1"], "response_modes": ["unfiltered_json_or_empty_v2"],
+        "credential_input_modes": ["replace_exact"]}, "limits": {}}
+    for key in smoke.COLLECTIONS:
+        value[key] = [{"id": key}]
+        value["limits"][key] = {"active": 1, "active_max": 10, "retained": 1, "retained_max": 10}
+    return value
 
 
 def response():
@@ -37,7 +48,8 @@ def audit_fixture():
         request_digest=REQUEST, operation_digest=OPERATION, attempt_id=ATTEMPT, flow_id=ATTEMPT)
     rows = [{"id": "start", "event_type": smoke.START, "event": {**event, "outcome": "release_started"}},
             {"id": "release", "event_type": smoke.RELEASE, "event": {**event, "outcome": "released", "upstream_status": 200,
-                "response_body_sha256": smoke.sha(body), "response_body_bytes": len(body), "response_validation": {"ok": True}}}]
+                "response_body_sha256": smoke.sha(body), "response_body_bytes": len(body),
+                "response_validation": {"ok": True, "mode": "bufferedJsonOrEmpty204V2", "body_bytes_preserved": True}}}]
     rows.extend({"id": "connect" + str(number), "event_type": smoke.CONNECT, "event": {"principal_id": SCOPE[0],
         "policy_hash": POLICY, "method": "CONNECT", "target": smoke.AUTHORITY, "outcome": "established"}} for number in range(3))
     rows.extend({"id": case, "event_type": smoke.DENIED, "event": {"route_id": SCOPE[1], "method": "POST",
@@ -46,13 +58,15 @@ def audit_fixture():
 
 
 class LiveSmokeTests(unittest.TestCase):
+    def test_selected_v2_contract_and_promoted_pin_are_exact(self):
+        self.assertEqual(smoke.PIN, "sha256:eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d")
+        self.assertEqual(smoke.RESPONSE_MODE, "unfiltered_json_or_empty_v2")
+        self.assertEqual(smoke.RESPONSE_VALIDATION_MODE, "bufferedJsonOrEmpty204V2")
+        self.assertEqual(smoke.CREATIONS, (("/credentials", "credentials", "credential"),
+            ("/applications", "applications", "application"), ("/access-rules", "access_rules", "access_rule")))
+
     def test_capability_and_capacity_guards(self):
-        value = {"proxy_url": "https://serverware-proxy.example.com", "capabilities": {"credential_types": ["bearer"],
-            "request_body_modes": ["preserve_json_v1"], "response_modes": ["unfiltered_json_or_empty_v1"],
-            "credential_input_modes": ["replace_exact"]}, "limits": {}}
-        for key in smoke.COLLECTIONS:
-            value[key] = [{"id": key}]
-            value["limits"][key] = {"active": 1, "active_max": 10, "retained": 1, "retained_max": 10}
+        value = catalog()
         smoke.preflight_catalog(value)
         for target in ("capability", "capacity", "proxy"):
             altered = deepcopy(value)
@@ -61,6 +75,49 @@ class LiveSmokeTests(unittest.TestCase):
             else: altered["proxy_url"] = "http://172.16.249.20:9090"
             with self.subTest(target=target), self.assertRaises(smoke.CheckFailure):
                 smoke.preflight_catalog(altered)
+
+    def test_v1_only_missing_or_malformed_response_capability_refused(self):
+        for modes in (["unfiltered_json_or_empty_v1"], [], None, "unfiltered_json_or_empty_v2"):
+            value = catalog()
+            value["capabilities"]["response_modes"] = modes
+            with self.subTest(modes=modes), self.assertRaises(smoke.CheckFailure):
+                smoke.preflight_catalog(value)
+        value = catalog()
+        value["capabilities"]["response_modes"].insert(0, "unfiltered_json_or_empty_v1")
+        smoke.preflight_catalog(value)  # Legacy capability may coexist, never be selected.
+
+    def test_new_rule_payload_and_created_saved_contract_require_v2(self):
+        expected = {"name": "synthetic-rule", "application_id": "synthetic-app", "credential_id": "synthetic-credential",
+            "upstream_url": "https://" + smoke.AUTHORITY + "/echo", "methods": ["POST"],
+            "request_fields": [], "response_fields": [], "request_body_mode": "preserve_json_v1",
+            "response_mode": "unfiltered_json_or_empty_v2", "credential_input": "replace_exact", "placeholder": smoke.DUMMY,
+            "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]}
+        self.assertEqual(smoke.access_rule_values("synthetic-rule", "synthetic-app", "synthetic-credential"), expected)
+        smoke.require_rule_contract({**expected, "id": "new-rule", "status": "active"}, expected)
+        for field, value in (("response_mode", "unfiltered_json_or_empty_v1"), ("response_mode", None),
+                             ("request_body_mode", None), ("response_fields", ["allowed"]), ("placeholder", "wrong")):
+            altered = {**expected, field: value}
+            with self.subTest(field=field, value=value), self.assertRaises(smoke.CheckFailure):
+                smoke.require_rule_contract(altered, expected)
+        legacy = {**expected, "response_mode": "unfiltered_json_or_empty_v1"}
+        with self.assertRaises(smoke.CheckFailure):
+            smoke.require_rule_contract(legacy, legacy)
+
+    def test_runtime_health_refuses_old_or_missing_binary_pin(self):
+        check = smoke.LiveSmoke.__new__(smoke.LiveSmoke)
+        check.args = SimpleNamespace(expected_binary_sha256=smoke.PIN)
+        check.management, check.management_ca = object(), None
+        health = {"ok": True, "policy_shadow_serving_ready": True,
+            "policy_shadow": {"mode": "operator-demo", "enabled": False, "readiness": False, "production_custody_bound": False},
+            "data_plane_binary_digest": smoke.PIN, "policy_trust_root_source": "attested-control-plane",
+            "policy_signing_key_id": "synthetic-key", "connect_mitm_interceptor": True,
+            "audit": {"enabled": True}, "release_authorization": {"enabled": False}}
+        check.json_request = Mock(return_value=(200, health))
+        self.assertEqual(check.health(), health)
+        for pin in (OLD_PIN, None):
+            check.json_request.return_value = (200, {**health, "data_plane_binary_digest": pin})
+            with self.subTest(pin=pin), self.assertRaises(smoke.CheckFailure):
+                check.health()
 
     def test_all_existing_public_fields_and_resource_sets_preserved(self):
         before = {key: [{"id": "old-" + key, "version": 2, "status": "active"}] for key in smoke.COLLECTIONS}
@@ -89,6 +146,7 @@ class LiveSmokeTests(unittest.TestCase):
         document, headers, body = response()
         result = smoke.response_evidence("positive", 200, headers, body, POLICY)
         self.assertEqual(result["requestDigest"], REQUEST)
+        self.assertEqual(result["responseMode"], "unfiltered_json_or_empty_v2")
         for field in ("authorization_matches_expected", "proxy_authorization_seen"):
             changed = deepcopy(document)
             changed[field] = not changed[field]
@@ -122,6 +180,34 @@ class LiveSmokeTests(unittest.TestCase):
             with self.subTest(mode=mode), self.assertRaises(smoke.CheckFailure):
                 smoke.scoped_audit(rows, SCOPE, positive)
 
+    def test_release_audit_requires_exact_v2_mode_and_preserved_body_claim(self):
+        for validation in ({"ok": True}, {"ok": True, "mode": "bufferedJsonOrEmpty204V1", "body_bytes_preserved": True},
+                {"ok": True, "mode": "bufferedJsonOrEmpty204V2", "body_bytes_preserved": False},
+                {"ok": True, "mode": "bufferedJsonOrEmpty204V2"},
+                {"ok": False, "mode": "bufferedJsonOrEmpty204V2", "body_bytes_preserved": True}):
+            rows, positive = audit_fixture()
+            rows[1]["event"]["response_validation"] = validation
+            with self.subTest(validation=validation), self.assertRaises(smoke.CheckFailure):
+                smoke.scoped_audit(rows, SCOPE, positive)
+        rows, positive = audit_fixture()
+        positive["responseMode"] = "unfiltered_json_or_empty_v1"
+        with self.assertRaises(smoke.CheckFailure):
+            smoke.scoped_audit(rows, SCOPE, positive)
+
+    def test_receipt_names_v2_and_keeps_echo_proof_limits(self):
+        check = smoke.LiveSmoke.__new__(smoke.LiveSmoke)
+        check.run_id, check.results, check.plans = "synthetic-run", [], []
+        check.feature_observations, check.token_retained = [], False
+        check.clean = Mock()
+        for ok in (False, True):
+            result = check.receipt(ok)
+            self.assertEqual(result["dataPlaneBinaryDigest"], smoke.PIN)
+            self.assertEqual(result["responseMode"], "unfiltered_json_or_empty_v2")
+            self.assertEqual(result["auditResponseMode"], "bufferedJsonOrEmpty204V2")
+            for field in ("rawBodyPreservationVerified", "empty204Verified", "browserTransactionVerified",
+                          "externalDnsVerified", "productionReady", "resourcesAutomaticallyCleaned"):
+                self.assertIs(result[field], False)
+
     def test_existing_unrelated_audit_not_mistaken_for_smoke(self):
         rows, positive = audit_fixture()
         rows.append({"id": "old-user", "event_type": smoke.RELEASE, "event": {"principal_id": "existing-user"}})
@@ -144,6 +230,7 @@ class LiveSmokeTests(unittest.TestCase):
             self.assertTrue(smoke.run_checks(args)["ok"])
         self.assertEqual(order, ["claim", "run"])
         self.assertEqual(args.proxy_url, smoke.PROXY)
+        self.assertEqual(args.expected_binary_sha256, smoke.PIN)
         self.assertIsNone(args.proxy_ca_file)
 
     def test_uncertain_mutation_remains_named_and_is_not_retried(self):

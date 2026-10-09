@@ -1,7 +1,8 @@
 """Pure, fixed synthetic oracle for the private ordinary-client proxy check.
 
-This is not a general echo endpoint. Both cases accept only REQUEST_BODY and a
+This is not a general echo endpoint. All cases accept only REQUEST_BODY and a
 synthetic injected credential. Nothing returns request headers or their digests.
+The explicit V2 cases add fixed ordinary metadata, never caller-selected fields.
 Header checks concern physical fields exposed by ASGI, not bytes an HTTP parser
 has already rejected or normalized. There are no network or filesystem effects.
 """
@@ -32,11 +33,17 @@ JSON_RESPONSE_BODY = REQUEST_BODY
 REQUEST_BODY_SHA256 = hashlib.sha256(REQUEST_BODY).hexdigest()
 REQUEST_BODY_LENGTH = len(REQUEST_BODY)
 EMPTY_RESPONSE_CONTENT_TYPE = "application/json; charset=utf-8"
+FIXTURE_CASES = ("json", "empty", "json_v2", "empty_v2")
+V2_RESPONSE_METADATA = (
+    ("server", "serverware-synthetic-upstream"),
+    ("date", "Thu, 01 Jan 1970 00:00:00 GMT"),
+    ("cache-control", "no-store"),
+)
 REJECTION_BODY = b'{"error":"ordinary_client_fixture_rejected"}'
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _QUERY = re.compile(
-    rb"case=(json|empty)&expectedAuthorizationSha256=([0-9a-f]{64})"
+    rb"case=(json|empty|json_v2|empty_v2)&expectedAuthorizationSha256=([0-9a-f]{64})"
     rb"&expectedBodySha256=([0-9a-f]{64})\Z"
 )
 _HEADER_NAME = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
@@ -68,7 +75,7 @@ class Outcome:
 
 def build_target(case: str, expected_authorization_sha256: str) -> str:
     """Canonical target used by the checker; body expectations are not caller-set."""
-    if (case not in ("json", "empty") or not isinstance(expected_authorization_sha256, str)
+    if (case not in FIXTURE_CASES or not isinstance(expected_authorization_sha256, str)
             or _DIGEST.fullmatch(expected_authorization_sha256) is None):
         raise FixtureRejected()
     return (FIXTURE_PATH + "?case=" + case
@@ -140,12 +147,13 @@ async def read_bounded_body(chunks: AsyncIterable[bytes]) -> bytes:
 
 def verify_body(admission: Admission, body: bytes) -> Outcome:
     """Independent byte, length and digest oracle; no parsing/reserialization."""
-    if (not isinstance(admission, Admission) or admission.case not in ("json", "empty")
+    if (not isinstance(admission, Admission) or admission.case not in FIXTURE_CASES
             or admission.content_length != REQUEST_BODY_LENGTH or not isinstance(body, bytes)
             or len(body) != REQUEST_BODY_LENGTH or len(body) > MAX_BODY_BYTES
             or not hmac.compare_digest(hashlib.sha256(body).hexdigest(), REQUEST_BODY_SHA256)
             or body != REQUEST_BODY):
         raise FixtureRejected()
-    if admission.case == "empty":
-        return Outcome(204, b"", (("content-type", EMPTY_RESPONSE_CONTENT_TYPE),))
-    return Outcome(200, body, (("content-type", "application/json"),))
+    metadata = V2_RESPONSE_METADATA if admission.case in ("json_v2", "empty_v2") else ()
+    if admission.case in ("empty", "empty_v2"):
+        return Outcome(204, b"", (("content-type", EMPTY_RESPONSE_CONTENT_TYPE),) + metadata)
+    return Outcome(200, body, (("content-type", "application/json"),) + metadata)

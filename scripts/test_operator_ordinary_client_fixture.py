@@ -96,6 +96,46 @@ class OrdinaryClientFixtureTests(unittest.TestCase):
             with self.subTest(query_case=index):
                 self.rejected(lambda: admit(raw_query=value))
 
+    def test_v2_cases_are_explicit_with_the_same_closed_canonical_query_keys(self):
+        for case in ("json_v2", "empty_v2"):
+            target = fixture.build_target(case, AUTHORIZATION_SHA256)
+            self.assertEqual(target, "/ordinary-client?case=" + case
+                + "&expectedAuthorizationSha256=" + AUTHORIZATION_SHA256
+                + "&expectedBodySha256=" + fixture.REQUEST_BODY_SHA256)
+            self.assertEqual(tuple(part.split("=", 1)[0] for part in target.split("?", 1)[1].split("&")),
+                             fixture.QUERY_KEYS)
+            self.assertEqual(admit(case=case), fixture.Admission(case, fixture.REQUEST_BODY_LENGTH))
+            raw_query = query(case)
+            for invalid in (raw_query + b"&metadata=1", b"&".join(reversed(raw_query.split(b"&"))),
+                            raw_query.replace(case.encode(), case.upper().encode()),
+                            raw_query.replace(b"_v2", b"%5fv2"), raw_query.replace(b"_v2", b"_v3")):
+                self.rejected(lambda: admit(raw_query=invalid))
+        for case in ("json_v3", "empty_v2&server=reflected", "json+v2"):
+            self.rejected(lambda: fixture.build_target(case, AUTHORIZATION_SHA256))
+
+    def test_fixed_metadata_is_emitted_only_by_v2_json_and_empty204(self):
+        self.assertEqual(fixture.V2_RESPONSE_METADATA, (
+            ("server", "serverware-synthetic-upstream"),
+            ("date", "Thu, 01 Jan 1970 00:00:00 GMT"), ("cache-control", "no-store")))
+        for base, status, body, media in (("json", 200, fixture.REQUEST_BODY, "application/json"),
+                                        ("empty", 204, b"", fixture.EMPTY_RESPONSE_CONTENT_TYPE)):
+            legacy = fixture.verify_body(admit(case=base), fixture.REQUEST_BODY)
+            outcome = fixture.verify_body(admit(case=base + "_v2"), fixture.REQUEST_BODY)
+            self.assertEqual((outcome.status_code, outcome.body), (status, body))
+            self.assertEqual(legacy.headers, (("content-type", media),))
+            self.assertEqual(outcome.headers, legacy.headers + fixture.V2_RESPONSE_METADATA)
+            self.assertFalse({"content-length", "transfer-encoding", "trailer"} & dict(outcome.headers).keys())
+            for secret in (AUTHORIZATION.decode(), AUTHORIZATION_SHA256, fixture.DUMMY_AUTHORIZATION):
+                self.assertNotIn(secret, repr(outcome))
+
+    def test_v2_keeps_exact_body_and_credential_oracles(self):
+        for case in ("json_v2", "empty_v2"):
+            for body in (b"", fixture.REQUEST_BODY + b" ", json.dumps(json.loads(fixture.REQUEST_BODY)).encode()):
+                self.rejected(lambda: fixture.verify_body(admit(case=case), body))
+            self.rejected(lambda: admit(case=case, fields=replacing(b"authorization", [fixture.DUMMY_AUTHORIZATION.encode()])))
+            self.rejected(lambda: admit(case=case, fields=headers() + [(b"authorization", AUTHORIZATION)]))
+            self.rejected(lambda: admit(raw_query=query(case).replace(fixture.REQUEST_BODY_SHA256.encode(), b"0" * 64)))
+
     def test_exact_injected_authorization_is_required_without_exposing_it(self):
         accepted = admit()
         self.assertEqual(accepted, fixture.Admission("json", fixture.REQUEST_BODY_LENGTH))

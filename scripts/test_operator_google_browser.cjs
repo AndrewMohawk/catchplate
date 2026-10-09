@@ -5,8 +5,10 @@
 // real backend would return provider secrets in its public catalog.
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
+const {readFileSync} = require('node:fs');
 const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
+const {runInNewContext} = require('node:vm');
 const {fixture, ready, view, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 
 const ROOT = resolve(__dirname, '..');
@@ -18,6 +20,10 @@ const DUMMY = "Bearer GOOGLE-DUMMY-'literal'-$value";
 const PRIVATE = ['synthetic-google-access-private-NEVER-RENDER', 'synthetic-google-refresh-private-NEVER-RENDER',
   'synthetic-google-client-secret-NEVER-RENDER', 'synthetic-google-ciphertext-NEVER-RENDER'];
 const STATIC_ID = '66666666-6666-4666-8666-666666666666';
+const FORMER_RULE_ID = '77777777-7777-4777-8777-777777777777';
+const ACTIVE_CARD_TEST = 'Google card shows account, friendly permission and app names with one optional Details disclosure';
+const QUARANTINED_CARD_TEST = 'quarantine stays visibly unusable while former assignments and technical metadata stay in Details';
+const UNKNOWN_PRESET_TEST = 'malformed public Google metadata: unknown permission preset';
 const capabilities = {responseModes: ['projected_json', 'unfiltered_json'], credentialInputModes: ['insert', 'replace_exact']};
 const digest = n => 'sha256:' + n.toString(16).padStart(64, '0');
 const google = (changes = {}) => credential({name: 'Saved test Google account', auth_type: 'google_oauth', header_name: 'Authorization',
@@ -31,12 +37,16 @@ const supplied = (changes = {}) => ({...capabilities, credentials: [google()], a
 const accountCard = page => page.locator('#credentials-list [data-resource-id="' + IDS.credential + '"][data-credential-type="google_oauth"]');
 const INPUTS = ['scripts/test_operator_google_browser.cjs', 'scripts/test_operator_catalog_browser.cjs', 'serverware/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_applications.js', 'workspace_resources.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
   [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')]))); }
-async function screenshot(page, name) { if (artifacts) await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true}); }
+async function screenshot(page, name) {
+  if (!artifacts) return;
+  await page.evaluate(() => window.scrollTo({top: 0, left: 0, behavior: 'instant'}));
+  await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true});
+}
 async function privateAbsent(page) {
   const surfaces = await page.evaluate(() => [document.documentElement.outerHTML,
     ...[...document.querySelectorAll('input,textarea')].map(item => item.value)].join('\n'));
@@ -85,7 +95,12 @@ function generatorChecks() {
   assert(command.includes("Authorization: Bearer GOOGLE-DUMMY-'\\''literal'\\''-$value"));
   assert(command.includes('Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN')); assert(command.includes('--cacert'));
   for (const value of PRIVATE) assert(!command.includes(value));
-  return {ok: true, groups: 1, scope: 'pure Google header target and safe public command generation; commands never executed'};
+  const resources = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_resources.js'), 'utf8');
+  const permission = input => runInNewContext(resources + '\noperatorGooglePermission(input)', {input}, {timeout: 1000});
+  assert.equal(permission(google()), 'Read Gmail');
+  for (const permission_preset of ['gmail_full_access', '', null, undefined])
+    assert.equal(permission(google({permission_preset})), 'Unsupported permission preset');
+  return {ok: true, groups: 1, scope: 'pure Google header target, safe command generation and defensive permission labels; commands never executed'};
 }
 
 const malformed = [
@@ -102,16 +117,35 @@ const malformed = [
 ];
 
 const tests = [
-  ['saved Google account shows public identity, scopes and assignments without claiming live health or offering ordinary revoke', browser => fixture(browser,
-    supplied({credentials: [google(), credential({id: STATIC_ID, name: 'Separate static key'})], rules: [googleRule()]}), async (page, state) => {
+  [ACTIVE_CARD_TEST, browser => fixture(browser,
+    supplied({credentials: [google(), credential({id: STATIC_ID, name: 'Separate static key'})],
+      applications: [application(), application({id: IDS.other, name: 'Former worker'})],
+      rules: [googleRule(), googleRule('insert', {id: FORMER_RULE_ID, route_id: 'operator.' + FORMER_RULE_ID,
+        application_id: IDS.other, status: 'revoked'})]}), async (page, state) => {
       await ready(page); await view(page, 'credentials'); const card = accountCard(page); await card.waitFor({state: 'visible'});
-      const text = await card.innerText(); for (const value of [ACCOUNT, 'gmail_readonly', ...SCOPES, 'Reporting application']) assert(text.includes(value));
-      assert.match(await card.locator('[data-google-account-notice]').innerText(), /not a refresh-health check.*not proof of proxy activation/is);
+      const details = card.locator('[data-google-identity]'); assert.equal(await card.locator('details').count(), 1);
+      assert.equal(await details.locator('summary').innerText(), 'Details'); assert(!await details.evaluate(item => item.open));
+      const text = await card.innerText(); for (const value of [ACCOUNT, 'Read Gmail', 'Assigned apps', 'Reporting application']) assert(text.includes(value));
+      for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application, IDS.other, 'Former worker'])
+        assert(!text.includes(value), 'technical or former-assignment detail must not appear on the compact card');
+      assert.match(await card.locator('[data-google-account-notice]').innerText(), /refresh health not checked.*do not confirm proxy activation/is);
       assert.equal(await card.locator('[data-action="revoke-credential"]').count(), 0);
-      assert(!await page.locator('#credentials-list [data-resource-id="' + STATIC_ID + '"] [data-action="revoke-credential"]').isDisabled());
-      await card.locator('[data-google-identity] summary').click();
-      for (const value of [SUBJECT, CLIENT]) assert((await card.locator('[data-google-identity]').innerText()).includes(value));
+      const staticCard = page.locator('#credentials-list [data-resource-id="' + STATIC_ID + '"]');
+      assert.match(await staticCard.innerText(), /Authentication\s+Bearer token/); assert((await staticCard.innerText()).includes(STATIC_ID));
+      assert(!await staticCard.locator('[data-action="revoke-credential"]').isDisabled());
       assert(await page.locator('#credential-google-connect').isDisabled()); await screenshot(page, 'google-account-desktop');
+      await details.locator('summary').click(); assert(await details.evaluate(item => item.open));
+      const detailText = await details.innerText();
+      for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application, IDS.other, 'Former worker'])
+        assert(detailText.includes(value), 'Details retains exact metadata and assignment identities');
+      assert.match(detailText, /saved active assignments\s+reporting application/i);
+      assert.match(detailText, /former assignments\s+former worker/i);
+      await details.locator('summary').click(); assert(!await details.evaluate(item => item.open));
+      assert(!(await card.innerText()).includes(SUBJECT));
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await details.locator('summary').isVisible());
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'compact account view fits mobile width');
+      await screenshot(page, 'google-account-mobile');
       await view(page, 'connect'); assert(await page.locator('#connect-google').isDisabled());
       await page.locator('#connect-use-saved').click();
       assert((await page.locator('#connect-credential-choice option[value="' + IDS.credential + '"]').innerText()).includes(ACCOUNT));
@@ -159,15 +193,21 @@ const tests = [
       assert(!contents.includes(SUBJECT) && !contents.includes(CLIENT), 'client setup does not need provider account identifiers');
       await download.delete(); assert.deepEqual(state.posts.map(item => item.name), ['applications']);
     })],
-  ['quarantine is visible, unavailable, retains former assignments, and never claims provider revocation', browser => fixture(browser,
+  [QUARANTINED_CARD_TEST, browser => fixture(browser,
     supplied({credentials: [quarantine()], rules: [googleRule('replace_exact', {status: 'revoked'})]}), async (page, state) => {
       await ready(page); await view(page, 'credentials'); const card = accountCard(page);
       assert.match(await card.locator('.badge').innerText(), /quarantined.*unusable/i);
-      assert.match(await card.locator('[data-google-account-notice]').innerText(), /provider revocation is not proven.*not a successful google disconnect/is);
-      const text = await card.innerText(); assert.match(text, /saved active assignments\s+none/i);
-      assert.match(text, /former assignments\s+reporting application/i); assert.equal(await card.locator('[data-action]').count(), 0);
-      await card.locator('[data-google-identity] summary').click(); assert.match(await card.innerText(), /provider revocation\s+not proven/i);
-      await screenshot(page, 'google-quarantine-desktop'); await page.setViewportSize({width: 390, height: 844}); await screenshot(page, 'google-quarantine-mobile');
+      assert.match(await card.locator('[data-google-account-notice]').innerText(), /unavailable for use.*google revocation is not proven.*health.*activation.*not confirmed/is);
+      const text = await card.innerText(); assert.match(text, /assigned apps\s+none/i); assert(text.includes('Read Gmail'));
+      for (const value of ['Former assignments', 'Reporting application', 'gmail_readonly', SUBJECT, CLIENT, IDS.application]) assert(!text.includes(value));
+      assert.equal(await card.locator('[data-action]').count(), 0); assert.equal(await card.locator('details').count(), 1);
+      const details = card.locator('[data-google-identity]'); assert(!await details.evaluate(item => item.open));
+      await details.locator('summary').click(); assert.match(await details.innerText(), /provider revocation\s+not proven/i);
+      assert.match(await details.innerText(), /former assignments\s+reporting application/i); assert((await details.innerText()).includes(IDS.application));
+      await details.locator('summary').click(); assert(!await details.evaluate(item => item.open));
+      await screenshot(page, 'google-quarantine-desktop'); await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'compact quarantine view fits mobile width');
+      await screenshot(page, 'google-quarantine-mobile');
       await view(page, 'access-rules'); assert(await page.locator('#rule-save').isDisabled());
       assert.equal(await page.locator('#rule-credential-id option[value="' + IDS.credential + '"]').count(), 0);
       await view(page, 'connect'); assert.equal(await page.locator('#connect-credential-choice option[value="' + IDS.credential + '"]').count(), 0);
@@ -222,11 +262,18 @@ const tests = [
       await refresh(page); await unavailable(page, state); assert.equal(calls, 1);
     })],
   ...malformed.map(([name, changes]) => ['malformed public Google metadata: ' + name, browser => fixture(browser,
-    supplied({credentials: [google(changes)]}), unavailable)]),
+    supplied({credentials: [google(changes)]}), async (page, state) => {
+      await unavailable(page, state);
+      if (name === 'unknown permission preset') assert.equal(await accountCard(page).count(), 0, 'unknown preset is rejected before any account card is rendered');
+    })]),
 ];
 
 async function main() {
-  assert.equal(process.argv.length, 2, 'Google presentation tests accept no targets or credentials');
+  const args = process.argv.slice(2);
+  assert(args.length === 0 || (args.length === 1 && args[0] === '--cards-only'), 'Google presentation tests accept only --cards-only or no arguments');
+  const cardTests = new Set([ACTIVE_CARD_TEST, QUARANTINED_CARD_TEST, UNKNOWN_PRESET_TEST]);
+  const selected = args.length ? tests.filter(([name]) => cardTests.has(name)) : tests;
+  if (args.length) assert.equal(selected.length, 3, 'focused card selection remains exact');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify(generatorChecks()));
   const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
@@ -236,8 +283,9 @@ async function main() {
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;
   try {
     await Promise.race([(async () => {
-      for (const [name, run] of tests) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'intercepted Google public-account presentation fixtures only',
+      for (const [name, run] of selected) { await run(browser); console.log('PASS ' + name); }
+      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length, selection: args.length ? 'cards-only' : 'all',
+        scope: 'intercepted Google public-account presentation fixtures only',
         consentTested: false, cleanupTested: false, otherBrowserSuitesExecuted: false, liveRequests: 0,
         generatedCommandsExecuted: false, productionAcceptance: false}));
     })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Google presentation fixture absolute deadline')), 120000); })]);

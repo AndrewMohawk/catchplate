@@ -111,20 +111,53 @@ function operatorRuleCredentialRows(rule, credential) {
   } catch (_) { rows.push(['Client setup', 'Invalid credential input configuration']); }
   return rows;
 }
-function operatorGoogleAccountRows(credential, catalog) {
-  const rules = catalog.access_rules.filter(rule => rule.credential_id === credential.id);
-  const names = status => [...new Set(rules.filter(rule => rule.status === status).map(rule => rule.application_id))].map(id => {
+function operatorGoogleAssignments(credential, catalog, status, includeIds = false) {
+  const rules = catalog.access_rules.filter(rule => rule.credential_id === credential.id && rule.status === status);
+  return [...new Set(rules.map(rule => rule.application_id))].map(id => {
     const application = catalog.applications.find(item => item.id === id);
-    return (application?.name || 'Retained application') + ' (' + id + ')';
+    return (application?.name || 'Retained application') + (includeIds ? ' (' + id + ')' : '');
   }).join(', ') || 'None';
+}
+function operatorGoogleAccountRows(credential, catalog) {
   return [['Google account', credential.provider_account], ['Permission preset', credential.permission_preset],
     ['Granted Google scopes', credential.scopes.join(', ')],
-    ['Saved active assignments', names('active')], ['Former assignments', names('revoked')]];
+    ['Saved active assignments', operatorGoogleAssignments(credential, catalog, 'active', true)],
+    ['Former assignments', operatorGoogleAssignments(credential, catalog, 'revoked', true)]];
 }
 function operatorGoogleAccountNotice(credential) {
   return credential.status === 'quarantined' ?
     'Quarantined: unavailable for grants and client setup. Provider revocation is not proven. Former assignments are retained references, not current access. This is not a successful Google disconnect.' :
     'Saved Google account metadata, not a refresh-health check. Granted Google scopes do not grant access to applications; each app still needs its own exact access rule. Assignments listed here are saved configuration, not proof of proxy activation.';
+}
+function operatorGooglePermission(credential) {
+  return credential.permission_preset === 'gmail_readonly' ? 'Read Gmail' : 'Unsupported permission preset';
+}
+function operatorGoogleAccountCard(credential, catalog) {
+  const known = credential.permission_preset === 'gmail_readonly';
+  const quarantined = credential.status === 'quarantined';
+  const badge = quarantined ? 'Quarantined · unusable' : known ? 'Saved' : 'Unsupported · unusable';
+  const card = resourceCard(credential, badge, [['Google account', credential.provider_account],
+    ['Permissions', operatorGooglePermission(credential)],
+    ['Assigned apps', operatorGoogleAssignments(credential, catalog, 'active')]]);
+  card.dataset.credentialType = 'google_oauth';
+  const notice = textNode('p', quarantined ?
+    'Unavailable for use. Google revocation is not proven. Refresh health and proxy activation are not confirmed here.' : !known ?
+    'Unsupported permission preset; do not use this account. Refresh health and proxy activation are not confirmed here.' :
+    'Refresh health not checked. Assignments do not confirm proxy activation.', 'small muted');
+  notice.dataset.googleAccountNotice = '';
+  const details = textNode('details'); details.dataset.googleIdentity = '';
+  details.append(textNode('summary', 'Details'));
+  const metadata = textNode('dl', undefined, 'metadata');
+  const values = [['Permission preset', credential.permission_preset], ['Granted Google scopes', credential.scopes.join(', ')],
+    ['Credential ID', credential.id], ['Provider subject', credential.provider_subject], ['OAuth client ID', credential.oauth_client_id],
+    ['Active rules', String(credential.active_rule_count)],
+    ['Saved active assignments', operatorGoogleAssignments(credential, catalog, 'active', true)],
+    ['Former assignments', operatorGoogleAssignments(credential, catalog, 'revoked', true)]];
+  if (quarantined) values.push(['Quarantined at', credential.quarantined_at], ['Provider revocation', 'Not proven']);
+  metadata.append(...values.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
+  details.append(metadata, textNode('p', 'Account removal needs provider-aware cleanup; this screen does not disconnect Google.', 'small muted'));
+  card.append(notice, details);
+  return card;
 }
 function createCredentialsView(workspace) {
   const form = element('credential-form');
@@ -147,21 +180,9 @@ function createCredentialsView(workspace) {
     renderCards('credentials-list', catalog.credentials.map(credential => {
       const google = credential.auth_type === 'google_oauth';
       const badge = credential.status === 'quarantined' ? 'Quarantined · unusable' : credential.status === 'active' ? 'Saved' : 'Revoked locally';
-      const card = resourceCard(credential, badge,
-        [['Authentication', google ? 'Google account (OAuth)' : credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
-          ...(google ? operatorGoogleAccountRows(credential, catalog) : []),
+      const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
+        [['Authentication', credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
           ['Active rules', String(credential.active_rule_count)], ['Credential ID', credential.id]]);
-      if (google) {
-        card.dataset.credentialType = 'google_oauth';
-        const notice = textNode('p', operatorGoogleAccountNotice(credential), 'small muted'); notice.dataset.googleAccountNotice = '';
-        const details = textNode('details'); details.dataset.googleIdentity = ''; details.append(textNode('summary', 'Google identity details'));
-        const identity = textNode('dl', undefined, 'metadata');
-        const values = [['Provider subject', credential.provider_subject], ['OAuth client ID', credential.oauth_client_id]];
-        if (credential.status === 'quarantined') values.push(['Quarantined at', credential.quarantined_at], ['Provider revocation', 'Not proven']);
-        identity.append(...values.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
-        details.append(identity); card.append(notice, details);
-        card.append(textNode('p', 'Google account removal requires provider-aware cleanup. This interface does not start consent or cleanup; ordinary credential revocation is not applicable.', 'small muted'));
-      }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
       if (credential.status === 'active' && !google) {
         const button = textNode('button', 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';

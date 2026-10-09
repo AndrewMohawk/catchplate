@@ -53,10 +53,11 @@ independent action and grants no application access by itself. Separate resource
 ownership in the backend must not become separate mandatory setup exercises.
 
 Account cards should lead with the account name, meaningful permission names,
-affected apps and observed attention state. The rendered Gmail candidate still
-puts raw scope URLs, preset identifiers, historical assignments and repeated
-implementation disclaimers ahead of the task. Move those details into a single
-diagnostic disclosure. Keep material limitations and blocking conditions visible,
+affected apps and observed attention state. The Google account card now shows
+the account, **Read Gmail**, and assigned app names, with raw scope URLs, preset
+identifiers, exact IDs and former assignments in one **Details** disclosure.
+This is presentation, not a new health observation or reconnect workflow.
+Keep material limitations and blocking conditions visible,
 but use concise states such as "Not tested yet", "Setup required", "Temporary
 failure" or "Reconnect required" only when their evidence supports them.
 
@@ -78,6 +79,24 @@ that lists, paginates, reads messages and continues after provider-token expiry.
 Neither a short form nor a successful isolated endpoint substitutes for those
 jobs. Do not promise arbitrary passthrough while the implementation supports
 only bounded JSON and selected statuses.
+
+### Compact account-card verification, 2026-10-09
+
+The focused `scripts/test_operator_google_browser.cjs --cards-only` check passed
+one pure group and three rendered groups: active account, quarantined account,
+and unknown-preset refusal. Details opens and closes, preserves exact assignment
+IDs, and stays optional. Static-key actions remain unchanged. Desktop and mobile
+screenshots were inspected. After correcting only screenshot scroll positioning,
+the same focused checks passed again with unchanged production UI code.
+
+The final resource-script SHA-256 is
+`08338a6e1652e9077ca389619a3d82aec909fd4504f3ad435c4e2a9e748d3446`.
+Evidence is `google-cards.P18BigAf/browser.log`; screenshots are in
+`serverware-operator-artifacts/google-browser-synthetic-lQbkfL` under the projects
+directory. Inputs were unchanged during each run; both bounded browser scopes
+terminated and their empty scratch directories were removed. These intercepted
+fixtures make no provider, proxy or live application requests. They do not
+establish consent, refresh, deployment, or production acceptance.
 
 ## Normal use, not just first-run configuration
 

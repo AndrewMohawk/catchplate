@@ -12681,6 +12681,7 @@ mod principal_explicit_time_tests {
             token_sha256: sha256_prefixed(TOKEN.as_bytes()),
             source_cidrs: vec!["127.0.0.1/32".parse().unwrap()],
             expires_at_ms: Some(u128::from(EXPIRES_AT)),
+            basic_transport: None,
         });
         Arc::new(snapshot)
     }

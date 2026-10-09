@@ -21,7 +21,8 @@ PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/applications", "/applications/revoke",
-    "/applications/rotate-token", "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
+    "/applications/rotate-token", "/applications/proxy-authentication",
+    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
 ))
 router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
@@ -212,6 +213,11 @@ async def revoke_application(request: Request, identity: auth.AdminIdentity = De
 @router.post("/applications/rotate-token")
 async def rotate_application_token(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "RotateApplicationInput", "rotate_application_token", 2048)
+
+
+@router.post("/applications/proxy-authentication")
+async def set_application_proxy_authentication(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "ApplicationProxyAuthenticationInput", "set_application_proxy_authentication", 2048)
 
 
 @router.post("/access-rules")

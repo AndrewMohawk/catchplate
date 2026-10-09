@@ -7,6 +7,9 @@ function createProxyView(workspace, applications) {
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     element('gmail-client-controls').hidden = true;
+    element('client-proxy-login').hidden = true;
+    for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
+      'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
     const catalog = workspace.state.catalog;
     if (!catalog) { element('client-command').textContent = 'Refresh workspace status before using this client.'; return; }
     chooseOptions('proxy-application', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
@@ -36,25 +39,38 @@ function createProxyView(workspace, applications) {
       element('client-command').textContent = !valid ? 'The application token is expired, revoked or cannot be verified.' : 'The saved rule or credential is unavailable or unsupported.';
       element('client-guidance').textContent = !valid ? 'Use Applications to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;
     }
-    let dummyHeader;
+    let dummyHeader; let proxy;
+    const proxyAuthentication = applicationProxyAuthentication(application);
     const messageId = element('gmail-message-id').value;
     if (messageRead && !/^[A-Za-z0-9_-]{1,512}$/.test(messageId)) {
       element('client-command').textContent = 'Enter a valid message ID returned by this account’s message list.';
       element('client-guidance').textContent = 'No command is available until the message ID is valid. Provider tokens and the application token do not belong in this field.'; return;
     }
     try {
-      const proxy = new URL(catalog.proxy_url);
+      proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
       command = buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
         caPath: element('ca-path').value, allowedHeaders: rule.allowed_headers,
-        credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
+        credentialInput: rule.credential_input, placeholder: rule.placeholder, credential,
+        proxyAuthentication, applicationId: application.id});
       dummyHeader = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
     } catch (_) { element('client-command').textContent = 'A valid public HTTPS proxy and supported rule are required.'; return; }
     element('client-command').textContent = command;
     const ready = workspace.loaded() && rule.enforcement === 'active' && application.access_status === 'active' && !workspace.state.busy && !workspace.state.uncertain;
     element('copy-command').disabled = !ready;
     element('download-config').disabled = !ready || !applications.tokenFor(application.id);
+    const basic = proxyAuthentication === 'basic_and_bearer_v1';
+    element('client-proxy-login').hidden = false;
+    element('client-proxy-auth-mode').textContent = basic ? 'Standard username/password login; Bearer also accepted.' : 'Bearer proxy authentication only.';
+    element('client-proxy-host').textContent = proxy.hostname; element('client-proxy-port').textContent = proxy.port || '443';
+    element('client-proxy-username').textContent = basic ? application.id : 'Not used for Bearer';
+    element('client-proxy-password-note').textContent = basic ?
+      'Use this application’s existing Serverware client token as the password, never the provider key. This page does not retrieve it.' :
+      'Send this application’s existing token in the Proxy-Authorization: Bearer header. Username/password login is not enabled; never use the provider key.';
+    element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
+      'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
+      'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
     if (gmail) {
       element('client-guidance').textContent = (ready ? 'Policy loaded and app token not expired. No Gmail request or refresh was tested here. ' :
         'Waiting for the exact policy to load; resolve uncertain changes before use. ') +
@@ -97,8 +113,11 @@ function createProxyView(workspace, applications) {
     const config = {application_id: application.id, access_rule_id: rule.id, proxy_url: catalog.proxy_url, upstream_url: rule.upstream_url,
       methods: rule.methods, response_mode: rule.response_mode, credential_input: rule.credential_input,
       request_headers: dummyHeader ? {[dummyHeader.name]: dummyHeader.value} : {},
-      ca_file: element('ca-path').value || './serverware-ca.pem', proxy_authorization: 'Bearer ' + token,
+      ca_file: element('ca-path').value || './serverware-ca.pem',
       token_expires_at_epoch_ms: application.token_expires_at_epoch_ms, note: 'Private development client configuration. Never commit or share. Provider credential not included.'};
+    if (applicationProxyAuthentication(application) === 'basic_and_bearer_v1') Object.assign(config,
+      {proxy_authentication: 'basic_and_bearer_v1', proxy_username: application.id, proxy_password: token});
+    else config.proxy_authorization = 'Bearer ' + token;
     if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
     if (isGmailRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.age_policy = {mode: rule.age_policy.mode};

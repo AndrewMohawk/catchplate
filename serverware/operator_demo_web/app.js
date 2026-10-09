@@ -25,7 +25,7 @@ function clientCredentialInput({credentialInput = 'insert', placeholder, credent
   return {name: credentialHeaderTarget(credential), value: placeholder};
 }
 function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders = ['accept', 'user-agent'],
-    credentialInput = 'insert', placeholder, credential}) {
+    credentialInput = 'insert', placeholder, credential, proxyAuthentication = 'bearer', applicationId}) {
   const quote = value => "'" + String(value).replace(/'/g, "'\\''") + "'";
   for (const value of [proxyUrl, upstreamUrl]) {
     const url = new URL(value);
@@ -33,6 +33,12 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
       throw new Error('Client configuration requires credential-free HTTPS URLs');
   }
   if (!CLIENT_METHODS.includes(method)) throw new Error('Invalid client method');
+  let proxyLogin;
+  if (proxyAuthentication === 'bearer') proxyLogin = ['  --proxy-header "Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN"'];
+  else if (proxyAuthentication === 'basic_and_bearer_v1' && typeof applicationId === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(applicationId))
+    proxyLogin = ['  --proxy-basic', `  --proxy-user ${quote(applicationId + ':')}"$SERVERWARE_PROXY_TOKEN"`];
+  else throw new Error('Unsupported proxy authentication or application username');
   const dummyHeader = clientCredentialInput({credentialInput, placeholder, credential});
   const target = dummyHeader?.name.toLowerCase();
   const insertsAccept = credentialInput === 'insert' && credential?.auth_type === 'header' && credential.header_name?.toLowerCase() === 'accept';
@@ -42,7 +48,7 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
   if (target !== 'user-agent') headers.push("  --header 'User-Agent:'");
   if (dummyHeader) headers.push(`  --header ${quote(dummyHeader.name + ': ' + dummyHeader.value)}`);
   return ['curl --fail-with-body --show-error --http1.1', "  --noproxy ''", `  --proxy ${quote(proxyUrl)}`,
-    '  --proxy-header "Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN"',
+    ...proxyLogin,
     `  --cacert ${quote(caPath || './serverware-ca.pem')}`, `  --request ${quote(method)}`,
     ...headers, `  ${quote(upstreamUrl)}`].join(' \\\n');
 }

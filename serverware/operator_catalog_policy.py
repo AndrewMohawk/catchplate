@@ -82,6 +82,8 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
         generated = legacy._build([flat], sequence, initial_hash)
         principal = generated['principals'][0]
         principal['proxyAuthorization']['tokenId'] = application['id']
+        if schema.application_proxy_authentication(application) == 'basic_and_bearer_v1':
+            principal['proxyAuthorization']['basicTransport'] = {'username': application['id']}
         principals[application['id']] = principal
         credential_policy = generated['credentials'][0]
         credential_policy['providerSubject'] = credential['provider_subject']

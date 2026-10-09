@@ -246,6 +246,24 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     return request_mode
 
 
+def application_proxy_authentication(application: dict) -> str:
+    """Absent retained metadata stays Bearer without rewriting the record."""
+    mode = application.get('proxy_authentication', 'bearer')
+    if not isinstance(mode, str) or mode not in {'bearer', 'basic_and_bearer_v1'}:
+        raise CatalogIntegrityError('catalog application proxy authentication refused')
+    if mode == 'basic_and_bearer_v1':
+        identifier = application.get('id')
+        try:
+            if not isinstance(identifier, str) or str(uuid.UUID(identifier)) != identifier:
+                raise ValueError('noncanonical application identifier')
+        except (ValueError, TypeError, AttributeError) as error:
+            raise CatalogIntegrityError('catalog Basic username binding refused') from error
+        expiry = application.get('token_expires_at_epoch_ms')
+        if type(expiry) is not int or not 1 <= expiry <= 9_007_199_254_740_991:
+            raise CatalogIntegrityError('catalog Basic token expiry refused')
+    return mode
+
+
 def validate_bindings(conn, catalog: dict | None = None) -> None:
     from serverware import operator_catalog_google
     operator_catalog_google.validate_profile_binding(conn)
@@ -302,6 +320,7 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                 or metadata.get('oauth') is True):
             raise CatalogIntegrityError('active catalog credential binding refused')
     for identifier, row in applications.items():
+        application_proxy_authentication(row)
         if (row.get('principal_id') != 'agent:operator-demo:' + identifier
                 or not isinstance(row.get('token_sha256'), str) or not _SHA.fullmatch(row['token_sha256'])
                 or type(row.get('token_expires_at_epoch_ms')) is not int or row['token_expires_at_epoch_ms'] <= 0):

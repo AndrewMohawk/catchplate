@@ -58,6 +58,8 @@ class CredentialInput(NamedInput):
 
 class ApplicationInput(NamedInput):
     token_lifetime_seconds: _Lifetime
+    # Old callers retain Bearer; new clients must select the broader transport.
+    proxy_authentication: Literal["bearer", "basic_and_bearer_v1"] = "bearer"
 
 
 class TargetInput(RevisionInput):
@@ -79,6 +81,10 @@ class ReplaceCredentialKeyInput(TargetInput):
 
 class RotateApplicationInput(TargetInput):
     token_lifetime_seconds: _Lifetime
+
+
+class ApplicationProxyAuthenticationInput(TargetInput):
+    proxy_authentication: Literal["bearer", "basic_and_bearer_v1"]
 
 
 class RuleInput(NamedInput):

@@ -157,6 +157,9 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-credential-next').disabled = !newCredential && !catalog()?.credentials.some(item =>
       item.id === element('connect-credential-choice').value && item.status === 'active');
     element('connect-application-next').textContent = newApp ? 'Create app and show token' : 'Use this application';
+    element('connect-application-proxy-default').textContent = newApplicationProxyAuthentication(catalog()).proxy_authentication ?
+      'Proxy login: public application ID as username, this app’s token as password. Bearer also remains supported. Never use the provider key.' :
+      'Proxy login: Bearer application token. Standard username/password login is not advertised by this deployment.';
     const selected = catalog()?.applications.find(item => item.id === element('connect-application-choice').value);
     element('connect-application-note').textContent = newApp ? '' : selected ?
       'Expires ' + new Date(selected.token_expires_at_epoch_ms).toLocaleString() + '. Use the token already configured in your app. If lost or expired, rotate explicitly in Applications; this flow does not retrieve or renew it.' : 'Select an available application.';

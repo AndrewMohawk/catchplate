@@ -6,6 +6,27 @@
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "defaults", "principals", "credentials", "routes"],
   "additionalProperties": false,
+  "allOf": [{
+    "if": {
+      "properties": {
+        "principals": {
+          "contains": {
+            "type": "object",
+            "required": ["proxyAuthorization"],
+            "properties": {
+              "proxyAuthorization": {"type": "object", "required": ["basicTransport"]}
+            }
+          }
+        }
+      }
+    },
+    "then": {
+      "properties": {
+        "apiVersion": {"const": "serverware.policy/v1"},
+        "metadata": {"properties": {"id": {"const": "serverware-operator-demo"}}}
+      }
+    }
+  }],
   "$defs": {
     "boundedScalar": {
       "anyOf": [
@@ -1156,6 +1177,16 @@
                 "type": "object",
                 "required": ["scheme", "tokenSha256"],
                 "additionalProperties": false,
+                "allOf": [{
+                  "if": {"required": ["basicTransport"]},
+                  "then": {
+                    "required": ["tokenId", "expiresAtEpochMs"],
+                    "properties": {
+                      "tokenId": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+                      "expiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+                    }
+                  }
+                }],
                 "properties": {
                   "scheme": {"enum": ["Bearer"]},
                   "tokenId": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -1167,7 +1198,16 @@
                     "uniqueItems": true,
                     "items": {"$ref": "#/$defs/canonicalCidr"}
                   },
-                  "expiresAtEpochMs": {"type": "integer", "minimum": 1}
+                  "expiresAtEpochMs": {"type": "integer", "minimum": 1},
+                  "basicTransport": {
+                    "type": "object",
+                    "required": ["username"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "username": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
+                    },
+                    "$comment": "The compiler additionally requires username to equal tokenId. This option does not change the Bearer verifier or authorize non-operator runtime use."
+                  }
                 }
               }
             ]

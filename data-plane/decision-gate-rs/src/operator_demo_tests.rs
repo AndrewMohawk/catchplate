@@ -30,6 +30,7 @@ fn snapshot(sequence: u64) -> Snapshot {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()),
         source_cidrs: vec![],
         expires_at_ms: Some(10_000),
+        basic_transport: None,
     });
     snapshot.routes[0].host = "api.example.com".to_owned();
     snapshot.routes[0].resolved_address_policy = ResolvedAddressPolicy::PublicOnly;
@@ -54,6 +55,32 @@ fn profile(snapshot: &Snapshot, deployment: Deployment) -> Profile {
 
 fn public_deployment() -> Deployment {
     Deployment::parse(r#"["https://api.example.com"]"#, None).unwrap()
+}
+
+#[test]
+fn operator_demo_basic_transport_requires_validated_operator_runtime() {
+    let mut candidate = snapshot(1);
+    let username = "a1111111-1111-4111-8111-111111111111";
+    let config = json!({"scheme":"Bearer", "tokenId":username,
+        "tokenSha256":sha256_prefixed("a".repeat(43).as_bytes()),
+        "expiresAtEpochMs":10_000, "basicTransport":{"username":username}});
+    candidate.principals[0].proxy_authorization =
+        crate::parse_proxy_authorization(Some(&config), "agent:test").unwrap();
+    let profile = profile(&candidate, public_deployment());
+    let candidate = Arc::new(candidate);
+    let mut state = test_gate_state(candidate.clone());
+    assert!(crate::proxy_basic_transport::require_runtime(&state, &candidate).is_err());
+    state.policy_shadow = ShadowRuntime::new_operator_demo(profile);
+    state.proxy_ingress_attestation.mode = INGRESS_MODE.into();
+    assert!(crate::proxy_basic_transport::require_runtime(&state, &candidate).is_ok());
+    state.is_production = true;
+    assert!(crate::proxy_basic_transport::require_runtime(&state, &candidate).is_err());
+    state.is_production = false;
+    state.atomic_release_authorization_enabled = true;
+    assert!(crate::proxy_basic_transport::require_runtime(&state, &candidate).is_err());
+    state.atomic_release_authorization_enabled = false;
+    state.proxy_ingress_attestation.mode = "development-raw".into();
+    assert!(crate::proxy_basic_transport::require_runtime(&state, &candidate).is_err());
 }
 
 struct Scratch(PathBuf);
@@ -190,11 +217,13 @@ fn operator_demo_every_principal_requires_hashed_bearer_and_expiry() {
             token_sha256: sha256_prefixed(b"token"),
             source_cidrs: vec![],
             expires_at_ms: None,
+            basic_transport: None,
         }),
         Some(ProxyAuthorizationPolicy::BearerToken {
             token_sha256: "sha256:not-a-digest".into(),
             source_cidrs: vec![],
             expires_at_ms: Some(500),
+            basic_transport: None,
         }),
     ] {
         let mut candidate = original.clone();

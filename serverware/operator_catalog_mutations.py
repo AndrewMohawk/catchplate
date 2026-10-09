@@ -16,7 +16,7 @@ from serverware import operator_catalog_schema as schema
 from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
-    ReplaceCredentialKeyInput,
+    ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -44,6 +44,7 @@ class _Change:
     client_token: str | None = field(default=None, repr=False)
     affected_rule_ids: list[str] = field(default_factory=list)
     key_replacement: dict | None = None
+    previous_proxy_authentication: str | None = None
 
 
 def _state(conn) -> dict:
@@ -131,6 +132,7 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
         revoked = record["status"] == "revoked"
         expired = now >= record["token_expires_at_epoch_ms"]
         result.update(principal_id=record["principal_id"],
+            proxy_authentication=schema.application_proxy_authentication(record),
             token_expires_at_epoch_ms=record["token_expires_at_epoch_ms"],
             token_generation=record["token_version"],
             token_status="revoked" if revoked else "expired" if expired else "valid",
@@ -184,6 +186,10 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
         if changed.key_replacement is not None:
             audit.update({key: changed.key_replacement[key] for key in
                 ("previous_credential_generation", "credential_generation")})
+        if changed.previous_proxy_authentication is not None:
+            audit.update(previous_proxy_authentication=changed.previous_proxy_authentication,
+                proxy_authentication=schema.application_proxy_authentication(changed.resource),
+                affected_rule_ids=changed.affected_rule_ids)
         db.append_audit_event(conn, event_type="operator_catalog." + event,
             actor_type="admin", actor_id=actor_id, event=audit)
         catalog = schema.read_catalog(conn)
@@ -261,6 +267,8 @@ def create_application(payload: ApplicationInput, actor_id: str) -> dict:
         token, verifier = _new_token(payload.token_lifetime_seconds)
         record = {"id": identifier, "name": payload.name, "principal_id": "agent:operator-demo:" + identifier,
             **verifier, "token_version": 1, "created_at": db.iso_now(), "status": "active"}
+        if "proxy_authentication" in payload.model_fields_set:
+            record["proxy_authentication"] = payload.proxy_authentication
         return _Change(schema.save_resource(conn, "applications", record, create=True), client_token=token)
     return _mutate(payload, actor_id, "applications", "application.created", change)
 
@@ -354,6 +362,20 @@ def rotate_application_token(payload: RotateApplicationInput, actor_id: str) -> 
     return _mutate(payload, actor_id, "applications", "application.token_rotated", change)
 
 
+def set_application_proxy_authentication(payload: ApplicationProxyAuthenticationInput, actor_id: str) -> dict:
+    """Explicit transport permission change; never rotate or renew the token."""
+    def change(db, conn, catalog):
+        record = _target(catalog, "applications", payload.id)
+        previous = schema.application_proxy_authentication(record)
+        if previous == payload.proxy_authentication:
+            raise CatalogConflict()
+        rules = _active_rules(catalog, "application_id", payload.id)
+        record["proxy_authentication"] = payload.proxy_authentication
+        return _Change(schema.save_resource(conn, "applications", record), authority_changed=bool(rules),
+            affected_rule_ids=[rule["id"] for rule in rules], previous_proxy_authentication=previous)
+    return _mutate(payload, actor_id, "applications", "application.proxy_authentication_changed", change)
+
+
 def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "access_rules", payload.id)
@@ -386,8 +408,11 @@ def catalog_status() -> dict:
            for collection in _RESULT_KEYS}, "limits": limits, "observed_activity": observed_activity,
         # Source capability, not proof of a deployed gate version. Publication
         # requires the co-versioned request/response/replacement gate (including
-        # V2 metadata discard for that explicit mode); never downgrade.
+        # V2 metadata discard and explicit Basic transport); never downgrade.
         "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else []),
+            "application_proxy_authentication": {"schema": "serverware.operatorProxyAuthentication/v1",
+                "modes": ["bearer", "basic_and_bearer_v1"],
+                "path": "/api/operator-demo/applications/proxy-authentication"},
             "static_key_replacement": {"schema": "serverware.operatorStaticKeyReplacement/v1",
                 "path": "/api/operator-demo/credentials/replace-key", "credential_types": ["bearer", "header"]},
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",

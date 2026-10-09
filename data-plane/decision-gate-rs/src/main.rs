@@ -13,6 +13,7 @@ mod buffered_response;
 mod response_metadata;
 mod gmail_read;
 mod request_query_compat;
+mod proxy_basic_transport;
 mod buffered_request;
 #[cfg(test)]
 mod ordinary_client_compat_tests;
@@ -884,6 +885,7 @@ struct ConnectAuthentication {
 enum ConnectProxyAuthorizationBinding {
     LegacyExactSha256(String),
     BearerTokenSha256(String),
+    BasicTransportTokenSha256 { username: String, token_sha256: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1089,6 +1091,7 @@ enum ProxyAuthorizationPolicy {
         token_sha256: String,
         source_cidrs: Vec<IpNet>,
         expires_at_ms: Option<u128>,
+        basic_transport: Option<proxy_basic_transport::BasicTransport>,
     },
 }
 
@@ -1164,18 +1167,21 @@ fn compiled_snapshot_behavior_sha256(
                         token_sha256,
                         source_cidrs,
                         expires_at_ms,
+                        basic_transport,
                     } => {
                         let mut source_cidrs = source_cidrs
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>();
                         source_cidrs.sort();
-                        json!({
+                        let mut value = json!({
                             "type":"bearer-token",
                             "tokenSha256":token_sha256,
                             "sourceCidrs":source_cidrs,
                             "expiresAtMs":expires_at_ms.map(|value| value.to_string()),
-                        })
+                        });
+                        if let Some(transport) = basic_transport { value["basicTransport"] = transport.value(); }
+                        value
                     }
                 });
             json!({
@@ -7499,6 +7505,20 @@ fn bearer_token_from_proxy_authorization<'a>(header: &'a str, scheme: &str) -> O
 }
 
 impl ProxyAuthorizationPolicy {
+    fn presented_token_binding(&self, header: &str) -> Option<ConnectProxyAuthorizationBinding> {
+        let Self::BearerToken { basic_transport, .. } = self else { return None; };
+        // Retain the old Bearer parser byte-for-byte. Only the signed option
+        // permits the separate strict Basic transport, shared with capture.
+        if let Some(token) = bearer_token_from_proxy_authorization(header, "Bearer") {
+            return Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(
+                sha256_prefixed(token.as_bytes())));
+        }
+        let transport = basic_transport.as_ref()?;
+        Some(ConnectProxyAuthorizationBinding::BasicTransportTokenSha256 {
+            username: transport.username().to_owned(), token_sha256: transport.token_sha256(header)?,
+        })
+    }
+
     fn matches_at(
         &self,
         client_ip: Option<&str>,
@@ -7514,17 +7534,22 @@ impl ProxyAuthorizationPolicy {
                 token_sha256,
                 source_cidrs,
                 expires_at_ms,
+                basic_transport,
             } => {
+                if basic_transport.is_some() && expires_at_ms.is_none_or(|expiry|
+                    expiry == 0 || expiry > proxy_basic_transport::MAX_EXPIRY) { return false; }
                 if expires_at_ms.is_some_and(|expires_at_ms| now_epoch_ms >= expires_at_ms) {
                     return false;
                 }
                 if !ip_in_any_network(client_ip, source_cidrs) {
                     return false;
                 }
-                let Some(token) = bearer_token_from_proxy_authorization(header, "Bearer") else {
-                    return false;
+                let provided = match self.presented_token_binding(header) {
+                    Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(digest)) => digest,
+                    Some(ConnectProxyAuthorizationBinding::BasicTransportTokenSha256 { token_sha256, .. }) => token_sha256,
+                    _ => return false,
                 };
-                constant_time_eq(&sha256_prefixed(token.as_bytes()), token_sha256)
+                constant_time_eq(&provided, token_sha256)
             }
         }
     }
@@ -7539,12 +7564,17 @@ impl ProxyAuthorizationPolicy {
                 token_sha256,
                 source_cidrs,
                 expires_at_ms,
-            } => json!({
-                "type":"bearerToken",
-                "tokenSha256":token_sha256,
-                "sourceCidrs":canonical_cidr_strings(source_cidrs),
-                "expiresAtEpochMs":expires_at_ms.map(|value| value.to_string()),
-            }),
+                basic_transport,
+            } => {
+                let mut value = json!({
+                    "type":"bearerToken",
+                    "tokenSha256":token_sha256,
+                    "sourceCidrs":canonical_cidr_strings(source_cidrs),
+                    "expiresAtEpochMs":expires_at_ms.map(|value| value.to_string()),
+                });
+                if let Some(transport) = basic_transport { value["basicTransport"] = transport.value(); }
+                value
+            },
         }
     }
 }
@@ -7637,13 +7667,25 @@ impl Principal {
                     token_sha256,
                     source_cidrs,
                     expires_at_ms,
+                    basic_transport,
                 }),
                 Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(provided)),
             ) => {
-                !expires_at_ms.is_some_and(|expires_at_ms| now_epoch_ms >= expires_at_ms)
+                (basic_transport.is_none() || expires_at_ms.is_some_and(|expiry|
+                    expiry > 0 && expiry <= proxy_basic_transport::MAX_EXPIRY))
+                    && !expires_at_ms.is_some_and(|expires_at_ms| now_epoch_ms >= expires_at_ms)
                     && ip_in_any_network(client_ip, source_cidrs)
                     && constant_time_eq(provided, token_sha256)
             }
+            (
+                Some(ProxyAuthorizationPolicy::BearerToken { token_sha256, source_cidrs,
+                    expires_at_ms: Some(expiry), basic_transport: Some(transport) }),
+                Some(ConnectProxyAuthorizationBinding::BasicTransportTokenSha256 {
+                    username, token_sha256: provided,
+                }),
+            ) => *expiry > now_epoch_ms && *expiry <= proxy_basic_transport::MAX_EXPIRY
+                && ip_in_any_network(client_ip, source_cidrs)
+                && username == transport.username() && constant_time_eq(provided, token_sha256),
             _ => false,
         }
     }
@@ -7675,6 +7717,9 @@ impl ConnectAuthentication {
             ) => json!({
                 "kind":"BEARER_TOKEN_SHA256",
                 "sha256":digest,
+            }),
+            Some(ConnectProxyAuthorizationBinding::BasicTransportTokenSha256 { username, token_sha256 }) => json!({
+                "kind":"BASIC_TRANSPORT_TOKEN_SHA256", "username":username, "sha256":token_sha256,
             }),
             None => Value::Null,
         };
@@ -7786,14 +7831,12 @@ impl ConnectAuthentication {
                 })
                 .ok_or(ConnectAuthenticationError::SelectorRejected)
                 .map(Some)?,
-            Some(ProxyAuthorizationPolicy::BearerToken { .. }) => {
-                let token = headers
+            Some(policy @ ProxyAuthorizationPolicy::BearerToken { .. }) => {
+                let binding = headers
                     .get("proxy-authorization")
-                    .and_then(|header| bearer_token_from_proxy_authorization(header, "Bearer"))
+                    .and_then(|header| policy.presented_token_binding(header))
                     .ok_or(ConnectAuthenticationError::SelectorRejected)?;
-                Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(
-                    sha256_prefixed(token.as_bytes()),
-                ))
+                Some(binding)
             }
             None => None,
         };
@@ -11537,6 +11580,7 @@ fn validate_x_recent_search_age_proof(
 }
 
 fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
+    proxy_basic_transport::validate_raw_policy(raw)?;
     const DEFAULTS: [(&str, &str); 5] = [
         ("action", "deny"),
         ("failMode", "closed"),
@@ -14769,10 +14813,12 @@ fn parse_proxy_authorization(
         config.get("sourceCidrs"),
         &format!("principal {principal_id} proxyAuthorization.sourceCidrs"),
     )?;
+    let basic_transport = proxy_basic_transport::BasicTransport::from_policy(config)?;
     Ok(Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256,
         source_cidrs,
         expires_at_ms,
+        basic_transport,
     }))
 }
 
@@ -14935,6 +14981,9 @@ fn load_shadow_snapshot_pair(
         false,
         trust_root_source,
     )?;
+    // Shadow/candidate authority is not the admitted operator transport.
+    proxy_basic_transport::require_scope(&active, false)?;
+    proxy_basic_transport::require_scope(&candidate, false)?;
     if active.policy_signing_key_id
         != candidate.policy_signing_key_id
     {
@@ -14967,6 +15016,7 @@ fn compile_signed_snapshot_for_source(raw: Value, trust_root: PolicyTrustRoot,
         transport.relays.remaining()?;
         let snapshot = compile_signed_snapshot_with_expected_key(raw, trust_root, binary_digest,
             require_active, Some(&transport.expected_policy_signing_key_id))?;
+        proxy_basic_transport::require_scope(&snapshot, false)?;
         transport.relays.remaining()?;
         Ok(snapshot)
     } else {
@@ -15729,6 +15779,14 @@ fn refresh_policy_snapshot_guarded(
     };
     match loaded {
         Ok(mut snapshot) => {
+            if let Err(error) = proxy_basic_transport::require_runtime(state, &snapshot) {
+                state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
+                enqueue_audit(state, "data_plane.policy.reload_failed", json!({
+                    "component":"serverware-decision-gate-rs", "error":error,
+                    "candidate_policy_hash":snapshot.hash,
+                }));
+                return Err(error.to_owned());
+            }
             if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
                 trust.check_snapshot(&snapshot)?;
             }
@@ -35189,6 +35247,9 @@ fn decide_internal_with_mode_and_shadow<'a>(
     precomputed_shadow_admission: Option<ShadowAdmission>,
 ) -> Value {
     let started = Instant::now();
+    if let Err(error) = proxy_basic_transport::require_runtime(state, snapshot) {
+        return deny(403, "operator Basic transport profile refused", json!({"error":error}), started);
+    }
     let shadow_admission = match precomputed_shadow_admission {
         Some(admission) if admission.matches(snapshot, &req, authenticated_principal_id) => admission,
         Some(_) => state.policy_shadow.capture_for_gate(state,
@@ -49625,6 +49686,11 @@ fn handle_connect_request(
     trusted_mtls_evidence: Option<TrustedMtlsEvidence>,
 ) {
     if stream.check_operation_deadline().is_err() { return; }
+    if let Err(error) = proxy_basic_transport::require_runtime(&state, &snapshot) {
+        let _ = stream.write_all(&http_response("403 Forbidden", json!({"error":error})));
+        let _ = stream.flush();
+        return;
+    }
     if !state.policy_shadow.account_unsupported(
         &snapshot,
         ShadowIngressKind::OuterConnect,
@@ -50407,6 +50473,11 @@ fn handle_gate_connection(
         }
     };
     let intake_snapshot = current_snapshot(&state);
+    if let Err(error) = proxy_basic_transport::require_runtime(&state, &intake_snapshot) {
+        let _ = stream.write_all(&http_response("403 Forbidden", json!({"error":error})));
+        let _ = stream.flush();
+        return;
+    }
     let ordered_intake = !management_listener && gmail_read::allows_ordered_intake(&intake_snapshot, None);
     let mut head = match read_request_head_with_ordered_query_from(&mut stream, client_ip.clone(), ordered_intake) {
         Ok(head) => head,
@@ -52639,6 +52710,7 @@ fn main() -> Result<(), String> {
     let binary_digest = current_binary_digest()?;
     let mut initial_snapshot = load_snapshot_on_deadline(&policy_path, &policy_trust_root_source,
         &binary_digest, operator_startup_guard.as_ref().map(|permit| permit.deadline()))?;
+    proxy_basic_transport::require_scope(&initial_snapshot, operator_selection.is_some() && !is_production)?;
     initial_snapshot.epoch = 1;
     initial_snapshot.trust_generation = 1;
     validate_production_release_authorization_policy(
@@ -52795,6 +52867,7 @@ fn main() -> Result<(), String> {
         initialized_state.operator_audit_publication = operator_publication_owner.as_ref().map(Arc::clone);
         operator_startup_guard.as_ref().ok_or("operator publication startup ownership missing")?.check()?;
     }
+    proxy_basic_transport::require_runtime(&initialized_state, &current_snapshot(&initialized_state))?;
     drop(operator_startup_guard);
     let state = Arc::new(initialized_state);
     if let Some(control) =
@@ -54010,6 +54083,7 @@ mod tests {
                 token_sha256: sha256_prefixed(b"tunnel-secret"),
                 source_cidrs: vec!["127.0.0.1/32".parse().expect("token CIDR")],
                 expires_at_ms: Some(2_000),
+                basic_transport: None,
             }),
         };
         let connect_headers = BTreeMap::from([

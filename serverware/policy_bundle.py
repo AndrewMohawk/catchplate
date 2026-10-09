@@ -3074,6 +3074,46 @@ def validate_discard_headers(
     return tuple(admitted)
 
 
+_PROXY_BASIC_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+
+
+def _proxy_authorization_token_digest(
+    raw_header: str,
+    *,
+    scheme: str,
+    basic_username: str | None = None,
+) -> str | None:
+    """Hash admitted transport material, never return or describe its plaintext.
+
+    The additive Basic transport is exactly one bounded operator-token wire
+    shape. The pre-existing Bearer parser intentionally retains its semantics.
+    Matching and static exact-selector overlap must use the same parser.
+    """
+    if not isinstance(raw_header, str) or not raw_header:
+        return None
+    if basic_username is not None and raw_header[:5].lower() == "basic":
+        if (len(raw_header) != 114 or raw_header[:6].lower() != "basic "
+                or re.fullmatch(r"[A-Za-z0-9+/]{107}=", raw_header[6:]) is None):
+            return None
+        encoded = raw_header[6:].encode("ascii")
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except ValueError:
+            return None
+        if (len(decoded) != 80 or not hmac.compare_digest(base64.b64encode(decoded), encoded)
+                or decoded[36:37] != b":"
+                or not hmac.compare_digest(decoded[:36], basic_username.encode("ascii"))
+                or re.fullmatch(rb"[A-Za-z0-9_-]{43}", decoded[37:]) is None):
+            return None
+        material = decoded[37:]
+    else:
+        actual_scheme, _, token = raw_header.strip().partition(" ")
+        if not token or actual_scheme.lower() != scheme.lower():
+            return None
+        material = token.encode("utf-8")
+    return "sha256:" + hashlib.sha256(material).hexdigest()
+
+
 @dataclass(frozen=True)
 class ProxyAuthorizationPolicy:
     scheme: str = "Bearer"
@@ -3081,6 +3121,7 @@ class ProxyAuthorizationPolicy:
     source_cidrs: tuple[str, ...] = ()
     expires_at_epoch_ms: int | None = None
     legacy_exact: str | None = None
+    basic_username: str | None = None
 
     @property
     def networks(self) -> tuple[ipaddress._BaseNetwork, ...]:
@@ -3105,11 +3146,10 @@ class ProxyAuthorizationPolicy:
                 return False
             if not any(ip in network for network in self.networks):
                 return False
-        scheme, _, token = raw_header.strip().partition(" ")
-        if not token or scheme.lower() != self.scheme.lower():
-            return False
-        digest = "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
-        return bool(self.token_sha256) and hmac.compare_digest(digest, self.token_sha256)
+        digest = _proxy_authorization_token_digest(
+            raw_header, scheme=self.scheme, basic_username=self.basic_username
+        )
+        return digest is not None and bool(self.token_sha256) and hmac.compare_digest(digest, self.token_sha256)
 
     @classmethod
     def from_raw(cls, raw: Any) -> "ProxyAuthorizationPolicy | None":
@@ -3125,6 +3165,7 @@ class ProxyAuthorizationPolicy:
             "tokenSha256",
             "sourceCidrs",
             "expiresAtEpochMs",
+            "basicTransport",
         }
         if (
             set(raw) - allowed_fields
@@ -3143,6 +3184,17 @@ class ProxyAuthorizationPolicy:
         token_id = raw.get("tokenId")
         token_sha256 = raw.get("tokenSha256")
         expires_at_epoch_ms = raw.get("expiresAtEpochMs")
+        basic_username = None
+        if "basicTransport" in raw:
+            basic = raw["basicTransport"]
+            if (not isinstance(basic, dict) or set(basic) != {"username"}
+                    or not isinstance(basic.get("username"), str)
+                    or _PROXY_BASIC_UUID_RE.fullmatch(basic["username"]) is None
+                    or basic["username"] != token_id
+                    or type(expires_at_epoch_ms) is not int
+                    or not 1 <= expires_at_epoch_ms <= 9_007_199_254_740_991):
+                raise PolicyBundleError("principal proxyAuthorization Basic transport contract is invalid")
+            basic_username = basic["username"]
         if (
             raw.get("scheme") != "Bearer"
             or (
@@ -3175,6 +3227,7 @@ class ProxyAuthorizationPolicy:
             token_sha256=token_sha256,
             source_cidrs=source_cidrs,
             expires_at_epoch_ms=expires_at_epoch_ms,
+            basic_username=basic_username,
         )
 
 
@@ -3396,11 +3449,10 @@ def _proxy_authorization_accepts_exact(
             raw_header.encode("utf-8"),
             policy.legacy_exact.encode("utf-8"),
         )
-    scheme, _, token = raw_header.strip().partition(" ")
-    if not token or scheme.lower() != policy.scheme.lower():
-        return False
-    digest = "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return bool(policy.token_sha256) and hmac.compare_digest(
+    digest = _proxy_authorization_token_digest(
+        raw_header, scheme=policy.scheme, basic_username=policy.basic_username
+    )
+    return digest is not None and bool(policy.token_sha256) and hmac.compare_digest(
         digest, policy.token_sha256
     )
 
@@ -6584,6 +6636,13 @@ def compile_policy_bundle(
 
     principals: dict[str, PrincipalPolicy] = {}
     for item in principal_items:
+        proxy_raw = item.get("proxyAuthorization")
+        if (isinstance(proxy_raw, dict) and "basicTransport" in proxy_raw
+                and (raw.get("apiVersion") != "serverware.policy/v1"
+                     or metadata.get("id") != "serverware-operator-demo")):
+            # A label is not runtime authority: the Rust transport separately
+            # requires an admitted operator profile at startup and reload.
+            raise PolicyBundleError("principal Basic transport requires the operator v1 policy profile")
         principal_id = item["id"]
         if principal_id in principals:
             raise PolicyBundleError(f"duplicate principal: {principal_id}")

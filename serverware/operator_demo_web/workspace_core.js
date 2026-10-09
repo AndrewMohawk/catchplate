@@ -120,7 +120,8 @@ function operatorRuleCredentialValid(rule, credential) {
 function operatorRuleSupported(rule, catalog) {
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
-  return Boolean(credential && application && operatorRuleContentValid(rule, credential) && operatorRuleCredentialValid(rule, credential) &&
+  return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
+    operatorRuleContentValid(rule, credential) && operatorRuleCredentialValid(rule, credential) &&
     (isGmailRule(rule) ? gmailAvailable(catalog, credential) : availableResponseModes(catalog).includes(rule.response_mode)) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
     (!Object.hasOwn(rule, 'request_body_mode') || availableRequestBodyChoices(catalog, credential).includes(rule.request_body_mode)));
 }
@@ -264,6 +265,30 @@ function staticKeyReplacementAvailable(catalog, credential) {
     Number.isSafeInteger(metadata.credential_generation) && metadata.credential_generation > 0 &&
     metadata.credential_generation < Number.MAX_SAFE_INTEGER);
 }
+function projectApplicationProxyAuthenticationCapability(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !== 'modes,path,schema' ||
+      value.schema !== 'serverware.operatorProxyAuthentication/v1' ||
+      value.path !== '/api/operator-demo/applications/proxy-authentication' ||
+      !Array.isArray(value.modes) || value.modes.length !== 2 || value.modes[0] !== 'bearer' ||
+      value.modes[1] !== 'basic_and_bearer_v1') return null;
+  return {schema: value.schema, path: value.path, modes: ['bearer', 'basic_and_bearer_v1']};
+}
+function applicationProxyAuthentication(application) {
+  if (!application) return null;
+  if (!Object.hasOwn(application, 'proxy_authentication')) return 'bearer';
+  return ['bearer', 'basic_and_bearer_v1'].includes(application.proxy_authentication) ? application.proxy_authentication : null;
+}
+function applicationProxyAuthenticationSupported(catalog, application) {
+  const mode = applicationProxyAuthentication(application);
+  return mode === 'bearer' || mode === 'basic_and_bearer_v1' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(application.id) &&
+    Boolean(projectApplicationProxyAuthenticationCapability(catalog?.capabilities?.application_proxy_authentication));
+}
+function newApplicationProxyAuthentication(catalog) {
+  return projectApplicationProxyAuthenticationCapability(catalog?.capabilities?.application_proxy_authentication) ?
+    {proxy_authentication: 'basic_and_bearer_v1'} : {};
+}
 function projectCatalog(value) {
   if (value?.schema !== 'serverware.operatorCatalog/v1' || value.mode !== 'operator-development' ||
       value.productionReady !== false || value.hardwareVerified !== false || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
@@ -282,6 +307,10 @@ function projectCatalog(value) {
   });
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
+  applications.forEach((application, index) => {
+    if (Object.hasOwn(value.applications[index], 'proxy_authentication'))
+      application.proxy_authentication = applicationProxyAuthentication(value.applications[index]);
+  });
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
@@ -305,6 +334,7 @@ function projectCatalog(value) {
   const capabilities = pick(value.capabilities || {}, ['credential_types', 'response_modes', 'request_body_modes',
     'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
   capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
+  capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
     throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
   capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;

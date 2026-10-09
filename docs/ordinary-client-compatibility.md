@@ -191,6 +191,92 @@ metadata; and real JSON/error/204 finalizer paths. The joined Google fixture
 must retain its ordinary upstream headers and reach actual expiry/refresh; do
 not alter its response merely to conceal a compatibility failure.
 
+## Agreed operator-only standard-client authentication contract
+
+The catalog, Python/schema, Rust and UI implementation is prepared and has
+independent source review. Execution and deployment acceptance remain open;
+earlier compatibility results do not cover this option. Ordinary clients need a supported way to authenticate
+to the proxy using their existing application token; this is separate from
+provider-key injection, OAuth consent and console authentication.
+
+### Signed opt-in and bounded wire form
+
+An operator-profile principal may explicitly add the optional signed field
+`proxyAuthorization.basicTransport = {"username": "<application UUID>"}`.
+The username must be the canonical lowercase application UUID and exactly match
+the existing `tokenId`. The existing `scheme: "Bearer"` and `tokenSha256`
+remain authoritative; this does not create a second password or change token
+hashing. `expiresAtEpochMs` must be an integer from 1 through
+9,007,199,254,740,991, and normal expiry enforcement still applies.
+
+For this opt-in, the outer proxy request may carry
+`Proxy-Authorization: Basic <credentials>`. The decoded credentials must be
+exactly 80 ASCII bytes: the 36-byte UUID, one colon, and the existing 43-byte
+URL-safe application token. Their standard padded Base64 encoding is exactly
+108 bytes, with canonical padding; decoding and re-encoding must agree.
+Noncanonical encodings, extra separators, whitespace, malformed identities or
+incorrect token lengths must not become alternate credentials. Use bounded
+parsing shared with the existing digest/authentication path, not a separate
+unbounded parser or a new request/approval digest domain. Proxy authentication
+material must not be forwarded to the upstream or copied into audit evidence.
+
+Without the signed opt-in, Basic authentication remains unsupported. Existing
+Bearer authentication, omitted-field policy output and all established digests
+remain unchanged. The new option is limited to the operator profile: policy-v2,
+native/enrolled and other non-operator runtimes must refuse it until their own
+integration and acceptance are completed. Operator support cannot stand in for
+that remaining full-product work.
+
+### Application mode and reviewed changes
+
+The application setting is `proxy_authentication`, with modes `bearer` and
+`basic_and_bearer_v1`. An absent saved field keeps the old Bearer interpretation;
+availability must not rewrite migrated records or signed policy. New application
+API requests default to `bearer`. The UI may select the new mode only when the
+exact capability is advertised, and must send the explicit opt-in rather than
+infer it from a missing field or general proxy readiness:
+
+```json
+{
+  "schema": "serverware.operatorProxyAuthentication/v1",
+  "modes": ["bearer", "basic_and_bearer_v1"],
+  "path": "/api/operator-demo/applications/proxy-authentication"
+}
+```
+
+Existing applications use the reviewed, catalog/policy-CAS mutation
+`POST /api/operator-demo/applications/proxy-authentication` to enable or disable
+the option. This preserves application/principal identity, token value and
+generation, absolute expiry, credential references and access rules. An assigned
+application requires a new signed-policy publication; an unassigned application
+mode change grants no access. Neither enabling the mode nor changing transport
+may silently renew the token. Disabling Basic must retain the existing Bearer
+path, not rotate or recreate the application.
+
+### Acceptance still required
+
+Acceptance must use stock Requests and curl through the actual **HTTPS** proxy,
+including their ordinary proxy-username/password handling; a custom CONNECT
+implementation or manually manufactured Basic header alone is insufficient.
+Verify outer proxy TLS and inner origin/MITM TLS trust separately, including
+wrong-outer-CA and wrong-inner-CA refusal. Wrong application identity, incorrect
+token and expired token must be denied without upstream dispatch. Retain
+positive Bearer and old absent-option controls, plus Basic refusal when disabled.
+
+The private checker must use independently generated outer and inner trust
+roots. Stock Requests uses one scoped CA bundle containing both roots; this is
+not separate per-layer Requests trust configuration. Removing either required
+root must fail. Curl can select the two CA files independently. The catalog's
+minimum application-token lifetime remains one hour; focused expiry controls
+must not be relabeled as a short fresh-API natural-expiry journey.
+
+Evidence must also establish secret isolation, audit bindings and the real
+policy transition, without logging proxy or provider credentials. UI fixtures,
+compiler/parser tests, isolated private proxy acceptance and retained live
+acceptance are separate results and must be recorded separately. None implies
+real-provider, native or production readiness. Implementation and verification
+status belong in the [verification record](ordinary-client-verification.md).
+
 ## Required cross-layer acceptance
 
 | Control | Required evidence |

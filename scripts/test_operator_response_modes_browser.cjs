@@ -2,7 +2,7 @@
 // Focused response-mode UI checks. Reuses only intercepted synthetic fixtures;
 // does not run the existing catalog suite or contact any application/provider.
 const assert = require('node:assert/strict');
-const {fixture, ready, view, credential, application, rule, IDS} = require('./test_operator_catalog_browser.cjs');
+const {fixture, ready, view, openRestrictions, credential, application, rule, IDS} = require('./test_operator_catalog_browser.cjs');
 
 const BOTH = ['projected_json', 'unfiltered_json'];
 const supplied = (changes = {}) => ({credentials: [credential()], applications: [application()], responseModes: BOTH, ...changes});
@@ -12,6 +12,7 @@ const ruleCard = (page, id) => page.locator(`#access-rules-list [data-resource-i
 
 async function form(page, name = 'Scoped status access') {
   await ready(page); await view(page, 'access-rules');
+  await openRestrictions(page, 'rule');
   await page.locator('#rule-name').fill(name); await page.locator('#rule-path').fill('/v1/status');
 }
 async function save(page) { await page.locator('#rule-save').click(); await ready(page); }

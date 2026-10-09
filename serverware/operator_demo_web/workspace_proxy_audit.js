@@ -43,9 +43,9 @@ function createProxyView(workspace, applications) {
       ' The template supplies no request body or query parameter values. Use your existing client to provide the endpoint-specific data within this rule.' +
       (dummyHeader ? ' Send the displayed exact dummy ' + dummyHeader.name + ' header once. It is not a provider secret or your Serverware application token.' :
         ' Do not send a provider credential header; Serverware adds it automatically.') +
-      (['unfiltered_json', 'unfiltered_json_or_empty_v1'].includes(rule.response_mode) ? ' Response content: all JSON fields, including error responses; no field filtering.' :
+      (operatorResponseKeepsJson(rule.response_mode) ? ' Response content: all JSON fields, including error responses; no field filtering.' :
         ' Successful JSON responses contain only the selected fields. Error responses retain only error, code and message fields.') +
-      ' ' + operatorResponseLimits(rule.response_mode) + ' See Compatibility limits for sizes, supported statuses and transport restrictions.' +
+      ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode) + ' See Compatibility limits for sizes, supported statuses and transport restrictions.' +
       (rule.request_body_mode === 'preserve_json_v1' ? ' Request content: keep your client’s JSON bytes unchanged, up to 64 KiB, or send no body. Nonempty bodies require application/json. No request-field list is needed; forms, binary and streaming are unsupported.' :
         rule.request_fields.length ? ' If the endpoint requires a body, send application/json using only these fields: ' + rule.request_fields.join(', ') +
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +

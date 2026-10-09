@@ -3,7 +3,7 @@
 // existing bounded synthetic fixture; generated commands are parsed, never run.
 const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
-const {fixture, ready, view, credential, application, rule, IDS, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
+const {fixture, ready, view, openRestrictions, credential, application, rule, IDS, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
 
 const MODES = ['insert', 'replace_exact'];
 const DUMMY = "Bearer DUMMY-$literal-'quoted'-`value`";
@@ -21,6 +21,7 @@ function separateProxy(args) {
 }
 async function form(page, name = 'Scoped credential use') {
   await ready(page); await view(page, 'access-rules');
+  await openRestrictions(page, 'rule');
   await page.locator('#rule-name').fill(name); await page.locator('#rule-path').fill('/v1/status');
   await page.locator('#rule-response-fields').fill('id\nstatus');
 }

@@ -211,6 +211,10 @@ async function view(page, name) {
   await page.locator(`nav a[href="#${name}"]`).click(); await page.locator('#' + name).waitFor({state: 'visible'});
   assert.equal(await page.locator('.page:visible').count(), 1); assert.equal(await page.locator(`nav a[href="#${name}"]`).getAttribute('aria-current'), 'page');
 }
+async function openRestrictions(page, prefix) {
+  const details = page.locator('#' + prefix + '-restrictions');
+  if (!await details.evaluate(node => node.open)) await details.locator(':scope > summary').click();
+}
 async function noToken(page) {
   await page.waitForFunction(() => document.querySelector('#client-token').value === '' && document.querySelector('#one-time-access').hidden);
   for (const id of ['copy-token', 'reveal-token', 'dismiss-token', 'download-config']) assert(await page.locator('#' + id).isDisabled(), id);
@@ -230,7 +234,7 @@ async function heldToken(page, value = token(IDS.application)) {
 }
 async function settled(page) { await page.waitForFunction(() => !document.querySelector('#application-fields').disabled); }
 async function saveRule(page, name = 'Read status') {
-  await view(page, 'access-rules'); await page.locator('#rule-name').fill(name);
+  await view(page, 'access-rules'); await openRestrictions(page, 'rule'); await page.locator('#rule-name').fill(name);
   await page.locator('#rule-path').fill('/v1/status'); await page.locator('#rule-response-fields').fill('id\nstatus');
   await page.locator('#rule-save').click(); await ready(page);
 }
@@ -427,4 +431,4 @@ async function main() {
   } finally { clearTimeout(deadline); await browser.close(); }
 }
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });
-module.exports = {main, fixture, ready, view, saveRule, credential, application, rule, IDS, NOW, UPSTREAM};
+module.exports = {main, fixture, ready, view, openRestrictions, saveRule, credential, application, rule, IDS, NOW, UPSTREAM};

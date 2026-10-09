@@ -8,7 +8,7 @@ const {readFileSync} = require('node:fs');
 const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const vm = require('node:vm');
-const {fixture: legacyFixture, ready, view, credential, application, rule, IDS, NOW, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
+const {fixture: legacyFixture, ready, view, openRestrictions, credential, application, rule, IDS, NOW, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
 const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
 
 const ROOT = resolve(__dirname, '..');
@@ -16,6 +16,8 @@ const ORIGIN = 'https://operator-catalog.example.test';
 const REQUEST_MODE = 'preserve_json_v1';
 const RESPONSE_MODE = 'unfiltered_json_or_empty_v1';
 const RESPONSES = ['projected_json', 'unfiltered_json', RESPONSE_MODE];
+// Additive fixture admission only; the original suite's advertised defaults stay unchanged.
+const KNOWN_RESPONSES = [...RESPONSES, 'unfiltered_json_or_empty_v2'];
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const PRIVATE = ['synthetic-ordinary-provider-secret-NEVER-RENDER', 'synthetic-refresh-private-NEVER-RENDER'];
 const DUMMY = "Bearer ORDINARY-DUMMY-'literal'-$value";
@@ -44,7 +46,7 @@ function publicCatalog(state) {
   const loaded = policy(state).activation === 'active' && state.active === state.loaded;
   const value = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
     hardwareVerified: false, revision: state.revision, policy: policy(state), proxy_url: 'https://proxy.example.test',
-    allowed_upstreams: [UPSTREAM], credentials: state.credentials.map(item => ({...item,
+    allowed_upstreams: state.allowedUpstreams || [UPSTREAM], credentials: state.credentials.map(item => ({...item,
       active_rule_count: activeRules.filter(saved => saved.credential_id === item.id).length})),
     applications: state.applications.map(item => {
       const count = activeRules.filter(saved => saved.application_id === item.id).length;
@@ -71,7 +73,7 @@ function admitRule(state, body) {
   const selectedCredential = state.credentials.find(item => item.id === body.credential_id && item.status === 'active');
   assert(selectedCredential && state.applications.some(item => item.id === body.application_id && item.status === 'active'));
   const target = new URL(body.upstream_url);
-  assert.equal(target.origin, UPSTREAM); assert(!target.username && !target.password && !target.hash && !target.search);
+  assert((state.allowedUpstreams || [UPSTREAM]).includes(target.origin)); assert(!target.username && !target.password && !target.hash && !target.search);
   assert(Array.isArray(body.methods) && body.methods.length >= 1 && body.methods.length <= 6 && new Set(body.methods).size === body.methods.length);
   assert(body.methods.every(method => METHODS.includes(method)));
   for (const name of ['request_fields', 'response_fields', 'query_keys', 'allowed_headers']) {
@@ -83,7 +85,7 @@ function admitRule(state, body) {
     assert.equal(body.request_body_mode, REQUEST_MODE); assert(Array.isArray(state.requestBodyModes) && state.requestBodyModes.includes(REQUEST_MODE));
     assert.deepEqual(body.request_fields, []); assert.notEqual(selectedCredential.auth_type, 'google_oauth');
   }
-  assert(RESPONSES.includes(body.response_mode) && Array.isArray(state.responseModes) && state.responseModes.includes(body.response_mode));
+  assert(KNOWN_RESPONSES.includes(body.response_mode) && Array.isArray(state.responseModes) && state.responseModes.includes(body.response_mode));
   assert.equal(body.response_fields.length > 0, body.response_mode === 'projected_json');
   assert(['insert', 'replace_exact'].includes(body.credential_input) && Array.isArray(state.credentialInputModes) && state.credentialInputModes.includes(body.credential_input));
   if (body.credential_input === 'insert') assert(!Object.hasOwn(body, 'placeholder'));
@@ -91,6 +93,8 @@ function admitRule(state, body) {
   if (selectedCredential.auth_type === 'google_oauth') {
     assert.deepEqual(body.methods, ['GET']); assert.deepEqual(body.request_fields, []);
     assert(!Object.hasOwn(body, 'request_body_mode'));
+    assert.equal(target.origin, 'https://gmail.googleapis.com');
+    assert(/^\/gmail\/v1\/users\/me\/(?:profile|history|(?:messages|threads|labels)(?:\/[A-Za-z0-9_-]+)?)$/.test(target.pathname));
   }
   const payload = Object.fromEntries(Object.entries(body).filter(([key]) => !key.startsWith('expected_')));
   const id = state.rules.length ? '55555555-5555-4555-8555-555555555555' : IDS.rule;
@@ -104,6 +108,7 @@ function admitRule(state, body) {
 async function fixture(browser, options, exercise) {
   return legacyFixture(browser, options, async (page, state, controls) => {
     state.requestBodyModes = options.requestBodyModes === undefined ? undefined : clone(options.requestBodyModes);
+    if (options.allowedUpstreams) state.allowedUpstreams = clone(options.allowedUpstreams);
     // Do not call route.fetch/continue: these handlers can only fulfill synthetic
     // JSON or deny. The underlying fixture still denies every other request and
     // every WebSocket, blocks service workers and closes this dedicated context.
@@ -152,10 +157,12 @@ async function pair(page) {
 }
 async function direct(page) {
   await ready(page); await view(page, 'access-rules');
+  await openRestrictions(page, 'rule');
   await page.locator('#rule-name').fill('Ordinary JSON operation'); await page.locator('#rule-path').fill('/v1/status');
 }
 async function draft(page) {
   await pair(page); await page.locator('#connect-rule-choice').selectOption('new');
+  await openRestrictions(page, 'connect');
   await page.locator('#connect-rule-name').fill('Ordinary JSON operation'); await page.locator('#connect-origin').selectOption(UPSTREAM);
   await page.locator('#connect-path').fill('/v1/status');
 }
@@ -246,6 +253,7 @@ const tests = [
     await page.locator('#connect-application-name').fill('Ordinary JSON client'); await page.locator('#connect-token-ttl').selectOption('3600');
     await page.locator('#connect-application-next').click(); await step(page, 'access'); const held = await page.locator('#client-token').inputValue();
     assert(held.startsWith('synthetic_application_')); assert.equal(state.rules.length, 0);
+    await openRestrictions(page, 'connect');
     await page.locator('#connect-rule-name').fill('Ordinary JSON operation'); await page.locator('#connect-path').fill('/v1/status');
     assert.equal(await page.locator('#connect-request-body-mode').inputValue(), REQUEST_MODE);
     assert.equal(await page.locator('#connect-response-mode').inputValue(), RESPONSE_MODE); await requestFields(page, 'connect', false);
@@ -423,3 +431,5 @@ async function main() {
   }
 }
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });
+module.exports = {fixture, publicCatalog, supplied, google, preservedRule, policy, digest, clone,
+  pair, direct, draft, method, review, grant, refresh, command, disabledClient, downloadedConfig, step, privateAbsent, PRIVATE, DUMMY};

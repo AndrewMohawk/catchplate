@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
-const {fixture, ready, view, credential, application, rule, IDS, NOW, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
+const {fixture, ready, view, openRestrictions, credential, application, rule, IDS, NOW, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
 
 const ROOT = resolve(__dirname, '..');
 const SECRET = 'synthetic-provider-key-for-connect-fixture';
@@ -68,6 +68,7 @@ async function useApplication(page, id = IDS.application) {
 async function pair(page) { await start(page); await useCredential(page); await useApplication(page); }
 async function draft(page) {
   await page.locator('#connect-rule-choice').selectOption('new');
+  await openRestrictions(page, 'connect');
   await page.locator('#connect-rule-name').fill('Read account status');
   await page.locator('#connect-origin').selectOption(UPSTREAM);
   await page.locator('#connect-path').fill('/v1/status');
@@ -292,7 +293,7 @@ const tests = [
     await page.locator('#connect-compatibility summary').click();
     assert.match(await page.locator('#connect-compatibility').innerText(), /204|empty/i);
     await page.locator('#connect-request-fields').fill('message\nrecipient');
-    await page.locator('#connect-rule-new details summary').click(); await page.locator('#connect-query-keys').fill('page\nlimit');
+    await page.locator('#connect-request-extras > summary').click(); await page.locator('#connect-query-keys').fill('page\nlimit');
     await review(page); const summary = await page.locator('#connect-review-details').innerText();
     for (const text of ['message', 'recipient', 'page', 'limit', 'POST']) assert(summary.includes(text));
     await grant(page); await setup(page); const body = state.posts[0].body;

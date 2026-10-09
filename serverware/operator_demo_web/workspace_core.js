@@ -1,12 +1,26 @@
 // Public catalog state and transport only. Provider secrets and client tokens do
 // not belong in this state. All resource views share one explicit mutation gate.
 const operatorMethods = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
-const operatorResponseModes = Object.freeze({unfiltered_json_or_empty_v1: 'Keep JSON responses and empty 204',
+const operatorResponseModes = Object.freeze({unfiltered_json_or_empty_v2: 'Keep JSON content or empty response',
+  unfiltered_json_or_empty_v1: 'Keep JSON responses and empty 204',
   unfiltered_json: 'Do not filter response content (JSON)',
   projected_json: 'Only return selected JSON fields'});
+function operatorResponseKeepsJson(mode) { return Object.hasOwn(operatorResponseModes, mode) && mode !== 'projected_json'; }
+function operatorResponseAllowsEmpty204(mode) { return ['unfiltered_json_or_empty_v1', 'unfiltered_json_or_empty_v2'].includes(mode); }
 function availableResponseModes(catalog) {
   const advertised = catalog?.capabilities?.response_modes;
   return Array.isArray(advertised) ? Object.keys(operatorResponseModes).filter(mode => advertised.includes(mode)) : [];
+}
+function responseFormChoices(catalog, current) {
+  const modes = availableResponseModes(catalog);
+  // Compatibility generations are persisted contracts, not operator choices.
+  // Retain an advertised draft exactly; only a fresh choice gets the default.
+  const whole = modes.includes(current) && operatorResponseKeepsJson(current) ? current : modes.find(operatorResponseKeepsJson);
+  return [...(whole ? [{id: whole, name: 'Do not filter response content'}] : []),
+    ...(modes.includes('projected_json') ? [{id: 'projected_json', name: 'Only return selected JSON fields'}] : [])];
+}
+function operatorPermissionName(value, methods, path) {
+  return value.trim() || (methods.join(', ') + ' ' + path).slice(0, 128).trim();
 }
 const operatorCredentialInputModes = Object.freeze({insert: 'Add credential automatically', replace_exact: 'Replace a dummy header value'});
 function availableCredentialInputModes(catalog) {

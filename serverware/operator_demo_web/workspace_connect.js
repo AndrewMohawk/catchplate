@@ -78,7 +78,8 @@ function createConnectView(workspace, applications, proxy) {
     choices('connect-rule-choice', [{id: 'new', name: 'Grant a new permission'}, ...matchingRules().map(item => ({id: item.id, name: item.name + ' · ' + item.id}))], 'new');
     choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
     choices('connect-credential-input', availableCredentialInputModes(value).map(id => ({id, name: operatorCredentialInputModes[id]})), 'insert');
-    choices('connect-response-mode', availableResponseModes(value).map(id => ({id, name: operatorResponseModes[id]})), availableResponseModes(value)[0]);
+    const responseChoices = responseFormChoices(value, element('connect-response-mode').value);
+    choices('connect-response-mode', responseChoices, responseChoices[0]?.id);
   }
   function renderForms() {
     const newCredential = element('connect-credential-choice').value === 'new';
@@ -102,6 +103,7 @@ function createConnectView(workspace, applications, proxy) {
     const content = review && step >= 3 ? review.rule : {response_mode: element('connect-response-mode').value};
     if (!(review && step >= 3) && element('connect-request-body-mode').value === 'preserve_json_v1') content.request_body_mode = 'preserve_json_v1';
     renderOperatorCompatibility('connect-compatibility-content', content);
+    renderBasicCompatibility('connect', catalog(), credential());
     element('connect-credential-next').textContent = newCredential ? 'Save credential & continue' : 'Use saved credential';
     element('connect-credential-next').disabled = !newCredential && !catalog()?.credentials.some(item =>
       item.id === element('connect-credential-choice').value && item.status === 'active');
@@ -189,9 +191,10 @@ function createConnectView(workspace, applications, proxy) {
   });
   function draftRule() {
     const origin = element('connect-origin').value; const path = element('connect-path').value.trim();
-    const rule = {name: element('connect-rule-name').value.trim(), application_id: selectedApplication, credential_id: selectedCredential,
+    const methods = [...document.querySelectorAll('input[name="connect-method"]:checked')].map(input => input.value);
+    const rule = {name: operatorPermissionName(element('connect-rule-name').value, methods, path), application_id: selectedApplication, credential_id: selectedCredential,
       upstream_url: origin.replace(/\/$/, '') + path,
-      methods: [...document.querySelectorAll('input[name="connect-method"]:checked')].map(input => input.value),
+      methods,
       credential_input: element('connect-credential-input').value, response_mode: element('connect-response-mode').value,
       response_fields: element('connect-response-mode').value === 'projected_json' ? fieldLines('connect-response-fields') : [],
       ...operatorRequestBodyInput(element('connect-request-body-mode').value, fieldLines('connect-request-fields'), catalog(), credential()),
@@ -224,12 +227,15 @@ function createConnectView(workspace, applications, proxy) {
   for (const id of ['connect-credential-choice', 'connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
     element(id).addEventListener('change', render);
   element('connect-request-fields').addEventListener('input', renderForms);
+  element('connect-query-keys').addEventListener('input', renderForms);
   element('connect-back').addEventListener('click', () => { if (step > 0 && step < 4 && !workspace.state.busy && !checkpoint) { review = null; goto(step - 1); } });
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null;
     for (const id of ['connect-credential-form', 'connect-application-form', 'connect-access-form']) element(id).reset();
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
+    for (const id of ['connect-response-mode', 'connect-request-body-mode']) element(id).value = '';
+    element('connect-restrictions').open = false;
     element('connect-credential-secret').value = ''; proxy.mount(null); step = 0;
   }
   element('connect-cancel').addEventListener('click', () => {

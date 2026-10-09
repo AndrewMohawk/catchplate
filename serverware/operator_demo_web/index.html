@@ -52,20 +52,24 @@
           <h2>What may this app do?</h2>
           <label for="connect-rule-choice">Access for this app and credential</label><select id="connect-rule-choice"></select>
           <div id="connect-rule-new">
-            <label for="connect-rule-name">Name this permission</label><input id="connect-rule-name" maxlength="128" placeholder="Read account status" required>
             <div class="two-column"><div><label for="connect-origin">Approved destination</label><select id="connect-origin"></select></div><div><label for="connect-path">Exact URL path</label><input id="connect-path" maxlength="1024" placeholder="/v1/status" required></div></div>
             <p class="small muted">Only deployment-approved destinations. One exact path, with no wildcard or query string. This build does not supply complete provider-operation bundles.</p>
             <fieldset class="method-fieldset"><legend>Allowed methods</legend><div class="method-options"><label><input type="checkbox" name="connect-method" value="GET" checked> GET</label><label><input type="checkbox" name="connect-method" value="POST"> POST</label><label><input type="checkbox" name="connect-method" value="PUT"> PUT</label><label><input type="checkbox" name="connect-method" value="PATCH"> PATCH</label><label><input type="checkbox" name="connect-method" value="DELETE"> DELETE</label><label><input type="checkbox" name="connect-method" value="OPTIONS"> OPTIONS</label></div></fieldset>
             <label for="connect-credential-input">How your existing client sends provider authentication</label><select id="connect-credential-input" required></select>
             <div id="connect-placeholder-group" hidden><p>Send this header: <code id="connect-header-target"></code></p><label for="connect-placeholder">Exact dummy header value</label><input id="connect-placeholder" maxlength="1024" autocomplete="off" spellcheck="false" disabled><p class="small muted">Full value, for example Bearer SERVERWARE_DUMMY. Exact case and spaces; no leading/trailing spaces. Never use a real provider secret or app token. Missing or different values are denied.</p></div>
             <p id="connect-input-help" class="small muted"></p>
+            <p id="connect-basic-compatibility" class="small muted" role="status">Loading supported request and response behavior...</p>
+            <details id="connect-restrictions"><summary>Add restrictions</summary>
+            <p class="small muted">Optional content restrictions. Closing this section does not remove your choices. Query and destination permissions remain separate.</p>
+            <label for="connect-rule-name">Permission name (optional)</label><input id="connect-rule-name" maxlength="128" placeholder="Named automatically from method and path">
             <label for="connect-request-body-mode">Request content</label><select id="connect-request-body-mode" aria-describedby="connect-body-warning" required></select>
             <p id="connect-body-warning" class="notice">Choose the supported request-content mode. Existing permissions are never broadened automatically.</p>
             <div id="connect-request-fields-group"><label for="connect-request-fields">Optional allowed request JSON fields</label><textarea id="connect-request-fields" rows="2" placeholder="Empty means no request body"></textarea></div>
             <label for="connect-response-mode">Response content</label><select id="connect-response-mode" required></select>
             <div id="connect-response-fields-group" hidden><label for="connect-response-fields">Allowed successful-response JSON fields</label><textarea id="connect-response-fields" rows="3" disabled></textarea><p class="small muted">One field path per line. Error responses retain only error, code and message.</p></div>
             <p id="connect-response-limits" class="small muted">JSON only; the selected mode determines whether empty HTTP 204 is supported. Size, status, authentication and destination limits still apply.</p>
-            <details><summary>Query parameters and client headers</summary><label for="connect-query-keys">Allowed query parameter names</label><textarea id="connect-query-keys" rows="2" placeholder="Empty means no query parameters"></textarea><label for="connect-allowed-headers">Allowed client headers</label><textarea id="connect-allowed-headers" rows="2">accept
+            </details>
+            <details id="connect-request-extras"><summary>Query parameters and client headers</summary><label for="connect-query-keys">Allowed query parameter names</label><textarea id="connect-query-keys" rows="2" placeholder="Empty means no query parameters"></textarea><label for="connect-allowed-headers">Allowed client headers</label><textarea id="connect-allowed-headers" rows="2">accept
 user-agent</textarea><p class="small muted">Provider authentication and JSON Content-Type are controlled separately.</p></details>
           </div>
           <button id="connect-review" type="submit">Review access</button>
@@ -94,7 +98,6 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
       <h1 id="access-rules-title">Access rules</h1><p class="intro">Allow an application to use one saved credential at one exact path. Reuse either resource in more rules without submitting the provider secret again.</p>
 <form id="access-rule-form" class="card" autocomplete="off">
   <fieldset id="access-rule-fields" disabled>
-    <label for="rule-name">Rule name</label><input id="rule-name" maxlength="128" placeholder="Read account status" required>
     <div class="two-column"><div><label for="rule-application-id">Application</label><select id="rule-application-id"></select></div><div><label for="rule-credential-id">Saved credential</label><select id="rule-credential-id"></select></div></div>
     <label for="rule-credential-input">Client credential input</label><select id="rule-credential-input" aria-describedby="rule-credential-input-help" required><option value="">Loading supported choices...</option></select>
     <p id="rule-credential-input-help" class="small muted" role="status"></p>
@@ -106,18 +109,23 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
     <div class="two-column"><div><label for="rule-upstream-origin">Approved destination</label><select id="rule-upstream-origin"></select></div><div><label for="rule-path">Exact URL path</label><input id="rule-path" maxlength="1024" placeholder="/v1/status" spellcheck="false" required></div></div>
     <p class="small muted">Destinations are deployment-managed. One exact path beginning with /. No wildcard, query string or fragment.</p>
     <fieldset class="method-fieldset"><legend>Allowed HTTP methods</legend><div class="method-options"><label><input type="checkbox" name="rule-method" value="GET" checked> GET</label><label><input type="checkbox" name="rule-method" value="POST"> POST</label><label><input type="checkbox" name="rule-method" value="PUT"> PUT</label><label><input type="checkbox" name="rule-method" value="PATCH"> PATCH</label><label><input type="checkbox" name="rule-method" value="DELETE"> DELETE</label><label><input type="checkbox" name="rule-method" value="OPTIONS"> OPTIONS</label></div></fieldset>
+    <p id="rule-basic-compatibility" class="small muted" role="status">Loading supported request and response behavior...</p>
+    <details id="rule-restrictions"><summary>Add restrictions</summary>
+    <p class="small muted">Optional content restrictions. Closing this section does not remove your choices. Query and destination permissions remain separate.</p>
+    <label for="rule-name">Permission name (optional)</label><input id="rule-name" maxlength="128" placeholder="Named automatically from method and path">
     <label for="rule-request-body-mode">Request content</label><select id="rule-request-body-mode" aria-describedby="rule-body-default" required><option value="">Loading supported choices...</option></select>
     <p id="rule-body-default" class="notice">Choose the supported request-content mode. Existing permissions are never broadened automatically.</p>
     <div id="rule-request-fields-group"><label for="rule-request-fields">Optional allowed request JSON fields</label><textarea id="rule-request-fields" rows="3" spellcheck="false" placeholder="Empty means no request body" aria-describedby="rule-body-default"></textarea></div>
+    <label for="rule-response-mode">Response content</label><select id="rule-response-mode" aria-describedby="rule-response-mode-help" required><option value="">Loading supported response modes...</option></select>
+    <p id="rule-response-mode-help" class="small muted" role="status"></p>
+    <p id="rule-response-limits" class="small muted">JSON only; the selected mode determines whether empty HTTP 204 is supported.</p>
+    <div id="rule-response-fields-group"><label for="rule-response-fields">Response JSON fields the application may see</label><textarea id="rule-response-fields" rows="3" spellcheck="false" placeholder="id&#10;status" required></textarea><p class="small muted">One approved field path per line for successful JSON responses. Errors retain only error, code and message fields. Required only for selected-field filtering, never for saving a credential.</p></div>
+    </details>
     <details id="rule-request-extras"><summary>Query parameters and client headers</summary>
       <label for="rule-query-keys">Allowed query parameter names</label><textarea id="rule-query-keys" rows="3" spellcheck="false" placeholder="Empty means no query parameters"></textarea>
       <label for="rule-allowed-headers">Allowed client request headers</label><textarea id="rule-allowed-headers" rows="3" spellcheck="false">accept
 user-agent</textarea><p class="small muted">Do not list Content-Type: the request JSON policy controls media type. Serverware injects provider authentication.</p>
     </details>
-    <label for="rule-response-mode">Response content</label><select id="rule-response-mode" aria-describedby="rule-response-mode-help" required><option value="">Loading supported response modes...</option></select>
-    <p id="rule-response-mode-help" class="small muted" role="status"></p>
-    <p id="rule-response-limits" class="small muted">JSON only; the selected mode determines whether empty HTTP 204 is supported.</p>
-    <div id="rule-response-fields-group"><label for="rule-response-fields">Response JSON fields the application may see</label><textarea id="rule-response-fields" rows="3" spellcheck="false" placeholder="id&#10;status" required></textarea><p class="small muted">One approved field path per line for successful JSON responses. Errors retain only error, code and message fields. Required only for selected-field filtering, never for saving a credential.</p></div>
     <details id="rule-compatibility-limits"><summary>Compatibility limits</summary><div id="rule-compatibility-content"></div></details>
     <div id="rule-effective-summary" class="notice" aria-live="polite">
       <h3>Effective rule summary</h3><p id="rule-effective-context">Loading workspace status...</p><dl id="rule-effective-restrictions" class="metadata"></dl>

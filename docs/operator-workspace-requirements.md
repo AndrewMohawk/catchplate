@@ -180,6 +180,16 @@ pages are management views, not three mandatory stops in onboarding. Present
 provider operations in the operator's language; do not expose a policy compiler
 form as the default journey.
 
+A new basic authentication-replacement journey must require **zero response
+configuration interactions**. Select the advertised supported no-filter contract
+automatically, with a short visible compatibility summary. Compatibility-version
+names are not user choices, even inside Advanced: expose only meaningful content
+restrictions, while retaining existing saved and drafted contracts exactly.
+Generate an optional permission name from the selected operation. Opening or
+closing **Add restrictions** must not itself change a permission. If an older
+backend supports only field projection, show that limitation and the required
+fields explicitly rather than inventing a no-filter capability.
+
 | Step | Required in the normal journey | Only when applicable |
 | --- | --- | --- |
 | Connect or save | Named API credential, or provider consent and verified account | Custom header name; administrator OAuth application setup is separate |

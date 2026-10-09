@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const {mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
-const {fixture, ready, view, credential, application, rule, IDS, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
+const {fixture, ready, view, openRestrictions, credential, application, rule, IDS, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
 const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
 let artifacts;
 const supplied = (changes = {}) => ({credentials: [credential()], applications: [application()],
@@ -25,15 +25,17 @@ async function compatibility(page, area) {
   await details.locator('summary').click(); assert(await content.isVisible());
   const text = await content.innerText();
   for (const item of ['HTTP 204', 'empty responses', '1 MiB', '64 KiB', 'text, binary, streaming and HEAD',
-    'not forwarded', '200, 201, 202', 'error, code and message']) assert(text.includes(item));
+    'No response headers are selected for forwarding', '200, 201, 202', 'error, code and message']) assert(text.includes(item));
   await details.locator('summary').click(); assert(!(await content.isVisible()));
 }
 
 const tests = [
   ['live draft exposes bodyless POST and all default restrictions before save', browser => fixture(browser, supplied(), async (page, state) => {
     await ready(page); await view(page, 'access-rules');
-    assert(await page.locator('#rule-request-fields').isVisible());
-    assert(await page.locator('#rule-request-fields').evaluate(node => node.closest('details') === null));
+    assert(!await page.locator('#rule-request-fields').isVisible());
+    assert(await page.locator('#rule-request-fields').evaluate(node => node.closest('details')?.id === 'rule-restrictions'));
+    assert.match(await page.locator('#rule-basic-compatibility').innerText(), /No request body/);
+    await openRestrictions(page, 'rule');
     assert(await page.locator('#rule-body-default').isVisible());
     assert((await page.locator('#rule-body-default').innerText()).includes('POST, PUT and PATCH'));
     await page.locator('#rule-path').fill('/v1/status');
@@ -58,6 +60,7 @@ const tests = [
   })],
   ['edited draft and saved card show the same exact restrictions without broadening the submitted rule', browser => fixture(browser, supplied(), async (page, state) => {
     await ready(page); await view(page, 'access-rules');
+    await openRestrictions(page, 'rule');
     await page.locator('#rule-name').fill('Scoped JSON operation'); await page.locator('#rule-path').fill('/v1/status');
     await page.locator('input[name="rule-method"][value="GET"]').uncheck(); await page.locator('input[name="rule-method"][value="POST"]').check();
     await page.locator('#rule-request-fields').fill('model\nmessages');

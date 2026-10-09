@@ -337,7 +337,13 @@ const tests = [
   })],
   ['reload resumes the stored exact operation without a second start or authorization URL replay', browser => fixture(browser, {startFault: 'lost'}, async (page, state, observed) => {
     await open(page); await start(page, observed, false); const id = observed.posts[0].operation_id;
-    await page.goto(ORIGIN + '/#credentials', {waitUntil: 'networkidle'}); await checkStatus(page, /^Waiting for Google consent\./);
+    const priorReads = observed.reads.length;
+    // open() already selected #credentials; goto of that same hash-bearing URL
+    // may be same-document navigation and cannot prove session restoration.
+    const response = await page.reload({waitUntil: 'networkidle'});
+    assert(response && response.status() === 200 && response.request().isNavigationRequest(), 'a new main document is required');
+    await checkStatus(page, /^Waiting for Google consent\./);
+    assert(observed.reads.length > priorReads, 'the new document performs fresh exact-operation recovery');
     assert(observed.reads.slice(1).every(path => path === PATH + '/' + id));
     assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0); assert(await page.locator('#credential-save').isDisabled());
   })],

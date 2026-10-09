@@ -18,10 +18,8 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = 'Credentials and applications alone grant no access. Add a rule, then return here.'; return;
     }
     const valid = application.token_status === 'valid' && Number.isSafeInteger(application.token_expires_at_epoch_ms) && application.token_expires_at_epoch_ms > Date.now();
-    const supported = availableResponseModes(catalog).includes(rule.response_mode) &&
-      availableCredentialInputModes(catalog).includes(rule.credential_input) &&
-      (rule.response_mode === 'projected_json' ? rule.response_fields.length > 0 : rule.response_fields.length === 0) &&
-      rule.methods.length > 0 && rule.methods.every(method => operatorMethods.includes(method));
+    const supported = operatorRuleSupported(rule, catalog);
+    renderOperatorCompatibility('client-compatibility-content', rule);
     if (!valid || !supported || credential?.status !== 'active') {
       element('client-command').textContent = !valid ? 'The application token is expired, revoked or cannot be verified.' : 'The saved rule or credential is unavailable or unsupported.';
       element('client-guidance').textContent = !valid ? 'Use Applications to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;
@@ -45,10 +43,11 @@ function createProxyView(workspace, applications) {
       ' The template supplies no request body or query parameter values. Use your existing client to provide the endpoint-specific data within this rule.' +
       (dummyHeader ? ' Send the displayed exact dummy ' + dummyHeader.name + ' header once. It is not a provider secret or your Serverware application token.' :
         ' Do not send a provider credential header; Serverware adds it automatically.') +
-      (rule.response_mode === 'unfiltered_json' ? ' Response content: all JSON fields, including error responses; no field filtering.' :
+      (['unfiltered_json', 'unfiltered_json_or_empty_v1'].includes(rule.response_mode) ? ' Response content: all JSON fields, including error responses; no field filtering.' :
         ' Successful JSON responses contain only the selected fields. Error responses retain only error, code and message fields.') +
-      ' JSON only; no empty/204 responses. See Compatibility limits for sizes, supported statuses and transport restrictions.' +
-      (rule.request_fields.length ? ' If the endpoint requires a body, send application/json using only these fields: ' + rule.request_fields.join(', ') +
+      ' ' + operatorResponseLimits(rule.response_mode) + ' See Compatibility limits for sizes, supported statuses and transport restrictions.' +
+      (rule.request_body_mode === 'preserve_json_v1' ? ' Request content: keep your client’s JSON bytes unchanged, up to 64 KiB, or send no body. Nonempty bodies require application/json. No request-field list is needed; forms, binary and streaming are unsupported.' :
+        rule.request_fields.length ? ' If the endpoint requires a body, send application/json using only these fields: ' + rule.request_fields.join(', ') +
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
@@ -71,6 +70,7 @@ function createProxyView(workspace, applications) {
       request_headers: dummyHeader ? {[dummyHeader.name]: dummyHeader.value} : {},
       ca_file: element('ca-path').value || './serverware-ca.pem', proxy_authorization: 'Bearer ' + token,
       token_expires_at_epoch_ms: application.token_expires_at_epoch_ms, note: 'Private development client configuration. Never commit or share. Provider credential not included.'};
+    if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2) + '\n'], {type: 'application/json'}));
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000); element('client-copy-status').textContent = 'Downloaded private client configuration. Keep it out of source control.';

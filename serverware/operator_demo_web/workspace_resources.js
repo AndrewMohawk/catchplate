@@ -1,23 +1,55 @@
-const operatorJsonResponseLimits = 'A non-empty application/json response is required. HTTP 204 and other empty responses, text, binary, streaming and HEAD are unsupported. Success bodies: at most 1 MiB; error bodies: at most 64 KiB. Upstream response headers are not forwarded.';
-const operatorJsonResponseStatuses = 'Only 200, 201, 202, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 and 504 are allowed by the current profile.';
-function renderOperatorCompatibility(id) {
+function operatorResponseLimits(mode) {
+  return mode === 'unfiltered_json_or_empty_v1' ? 'JSON or empty 204 only; other empty responses are unsupported.' : 'JSON only; no empty/204 responses.';
+}
+function operatorRequestBodySummary(rule) {
+  if (Object.hasOwn(rule, 'request_body_mode')) return rule.request_body_mode === 'preserve_json_v1' && !rule.request_fields.length ?
+    'JSON content preserved unchanged, up to 64 KiB; an empty body is also allowed. No field list required.' : 'Unsupported request-body configuration; cannot use.';
+  return rule.request_fields.length ? 'JSON fields only: ' + rule.request_fields.join(', ') + '.' : 'No body, including POST, PUT and PATCH.';
+}
+function operatorResponseSummary(rule) {
+  return (operatorResponseModes[rule.response_mode] || 'Choose a supported response mode') + '. ' +
+    (['unfiltered_json', 'unfiltered_json_or_empty_v1'].includes(rule.response_mode) ? 'All JSON content (no field filtering), including errors.' :
+      'Success fields: ' + (rule.response_fields.length ? rule.response_fields.join(', ') + '.' : 'none selected; cannot save.')) +
+    ' ' + operatorResponseLimits(rule.response_mode);
+}
+function renderOperatorCompatibility(id, rule = {}) {
+  const empty204 = rule.response_mode === 'unfiltered_json_or_empty_v1';
   element(id).replaceChildren(...[
-    operatorJsonResponseLimits, operatorJsonResponseStatuses,
-    'When request fields are listed, the request body must use application/json and is limited to 64 KiB. Proxy authentication, provider credential handling and JSON Content-Type are controlled separately from the client-header allowlist.',
+    operatorResponseLimits(rule.response_mode) + ' Success bodies: at most 1 MiB; error bodies: at most 64 KiB. Upstream response headers are not forwarded.',
+    'Only 200, 201, 202, ' + (empty204 ? '204, ' : '') + '400, 401, 403, 404, 409, 422, 429, 500, 502, 503 and 504 are allowed by this response profile.',
+    ...(empty204 ? ['HTTP 204 must have no body, trailers, Content-Length or Transfer-Encoding. An admitted JSON Content-Type may be present or omitted. Other allowed statuses still require strict JSON; empty 200, 205 and redirects are not supported.'] : []),
+    rule.request_body_mode === 'preserve_json_v1' ?
+      'Request JSON is preserved byte-for-byte, with no field declarations, up to 64 KiB. Empty bodies are allowed. Nonempty bodies require application/json. Strict JSON rejects duplicate keys, invalid Unicode, non-finite or overflowing numbers, integer -0 and nesting deeper than 127 containers.' :
+      'Without explicit JSON preservation, an empty request-field list forbids bodies; listed fields permit only their declared application/json content, up to 64 KiB.',
+    'Form, multipart, text, binary, compressed bodies, streaming and HEAD are unsupported. Query names still need explicit permission and canonical ordering. Proxy authentication, provider credential handling and JSON Content-Type are separate from the client-header allowlist.',
     'Selected-field filtering applies to successful responses; error responses retain only error, code and message. Whole-JSON mode includes all JSON content, including errors, but does not remove size, status or transport limits.',
+    'Choices reflect capabilities advertised by this workspace’s control-plane source, not negotiated proxy support. Wait for confirmation that the exact saved policy is loaded; activation is not proof of a successful upstream request.',
   ].map(value => textNode('p', value, 'small muted')));
+}
+function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, active = true) {
+  const select = element(prefix + '-request-body-mode'); const input = element(prefix + '-request-fields');
+  const modes = availableRequestBodyChoices(catalog, credential);
+  if (catalog && credential) chooseModeOptions(select.id, modes.map(id => ({id, name: operatorRequestBodyChoices[id]})), 'Choose a request-body mode');
+  const preserve = select.value === 'preserve_json_v1'; const hasFields = fieldLines(input.id).length > 0;
+  const showFields = select.value === 'legacy_fields' || hasFields;
+  element(prefix + '-request-fields-group').hidden = !showFields; input.disabled = !active || !showFields;
+  const invalid = !modes.includes(select.value) ? 'This request-body choice is unavailable. Choose again.' :
+    preserve && hasFields ? 'Clear the explicit request-field restrictions before preserving JSON content.' :
+    credential?.auth_type === 'google_oauth' && hasFields ? 'Google permits GET with no request body. Clear the request fields.' : '';
+  select.setCustomValidity(invalid);
+  element(warningId).textContent = invalid || (credential?.auth_type === 'google_oauth' ?
+    'This Google account profile permits GET with no request body only. Google connection remains unavailable here.' : preserve ?
+      'Keep your client’s JSON body unchanged, up to 64 KiB, or send no body. No field list is needed. Forms, binary and streaming are not supported.' :
+      'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
   return [
     ['Destination / methods', (rule.upstream_url || 'Choose an exact destination') + ' · ' +
       (rule.methods.length ? rule.methods.join(', ') + ' only' : 'Choose a method')],
-    ['Request body', rule.request_fields.length ? 'JSON fields only: ' + rule.request_fields.join(', ') + '.' : 'No body, including POST, PUT and PATCH.'],
+    ['Request body', operatorRequestBodySummary(rule)],
     ['Query parameters', rule.query_keys.length ? 'Names only: ' + rule.query_keys.join(', ') + '.' : 'None allowed.'],
     ['Client headers', rule.allowed_headers.length ? rule.allowed_headers.join(', ') : 'No extra client headers.'],
-    ['Response', (operatorResponseModes[rule.response_mode] || 'Choose a supported response mode') + '. ' +
-      (rule.response_mode === 'unfiltered_json' ? 'All JSON content (no field filtering), including errors.' :
-        'Success fields: ' + (rule.response_fields.length ? rule.response_fields.join(', ') + '.' : 'none selected; cannot save.')) +
-      ' JSON only; no empty/204 responses.'],
+    ['Response', operatorResponseSummary(rule)],
   ];
 }
 function operatorRuleCredentialRows(rule, credential) {
@@ -115,8 +147,15 @@ function createAccessRulesView(workspace) {
       methods: [...document.querySelectorAll('input[name="rule-method"]:checked')].map(input => input.value),
       request_fields: fieldLines('rule-request-fields'), query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers'),
       response_mode: element('rule-response-mode').value, response_fields: fieldLines('rule-response-fields')};
+    const requestMode = element('rule-request-body-mode').value;
+    if (requestMode && requestMode !== 'legacy_fields') draft.request_body_mode = requestMode;
     const rows = operatorRuleRestrictions(draft);
     list.replaceChildren(...rows.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
+    renderOperatorCompatibility('rule-compatibility-content', draft);
+  }
+  function renderRequestBody() {
+    const catalog = workspace.state.catalog;
+    renderOperatorRequestBodyForm('rule', catalog, catalog?.credentials.find(item => item.id === element('rule-credential-id').value), 'rule-body-default');
   }
   function renderCredentialInput() {
     const mode = element('rule-credential-input').value;
@@ -145,14 +184,17 @@ function createAccessRulesView(workspace) {
     element('rule-response-fields-group').hidden = !projected;
     element('rule-response-fields').disabled = !projected;
     element('rule-response-fields').required = projected;
+    element('rule-response-limits').textContent = operatorResponseLimits(mode);
     element('rule-response-mode-help').textContent = !supported ? 'Refresh the workspace to load supported response modes. Saving is disabled until one is available.' :
-      mode === 'unfiltered_json' ? 'Returns all content in a bounded JSON response, including error responses. No response field list is needed. Destination, method and request restrictions still apply.' :
+      mode === 'unfiltered_json_or_empty_v1' ? 'Keeps bounded JSON success and error content unchanged, or an admitted empty HTTP 204. No response field list is needed. Destination, method and request restrictions still apply.' :
+      mode === 'unfiltered_json' ? 'Returns all content in a bounded nonempty JSON response, including errors. No response field list is needed. Empty responses remain unsupported.' :
       'Successful JSON responses contain only the fields you list below. Error responses retain only error, code and message fields. Destination, method and request restrictions still apply.';
   }
   element('rule-response-mode').addEventListener('change', renderResponseMode);
   for (const id of ['rule-credential-input', 'rule-credential-id']) element(id).addEventListener('change', renderCredentialInput);
-  form.addEventListener('input', renderSummary);
-  form.addEventListener('change', renderSummary);
+  const renderDraft = () => { renderRequestBody(); renderSummary(); };
+  form.addEventListener('input', renderDraft);
+  form.addEventListener('change', renderDraft);
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (!workspace.ready('access_rules') || !form.reportValidity()) return;
     const catalog = workspace.state.catalog; const origin = element('rule-upstream-origin').value;
@@ -176,9 +218,14 @@ function createAccessRulesView(workspace) {
     }
     const body = {name: element('rule-name').value.trim(), application_id: element('rule-application-id').value,
       credential_id: element('rule-credential-id').value, upstream_url: origin.replace(/\/$/, '') + path, methods,
-      request_fields: fieldLines('rule-request-fields'), response_mode: responseMode, response_fields: responseFields,
+      response_mode: responseMode, response_fields: responseFields,
       credential_input: credentialInput, query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers')};
     if (credentialInput === 'replace_exact') body.placeholder = placeholder;
+    try { Object.assign(body, operatorRequestBodyInput(element('rule-request-body-mode').value, fieldLines('rule-request-fields'), catalog, credential)); }
+    catch (error) { element('access-rule-form-status').textContent = operatorMessage(error); return; }
+    if (!operatorRuleSupported(body, catalog)) {
+      element('access-rule-form-status').textContent = 'Choose supported content modes and active resources. Google permits only GET with no request body.'; return;
+    }
     await workspace.mutate('access-rules', body, 'access-rule-form-status');
   });
   function render() {
@@ -187,13 +234,14 @@ function createAccessRulesView(workspace) {
     const credentialInputModes = availableCredentialInputModes(catalog);
     element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active') ||
       !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
-    if (!catalog) { renderResponseMode(); renderCredentialInput(); renderSummary(); return; }
-    chooseOptions('rule-response-mode', responseModes.map(mode => ({id: mode, name: operatorResponseModes[mode]})), 'No supported response mode available');
+    if (!catalog) { renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
+    chooseModeOptions('rule-response-mode', responseModes.map(mode => ({id: mode, name: operatorResponseModes[mode]})), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
     chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active'), 'Save a credential first');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
+    renderRequestBody();
     chooseOptions('rule-upstream-origin', catalog.allowed_upstreams.map(origin => ({id: origin, name: origin})), 'No approved destination configured');
     renderSummary();
     renderCards('access-rules-list', catalog.access_rules.map(rule => {

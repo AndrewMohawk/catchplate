@@ -45,14 +45,7 @@ function createConnectView(workspace, applications, proxy) {
   }
   function goto(next) { step = next; render(); if (open) element('connect-progress').scrollIntoView({block: 'nearest'}); }
   function activePair() { return credential() && validApp(application()); }
-  function supported(rule) {
-    if (!rule || !availableCredentialInputModes(catalog()).includes(rule.credential_input) ||
-        !availableResponseModes(catalog()).includes(rule.response_mode) ||
-        !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
-        (rule.response_mode === 'projected_json' ? !rule.response_fields.length : rule.response_fields.length)) return false;
-    try { clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential: credential()}); return true; }
-    catch (_) { return false; }
-  }
+  function supported(rule) { return operatorRuleSupported(rule, catalog()); }
   function confirmCheckpoint() {
     if (!checkpoint || !catalog() || workspace.state.busy || workspace.state.uncertain || catalog().revision < checkpoint.revision) return;
     const item = catalog()[checkpoint.collection].find(item => item.id === checkpoint.id && item.status === 'active');
@@ -104,6 +97,11 @@ function createConnectView(workspace, applications, proxy) {
       'Automatic insertion: your client sends no provider credential header; Serverware supplies it after authorization.';
     const projected = newRule && element('connect-response-mode').value === 'projected_json';
     fields('connect-response-fields-group', projected); element('connect-response-fields').required = projected;
+    renderOperatorRequestBodyForm('connect', catalog(), credential(), 'connect-body-warning', newRule);
+    element('connect-response-limits').textContent = operatorResponseLimits(element('connect-response-mode').value);
+    const content = review && step >= 3 ? review.rule : {response_mode: element('connect-response-mode').value};
+    if (!(review && step >= 3) && element('connect-request-body-mode').value === 'preserve_json_v1') content.request_body_mode = 'preserve_json_v1';
+    renderOperatorCompatibility('connect-compatibility-content', content);
     element('connect-credential-next').textContent = newCredential ? 'Save credential & continue' : 'Use saved credential';
     element('connect-credential-next').disabled = !newCredential && !catalog()?.credentials.some(item =>
       item.id === element('connect-credential-choice').value && item.status === 'active');
@@ -196,11 +194,12 @@ function createConnectView(workspace, applications, proxy) {
       methods: [...document.querySelectorAll('input[name="connect-method"]:checked')].map(input => input.value),
       credential_input: element('connect-credential-input').value, response_mode: element('connect-response-mode').value,
       response_fields: element('connect-response-mode').value === 'projected_json' ? fieldLines('connect-response-fields') : [],
-      request_fields: fieldLines('connect-request-fields'), query_keys: fieldLines('connect-query-keys'), allowed_headers: fieldLines('connect-allowed-headers')};
+      ...operatorRequestBodyInput(element('connect-request-body-mode').value, fieldLines('connect-request-fields'), catalog(), credential()),
+      query_keys: fieldLines('connect-query-keys'), allowed_headers: fieldLines('connect-allowed-headers')};
     if (rule.credential_input === 'replace_exact') rule.placeholder = element('connect-placeholder').value;
     if (!catalog().allowed_upstreams.includes(origin) || !path.startsWith('/') || path.startsWith('//') || /[?#\\\s*]/.test(path) ||
         credential()?.legacy_upstream_origin && credential().legacy_upstream_origin !== origin || !supported(rule))
-      throw operatorError('Choose an approved exact path and supported methods, response and credential-input choices. Exact dummy values must be printable ASCII with no outer spaces; selected-field responses require fields.');
+      throw operatorError('Choose an approved exact path and supported methods, content and credential-input choices. Exact dummy values must be printable ASCII with no outer spaces; selected-field responses require fields. Google permits only GET with no request body.');
     return rule;
   }
   element('connect-access-form').addEventListener('submit', event => {
@@ -222,8 +221,9 @@ function createConnectView(workspace, applications, proxy) {
     if (!workspace.ready('access_rules')) return;
     await workspace.mutate('access-rules', {...review.rule}, 'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
-  for (const id of ['connect-credential-choice', 'connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode'])
+  for (const id of ['connect-credential-choice', 'connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
     element(id).addEventListener('change', render);
+  element('connect-request-fields').addEventListener('input', renderForms);
   element('connect-back').addEventListener('click', () => { if (step > 0 && step < 4 && !workspace.state.busy && !checkpoint) { review = null; goto(step - 1); } });
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {

@@ -1,7 +1,8 @@
 // Public catalog state and transport only. Provider secrets and client tokens do
 // not belong in this state. All resource views share one explicit mutation gate.
 const operatorMethods = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
-const operatorResponseModes = Object.freeze({unfiltered_json: 'Do not filter response content (JSON)',
+const operatorResponseModes = Object.freeze({unfiltered_json_or_empty_v1: 'Keep JSON responses and empty 204',
+  unfiltered_json: 'Do not filter response content (JSON)',
   projected_json: 'Only return selected JSON fields'});
 function availableResponseModes(catalog) {
   const advertised = catalog?.capabilities?.response_modes;
@@ -11,6 +12,58 @@ const operatorCredentialInputModes = Object.freeze({insert: 'Add credential auto
 function availableCredentialInputModes(catalog) {
   const advertised = catalog?.capabilities?.credential_input_modes;
   return Array.isArray(advertised) ? Object.keys(operatorCredentialInputModes).filter(mode => advertised.includes(mode)) : [];
+}
+// legacy_fields is a form choice, never an API enum. Omission retains the old
+// declared-field/no-body contract; a capability cannot broaden a saved rule.
+const operatorRequestBodyChoices = Object.freeze({preserve_json_v1: 'Keep JSON request content',
+  legacy_fields: 'Restrict JSON fields (empty blocks bodies)'});
+function availableRequestBodyChoices(catalog, credential) {
+  const advertised = catalog?.capabilities?.request_body_modes;
+  return [...(credential && credential.auth_type !== 'google_oauth' && Array.isArray(advertised) &&
+    advertised.includes('preserve_json_v1') ? ['preserve_json_v1'] : []), 'legacy_fields'];
+}
+function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
+  if (!availableRequestBodyChoices(catalog, credential).includes(choice) ||
+      choice === 'preserve_json_v1' && requestFields.length || credential?.auth_type === 'google_oauth' && requestFields.length)
+    throw operatorError('Choose a supported request-body mode. Clear explicit field restrictions before preserving JSON. Google permits GET with no body only.');
+  return {request_fields: requestFields, ...(choice === 'preserve_json_v1' ? {request_body_mode: choice} : {})};
+}
+function operatorRuleContentValid(rule, credential) {
+  if (!rule || !['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers'].every(name =>
+      Array.isArray(rule[name]) && rule[name].every(value => typeof value === 'string')) ||
+      !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
+      !Object.hasOwn(operatorResponseModes, rule.response_mode) ||
+      (rule.response_mode === 'projected_json' ? !rule.response_fields.length : rule.response_fields.length)) return false;
+  if (Object.hasOwn(rule, 'request_body_mode') && (rule.request_body_mode !== 'preserve_json_v1' || rule.request_fields.length)) return false;
+  return credential?.auth_type !== 'google_oauth' || !Object.hasOwn(rule, 'request_body_mode') &&
+    !rule.request_fields.length && rule.methods.length === 1 && rule.methods[0] === 'GET';
+}
+function operatorRuleCredentialValid(rule, credential) {
+  try {
+    if (!Object.hasOwn(operatorCredentialInputModes, rule.credential_input) ||
+        rule.credential_input === 'insert' && Object.hasOwn(rule, 'placeholder')) return false;
+    // Replacement has a stricter target contract than legacy insertion. Do not
+    // apply its reserved-header/alias restrictions to an existing insert rule.
+    const bearer = ['bearer', 'google_oauth'].includes(credential?.auth_type);
+    if (bearer ? credential.header_name !== 'Authorization' : credential?.auth_type !== 'header' ||
+        typeof credential.header_name !== 'string' || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(credential.header_name)) return false;
+    clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential}); return true;
+  } catch (_) { return false; }
+}
+function operatorRuleSupported(rule, catalog) {
+  const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
+  const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
+  return Boolean(credential && application && operatorRuleContentValid(rule, credential) && operatorRuleCredentialValid(rule, credential) &&
+    availableResponseModes(catalog).includes(rule.response_mode) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
+    (!Object.hasOwn(rule, 'request_body_mode') || availableRequestBodyChoices(catalog, credential).includes(rule.request_body_mode)));
+}
+function chooseModeOptions(id, items, placeholder) {
+  const select = element(id); const previous = select.value;
+  chooseOptions(id, items, placeholder);
+  if (previous && !items.some(item => item.id === previous)) {
+    const missing = textNode('option', 'Previous choice unavailable — choose again');
+    missing.value = previous; missing.disabled = true; select.append(missing); select.value = previous;
+  }
 }
 const operatorViews = {connect: 'Connect an app', overview: 'Overview', credentials: 'Credentials', applications: 'Applications',
   'access-rules': 'Access rules', proxy: 'Proxy setup', audit: 'Audit log'};
@@ -80,10 +133,20 @@ function projectCatalog(value) {
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
-    'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'placeholder', 'enforcement']);
+    'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
+  accessRules.forEach((rule, index) => {
+    for (const name of ['request_body_mode', 'placeholder']) if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
+  });
   for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';
   for (const rule of accessRules) for (const name of ['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers']) {
     if (!Array.isArray(rule[name]) || rule[name].some(item => typeof item !== 'string')) throw operatorError('Saved rule metadata is incomplete.');
+  }
+  for (const rule of accessRules) {
+    const credential = credentials.find(item => item.id === rule.credential_id);
+    const application = applications.find(item => item.id === rule.application_id);
+    if (!credential || !application || !operatorRuleContentValid(rule, credential) || !operatorRuleCredentialValid(rule, credential) ||
+        rule.status === 'active' && (credential.status !== 'active' || application.status !== 'active'))
+      throw operatorError('Saved rule content modes or resource references are inconsistent. Changes are disabled.');
   }
   const quarantinedAccounts = new Set(credentials.filter(item => item.status === 'quarantined').map(item => item.id));
   if (accessRules.some(rule => rule.status === 'active' && quarantinedAccounts.has(rule.credential_id)))

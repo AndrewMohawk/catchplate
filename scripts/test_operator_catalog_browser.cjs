@@ -240,14 +240,19 @@ async function saveRule(page, name = 'Read status') {
 }
 
 const tests = [
-  ['guided next step advances save credential, create application, grant rule and configure proxy', browser => fixture(browser, {}, async (page, state) => {
-    await ready(page); assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#credentials');
+  ['overview guided-entry labels track credential, application and access progress before client setup', browser => fixture(browser, {}, async (page, state) => {
+    await ready(page); await view(page, 'overview');
+    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect your first app');
     await addCredential(page); await ready(page); await view(page, 'overview');
-    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#applications');
+    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect an app with a saved credential');
     await addApplication(page); await heldToken(page); await settled(page); await view(page, 'overview');
-    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#access-rules');
+    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Choose permitted access for your app');
     await saveRule(page); await view(page, 'overview');
     assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#proxy');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Configure your app and send a scoped test request');
     await view(page, 'proxy'); assert(!(await page.locator('#copy-command').isDisabled()));
     assert(!(await page.locator('#download-config').isDisabled()));
     await view(page, 'applications'); await heldToken(page);
@@ -285,6 +290,7 @@ const tests = [
     await ready(page); await view(page, 'access-rules');
     assert.deepEqual(await page.locator('input[name="rule-method"]').evaluateAll(items => items.map(item => item.value)), METHODS);
     for (const [id, name] of [[IDS.application, 'First access'], [IDS.other, 'Second access']]) {
+      await openRestrictions(page, 'rule');
       await page.locator('#rule-name').fill(name); await page.locator('#rule-application-id').selectOption(id);
       await page.locator('#rule-credential-id').selectOption(IDS.credential); await page.locator('#rule-path').fill('/v1/status');
       await page.locator('#rule-response-fields').fill('id\nstatus'); await page.locator('#rule-save').click(); await ready(page);
@@ -378,7 +384,9 @@ const tests = [
   ['all six workspaces, audit filter and mobile controls are rendered and usable', browser => fixture(browser, {
     credentials: [credential()], applications: [application()], rules: [rule()]}, async (page, state) => {
     await ready(page);
-    artifactDirectory = await mkdtemp(join(ROOT, '../serverware-operator-artifacts/catalog-browser-synthetic-'));
+    const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+    assert((await stat(artifactRoot)).isDirectory());
+    artifactDirectory = await mkdtemp(join(artifactRoot, 'catalog-browser-synthetic-'));
     for (const size of [{width: 1280, height: 960}, {width: 390, height: 844}]) {
       await page.setViewportSize(size);
       for (const name of VIEWS) {

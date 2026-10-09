@@ -22,7 +22,7 @@ from scripts import prepare_operator_catalog_fixture as base
 from scripts.operator_google_fixture import CLIENT_ID, CONTROL_ORIGIN, GOOGLE_IP
 
 
-BINARY_SHA256 = "9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4"
+BINARY_SHA256 = "eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d"
 
 
 def build(source, binary, initializer, root):

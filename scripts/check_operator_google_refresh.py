@@ -122,6 +122,14 @@ def validate_observations(document, stage):
             "isolated provider observations unavailable")
     consent, refresh, resources = STAGES[stage]
     counts = document.get("counts", {})
+    if stage == "expired":
+        require(isinstance(counts, dict) and isinstance(counts.get("google"), dict),
+                "provider expiry checkpoint counts unavailable")
+        refresh = counts["google"].get("refresh_exchanges", 0)
+        require(type(refresh) is int and refresh in (0, 1),
+                "provider expiry checkpoint has an invalid refresh count")
+        # Hot-scope secret-lease renewal may already have refreshed the token.
+        # Select one complete inventory, never a partial/unknown allowance.
     expected = {"authorization_requests": consent, "authorization_codes_issued": consent,
         "authorization_code_exchanges": consent, "token_requests": consent + refresh,
         "token_responses": consent + refresh, "refresh_exchanges": refresh,
@@ -180,9 +188,12 @@ def validate_observations(document, stage):
             require(document["initialAccessExpired"] is False, "initial provider token expired prematurely")
         if resources == 2:
             require(reached[1]["timestamp_epoch_ms"] >= expiry + 1000, "second dispatch preceded the expiry checkpoint")
-    return {"stage": stage, "counts": dict(sorted(counts["google"].items())),
+    result = {"stage": stage, "counts": dict(sorted(counts["google"].items())),
             "initialAccessExpiresAtEpochMs": expiry, "initialAccessExpired": document["initialAccessExpired"],
             "resourceGenerations": [row["token_generation"] for row in events if row["type"] == "resource_authorized"]}
+    if stage == "expired":
+        result["refreshCompletedAtExpiry"] = bool(refresh)
+    return result
 
 
 def no_dispatch_effects(events):
@@ -451,7 +462,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
         expiry_wait = time.monotonic() + remaining
         while time.monotonic() < expiry_wait:
             time.sleep(max(0.0, min(1.0, expiry_wait - time.monotonic(), self.timeout())))
-        self.observe("expired")
+        expired = self.observe("expired")
         self.unchanged(pinned)
         self.dispatch()
         self.successes.append(scope)
@@ -466,6 +477,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
             "productionReady": False, "hardwareVerified": False, "checks": self.results,
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "credentialId": credential["id"],
             "applicationIds": [application["id"], unassigned["id"]], "ruleId": rule["id"],
+            "refreshCompletedAtExpiry": expired["refreshCompletedAtExpiry"],
             "providerObservations": self.provider_observations, "durableAuditEventIds": audit_ids,
             "auditedRequestAttemptIds": attempts, **generations}
         self.clean(json.dumps(result, sort_keys=True).encode())

@@ -52,8 +52,10 @@ def callback_header():
     return [("Location", checker.fixture.CONTROL_ORIGIN + checker.CALLBACK_PATH + "?" + urlencode({"code": CODE, "state": STATE}))]
 
 
-def observations(stage):
+def observations(stage, *, refresh_before_expiry=False):
     consent, refresh, resources = checker.STAGES[stage]
+    if stage == "expired" and refresh_before_expiry:
+        refresh = 1
     counts = {"authorization_requests": consent, "authorization_codes_issued": consent,
         "authorization_code_exchanges": consent, "token_requests": consent + refresh,
         "token_responses": consent + refresh, "refresh_exchanges": refresh, "identity_requests": consent,
@@ -73,8 +75,10 @@ def observations(stage):
         add("resource_received", timestamp=1005000)
         add("resource_authorized", timestamp=1005000, token_generation=1, operation="gmail.messages.list")
     if refresh:
-        add("refresh_token_rotated", timestamp=expiry + 1000, granted_scopes=checker.SCOPES)
-        add("tokens_issued", timestamp=expiry + 1000, grant_type="refresh_token", granted_scopes=checker.SCOPES)
+        refreshed_at = expiry - 55000 if refresh_before_expiry else expiry + 1000
+        add("refresh_token_rotated", timestamp=refreshed_at, granted_scopes=checker.SCOPES)
+        add("tokens_issued", timestamp=refreshed_at, grant_type="refresh_token", granted_scopes=checker.SCOPES)
+    if resources == 2:
         add("resource_received", timestamp=expiry + 1001)
         add("resource_authorized", timestamp=expiry + 1001, token_generation=2, operation="gmail.messages.list")
     return {"schema": "serverware.privateGoogleObservations/v1", "counts": {"google": {key: value for key, value in counts.items() if value}, "x": {}},
@@ -168,6 +172,41 @@ class GoogleRefreshCheckerTests(unittest.TestCase):
             change(value)
             with self.subTest(case=index), self.assertRaises(checker.CheckFailure):
                 checker.validate_observations(value, "refreshed")
+
+    def test_expiry_checkpoint_accepts_both_complete_automatic_refresh_timing_paths(self):
+        for prefetched in (False, True):
+            with self.subTest(refresh_before_expiry=prefetched):
+                first = checker.validate_observations(observations("first"), "first")
+                expired = checker.validate_observations(observations("expired", refresh_before_expiry=prefetched), "expired")
+                final = checker.validate_observations(observations("refreshed", refresh_before_expiry=prefetched), "refreshed")
+                self.assertEqual(first["resourceGenerations"], [1])
+                self.assertEqual(expired["resourceGenerations"], [1])
+                self.assertIs(expired["refreshCompletedAtExpiry"], prefetched)
+                self.assertEqual(expired["counts"].get("refresh_exchanges", 0), int(prefetched))
+                self.assertEqual(final["resourceGenerations"], [1, 2])
+                self.assertEqual(final["counts"]["refresh_exchanges"], 1)
+                self.assertEqual(final["counts"]["resource_requests"], 2)
+
+    def test_expiry_checkpoint_refuses_partial_extra_and_malformed_refresh_inventories(self):
+        changes = [lambda value, count=count: value["counts"]["google"].update(refresh_exchanges=count)
+                   for count in (2, -1, True, "1", None, 0)]
+        changes.extend((
+            lambda value: value["counts"]["google"].update(token_requests=1),
+            lambda value: value["counts"]["google"].update(token_responses=1),
+            lambda value: value["counts"]["google"].update(resource_attempts=2),
+            lambda value: value["events"].pop(),
+            lambda value: value["events"][-1].update(granted_scopes=["profile"]),
+            lambda value: value["events"][-1].update(grant_type="authorization_code"),
+            lambda value: value.update(initialAccessExpired=False)))
+        for index, change in enumerate(changes):
+            value = observations("expired", refresh_before_expiry=True)
+            change(value)
+            with self.subTest(case=index), self.assertRaises(checker.CheckFailure):
+                checker.validate_observations(value, "expired")
+        partial = observations("expired")
+        partial["counts"]["google"]["token_requests"] = 2
+        with self.assertRaises(checker.CheckFailure):
+            checker.validate_observations(partial, "expired")
 
     def test_refresh_skew_actual_expiry_and_new_token_generation_cannot_be_fabricated(self):
         changes = [lambda value: value.update(initialAccessExpired=False),

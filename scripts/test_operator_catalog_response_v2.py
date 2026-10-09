@@ -29,12 +29,13 @@ PROFILE = "bufferedJsonOrEmpty204V2"
 CAPABILITIES = ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1", MODE]
 
 
-def refused(operation, exception):
+def refused(operation, exception, *, context=None):
     try:
         operation()
     except exception:
         return
-    raise AssertionError("catalog V2 invalid input or state was admitted")
+    message = "catalog V2 invalid input or state was admitted"
+    raise AssertionError(f"{context}: {message}" if context else message)
 
 
 def profile_contract(route):
@@ -207,15 +208,35 @@ def google_admission():
     assert request["bodyMode"] == "none" and request["maxBodyBytes"] == 0
     assert route["adapter"]["config"]["credentialBinding"] == f.google.route_binding(f.record)
     assert signed["credentials"][0]["scopes"] == list(f.profile.scopes)
+
+    # A single ID-shaped segment named "send" is still a GET read route. It
+    # does not authorize Gmail's POST send operation or deeper resource paths.
+    f.rule(application, "messages/send", response_mode=MODE, response_fields=[])
+    with_message_id = workspace.verify_signed(f.config, f.db, f.store, f.bundles)
+    assert with_message_id["routes"][:-1] == signed["routes"]
+    assert with_message_id["credentials"] == signed["credentials"]
+    assert with_message_id["principals"] == signed["principals"]
+    message_id_route = with_message_id["routes"][-1]
+    profile_contract(message_id_route)
+    assert message_id_route["match"]["host"] == "gmail.googleapis.com"
+    assert message_id_route["match"]["methods"] == ["GET"]
+    assert message_id_route["match"]["paths"] == ["/gmail/v1/users/me/messages/send"]
+    message_id_request = message_id_route["adapter"]["config"]["request"]
+    assert message_id_request["bodyMode"] == "none" and message_id_request["maxBodyBytes"] == 0
+    assert message_id_route["adapter"]["config"]["credentialBinding"] == f.google.route_binding(f.record)
+
     before = f.snapshot()
-    invalid = ({"methods": ["POST"]}, {"methods": ["GET", "POST"]},
-        {"request_fields": ["raw"]}, {"request_body_mode": "preserve_json_v1"},
-        {"upstream_url": "https://api.example.com/v1/items"},
-        {"upstream_url": google_tests.GMAIL + "messages/send"})
-    for change in invalid:
+    invalid = (("POST method", {"methods": ["POST"]}),
+        ("mixed GET/POST methods", {"methods": ["GET", "POST"]}),
+        ("request fields", {"request_fields": ["raw"]}),
+        ("preserved request body", {"request_body_mode": "preserve_json_v1"}),
+        ("other provider origin", {"upstream_url": "https://api.example.com/v1/items"}),
+        ("unsupported nested path", {"upstream_url": google_tests.GMAIL + "messages/id/attachments/part"}))
+    for index, (label, change) in enumerate(invalid, start=1):
+        context = f"Google refusal case {index}/{len(invalid)} ({label})"
         refused(lambda: f.rule(application, **{"response_mode": MODE, "response_fields": [], **change}),
-            (f.schema.CatalogIntegrityError, ValueError))
-        assert f.snapshot() == before
+            (f.schema.CatalogIntegrityError, ValueError), context=context)
+        assert f.snapshot() == before, f"{context}: refused mutation changed retained state"
     with closing(f.db.connect()) as conn:
         f.schema.validate_bindings(conn)
     return {"gmail_get_no_body_v2": True, "unchanged_google_refusals": len(invalid)}

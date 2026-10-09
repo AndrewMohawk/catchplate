@@ -2,8 +2,8 @@
 // Focused presentation checks only. Requests are intercepted synthetic fixtures;
 // the command generator is compared, not changed or executed. No live targets.
 const assert = require('node:assert/strict');
-const {mkdtemp} = require('node:fs/promises');
-const {join, resolve} = require('node:path');
+const {mkdtemp, stat} = require('node:fs/promises');
+const {join} = require('node:path');
 const {fixture, ready, view, openRestrictions, credential, application, rule, IDS, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
 const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
 let artifacts;
@@ -24,8 +24,10 @@ async function compatibility(page, area) {
   assert.equal(await details.evaluate(node => node.open), false); assert(!(await content.isVisible()));
   await details.locator('summary').click(); assert(await content.isVisible());
   const text = await content.innerText();
-  for (const item of ['HTTP 204', 'empty responses', '1 MiB', '64 KiB', 'text, binary, streaming and HEAD',
-    'No response headers are selected for forwarding', '200, 201, 202', 'error, code and message']) assert(text.includes(item));
+  for (const item of ['JSON only; no empty/204 responses.', '1 MiB', '64 KiB',
+    'Form, multipart, text, binary, compressed bodies, streaming and HEAD are unsupported.',
+    'rejects unlisted upstream headers', 'No response headers are selected for forwarding',
+    '200, 201, 202', 'error, code and message', 'does not remove size, status or transport limits']) assert(text.includes(item));
   await details.locator('summary').click(); assert(!(await content.isVisible()));
 }
 
@@ -85,7 +87,7 @@ const tests = [
     assert.equal(summary['Destination / methods'], UPSTREAM + '/v1/status · POST only'); assert(summary['Request body'].startsWith('No body'));
     assert(summary['Query parameters'].startsWith('None allowed')); assert(summary['Client headers'].startsWith('No extra client headers'));
     assert(summary.Response.includes('All JSON content')); compactResponse(summary);
-    assert((await page.locator('#rule-response-limits').innerText()).includes('Whole-JSON mode does not remove these limits'));
+    assert.equal(await page.locator('#rule-response-limits').innerText(), 'JSON only; no empty/204 responses.');
     await compatibility(page, 'rule');
     assert.equal(state.posts.length, 0);
   })],
@@ -113,7 +115,9 @@ const tests = [
 
 async function main() {
   assert.equal(process.argv.length, 2, 'clarity fixtures do not accept live targets or credentials');
-  artifacts = await mkdtemp(join(resolve(__dirname, '../../serverware-operator-artifacts'), 'rule-clarity-synthetic-'));
+  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  assert((await stat(artifactRoot)).isDirectory());
+  artifacts = await mkdtemp(join(artifactRoot, 'rule-clarity-synthetic-'));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
   let deadline;

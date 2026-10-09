@@ -11,6 +11,7 @@ from email.message import Message
 import io
 import json
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -74,6 +75,37 @@ def authorize(provider, *, bad_verifier=False):
 
 
 class ManifestTests(unittest.TestCase):
+    def test_keeper_health_drops_identity_before_private_marker_read(self):
+        value = prepare.build(SOURCE, BINARY, INITIALIZER, ROOT)
+        service = value["services"]["network"]
+        self.assertEqual(service["cap_add"], ["NET_ADMIN", "SETUID", "SETGID"])
+        command = service["healthcheck"]["test"]
+        self.assertEqual(command[:3], ["CMD", "python", "-c"])
+        for bad_field, bad_value in ((None, None), ("st_mode", 0o100644),
+                ("st_mode", 0o120400), ("st_uid", 0), ("st_gid", 0),
+                ("st_nlink", 2), ("st_size", 0), ("st_size", 1025)):
+            calls = []
+            info = {"st_mode": 0o100400, "st_uid": 10001, "st_gid": 10001, "st_nlink": 1, "st_size": 145}
+            if bad_field is not None:
+                info[bad_field] = bad_value
+
+            def observed_stat(path, *, follow_symlinks):
+                self.assertEqual(calls, [("groups", []), ("gid", 10001), ("uid", 10001)])
+                self.assertEqual(path, "/fixture-network/ready")
+                self.assertFalse(follow_symlinks)
+                return SimpleNamespace(**info)
+
+            observed_os = SimpleNamespace(setgroups=lambda value: calls.append(("groups", value)),
+                setgid=lambda value: calls.append(("gid", value)),
+                setuid=lambda value: calls.append(("uid", value)), stat=observed_stat)
+            # Execute only the fixed health expression against a recording OS;
+            # this proves command order, not a real UID transition or startup.
+            modules = {"os": observed_os, "stat": stat}
+            with self.assertRaises(SystemExit) as exited:
+                exec(command[3], {"__builtins__": {"__import__": lambda name, *a: modules[name],
+                    "SystemExit": SystemExit}})
+            self.assertEqual(exited.exception.code, 0 if bad_field is None else 1)
+
     def test_no_external_network_and_normal_binary_and_real_runner(self):
         value = prepare.build(SOURCE, BINARY, INITIALIZER, ROOT)
         prepare.validate(value, SOURCE, BINARY, INITIALIZER, ROOT)

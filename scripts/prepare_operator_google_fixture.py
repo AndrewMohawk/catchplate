@@ -93,7 +93,12 @@ def build(source, binary, initializer, root):
         "sysctls": {"net.ipv4.ip_unprivileged_port_start": "0", "net.ipv4.ip_nonlocal_bind": "0"},
         "volumes": [base.bind(source, "/app"), base.bind(runtime / "network-data", "/fixture-network", False), *hosts],
         "healthcheck": {"test": ["CMD", "python", "-c",
-            "from pathlib import Path; raise SystemExit(0 if Path('/fixture-network/ready').is_file() else 1)"],
+            # Docker starts healthchecks as Config.User (root), not the keeper's
+            # permanently dropped UID. Use existing SETGID/SETUID, not DAC bypass.
+            "import os,stat; os.setgroups([]); os.setgid(10001); os.setuid(10001); "
+            "s=os.stat('/fixture-network/ready',follow_symlinks=False); "
+            "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and stat.S_IMODE(s.st_mode)==0o400 "
+            "and s.st_uid==s.st_gid==10001 and s.st_nlink==1 and 0<s.st_size<=1024 else 1)"],
             "interval": "2s", "timeout": "3s", "retries": 10, "start_period": "3s"}}
     services["network"] = network
     initialize = services["initialize"]

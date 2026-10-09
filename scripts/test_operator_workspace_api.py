@@ -161,6 +161,16 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             self.assertEqual(rotated["application"]["token_generation"], 2)
             self.mutation("applications/revoke", {**self.review(), "id": first_id}, expected=200)
             current = self.status()
+            activity = current["observed_activity"]
+            self.assertEqual(activity["schema"], "serverware.operatorAccountActivity/v1")
+            self.assertEqual(activity["status"], "available")
+            self.assertEqual(activity["chain_verification"], "not_checked")
+            self.assertIs(type(activity["observed_at_epoch_ms"]), int)
+            self.assertFalse(activity["window"]["incomplete"])
+            self.assertGreater(activity["window"]["rows_scanned"], 0)
+            self.assertEqual(activity["accounts"], [{"credential_id": credential["id"],
+                "last_successful_response": None, "last_refresh_success": None,
+                "last_refresh_failure": None, "last_refresh_outcome": "unobserved"}])
             self.assertEqual(current["credentials"][0]["status"], "active")
             self.assertEqual({item["application_id"] for item in current["access_rules"] if item["status"] == "active"}, {second_id})
             self.assertIsNone(current["policy"]["loaded_policy_hash"])
@@ -175,8 +185,20 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
                 self.assertEqual(json.loads(raw)["code"], "operator_demo_resource_model_changed")
                 self.assertEqual(json.loads(raw)["catalog_path"], CATALOG)
             committed = self.snapshot()
+            # Catalog observation is a real authenticated HTTP read, not a
+            # refresh trigger, provider probe or audit/catalog mutation.
+            observed_again = self.status()
+            self.assertEqual(self.snapshot(), committed)
+            self.assertGreaterEqual(observed_again["observed_activity"]["observed_at_epoch_ms"],
+                activity["observed_at_epoch_ms"])
         with self.runner():
-            self.assertEqual(self.status(), current)
+            restarted = self.status()
+            self.assertGreaterEqual(restarted["observed_activity"]["observed_at_epoch_ms"],
+                observed_again["observed_activity"]["observed_at_epoch_ms"])
+            # Only the observation clock changes: all authority fields AND
+            # recorded activity/window evidence must remain identical.
+            restarted["observed_activity"]["observed_at_epoch_ms"] = activity["observed_at_epoch_ms"]
+            self.assertEqual(restarted, current)
             self.assertEqual(self.snapshot(), committed)
 
     def test_cas_unknown_and_storage_failure_are_fixed_and_atomic(self):

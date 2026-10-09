@@ -56,7 +56,7 @@ Account cards should lead with the account name, meaningful permission names,
 affected apps and observed attention state. The Google account card now shows
 the account, **Read Gmail**, and assigned app names, with raw scope URLs, preset
 identifiers, exact IDs and former assignments in one **Details** disclosure.
-This is presentation, not a new health observation or reconnect workflow.
+This is presentation, not a live health check or reconnect workflow.
 Keep material limitations and blocking conditions visible,
 but use concise states such as "Not tested yet", "Setup required", "Temporary
 failure" or "Reconnect required" only when their evidence supports them.
@@ -79,6 +79,29 @@ that lists, paginates, reads messages and continues after provider-token expiry.
 Neither a short form nor a successful isolated endpoint substitutes for those
 jobs. Do not promise arbitrary passthrough while the implementation supports
 only bounded JSON and selected statuses.
+
+### Observed activity is not account health
+
+Account and key cards should answer what the proxy has actually recorded, while
+keeping their saved permissions separate from runtime observations. The additive
+`observed_activity` catalog field reports a bounded recent audit window: matched
+successful response records for saved credentials and refresh success/failure
+records for Google accounts. Reading it must neither decrypt a credential nor
+contact a provider, trigger refresh, change a generation or publish a policy.
+
+The ordinary card shows one concise summary. Details identify the recorded
+events and incomplete coverage. Missing, malformed or unavailable evidence is
+not proof of health or disuse and must not disable otherwise valid catalog
+management. Quarantined or revoked credentials remain unusable regardless of
+historical successes. A recorded proxy response is not proof that the client
+received it or completed its job; audit timestamps are storage/receiver times,
+and this projection does not independently verify the audit chain.
+
+Refresh failure alone does not establish that consent was revoked. The generic
+refresh error must direct the operator to account status and audit information,
+not unconditionally instruct reconnection. A safe reconnect workflow, real
+Google acceptance and app-identity renewal remain separate requirements; this
+read-only display does not implement them.
 
 ### Guided setup consistency, 2026-10-09
 

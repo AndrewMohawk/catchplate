@@ -182,6 +182,61 @@ function projectGoogleAccount(item) {
   }
   return result;
 }
+function projectObservedAccountActivity(value, credentials, applications, accessRules) {
+  // Observational evidence is not authority. Missing or malformed evidence makes
+  // activity unavailable, without changing otherwise valid catalog permissions.
+  const object = item => item !== null && typeof item === 'object' && !Array.isArray(item);
+  const integer = (item, maximum) => Number.isSafeInteger(item) && item >= 0 && item <= maximum;
+  const uuid = item => typeof item === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(item);
+  if (!object(value) || value.schema !== 'serverware.operatorAccountActivity/v1' ||
+      !['available', 'unavailable'].includes(value.status) || value.chain_verification !== 'not_checked' ||
+      !integer(value.observed_at_epoch_ms, 8640000000000000) || !object(value.window) ||
+      !Array.isArray(value.accounts) || value.accounts.length > 1024) return null;
+  const window = value.window;
+  if (window.row_limit !== 256 || window.event_byte_limit !== 16384 || window.byte_limit !== 2097152 ||
+      !integer(window.rows_scanned, window.row_limit) || !integer(window.bytes_read, window.byte_limit) ||
+      !['has_older_rows', 'byte_budget_exhausted', 'incomplete'].every(key => typeof window[key] === 'boolean') ||
+      !['oversized_events', 'invalid_events', 'unmatched_responses'].every(key => integer(window[key], window.rows_scanned)) ||
+      (window.has_older_rows || window.byte_budget_exhausted || window.oversized_events || window.invalid_events || window.unmatched_responses) && !window.incomplete)
+    return null;
+  const result = {schema: value.schema, status: value.status, observed_at_epoch_ms: value.observed_at_epoch_ms,
+    chain_verification: 'not_checked', window: Object.fromEntries(['row_limit', 'event_byte_limit', 'byte_limit',
+      'rows_scanned', 'bytes_read', 'has_older_rows', 'byte_budget_exhausted', 'oversized_events', 'invalid_events',
+      'unmatched_responses', 'incomplete'].map(key => [key, window[key]])), accounts: []};
+  if (value.status === 'unavailable') return value.accounts.length === 0 && window.incomplete ? result : null;
+  if (value.accounts.length !== credentials.length) return null;
+  function observation(item, credentialId, response = false) {
+    if (item === null) return null;
+    if (!object(item) || !(uuid(item.event_id) || typeof item.event_id === 'string' && /^sha256:[0-9a-f]{64}$/.test(item.event_id)) ||
+        !integer(item.recorded_at_epoch_ms, value.observed_at_epoch_ms) ||
+        !Number.isSafeInteger(item.credential_version) || item.credential_version < 1 || window.rows_scanned === 0) return undefined;
+    const event = {event_id: item.event_id, recorded_at_epoch_ms: item.recorded_at_epoch_ms, credential_version: item.credential_version};
+    if (response) {
+      const rule = accessRules.find(rule => rule.id === item.rule_id && rule.credential_id === credentialId && rule.application_id === item.application_id);
+      if (!uuid(item.rule_id) || !uuid(item.application_id) || !rule || !applications.some(app => app.id === item.application_id)) return undefined;
+      Object.assign(event, {application_id: item.application_id, rule_id: item.rule_id});
+    }
+    return event;
+  }
+  const seen = new Set();
+  for (const item of value.accounts) {
+    if (!object(item) || !uuid(item.credential_id) || seen.has(item.credential_id)) return null;
+    const credential = credentials.find(record => record.id === item.credential_id);
+    if (!credential || !['success', 'failure', 'unobserved'].includes(item.last_refresh_outcome)) return null;
+    const response = observation(item.last_successful_response, item.credential_id, true);
+    const success = observation(item.last_refresh_success, item.credential_id);
+    const failure = observation(item.last_refresh_failure, item.credential_id);
+    if ([response, success, failure].includes(undefined) ||
+        credential.auth_type !== 'google_oauth' && (success || failure || item.last_refresh_outcome !== 'unobserved') ||
+        item.last_refresh_outcome === 'unobserved' && (success || failure) ||
+        item.last_refresh_outcome === 'success' && (!success || failure && success.recorded_at_epoch_ms < failure.recorded_at_epoch_ms) ||
+        item.last_refresh_outcome === 'failure' && (!failure || success && failure.recorded_at_epoch_ms < success.recorded_at_epoch_ms)) return null;
+    seen.add(item.credential_id);
+    result.accounts.push({credential_id: item.credential_id, last_successful_response: response,
+      last_refresh_success: success, last_refresh_failure: failure, last_refresh_outcome: item.last_refresh_outcome});
+  }
+  return result;
+}
 function projectCatalog(value) {
   if (value?.schema !== 'serverware.operatorCatalog/v1' || value.mode !== 'operator-development' ||
       value.productionReady !== false || value.hardwareVerified !== false || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
@@ -229,7 +284,8 @@ function projectCatalog(value) {
     throw operatorError('Google destination capability is inconsistent. Changes are disabled.');
   return {schema: value.schema, revision: value.revision, policy: pick(value.policy, ['policy_hash', 'loaded_policy_hash', 'sequence', 'activation']),
     proxy_url: value.proxy_url, allowed_upstreams: value.allowed_upstreams.filter(item => typeof item === 'string'),
-    credentials, applications, access_rules: accessRules, limits: value.limits, capabilities};
+    credentials, applications, access_rules: accessRules, limits: value.limits, capabilities,
+    observed_activity: projectObservedAccountActivity(value.observed_activity, credentials, applications, accessRules)};
 }
 function createOperatorWorkspace() {
   let writeInFlight = false;

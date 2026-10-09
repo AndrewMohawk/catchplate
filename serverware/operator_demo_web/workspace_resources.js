@@ -132,6 +132,55 @@ function operatorGoogleAccountNotice(credential) {
 function operatorGooglePermission(credential) {
   return credential.permission_preset === 'gmail_readonly' ? 'Read Gmail' : 'Unsupported permission preset';
 }
+function operatorAccountActivity(credential, catalog) {
+  const activity = catalog.observed_activity;
+  const account = activity?.status === 'available' ? activity.accounts.find(item => item.credential_id === credential.id) : null;
+  const time = value => new Date(value).toLocaleString();
+  const rows = [];
+  if (activity) {
+    const window = activity.window;
+    rows.push(['Summary observed at', time(activity.observed_at_epoch_ms)],
+      ['Audit scan', window.rows_scanned + ' of at most ' + window.row_limit + ' recent rows; ' + window.bytes_read + ' of at most ' + window.byte_limit + ' bytes'],
+      ['Coverage', window.incomplete ? 'Incomplete evidence' : 'No omissions reported inside this bounded scan'],
+      ['Older rows outside scan', window.has_older_rows ? 'Yes' : 'No'],
+      ['Byte budget exhausted', window.byte_budget_exhausted ? 'Yes' : 'No'],
+      ['Skipped or unmatched evidence', window.oversized_events + ' oversized; ' + window.invalid_events + ' invalid; ' + window.unmatched_responses + ' unmatched responses'],
+      ['Audit-chain verification', 'Not checked']);
+  }
+  if (!account) return {status: 'unavailable', text: 'Activity unavailable.', rows};
+  const notes = [];
+  const response = account.last_successful_response;
+  const describe = event => event ? time(event.recorded_at_epoch_ms) + ' · credential version ' + event.credential_version + ' · event ' + event.event_id : 'No matching event in this scan';
+  if (response) notes.push('Proxy recorded a successful response ' + time(response.recorded_at_epoch_ms));
+  rows.push(['Last successful response recorded by proxy', describe(response)]);
+  if (response) {
+    const app = catalog.applications.find(item => item.id === response.application_id);
+    const rule = catalog.access_rules.find(item => item.id === response.rule_id);
+    rows.push(['Response application', app.name + ' (' + app.id + ')'], ['Response access rule', rule.name + ' (' + rule.id + ')']);
+  }
+  if (credential.auth_type === 'google_oauth') {
+    const latest = account.last_refresh_outcome === 'success' ? account.last_refresh_success : account.last_refresh_failure;
+    if (latest) notes.push('Refresh ' + account.last_refresh_outcome + ' recorded ' + time(latest.recorded_at_epoch_ms));
+    rows.push(['Last recorded refresh success', describe(account.last_refresh_success)], ['Last recorded refresh failure', describe(account.last_refresh_failure)]);
+  }
+  const observed = notes.length > 0;
+  let text = observed ? (credential.status !== 'active' ? 'Historical activity only: ' : '') + notes.join('. ') + '.' :
+    'No matching activity in the scanned audit window.';
+  if (activity.window.incomplete) text += ' Evidence incomplete.';
+  return {status: activity.window.incomplete ? 'incomplete' : observed ? 'observed' : 'unobserved', text, rows};
+}
+function appendOperatorAccountActivity(card, details, credential, catalog) {
+  const activity = operatorAccountActivity(credential, catalog);
+  const summary = textNode('p', activity.text, 'small');
+  summary.dataset.accountActivity = ''; summary.dataset.activityStatus = activity.status;
+  card.append(summary);
+  const evidence = textNode('div'); evidence.dataset.accountActivityDetails = '';
+  const metadata = textNode('dl', undefined, 'metadata');
+  metadata.append(...activity.rows.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
+  evidence.append(metadata, textNode('p',
+    'Times are audit storage/receiver times, not provider event times. This bounded scan may omit older or pending audit records; no matching event does not mean never used. The audit chain has not been verified here. A proxy response record does not prove delivery to the client or completion of its job. Historical observations do not establish current account health, application-token validity or policy activation.', 'small muted'));
+  details.append(evidence);
+}
 function operatorGoogleAccountCard(credential, catalog) {
   const known = credential.permission_preset === 'gmail_readonly';
   const quarantined = credential.status === 'quarantined';
@@ -141,9 +190,9 @@ function operatorGoogleAccountCard(credential, catalog) {
     ['Assigned apps', operatorGoogleAssignments(credential, catalog, 'active')]]);
   card.dataset.credentialType = 'google_oauth';
   const notice = textNode('p', quarantined ?
-    'Unavailable for use. Google revocation is not proven. Refresh health and proxy activation are not confirmed here.' : !known ?
-    'Unsupported permission preset; do not use this account. Refresh health and proxy activation are not confirmed here.' :
-    'Refresh health not checked. Assignments do not confirm proxy activation.', 'small muted');
+    'Unavailable for use. Google revocation is not proven.' : !known ?
+    'Unsupported permission preset; do not use this account.' :
+    'Historical observations do not confirm current account health or proxy activation.', 'small muted');
   notice.dataset.googleAccountNotice = '';
   const details = textNode('details'); details.dataset.googleIdentity = '';
   details.append(textNode('summary', 'Details'));
@@ -156,6 +205,7 @@ function operatorGoogleAccountCard(credential, catalog) {
   if (quarantined) values.push(['Quarantined at', credential.quarantined_at], ['Provider revocation', 'Not proven']);
   metadata.append(...values.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
   details.append(metadata, textNode('p', 'Account removal needs provider-aware cleanup; this screen does not disconnect Google.', 'small muted'));
+  appendOperatorAccountActivity(card, details, credential, catalog);
   card.append(notice, details);
   return card;
 }
@@ -183,6 +233,10 @@ function createCredentialsView(workspace) {
       const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
         [['Authentication', credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
           ['Active rules', String(credential.active_rule_count)], ['Credential ID', credential.id]]);
+      if (!google) {
+        const details = textNode('details'); details.append(textNode('summary', 'Activity details'));
+        appendOperatorAccountActivity(card, details, credential, catalog); card.append(details);
+      }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
       if (credential.status === 'active' && !google) {
         const button = textNode('button', 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';

@@ -300,7 +300,7 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 
 def catalog_status() -> dict:
-    from serverware import operator_catalog_capabilities, operator_catalog_gmail, operator_demo
+    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_gmail, operator_demo
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
@@ -311,13 +311,15 @@ def catalog_status() -> dict:
         limits = {collection: {"active": sum(row["status"] == "active" for row in catalog[collection]),
             "retained": len(catalog[collection]) + schema.retained_legacy_count(conn, collection),
             "active_max": MAX_ACTIVE_RESOURCES, "retained_max": MAX_RETAINED_RESOURCES} for collection in _RESULT_KEYS}
+        observed_activity = operator_catalog_activity.project(
+            conn, catalog, observed_at_epoch_ms=time.time_ns() // 1_000_000)
     observation = _policy_observation(state)
     now, settings = time.time_ns() // 1_000_000, operator_demo.settings()
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
         **{collection: [_public(collection, row, catalog, observation, now) for row in catalog[collection]]
-           for collection in _RESULT_KEYS}, "limits": limits,
+           for collection in _RESULT_KEYS}, "limits": limits, "observed_activity": observed_activity,
         # Source capability, not proof of a deployed gate version. Publication
         # requires the co-versioned request/response/replacement gate (including
         # V2 metadata discard for that explicit mode); never downgrade.

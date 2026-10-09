@@ -10,6 +10,7 @@ const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const {runInNewContext} = require('node:vm');
 const {fixture, ready, view, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
+const {publicCatalog} = require('./test_operator_ordinary_modes_browser.cjs');
 
 const ROOT = resolve(__dirname, '..');
 const SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
@@ -33,6 +34,11 @@ const SECOND_RULE_ID = '44444444-5555-4555-8555-555555555555';
 const MIMIC_APPLICATION_ID = '88888888-8888-4888-8888-888888888888';
 const ACTION_RULE_ID = '99999999-9999-4999-8999-999999999999';
 const SECOND_ACCOUNT = 'other-operator@example.test';
+const ACTIVITY_SCHEMA = 'serverware.operatorAccountActivity/v1';
+const ACTIVITY_ERROR = 'synthetic-raw-provider-error-NEVER-DISPLAY';
+const RESPONSE_EVENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const SUCCESS_EVENT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const FAILURE_EVENT = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const capabilities = {responseModes: ['projected_json', 'unfiltered_json'], credentialInputModes: ['insert', 'replace_exact']};
 const digest = n => 'sha256:' + n.toString(16).padStart(64, '0');
 const google = (changes = {}) => credential({name: 'Saved test Google account', auth_type: 'google_oauth', header_name: 'Authorization',
@@ -44,7 +50,20 @@ const googleRule = (mode = 'replace_exact', changes = {}) => rule({name: 'Read G
   credential_input: mode, ...(mode === 'replace_exact' ? {placeholder: DUMMY} : {}), ...changes});
 const supplied = (changes = {}) => ({...capabilities, credentials: [google()], applications: [application()], ...changes});
 const accountCard = page => page.locator('#credentials-list [data-resource-id="' + IDS.credential + '"][data-credential-type="google_oauth"]');
-const INPUTS = ['scripts/test_operator_google_browser.cjs', 'scripts/test_operator_catalog_browser.cjs', 'serverware/operator_demo_portal.py',
+const clone = value => JSON.parse(JSON.stringify(value));
+const activityAccount = (changes = {}) => ({credential_id: IDS.credential, last_successful_response: null,
+  last_refresh_success: null, last_refresh_failure: null, last_refresh_outcome: 'unobserved', ...changes});
+const activityEvent = (changes = {}) => ({event_id: SUCCESS_EVENT, recorded_at_epoch_ms: NOW - 60000, credential_version: 2, ...changes});
+const responseEvent = (changes = {}) => activityEvent({event_id: RESPONSE_EVENT, application_id: IDS.application, rule_id: IDS.rule, ...changes});
+const activity = (changes = {}) => ({schema: ACTIVITY_SCHEMA, status: 'available', observed_at_epoch_ms: NOW,
+  chain_verification: 'not_checked', window: {row_limit: 256, event_byte_limit: 16384, byte_limit: 2097152,
+    rows_scanned: 0, bytes_read: 0, has_older_rows: false, byte_budget_exhausted: false,
+    oversized_events: 0, invalid_events: 0, unmatched_responses: 0, incomplete: false},
+  accounts: [activityAccount()], ...changes});
+const observedActivity = (accounts, changes = {}) => activity({accounts,
+  window: {...activity().window, rows_scanned: 8, bytes_read: 2048}, ...changes});
+const INPUTS = ['scripts/test_operator_google_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_applications.js', 'workspace_resources.js',
     'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
@@ -64,6 +83,45 @@ async function privateAbsent(page) {
 async function refresh(page) {
   const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/operator-demo/catalog');
   await page.locator('#connect-status-refresh').click(); await response; await page.waitForLoadState('networkidle');
+}
+async function activityRefresh(page) {
+  const endpoint = 'https://operator-catalog.example.test/api/operator-demo/catalog';
+  // Await the actual replacement of resource cards after this GET, including
+  // unavailable fallback where the visible words may match the old document.
+  await page.evaluate(() => {
+    window.__activityRendered = false;
+    const observer = new MutationObserver(() => { window.__activityRendered = true; observer.disconnect(); });
+    observer.observe(document.querySelector('#credentials-list'), {childList: true});
+  });
+  const response = page.waitForResponse(value => value.url() === endpoint && value.request().method() === 'GET');
+  await page.locator('#connect-status-refresh').click(); await (await response).finished();
+  await page.waitForFunction(() => window.__activityRendered === true);
+  await page.evaluate(() => { delete window.__activityRendered; });
+}
+async function activityFixture(browser, options, exercise) {
+  return fixture(browser, supplied(options), async (page, state, controls) => {
+    const endpoint = 'https://operator-catalog.example.test/api/operator-demo/catalog';
+    state.activityObservation = options.activityObservation;
+    let calls = 0;
+    // A top-level public observation is not a credential or a new API authority.
+    // Override only this exact synthetic GET; the existing deny-all HTTP and
+    // WebSocket guards, service-worker block and context cleanup remain active.
+    await controls.context.route(endpoint, async route => {
+      const request = route.request();
+      state.requests.push({path: '/api/operator-demo/catalog', query: '', method: request.method()});
+      if (++calls > 12 || state.requests.length > 150 || request.url() !== endpoint || request.method() !== 'GET' || request.postDataBuffer()?.length) {
+        state.unexpected.push('account activity catalog boundary refused'); await route.abort(); return;
+      }
+      state.catalogCalls++;
+      const value = publicCatalog(state);
+      if (state.activityObservation !== undefined) value.observed_activity = state.activityObservation;
+      await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(value)});
+    });
+    await activityRefresh(page);
+    await exercise(page, state, controls);
+    assert(calls >= 1); assert.equal(state.posts.length, 0, 'activity observation never causes a catalog mutation');
+    await privateAbsent(page);
+  });
 }
 async function useGoogle(page) {
   await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
@@ -134,6 +192,81 @@ function generatorChecks() {
   return {ok: true, groups: 1, scope: 'pure Google header target, safe commands, permission labels and exact-ID display disambiguation; commands never executed'};
 }
 
+const malformedActivity = [
+  ['unknown schema', value => { value.schema += '/unknown'; }],
+  ['unknown status', value => { value.status = 'healthy'; }],
+  ['claimed verified chain', value => { value.chain_verification = 'verified'; }],
+  ['fractional observation time', value => { value.observed_at_epoch_ms += 0.5; }],
+  ['wrong row bound', value => { value.window.row_limit = 257; }],
+  ['wrong event byte bound', value => { value.window.event_byte_limit++; }],
+  ['wrong total byte bound', value => { value.window.byte_limit++; }],
+  ['excess rows', value => { value.window.rows_scanned = 257; }],
+  ['excess bytes', value => { value.window.bytes_read = 2097153; }],
+  ['nonboolean coverage', value => { value.window.incomplete = 'false'; }],
+  ['counter greater than rows', value => { value.window.invalid_events = 9; }],
+  ...['has_older_rows', 'byte_budget_exhausted', 'oversized_events', 'invalid_events', 'unmatched_responses'].map(key =>
+    ['unacknowledged omission ' + key, value => { value.window[key] = key.endsWith('rows') || key === 'byte_budget_exhausted' ? true : 1; }]),
+  ['missing account', value => { value.accounts = []; }],
+  ['duplicate account', value => { value.accounts.push(clone(value.accounts[0])); }],
+  ['foreign credential', value => { value.accounts[0].credential_id = SECOND_GOOGLE_ID; }],
+  ['invalid event ID', value => { value.accounts[0].last_successful_response.event_id = 'not-an-event'; }],
+  ['future response', value => { value.accounts[0].last_successful_response.recorded_at_epoch_ms = NOW + 1; }],
+  ['zero version', value => { value.accounts[0].last_successful_response.credential_version = 0; }],
+  ['missing application', value => { value.accounts[0].last_successful_response.application_id = SECOND_APPLICATION_ID; }],
+  ['missing rule', value => { value.accounts[0].last_successful_response.rule_id = SECOND_RULE_ID; }],
+  ['success without success event', value => { value.accounts[0].last_refresh_success = null; }],
+  ['unobserved with a refresh event', value => { value.accounts[0].last_refresh_outcome = 'unobserved'; }],
+  ['failure without failure event', value => { value.accounts[0].last_refresh_outcome = 'failure'; }],
+  ['success older than failure', value => { value.accounts[0].last_refresh_failure = activityEvent({event_id: FAILURE_EVENT, recorded_at_epoch_ms: NOW - 1}); }],
+  ['missing required event slot', value => { delete value.accounts[0].last_refresh_failure; }],
+  ['observation without scanned rows', value => { value.window.rows_scanned = 0; }],
+  ['unavailable with account evidence', value => { value.status = 'unavailable'; value.window.incomplete = true; }],
+];
+function activityProjectionChecks() {
+  const core = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+  const state = {credentials: [google()], applications: [application()], rules: [googleRule()], revision: 1,
+    sequence: 1, active: digest(1), loaded: digest(1), responseModes: capabilities.responseModes,
+    credentialInputModes: capabilities.credentialInputModes};
+  const project = (value, changes = {}) => {
+    const input = publicCatalog({...state, ...changes}); if (value !== undefined) input.observed_activity = value;
+    return clone(runInNewContext(core + '\nprojectCatalog(input)',
+      {input, clientCredentialInput, credentialHeaderTarget}, {timeout: 1000}));
+  };
+  const valid = observedActivity([activityAccount({last_successful_response: responseEvent(),
+    last_refresh_success: activityEvent(), last_refresh_outcome: 'success'})]);
+  assert.deepEqual(project(valid).observed_activity, valid);
+  for (const value of [undefined, null, {}, ...malformedActivity.map(([, change]) => { const item = clone(valid); change(item); return item; })]) {
+    const result = project(value); assert.equal(result.observed_activity, null);
+    assert.equal(result.credentials[0].id, IDS.credential); assert.equal(result.access_rules[0].id, IDS.rule);
+    assert.equal(result.capabilities.oauth, false, 'malformed observations do not create authority or invalidate the catalog');
+  }
+  const extras = clone(valid); extras.raw_error = ACTIVITY_ERROR; extras.window.raw_error = ACTIVITY_ERROR;
+  extras.accounts[0].refresh_token = PRIVATE[1]; extras.accounts[0].last_successful_response.error = ACTIVITY_ERROR;
+  extras.accounts[0].last_refresh_success.access_token = PRIVATE[0];
+  assert.deepEqual(project(extras).observed_activity, valid, 'only explicit public evidence survives projection');
+  const tied = clone(valid); tied.accounts[0].last_refresh_failure = activityEvent({event_id: FAILURE_EVENT});
+  for (const last_refresh_outcome of ['success', 'failure']) {
+    tied.accounts[0].last_refresh_outcome = last_refresh_outcome;
+    assert.equal(project(tied).observed_activity.accounts[0].last_refresh_outcome, last_refresh_outcome,
+      'equal storage timestamps retain backend row-order outcome, not a client timestamp guess');
+  }
+  const unavailable = activity({status: 'unavailable', accounts: [], window: {...activity().window, incomplete: true}});
+  assert.deepEqual(project(unavailable).observed_activity, unavailable);
+  const staticEvidence = observedActivity([activityAccount({last_successful_response: responseEvent({event_id: digest(9)})})]);
+  assert.deepEqual(project(staticEvidence, {credentials: [credential()], rules: [rule()]}).observed_activity, staticEvidence);
+  assert.equal(project(valid, {credentials: [credential()], rules: [rule()]}).observed_activity, null, 'static keys cannot inherit Google refresh evidence');
+  const misbound = clone(valid);
+  assert.equal(project(misbound, {credentials: [google(), google({id: SECOND_GOOGLE_ID})],
+    rules: [googleRule('insert', {credential_id: SECOND_GOOGLE_ID})]}).observed_activity, null);
+  const withTwoAccounts = clone(valid); withTwoAccounts.accounts.push(activityAccount({credential_id: SECOND_GOOGLE_ID}));
+  assert.equal(project(withTwoAccounts, {credentials: [google(), google({id: SECOND_GOOGLE_ID})],
+    rules: [googleRule('insert', {credential_id: SECOND_GOOGLE_ID})]}).observed_activity, null,
+    'even a retained rule and application must belong to the exact observed credential');
+  return {ok: true, groups: 1, malformedVariants: malformedActivity.length + 3,
+    scope: 'pure actual catalog projection; activity-only failure, exact joins and sanitized historical evidence, not audit verification'};
+}
+
 const malformed = [
   ['missing account', {provider_account: undefined}], ['empty account', {provider_account: ''}],
   ['control character in account', {provider_account: ACCOUNT + '\n'}], ['missing subject', {provider_subject: undefined}],
@@ -159,7 +292,7 @@ const tests = [
       const text = await card.innerText(); for (const value of [ACCOUNT, 'Read Gmail', 'Assigned apps', 'Reporting application']) assert(text.includes(value));
       for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application, IDS.other, 'Former worker'])
         assert(!text.includes(value), 'technical or former-assignment detail must not appear on the compact card');
-      assert.match(await card.locator('[data-google-account-notice]').innerText(), /refresh health not checked.*do not confirm proxy activation/is);
+      assert.equal(await card.locator('[data-google-account-notice]').innerText(), 'Historical observations do not confirm current account health or proxy activation.');
       assert.equal(await card.locator('[data-action="revoke-credential"]').count(), 0);
       const staticCard = page.locator('#credentials-list [data-resource-id="' + STATIC_ID + '"]');
       assert.match(await staticCard.innerText(), /Authentication\s+Bearer token/); assert((await staticCard.innerText()).includes(STATIC_ID));
@@ -196,7 +329,7 @@ const tests = [
     const compact = await summary.innerText();
     for (const value of [ACCOUNT, 'Read Gmail', 'Assigned apps', 'Reporting application']) assert(compact.includes(value));
     for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application]) assert(!compact.includes(value));
-    assert.match(compact, /refresh health not checked.*do not confirm proxy activation/is);
+    assert(compact.includes('Historical observations do not confirm current account health or proxy activation.'));
     await details.locator('summary').click();
     for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application]) assert((await details.innerText()).includes(value));
     await refresh(page); assert(await details.evaluate(item => item.open), 'refresh preserves an explicit Details choice for the same account');
@@ -319,12 +452,13 @@ const tests = [
     supplied({credentials: [quarantine()], rules: [googleRule('replace_exact', {status: 'revoked'})]}), async (page, state) => {
       await ready(page); await view(page, 'credentials'); const card = accountCard(page);
       assert.match(await card.locator('.badge').innerText(), /quarantined.*unusable/i);
-      assert.match(await card.locator('[data-google-account-notice]').innerText(), /unavailable for use.*google revocation is not proven.*health.*activation.*not confirmed/is);
+      assert.equal(await card.locator('[data-google-account-notice]').innerText(), 'Unavailable for use. Google revocation is not proven.');
       const text = await card.innerText(); assert.match(text, /assigned apps\s+none/i); assert(text.includes('Read Gmail'));
       for (const value of ['Former assignments', 'Reporting application', 'gmail_readonly', SUBJECT, CLIENT, IDS.application]) assert(!text.includes(value));
       assert.equal(await card.locator('[data-action]').count(), 0); assert.equal(await card.locator('details').count(), 1);
       const details = card.locator('[data-google-identity]'); assert(!await details.evaluate(item => item.open));
       await details.locator('summary').click(); assert.match(await details.innerText(), /provider revocation\s+not proven/i);
+      assert.match(await details.innerText(), /historical observations do not establish current account health, application-token validity or policy activation/i);
       assert.match(await details.innerText(), /former assignments\s+reporting application/i); assert((await details.innerText()).includes(IDS.application));
       await details.locator('summary').click(); assert(!await details.evaluate(item => item.open));
       await screenshot(page, 'google-quarantine-desktop'); await page.setViewportSize({width: 390, height: 844});
@@ -390,19 +524,168 @@ const tests = [
     })]),
 ];
 
+async function activityCard(page, status, id = IDS.credential) {
+  await ready(page); await view(page, 'credentials');
+  const card = page.locator('#credentials-list [data-resource-id="' + id + '"]');
+  const summary = card.locator('p[data-account-activity]');
+  assert.equal(await summary.getAttribute('data-activity-status'), status);
+  assert(!await page.locator('#load-error').isVisible());
+  assert(!await page.locator('#credential-save').isDisabled()); assert(!await page.locator('#application-create').isDisabled());
+  return {card, summary, details: card.locator('details')};
+}
+async function activityDetails(details) {
+  assert(!await details.evaluate(node => node.open)); await details.locator('summary').click();
+  const evidence = details.locator('[data-account-activity-details]'); assert(await evidence.isVisible());
+  const text = await evidence.innerText();
+  for (const phrase of ['audit storage/receiver times, not provider event times', 'no matching event does not mean never used',
+    'audit chain has not been verified', 'does not prove delivery to the client or completion of its job',
+    'do not establish current account health, application-token validity or policy activation']) assert(text.includes(phrase));
+  return text;
+}
+const activityTests = [
+  ['activity: missing additive evidence is unavailable without disabling valid saved resources', browser => activityFixture(browser,
+    {rules: [googleRule()]}, async page => {
+      const {card, summary, details} = await activityCard(page, 'unavailable'); assert.equal(await summary.innerText(), 'Activity unavailable.');
+      assert.equal(await card.locator('details').count(), 1); await activityDetails(details);
+      await view(page, 'proxy'); assert(!await page.locator('#copy-command').isDisabled(), 'missing observations do not revoke current independent rule authority');
+      assert(await page.locator('#download-config').isDisabled(), 'historical activity never retrieves the app token');
+    })],
+  ['activity: explicit unavailable reports no successful-use inference', browser => activityFixture(browser,
+    {activityObservation: activity({status: 'unavailable', accounts: [], window: {...activity().window, incomplete: true}})}, async page => {
+      const {summary, details} = await activityCard(page, 'unavailable'); assert.equal(await summary.innerText(), 'Activity unavailable.');
+      const text = await activityDetails(details); assert.match(text, /coverage\s+incomplete evidence/i); assert.match(text, /audit-chain verification\s+not checked/i);
+      assert(!text.includes('Refresh success recorded')); await screenshot(page, 'activity-unavailable-desktop');
+    })],
+  ['activity: unobserved is a bounded scan and the same optional Details appears in Connect', browser => activityFixture(browser,
+    {activityObservation: activity()}, async page => {
+      const {summary, details} = await activityCard(page, 'unobserved');
+      assert.equal(await summary.innerText(), 'No matching activity in the scanned audit window.');
+      const text = await activityDetails(details); assert.match(text, /0 of at most 256 recent rows; 0 of at most 2097152 bytes/);
+      assert.match(text, /no omissions reported inside this bounded scan/i);
+      await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+      await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+      const selected = page.locator('#connect-google-account-summary');
+      assert.equal(await selected.locator('[data-account-activity]').getAttribute('data-activity-status'), 'unobserved');
+      await activityDetails(selected.locator('details')); await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+      await screenshot(page, 'activity-connect-details-mobile');
+      await activityRefresh(page); assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+      assert(await selected.locator('details').evaluate(node => node.open), 'refresh preserves the operator disclosure choice for this exact account');
+    })],
+  ['activity: incomplete evidence retains a historical response while exposing scan omissions', browser => activityFixture(browser,
+    {rules: [googleRule()], activityObservation: observedActivity([activityAccount({last_successful_response: responseEvent()})],
+      {window: {...activity().window, rows_scanned: 8, bytes_read: 2048, has_older_rows: true,
+        byte_budget_exhausted: true, oversized_events: 1, invalid_events: 1, unmatched_responses: 1, incomplete: true}})}, async page => {
+      const {summary, details} = await activityCard(page, 'incomplete');
+      assert.match(await summary.innerText(), /proxy recorded a successful response.*evidence incomplete/is);
+      const text = await activityDetails(details);
+      for (const value of [RESPONSE_EVENT, 'Reporting application', IDS.application, IDS.rule, 'credential version 2']) assert(text.includes(value));
+      assert.match(text, /older rows outside scan\s+yes/i); assert.match(text, /byte budget exhausted\s+yes/i);
+      assert(text.includes('1 oversized; 1 invalid; 1 unmatched responses')); await screenshot(page, 'activity-incomplete-desktop');
+    })],
+  ['activity: refresh success cannot renew an expired application token or enable client setup', browser => activityFixture(browser,
+    {applications: [application({token_status: 'expired', token_expires_at_epoch_ms: NOW - 1})], rules: [googleRule()],
+      activityObservation: observedActivity([activityAccount({last_refresh_success: activityEvent(), last_refresh_outcome: 'success'})])}, async page => {
+      const {summary} = await activityCard(page, 'observed'); assert.match(await summary.innerText(), /^Refresh success recorded /);
+      assert(!/healthy|reconnect|token valid|policy active/i.test(await summary.innerText()));
+      await view(page, 'applications'); assert.match(await page.locator('#applications-list [data-resource-id="' + IDS.application + '"]').innerText(), /token expired/i);
+      await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled()); assert(await page.locator('#download-config').isDisabled());
+      assert.match(await page.locator('#client-command').innerText(), /application token is expired, revoked or cannot be verified/i);
+      assert.match(await page.locator('#client-guidance').innerText(), /no token has been renewed automatically/i); await screenshot(page, 'activity-expired-app-desktop');
+    })],
+  ['activity: latest refresh failure is historical evidence not a reconnect diagnosis', browser => activityFixture(browser,
+    {activityObservation: observedActivity([activityAccount({last_refresh_success: activityEvent({recorded_at_epoch_ms: NOW - 120000}),
+      last_refresh_failure: activityEvent({event_id: FAILURE_EVENT}), last_refresh_outcome: 'failure'})])}, async page => {
+      const {card, summary, details} = await activityCard(page, 'observed'); assert.match(await summary.innerText(), /^Refresh failure recorded /);
+      assert(!/reconnect|consent required|healthy|revoked/i.test(await summary.innerText()));
+      assert.equal(await card.locator('[data-action]').count(), 0); assert(await page.locator('#credential-google-connect').isDisabled());
+      const text = await activityDetails(details); assert(text.includes(SUCCESS_EVENT) && text.includes(FAILURE_EVENT));
+      assert.match(text, /last recorded refresh success/i); assert.match(text, /last recorded refresh failure/i);
+    })],
+  ['activity: quarantine remains unusable despite earlier successful response and refresh', browser => activityFixture(browser,
+    {credentials: [quarantine()], rules: [googleRule('insert', {status: 'revoked'})],
+      activityObservation: observedActivity([activityAccount({last_successful_response: responseEvent(),
+        last_refresh_success: activityEvent(), last_refresh_outcome: 'success'})])}, async page => {
+      const {card, summary, details} = await activityCard(page, 'observed');
+      assert.match(await card.locator('.badge').innerText(), /quarantined.*unusable/i); assert.match(await summary.innerText(), /^Historical activity only:/);
+      assert.equal(await card.locator('[data-google-account-notice]').innerText(), 'Unavailable for use. Google revocation is not proven.');
+      await activityDetails(details); await view(page, 'connect'); assert(await page.locator('#connect-use-saved').isDisabled());
+      assert.equal(await page.locator('#connect-credential-choice option[value="' + IDS.credential + '"]').count(), 0);
+      await view(page, 'access-rules'); assert(await page.locator('#rule-save').isDisabled());
+      await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled()); assert(await page.locator('#download-config').isDisabled());
+    })],
+  ['activity: arbitrary errors and private extras stay absent while public labels remain escaped text', browser => {
+    const label = '<img data-activity-injected src=x onerror="window.activityExecuted=true">';
+    const appName = '<svg data-activity-injected onload="window.activityExecuted=true">';
+    const evidence = observedActivity([activityAccount({last_successful_response: {...responseEvent(), error: ACTIVITY_ERROR},
+      last_refresh_success: {...activityEvent(), access_token: PRIVATE[0]}, last_refresh_outcome: 'success', raw_error: ACTIVITY_ERROR})]);
+    evidence.raw_error = ACTIVITY_ERROR; evidence.refresh_token = PRIVATE[1];
+    return activityFixture(browser, {credentials: [google({provider_account: label})], applications: [application({name: appName})],
+      rules: [googleRule()], activityObservation: evidence}, async page => {
+      const {card, details} = await activityCard(page, 'observed'); assert((await card.innerText()).includes(label));
+      assert((await activityDetails(details)).includes(appName)); assert.equal(await page.locator('[data-activity-injected]').count(), 0);
+      assert.equal(await page.evaluate(() => window.activityExecuted), undefined);
+      assert(!(await page.content()).includes(ACTIVITY_ERROR)); await privateAbsent(page);
+    });
+  }],
+  ['activity: malformed observations fail only their own display and never replace the selected saved identity', browser => activityFixture(browser,
+    {rules: [googleRule()], activityObservation: activity()}, async (page, state) => {
+      await view(page, 'connect'); await page.locator('#connect-use-saved').click(); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+      for (const name of ['unknown schema', 'future response', 'foreign credential', 'missing rule', 'success older than failure', 'excess rows']) {
+        state.activityObservation = observedActivity([activityAccount({last_successful_response: responseEvent(),
+          last_refresh_success: activityEvent(), last_refresh_outcome: 'success'})]);
+        malformedActivity.find(([label]) => label === name)[1](state.activityObservation);
+        await activityRefresh(page); const {summary} = await activityCard(page, 'unavailable');
+        assert.equal(await summary.innerText(), 'Activity unavailable.', name);
+        await view(page, 'connect'); assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+        assert(!await page.locator('#connect-credential-next').isDisabled());
+      }
+      await view(page, 'proxy'); assert(!await page.locator('#copy-command').isDisabled());
+    })],
+  ['activity: evidence is bound to exact account rule and application rather than a matching label', browser => activityFixture(browser,
+    {credentials: [google(), google({id: SECOND_GOOGLE_ID, provider_subject: 'different-subject'})],
+      applications: [application(), application({id: SECOND_APPLICATION_ID, name: 'Other worker'})],
+      rules: [googleRule('insert', {credential_id: SECOND_GOOGLE_ID, application_id: SECOND_APPLICATION_ID})],
+      activityObservation: observedActivity([activityAccount(), activityAccount({credential_id: SECOND_GOOGLE_ID,
+        last_successful_response: responseEvent({application_id: SECOND_APPLICATION_ID})})])}, async page => {
+      const first = await activityCard(page, 'unobserved'); assert.equal(await first.summary.innerText(), 'No matching activity in the scanned audit window.');
+      const second = await activityCard(page, 'observed', SECOND_GOOGLE_ID); assert.match(await second.summary.innerText(), /^Proxy recorded a successful response /);
+      const text = await activityDetails(second.details); assert(text.includes(SECOND_APPLICATION_ID) && text.includes('Other worker'));
+      assert(!text.includes('(' + IDS.application + ')'));
+      await view(page, 'connect'); await page.locator('#connect-use-saved').click(); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+      assert.equal(await page.locator('#connect-google-account-summary [data-account-activity]').getAttribute('data-activity-status'), 'unobserved');
+      await page.locator('#connect-credential-choice').selectOption(SECOND_GOOGLE_ID);
+      assert.equal(await page.locator('#connect-google-account-summary [data-account-activity]').getAttribute('data-activity-status'), 'observed');
+    })],
+  ['activity: static keys show joined response evidence without invented Google refresh fields', browser => activityFixture(browser,
+    {credentials: [credential()], rules: [rule()], activityObservation: observedActivity([activityAccount({last_successful_response: responseEvent({event_id: digest(9)})})])}, async page => {
+      const {card, summary, details} = await activityCard(page, 'observed'); assert.match(await summary.innerText(), /^Proxy recorded a successful response /);
+      assert(!/refresh/i.test(await summary.innerText())); assert.equal(await card.locator('details').count(), 1);
+      assert.equal(await details.locator('summary').innerText(), 'Activity details');
+      const text = await activityDetails(details); assert(text.includes(digest(9))); assert(text.includes('Reporting application'));
+      assert(!/last recorded refresh/i.test(text)); assert.equal(await card.locator('[data-action="revoke-credential"]').count(), 1);
+      assert(await card.locator('[data-action="revoke-credential"]').isDisabled(), 'existing active-rule revoke guard remains unchanged');
+      await screenshot(page, 'activity-static-key-desktop');
+    })],
+];
+
 async function main() {
   const args = process.argv.slice(2);
-  assert(args.length === 0 || (args.length === 1 && ['--cards-only', '--setup-only'].includes(args[0])), 'Google presentation tests accept only --cards-only, --setup-only or no arguments');
+  assert(args.length === 0 || (args.length === 1 && ['--cards-only', '--setup-only', '--activity-only'].includes(args[0])),
+    'Google presentation tests accept only --cards-only, --setup-only, --activity-only or no arguments');
   const cardTests = new Set([ACTIVE_CARD_TEST, QUARANTINED_CARD_TEST, UNKNOWN_PRESET_TEST]);
   const setupTests = new Set([SETUP_SUMMARY_TEST, DUPLICATE_NAMES_TEST,
     'quarantining the selected account at step one preserves the unavailable choice and cannot resubmit it',
     'quarantine during selected Google review disables the exact workflow without switching accounts',
     'quarantine during selected Google setup disables the exact workflow without switching accounts']);
   const selection = args[0]?.slice(2) || 'all';
-  const selected = selection === 'all' ? tests : tests.filter(([name]) => (selection === 'cards-only' ? cardTests : setupTests).has(name));
-  if (selection !== 'all') assert.equal(selected.length, selection === 'cards-only' ? 3 : 5, 'focused selection remains exact');
+  const selected = selection === 'all' ? [...tests, ...activityTests] : selection === 'activity-only' ? activityTests :
+    tests.filter(([name]) => (selection === 'cards-only' ? cardTests : setupTests).has(name));
+  assert.equal(activityTests.length, 11, 'activity selection remains exactly eleven focused rendered groups');
+  if (selection !== 'all') assert.equal(selected.length, selection === 'cards-only' ? 3 : selection === 'setup-only' ? 5 : 11, 'focused selection remains exact');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-  console.log(JSON.stringify(generatorChecks()));
+  if (selection !== 'activity-only') console.log(JSON.stringify(generatorChecks()));
+  if (selection === 'all' || selection === 'activity-only') console.log(JSON.stringify(activityProjectionChecks()));
   const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'google-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'public-account synthetic screenshots only'}));
@@ -411,10 +694,10 @@ async function main() {
   try {
     await Promise.race([(async () => {
       for (const [name, run] of selected) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length, selection,
+      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length + activityTests.length, selection,
         scope: 'intercepted Google public-account presentation fixtures only',
         consentTested: false, cleanupTested: false, otherBrowserSuitesExecuted: false, liveRequests: 0,
-        generatedCommandsExecuted: false, productionAcceptance: false}));
+        generatedCommandsExecuted: false, auditVerificationTested: false, productionAcceptance: false}));
     })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Google presentation fixture absolute deadline')), 120000); })]);
   } finally {
     clearTimeout(deadline); try { await browser.close(); }

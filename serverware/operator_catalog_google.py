@@ -58,7 +58,7 @@ def initialize_profile(conn) -> None:
         conn.execute("INSERT INTO " + _TABLE + " VALUES (1,?,?)", (expected, profile.binding_digest))
     validate_profile_binding(conn)
     from serverware import operator_catalog_oauth
-    operator_catalog_oauth.initialize(conn)
+    operator_catalog_oauth.initialize(conn, fresh_profile=exists is None)
 
 
 def validate_profile_binding(conn):

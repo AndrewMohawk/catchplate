@@ -1339,6 +1339,8 @@ def revoke_oauth_token(
     if (_operator_cleanup_work_id is not None
             or operator_google_cleanup.operator_context(provider.id, work_id=_operator_cleanup_work_id)):
         try:
+            if provider.id != "google":
+                raise ValueError("operator cleanup provider differs from its owner")
             operator_google_cleanup.require_provider_io_unlocked()
             operator_google_cleanup._store().require_permit(
                 work_id=_operator_cleanup_work_id, secret=token_secret)

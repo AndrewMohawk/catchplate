@@ -53,8 +53,6 @@ def require_provider_io_unlocked() -> None:
 
 def operator_context(provider_id: str | None, *, result: dict | None = None, work_id=None) -> bool:
     """Server-owned markers and active profile cannot fall back to legacy."""
-    if provider_id != "google":
-        return False
     if isinstance(result, dict) and (result.get("_operator_catalog_intent") is not None
             or result.get("_operator_google_work") is not None):
         return True
@@ -64,9 +62,11 @@ def operator_context(provider_id: str | None, *, result: dict | None = None, wor
                 return True
         except Exception:
             return True  # A broken operator association never lends legacy authority.
-    from serverware import operator_demo, operator_catalog_oauth_profile as profiles
+    if provider_id != "google":
+        return False
+    from serverware import operator_catalog_oauth_profile as profiles
     try:
-        return operator_demo.active() and profiles.selected()
+        return profiles.selected() or _store().retained_ownership()
     except Exception:
         return True
 

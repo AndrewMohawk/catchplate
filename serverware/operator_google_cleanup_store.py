@@ -7,6 +7,7 @@ receipts. Source tags remain authoritative even if the association disappears.
 from __future__ import annotations
 
 from contextlib import closing
+from contextvars import ContextVar
 import hashlib
 import hmac
 import json
@@ -19,6 +20,33 @@ INITIAL_SOURCE = PREFIX + "initial_v1"
 REFRESH_SOURCE = PREFIX + "refresh_v1"
 SOURCES = frozenset({INITIAL_SOURCE, REFRESH_SOURCE})
 TABLE = "operator_google_cleanup_work"
+_PROFILE_TABLE = "operator_catalog_oauth_profile"
+_RETIRE_FUNCTION = "operator_google_cleanup_retire_allowed"
+_INSERT_GUARD = "operator_google_cleanup_insert_guard"
+_UPDATE_GUARD = "operator_google_cleanup_association_immutable"
+_DELETE_GUARD = "operator_google_cleanup_retirement_guard"
+_OLD_CORE_GUARD = "operator_google_cleanup_source_immutable"
+_RETIRING = ContextVar("operator_google_cleanup_retiring", default=False)
+_TABLE_SQL = """CREATE TABLE operator_google_cleanup_work (
+    work_id TEXT NOT NULL PRIMARY KEY REFERENCES oauth_revocation_work(id) ON DELETE CASCADE,
+    source TEXT NOT NULL, association_json TEXT NOT NULL,
+    identity_json TEXT, material_sha256 TEXT, fence_json TEXT,
+    created_at TEXT NOT NULL) WITHOUT ROWID"""
+_INSERT_SQL = """CREATE TRIGGER operator_google_cleanup_insert_guard
+    BEFORE INSERT ON operator_google_cleanup_work
+    WHEN EXISTS (SELECT 1 FROM operator_google_cleanup_work WHERE work_id=NEW.work_id)
+    BEGIN SELECT RAISE(ABORT,'operator cleanup owner already exists'); END"""
+_UPDATE_SQL = """CREATE TRIGGER operator_google_cleanup_association_immutable
+    BEFORE UPDATE ON operator_google_cleanup_work
+    WHEN NEW.work_id IS NOT OLD.work_id OR NEW.source IS NOT OLD.source
+      OR NEW.association_json IS NOT OLD.association_json OR NEW.created_at IS NOT OLD.created_at
+      OR (OLD.identity_json IS NOT NULL AND NEW.identity_json IS NOT OLD.identity_json)
+      OR (OLD.fence_json IS NOT NULL AND (NEW.fence_json IS NOT OLD.fence_json OR NEW.material_sha256 IS NOT OLD.material_sha256))
+    BEGIN SELECT RAISE(ABORT,'operator cleanup association is immutable'); END"""
+_DELETE_SQL = """CREATE TRIGGER operator_google_cleanup_retirement_guard
+    BEFORE DELETE ON operator_google_cleanup_work
+    WHEN operator_google_cleanup_retire_allowed(OLD.work_id) IS NOT 1
+    BEGIN SELECT RAISE(ABORT,'operator cleanup retirement refused'); END"""
 ASSOCIATION_SCHEMA = "serverware.operatorGoogleCleanupAssociation/v1"
 FENCE_SCHEMA = "serverware.operatorGoogleCleanupFence/v1"
 MAX_ASSOCIATION_BYTES = 8192
@@ -84,37 +112,72 @@ def _transaction(conn):
     _require(isinstance(conn, sqlite3.Connection) and conn.in_transaction)
 
 
+def configure_connection(conn) -> None:
+    """No DDL or permission: ordinary parent deletes can resolve the guard."""
+    conn.create_function(_RETIRE_FUNCTION, 1, lambda _work_id: 0)
+
+
+def _objects(conn):
+    return {row["name"]: dict(row) for row in conn.execute(
+        "SELECT name,type,tbl_name,sql FROM sqlite_master WHERE name IN (?,?,?,?,?) "
+        "OR (type='trigger' AND tbl_name=?)",
+        (TABLE, _INSERT_GUARD, _UPDATE_GUARD, _DELETE_GUARD, _OLD_CORE_GUARD, TABLE)).fetchall()}
+
+
 def _exists(conn) -> bool:
-    # Ordinary/native callers need no operator schema and no profile admission.
+    # Retained ownership is inspected even when its profile is disabled or
+    # malformed. Absence must never silently turn protected work into legacy.
     from serverware import db
     if isinstance(conn, db.PostgresMetadataConnection):
         return False
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (TABLE,)).fetchone() is not None
+    objects = _objects(conn)
+    profile = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (_PROFILE_TABLE,)).fetchone()
+    if not objects and profile is None:
+        return False
+    _require(profile is not None and set(objects) == {TABLE, _INSERT_GUARD, _UPDATE_GUARD, _DELETE_GUARD})
+    for name, kind, definition in ((TABLE, "table", _TABLE_SQL),
+            (_INSERT_GUARD, "trigger", _INSERT_SQL),
+            (_UPDATE_GUARD, "trigger", _UPDATE_SQL), (_DELETE_GUARD, "trigger", _DELETE_SQL)):
+        row = objects[name]
+        _require(row["type"] == kind and row["tbl_name"] == TABLE and isinstance(row["sql"], str)
+            and " ".join(row["sql"].split()) == " ".join(definition.split()))
+    return True
 
 
-def initialize(conn) -> None:
+def retained_ownership(conn=None) -> bool:
+    """Disabled configuration cannot erase durable cleanup ownership."""
+    from serverware import db
+    if db.metadata_uses_postgres():
+        return False
+    if conn is None:
+        with closing(db.connect()) as opened:
+            opened.execute("BEGIN")
+            return retained_ownership(conn=opened)
+    if _exists(conn):
+        return True
+    core = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='oauth_revocation_work'").fetchone()
+    return core is not None and conn.execute(
+        "SELECT 1 FROM oauth_revocation_work WHERE substr(source,1,16)=? LIMIT 1",
+        (PREFIX,)).fetchone() is not None
+
+
+def initialize(conn, *, fresh_profile=False) -> None:
     from serverware.operator_publication import assert_held
     _profile()
     _transaction(conn)
     assert_held()
-    conn.execute("""CREATE TABLE IF NOT EXISTS operator_google_cleanup_work (
-        work_id TEXT PRIMARY KEY REFERENCES oauth_revocation_work(id) ON DELETE CASCADE,
-        source TEXT NOT NULL, association_json TEXT NOT NULL,
-        identity_json TEXT, material_sha256 TEXT, fence_json TEXT,
-        created_at TEXT NOT NULL)""")
-    # Generic SQL cannot retag protected work as ordinary cleanup. Missing
-    # associations remain protected by the immutable source on the core row.
-    conn.execute("""CREATE TRIGGER IF NOT EXISTS operator_google_cleanup_source_immutable
-        BEFORE UPDATE OF id,source,provider_id,actor_id ON oauth_revocation_work
-        WHEN (substr(OLD.source,1,16)='operator_google_' OR substr(NEW.source,1,16)='operator_google_')
-          AND (NEW.id!=OLD.id OR NEW.source!=OLD.source OR NEW.provider_id!=OLD.provider_id OR NEW.actor_id!=OLD.actor_id)
-        BEGIN SELECT RAISE(ABORT,'operator cleanup source is immutable'); END""")
-    conn.execute("""CREATE TRIGGER IF NOT EXISTS operator_google_cleanup_association_immutable
-        BEFORE UPDATE ON operator_google_cleanup_work
-        WHEN NEW.work_id!=OLD.work_id OR NEW.source!=OLD.source OR NEW.association_json!=OLD.association_json
-          OR (OLD.identity_json IS NOT NULL AND NEW.identity_json IS NOT OLD.identity_json)
-          OR (OLD.fence_json IS NOT NULL AND (NEW.fence_json IS NOT OLD.fence_json OR NEW.material_sha256 IS NOT OLD.material_sha256))
-        BEGIN SELECT RAISE(ABORT,'operator cleanup association is immutable'); END""")
+    _require(type(fresh_profile) is bool)
+    if fresh_profile:
+        # This flag comes from profile-table absence before its creation in
+        # this same transaction, never from empty intent or work inventories.
+        _require(not _objects(conn) and conn.execute(
+            "SELECT 1 FROM oauth_revocation_work WHERE substr(source,1,16)=? LIMIT 1",
+            (PREFIX,)).fetchone() is None)
+        for definition in (_TABLE_SQL, _INSERT_SQL, _UPDATE_SQL, _DELETE_SQL):
+            conn.execute(definition)
+    _require(_exists(conn))  # Retained schemas are verified, never repaired.
 
 
 def _association(value, row):
@@ -143,10 +206,11 @@ def get_work(work_id, conn=None):
         with closing(db.connect()) as opened:
             opened.execute("BEGIN")
             return get_work(work_id, conn=opened)
+    associated = conn.execute("SELECT * FROM " + TABLE + " WHERE work_id=?", (work_id,)).fetchone() if _exists(conn) else None
     row = conn.execute("SELECT id,source,provider_id,actor_id,status FROM oauth_revocation_work WHERE id=?", (work_id,)).fetchone()
     if row is None:
+        _require(associated is None)  # An orphan is retained ownership, not legacy.
         return None
-    associated = conn.execute("SELECT * FROM " + TABLE + " WHERE work_id=?", (work_id,)).fetchone() if _exists(conn) else None
     if not tagged(row["source"]) and associated is None:
         return None
     _require(row["source"] in SOURCES and associated is not None and associated["source"] == row["source"])
@@ -243,7 +307,9 @@ def on_reserve(conn, *, work_id, provider_id, actor_id, source, association):
     if not tagged(source):
         _require(association is None)
         if provider_id == "google":
-            _require(not profiles.selected())  # Never manufacture ordinary fallback work.
+            # Neither disabling the flag nor losing an association grants
+            # ordinary fallback work under a retained operator ownership pin.
+            _require(not profiles.selected() and not retained_ownership(conn=conn))
         return
     profile = _profile()
     _transaction(conn)
@@ -410,17 +476,45 @@ def eligible(conn, work_row) -> bool:
         return False
 
 
+def ordinary_clause(conn) -> str:
+    """Ownership presence excludes a row without parsing it or its profile."""
+    ordinary = "substr(source,1,16) != 'operator_google_'"
+    if _exists(conn):
+        ordinary += " AND NOT EXISTS (SELECT 1 FROM " + TABLE + " AS protected " \
+            "WHERE protected.work_id=oauth_revocation_work.id)"
+    return "(" + ordinary + ")"
+
+
+def reservation_count(conn, *, exclude=None) -> int:
+    where, params = ("", ()) if exclude is None else (" WHERE id<>?", (exclude,))
+    if not _exists(conn):
+        return int(conn.execute("SELECT COUNT(*) AS count FROM oauth_revocation_work" + where,
+            params).fetchone()["count"])
+    return int(conn.execute("SELECT COUNT(*) AS count FROM (SELECT id FROM oauth_revocation_work UNION "
+        "SELECT work_id AS id FROM " + TABLE + ")" + where, params).fetchone()["count"])
+
+
 def claim_clause(conn) -> str:
     """Skip withheld work before the bounded ordinary claim LIMIT is applied.
 
     This is only a candidate filter. Every selected row still passes eligible()
     before its encrypted material is read or a worker lease is assigned.
     """
-    ordinary = "substr(source,1,16) != 'operator_google_'"
+    ordinary = ordinary_clause(conn)
     if not _exists(conn):
         return ordinary
     return "(" + ordinary + " OR EXISTS (SELECT 1 FROM " + TABLE + " AS protected " \
-        "WHERE protected.work_id=oauth_revocation_work.id AND protected.fence_json IS NOT NULL))"
+        "WHERE protected.work_id=oauth_revocation_work.id AND protected.source=oauth_revocation_work.source " \
+        "AND protected.fence_json IS NOT NULL))"
+
+
+def claimed_marker(conn, work_id):
+    """Private server-owned marker; never infer ownership from the core tag."""
+    work = get_work(work_id, conn=conn)
+    if work is None:
+        return {}
+    _require(eligible(conn, {"id": work_id, "source": work["source"]}))
+    return {"operator_google_cleanup_work_id": work_id}
 
 
 def require_permit(*, work_id, secret):
@@ -483,3 +577,66 @@ def require_adoption(conn, work_id, credential_id):
     issued = _tokens(db.decrypt_secret_envelope(retained))
     adopted = _tokens(db.decrypt_secret_envelope(row))
     _require(_digest(issued) == work["material_sha256"] and all(adopted.get(key) == value for key, value in issued.items()))
+
+
+def refuse_generic_completion(conn, work_id):
+    # An eligible fence is not evidence of adoption or successful provider
+    # cleanup. Generic completion/uncertainty APIs have neither authority.
+    _require(get_work(work_id, conn=conn) is None)
+
+
+def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
+    """Retire protected work only through a verified, atomic parent cascade.
+
+    Returns False for ordinary work. The persistent operator-side DELETE guard
+    denies raw deletes and cascades on every connection, including restart.
+    Its one-use callback is armed only around this one parent DELETE statement.
+    No provider I/O, commit, durable success ledger, or core-schema DDL occurs.
+    """
+    from serverware import db
+    work = get_work(work_id, conn=conn)
+    if work is None:
+        return False
+    _transaction(conn)
+    _require(not _RETIRING.get())
+    _require((credential_id is None) != (worker_id is None))
+    row = conn.execute("SELECT * FROM oauth_revocation_work WHERE id=?", (work_id,)).fetchone()
+    _require(row is not None)
+    if credential_id is not None:
+        _require(row["status"] == "held")
+        require_adoption(conn, work_id, credential_id)
+    else:
+        _require(isinstance(worker_id, str) and worker_id and row["status"] == "pending"
+            and row["lease_owner"] == worker_id
+            and eligible(conn, {"id": work_id, "source": work["source"]}))
+        _require(_digest(_tokens(db.decrypt_secret_envelope(row))) == work["material_sha256"])
+    used = False
+    armed = True
+
+    def allow(identifier):
+        nonlocal used
+        if armed and not used and identifier == work_id and conn.in_transaction:
+            used = True
+            return 1
+        return 0
+
+    token = _RETIRING.set(True)
+    try:
+        conn.execute("SAVEPOINT operator_google_cleanup_retire")
+        try:
+            conn.create_function(_RETIRE_FUNCTION, 1, allow)
+            deleted = conn.execute("DELETE FROM oauth_revocation_work WHERE id=? AND status=?",
+                (work_id, row["status"]))
+            _require(deleted.rowcount == 1 and used
+                and conn.execute("SELECT 1 FROM " + TABLE + " WHERE work_id=?", (work_id,)).fetchone() is None)
+        except BaseException:
+            conn.execute("ROLLBACK TO SAVEPOINT operator_google_cleanup_retire")
+            raise
+        finally:
+            armed = False
+            configure_connection(conn)
+            conn.execute("RELEASE SAVEPOINT operator_google_cleanup_retire")
+    finally:
+        armed = False
+        _RETIRING.reset(token)
+    return True

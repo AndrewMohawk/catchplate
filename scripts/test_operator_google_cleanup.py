@@ -44,6 +44,12 @@ class Fixture(consent_tests.Fixture):
         self.fail_revocation = False
         self.refresh_core = None
 
+    def rows(self, table):
+        if table == WORK_TABLE:
+            with closing(self.db.connect()) as conn:
+                return [dict(row) for row in conn.execute("SELECT * FROM " + WORK_TABLE + " ORDER BY work_id")]
+        return super().rows(table)
+
     def snapshot(self):
         with closing(self.db.connect()) as conn:
             return {table: sorted(tuple(row) for row in conn.execute("SELECT * FROM " + table))
@@ -243,21 +249,23 @@ def missing_association():
         f.begin()
         work_id = f.held()
         original = f.cleanup_store.get_work(work_id)
-        for table, column, value, key in (
-                ("oauth_revocation_work", "source", "authorization_code_exchange", "id"),
-                ("oauth_revocation_work", "provider_id", "x", "id"),
-                (WORK_TABLE, "association_json", "{}", "work_id")):
-            with closing(f.db.connect()) as conn, conn:
-                consent_tests.refused(lambda: conn.execute("UPDATE " + table + " SET " + column
-                    + "=? WHERE " + key + "=?", (value, work_id)), sqlite3.IntegrityError)
+        for column, value in (("source", "authorization_code_exchange"), ("provider_id", "x")):
+            with closing(f.db.connect()) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                # Core fields are mirrors, not new protected-schema triggers.
+                conn.execute("UPDATE oauth_revocation_work SET " + column + "=? WHERE id=?", (value, work_id))
+                consent_tests.refused(lambda: f.cleanup_store.get_work(work_id, conn=conn), ValueError)
+                conn.rollback()
             assert f.cleanup_store.get_work(work_id) == original
+        with closing(f.db.connect()) as conn, conn:
+            consent_tests.refused(lambda: conn.execute("UPDATE " + WORK_TABLE
+                + " SET association_json='{}' WHERE work_id=?", (work_id,)), sqlite3.IntegrityError)
         before = f.snapshot()
         for source in ("operator_google_initial_v1", "operator_google_unknown_v1"):
             consent_tests.refused(lambda: f.db.reserve_oauth_revocation_work(provider_id="google",
                 actor_id="synthetic-caller", source=source), ValueError)
             assert f.snapshot() == before
-        with closing(f.db.connect()) as conn, conn:
-            conn.execute("DELETE FROM " + WORK_TABLE + " WHERE work_id=?", (work_id,))
+        remove_association_for_refusal(f, work_id)
         f.due(work_id)
         f.ineligible(work_id)
         consent_tests.refused(lambda: f.db.mark_oauth_revocation_work_pending(work_id,
@@ -269,6 +277,20 @@ def missing_association():
         assert row["source"] == "operator_google_initial_v1"
         assert row["secret_ciphertext"]
     return {"missing_association_not_downgraded": True}
+
+
+def remove_association_for_refusal(f, work_id):
+    """Corrupt one private negative fixture, then restore identical guard DDL."""
+    with sqlite3.connect(str(f.config.DB_PATH)) as conn:
+        triggers = conn.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?",
+            (WORK_TABLE,)).fetchall()
+        assert triggers
+        for name, _sql in triggers:
+            assert name.replace("_", "").isalnum()
+            conn.execute('DROP TRIGGER "' + name + '"')
+        conn.execute("DELETE FROM " + WORK_TABLE + " WHERE work_id=?", (work_id,))
+        for _name, sql in triggers:
+            conn.execute(sql)
 
 
 def unknown_identity():

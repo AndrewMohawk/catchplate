@@ -5777,12 +5777,14 @@ def _reconcile_oauth_revocations(
             token_secret = json.loads(item["secret"])
             if not isinstance(token_secret, dict):
                 raise OAuthError("OAuth revocation material is malformed")
-            from serverware import operator_google_cleanup
+            protected_work_id = item.get("operator_google_cleanup_work_id")
+            if protected_work_id is not None and protected_work_id != item["id"]:
+                raise OAuthError("Operator Google cleanup claim binding refused")
             revoke_oauth_token(
                 provider_id=str(item["provider_id"]),
                 token_secret=token_secret,
-                **({"_operator_cleanup_work_id": item["id"]}
-                    if item.get("source") in operator_google_cleanup.SOURCES else {}),
+                **({"_operator_cleanup_work_id": protected_work_id}
+                    if protected_work_id is not None else {}),
             )
         except (OAuthError, json.JSONDecodeError, TypeError, ValueError) as exc:
             error = str(exc)[:500] or type(exc).__name__

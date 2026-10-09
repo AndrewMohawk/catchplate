@@ -90,14 +90,19 @@ def profile_for_refresh(metadata: dict):
     return profile
 
 
-def initialize(conn) -> None:
+def initialize(conn, *, fresh_profile=False) -> None:
     schema._transaction(conn)
     _profile()
-    conn.execute("""CREATE TABLE IF NOT EXISTS operator_catalog_oauth_intents (
-        id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, state_digest TEXT UNIQUE,
-        metadata_json TEXT NOT NULL)""")
+    existing = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='operator_catalog_oauth_intents'").fetchone()
+    if type(fresh_profile) is not bool or (fresh_profile and existing is not None) or (not fresh_profile and existing is None):
+        raise GoogleConsentError("Google consent initialization binding refused")
+    if fresh_profile:
+        conn.execute("""CREATE TABLE operator_catalog_oauth_intents (
+            id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, state_digest TEXT UNIQUE,
+            metadata_json TEXT NOT NULL)""")
     from serverware import operator_google_cleanup_store
-    operator_google_cleanup_store.initialize(conn)
+    operator_google_cleanup_store.initialize(conn, fresh_profile=fresh_profile)
 
 
 def _read(row) -> dict:

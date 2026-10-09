@@ -26234,6 +26234,7 @@ def connect() -> Any:
         )
     conn = sqlite3.connect(DB_PATH, timeout=10)
     _metadata_schema.configure_sqlite_metadata_connection(conn)
+    _operator_google_cleanup.configure_connection(conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -66081,13 +66082,7 @@ def reserve_oauth_revocation_work(
     with connection_scope as conn:
         _lock_oauth_revocation_work(conn)
         _expire_oauth_exchange_reservations(conn, now_s)
-        count_row = conn.execute(
-            "SELECT COUNT(*) AS count FROM oauth_revocation_work"
-        ).fetchone()
-        if (
-            int(count_row["count"] if count_row else 0)
-            >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT
-        ):
+        if _operator_google_cleanup.reservation_count(conn) >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT:
             raise ManagedOAuthCredentialError(
                 "OAuth revocation work capacity has been reached"
             )
@@ -66124,7 +66119,7 @@ def reserve_oauth_revocation_work(
 def _expire_oauth_exchange_reservations(conn: Any, now_s: str) -> None:
     conn.execute(
         "DELETE FROM oauth_revocation_work WHERE status = 'reserved' AND next_attempt_at <= ? "
-        "AND substr(source,1,16) != 'operator_google_'",
+        "AND " + _operator_google_cleanup.ordinary_clause(conn),
         (now_s,),
     )
     conn.execute(
@@ -66266,7 +66261,7 @@ def mark_oauth_revocation_work_pending(work_id: str, *, error: str) -> None:
 def complete_oauth_revocation_work(work_id: str) -> bool:
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
-        _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
+        _operator_google_cleanup.refuse_generic_completion(conn, work_id)
         deleted = conn.execute(
             "DELETE FROM oauth_revocation_work WHERE id = ?",
             (work_id,),
@@ -66353,7 +66348,7 @@ def resolve_oauth_issuance_uncertainty(
     )
     with connection_scope as conn:
         _lock_credential_mutation(conn, work_id)
-        _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
+        _operator_google_cleanup.refuse_generic_completion(conn, work_id)
         row = conn.execute(
             "SELECT id, provider_id, actor_id, source, status, created_at "
             "FROM oauth_revocation_work WHERE id = ?",
@@ -66387,7 +66382,8 @@ def resolve_oauth_issuance_uncertainty(
 def _consume_oauth_revocation_work(conn: Any, work_id: str, *, credential_id: str | None = None) -> None:
     if not isinstance(work_id, str) or not work_id or len(work_id) > 128:
         raise ManagedOAuthCredentialError("OAuth revocation work binding is invalid")
-    _operator_google_cleanup.require_adoption(conn, work_id, credential_id)
+    if _operator_google_cleanup.retire(conn, work_id, credential_id=credential_id):
+        return
     deleted = conn.execute(
         "DELETE FROM oauth_revocation_work WHERE id = ? AND status = 'held'",
         (work_id,),
@@ -66481,21 +66477,13 @@ def _queue_superseded_oauth_secret(
     if retirement_secret is None:
         return None
     _lock_oauth_revocation_work(conn)
-    if replacing_work_id is None:
-        count_row = conn.execute(
-            "SELECT COUNT(*) AS count FROM oauth_revocation_work"
-        ).fetchone()
-    else:
+    if replacing_work_id is not None:
         if not isinstance(replacing_work_id, str) or not replacing_work_id:
             raise ManagedOAuthCredentialError(
                 "OAuth revocation work replacement is invalid"
             )
-        count_row = conn.execute(
-            "SELECT COUNT(*) AS count FROM oauth_revocation_work WHERE id <> ?",
-            (replacing_work_id,),
-        ).fetchone()
     if (
-        int(count_row["count"] if count_row else 0)
+        _operator_google_cleanup.reservation_count(conn, exclude=replacing_work_id)
         >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT
     ):
         raise ManagedOAuthCredentialError(
@@ -66572,7 +66560,8 @@ def claim_oauth_revocations(
         _expire_oauth_exchange_reservations(conn, now_s)
         conn.execute(
             "UPDATE oauth_revocation_work SET status = 'pending', updated_at = ? "
-            "WHERE status = 'held' AND next_attempt_at <= ? AND substr(source,1,16) != 'operator_google_'",
+            "WHERE status = 'held' AND next_attempt_at <= ? AND "
+            + _operator_google_cleanup.ordinary_clause(conn),
             (now_s, now_s),
         )
         uncertainty_rows = conn.execute(
@@ -66663,6 +66652,7 @@ def claim_oauth_revocations(
                         "secret": decrypt_secret_envelope(row),
                         "actor_id": str(row["actor_id"]),
                         "source": str(row["source"]),
+                        **_operator_google_cleanup.claimed_marker(conn, str(row["id"])),
                     }
                 )
     return claimed
@@ -66708,6 +66698,7 @@ def finish_oauth_revocation_work(
     now_s = now.isoformat()
     with connect() as conn:
         _lock_credential_mutation(conn, work_id)
+        _operator_google_cleanup.get_work(work_id, conn=conn)
         row = conn.execute(
             "SELECT * FROM oauth_revocation_work WHERE id = ?",
             (work_id,),
@@ -66718,7 +66709,8 @@ def finish_oauth_revocation_work(
             return {"ok": False, "reason": "revocation_work_not_claimed"}
         _operator_google_cleanup.require_transition(conn, work_id, cleanup=True)
         if succeeded:
-            conn.execute("DELETE FROM oauth_revocation_work WHERE id = ?", (work_id,))
+            if not _operator_google_cleanup.retire(conn, work_id, worker_id=worker_id):
+                conn.execute("DELETE FROM oauth_revocation_work WHERE id = ?", (work_id,))
             return {"ok": True, "revocation_status": "revoked", "deleted": True}
         attempts = int(row["attempts"] or 0) + 1
         next_attempt_at = (

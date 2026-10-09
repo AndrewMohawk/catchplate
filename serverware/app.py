@@ -16259,8 +16259,11 @@ def oauth_callback(
             reason="oauth_consent_denied",
         )
         detail = html.escape(error_description or error)
+        from serverware import operator_google_landing
+        return_link = operator_google_landing.return_link(
+            operator_google_landing.denial_target(denied_state))
         denied = HTMLResponse(
-            f"<h1>OAuth denied</h1><p>{detail}</p>",
+            f"<h1>OAuth denied</h1><p>{detail}</p>{return_link}",
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
@@ -16700,12 +16703,16 @@ def oauth_callback(
             if exchanged.get("_operator_catalog_intent") is not None
             else "The credential is encrypted in Serverware and remains assigned to its policy routes."
         )
+        from serverware import operator_google_landing
+        operator_return = operator_google_landing.success_target(exchanged, setup_session=setup_session)
+        return_target = operator_return or ("/?setup=" + setup_session["id"] if setup_session is not None else "/")
+        return_link = operator_google_landing.return_link(operator_return)
         connected = HTMLResponse(
             f"""
             <h1>{heading}</h1>
-            <p>{connection_message}</p>
+            <p>{connection_message}</p>{return_link}
             <script>
-              setTimeout(() => {{ window.location.href = {json.dumps("/?setup=" + setup_session["id"] if setup_session is not None else "/")}; }}, 1200);
+              setTimeout(() => {{ window.location.href = {json.dumps(return_target)}; }}, 1200);
             </script>
             """,
             headers={"Cache-Control": "no-store"},

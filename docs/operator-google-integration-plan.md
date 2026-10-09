@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Google account integration into the operator workspace
 
 ## Status and objective
@@ -362,9 +364,9 @@ account. Local removal is not forensic erasure or provider-side revocation.
 ### Explicit disconnect backend, October 9 source work
 
 The new backend slice separates an explicit administrator disconnect from
-rejected-consent/refresh cleanup. Its source has passed independent review;
-focused execution is pending. It is not deployed, browser-wired, real-provider
-verified or a reconnect feature.
+rejected-consent/refresh cleanup. Its source has passed independent review and
+all 13 selected synthetic backend test groups. It is not deployed, browser-wired,
+real-provider verified or a reconnect feature.
 
 `POST /api/operator-demo/oauth/google/disconnect` requires the target account,
 catalog revision and policy hash, the complete sorted set of affected active
@@ -403,6 +405,40 @@ Finalization, permission-preserving reconnection and its UI are still required;
 "Connect Google" is not a workaround. Lifecycle storage is provisioned only for
 fresh profiles. Older retained profiles remain unavailable for this new action,
 without implicit schema reconstruction or backfilling live account state.
+
+#### Focused backend result, 2026-10-09
+
+Frozen commit `ba06b7363f649051a510ae382bfccc8884dccf0e` passed the nine new
+disconnect groups and four existing controls in one fail-fast run. The unittest
+log records 13/13 in 224.529 seconds, without failures, errors, skips or retries.
+The new groups cover shared-account impact and unrelated-resource preservation;
+exact review, authentication and input guards; signing/audit rollback; failed and
+lost provider responses; durable acceptance across process restart; in-flight
+consent/refresh refusal; committed publication failure; and missing/corrupted
+ownership after a real worker claim, with zero subsequent provider contact.
+Existing controls cover disabled Google capability, deferred empty-family
+cleanup, failed callback cleanup and canonical successful consent.
+
+The test uses real SQLite, policy signing, ASGI and the production cleanup
+orchestrator, with synthetic provider transport. Completion is also checked for
+absence of management HTTP beneath publication EX. This is focused backend
+coverage, not a full-suite, browser, Rust enforcement, real-Google, propagation,
+reconnect, native-pilot or deployment result. The live demo was not changed.
+
+Evidence: `google-disconnect.5a3IHF03` under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence`.
+`test-result.json` SHA-256:
+`54ff59dd5d7f145064761e099fb15320aeedf011f0e319a2d1087e1ad9d4d65e`.
+The exact 4,763-file source manifest, before/after manifests and frozen test IDs
+agree; manifest SHA-256:
+`b46065de97732fa5274e2ba2f6815a68facd9f6dc44d284c6f0fc26de37cb9b1`.
+Independent result review found no contradiction. The cached-image container
+ran with network disabled, read-only source/root, UID 1000, one CPU, 1 GiB RAM,
+no additional swap and 96 PIDs; its terminal exit was zero with PID zero and no
+OOM. Only its exited container and 105 MiB task scratch were removed after
+terminal/mount/open-file checks. `cleanup-receipt.json` records the check's
+visibility limit and verified removal, superseding the execution receipt's
+earlier cleanup-pending field. Committed source and durable evidence remain.
 
 ## Verification and remaining user actions
 

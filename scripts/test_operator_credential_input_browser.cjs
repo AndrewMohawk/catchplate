@@ -121,15 +121,20 @@ const tests = [
     assert.equal(state.posts.length, 0);
   })],
   ...[
-    {name: 'unknown mode', saved: rule({credential_input: 'future_mode'})},
-    {name: 'missing dummy', saved: rule({credential_input: 'replace_exact'})},
-    {name: 'empty dummy', saved: rule({credential_input: 'replace_exact', placeholder: ''})},
-    {name: 'outer whitespace', saved: rule({credential_input: 'replace_exact', placeholder: ' DUMMY'})},
-    {name: 'insert with placeholder', saved: rule({credential_input: 'insert', placeholder: 'DUMMY'})},
+    {name: 'unknown mode', malformed: true, saved: rule({credential_input: 'future_mode'})},
+    {name: 'missing dummy', malformed: true, saved: rule({credential_input: 'replace_exact'})},
+    {name: 'empty dummy', malformed: true, saved: rule({credential_input: 'replace_exact', placeholder: ''})},
+    {name: 'outer whitespace', malformed: true, saved: rule({credential_input: 'replace_exact', placeholder: ' DUMMY'})},
+    {name: 'insert with placeholder', malformed: true, saved: rule({credential_input: 'insert', placeholder: 'DUMMY'})},
     {name: 'replacement not advertised', saved: rule({credential_input: 'replace_exact', placeholder: 'DUMMY'}), modes: ['insert']},
   ].map(test => [test.name + ' disables generated client actions', browser => fixture(browser,
     supplied({rules: [test.saved], credentialInputModes: test.modes || MODES}), async (page, state) => {
-      await ready(page); await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled());
+      if (test.malformed) {
+        await page.locator('#load-error').waitFor({state: 'visible'});
+        assert(await page.locator('#credential-fields').evaluate(node => node.disabled));
+        assert(await page.locator('#access-rule-fields').evaluate(node => node.disabled));
+      } else await ready(page);
+      await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled());
       assert(await page.locator('#download-config').isDisabled()); assert.equal(state.posts.length, 0);
     })]),
 ];

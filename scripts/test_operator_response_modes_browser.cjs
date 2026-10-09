@@ -56,13 +56,15 @@ const tests = [
     await mode(page).selectOption('unfiltered_json'); await projectionState(page, false); await save(page);
     assert.equal(state.posts[0].body.response_mode, 'unfiltered_json'); assert.deepEqual(state.posts[0].body.response_fields, []);
   })],
-  ['capability withdrawal returns a pending new form to explicit projection without a write', browser => fixture(browser, supplied(), async (page, state) => {
+  ['capability withdrawal preserves the unavailable choice until an explicit replacement without a write', browser => fixture(browser, supplied(), async (page, state) => {
     await form(page); assert.equal(await mode(page).inputValue(), 'unfiltered_json');
     state.responseModes = ['projected_json']; await page.locator('#rules-refresh').click();
-    await page.waitForFunction(() => document.querySelector('#rule-response-mode').value === 'projected_json');
-    await projectionState(page, true);
-    assert.equal(await mode(page).locator('option[value="unfiltered_json"]').count(), 0);
+    await page.waitForFunction(() => document.querySelector('#rule-response-mode option:checked')?.disabled === true);
+    assert.equal(await mode(page).inputValue(), 'unfiltered_json'); await projectionState(page, false);
+    assert.equal(await mode(page).locator('option[value="unfiltered_json"]').count(), 1);
     await page.locator('#rule-save').click(); assert.equal(state.posts.length, 0);
+    await mode(page).selectOption('projected_json'); await projectionState(page, true);
+    await page.locator('#rule-save').click(); assert.equal(state.posts.length, 0, 'explicit projection still needs fields');
     assert.equal(state.rules.length, 0);
   })],
   ['legacy projected-only catalog keeps projection as the default and existing command usable', browser => fixture(browser,
@@ -91,12 +93,17 @@ const tests = [
   })],
   ...[
     {name: 'unadvertised simple mode', modes: ['projected_json'], saved: rule({response_mode: 'unfiltered_json', response_fields: []})},
-    {name: 'unknown saved mode', modes: BOTH, saved: rule({response_mode: 'future_json', response_fields: []})},
-    {name: 'simple mode with conflicting fields', modes: BOTH, saved: rule({response_mode: 'unfiltered_json', response_fields: ['id']})},
-    {name: 'projection without explicit fields', modes: BOTH, saved: rule({response_mode: 'projected_json', response_fields: []})},
+    {name: 'unknown saved mode', malformed: true, modes: BOTH, saved: rule({response_mode: 'future_json', response_fields: []})},
+    {name: 'simple mode with conflicting fields', malformed: true, modes: BOTH, saved: rule({response_mode: 'unfiltered_json', response_fields: ['id']})},
+    {name: 'projection without explicit fields', malformed: true, modes: BOTH, saved: rule({response_mode: 'projected_json', response_fields: []})},
   ].map(test => [test.name + ' cannot produce an enabled client command', browser => fixture(browser,
     supplied({responseModes: test.modes, rules: [test.saved]}), async (page, state) => {
-      await ready(page); await view(page, 'proxy');
+      if (test.malformed) {
+        await page.locator('#load-error').waitFor({state: 'visible'});
+        assert(await page.locator('#credential-fields').evaluate(node => node.disabled));
+        assert(await page.locator('#access-rule-fields').evaluate(node => node.disabled));
+      } else await ready(page);
+      await view(page, 'proxy');
       assert(await page.locator('#copy-command').isDisabled()); assert(await page.locator('#download-config').isDisabled());
       assert.equal(state.posts.length, 0);
     })]),

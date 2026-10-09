@@ -118,7 +118,9 @@ therefore be implemented in the request and response paths, not achieved by
 hiding required field declarations. Unsupported formats must be explained
 before saving. The additive [ordinary-client compatibility contract](ordinary-client-compatibility.md)
 implements unchanged JSON request bytes plus an explicit JSON-or-empty-204
-response mode in source; verification and UI exposure remain separate gates.
+response mode in source. The operator UI exposes these choices only when
+advertised, without requiring either field list; real client and deployment
+acceptance remain separate gates.
 Ordinary query ordering, form, binary and streaming support remain separate
 work. Existing rules must not acquire these permissions through a default change.
 
@@ -189,8 +191,10 @@ form as the default journey.
 "No content filtering" is not "no authentication or destination restriction."
 Conversely, a transport limitation is not an optional policy preference: show it
 before saving, and do not suggest hiding an unsupported request format makes it
-work. The current editor still requires request-field declarations for JSON
-bodies; removing that requirement needs implementation, not different wording.
+work. New rules can explicitly preserve supported JSON content without field
+declarations. Choosing optional field restrictions retains the legacy contract,
+including no body when that list is empty. Saved rules are never broadened by
+the new form defaults.
 
 The two basic onboarding paths are:
 

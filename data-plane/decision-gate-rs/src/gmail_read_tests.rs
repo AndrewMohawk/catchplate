@@ -433,7 +433,7 @@ fn gmail_read_ordered_dispatch_preserves_exact_url_and_rejects_forged_commitment
         let mut changed=url.clone(); changed.set_query(Some("q=different"));
         assert!(validate_canonical_url(&canonical,&snapshot.routes[0],"GET",&changed).is_err());
         let mut downgrade=canonical; downgrade["v"]=json!(2);
-        assert!(canonical_discard_headers(&downgrade,&snapshot.routes[0]).is_err());
+        assert!(super::canonical_discard_headers(&downgrade,&snapshot.routes[0]).is_err());
     }
 }
 

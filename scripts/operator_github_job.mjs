@@ -26,6 +26,32 @@ const proxy = new ProxyAgent({
   connections: 1,
 });
 const observations = [];
+const safeErrorCodes = new Set([
+  'github_response_link_denied', 'provider_operation_outcome_unknown',
+  'upstream_request_failed', 'upstream_body_failed', 'response_credential_reflection',
+  'response_metadata_limit_exceeded', 'response_metadata_invalid', 'response_metadata_reserved_header',
+  'response_metadata_duplicate', 'response_release_mode_invalid', 'response_body_too_large', 'response_invalid_json',
+  'credential_lease_changed_before_release', 'credential_lease_lifetime_insufficient_for_upstream_send',
+  'credential_generation_changed_before_upstream_send', 'credential_lease_expired_before_upstream_send',
+  'credential_lease_changed_before_upstream_send', 'required_credential_audit_unavailable',
+]);
+// Failure stage and last response stage are separate: a transport failure may
+// occur before the current operation yields any response at all.
+let stage = 'initializing';
+let observedResponses = 0;
+let lastObservation = null;
+function responseObservation(responseStage, status, hasLink, body) {
+  let errorCategory = 'unrecognized';
+  const bounded = Buffer.isBuffer(body) && body.length <= 1048576;
+  if (bounded) {
+    try {
+      const value = JSON.parse(body.toString('utf8'));
+      if (value && typeof value === 'object' && !Array.isArray(value)
+          && typeof value.error === 'string' && safeErrorCodes.has(value.error)) errorCategory = value.error;
+    } catch { /* Never return parse errors or response content. */ }
+  }
+  return { stage: responseStage, status, bodyBytes: bounded ? body.length : null, errorCategory, hasLink };
+}
 const sdk = new Octokit({
   auth: input.phase === 'wrong_dummy' ? 'serverware-wrong-placeholder-v1' : 'serverware-github-placeholder-v1',
   userAgent: 'serverware-test-run/' + input.runId,
@@ -35,6 +61,8 @@ const sdk = new Octokit({
     const requestBody = options.body === undefined ? Buffer.alloc(0) : Buffer.from(options.body);
     require(requestBody.length <= 65536 && observations.length < 12);
     const response = await fetch(url, { ...options, dispatcher: proxy });
+    observedResponses += 1;
+    lastObservation = responseObservation(stage, response.status, response.headers.has('link'), null);
     const copy = response.clone();
     const reader = copy.body.getReader();
     const chunks = []; let size = 0;
@@ -46,6 +74,7 @@ const sdk = new Octokit({
       chunks.push(Buffer.from(item.value));
     }
     const body = Buffer.concat(chunks);
+    lastObservation = responseObservation(stage, response.status, response.headers.has('link'), body);
     const headers = Object.fromEntries(response.headers.entries());
     require(JSON.stringify(headers).length <= 16384);
     // Authorization is deliberately not exported. The independent fixture
@@ -66,9 +95,7 @@ const fullIssue = (number) => ({ id: 1700 + number, number, title: `Fixture issu
 const same = (a, b) => require(JSON.stringify(a) === JSON.stringify(b));
 
 let result;
-// Public, fixed operation labels only. Never derive diagnostics from SDK errors,
-// request arguments, response bodies or credentials.
-let stage = 'initializing';
+// Public, fixed operation labels only; never derive them from SDK error text.
 try {
   if (input.phase === 'job') {
     stage = 'pagination';
@@ -122,7 +149,8 @@ try {
   }
 } catch {
   // RequestError can contain raw request credentials: never stringify it.
-  result = { ok: false, phase: input.phase, stage, error: 'stock SDK fixture operation failed' };
+  result = { ok: false, phase: input.phase, stage, observedResponses, lastObservation,
+    error: 'stock SDK fixture operation failed' };
 } finally {
   await proxy.destroy();
   clearTimeout(deadline);

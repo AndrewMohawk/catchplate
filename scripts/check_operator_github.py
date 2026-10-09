@@ -44,7 +44,7 @@ BLOCK_ERROR_CATEGORIES = frozenset(("github_response_link_denied", "provider_ope
     "response_metadata_duplicate", "response_release_mode_invalid", "response_body_too_large", "response_invalid_json",
     "credential_lease_changed_before_release", "credential_lease_lifetime_insufficient_for_upstream_send",
     "credential_generation_changed_before_upstream_send", "credential_lease_expired_before_upstream_send",
-    "credential_lease_changed_before_upstream_send"))
+    "credential_lease_changed_before_upstream_send", "required_credential_audit_unavailable"))
 NODE_SHA256 = "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d"
 
 
@@ -66,6 +66,46 @@ def block_failure_observation(case, status, body, headers, request_digest, opera
         "bodyBytes": len(body) if bounded else None, "errorCategory": category,
         "hasLink": isinstance(headers, dict) and any(isinstance(name, str) and name.lower() == "link" for name in headers),
         "requestDigest": pinned_digest(request_digest), "operationDigest": pinned_digest(operation_digest)}
+
+
+def sdk_failure_observation(document, expected_phase):
+    """Admit only a closed SDK failure summary, never arbitrary process output."""
+    keys = {"schema", "package", "version", "undiciVersion", "retryPlugin", "throttlePlugin",
+            "requestRewrite", "ok", "phase", "stage", "error", "observedResponses", "lastObservation"}
+    if (not isinstance(expected_phase, str) or expected_phase not in SDK_PHASES
+            or not isinstance(document, dict) or set(document) != keys
+            or document.get("schema") != "serverware.privateGithubSdk/v1"
+            or document.get("package") != "@octokit/rest" or document.get("version") != "22.0.1"
+            or document.get("undiciVersion") != "8.11.2" or document.get("ok") is not False
+            or any(document.get(key) is not False for key in ("retryPlugin", "throttlePlugin", "requestRewrite"))
+            or document.get("phase") != expected_phase or not isinstance(document.get("stage"), str)
+            or document["stage"] not in SDK_STAGES or document.get("error") != "stock SDK fixture operation failed"
+            or type(document.get("observedResponses")) is not int or not 0 <= document["observedResponses"] <= 12):
+        return None
+    last = document["lastObservation"]
+    if document["observedResponses"] == 0:
+        if last is not None:
+            return None
+    elif (not isinstance(last, dict) or set(last) != {"stage", "status", "bodyBytes", "errorCategory", "hasLink"}
+            or not isinstance(last.get("stage"), str) or last["stage"] not in SDK_STAGES
+            or type(last.get("status")) is not int or not 100 <= last["status"] <= 599
+            or not (last.get("bodyBytes") is None or type(last["bodyBytes"]) is int and 0 <= last["bodyBytes"] <= 1048576)
+            or not isinstance(last.get("errorCategory"), str)
+            or last["errorCategory"] not in BLOCK_ERROR_CATEGORIES | {"unrecognized"}
+            or type(last.get("hasLink")) is not bool
+            or last["bodyBytes"] is None and last["errorCategory"] != "unrecognized"):
+        return None
+    return {"source": "sdk", "phase": expected_phase, "stage": document["stage"],
+            "observedResponses": document["observedResponses"],
+            "lastObservation": dict(last) if last is not None else None}
+
+
+class SDKFailure(CheckFailure):
+    def __init__(self, phase, document):
+        self.failed_observation = sdk_failure_observation(document, phase)
+        stage = self.failed_observation["stage"] if self.failed_observation else "unknown"
+        phase = phase if isinstance(phase, str) and phase in SDK_PHASES else "unrecognized"
+        super().__init__("stock SDK process failed: " + phase + "/" + stage + "; raw error suppressed")
 
 
 def run_sdk(phase, application, token, run_id, seconds):
@@ -92,17 +132,12 @@ def run_sdk(phase, application, token, run_id, seconds):
                         require(len(output[key.data]) <= (262144 if key.data == "out" else 8192), "SDK output bound exceeded")
         code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
         if code != 0 or output["err"]:
-            stage = None
+            failure = None
             try:
                 failure = json.loads(output["out"])
-                if (isinstance(failure, dict) and failure.get("schema") == "serverware.privateGithubSdk/v1"
-                        and failure.get("ok") is False and failure.get("phase") == phase
-                        and failure.get("stage") in SDK_STAGES):
-                    stage = failure["stage"]
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 pass
-            raise CheckFailure("stock SDK process failed: " + phase + "/" + (stage or "unknown")
-                               + "; raw error suppressed")
+            raise SDKFailure(phase, failure)
         return bytes(output["out"])
     finally:
         if process.poll() is None:
@@ -416,6 +451,8 @@ def main():
                 safe = {"safeEvidenceUnavailable": True}
             if check.failed_observation is not None:
                 safe["failedObservation"] = check.failed_observation
+        if isinstance(error, SDKFailure) and error.failed_observation is not None:
+            safe["failedObservation"] = error.failed_observation
         result = {"ok": False, "syntheticOnly": True, "productionReady": False,
                   "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__, **safe}
     finally:

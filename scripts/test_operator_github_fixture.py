@@ -6,17 +6,19 @@ Executable inputs below are inert bytes, never loaded or run. Their synthetic
 pins are patched explicitly; the production executable/dependency pins stay
 independently checked and the real manifest/hash code processes the files.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
 from copy import deepcopy
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import prepare_operator_github_fixture as fixture
 from scripts import operator_github_fixture_network as network
@@ -350,8 +352,16 @@ class GithubFixtureTests(unittest.TestCase):
             "response_metadata_duplicate", "response_release_mode_invalid", "response_body_too_large", "response_invalid_json",
             "credential_lease_changed_before_release", "credential_lease_lifetime_insufficient_for_upstream_send",
             "credential_generation_changed_before_upstream_send", "credential_lease_expired_before_upstream_send",
-            "credential_lease_changed_before_upstream_send"}
+            "credential_lease_changed_before_upstream_send", "required_credential_audit_unavailable"}
         self.assertEqual(checker.BLOCK_ERROR_CATEGORIES, categories)
+        # Source parity only: never import or execute the SDK script or its deps.
+        source = (Path(__file__).resolve().parents[1] / fixture.JOB).read_text()
+        match = re.search(r"const safeErrorCodes = new Set\(\[(.*?)\]\);", source, re.S)
+        self.assertIsNotNone(match)
+        literals = re.findall(r"'([a-z_]+)'", match.group(1))
+        self.assertEqual(len(literals), len(categories))
+        self.assertEqual(set(literals), categories)
+        self.assertEqual(re.sub(r"'[a-z_]+'|[\s,]", "", match.group(1)), "")
         secret = "synthetic-private-response-material-NEVER-ECHO"
         request, operation = "sha256:" + "a" * 64, "sha256:" + "b" * 64
         keys = {"case", "status", "bodyBytes", "errorCategory", "hasLink", "requestDigest", "operationDigest"}
@@ -420,6 +430,7 @@ class GithubFixtureTests(unittest.TestCase):
                     (None, 502, "github_response_link_denied"), ("502", 502, "github_response_link_denied"),
                     (True, 502, "github_response_link_denied"), (502, 502.0, "github_response_link_denied"),
                     (502, True, "github_response_link_denied"), (502, 502, "provider_operation_outcome_unknown"),
+                    (503, 503, "required_credential_audit_unavailable"),
                     (502, 502, "response_blocked"), (502, 502, secret), (502, 502, None)):
                 with self.subTest(case=case, sdk_type=type(sdk_status).__name__, wire_type=type(wire_status).__name__):
                     value, incoming = fresh(), row(case, wire_status, error)
@@ -444,6 +455,164 @@ class GithubFixtureTests(unittest.TestCase):
                 value.accept_wire([incoming], (case,), scope, credential, sdk_status=502)
             self.assertEqual(value.wire, [])
             self.assertIsNone(value.failed_observation)
+
+    @staticmethod
+    def sdk_failure_document():
+        return {"schema": "serverware.privateGithubSdk/v1", "package": "@octokit/rest", "version": "22.0.1",
+            "undiciVersion": "8.11.2", "retryPlugin": False, "throttlePlugin": False, "requestRewrite": False,
+            "ok": False, "phase": "job", "stage": "read_issue", "error": "stock SDK fixture operation failed",
+            "observedResponses": 2, "lastObservation": {"stage": "pagination", "status": 200,
+                "bodyBytes": 123, "errorCategory": "unrecognized", "hasLink": False}}
+
+    def test_sdk_failure_projection_keeps_actual_response_stage_and_partial_body_distinct(self):
+        from scripts import check_operator_github as checker
+        document = self.sdk_failure_document()
+        result = checker.sdk_failure_observation(document, "job")
+        self.assertEqual(result, {"source": "sdk", "phase": "job", "stage": "read_issue",
+            "observedResponses": 2, "lastObservation": document["lastObservation"]})
+        self.assertNotEqual(result["stage"], result["lastObservation"]["stage"])
+        document["lastObservation"]["status"] = 503
+        self.assertEqual(result["lastObservation"]["status"], 200, "projection must copy the admitted observation")
+        for count, body_bytes, category in ((0, None, "unrecognized"), (1, None, "unrecognized"),
+                (1, 0, "unrecognized"), (12, 1048576, "required_credential_audit_unavailable")):
+            document = self.sdk_failure_document()
+            document["observedResponses"] = count
+            document["lastObservation"] = None if not count else {
+                "stage": "pagination", "status": 503, "bodyBytes": body_bytes,
+                "errorCategory": category, "hasLink": True}
+            result = checker.sdk_failure_observation(document, "job")
+            self.assertIsNotNone(result)
+            self.assertEqual(result["observedResponses"], count)
+            self.assertEqual(result["lastObservation"], document["lastObservation"])
+        for category in checker.BLOCK_ERROR_CATEGORIES | {"unrecognized"}:
+            for status in (100, 503, 599):
+                document = self.sdk_failure_document()
+                document["lastObservation"].update(status=status, errorCategory=category)
+                self.assertEqual(checker.sdk_failure_observation(document, "job")["lastObservation"]["errorCategory"], category)
+
+    def test_sdk_failure_envelope_types_bounds_and_unknown_material_fail_closed(self):
+        from scripts import check_operator_github as checker
+        secret = "synthetic-raw-SDK-request-credential-NEVER-ECHO"
+        invalid = [None, [], secret]
+        original = self.sdk_failure_document()
+        for key in original:
+            changed = deepcopy(original)
+            del changed[key]
+            invalid.append(changed)
+        invalid.append({**original, "rawError": secret})
+        values = {"schema": [secret], "package": [secret], "version": ["22.0.2"],
+            "undiciVersion": ["8.11.3"], "ok": [True, 0, None], "retryPlugin": [True, 0],
+            "throttlePlugin": [True, 0], "requestRewrite": [True, 0], "phase": ["numeric", secret],
+            "stage": [secret, [], None], "error": [secret, None],
+            "observedResponses": [-1, 13, True, 1.0, "1"], "lastObservation": [None, [], secret]}
+        for key, candidates in values.items():
+            invalid.extend({**deepcopy(original), key: value} for value in candidates)
+        for key in original["lastObservation"]:
+            changed = deepcopy(original)
+            del changed["lastObservation"][key]
+            invalid.append(changed)
+        values = {"stage": [secret, None, []], "status": [99, 600, True, 502.0, "502", None],
+            "bodyBytes": [-1, 1048577, True, 1.0, "1"], "errorCategory": [secret, [], None],
+            "hasLink": [0, 1, "true", None], "rawBody": [secret]}
+        for key, candidates in values.items():
+            for value in candidates:
+                changed = deepcopy(original)
+                changed["lastObservation"][key] = value
+                invalid.append(changed)
+        invalid.append({**deepcopy(original), "observedResponses": 0})
+        changed = deepcopy(original)
+        changed["lastObservation"].update(bodyBytes=None, errorCategory="required_credential_audit_unavailable")
+        invalid.append(changed)
+        for index, document in enumerate(invalid):
+            with self.subTest(control=index):
+                self.assertIsNone(checker.sdk_failure_observation(document, "job"))
+                failure = checker.SDKFailure("job", document)
+                self.assertIsNone(failure.failed_observation)
+                self.assertEqual(str(failure), "stock SDK process failed: job/unknown; raw error suppressed")
+                self.assertNotIn(secret, repr(failure))
+        for phase in (secret, None, [], "JOB"):
+            self.assertIsNone(checker.sdk_failure_observation(original, phase))
+            self.assertNotIn(secret, str(checker.SDKFailure(phase, original)))
+
+    def test_sdk_process_decoder_uses_only_closed_output_and_never_raw_stderr(self):
+        from scripts import check_operator_github as checker
+        secret = "synthetic-process-stdout-stderr-secret-NEVER-ECHO"
+
+        class Selector:
+            def __init__(self):
+                self.active = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def register(self, stream, _events, name):
+                fd = 1 if name == "out" else 2
+                self.active[fd] = SimpleNamespace(fd=fd, fileobj=stream, data=name)
+
+            def unregister(self, stream):
+                fd = next(fd for fd, key in self.active.items() if key.fileobj is stream)
+                del self.active[fd]
+
+            def get_map(self):
+                return self.active
+
+            def select(self, _timeout):
+                return [(key, 1) for key in self.active.values()]
+
+        valid = json.dumps(self.sdk_failure_document()).encode()
+        for code, stdout, stderr, admitted in ((1, valid, b"", True),
+                (0, valid, secret.encode(), True), (1, secret.encode(), secret.encode(), False),
+                (1, json.dumps({**self.sdk_failure_document(), "rawError": secret}).encode(), b"", False)):
+            process = SimpleNamespace(stdin=Mock(), stdout=Mock(), stderr=Mock(),
+                wait=Mock(return_value=code), poll=Mock(return_value=code), kill=Mock())
+            chunks = {1: [stdout, b""], 2: [stderr] + ([b""] if stderr else [])}
+            with patch.object(checker.subprocess, "Popen", return_value=process) as launch, \
+                    patch.object(checker.selectors, "DefaultSelector", Selector), \
+                    patch.object(checker.os, "read", side_effect=lambda fd, _size: chunks[fd].pop(0)):
+                with self.assertRaises(checker.SDKFailure) as caught:
+                    checker.run_sdk("job", "synthetic-app", "T" * 43, "synthetic-run", 1)
+            failure = caught.exception
+            self.assertEqual(failure.failed_observation,
+                checker.sdk_failure_observation(self.sdk_failure_document(), "job") if admitted else None)
+            self.assertNotIn(secret, str(failure))
+            self.assertNotIn(secret, json.dumps(failure.failed_observation))
+            self.assertEqual(launch.call_args.args[0], ["/node", "/app/scripts/operator_github_job.mjs"])
+            self.assertEqual(launch.call_args.kwargs["env"], {"LANG": "C.UTF-8"})
+            self.assertTrue(launch.call_args.kwargs["close_fds"])
+            process.kill.assert_not_called()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                self.assertTrue(stream.close.called)
+
+    def test_main_attaches_only_validated_typed_sdk_failure_projection(self):
+        from scripts import check_operator_github as checker
+        secret = "synthetic-exception-attribute-secret-NEVER-ECHO"
+        valid = checker.SDKFailure("job", self.sdk_failure_document())
+        invalid = checker.SDKFailure("job", {"rawError": secret})
+        spoof = RuntimeError(secret)
+        spoof.failed_observation = {"rawError": secret}
+        args = SimpleNamespace(timeout_seconds=30, expected_binary_sha256="sha256:" + "a" * 64,
+            fixture_marker_file=Path("/unused-marker"), run_claim_file=Path("/unused-claim"))
+        for failure in (valid, invalid, spoof):
+            fake = SimpleNamespace(wire=[], failed_observation=None, run=Mock(side_effect=failure))
+            output = io.StringIO()
+            with patch.object(checker.argparse.ArgumentParser, "parse_args", return_value=args), \
+                    patch.object(checker.signal, "signal"), patch.object(checker.signal, "alarm"), \
+                    patch.object(checker, "claim_fixture"), patch.object(checker, "GithubCheck", return_value=fake), \
+                    patch.object(checker.features, "safe_evidence", return_value={}), redirect_stdout(output):
+                self.assertEqual(checker.main(), 1)
+            result = json.loads(output.getvalue())
+            self.assertIs(result["ok"], False)
+            self.assertEqual(result["completedSdkRequests"], [])
+            if failure is valid:
+                self.assertEqual(result["failedObservation"], valid.failed_observation)
+                self.assertEqual(result["failedObservation"]["stage"], "read_issue")
+                self.assertEqual(result["failedObservation"]["lastObservation"]["stage"], "pagination")
+            else:
+                self.assertNotIn("failedObservation", result)
+            self.assertNotIn(secret, output.getvalue())
 
 
 if __name__ == "__main__":

@@ -93,11 +93,23 @@ Recorded for this source slice:
   Gmail-bundle and Google-reauthorization regressions also pass.
 - All 18 selected Rust checks pass; the normal binary has SHA-256 prefix
   `61c312f1`, built from source `6ee45a31`.
-- The first isolated stock-SDK → normal proxy → synthetic-provider fixture
-  stopped at startup: its two-CIDR configuration violated the demo-only/private
-  address guards. The SDK never ran. A fixture-only correction is in progress;
-  the joined client job remains pending. Browser and Rust checks do not prove
-  that job, deployment, real GitHub permission validity or provider behavior.
+- In network-isolated synthetic-provider testing, stock Octokit `22.0.1` and
+  Undici `8.11.2` on Node `25.5.0` completed nine legitimate requests and four
+  pre-lease controls once. That run stopped during hostile-Link checks; a second
+  run failed the normal job at `rate_limit`. Neither run passed full acceptance.
+  The exact underlying error was not retained. Source review identified a
+  near-expiry cache availability issue; its fix is under development, not yet a
+  demonstrated explanation or resolution of the runtime failures.
+- At `05fbe561`, bounded failure diagnostics were added and ten pure fixture
+  groups passed. Expanded SDK failure diagnostics now pass all 14 pure fixture
+  groups, including secret-safe output and exact refusal assertions. Separately, all
+  11 stock endpoint-serialization cases passed with zero fetch calls. These
+  offline checks do not prove proxy dispatch or response delivery.
+- Source review found the generated recipe consistent with the fixture's stock
+  client, dummy authentication and separate TLS trust configuration. The exact
+  displayed snippet was not executed, and the SDK run exercised Basic proxy
+  authentication, not the retained Bearer branch. Node `22.19` is the dependency
+  minimum, not a runtime-tested version in this checkpoint.
 
 Complete that runtime acceptance and pair-provenance review before deployment;
 then separately verify the intended real repository job with authorized provider

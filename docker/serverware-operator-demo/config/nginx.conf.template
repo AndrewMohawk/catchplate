@@ -1,0 +1,118 @@
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/null;
+events { worker_connections 128; }
+
+http {
+    access_log off;
+    server_tokens off;
+    client_max_body_size 2m;
+    client_body_timeout 15s;
+    client_body_temp_path /tmp/client-body;
+    proxy_temp_path /tmp/proxy;
+    fastcgi_temp_path /tmp/fastcgi;
+    uwsgi_temp_path /tmp/uwsgi;
+    scgi_temp_path /tmp/scgi;
+    send_timeout 30s;
+    keepalive_timeout 10s;
+    resolver 127.0.0.11 ipv6=off valid=10s;
+
+    # Actual socket peer only. Forwarded headers cannot establish identity.
+    geo $traefik_peer {
+        default 0;
+        ${TRAEFIK_IPV4}/32 1;
+    }
+    map $http_remote_user $sandbox_operator {
+        default 0;
+        ~^operator$ 1;
+    }
+    # Injected admin-header auth bypasses the app's cookie CSRF check. Preserve
+    # the browser boundary here: unsafe requests require the exact Origin.
+    map $http_origin $foreign_origin {
+        default 1;
+        "" 0;
+        "https://serverware-demo.example.com" 0;
+    }
+    map "$request_method:$http_origin" $unsafe_origin {
+        default 1;
+        ~^(GET|HEAD|OPTIONS): 0;
+        ~^[A-Z]+:https://serverware-demo\.example\.com$ 0;
+    }
+
+    proxy_http_version 1.1;
+    proxy_set_header Host serverware-demo.example.com;
+    proxy_set_header Connection "";
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Host serverware-demo.example.com;
+    proxy_set_header X-Forwarded-Port 443;
+    proxy_set_header Forwarded "";
+    proxy_set_header Authorization "";
+    proxy_set_header X-Serverware-Admin-Token "";
+    proxy_set_header X-Serverware-Bootstrap-Token "";
+    proxy_pass_request_headers on;
+    proxy_request_buffering on;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_next_upstream off;
+    proxy_connect_timeout 3s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 60s;
+
+    server {
+        listen 8080 default_server;
+        server_name _;
+        return 403;
+    }
+
+    server {
+        listen 8080;
+        server_name serverware-demo.example.com;
+        if ($traefik_peer = 0) { return 403; }
+        if ($sandbox_operator = 0) { return 403; }
+        if ($foreign_origin = 1) { return 403; }
+        if ($unsafe_origin = 1) { return 403; }
+        set $sandbox_backend http://serverware:3000;
+        location / {
+            # nginx proxy_set_header inheritance is all-or-nothing. Repeat the
+            # scrubbed forwarding headers alongside the private token include.
+            proxy_set_header Host serverware-demo.example.com;
+            proxy_set_header Connection "";
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Host serverware-demo.example.com;
+            proxy_set_header X-Forwarded-Port 443;
+            proxy_set_header Forwarded "";
+            proxy_set_header Authorization "";
+            proxy_set_header X-Serverware-Bootstrap-Token "";
+            include /run/secrets/serverware-edge/admin-header.conf;
+            proxy_pass $sandbox_backend;
+        }
+    }
+
+    server {
+        listen 8080;
+        server_name serverware-demo.lab.example.com;
+        if ($traefik_peer = 0) { return 403; }
+        set $sandbox_backend http://serverware:3000;
+        location = /healthz {
+            limit_except GET { deny all; }
+            # Native development-backend health, no injected admin credential.
+            proxy_pass $sandbox_backend;
+        }
+        location / {
+            return 308 https://serverware-demo.example.com$request_uri;
+        }
+    }
+
+    # Container liveness, deliberately not backend/native-pilot readiness.
+    server {
+        listen 127.0.0.1:8081;
+        server_name localhost;
+        location = /edge-healthz {
+            default_type text/plain;
+            return 200 "sandbox edge alive; application readiness not asserted\n";
+        }
+        location / { return 404; }
+    }
+}

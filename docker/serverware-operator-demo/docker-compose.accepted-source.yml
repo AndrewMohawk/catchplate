@@ -1,0 +1,22 @@
+# Combine with docker-compose.yml and the retained deployment environment.
+# This selects the accepted application snapshot and normal Rust executable;
+# it does not change the fixture source, edge, network or persistent data.
+# The source must be a separately frozen, readable artifact, not a worktree.
+services:
+  serverware:
+    environment:
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4
+    volumes:
+      - type: bind
+        source: ${OPERATOR_DEMO_APP_SOURCE:?Set the approved immutable accepted application snapshot}
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4/serverware-decision-gate
+        target: /usr/local/bin/serverware-decision-gate
+        read_only: true
+        bind: {create_host_path: false}

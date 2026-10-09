@@ -60209,28 +60209,44 @@ mod tests {
             client_request_digest: None,
         };
 
-        let duplicate_head = parse_head(
-            b"GET https://example.test/resource?mode=read&mode=delete HTTP/1.1\r\nHost: example.test\r\n\r\n",
-        )
-        .expect("duplicate-query request head");
-        let duplicate_url = Url::parse(&duplicate_head.target).expect("duplicate-query URL");
-        assert!(prepare_upstream_for_forward(
-            &state,
-            &snapshot,
-            &duplicate_head,
-            &duplicate_url,
-            Some("agent:test"),
-        )
-        .expect("duplicate-query preflight")
-        .is_none());
-        assert_eq!(resolver.calls(), 0);
-        assert_eq!(resolver.remaining_answers(), 1);
-
         for query in ["mode=read&mode=delete", "mode=delete&mode=read"] {
+            let target = format!("https://example.test/resource?{query}");
+            let wire = format!("GET {target} HTTP/1.1\r\nHost: example.test\r\n\r\n");
+            assert!(parse_head(wire.as_bytes())
+                .err()
+                .expect("strict intake must reject both duplicate-query orders")
+                .contains("unique nonempty keys"));
+
+            // A malformed internal head must also fail defensive preflight before DNS.
+            let duplicate_head = RequestHead {
+                method: "GET".to_string(),
+                target,
+                http_version: "HTTP/1.1".to_string(),
+                headers: BTreeMap::from([("host".to_string(), "example.test".to_string())]),
+                raw_headers_digest: None,
+                raw_header_count: 1,
+                content_length: 0,
+                has_content_length: false,
+                prefetched_body: Vec::new(),
+                client_ip: None,
+            };
+            let duplicate_url = Url::parse(&duplicate_head.target).expect("duplicate-query URL");
+            assert!(prepare_upstream_for_forward(
+                &state,
+                &snapshot,
+                &duplicate_head,
+                &duplicate_url,
+                Some("agent:test"),
+            )
+            .expect("duplicate-query preflight")
+            .is_none());
+            assert_eq!(resolver.calls(), 0);
+            assert_eq!(resolver.remaining_answers(), 1);
+
             let denied = decide_internal(&state, &snapshot, request(query), Some("agent:test"));
             assert_eq!(denied["status_code"], 400);
-            assert_eq!(denied["payload"]["error"], "duplicate_query_key_denied");
-            assert_eq!(denied["payload"]["key"], "mode");
+            assert_eq!(denied["payload"]["error"], "invalid_request_target");
+            assert!(denied["payload"].get("key").is_none());
             assert!(denied.get("request_digest").is_none());
             assert!(denied.get("operation_digest").is_none());
             assert!(denied.get("approval_id").is_none());
@@ -64335,6 +64351,11 @@ mod tests {
         let mut retained_discard = decision.clone();
         retained_discard["canonical_request"]["request"]["headers"]["npm-session"] =
             json!("must-not-be-bound");
+        // Keep the digest binding valid so these negatives reach the header guards.
+        retained_discard["request_digest"] =
+            json!(digest_json_ensure_ascii(&retained_discard["canonical_request"]));
+        retained_discard["operation_digest"] =
+            json!(operation_digest(&retained_discard["canonical_request"]));
         assert!(
             allowed_decision_discard_headers(&snapshot, &retained_discard)
                 .expect_err("canonical request retained a discarded value")
@@ -64344,6 +64365,10 @@ mod tests {
             let mut alias_tamper = decision.clone();
             alias_tamper["canonical_request"]["request"]["headers"][retained_alias] =
                 json!("must-not-be-bound");
+            alias_tamper["request_digest"] =
+                json!(digest_json_ensure_ascii(&alias_tamper["canonical_request"]));
+            alias_tamper["operation_digest"] =
+                json!(operation_digest(&alias_tamper["canonical_request"]));
             assert!(
                 allowed_decision_discard_headers(&snapshot, &alias_tamper)
                     .expect_err("canonical request retained a discarded alias")
@@ -69781,19 +69806,32 @@ mod tests {
         let mut first = Url::parse("https://example.test/resource?b=2&a=%7E").expect("first URL");
         let mut equivalent =
             Url::parse("https://example.test/resource?a=~&b=2").expect("equivalent URL");
-        assert_eq!(query_pairs(&first), query_pairs(&equivalent));
+        assert_ne!(query_pairs(&first), query_pairs(&equivalent));
         apply_rewrite(&mut first, &json!({})).expect("empty rewrite");
         apply_rewrite(&mut equivalent, &json!({})).expect("empty rewrite");
         assert_eq!(first.as_str(), equivalent.as_str());
+        assert_eq!(query_pairs(&first), query_pairs(&equivalent));
+
+        let mut duplicate_url =
+            Url::parse("https://example.test/resource?q=one&q=two&start_time=recent").expect("URL");
+        let original_duplicate_url = duplicate_url.clone();
+        assert!(apply_rewrite(&mut duplicate_url, &json!({"query":{"max_results":"10"}}))
+            .expect_err("query rewrite must not admit duplicate keys")
+            .contains("unique nonempty keys"));
+        assert_eq!(duplicate_url, original_duplicate_url);
 
         let mut url =
-            Url::parse("https://example.test/resource?q=one&q=two&start_time=recent").expect("URL");
+            Url::parse("https://example.test/resource?q=one&start_time=recent").expect("URL");
         apply_rewrite(&mut url, &json!({"query":{"max_results":"10"}}))
             .expect("query rewrite");
-        let pairs = url.query_pairs().into_owned().collect::<Vec<_>>();
-        assert!(pairs.contains(&("q".to_string(), "one".to_string())));
-        assert!(pairs.contains(&("q".to_string(), "two".to_string())));
-        assert!(pairs.contains(&("start_time".to_string(), "recent".to_string())));
+        assert_eq!(
+            query_pairs(&url),
+            vec![
+                ("max_results".to_string(), "10".to_string()),
+                ("q".to_string(), "one".to_string()),
+                ("start_time".to_string(), "recent".to_string()),
+            ]
+        );
 
         let mut route = test_snapshot(1).routes[0].clone();
         route.constraints = vec![json!({

@@ -377,3 +377,23 @@ account-owner consent in Google; and separately authorized deployment/routing.
 Then prove consent -> proxy request -> expired-token refresh with the real
 account. No pasted refresh token or secret in chat is required. Source/simulator
 success is not deployed provider integration or production/native acceptance.
+
+The retained synthetic demo is not configurable into real Google merely by
+adding environment variables. `operator_demo_store.initialize()` pins both
+`allowed_upstreams` and `fixture_cidrs` to the data directory and explicitly
+rejects a changed allowlist. Its control-plane container is also on the internal
+synthetic network with no external DNS forwarding. Preserve its credentials,
+application identities, policy and audit history. Real-provider rollout needs
+either a separate reviewed deployment/data target or an explicit, reviewed
+destination-migration workflow, plus bounded control-plane DNS/TLS egress and
+the private Google secret mount. No retained database pin should be edited to
+make an environment-only change appear valid.
+
+For ordinary clients, distinguish the isolated HTTP-proxy CONNECT check from
+the public HTTPS-proxy connection. Current workload identity uses proxy Bearer
+authentication; standard Requests proxy-URL credentials generate Basic instead.
+A supported Requests integration must keep proxy credentials out of upstream
+headers. For the public HTTPS proxy it must also keep outer public/system trust
+separate from inner Serverware CA trust. An HTTP-loopback fixture cannot prove
+that second TLS layer, and a hand-crafted cURL success does not prove stock SDK
+configuration. Managed app-identity renewal remains separate from Google refresh.

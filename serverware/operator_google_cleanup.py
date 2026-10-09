@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from serverware import db, operator_catalog_schema as schema
 from serverware.operator_publication import exclusive
 
-SOURCES = frozenset({"operator_google_initial_v1", "operator_google_refresh_v1"})
-_REASONS = frozenset({"operator_google_rejected", "google_grant_collision", "registration_failed", "refresh_failed"})
+SOURCES = frozenset({"operator_google_initial_v1", "operator_google_refresh_v1", "operator_google_disconnect_v1"})
+_REASONS = frozenset({"operator_google_rejected", "google_grant_collision", "registration_failed", "refresh_failed", "explicit_disconnect"})
 
 
 @dataclass(frozen=True)
@@ -91,6 +91,8 @@ def fence_in_transaction(conn, work_id: str, *, reason="operator_google_rejected
     work = _store().get_work(work_id, conn=conn)
     if work is None or work.get("material_sha256") is None:
         raise ValueError("Google cleanup material is unavailable")
+    if (reason == "explicit_disconnect") != (work["source"] == _store().DISCONNECT_SOURCE):
+        raise ValueError("Google cleanup disposition does not match its owner")
     metadata = _metadata(work)
     catalog = schema.read_catalog(conn)
     schema.validate_bindings(conn, catalog)

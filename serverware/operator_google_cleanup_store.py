@@ -18,7 +18,8 @@ import uuid
 PREFIX = "operator_google_"
 INITIAL_SOURCE = PREFIX + "initial_v1"
 REFRESH_SOURCE = PREFIX + "refresh_v1"
-SOURCES = frozenset({INITIAL_SOURCE, REFRESH_SOURCE})
+DISCONNECT_SOURCE = PREFIX + "disconnect_v1"
+SOURCES = frozenset({INITIAL_SOURCE, REFRESH_SOURCE, DISCONNECT_SOURCE})
 TABLE = "operator_google_cleanup_work"
 _PROFILE_TABLE = "operator_catalog_oauth_profile"
 _RETIRE_FUNCTION = "operator_google_cleanup_retire_allowed"
@@ -178,6 +179,8 @@ def initialize(conn, *, fresh_profile=False) -> None:
         for definition in (_TABLE_SQL, _INSERT_SQL, _UPDATE_SQL, _DELETE_SQL):
             conn.execute(definition)
     _require(_exists(conn))  # Retained schemas are verified, never repaired.
+    from serverware import operator_google_disconnect_store
+    operator_google_disconnect_store.initialize(conn, fresh_profile=fresh_profile)
 
 
 def _association(value, row):
@@ -193,7 +196,8 @@ def _association(value, row):
         _require(value["operation"] == "initial" and value["credential_id"] is None
             and value["credential_generation"] is None and value["credential_metadata_sha256"] is None)
     else:
-        _require(value["operation"] == "refresh" and _uuid(value["credential_id"])
+        _require(value["operation"] == {REFRESH_SOURCE: "refresh", DISCONNECT_SOURCE: "disconnect"}[value["source"]]
+            and _uuid(value["credential_id"])
             and type(value["credential_generation"]) is int and value["credential_generation"] > 0
             and isinstance(value["credential_metadata_sha256"], str)
             and _SHA.fullmatch(value["credential_metadata_sha256"]))
@@ -258,7 +262,8 @@ def _reserve(conn, *, operation, actor_id, profile, intent_id, credential=None):
     from serverware import db
     _transaction(conn)
     _require(_exists(conn))
-    source = INITIAL_SOURCE if operation == "initial" else REFRESH_SOURCE
+    _require(operation in {"initial", "refresh", "disconnect"})
+    source = {"initial": INITIAL_SOURCE, "refresh": REFRESH_SOURCE, "disconnect": DISCONNECT_SOURCE}[operation]
     association = {"schema": ASSOCIATION_SCHEMA, "operation": operation, "work_id": None,
         "source": source, "actor_id": actor_id, "profile_binding_digest": profile.binding_digest,
         "oauth_client_id": profile.client_id, "intent_id": intent_id,
@@ -321,6 +326,8 @@ def on_reserve(conn, *, work_id, provider_id, actor_id, source, association):
     # asserted association to the caller's real transaction snapshot.
     if source == INITIAL_SOURCE:
         from serverware import operator_catalog_oauth as consent
+        from serverware import operator_google_disconnect_store as disconnects
+        disconnects.require_initial_admission(conn)
         consent._checked(conn, value["intent_id"], status="exchanging", actor_id=actor_id)
     else:
         from serverware import operator_catalog_schema as schema, operator_catalog_google as google
@@ -333,6 +340,13 @@ def on_reserve(conn, *, work_id, provider_id, actor_id, source, association):
         _require(metadata.get("oauth_intent_id") == value["intent_id"]
             and row["credential_version"] == value["credential_generation"]
             and _digest(metadata) == value["credential_metadata_sha256"])
+        from serverware import operator_google_disconnect_store as disconnects
+        if source == REFRESH_SOURCE:
+            disconnects.require_refresh_admission(conn, metadata)
+        else:
+            from serverware.operator_publication import assert_held
+            assert_held()
+            _require(source == DISCONNECT_SOURCE and disconnects.available(conn))
     raw = _canonical(value)
     _require(len(raw.encode("ascii")) <= MAX_ASSOCIATION_BYTES)
     conn.execute("INSERT INTO " + TABLE + " (work_id,source,association_json,created_at) VALUES (?,?,?,?)",
@@ -462,16 +476,26 @@ def authorize_fence(conn, *, work_id, metadata, policy_hash, catalog_revision):
     return receipt
 
 
+def _eligible_work(conn, work, *, terminal=False) -> bool:
+    _require(work["fence"] is not None)
+    identifiers, _current_hash, revision = _fenced_snapshot(conn, work)
+    if work["source"] == DISCONNECT_SOURCE:
+        from serverware import operator_google_disconnect_store as disconnects
+        if terminal:
+            disconnects.require_terminal_retirement(conn, work)
+        else:
+            disconnects.require_provider_work(conn, work)
+    return (identifiers == work["fence"]["credential_ids"]
+        and revision >= work["fence"]["catalog_revision"])
+
+
 def eligible(conn, work_row) -> bool:
     """Read-only oracle; malformed operator work stays retained, never legacy."""
     try:
         work = get_work(work_row["id"], conn=conn)
         if work is None:
             return not tagged(work_row["source"])
-        _require(work["fence"] is not None)
-        identifiers, _current_hash, revision = _fenced_snapshot(conn, work)
-        return (identifiers == work["fence"]["credential_ids"]
-            and revision >= work["fence"]["catalog_revision"])
+        return _eligible_work(conn, work)
     except Exception:
         return False
 
@@ -560,6 +584,7 @@ def require_adoption(conn, work_id, credential_id):
     work = get_work(work_id, conn=conn)
     if work is None:
         return
+    _require(work["source"] != DISCONNECT_SOURCE)
     profile = _check_profile(work)
     _require(_uuid(credential_id) and work["fence"] is None and work["identity"] is not None)
     row = conn.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
@@ -607,8 +632,11 @@ def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
         require_adoption(conn, work_id, credential_id)
     else:
         _require(isinstance(worker_id, str) and worker_id and row["status"] == "pending"
-            and row["lease_owner"] == worker_id
-            and eligible(conn, {"id": work_id, "source": work["source"]}))
+            and row["lease_owner"] == worker_id)
+        if work["source"] == DISCONNECT_SOURCE:
+            _require(_eligible_work(conn, work, terminal=True))
+        else:
+            _require(eligible(conn, {"id": work_id, "source": work["source"]}))
         _require(_digest(_tokens(db.decrypt_secret_envelope(row))) == work["material_sha256"])
     used = False
     armed = True

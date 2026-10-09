@@ -392,6 +392,7 @@ def catalog_status() -> dict:
         schema.validate_bindings(conn, catalog)
         static_generations = _static_generations(conn, catalog)
         google_oauth = operator_catalog_capabilities.google_oauth(conn)
+        google_disconnect = operator_catalog_capabilities.google_disconnect(conn)
         operation_bundles = operator_catalog_gmail.capabilities(conn)
         state = _state(conn)
         limits = {collection: {"active": sum(row["status"] == "active" for row in catalog[collection]),
@@ -418,6 +419,7 @@ def catalog_status() -> dict:
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
                 "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None,
             "google_oauth": google_oauth,
+            "google_disconnect": google_disconnect,
             "operation_bundles": operation_bundles,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],

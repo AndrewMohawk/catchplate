@@ -67,6 +67,28 @@ class TargetInput(RevisionInput):
     _canonical_id = field_validator("id")(_identifier)
 
 
+class GoogleDisconnectInput(TargetInput):
+    """Explicit review of local impact and Google's wider revocation boundary."""
+    confirmed_affected_rule_ids: list[Annotated[str, Field(min_length=36, max_length=36)]] = Field(max_length=64)
+    acknowledge_project_wide_revocation: bool
+
+    @field_validator("confirmed_affected_rule_ids")
+    @classmethod
+    def exact_reviewed_rules(cls, values: list[str]) -> list[str]:
+        if values != sorted(set(values)):
+            raise ValueError("affected rules must be unique and sorted")
+        for value in values:
+            _identifier(value)
+        return values
+
+    @field_validator("acknowledge_project_wide_revocation")
+    @classmethod
+    def explicit_acknowledgement(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("Google project-wide revocation acknowledgement required")
+        return value
+
+
 class ReplaceCredentialKeyInput(TargetInput):
     expected_credential_generation: int = Field(ge=1, lt=9_007_199_254_740_991)
     secret: str = Field(min_length=1, max_length=8192, repr=False)

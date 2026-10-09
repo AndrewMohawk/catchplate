@@ -66181,12 +66181,21 @@ def mark_oauth_issuance_uncertain(work_id: str, *, error: str) -> None:
             )
 
 
-def attach_oauth_revocation_material(work_id: str, *, secret: str) -> None:
+def attach_oauth_revocation_material(work_id: str, *, secret: str, _connection: Any | None = None) -> None:
+    if _connection is not None:
+        from serverware.operator_publication import assert_held
+        if not isinstance(_connection, sqlite3.Connection) or not _connection.in_transaction:
+            raise ManagedOAuthCredentialError("borrowed OAuth material requires an existing SQLite transaction")
+        assert_held()
+        work = _operator_google_cleanup.get_work(work_id, conn=_connection)
+        if work is None or work["source"] != _operator_google_cleanup.DISCONNECT_SOURCE:
+            raise ManagedOAuthCredentialError("borrowed OAuth material requires explicit disconnect ownership")
     secret = validate_credential_secret(secret)
     now = utcnow()
     now_s = now.isoformat()
     encrypted = _envelope_values(work_id, secret, 1)
-    with connect() as conn:
+    connection_scope = connect() if _connection is None else contextlib.nullcontext(_connection)
+    with connection_scope as conn:
         _lock_credential_mutation(conn, work_id)
         _operator_google_cleanup.on_attach(conn, work_id, secret)
         updated = conn.execute(
@@ -66694,6 +66703,12 @@ def finish_oauth_revocation_work(
 ) -> dict[str, Any]:
     if error is not None and (not isinstance(error, str) or len(error) > 500):
         raise ManagedOAuthCredentialError("OAuth revocation error is invalid")
+    from serverware import operator_google_disconnect_store
+    if operator_google_disconnect_store.identifies_operation(work_id):
+        # Select the explicit owner before opening a writer transaction:
+        # publication EX must precede SQLite, never be acquired beneath it.
+        from serverware.operator_google_disconnect import finish_work
+        return finish_work(work_id, worker_id=worker_id, succeeded=succeeded, error=error)
     now = utcnow()
     now_s = now.isoformat()
     with connect() as conn:

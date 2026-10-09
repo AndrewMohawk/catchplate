@@ -359,6 +359,51 @@ remains disconnect then connect again because revocation is grant-wide.
 Do not bypass duplicate-account guards; prefer reuse of an already connected
 account. Local removal is not forensic erasure or provider-side revocation.
 
+### Explicit disconnect backend, October 9 source work
+
+The new backend slice separates an explicit administrator disconnect from
+rejected-consent/refresh cleanup. Its source has passed independent review;
+focused execution is pending. It is not deployed, browser-wired, real-provider
+verified or a reconnect feature.
+
+`POST /api/operator-demo/oauth/google/disconnect` requires the target account,
+catalog revision and policy hash, the complete sorted set of affected active
+rule IDs, and an explicit project-wide revocation acknowledgement. The server
+recomputes impact; the submitted list cannot narrow the account's affected apps.
+`GET /api/operator-demo/oauth/google/disconnect/{credential_id}` observes the
+initiating administrator's retained operation without repeating the action.
+A missing operation is not evidence that an uncertain mutation rolled back.
+
+The transaction joins encrypted cleanup work, the local account fence,
+revoked permissions, signed policy, audit and a durable public receipt. App
+identities/tokens and historical rules remain; active rules are deliberately
+revoked by the confirmed disconnect, not silently restored later. Provider I/O
+occurs outside publication and database ownership. Provider acceptance must
+commit with guarded work retirement; failed or uncertain outcomes remain
+distinct from success. Deletion of temporary cleanup work alone proves nothing.
+
+Worker selection and the final pre-contact permit both join the durable receipt
+to the exact work, actor, profile, account family, original policy fence and
+revoked assignments. Missing or corrupt ownership blocks provider contact while
+retaining the encrypted work. Provider contact admits only pending/retry state;
+guarded work retirement separately requires accepted state in the completion
+transaction. Completion does not query management HTTP under the publication or
+SQLite write lock. Its audit and reconciliation counter say provider accepted,
+not revoked; the public `attempts` field counts failed/unconfirmed outcomes,
+not all provider requests. Acceptance does not restore rules or enable reconnect.
+
+Google documents account-grant revocation as affecting all clients and granted
+scopes in the same project, with potentially delayed effect. A local account fence and an
+administrator acknowledgement cannot establish control over external clients or
+prove propagation. See [Google's revocation contract](https://developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke).
+
+This first backend version retains the family exclusion even after provider
+acceptance and blocks new unknown-account consent while any disconnect remains.
+Finalization, permission-preserving reconnection and its UI are still required;
+"Connect Google" is not a workaround. Lifecycle storage is provisioned only for
+fresh profiles. Older retained profiles remain unavailable for this new action,
+without implicit schema reconstruction or backfilling live account state.
+
 ## Verification and remaining user actions
 
 Buildable without real consent: profile refusal tests; HTTPS provider-simulator

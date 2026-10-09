@@ -23,6 +23,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/applications", "/applications/revoke",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
+    "/oauth/google/disconnect",
 ))
 router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
@@ -233,3 +234,58 @@ async def revoke_rule(request: Request, identity: auth.AdminIdentity = Depends(_
 @router.post("/access-rules/gmail-read")
 async def create_gmail_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "GmailReadRuleInput", "create_gmail_rule", 4096, created=True)
+
+
+async def _google_disconnect_result(function, *args, accepted: bool = False) -> JSONResponse:
+    """A transport failure is not a disconnect rollback or permission to retry."""
+    from serverware import operator_google_disconnect as lifecycle
+    from serverware.operator_catalog_mutations import CatalogNotFound
+    from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
+
+    try:
+        result = await _blocking(function, *args)
+    except CatalogNotFound:
+        _reject(404, "Google account or disconnect operation not found")
+    except CatalogConflict:
+        _reject(409, "Google account or affected access changed; inspect saved status before continuing")
+    except (lifecycle.DisconnectUnavailable, CatalogIntegrityError):
+        _reject(503, "Google disconnect status unavailable; inspect saved status before continuing")
+    except ValueError:
+        _reject(422, "invalid Google disconnect input")
+    except Exception:
+        _reject(503, "Google disconnect outcome unavailable; do not repeat the action automatically")
+    if result is None:
+        # Absence is deliberately not a successful rollback/retirement receipt.
+        _reject(404, "Google disconnect operation not found; absence does not authorize retry")
+    try:
+        status_code = 503 if result.get("outcome") == "unknown" else 202 if accepted else 200
+        return JSONResponse(result, status_code=status_code, headers=_HEADERS)
+    except Exception:
+        _reject(503, "Google disconnect result unavailable; inspect saved status before continuing")
+
+
+@router.post("/oauth/google/disconnect")
+async def disconnect_google_account(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_disconnect as lifecycle
+    from serverware.operator_catalog_inputs import GoogleDisconnectInput
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, GoogleDisconnectInput, 8192)
+    return await _google_disconnect_result(lifecycle.disconnect, payload, identity.user_id, accepted=True)
+
+
+@router.get("/oauth/google/disconnect/{credential_id}")
+async def google_disconnect_status(credential_id: str, request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_disconnect as lifecycle
+    from serverware.operator_catalog_inputs import _identifier
+
+    _admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _reject(400, "Google disconnect status accepts no body")
+    try:
+        _identifier(credential_id)
+    except (ValueError, TypeError, AttributeError):
+        _reject(422, "invalid Google account identifier")
+    return await _google_disconnect_result(lifecycle.status_for_credential, credential_id, identity.user_id)

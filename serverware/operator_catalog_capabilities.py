@@ -34,3 +34,24 @@ mismatch propagates to the catalog's fixed unavailable error, never `False`.
         "start_path": "/api/operator-demo/oauth/google/start",
         "intents_path": "/api/operator-demo/oauth/google/intents",
     }
+
+
+def google_disconnect(conn) -> dict | None:
+    """Advertise the backend lifecycle only where its retained schema exists."""
+    from serverware import operator_catalog_google, operator_google_disconnect
+    from serverware.operator_catalog_schema import CatalogIntegrityError
+
+    if getattr(conn, "in_transaction", False) is not True:
+        raise CatalogIntegrityError("operator capability requires a catalog read snapshot")
+    if operator_catalog_google.validate_profile_binding(conn) is None:
+        return None
+    if not operator_google_disconnect.capability_available(conn):
+        return None
+    return {
+        "schema": "serverware.operatorGoogleDisconnectCapability/v1",
+        "path": "/api/operator-demo/oauth/google/disconnect",
+        "status_path_prefix": "/api/operator-demo/oauth/google/disconnect/",
+        "requires_affected_rule_confirmation": True,
+        "requires_project_wide_revocation_acknowledgement": True,
+        "reconnect_supported": False,
+    }

@@ -5746,6 +5746,7 @@ def _reconcile_oauth_revocations(
     worker_id = f"oauth-reconciler-{os.getpid()}-{secrets.token_hex(8)}"
     claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
     revoked = 0
+    accepted = 0
     failed = 0
     uncertain = 0
     for item in claimed:
@@ -5788,6 +5789,7 @@ def _reconcile_oauth_revocations(
             )
         except (OAuthError, json.JSONDecodeError, TypeError, ValueError) as exc:
             error = str(exc)[:500] or type(exc).__name__
+        explicit_disconnect = item.get("source") == "operator_google_disconnect_v1"
         if item["kind"] == "pending":
             result = db.finish_pending_oauth_revocation(
                 item["id"],
@@ -5802,8 +5804,11 @@ def _reconcile_oauth_revocations(
                 succeeded=error is None,
                 error=error,
             )
+            disconnect_accepted = (explicit_disconnect and result.get("ok")
+                and result.get("revocation_status") == "accepted")
             db.record_audit_event(
-                (
+                ("credential.oauth_disconnect_provider_accepted" if disconnect_accepted
+                    else "credential.oauth_disconnect_revocation_failed") if explicit_disconnect else (
                     "credential.oauth_exchange_revoked"
                     if error is None
                     else "credential.oauth_exchange_revocation_failed"
@@ -5812,13 +5817,18 @@ def _reconcile_oauth_revocations(
                     "provider": item["provider_id"],
                     "source": item["source"],
                     "revocation_work_id": item["id"],
-                    "result": "revoked" if error is None else "failed",
-                    "retry_retained": error is not None,
+                    "result": ("provider_accepted" if disconnect_accepted else "not_proven")
+                        if explicit_disconnect else ("revoked" if error is None else "failed"),
+                    "retry_retained": not disconnect_accepted if explicit_disconnect else error is not None,
+                    **({"propagation": "not_proven", "reconnect": "blocked"} if explicit_disconnect else {}),
                 },
                 actor_id=str(item["actor_id"]),
             )
-        if result.get("ok"):
-            revoked += 1
+        if result.get("ok") and (not explicit_disconnect or result.get("revocation_status") == "accepted"):
+            if explicit_disconnect:
+                accepted += 1
+            else:
+                revoked += 1
         else:
             failed += 1
     result = {
@@ -5826,6 +5836,8 @@ def _reconcile_oauth_revocations(
         "revoked": revoked,
         "failed": failed,
     }
+    if accepted:
+        result["accepted"] = accepted
     if uncertain:
         result["uncertain"] = uncertain
     return result

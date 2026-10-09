@@ -4,6 +4,14 @@
 
 ## Status and objective
 
+The first-Google administrator setup now has focused retained-state verification:
+six selected groups passed using 18 fresh-process workers, including activation,
+restart preservation and audit-failure rollback. It stages an exact public
+configuration while Google remains disabled, then admits it during a controlled
+cold restart without replacing the saved catalog. This is separate from account
+consent and does not enable Google in the live demo. See the
+[setup contract and verification](operator-google-setup.md).
+
 Current joined checkpoint, 2026-10-09: the isolated **Read Gmail** job passed
 list/pagination/message reads before and after actual synthetic-token expiry:
 eight proxy requests, one automatic refresh and eight matching audit attempts.

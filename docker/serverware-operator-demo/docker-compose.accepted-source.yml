@@ -5,7 +5,7 @@
 services:
   serverware:
     environment:
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d
     volumes:
       - type: bind
         source: ${OPERATOR_DEMO_APP_SOURCE:?Set the approved immutable accepted application snapshot}
@@ -16,7 +16,7 @@ services:
   decision-gate-rs:
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4/serverware-decision-gate
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d/serverware-decision-gate
         target: /usr/local/bin/serverware-decision-gate
         read_only: true
         bind: {create_host_path: false}

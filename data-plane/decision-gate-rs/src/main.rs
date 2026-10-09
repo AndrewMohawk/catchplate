@@ -7059,8 +7059,14 @@ fn parse_validated_absolute_target(
         "http" => Some(80),
         _ => None,
     });
+    // host_str() includes IPv6 brackets; the strict raw authority validator
+    // returns the canonical address without brackets. Compare the typed address.
+    let host_matches = match parsed.host() {
+        Some(url::Host::Ipv6(address)) => address.to_string() == expected_host,
+        _ => parsed.host_str() == Some(expected_host.as_str()),
+    };
     if parsed.scheme() != scheme
-        || parsed.host_str() != Some(expected_host.as_str())
+        || !host_matches
         || parsed.port_or_known_default() != expected_port
         || parsed.path() != raw_path
         || parsed.query() != expected_query
@@ -62511,6 +62517,45 @@ mod tests {
                 "noncanonical path template was admitted: {template}"
             );
         }
+    }
+
+    #[test]
+    fn validated_absolute_targets_preserve_typed_host_identity() {
+        for target in [
+            "https://[2001:db8::1]:8443/resource?value=ok",
+            "https://[2001:db8::1]/resource?value=ok",
+            "https://api.example.test:8443/resource?value=ok",
+            "https://api.example.test/resource?value=ok",
+            "https://192.0.2.1:8443/resource?value=ok",
+            "https://192.0.2.1/resource?value=ok",
+        ] {
+            let (_, parsed) = parse_validated_absolute_target(target)
+                .unwrap_or_else(|error| panic!("canonical target rejected {target}: {error}"));
+            assert_eq!(parsed.as_str(), target, "canonical wire bytes changed");
+        }
+        for target in [
+            "https://[2001:0db8::1]:8443/resource?value=ok",
+            "https://[2001:DB8::1]:8443/resource?value=ok",
+            "https://[2001:db8:0:0:0:0:0:1]:8443/resource?value=ok",
+            "https://[2001:db8::1]:443/resource?value=ok",
+            "http://[2001:db8::1]:80/resource?value=ok",
+            "https://[2001:db8::1]:08443/resource?value=ok",
+            "https://[2001:db8::1%25eth0]:8443/resource?value=ok",
+            "https://[::ffff:192.0.2.1]:8443/resource?value=ok",
+            "https://2001:db8::1:8443/resource?value=ok",
+            "https://API.example.test:8443/resource?value=ok",
+            "https://192.0.2.01:8443/resource?value=ok",
+            "https://api.example.test:443/resource?value=ok",
+            "https://192.0.2.1:443/resource?value=ok",
+        ] {
+            assert!(
+                parse_validated_absolute_target(target).is_err(),
+                "noncanonical target admitted: {target}"
+            );
+        }
+        assert!(canonical_policy_host("2001:db8::1")
+            .expect_err("raw IPv6 parsing must not expand the v1 policy-host contract")
+            .contains("IPv6 host is not admitted"));
     }
 
     #[test]

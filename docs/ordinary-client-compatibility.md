@@ -193,9 +193,11 @@ not alter its response merely to conceal a compatibility failure.
 
 ## Agreed operator-only standard-client authentication contract
 
-The catalog, Python/schema, Rust and UI implementation is prepared and has
-independent source review. Execution and deployment acceptance remain open;
-earlier compatibility results do not cover this option. Ordinary clients need a supported way to authenticate
+The catalog, Python/schema, Rust and UI implementation is committed and has
+independent source review. Focused Python, Rust and intercepted UI checks passed
+across the [retained verification batches](ordinary-client-verification.md#standard-proxy-login-focused-verification);
+actual stock-client HTTPS-proxy acceptance and deployment remain open. Earlier
+compatibility results do not cover this option. Ordinary clients need a supported way to authenticate
 to the proxy using their existing application token; this is separate from
 provider-key injection, OAuth consent and console authentication.
 

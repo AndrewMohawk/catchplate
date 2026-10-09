@@ -30,6 +30,9 @@ class Harness(checker.OperatorCatalogCheck):
         self.revision, self.sequence = 1, 1
         self.rows = {name: [] for name in checker.COLLECTIONS}
         self.catalog_hook, self.post_hook, self.health_hook = None, None, None
+        self.dispatch_hook, self.capture_hook = None, None
+        self.real_warm_capture, self.capturing_cas = False, False
+        self.lease_receipts, self.lease_lifetime_ms = [], 1794
         self.catalog_latency_ms, self.header_latency_ms = 600, 30
 
     def advance(self, milliseconds):
@@ -68,8 +71,11 @@ class Harness(checker.OperatorCatalogCheck):
         self.trace.append("post:" + route)
         self.posts.append((route, deepcopy(payload)))
         self.advance(80)
-        assert payload["expected_revision"] == self.revision
-        assert payload["expected_policy_hash"] == self.policy()["policy_hash"]
+        # Model the server's atomic revision/hash refusal, not a test assertion:
+        # concurrent changes must reach the real caller as one definite409.
+        if (payload["expected_revision"] != self.revision
+                or payload["expected_policy_hash"] != self.policy()["policy_hash"]):
+            return 409, {"detail": "synthetic stale CAS"}
         issued, affected = None, None
         if route == "/credentials":
             collection, result_key = "credentials", "credential"
@@ -122,8 +128,15 @@ class Harness(checker.OperatorCatalogCheck):
     def health(self):
         self.trace.append("health")
         self.advance(10)
+        current = [row for row in self.lease_receipts
+            if row["event"]["policy_hash"] == self.policy()["policy_hash"]
+            and row["event"]["expires_at_epoch_ms"] > self.epoch_ms]
+        scope_count = len({(row["event"]["principal_id"], row["event"]["route_id"]) for row in current})
         result = {"policy_hash": self.policy()["policy_hash"],
-            "policy_shadow": {"operator_policy_sha256": self.policy()["policy_hash"]}}
+            "policy_shadow": {"operator_policy_sha256": self.policy()["policy_hash"]},
+            "credential_leases": scope_count, "credential_generation_hot_scopes": scope_count,
+            "credential_lease_earliest_expiry_epoch_ms": min(
+                (row["event"]["expires_at_epoch_ms"] for row in current), default=None)}
         if self.health_hook:
             self.health_hook(result)
         return result
@@ -145,15 +158,40 @@ class Harness(checker.OperatorCatalogCheck):
         self.trace.append("dispatch")
         self.dispatches += 1
         self.successes.append((application["principal_id"], rule["route_id"], self.policy_hash))
+        self.lease_receipts.append({"id": "synthetic-lease-" + str(self.dispatches),
+            "event_type": "data_plane.credential_lease.issued", "event": {
+                "purpose": "dispatchSecret", "principal_id": application["principal_id"],
+                "route_id": rule["route_id"], "credential_id": rule["credential_id"],
+                "policy_hash": self.policy()["policy_hash"], "data_plane_binary_digest": self.args.expected_binary_sha256,
+                "issued_at_epoch_ms": self.epoch_ms, "expires_at_epoch_ms": self.epoch_ms + self.lease_lifetime_ms}})
+        if self.dispatch_hook:
+            self.dispatch_hook()
+
+    def warm_cas_snapshot(self):
+        self.capturing_cas = True
+        try:
+            return super().warm_cas_snapshot()
+        finally:
+            self.capturing_cas = False
+
+    def audit(self):
+        self.trace.append("audit")
+        return deepcopy(self.lease_receipts)
 
     def observe_live_lease(self, stage, application, rule, credential, *, minimum_scopes):
-        # Actual health/scoped receipt capture has separate unchanged controls.
         self.trace.append("warm:" + stage)
-        return {"stage": stage, "principalId": application["principal_id"], "routeId": rule["route_id"],
-            "scopedLeaseAuditEventId": "synthetic-lease", "capturedAtEpochMs": self.epoch_ms,
-            "_captured_monotonic_ns": self.monotonic_ns, "denialDeadlineEpochMs": self.epoch_ms + 1794,
-            "healthEarliestUnexpiredLeaseEpochMs": self.epoch_ms + 1794,
-            "scopedLeaseExpiryEpochMs": self.epoch_ms + 1794}
+        if self.real_warm_capture:
+            warm = super().observe_live_lease(stage, application, rule, credential, minimum_scopes=minimum_scopes)
+        else:
+            # Most orchestration controls isolate the already tested capture.
+            warm = {"stage": stage, "principalId": application["principal_id"], "routeId": rule["route_id"],
+                "scopedLeaseAuditEventId": "synthetic-lease", "capturedAtEpochMs": self.epoch_ms,
+                "_captured_monotonic_ns": self.monotonic_ns, "denialDeadlineEpochMs": self.epoch_ms + 1794,
+                "healthEarliestUnexpiredLeaseEpochMs": self.epoch_ms + 1794,
+                "scopedLeaseExpiryEpochMs": self.epoch_ms + 1794}
+        if self.capture_hook:
+            self.capture_hook(stage)
+        return warm
 
     def finalize_mutation(self, result, after, **kwargs):
         super().finalize_mutation(result, after, **kwargs)
@@ -185,7 +223,11 @@ class PhaseSplitTests(unittest.TestCase):
             post = value.trace.index("post:" + route, start)
             denial = value.trace.index("headers403", post)
             finalize = value.trace.index("finalize:operator_catalog.application." + event, denial)
-            self.assertEqual(value.trace[start - 1], "catalog")
+            if stage == "before_app1_revoke":
+                self.assertEqual(value.trace[start - 5:start], ["catalog"] + ["dispatch"] * 4)
+            else:
+                self.assertEqual(value.trace[start - 3:start], [
+                    "finalize:operator_catalog.application.revoked", "catalog", "dispatch"])
             self.assertEqual(value.trace[start + 1:denial], ["post:" + route, "health", "count"])
             self.assertEqual(value.trace[denial + 1:finalize], ["count", "catalog", "health"])
             self.assertEqual(sum(path == route for path, _ in value.posts), 1)
@@ -204,7 +246,7 @@ class PhaseSplitTests(unittest.TestCase):
             value = Harness()
 
             def catalog(snapshot):
-                if value.dispatches == 4:
+                if value.capturing_cas:
                     snapshot["policy"][changed] = "pending" if changed == "activation" else "sha256:" + "f" * 64
 
             value.catalog_hook = catalog
@@ -212,6 +254,101 @@ class PhaseSplitTests(unittest.TestCase):
                 self.run_lifecycle(value)
             self.assertNotIn("warm:before_app1_revoke", value.trace)
             self.assertFalse(any(route.endswith("/revoke") for route, _ in value.posts))
+
+    def test_store_only_change_during_warm_gets_refuses_original_cas_once(self):
+        for trigger, route, expected_revision, finalized in (
+                (1, "/applications/revoke", 6, 5), (5, "/applications/rotate-token", 7, 6)):
+            value = Harness()
+            value.real_warm_capture = True
+
+            def change():
+                if value.dispatches == trigger:
+                    # Store-only writes preserve policy hash but spend revision.
+                    value.revision += 1
+
+            value.dispatch_hook = change
+            with self.subTest(route=route), self.assertRaisesRegex(checker.CheckFailure, "mutation returned"):
+                self.run_lifecycle(value)
+            submitted = [payload for path, payload in value.posts if path == route]
+            self.assertEqual(len(submitted), 1)
+            self.assertEqual(submitted[0]["expected_revision"], expected_revision)
+            self.assertEqual(value.revision, expected_revision + 1)
+            self.assertEqual(submitted[0]["expected_policy_hash"], value.policy()["policy_hash"])
+            self.assertTrue(all(value.warm_lease_checks[-1]["conditions"].values()))
+            self.assertEqual(value.trace[value.trace.index("post:" + route) + 1:], [])
+            self.assertEqual(len(value.mutations), finalized)
+            self.assertEqual(value.dispatches, 4 if trigger == 1 else 5)
+
+    def test_loaded_policy_change_during_warm_gets_fails_actual_capture(self):
+        for trigger, route, finalized in ((1, "/applications/revoke", 5),
+                (5, "/applications/rotate-token", 6)):
+            value = Harness()
+            value.real_warm_capture = True
+
+            def change():
+                if value.dispatches == trigger:
+                    value.revision += 1
+                    value.sequence += 1
+
+            value.dispatch_hook = change
+            with self.subTest(route=route), self.assertRaisesRegex(checker.CheckFailure, "health_policy_hash_matches"):
+                self.run_lifecycle(value)
+            self.assertFalse(any(path == route for path, _ in value.posts))
+            self.assertIn("health_policy_hash_matches", value.warm_lease_checks[-1]["failedConjuncts"])
+            self.assertEqual(len(value.mutations), finalized)
+            self.assertEqual(value.dispatches, 4 if trigger == 1 else 5)
+
+    def test_publication_after_capture_cannot_refresh_or_retry_original_cas(self):
+        for stage, route, expected_revision, finalized in (
+                ("before_app1_revoke", "/applications/revoke", 6, 5),
+                ("before_app2_rotate", "/applications/rotate-token", 7, 6)):
+            value = Harness()
+            value.real_warm_capture = True
+
+            def change(captured_stage):
+                if captured_stage == stage:
+                    value.revision += 1
+                    value.sequence += 1
+
+            value.capture_hook = change
+            with self.subTest(stage=stage), self.assertRaisesRegex(checker.CheckFailure, "mutation returned"):
+                self.run_lifecycle(value)
+            submitted = [payload for path, payload in value.posts if path == route]
+            self.assertEqual(len(submitted), 1)
+            self.assertEqual(submitted[0]["expected_revision"], expected_revision)
+            self.assertNotEqual(submitted[0]["expected_policy_hash"], value.policy()["policy_hash"])
+            self.assertTrue(all(value.warm_lease_checks[-1]["conditions"].values()))
+            self.assertEqual(value.trace[value.trace.index("post:" + route) + 1:], [])
+            self.assertEqual(len(value.mutations), finalized)
+
+    def test_matching_health_does_not_replace_original_scoped_receipt_binding(self):
+        value = Harness()
+        value.real_warm_capture = True
+        original_audit = value.audit
+
+        def audit():
+            rows = original_audit()
+            for row in rows:
+                if row["event"]["principal_id"] == "principal1":
+                    row["event"]["policy_hash"] = "sha256:" + "f" * 64
+            return rows
+
+        value.audit = audit
+        with self.assertRaisesRegex(checker.CheckFailure, "scoped_dispatch_receipt_present"):
+            self.run_lifecycle(value)
+        self.assertTrue(value.warm_lease_checks[0]["conditions"]["health_policy_hash_matches"])
+        self.assertFalse(any(route == "/applications/revoke" for route, _ in value.posts))
+        self.assertEqual(value.dispatches, 4)
+
+    def test_pre_warm_cas_order_does_not_make_short_cached_lease_pass(self):
+        value = Harness()
+        value.real_warm_capture, value.lease_lifetime_ms = True, 1000
+        with self.assertRaisesRegex(checker.CheckFailure, "health_remaining_gt_1000ms"):
+            self.run_lifecycle(value)
+        self.assertEqual(value.warm_lease_checks[0]["minimumRemainingMsExclusive"], 1000)
+        self.assertLessEqual(value.warm_lease_checks[0]["healthRemainingMsAtComparison"], 1000)
+        self.assertFalse(any(route == "/applications/revoke" for route, _ in value.posts))
+        self.assertEqual(value.dispatches, 4)
 
     def test_bad_warm_post_receipts_never_retry_or_reach_denial(self):
         changes = {

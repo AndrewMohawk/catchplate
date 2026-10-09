@@ -459,10 +459,10 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         self.wait_catalog_loaded("two_rules")
         self.denied_without_dispatch(None)
         self.denied_without_dispatch(self.wrong_token)
+        revoke_before = self.warm_cas_snapshot()
         for _ in range(2):
             for application, token, rule in zip(applications, tokens, rules):
                 self.injected(token, application, rule)
-        revoke_before = self.warm_cas_snapshot()
         revoke_warm = self.observe_live_lease("before_app1_revoke", applications[0], rules[0], credential, minimum_scopes=2)
         self.results.append("one_shared_credential_two_apps_two_rules_both_200_with_warm_leases")
         revoked_app, _, revoked = self.submit_mutation(revoke_before, "/applications/revoke", {"id": applications[0]["id"]},
@@ -483,9 +483,9 @@ class OperatorCatalogCheck(OperatorDemoCheck):
                 and retained["active_rule_count"] == 1, "revocation changed the shared credential")
         self.finalize_mutation(revoked, snapshot, collection="applications", result_key="application",
             event="operator_catalog.application.revoked")
+        rotate_before = self.warm_cas_snapshot()
         self.injected(tokens[1], applications[1], rules[1])
         self.results.append("warm_app1_revoked_403_no_dispatch_while_app2_still_200")
-        rotate_before = self.warm_cas_snapshot()
         rotate_warm = self.observe_live_lease("before_app2_rotate", applications[1], rules[1], credential, minimum_scopes=1)
         rotated, replacement, rotation = self.submit_mutation(rotate_before, "/applications/rotate-token",
             {"id": applications[1]["id"], "token_lifetime_seconds": 3600}, result_key="application",

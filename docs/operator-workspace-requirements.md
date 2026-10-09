@@ -180,6 +180,14 @@ pages are management views, not three mandatory stops in onboarding. Present
 provider operations in the operator's language; do not expose a policy compiler
 form as the default journey.
 
+Choose the connection method first: **Connect Google**, **Use an API key**, or
+**Use a saved connection**. Show only the relevant form. Opening Google setup
+must not leave a second API-key form and another Connect Google button competing
+on the same screen. After consent, continue with the verified account selected.
+Explain account permissions once; keep exceptional recovery controls contextual.
+The current additive Google consent panel is an integration step, not acceptance
+of this exclusive, single-journey layout.
+
 A new basic authentication-replacement journey must require **zero response
 configuration interactions**. Select the advertised supported no-filter contract
 automatically, with a short visible compatibility summary. Compatibility-version
@@ -316,6 +324,34 @@ rule editor cannot express all of them; the README explicitly keeps ECR-specific
 integration open. Selecting a restriction still requires its actual request and
 response enforcement, and choosing an unfiltered mode must not silently discard
 it.
+
+The next Google delivery boundary is a **usable inbox job**, not merely a
+successful consent callback. Current catalog rules bind one literal path and
+do not admit message-ID templates. Consequently, saving an account and granting
+one list URL does not let a job read newly returned message IDs. A named read-mail
+preset must cover its bounded list, pagination and message-read operations,
+with representative normal-client query ordering and headers. Test the same job
+again after access-token expiry, without new consent or exposing provider tokens.
+Mail-age restrictions remain optional, with their independent response checks
+when selected. Attachments, history and other operations must be named explicitly
+rather than silently included in a vague "Google access" grant.
+
+Do not copy the illustrative npm policy as a publish-only default. The README's
+daily publishing window differs from the weekday JSON example, which also
+requires approval and lists unpublish, dist-tag, token and metadata writes.
+A publish preset must permit only its reviewed publish workflow and necessary
+prerequisite reads. Schedules and approval are separate choices; neither broader
+write permissions nor weekdays-only behavior may be inferred from the example's
+name. ECR additionally needs its actual authentication and multi-request image
+publication protocol; a generic JSON route and static header insertion do not
+implement that integration.
+
+Judge the simplified demo by two complete jobs: a normal client replaces its
+configured dummy authentication with **zero response-configuration interactions**,
+and a background mail worker uses a connected account across token expiry.
+Browser setup, saved configuration, loaded permissions, actual API results and
+redacted audit outcomes must agree. Source tests, a saved-account card, or one
+successful handcrafted request are useful evidence but not either full job.
 
 The broader [policy examples](../policies/credential-limits.examples.json) also
 use Basic, query-token and cookie authentication, and form bodies for Stripe and

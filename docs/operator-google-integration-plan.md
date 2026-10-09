@@ -12,6 +12,16 @@ not real Google consent, a joined browser journey or deployment. See the
 Earlier failures and the open provider/browser/lifecycle requirements remain
 recorded below; they are not erased by this focused success.
 
+The consent UI is now wired in source: the catalog advertises only a validated
+Google profile, the owner explicitly continues to Google, and callback return
+selects an account only after joining the actor's saved intent to a fresh active
+catalog record. Backend callback/discovery checks and intercepted browser checks
+pass separately; they do not establish a joined real-provider browser journey.
+The current panel still needs the exclusive connection-method layout described
+in [the requirements](operator-workspace-requirements.md), and a reusable Gmail
+list/pagination/message-read preset remains missing. The live demo was not
+changed by these checks. See [consent UI verification](operator-google-backend-verification.md#consent-discovery-and-return-ui-checks).
+
 Originally designed against workspace commit `10879772`. The 2026-10-08 shared
 working-tree checkpoint now contains cold profile, consent/catalog,
 generation-reconciliation and local cleanup-fence source. It is **not releasable

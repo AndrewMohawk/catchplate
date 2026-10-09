@@ -119,6 +119,8 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             enforcement=("revoked" if record["status"] == "revoked" else "active") if loaded else "pending")
         if result["credential_input"] == "replace_exact":
             result["placeholder"] = record["placeholder"]
+        if "request_body_mode" in record:
+            result["request_body_mode"] = record["request_body_mode"]
     return result
 
 
@@ -209,12 +211,15 @@ def create_rule(payload: RuleInput, actor_id: str) -> dict:
         credential = _target(catalog, "credentials", payload.credential_id)
         identifier = str(uuid.uuid4())
         record = payload.model_dump(exclude={"expected_revision", "expected_policy_hash"})
+        if "request_body_mode" not in payload.model_fields_set:
+            record.pop("request_body_mode", None)
         if payload.credential_input == "insert":
             record.pop("placeholder", None)
         try:
             schema.rule_credential_header(record, credential)
+            schema.rule_request_body_mode(record, credential)
         except CatalogIntegrityError:
-            raise ValueError("credential input is incompatible with the selected credential") from None
+            raise ValueError("rule content or credential input is incompatible with the selected credential") from None
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
     return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
@@ -286,9 +291,10 @@ def catalog_status() -> dict:
         **{collection: [_public(collection, row, catalog, observation, now) for row in catalog[collection]]
            for collection in _RESULT_KEYS}, "limits": limits,
         # Source capability, not proof of a deployed gate version. Publication
-        # requires the co-versioned response/replacement gate; never downgrade.
+        # requires the co-versioned request/response/replacement gate; never downgrade.
         "capabilities": {"credential_types": ["bearer", "header"],
-            "response_modes": ["projected_json", "unfiltered_json"], "oauth": False,
+            "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1"], "oauth": False,
+            "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],
             "token_lifetime_seconds": {"min": MIN_TOKEN_LIFETIME_SECONDS, "max": MAX_TOKEN_LIFETIME_SECONDS,
                 "default": DEFAULT_TOKEN_LIFETIME_SECONDS}}}

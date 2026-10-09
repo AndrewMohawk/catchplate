@@ -116,10 +116,11 @@ Normal clients also need their request bodies, provider errors and supported
 response statuses to behave normally. "No optional content filtering" must
 therefore be implemented in the request and response paths, not achieved by
 hiding required field declarations. Unsupported formats must be explained
-before saving. The next bounded compatibility slice is unchanged JSON request
-bytes plus an explicit JSON-or-empty-204 response contract; ordinary query
-ordering, form, binary and streaming support remain separate work. Existing
-rules must not acquire any of these permissions through a default change.
+before saving. The additive [ordinary-client compatibility contract](ordinary-client-compatibility.md)
+implements unchanged JSON request bytes plus an explicit JSON-or-empty-204
+response mode in source; verification and UI exposure remain separate gates.
+Ordinary query ordering, form, binary and streaming support remain separate
+work. Existing rules must not acquire these permissions through a default change.
 
 ## Requirement and scope
 
@@ -333,9 +334,10 @@ work around them with a pasted refresh token or a hidden legacy fallback.
 The current source is not yet a general "just replace authentication" proxy.
 Removing mandatory response projection solves only one part of that journey:
 
-- An empty request-field list currently forbids a body. Ordinary JSON POSTs
-  still need field declarations; a future unchanged-request-content mode needs
-  an explicit backend contract, not merely a collapsed form section.
+- In the existing UI and legacy rules, an empty request-field list forbids a
+  body. The additive source mode preserves bounded strict JSON without field
+  declarations; it must pass backend verification and have accurate mode-aware
+  UI summaries before being exposed. Collapsing the form alone is not support.
 - Query names default to none, and forwarded client headers default to
   `accept` and `user-agent`. An example-request importer could suggest those
   names locally for explicit approval; it must not silently broaden access.
@@ -343,8 +345,9 @@ Removing mandatory response projection solves only one part of that journey:
   A complete example would need supplied sample input and must not execute
   automatically.
 - Whole-JSON responses retain status-code, body-presence, size and safe-header
-  restrictions; `204 No Content` is not supported by the current envelope.
-  Text, binary and streaming remain open compatibility work. The current
+  restrictions. The existing UI and legacy whole-JSON envelope do not support
+  `204 No Content`; the additive source contract admits it only through an
+  explicit paired mode. Text, binary and streaming remain open compatibility work. The current
   CONNECT parser also requires canonical query ordering. Ordinary-client
   compatibility needs explicit implementation and proof, not a claim that
   "no response filter" removes these protocol restrictions.

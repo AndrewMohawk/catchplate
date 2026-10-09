@@ -109,7 +109,9 @@ def compiled_contract():
             raise AssertionError("invalid stored mode was silently rendered")
     with patch.object(store, "loaded_policy_hash", return_value=state["policy_hash"]):
         status = mutations.catalog_status()
-    assert status["capabilities"]["response_modes"] == ["projected_json", "unfiltered_json"]
+    assert status["capabilities"]["response_modes"] == [
+        "projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1"]
+    assert status["capabilities"]["request_body_modes"] == ["preserve_json_v1"]
     assert status["policy"]["activation"] == "active"
     return {"paired_profile": True, "request_unchanged": True, "invalid_stored_modes_refused": 3}
 

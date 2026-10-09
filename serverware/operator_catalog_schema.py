@@ -212,6 +212,32 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
         raise CatalogIntegrityError('catalog credential placeholder or target refused') from error
 
 
+def rule_content_modes(rule: dict) -> tuple[str | None, str]:
+    """Validate additive modes without defaulting retained records into them."""
+    request_mode = rule.get('request_body_mode')
+    request_fields = rule.get('request_fields')
+    response_mode = rule.get('response_mode', 'projected_json')
+    response_fields = rule.get('response_fields')
+    if not isinstance(request_fields, list):
+        raise CatalogIntegrityError('catalog request fields refused')
+    if 'request_body_mode' in rule and (request_mode != 'preserve_json_v1' or request_fields):
+        raise CatalogIntegrityError('catalog request preservation mode/fields refused')
+    if (not isinstance(response_mode, str)
+            or response_mode not in {'projected_json', 'unfiltered_json', 'unfiltered_json_or_empty_v1'}
+            or not isinstance(response_fields, list)
+            or (response_mode == 'projected_json') != bool(response_fields)):
+        raise CatalogIntegrityError('catalog response mode/fields refused')
+    return request_mode, response_mode
+
+
+def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
+    """Google's existing exact GET/no-body contract is not widened by this mode."""
+    request_mode, _ = rule_content_modes(rule)
+    if request_mode is not None and credential.get('auth_type') == 'google_oauth':
+        raise CatalogIntegrityError('Google account request preservation is unsupported')
+    return request_mode
+
+
 def validate_bindings(conn, catalog: dict | None = None) -> None:
     from serverware import operator_catalog_google
     operator_catalog_google.validate_profile_binding(conn)
@@ -263,14 +289,12 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                 or type(row.get('token_expires_at_epoch_ms')) is not int or row['token_expires_at_epoch_ms'] <= 0):
             raise CatalogIntegrityError('catalog application verifier refused')
     for row in catalog['access_rules']:
-        mode, fields = row.get('response_mode', 'projected_json'), row.get('response_fields')
-        if (mode not in {'projected_json', 'unfiltered_json'} or not isinstance(fields, list)
-                or (mode == 'projected_json') != bool(fields)):
-            raise CatalogIntegrityError('catalog response mode/fields refused')
+        rule_content_modes(row)
         app, credential = applications.get(row['application_id']), credentials.get(row['credential_id'])
         if app is None or credential is None or row.get('route_id') != 'operator.' + row['id']:
             raise CatalogIntegrityError('catalog rule binding refused')
         rule_credential_header(row, credential)
+        rule_request_body_mode(row, credential)
         if row['status'] == 'active' and credential.get('auth_type') == 'google_oauth':
             from serverware import operator_catalog_google
             operator_catalog_google.validate_rule(row, credential)

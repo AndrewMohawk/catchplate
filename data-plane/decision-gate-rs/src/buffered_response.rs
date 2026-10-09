@@ -2,14 +2,20 @@
 use crate::{
     normalized_media_type, sensitive_json_value_from_slice, validate_response_header_allowlist,
     ResponseSecretGuard, SensitiveResponseBytes, MAX_BUFFERED_RESPONSE_BODY_BYTES,
-    SAFE_RESPONSE_HEADERS,
+    SAFE_RESPONSE_HEADERS, SensitiveReleasedHeaders,
 };
-use reqwest::StatusCode;
+use reqwest::{header::HeaderMap, StatusCode};
 use serde_json::{json, Map, Value};
 use std::io::{self, Write};
 
 pub(crate) const MODE: &str = "bufferedPassthrough";
+pub(crate) const JSON_OR_EMPTY_204_MODE: &str = "bufferedJsonOrEmpty204V1";
+pub(crate) const JSON_OR_EMPTY_204_PRESENCE: &str = "jsonOrEmpty204V1";
 const MAX_ERROR_BYTES: u64 = 65_536;
+
+pub(crate) fn supported_mode(mode: &str) -> bool {
+    matches!(mode, MODE | JSON_OR_EMPTY_204_MODE)
+}
 
 fn validate_profile(profile: &Map<String, Value>, error: bool) -> Result<u64, String> {
     let allowed: &[&str] = if error {
@@ -34,7 +40,7 @@ fn validate_profile(profile: &Map<String, Value>, error: bool) -> Result<u64, St
     if profile.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("bufferedPassthrough profile contains an unsupported field".to_string());
     }
-    if profile.get("mode").and_then(Value::as_str) != Some(MODE)
+    if !profile.get("mode").and_then(Value::as_str).is_some_and(supported_mode)
         || profile.get("bodyFormat").and_then(Value::as_str) != Some("json")
         || profile.get("contentTypes") != Some(&json!(["application/json"]))
     {
@@ -93,7 +99,81 @@ pub(crate) fn validate_contract(
         .and_then(Value::as_object)
         .ok_or("bufferedPassthrough requires an explicit bufferedPassthrough error profile")?;
     validate_profile(error, true)?;
+    if response.get("mode") != error.get("mode") {
+        return Err("whole JSON success and error profiles must use the same mode".into());
+    }
     Ok(())
+}
+
+/// Check both halves before any adapter/profile-specific early return. A new
+/// envelope cannot silently broaden an older profile, including projected modes.
+pub(crate) fn validate_envelope_pairing(
+    adapter_type: &str,
+    mode: Option<&str>,
+    constraints: &[Value],
+) -> Result<(), String> {
+    let envelopes = constraints.iter().filter(|constraint|
+        constraint.get("type").and_then(Value::as_str) == Some("responseEnvelope")).collect::<Vec<_>>();
+    if mode != Some(JSON_OR_EMPTY_204_MODE) {
+        if envelopes.iter().any(|envelope|
+            envelope.get("bodyPresence").and_then(Value::as_str) == Some(JSON_OR_EMPTY_204_PRESENCE))
+        {
+            return Err("jsonOrEmpty204V1 requires its explicit generic.rest response profile".into());
+        }
+        return Ok(());
+    }
+    if adapter_type != "generic.rest" || envelopes.is_empty() || envelopes.iter().any(|envelope|
+        envelope.get("phase").and_then(Value::as_str) != Some("response")
+            || envelope.get("bodyPresence").and_then(Value::as_str) != Some(JSON_OR_EMPTY_204_PRESENCE)
+            || envelope.get("contentTypes") != Some(&json!(["application/json"]))
+            || !envelope.get("statusCodes").and_then(Value::as_array).is_some_and(|statuses| {
+                let mut seen = std::collections::HashSet::new();
+                (1..=16).contains(&statuses.len())
+                    && statuses.iter().any(|status| status.as_u64() == Some(204))
+                    && statuses.iter().all(|status| status.as_u64().is_some_and(|status|
+                        seen.insert(status)
+                            && ((200..=299).contains(&status) && status != 205 || (400..=599).contains(&status))))
+            })
+    ) {
+        return Err("bufferedJsonOrEmpty204V1 requires exact JSON-or-empty-204 response envelopes".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_mode_constraints(mode: &str, constraints: &[Value]) -> Result<(), String> {
+    validate_constraints(constraints)?;
+    validate_envelope_pairing("generic.rest", Some(mode), constraints)
+}
+
+/// Reqwest may not expose bytes after a 204 as response-body bytes. Reject every
+/// visible illegal framing declaration; the caller must additionally disable
+/// upstream connection reuse for this profile. This is not raw-wire capture.
+pub(crate) fn validate_empty_204_headers(headers: &HeaderMap) -> Result<(), Value> {
+    if ["content-length", "transfer-encoding", "trailer"].iter().any(|name| headers.contains_key(*name)) {
+        return Err(json!({"error":"response_empty_204_framing_forbidden"}));
+    }
+    let mut types = headers.get_all("content-type").iter();
+    if let Some(value) = types.next() {
+        if types.next().is_some() || value.to_str().ok().and_then(normalized_media_type).as_deref() != Some("application/json") {
+            return Err(json!({"error":"response_json_content_type_mismatch"}));
+        }
+    }
+    Ok(())
+}
+
+/// Only the additive, already-validated 204 release calls this serializer. Old
+/// response modes keep their serializer and no content header is invented here.
+pub(crate) fn serialize_empty_204(content_type: Option<&str>, headers: &SensitiveReleasedHeaders) -> SensitiveResponseBytes {
+    let mut output = SensitiveResponseBytes::with_capacity(512);
+    output.extend_from_slice(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n");
+    if let Some(value) = content_type {
+        output.extend_from_slice(b"Content-Type: "); output.extend_from_slice(value.as_bytes()); output.extend_from_slice(b"\r\n");
+    }
+    for (name, value) in headers {
+        output.extend_from_slice(name.as_bytes()); output.extend_from_slice(b": ");
+        output.extend_from_slice(value.as_bytes()); output.extend_from_slice(b"\r\n");
+    }
+    output.extend_from_slice(b"\r\n"); output
 }
 
 pub(crate) fn validate_constraints(constraints: &[Value]) -> Result<(), String> {
@@ -151,6 +231,21 @@ pub(crate) fn inspect_body(
         .as_object()
         .and_then(|profile| validate_profile(profile, error).ok())
         .ok_or_else(|| json!({"error":"response_buffered_passthrough_profile_invalid"}))?;
+    if config.get("mode").and_then(Value::as_str) == Some(JSON_OR_EMPTY_204_MODE) {
+        if status == StatusCode::RESET_CONTENT {
+            return Err(json!({"error":"response_status_invalid"}));
+        }
+        if status == StatusCode::NO_CONTENT {
+            if !body.is_empty() { return Err(json!({"error":"response_empty_204_body_forbidden"})); }
+            if let Some(value) = content_type {
+                if normalized_media_type(value).as_deref() != Some("application/json") {
+                    return Err(json!({"error":"response_json_content_type_mismatch"}));
+                }
+                if secret_guard.detects(value.as_bytes()) { return Err(json!({"error":"response_credential_reflection"})); }
+            }
+            return Ok(body);
+        }
+    }
     if content_type.and_then(normalized_media_type).as_deref() != Some("application/json") {
         return Err(json!({"error":"response_json_content_type_mismatch"}));
     }
@@ -159,6 +254,10 @@ pub(crate) fn inspect_body(
     }
     if secret_guard.detects(&body) {
         return Err(json!({"error":"response_credential_reflection"}));
+    }
+    if config.get("mode").and_then(Value::as_str) == Some(JSON_OR_EMPTY_204_MODE) {
+        crate::buffered_request::validate_container_depth(&body)
+            .map_err(|()| json!({"error":"response_invalid_json","adapter":adapter_type}))?;
     }
     let value = sensitive_json_value_from_slice(&body)
         .map_err(|_| json!({"error":"response_invalid_json","adapter":adapter_type}))?;

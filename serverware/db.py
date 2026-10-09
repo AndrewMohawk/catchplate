@@ -67491,20 +67491,27 @@ def replace_operator_static_credential_secret_if_version(
     try:
         metadata = loads(current["metadata"], {})
         catalog = loads(retained["data_json"], {})
+        if not isinstance(metadata, dict) or not isinstance(catalog, dict):
+            raise ValueError("static binding refused")
+        metadata_fields = {"provider_id", "provider_subject", "secret_class"}
+        if "connection_type" in metadata or "connection_type" in catalog:
+            from serverware import operator_catalog_github
+            if not operator_catalog_github.validate_credential(catalog, metadata):
+                raise ValueError("static connection binding refused")
+            metadata_fields.add("connection_type")
         bearer = current["kind"] == "bearer"
         if (current["kind"] not in {"bearer", "header"}
                 or current["lifecycle_status"] != "active"
-                or not isinstance(metadata, dict)
-                or set(metadata) != {"provider_id", "provider_subject", "secret_class"}
+                or set(metadata) != metadata_fields
                 or metadata["provider_id"] != "operator-demo"
                 or metadata["secret_class"] != ("bearerToken" if bearer else "customHeader")
-                or not isinstance(catalog, dict) or catalog.get("status") != "active"
+                or catalog.get("status") != "active"
                 or catalog.get("auth_type") != current["kind"]
                 or catalog.get("name") != current["name"]
                 or not isinstance(metadata["provider_subject"], str) or not metadata["provider_subject"]
                 or catalog.get("provider_subject") != metadata["provider_subject"]):
             raise ValueError("static binding refused")
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, operator_catalog_schema.CatalogIntegrityError) as error:
         raise MetadataStoreError("operator static replacement binding refused") from error
     current_version = current["credential_version"]
     if type(current_version) is not int or not 1 <= current_version < 9_007_199_254_740_991:

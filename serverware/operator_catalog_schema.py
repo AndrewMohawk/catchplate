@@ -215,7 +215,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
-    from serverware import operator_catalog_gmail
+    from serverware import operator_catalog_github, operator_catalog_gmail
+    if operator_catalog_github.selected(rule):
+        operator_catalog_github.validate_shape(rule)
+        return 'preserve_json_v1', operator_catalog_github.RESPONSE_MODE
     if operator_catalog_gmail.selected(rule):
         operator_catalog_gmail.validate_shape(rule)
         return None, operator_catalog_gmail.RESPONSE_MODE
@@ -239,6 +242,12 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
     request_mode, _ = rule_content_modes(rule)
+    from serverware import operator_catalog_github
+    if operator_catalog_github.selected(rule):
+        operator_catalog_github.validate_rule(rule, credential)
+        return request_mode
+    if operator_catalog_github.validate_credential(credential):
+        raise CatalogIntegrityError('GitHub token connections require a GitHub preset')
     if 'operation_bundle' in rule and credential.get('auth_type') != 'google_oauth':
         raise CatalogIntegrityError('Gmail bundle requires a connected Google account')
     if request_mode is not None and credential.get('auth_type') == 'google_oauth':
@@ -283,6 +292,8 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                     or type(row.get('version')) is not int or row['version'] < 1):
                 raise CatalogIntegrityError('catalog resource state refused')
     for identifier, row in credentials.items():
+        from serverware import operator_catalog_github
+        operator_catalog_github.validate_credential(row)
         core = conn.execute('SELECT id,name,kind,metadata,lifecycle_status FROM credentials WHERE id=?', (identifier,)).fetchone()
         if 'key_replaced_at' in row:
             try:
@@ -319,6 +330,7 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                 or metadata.get('secret_class') != ('bearerToken' if bearer else 'customHeader')
                 or metadata.get('oauth') is True):
             raise CatalogIntegrityError('active catalog credential binding refused')
+        operator_catalog_github.validate_credential(row, metadata)
     for identifier, row in applications.items():
         application_proxy_authentication(row)
         if (row.get('principal_id') != 'agent:operator-demo:' + identifier

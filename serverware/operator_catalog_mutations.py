@@ -17,6 +17,7 @@ from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
+    GithubTokenInput, GithubRuleInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -127,6 +128,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["credential_generation"] = static_generations[record["id"]]
             if "key_replaced_at" in record:
                 result["key_replaced_at"] = record["key_replaced_at"]
+        if "connection_type" in record:
+            from serverware import operator_catalog_github
+            operator_catalog_github.validate_credential(record)
+            result.update(connection_type=operator_catalog_github.CONNECTION, provider_id="github")
     elif collection == "applications":
         count = len(_active_rules(catalog, "application_id", record["id"]))
         revoked = record["status"] == "revoked"
@@ -152,8 +157,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["placeholder"] = record["placeholder"]
         if "request_body_mode" in record:
             result["request_body_mode"] = record["request_body_mode"]
-        from serverware import operator_catalog_gmail
-        if operator_catalog_gmail.selected(record):
+        from serverware import operator_catalog_github, operator_catalog_gmail
+        if operator_catalog_github.selected(record):
+            result.update(operator_catalog_github.public_fields(record))
+        elif operator_catalog_gmail.selected(record):
             result.update(operator_catalog_gmail.public_fields(record))
     return result
 
@@ -240,11 +247,30 @@ def create_credential(payload: CredentialInput, actor_id: str) -> dict:
     return _mutate(payload, actor_id, "credentials", "credential.created", change)
 
 
+def create_github_credential(payload: GithubTokenInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_github as github
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "credentials")
+        subject = str(uuid.uuid4())
+        credential = db.create_credential(payload.name, "bearer", payload.secret,
+            {"provider_id": "operator-demo", "provider_subject": subject,
+                "secret_class": "bearerToken", "connection_type": github.CONNECTION}, _connection=conn)
+        record = {"id": credential["id"], "name": payload.name, "auth_type": "bearer",
+            "header_name": "Authorization", "connection_type": github.CONNECTION,
+            "provider_subject": subject, "created_at": db.iso_now(), "status": "active"}
+        return _Change(schema.save_resource(conn, "credentials", record, create=True))
+    return _mutate(payload, actor_id, "credentials", "credential.github_token_created", change)
+
+
 def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "credentials", payload.id)
         if record["auth_type"] not in {"bearer", "header"}:
             raise CatalogConflict()
+        from serverware import operator_catalog_github
+        if operator_catalog_github.validate_credential(record):
+            operator_catalog_github.validate_token(payload.secret)
         receipt = db.replace_operator_static_credential_secret_if_version(conn, payload.id,
             expected_version=payload.expected_credential_generation, secret=payload.secret)
         if receipt is None:
@@ -322,6 +348,27 @@ def create_gmail_rule(payload: GmailReadRuleInput, actor_id: str) -> dict:
     return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
 
 
+def create_github_rule(payload: GithubRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_github as github, operator_demo
+    if github.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("GitHub destination is not deployment-allowlisted")
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        record = github.record_fields(payload)
+        try:
+            github.validate_rule(record, credential)
+            schema.rule_credential_header(record, credential)
+        except CatalogIntegrityError:
+            raise ValueError("GitHub preset requires a GitHub token connection") from None
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.github_created", change)
+
+
 def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "credentials", payload.id)
@@ -385,7 +432,7 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 
 def catalog_status() -> dict:
-    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_gmail, operator_demo
+    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_demo
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
@@ -422,6 +469,7 @@ def catalog_status() -> dict:
             "google_oauth": google_oauth,
             "google_disconnect": google_disconnect,
             "google_reauthorization": google_reauthorization,
+            "github": operator_catalog_github.capability(),
             "operation_bundles": operation_bundles,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],

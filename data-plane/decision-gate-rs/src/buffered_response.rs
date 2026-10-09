@@ -22,7 +22,7 @@ pub(crate) fn json_or_empty_204_mode(mode: &str) -> bool {
     matches!(mode, JSON_OR_EMPTY_204_MODE | JSON_OR_EMPTY_204_V2_MODE)
 }
 
-fn validate_profile(profile: &Map<String, Value>, error: bool) -> Result<u64, String> {
+fn validate_profile_with_headers(profile: &Map<String, Value>, error: bool, safe_headers: &[&str]) -> Result<u64, String> {
     let allowed: &[&str] = if error {
         &[
             "mode",
@@ -65,18 +65,20 @@ fn validate_profile(profile: &Map<String, Value>, error: bool) -> Result<u64, St
         .ok_or_else(|| {
             format!("bufferedPassthrough maxBodyBytes must be between 1 and {maximum}")
         })?;
-    validate_response_header_allowlist(profile, "bufferedPassthrough")?;
+    if safe_headers == SAFE_RESPONSE_HEADERS {
+        validate_response_header_allowlist(profile, "bufferedPassthrough")?;
+    }
     // The shared validator also accepts mixed-case names for old profiles.
     // The additive profile is deliberately canonical, matching its schema/compiler.
     if profile
         .get("allowedHeaders")
         .and_then(Value::as_array)
         .is_none_or(|headers| {
-            headers.len() > SAFE_RESPONSE_HEADERS.len()
+            headers.len() > safe_headers.len()
                 || headers.iter().any(|header| {
                     header
                         .as_str()
-                        .is_none_or(|name| !SAFE_RESPONSE_HEADERS.contains(&name))
+                        .is_none_or(|name| !safe_headers.contains(&name))
                 })
         })
     {
@@ -95,15 +97,27 @@ pub(crate) fn validate_contract(
     adapter_type: &str,
     response: &Map<String, Value>,
 ) -> Result<(), String> {
+    validate_contract_with_headers(adapter_type, response, &SAFE_RESPONSE_HEADERS)
+}
+
+/// The extra names are reachable only through the entire closed GitHub profile.
+/// An ordinary V2 response with the same allowedHeaders is still refused.
+pub(crate) fn validate_github_contract(config: &Value, constraints: &[Value]) -> Result<(), String> {
+    crate::github_issues::validate_config(config, constraints)?;
+    validate_contract_with_headers("generic.rest", config["response"].as_object().ok_or("GitHub response missing")?,
+        crate::github_issues::RESPONSE_HEADERS)
+}
+
+fn validate_contract_with_headers(adapter_type: &str, response: &Map<String, Value>, safe_headers: &[&str]) -> Result<(), String> {
     if adapter_type != "generic.rest" {
         return Err("bufferedPassthrough is only supported by generic.rest".to_string());
     }
-    validate_profile(response, false)?;
+    validate_profile_with_headers(response, false, safe_headers)?;
     let error = response
         .get("error")
         .and_then(Value::as_object)
         .ok_or("bufferedPassthrough requires an explicit bufferedPassthrough error profile")?;
-    validate_profile(error, true)?;
+    validate_profile_with_headers(error, true, safe_headers)?;
     if response.get("mode") != error.get("mode") {
         return Err("whole JSON success and error profiles must use the same mode".into());
     }
@@ -268,13 +282,32 @@ pub(crate) fn inspect_body(
     body: SensitiveResponseBytes,
     secret_guard: &ResponseSecretGuard,
 ) -> Result<SensitiveResponseBytes, Value> {
+    inspect_body_with_headers(adapter_type, config, status, content_type, body, secret_guard, &SAFE_RESPONSE_HEADERS)
+}
+
+pub(crate) fn inspect_github_body(route: &crate::Route, config: &Value, status: StatusCode,
+    content_type: Option<&str>, body: SensitiveResponseBytes, secret_guard: &ResponseSecretGuard,
+) -> Result<SensitiveResponseBytes, Value> {
+    crate::github_issues::validate_route(route)
+        .map_err(|_| json!({"error":"response_buffered_passthrough_profile_invalid"}))?;
+    let expected = if status.is_client_error() || status.is_server_error() {
+        &route.adapter_config["response"]["error"]
+    } else { &route.adapter_config["response"] };
+    if config != expected { return Err(json!({"error":"response_buffered_passthrough_profile_invalid"})); }
+    inspect_body_with_headers("generic.rest", config, status, content_type, body, secret_guard,
+        crate::github_issues::RESPONSE_HEADERS)
+}
+
+fn inspect_body_with_headers(adapter_type: &str, config: &Value, status: StatusCode, content_type: Option<&str>,
+    body: SensitiveResponseBytes, secret_guard: &ResponseSecretGuard, safe_headers: &[&str],
+) -> Result<SensitiveResponseBytes, Value> {
     let error = status.is_client_error() || status.is_server_error();
     if adapter_type != "generic.rest" || !(status.is_success() || error) {
         return Err(json!({"error":"response_buffered_passthrough_profile_invalid"}));
     }
     let limit = config
         .as_object()
-        .and_then(|profile| validate_profile(profile, error).ok())
+        .and_then(|profile| validate_profile_with_headers(profile, error, safe_headers).ok())
         .ok_or_else(|| json!({"error":"response_buffered_passthrough_profile_invalid"}))?;
     if config.get("mode").and_then(Value::as_str).is_some_and(json_or_empty_204_mode) {
         if status == StatusCode::RESET_CONTENT {

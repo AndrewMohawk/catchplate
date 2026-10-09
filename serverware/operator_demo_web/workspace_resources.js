@@ -41,6 +41,7 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isGithubRule(rule)) { renderGithubCompatibility(id, rule); return; }
   if (isGmailRule(rule)) {
     element(id).replaceChildren(...[
       'Read Gmail permits GET message lists, pagination and individual message reads for users/me. No request body, sending, modification, attachments, history, threads or Calendar operations. No age restriction is enforced; a search query is not an age policy.',
@@ -86,6 +87,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isGithubRule(rule)) return githubRuleRestrictions(rule);
   if (isGmailRule(rule)) return [
     ['Permission', 'Read Gmail · this connected account'],
     ['Allowed operations', 'List messages, follow pagination and read individual messages (GET only; no request body).'],
@@ -329,9 +331,11 @@ function createCredentialsView(workspace, actions = {}) {
       const google = credential.auth_type === 'google_oauth';
       const badge = credential.status === 'quarantined' ? 'Quarantined · unusable' : credential.status === 'active' ? 'Saved' : 'Revoked locally';
       const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
-        [['Authentication', credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
+        [['Authentication', isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
           ['Active rules', String(credential.active_rule_count)], ['Credential ID', credential.id]]);
       if (!google) {
+        if (isGithubCredential(credential)) card.append(textNode('p',
+          'GitHub issue presets only. Stored token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
         const details = textNode('details'); details.append(textNode('summary', 'Activity details'));
         if (Object.hasOwn(credential, 'credential_generation')) {
           const metadata = textNode('dl', undefined, 'metadata'); metadata.dataset.keyReplacementDetails = '';
@@ -475,13 +479,13 @@ function createAccessRulesView(workspace) {
     const catalog = workspace.state.catalog;
     const responseModes = availableResponseModes(catalog);
     const credentialInputModes = availableCredentialInputModes(catalog);
-    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active') ||
+    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active' && !isGithubCredential(item)) ||
       !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
     if (!catalog) { renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active'), 'Save a credential first');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isGithubCredential(item)), 'Use Connect an app for GitHub presets');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

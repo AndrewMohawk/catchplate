@@ -3,10 +3,12 @@ function createProxyView(workspace, applications) {
   content.append(...[...home.children].slice(2)); home.append(content);
   let command = '';
   let gmailContext = '';
+  let githubContext = '';
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     element('gmail-client-controls').hidden = true;
+    element('github-client-controls').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -17,13 +19,21 @@ function createProxyView(workspace, applications) {
     chooseOptions('proxy-rule', catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id), 'Add an access rule for this application');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
     const gmail = isGmailRule(rule);
+    const github = isGithubRule(rule);
+    const githubSelection = github ? application?.id + ':' + rule.id : '';
+    if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
+    element('github-client-controls').hidden = !github;
+    element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
+    element('proxy-method').hidden = github; element('proxy-method').disabled = github;
+    document.querySelector('label[for="proxy-method"]').hidden = github;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail;
     const messageRead = gmail && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = gmail ?
+    element('client-template-title').textContent = github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = github ?
+      'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmail ?
       'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
       'This template includes no request body or query parameter values. It is not a complete API operation or a successful request test. Supply endpoint-specific data in your existing client, using only what the selected rule permits.';
     chooseOptions('proxy-method', (rule?.methods || []).filter(method => operatorMethods.includes(method)).map(method => ({id: method, name: method})), 'No supported method');
@@ -50,7 +60,10 @@ function createProxyView(workspace, applications) {
       proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
+      command = github ? buildGithubClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+        repository: rule.repository, bundle: rule.operation_bundle, operation: element('github-client-operation').value,
+        caPath: element('ca-path').value, proxyCaPath: element('github-proxy-ca-path').value}) :
+        buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
         caPath: element('ca-path').value, allowedHeaders: rule.allowed_headers,
         credentialInput: rule.credential_input, placeholder: rule.placeholder, credential,
         proxyAuthentication, applicationId: application.id});
@@ -71,6 +84,15 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (github) {
+      element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No GitHub request was tested here. ' :
+        'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') +
+        githubPermissionName(rule.operation_bundle) + ' for ' + rule.repository.owner + '/' + rule.repository.name +
+        '. No response-field setup: supported JSON content/errors and selected pagination/retry metadata are preserved. ' +
+        'The app token authenticates only to the proxy; the fixed dummy authenticates no real GitHub account. ' +
+        'Keep outer proxy trust separate from destination trust; no global TLS bypass. No automatic retry of an uncertain issue/comment creation. See Compatibility limits.';
+      return;
+    }
     if (gmail) {
       element('client-guidance').textContent = (ready ? 'Policy loaded and app token not expired. No Gmail request or refresh was tested here. ' :
         'Waiting for the exact policy to load; resolve uncertain changes before use. ') +
@@ -95,12 +117,18 @@ function createProxyView(workspace, applications) {
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
-  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation']) element(id).addEventListener('change', render);
+  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation']) element(id).addEventListener('change', render);
   element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
+  element('github-proxy-ca-path').addEventListener('input', render);
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
-    try { await navigator.clipboard.writeText(command); element('client-copy-status').textContent = 'Copied. This connection template has no request body or query values. Set the application token in your client environment.'; }
+    try {
+      await navigator.clipboard.writeText(command);
+      element('client-copy-status').textContent = !element('github-client-controls').hidden ?
+        'Copied the GitHub client recipe. Set the application token and any creation content locally. No request was executed by this page.' :
+        'Copied. This connection template has no request body or query values. Set the application token in your client environment.';
+    }
     catch (_) { element('client-copy-status').textContent = 'Clipboard access was denied. Select and copy the displayed example manually.'; }
   });
   element('download-config').addEventListener('click', () => {
@@ -125,6 +153,13 @@ function createProxyView(workspace, applications) {
       config.operations = [{name: 'List messages', method: 'GET', url: rule.upstream_url},
         {name: 'Read message', method: 'GET', url_template: rule.upstream_url + '/{message_id}', message_id_source: 'id returned by this account message list'}];
       config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
+    }
+    if (isGithubRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.repository = {...rule.repository}; config.query_mode = rule.query_mode;
+      config.client_recipe = {packages: {'@octokit/rest': '22.0.1', undici: '8.11.2'}, minimum_node: '22.19',
+        sdk_auth_token: operatorGithub.token, proxy_ca_file: element('github-proxy-ca-path').value || null,
+        destination_ca_file: config.ca_file};
+      config.note += ' The public SDK dummy is not the provider token. Outer proxy TLS and destination TLS use separate trust. No automatic retry after uncertain creation.';
     }
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2) + '\n'], {type: 'application/json'}));
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();

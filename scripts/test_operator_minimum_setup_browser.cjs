@@ -16,7 +16,7 @@ const ALL = ['projected_json', 'unfiltered_json', V1, V2];
 const options = changes => supplied({responseModes: ALL, ...changes});
 const SOURCE_FILES = ['scripts/test_operator_minimum_setup_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
-    'workspace_core.js', 'workspace_google.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
+    'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async name =>
@@ -53,7 +53,8 @@ function exactDefault(body, name, methods = ['GET']) {
   assert.deepEqual(body.methods, methods); assert.deepEqual(body.query_keys, []); assert.deepEqual(body.allowed_headers, ['accept', 'user-agent']);
 }
 function pureChecks() {
-  const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const source = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const evaluate = (expression, input) => vm.runInNewContext(source + '\n' + expression, {input}, {timeout: 1000});
   const catalog = modes => ({capabilities: {response_modes: modes}});
   assert.equal(evaluate('operatorPermissionName("", ["POST"], "/v1/send")'), 'POST /v1/send');

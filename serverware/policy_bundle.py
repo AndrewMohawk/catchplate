@@ -25,6 +25,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from serverware import github_issues
 from serverware.config import (
     POLICY_BUNDLE_PATH,
     POLICY_MIN_ROLLBACK_EPOCH,
@@ -439,6 +440,8 @@ def adapter_operation_query_fields(
     operation: str,
 ) -> frozenset[str] | None:
     if adapter_type == "generic.rest":
+        if github_issues.selected(adapter_config):
+            return None  # No scalar-query capture/approval consumer for v3.
         return frozenset(
             (adapter_config.get("request") or {}).get("allowedQueryKeys") or []
         )
@@ -5044,6 +5047,8 @@ def validate_buffered_json_passthrough_request(
     required = {"allowedQueryKeys", "allowedHeaders", "allowedMediaTypes",
         "bodyMode", "maxBodyBytes", "operation", "valueRules"}
     allowed = required | {"discardHeaders", "requiredHeaders"}
+    if request.get("queryMode") == github_issues.QUERY_MODE:
+        allowed.add("queryMode")  # Full repository authority is checked separately.
     if adapter_type != "generic.rest" or not required.issubset(request) or set(request) - allowed:
         raise PolicyBundleError(f"{label} must use the closed generic.rest request profile")
     if request.get("allowedMediaTypes") != ["application/json"]:
@@ -5750,11 +5755,12 @@ def _validate_response_headers(
     route_id: str,
     profile: dict[str, Any],
     profile_name: str,
+    *, safe_headers: frozenset[str] = SAFE_RESPONSE_HEADERS,
 ) -> None:
     headers = profile.get("allowedHeaders")
-    if not isinstance(headers, list) or len(headers) > len(SAFE_RESPONSE_HEADERS):
+    if not isinstance(headers, list) or len(headers) > len(safe_headers):
         raise PolicyBundleError(f"route {route_id} {profile_name} must define bounded allowedHeaders")
-    if any(not isinstance(header, str) or header not in SAFE_RESPONSE_HEADERS for header in headers):
+    if any(not isinstance(header, str) or header not in safe_headers for header in headers):
         raise PolicyBundleError(
             f"route {route_id} {profile_name} allowedHeaders must be lower-case safe response headers"
         )
@@ -5793,12 +5799,22 @@ def validate_buffered_passthrough_response(
     adapter_type: str,
     response: Any,
     constraints: tuple[dict[str, Any], ...] | None = None,
+    *, adapter_config: dict[str, Any] | None = None,
 ) -> None:
     """Validate explicit whole-JSON profiles independently of schema loading.
 
     None selects shape-only validation before route constraints are compiled.
     An actual tuple, including an empty tuple, also checks the envelope binding.
     """
+    safe_headers = SAFE_RESPONSE_HEADERS
+    if github_issues.selected(adapter_config):
+        try:
+            github_issues.validate_config(adapter_config)
+            if adapter_type != "generic.rest" or response != adapter_config["response"]:
+                raise ValueError("GitHub response refused")
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} GitHub response profile is invalid") from None
+        safe_headers = frozenset(github_issues.RESPONSE_HEADERS)
     mode = response.get("mode") if isinstance(response, dict) else None
     if adapter_type == GMAIL_READ_ADAPTER or mode == GMAIL_READ_RESPONSE_MODE:
         if adapter_type != GMAIL_READ_ADAPTER:
@@ -5846,7 +5862,7 @@ def validate_buffered_passthrough_response(
         ):
             raise PolicyBundleError(f"route {route_id} {label} must use bounded JSON and block on invalid")
         _validate_response_body_limit(route_id, profile, label, maximum)
-        _validate_response_headers(route_id, profile, label)
+        _validate_response_headers(route_id, profile, label, safe_headers=safe_headers)
     if mode == BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE and constraints is not None:
         from serverware.response_header_compat import reserved_policy_name
         # Runtime adapter/envelope callers need the same closed rules as the
@@ -5908,12 +5924,13 @@ def _validate_optional_response_release_contract(
     route_id: str,
     response: dict[str, Any],
     adapter_name: str,
+    *, adapter_config: dict[str, Any] | None = None,
 ) -> None:
     if adapter_name == GMAIL_READ_ADAPTER:
         validate_gmail_read_response(route_id, response)
         return
     if response.get("mode") in WHOLE_JSON_RESPONSE_MODES:
-        validate_buffered_passthrough_response(route_id, adapter_name, response)
+        validate_buffered_passthrough_response(route_id, adapter_name, response, adapter_config=adapter_config)
         return
     if response.get("mode") in PROJECTED_RESPONSE_MODES:
         _validate_response_field_paths(route_id, response, f"{adapter_name} success response")
@@ -6073,7 +6090,15 @@ def validate_gmail_read_response(route_id: str, response: Any,
 
 
 def request_query_mode(adapter_type: str, adapter_config: Any) -> str | None:
-    """Only a signed, explicit typed Gmail marker selects ordered form parsing."""
+    """Only closed typed Gmail/GitHub markers select versioned query parsing."""
+    if github_issues.selected(adapter_config):
+        try:
+            github_issues.validate_config(adapter_config)
+            if adapter_type != "generic.rest":
+                raise ValueError("GitHub adapter refused")
+        except (TypeError, ValueError):
+            raise PolicyBundleError("unsupported GitHub request profile") from None
+        return github_issues.QUERY_MODE
     request = adapter_config.get("request") if isinstance(adapter_config, dict) else None
     if not isinstance(request, dict) or "queryMode" not in request:
         return None
@@ -6084,8 +6109,15 @@ def request_query_mode(adapter_type: str, adapter_config: Any) -> str | None:
 
 def validate_ordered_form_route(route: Any) -> bool:
     """Refuse non-v3 consumers before request capture, generation or lease work."""
-    if request_query_mode(route.adapter_type, route.adapter_config) is None:
+    mode = request_query_mode(route.adapter_type, route.adapter_config)
+    if mode is None:
         return False
+    if mode == github_issues.QUERY_MODE:
+        try:
+            github_issues.validate_route(route)
+        except (TypeError, ValueError):
+            raise PolicyBundleError("GitHub query authority is unsupported") from None
+        return True
     if (route.scheme != "https" or route.host != "gmail.googleapis.com" or route.port != 443
             or route.methods != frozenset({"GET"}) or route.path_templates != GMAIL_READ_PATHS
             or route.jit or not route.credential_ref
@@ -6261,6 +6293,13 @@ def _validate_adapter_security_invariants(
     constraints: tuple[dict[str, Any], ...],
     signed_policy: bool,
 ) -> None:
+    request_query_mode(adapter_type, adapter_config)
+    if github_issues.selected(adapter_config):
+        try:
+            github_issues.validate_authority(adapter_config, adapter=adapter_type, host=host,
+                credential_ref=credential_ref, jit=jit, methods=methods, paths=paths, constraints=constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} GitHub authority is invalid") from None
     if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2", "npm.registry"}:
         _validate_provider_request_profile(route_id, adapter_type, adapter_config)
 
@@ -6883,7 +6922,7 @@ def compile_policy_bundle(
             paths,
         )
         validate_buffered_passthrough_response(
-            route_id, adapter_type, adapter_config.get("response")
+            route_id, adapter_type, adapter_config.get("response"), adapter_config=adapter_config
         )
         if adapter_type != "gmail.v1":
             response_config = adapter_config.get("response")
@@ -6912,7 +6951,7 @@ def compile_policy_bundle(
                 )
             if adapter_type not in {"npm.registry"}:
                 _validate_optional_response_release_contract(
-                    route_id, response_config, adapter_type
+                    route_id, response_config, adapter_type, adapter_config=adapter_config
                 )
             if (
                 response_mode in STREAMING_RESPONSE_MODES
@@ -7206,7 +7245,7 @@ def compile_policy_bundle(
             route_id, adapter_type, adapter_config.get("request"), constraints
         )
         validate_buffered_passthrough_response(
-            route_id, adapter_type, adapter_config.get("response"), constraints
+            route_id, adapter_type, adapter_config.get("response"), constraints, adapter_config=adapter_config
         )
         shared_rate_limits = [
             constraint
@@ -7289,6 +7328,14 @@ def compile_policy_bundle(
             or "jit" in item or "responseObservation" in item
         ):
             raise PolicyBundleError(f"route {route_id} Gmail read transport or authority extension is invalid")
+        if github_issues.selected(adapter_config) and (
+            match.get("scheme") != "https" or type(match.get("port")) is not int or match["port"] != 443
+            or match.get("methods") != (["GET"] if adapter_config["operationBundle"] == github_issues.READ else ["GET", "POST"])
+            or item.get("credentialHeader") != github_issues.REPLACEMENT
+            or credentials[credential_ref].injection != {"type": "bearer", "header": "Authorization"}
+            or "jit" in item or "responseObservation" in item
+        ):
+            raise PolicyBundleError(f"route {route_id} GitHub transport or authority extension is invalid")
         response_mode = str((adapter_config.get("response") or {}).get("mode") or "")
         if response_mode in STREAMING_RESPONSE_MODES and any(
             constraint.get("type")
@@ -9333,19 +9380,25 @@ def validate_ordered_gmail_target(pretty_url: str) -> SplitResult:
 def validated_request_routing_target(pretty_url: str, method: str) -> SplitResult:
     """Bounded pre-route parsing; the selected route must separately admit mode.
 
-    Legacy admission is tried unchanged. Its sole alternate is a GET to the
-    fixed Gmail message-read paths, not a global query grammar fallback.
+    Legacy admission is tried unchanged. Alternates have fixed provider/path
+    shapes; only the selected signed route can authorize their query mode.
     """
     try:
         return validate_raw_absolute_target(pretty_url)
     except (TypeError, ValueError):
+        if method in {"GET", "POST"} and isinstance(pretty_url, str) and pretty_url.startswith(github_issues.ORIGIN + "/"):
+            return github_issues.target_parts(pretty_url)
         if method != "GET":
             raise
         return validate_ordered_gmail_target(pretty_url)
 
 
 def validated_request_urlsplit_for_route(pretty_url: str, route: Any) -> SplitResult:
-    if request_query_mode(route.adapter_type, route.adapter_config) == ORDERED_FORM_QUERY_MODE:
+    mode = request_query_mode(route.adapter_type, route.adapter_config)
+    if mode == github_issues.QUERY_MODE:
+        github_issues.validate_route(route)
+        return github_issues.target_parts(pretty_url)
+    if mode == ORDERED_FORM_QUERY_MODE:
         return validate_ordered_gmail_target(pretty_url)
     return validated_request_urlsplit(pretty_url)
 

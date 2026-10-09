@@ -34,7 +34,7 @@ const card = (page, id = IDS.application) => page.locator('#applications-list [d
 const action = (page, id = IDS.application) => card(page, id).locator('[data-action="change-proxy-authentication"]');
 const INPUTS = ['scripts/test_operator_proxy_auth_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_resources.js', 'workspace_applications.js',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_resources.js', 'workspace_applications.js',
     'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 let contexts = 0;
@@ -195,7 +195,8 @@ function checkCommand(command, basic, id = IDS.application) {
   assert(!/https:\/\/[^\s]*@/.test(command), 'no token-bearing URL'); return args;
 }
 function projectionChecks() {
-  const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const source = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const {buildCurlCommand, clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
   const project = (capability, application = app()) => {
     const state = {...supplied({applications: [application]}), revision: 1, sequence: 1, active: digest(1), loaded: digest(1),

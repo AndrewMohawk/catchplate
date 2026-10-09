@@ -460,13 +460,17 @@ fn gmail_read_ordered_shadow_and_final_dispatch_source_contract_only() {
     // These are hook-presence controls, not native shadow/dispatch runtime proof.
     let source=include_str!("policy_core.rs");
     let evaluation=source.split("fn evaluate_policy_plan_request(").nth(1).unwrap().split("fn ").next().unwrap();
-    assert!(evaluation.contains("gmail_read::parse_target_for_route(compiled"));
-    assert!(evaluation.contains("gmail_read::apply_route_rewrite(route"));
+    assert!(evaluation.contains("provider_query::parse_target_for_route(compiled"));
+    assert!(evaluation.contains("provider_query::apply_route_rewrite(route"));
     let prerequisite=source.split("pub(crate) fn reserve_credential_prerequisites(").nth(1).unwrap().split("pub(crate) fn ").next().unwrap();
-    assert!(prerequisite.contains("gmail_read::parse_target_for_route(snapshot, &facts.method, &facts.url"));
+    assert!(prerequisite.contains("provider_query::parse_target_for_route(snapshot, &facts.method, &facts.url"));
     assert!(prerequisite.contains("Some(&principal.id)"));
     let source=include_str!("main.rs");
     let forward=source.split("fn forward_absolute_request_inner_with_prepared").nth(1).unwrap().split("fn ").next().unwrap();
-    assert!(forward.contains("gmail_read::provider_url_for_decision"));
-    assert!(forward.contains("gmail_read::validate_built_request"));
+    assert!(forward.contains("provider_query::provider_url_for_decision"));
+    assert!(forward.contains("provider_query::validate_built_request"));
+    // The new dispatch shim delegates every non-GitHub path to this unchanged module.
+    let shim=include_str!("provider_query.rs");
+    assert!(shim.contains("crate::gmail_read::provider_url_for_decision"));
+    assert!(shim.contains("crate::gmail_read::validate_built_request"));
 }

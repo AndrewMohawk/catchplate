@@ -32,7 +32,7 @@ const google = (changes = {}) => credential({auth_type: 'google_oauth', header_n
 const digest = number => 'sha256:' + number.toString(16).padStart(64, '0');
 const clone = value => JSON.parse(JSON.stringify(value));
 const SOURCE_FILES = ['scripts/test_operator_ordinary_modes_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js',
+  'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
     'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
@@ -205,7 +205,8 @@ async function downloadedConfig(page) {
 }
 
 function projectionChecks() {
-  const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const source = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const state = {credentials: [credential({secret: PRIVATE[0], refresh_token: PRIVATE[1]})], applications: [application()],
     rules: [rule(), preservedRule({id: '55555555-5555-4555-8555-555555555555'})], requestBodyModes: [REQUEST_MODE],
     responseModes: RESPONSES, credentialInputModes: ['insert', 'replace_exact'], revision: 1, sequence: 1, active: digest(1), loaded: digest(1)};

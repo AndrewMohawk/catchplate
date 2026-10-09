@@ -21,6 +21,13 @@
       "uniqueItems": true,
       "items": {"enum": ["cache-control", "content-language", "etag", "last-modified", "retry-after", "www-authenticate"]}
     },
+    "githubResponseHeaders": {
+      "const": ["link", "retry-after", "x-github-request-id", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "x-ratelimit-resource", "x-ratelimit-used"]
+    },
+    "v2ResponseHeaders": {
+      "anyOf": [{"$ref": "#/$defs/allowedResponseHeaders"}, {"$ref": "#/$defs/githubResponseHeaders"}],
+      "$comment": "The exact GitHub list is available only with the paired closed GitHub config below; legacy generic routes retain their original list. Typed Link parsing and scope-preserving normalization are mandatory before forwarding."
+    },
     "operationFields": {
       "type": "array",
       "maxItems": 16,
@@ -196,7 +203,7 @@
         "bodyFormat": {"const": "json"},
         "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 65536},
         "contentTypes": {"const": ["application/json"]},
-        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "allowedHeaders": {"$ref": "#/$defs/v2ResponseHeaders"},
         "onInvalid": {"const": "block"}
       }
     },
@@ -210,7 +217,7 @@
         "bodyFormat": {"const": "json"},
         "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
         "contentTypes": {"const": ["application/json"]},
-        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "allowedHeaders": {"$ref": "#/$defs/v2ResponseHeaders"},
         "error": {"$ref": "#/$defs/bufferedJsonOrEmpty204V2ErrorResponse"}
       }
     },
@@ -255,9 +262,54 @@
         "required": ["noCredentialProof"],
         "not": {"required": ["credentialBinding"]}
       }
+    },
+    {
+      "if": {"anyOf": [
+        {"required": ["githubRepository"]}, {"required": ["operationBundle"]},
+        {"required": ["request"], "properties": {"request": {"required": ["queryMode"]}}}
+      ]},
+      "then": {
+        "required": ["githubRepository", "operationBundle", "credentialBinding"],
+        "properties": {
+          "credentialMode": {"const": "required"},
+          "request": {
+            "required": ["queryMode", "discardHeaders"],
+            "properties": {
+              "queryMode": {"const": "githubRestV1"},
+              "allowedHeaders": {"const": ["accept", "accept-language", "sec-fetch-mode", "user-agent", "x-github-api-version"]},
+              "discardHeaders": {"const": ["accept-encoding"]},
+              "allowedQueryKeys": {"const": ["assignee", "creator", "direction", "labels", "mentioned", "milestone", "page", "per_page", "since", "sort", "state"]},
+              "bodyMode": {"const": "bufferedJsonPassthroughV1"},
+              "maxBodyBytes": {"const": 65536},
+              "valueRules": {"const": []}
+            }
+          },
+          "response": {
+            "properties": {
+              "mode": {"const": "bufferedJsonOrEmpty204V2"},
+              "allowedHeaders": {"$ref": "#/$defs/githubResponseHeaders"},
+              "error": {"properties": {"allowedHeaders": {"$ref": "#/$defs/githubResponseHeaders"}}}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {"response": {"properties": {
+          "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+          "error": {"properties": {"allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"}}}
+        }}}
+      }
     }
   ],
   "properties": {
+    "githubRepository": {
+      "type": "object", "additionalProperties": false, "required": ["owner", "name"],
+      "properties": {
+        "owner": {"type": "string", "minLength": 1, "maxLength": 39, "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9_.-]{1,100}$", "not": {"enum": [".", ".."]}}
+      }
+    },
+    "operationBundle": {"enum": ["github_issues_read_v1", "github_issues_write_v1"]},
     "credentialMode": {"enum": ["required", "none"]},
     "credentialBinding": {"$ref": "#/$defs/credentialBinding"},
     "noCredentialProof": {
@@ -445,6 +497,7 @@
         }
       ],
       "properties": {
+        "queryMode": {"const": "githubRestV1"},
         "allowedQueryKeys": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
         "allowedHeaders": {
           "type": "array",
@@ -557,7 +610,7 @@
         "maxRecordBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "allowedFields": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
-        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "allowedHeaders": {"$ref": "#/$defs/v2ResponseHeaders"},
         "error": {"oneOf": [{"$ref": "#/$defs/errorResponse"}, {"$ref": "#/$defs/bufferedPassthroughErrorResponse"}, {"$ref": "#/$defs/bufferedJsonOrEmpty204ErrorResponse"}, {"$ref": "#/$defs/bufferedJsonOrEmpty204V2ErrorResponse"}]}
       }
     }

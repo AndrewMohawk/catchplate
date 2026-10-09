@@ -20,9 +20,9 @@ from serverware.setup_receipts import JsonLimits, parse_strict_json_object
 PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
-    "/credentials", "/credentials/revoke", "/credentials/replace-key", "/applications", "/applications/revoke",
+    "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/applications", "/applications/revoke",
     "/applications/rotate-token", "/applications/proxy-authentication",
-    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
+    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
 ))
@@ -197,6 +197,11 @@ async def revoke_credential(request: Request, identity: auth.AdminIdentity = Dep
     return await _mutate(request, identity, "TargetInput", "revoke_credential", 1024)
 
 
+@router.post("/credentials/github-token")
+async def create_github_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "GithubTokenInput", "create_github_credential", 16384, created=True)
+
+
 @router.post("/credentials/replace-key")
 async def replace_credential_key(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "ReplaceCredentialKeyInput", "replace_credential_key", 16384)
@@ -235,6 +240,11 @@ async def revoke_rule(request: Request, identity: auth.AdminIdentity = Depends(_
 @router.post("/access-rules/gmail-read")
 async def create_gmail_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "GmailReadRuleInput", "create_gmail_rule", 4096, created=True)
+
+
+@router.post("/access-rules/github")
+async def create_github_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "GithubRuleInput", "create_github_rule", 4096, created=True)
 
 
 async def _google_disconnect_result(function, *args, accepted: bool = False) -> JSONResponse:

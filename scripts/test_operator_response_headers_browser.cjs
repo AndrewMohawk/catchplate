@@ -21,7 +21,7 @@ const GOOGLE_ORIGIN = 'https://gmail.googleapis.com';
 const GOOGLE_PATH = '/gmail/v1/users/me/messages';
 const SOURCE_FILES = ['scripts/test_operator_response_headers_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs',
   'scripts/test_operator_catalog_browser.cjs', 'serverware/operator_demo_portal.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_applications.js', 'workspace_resources.js',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_applications.js', 'workspace_resources.js',
     'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async name =>
@@ -52,7 +52,8 @@ async function responseFieldsHidden(page, prefix) {
 async function maybeClick(page, selector) { if (!await page.locator(selector).isDisabled()) await page.locator(selector).click(); }
 
 function projectionChecks() {
-  const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const source = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const state = {credentials: [credential({secret: PRIVATE[0]})], applications: [application()],
     rules: [saved({secret: PRIVATE[1]})], requestBodyModes: ['preserve_json_v1'], responseModes: MODES,
     credentialInputModes: ['insert', 'replace_exact'], revision: 1, sequence: 1, active: digest(1), loaded: digest(1)};

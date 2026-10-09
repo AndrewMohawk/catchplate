@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
-from serverware import db, http_client, runtime
+from serverware import db, github_issues, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
@@ -677,6 +677,25 @@ class ApiAdapter:
         return PolicyDecision(allowed=True)
 
     def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if github_issues.selected(route.adapter_config):
+            try:
+                github_issues.validate_route(route)
+                body = flow.request.raw_content
+                if not isinstance(body, bytes) or len(body) > 65536:
+                    raise ValueError("GitHub request body is not bounded bytes")
+                parsed = _strict_buffered_json(body) if flow.request.method == "POST" else None
+                headers = {}
+                for name in route.adapter_config["request"]["allowedHeaders"]:
+                    values = self._response_header_values(flow.request.headers, name)
+                    if len(values) > 1:
+                        raise ValueError("GitHub duplicate request header")
+                    if values:
+                        headers[name] = values[0]
+                github_issues.validate_request(flow.request.pretty_url, flow.request.method,
+                    route.adapter_config, headers, body, parsed)
+            except (TypeError, ValueError, UnicodeError, RecursionError):
+                return PolicyDecision(False, "GitHub request contract refused", 403,
+                    {"error": "github_request_denied"})
         request_cfg = route.adapter_config.get("request") or {}
         if not request_cfg:
             return PolicyDecision(
@@ -784,7 +803,7 @@ class ApiAdapter:
 
         allowed_query_keys = {str(item) for item in request_cfg.get("allowedQueryKeys") or []}
         for key, _ in parse_qsl(
-            validated_request_urlsplit(flow.request.pretty_url).query,
+            validated_request_urlsplit_for_route(flow.request.pretty_url, route).query,
             keep_blank_values=True,
         ):
             if key not in allowed_query_keys:
@@ -1135,11 +1154,11 @@ class ApiAdapter:
             # The body/framing contract was checked above; do not manufacture a
             # JSON value or assign content (the HTTP object may synthesize CL).
             # Engine envelope/semantic and final release guards still run.
-            self._normalize_response_headers(flow, response_cfg, mode)
+            self._normalize_response_headers(flow, response_cfg, mode, route=route)
             return PolicyDecision(allowed=True)
         if mode == "headersOnly":
             flow.response.content = b""
-            self._normalize_response_headers(flow, response_cfg, mode)
+            self._normalize_response_headers(flow, response_cfg, mode, route=route)
             return PolicyDecision(allowed=True)
         if mode in _PROJECTED_RESPONSE_MODES:
             projection_error = self._response_projection_error(
@@ -1177,7 +1196,7 @@ class ApiAdapter:
                     reason=str(exc),
                     payload={"error": "streaming_redaction_response_invalid", "detail": str(exc)},
                 )
-            self._normalize_response_headers(flow, response_cfg, mode)
+            self._normalize_response_headers(flow, response_cfg, mode, route=route)
             return PolicyDecision(allowed=True)
         if mode in {"json"} | _WHOLE_JSON_RESPONSE_MODES or allowed_fields:
             try:
@@ -1222,11 +1241,11 @@ class ApiAdapter:
                 # The prototype has no credential-bearing forwarding authority.
                 # Rust additionally scans this decoded representation for secrets.
                 # Preserve the received bytes: JSON serialization can round numbers.
-                self._normalize_response_headers(flow, response_cfg, mode)
+                self._normalize_response_headers(flow, response_cfg, mode, route=route)
                 return PolicyDecision(allowed=True)
             flow.response.headers["Content-Type"] = "application/json"
             flow.response.set_text(canonical_json(payload))
-        self._normalize_response_headers(flow, response_cfg, mode)
+        self._normalize_response_headers(flow, response_cfg, mode, route=route)
         return PolicyDecision(allowed=True)
 
     def finalize_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
@@ -1239,6 +1258,7 @@ class ApiAdapter:
                 self.id if self.id != "generic.rest" else getattr(route, "adapter_type", self.id),
                 route.adapter_config.get("response"),
                 tuple(getattr(route, "constraints", ()) or ()),
+                adapter_config=route.adapter_config,
             )
         except PolicyBundleError:
             return PolicyDecision(
@@ -1311,10 +1331,20 @@ class ApiAdapter:
         }:
             return None
         try:
-            inspect_physical_headers(getattr(flow.response.headers, "fields", None),
+            entries = inspect_physical_headers(getattr(flow.response.headers, "fields", None),
                 listed_names=listed_response_headers(route.constraints))
         except HeaderCompatibilityError as error:
             return PolicyDecision(False, "upstream response metadata refused", 502, error.payload())
+        if github_issues.selected(route.adapter_config):
+            try:
+                github_issues.validate_route(route)
+                for name, value in entries:
+                    if name == "link":
+                        github_issues.normalize_link(value, url=flow.request.pretty_url,
+                            method=flow.request.method, repository=route.adapter_config["githubRepository"])
+            except (TypeError, ValueError):
+                return PolicyDecision(False, "GitHub response link refused", 502,
+                    {"error": "github_response_link_denied"})
         # This isolated adapter is not forwarding authority. The engine requires
         # the live credential guard and scans every physical field before here.
         return None
@@ -1413,17 +1443,24 @@ class ApiAdapter:
         return None
 
     def _normalize_response_headers(
-        self, flow: Any, response_cfg: dict[str, Any], mode: str
+        self, flow: Any, response_cfg: dict[str, Any], mode: str, *, route: Any = None
     ) -> None:
         released: dict[str, str] = {}
         configured = {
             str(name).strip().lower() for name in (response_cfg.get("allowedHeaders") or [])
         }
-        for name in sorted(configured & _SAFE_RESPONSE_HEADERS):
+        github = route is not None and github_issues.selected(route.adapter_config)
+        if github:
+            github_issues.validate_route(route)
+        safe_headers = set(github_issues.RESPONSE_HEADERS) if github else _SAFE_RESPONSE_HEADERS
+        for name in sorted(configured & safe_headers):
             value = flow.response.headers.get(name)
             if value is None:
                 continue
             text = str(value)
+            if github and name == "link":
+                text = github_issues.normalize_link(text, url=flow.request.pretty_url,
+                    method=flow.request.method, repository=route.adapter_config["githubRepository"])
             if len(text.encode("utf-8")) <= 8192 and "\r" not in text and "\n" not in text:
                 released[name] = text
 

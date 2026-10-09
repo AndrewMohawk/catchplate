@@ -128,14 +128,15 @@ async function bundleForm(page) {
 }
 const SOURCE_FILES = ['scripts/test_operator_gmail_bundle_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
-    'workspace_core.js', 'workspace_google.js', 'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js',
+    'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js',
     'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async path =>
   [path, createHash('sha256').update(await readFile(join(ROOT, path))).digest('hex')]))); }
 async function screenshot(page, name) { await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true, mask: [page.locator('#client-token')]}); }
 function pureChecks() {
-  const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const source = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const state = {credentials: [google({secret: PRIVATE[0]})], applications: [application()], rules: [bundleRule()],
     responseModes: ['projected_json'], credentialInputModes: ['insert', 'replace_exact'], requestBodyModes: ['preserve_json_v1'],
     revision: 1, sequence: 1, active: digest(1), loaded: digest(1), allowedUpstreams: [GMAIL], googleEnabled: true, bundles: [descriptor()]};

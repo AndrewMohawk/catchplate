@@ -81,7 +81,7 @@ function startReceipt(item) {
 }
 const INPUTS = ['scripts/test_operator_google_reauthorization_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
     'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 let activeGroup = 0;
@@ -309,7 +309,8 @@ function pureChecks() {
       {present: true, id: null, clean: '/#credentials'});
   // Actual shared coordinator, without network or a browser. A second owner
   // releasing its observation must never clear another owner's active hold.
-  const core = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const core = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const workspace = runInNewContext(core + '\ncreateOperatorWorkspace()', {
     document: {getElementById: () => ({addEventListener() {}, querySelectorAll: () => []})},
     window: {addEventListener() {}}, clearTimeout, setTimeout,

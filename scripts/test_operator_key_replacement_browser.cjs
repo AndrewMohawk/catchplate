@@ -50,7 +50,7 @@ const panel = page => page.locator('#credential-replace-panel');
 const secret = page => page.locator('#credential-replace-secret');
 const INPUTS = ['scripts/test_operator_key_replacement_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_resources.js', 'workspace_applications.js',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_resources.js', 'workspace_applications.js',
     'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
@@ -172,7 +172,8 @@ async function uncertain(page, freshRequired = false) {
 }
 
 function projectionChecks() {
-  const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const source = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
   const projected = (capability, target = staticKey()) => {
     const state = {...supplied({credentials: [target], applications: [], rules: []}), revision: 1,

@@ -2,6 +2,7 @@
 """Offline credential-first catalog asset checks; no app configuration or I/O."""
 from html.parser import HTMLParser
 from pathlib import Path
+import re
 import sys
 import unittest
 from unittest.mock import patch
@@ -119,9 +120,19 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertIn('disabled', index['credential-google-connect'][1])
 
     def test_no_persistent_secret_store_or_unsafe_rendering_transport(self):
-        script = '\n'.join(path.read_text() for path in sorted(ASSETS.glob('*.js')))
-        for forbidden in ('localStorage', 'sessionStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
-            self.assertNotIn(forbidden, script)
+        scripts = {path.name: path.read_text() for path in sorted(ASSETS.glob('*.js'))}
+        script = '\n'.join(scripts.values())
+        for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
+            self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
+        for name, source in scripts.items():
+            if name != 'workspace_google_reauthorization.js':
+                self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
+        # Reauthorization retains only a public operation UUID for lost-response
+        # recovery. Its existing browser suite checks the actual storage value;
+        # no provider secret or application token may use this exception.
+        recovery = scripts['workspace_google_reauthorization.js']
+        self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', recovery), ['storageKey, id'])
+        self.assertIn('reauthorizationUuid(id)', recovery)
         self.assertIn('BroadcastChannel', script)
         self.assertIn('/api/operator-demo/catalog', script)
         self.assertNotIn('/api/operator-demo/connections', script)

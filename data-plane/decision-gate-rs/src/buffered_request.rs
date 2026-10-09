@@ -22,7 +22,8 @@ pub(crate) fn validate_contract(request: &Map<String, Value>, constraints: &[Val
     const REQUIRED: &[&str] = &["allowedQueryKeys", "allowedHeaders", "allowedMediaTypes", "bodyMode", "maxBodyBytes", "operation", "valueRules"];
     if REQUIRED.iter().any(|key| !request.contains_key(*key))
         || request.keys().any(|key| !REQUIRED.contains(&key.as_str())
-            && !matches!(key.as_str(), "discardHeaders" | "requiredHeaders"))
+            && !matches!(key.as_str(), "discardHeaders" | "requiredHeaders")
+            && !(key == "queryMode" && request.get(key).and_then(Value::as_str) == Some(crate::github_issues::MODE)))
     {
         return Err("bufferedJsonPassthroughV1 requires its closed request profile".into());
     }

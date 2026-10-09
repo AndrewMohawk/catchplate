@@ -64,7 +64,7 @@ const observedActivity = (accounts, changes = {}) => activity({accounts,
   window: {...activity().window, rows_scanned: 8, bytes_read: 2048}, ...changes});
 const INPUTS = ['scripts/test_operator_google_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_applications.js', 'workspace_resources.js',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_applications.js', 'workspace_resources.js',
     'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 
@@ -223,7 +223,8 @@ const malformedActivity = [
   ['unavailable with account evidence', value => { value.status = 'unavailable'; value.window.incomplete = true; }],
 ];
 function activityProjectionChecks() {
-  const core = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  const core = ['workspace_core.js', 'workspace_github.js']
+    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
   const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
   const state = {credentials: [google()], applications: [application()], rules: [googleRule()], revision: 1,
     sequence: 1, active: digest(1), loaded: digest(1), responseModes: capabilities.responseModes,

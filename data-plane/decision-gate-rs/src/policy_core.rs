@@ -1562,7 +1562,7 @@ fn evaluate_policy_plan_request(
     // pure plan; never repeat identity lookup using a later wall clock.
     let target = parse_validated_absolute_target(&request.url).or_else(|error| {
         match principal {
-            Some(principal) => gmail_read::parse_target_for_route(compiled, &request.method,
+            Some(principal) => provider_query::parse_target_for_route(compiled, &request.method,
                 &request.url, request.client_ip.as_deref(), &request.headers, Some(&principal.id)),
             None => Err(error),
         }
@@ -1592,7 +1592,7 @@ fn evaluate_policy_plan_request(
         );
     };
     let route = route_match.route;
-    if !gmail_read::ordered_query(route) && duplicate_query_key(&url).is_some() {
+    if !provider_query::ordered_query(route) && duplicate_query_key(&url).is_some() {
         return denied(snapshot, json!({"error":"duplicate_query_key_denied","status_code":400}), 400);
     }
     for validation in [
@@ -1687,8 +1687,8 @@ fn evaluate_policy_plan_request(
             Err(payload) => return denied(snapshot, payload, 403),
         };
     let mut provider_url = url.clone();
-    if gmail_read::apply_route_rewrite(route, &mut provider_url, &rewrite).is_err()
-        || (!gmail_read::ordered_query(route) && duplicate_query_key(&provider_url).is_some())
+    if provider_query::apply_route_rewrite(route, &mut provider_url, &rewrite).is_err()
+        || (!provider_query::ordered_query(route) && duplicate_query_key(&provider_url).is_some())
     {
         return indeterminate(snapshot, "adapter rewrite is invalid");
     }
@@ -1716,7 +1716,7 @@ fn evaluate_policy_plan_request(
             Err(payload) => return denied(snapshot, payload, 403),
         };
     let mut converged = provider_url.clone();
-    if gmail_read::apply_route_rewrite(route, &mut converged, &revalidated_rewrite).is_err()
+    if provider_query::apply_route_rewrite(route, &mut converged, &revalidated_rewrite).is_err()
         || converged != provider_url
         || revalidated_operation != operation
         || revalidated_gmail_condition.is_some() != gmail_condition.is_some()
@@ -6043,7 +6043,7 @@ impl ShadowRequestHandle {
                 u128::from(binding.decision_at_epoch_ms),
             ))
         }.ok_or("credential prerequisite admitted principal is unavailable")?;
-        let (_, url) = gmail_read::parse_target_for_route(snapshot, &facts.method, &facts.url,
+        let (_, url) = provider_query::parse_target_for_route(snapshot, &facts.method, &facts.url,
             facts.client_ip.as_deref(), &facts.headers, Some(&principal.id))?;
         let matched = snapshot.match_route(&principal.id, &facts.method, &url)
             .ok_or("credential prerequisite admitted route is unavailable")?;

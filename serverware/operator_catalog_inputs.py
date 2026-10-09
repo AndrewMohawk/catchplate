@@ -56,6 +56,36 @@ class CredentialInput(NamedInput):
         return self
 
 
+class GithubTokenInput(NamedInput):
+    secret: str = Field(min_length=1, max_length=8192, repr=False)
+
+    @field_validator("secret")
+    @classmethod
+    def opaque_token(cls, value: str) -> str:
+        from serverware.operator_catalog_github import validate_token
+        return validate_token(value)
+
+
+class GithubRepositoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    owner: str = Field(min_length=1, max_length=39)
+    name: str = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def named_repository(self):
+        from serverware.github_issues import validate_repository
+        validate_repository(self.model_dump())
+        return self
+
+
+class GithubRuleInput(NamedInput):
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["github_issues_read_v1", "github_issues_write_v1"]
+    repository: GithubRepositoryInput
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+
 class ApplicationInput(NamedInput):
     token_lifetime_seconds: _Lifetime
     # Old callers retain Bearer; new clients must select the broader transport.

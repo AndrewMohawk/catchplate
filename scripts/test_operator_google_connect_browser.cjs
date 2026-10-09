@@ -34,7 +34,7 @@ function startReceipt(name = 'My Gmail account') {
 }
 const SOURCE_FILES = ['scripts/test_operator_google_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_google.js', 'workspace_resources.js',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_resources.js',
     'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async path =>

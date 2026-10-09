@@ -12,6 +12,8 @@ mod response_v2;
 mod buffered_response;
 mod response_metadata;
 mod gmail_read;
+mod github_issues;
+mod provider_query;
 mod request_query_compat;
 mod proxy_basic_transport;
 mod buffered_request;
@@ -11960,6 +11962,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             }));
         }
         let constraints = combined_constraints.as_slice();
+        if github_issues::marked(&Value::Object(adapter_config.clone())) {
+            if adapter_type != "generic.rest" {
+                return Err("GitHub profile requires generic.rest".into());
+            }
+            github_issues::validate_policy(route)?;
+            if credential_policy.is_none_or(|credential| credential.kind() != "static"
+                || credential.injection.get("type").and_then(Value::as_str) != Some("bearer")
+                || credential.injection.get("header").and_then(Value::as_str) != Some("Authorization")
+                || credential.injection.get("field").is_some() || credential.injection.get("prefix").is_some()) {
+                return Err("GitHub profile requires fixed static Authorization bearer injection".into());
+            }
+        }
         if adapter_type == gmail_read::ADAPTER {
             gmail_read::validate_policy_match(route_match)?;
             gmail_read::validate_config(&Value::Object(adapter_config.clone()), constraints)?;
@@ -12086,7 +12100,11 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 // The closed typed contract above owns whole-JSON release;
                 // it is not admitted through generic REST's profile guard.
             } else if buffered_response::supported_mode(response_mode) {
-                buffered_response::validate_contract(adapter_type, response)?;
+                if github_issues::marked(&Value::Object(adapter_config.clone())) {
+                    buffered_response::validate_github_contract(&Value::Object(adapter_config.clone()), constraints)?;
+                } else {
+                    buffered_response::validate_contract(adapter_type, response)?;
+                }
                 buffered_response::validate_mode_constraints(response_mode, constraints)?;
             } else {
                 validate_optional_response_release_contract(
@@ -24330,7 +24348,7 @@ fn prepare_upstream_for_forward(
     authenticated_principal_id: Option<&str>,
 ) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
     if validate_canonical_http_method(&request.method).is_err()
-        || !gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+        || !provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
             request.client_ip.as_deref(), &request.headers, authenticated_principal_id)
             .is_ok_and(|(_, url)| url == *target_url)
         || !target_url.username().is_empty()
@@ -24359,7 +24377,7 @@ fn prepare_upstream_for_forward(
         return Ok(None);
     };
     let route = route_match.route;
-    if gmail_read::ordered_query(route)
+    if provider_query::ordered_query(route)
         && (state.atomic_release_authorization_enabled
             || state.response_proof_signer.release_profile() != ReleaseProfile::Legacy)
     {
@@ -29474,7 +29492,7 @@ fn canonical_request(
     policy_hash: &str,
     operation: &Value,
 ) -> Value {
-    let version = if gmail_read::ordered_query(route) { 3 }
+    let version = if provider_query::ordered_query(route) { 3 }
         else if route.discard_headers.is_empty() { 1 } else { 2 };
     let canonical_credential_version = if route.credential_ref.is_some() {
         credential_version.to_string()
@@ -29500,7 +29518,7 @@ fn canonical_request(
             );
     }
     if version == 3 {
-        request["query_mode"] = json!(request_query_compat::MODE);
+        request["query_mode"] = json!(provider_query::mode(route));
         request["query_wire"] = json!(url.query());
     }
     json!({
@@ -31128,6 +31146,7 @@ fn validate_adapter_with_gmail_proof_mode(
     match route.adapter_type.as_str() {
         gmail_read::ADAPTER => gmail_read::normalize_request(req, forwarded_headers, url, route),
         "generic.rest" => {
+            provider_query::validate_github_request(req, forwarded_headers, url, route)?;
             if get_object(config, "request").is_none() {
                 return Err(json!({
                     "error":"generic_request_policy_missing",
@@ -35349,7 +35368,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     let headers = lower_headers(&req.headers);
-    let (path_validation, url) = match gmail_read::parse_target_for_route(snapshot, &req.method,
+    let (path_validation, url) = match provider_query::parse_target_for_route(snapshot, &req.method,
         &req.url, req.client_ip.as_deref(), &req.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(_) => {
@@ -35387,14 +35406,14 @@ fn decide_internal_with_mode_and_shadow<'a>(
         );
     };
     let route = route_match.route;
-    if gmail_read::ordered_query(route)
+    if provider_query::ordered_query(route)
         && (state.atomic_release_authorization_enabled
             || state.response_proof_signer.release_profile() != ReleaseProfile::Legacy)
     {
         return deny_for_route(422, "ordered query release profile unsupported",
             json!({"error":"ordered_query_release_profile_unsupported"}), route, started);
     }
-    if gmail_read::ordered_query(route)
+    if provider_query::ordered_query(route)
         && (req.client_request_digest.is_some()
             || [RESPONSE_PROOF_NONCE_HEADER, STREAM_RESPONSE_PROOF_NONCE_HEADER, RESPONSE_OBSERVATION_NONCE_HEADER]
                 .iter().any(|name| headers.contains_key(*name)))
@@ -35402,7 +35421,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         return deny_for_route(422, "ordered query proof consumer unsupported",
             json!({"error":"response_metadata_v2_proof_unsupported"}), route, started);
     }
-    if !gmail_read::ordered_query(route) && duplicate_query_key(&url).is_some() {
+    if !provider_query::ordered_query(route) && duplicate_query_key(&url).is_some() {
         return deny_for_route(400, "duplicate query key denied",
             json!({"error":"duplicate_query_key_denied","duplicateQueryKeyCount":1}), route, started);
     }
@@ -35662,7 +35681,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     let mut provider_url = url.clone();
-    if gmail_read::apply_route_rewrite(route, &mut provider_url, &rewrite).is_err() {
+    if provider_query::apply_route_rewrite(route, &mut provider_url, &rewrite).is_err() {
         return deny_for_route(
             500,
             "adapter query rewrite is invalid",
@@ -35671,7 +35690,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             started,
         );
     }
-    if !gmail_read::ordered_query(route) && duplicate_query_key(&provider_url).is_some() {
+    if !provider_query::ordered_query(route) && duplicate_query_key(&provider_url).is_some() {
         return deny_for_route(
             500,
             "adapter query rewrite produced a duplicate key",
@@ -37662,7 +37681,7 @@ fn allowed_decision_discard_headers_profile(
         .iter()
         .find(|route| route.id == route_id)
         .ok_or("allowed decision route is not in the active snapshot")?;
-    if gmail_read::ordered_query(route) && profile != ReleaseProfile::Legacy {
+    if provider_query::ordered_query(route) && profile != ReleaseProfile::Legacy {
         return Err("ordered query canonical request requires the ordinary release profile".into());
     }
     let policy_hash = decision
@@ -37724,7 +37743,7 @@ fn allowed_decision_discard_headers_profile(
         .get("canonical_request")
         .ok_or("allowed decision canonical request missing")?;
     let canonical_headers =
-        gmail_read::canonical_discard_headers(canonical_request, route)?;
+        provider_query::canonical_discard_headers(canonical_request, route)?;
     let canonical = canonical_request
         .as_object()
         .ok_or("allowed decision canonical request missing or invalid")?;
@@ -42563,8 +42582,8 @@ fn decision_route_context<'a>(
     if route_match.route.id != route_id {
         return Err(json!({"error":"response_route_context_mismatch"}));
     }
-    if gmail_read::ordered_query(route_match.route) {
-        gmail_read::validate_canonical_url(decision.get("canonical_request").unwrap_or(&Value::Null),
+    if provider_query::ordered_query(route_match.route) {
+        provider_query::validate_canonical_url(decision.get("canonical_request").unwrap_or(&Value::Null),
             route_match.route, method, url)
             .map_err(|_| json!({"error":"response_request_target_context_mismatch"}))?;
     }
@@ -42857,6 +42876,9 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 }
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
+    if github_issues::selected(route) {
+        github_issues::validate_route(route)?;
+    }
     if route.adapter_type == gmail_read::ADAPTER {
         return gmail_read::validate_route(route);
     }
@@ -42870,11 +42892,15 @@ fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
         buffered_response::validate_v2_header_selection(response, &route.constraints)?;
     }
     if response_mode.is_some_and(buffered_response::supported_mode) {
-        buffered_response::validate_contract(
-            &route.adapter_type,
-            route.adapter_config.get("response").and_then(Value::as_object)
-                .ok_or("bufferedPassthrough response profile missing")?,
-        )?;
+        if github_issues::selected(route) {
+            buffered_response::validate_github_contract(&route.adapter_config, &route.constraints)?;
+        } else {
+            buffered_response::validate_contract(
+                &route.adapter_type,
+                route.adapter_config.get("response").and_then(Value::as_object)
+                    .ok_or("bufferedPassthrough response profile missing")?,
+            )?;
+        }
         buffered_response::validate_mode_constraints(response_mode.unwrap_or_default(), &route.constraints)?;
     }
     if route_has_durable_policy_claim(route)
@@ -43187,6 +43213,14 @@ fn released_response_headers(
     response_config: &Value,
     upstream_headers: &HeaderMap,
 ) -> Result<SensitiveReleasedHeaders, Value> {
+    released_response_headers_from_names(response_config, upstream_headers, &SAFE_RESPONSE_HEADERS)
+}
+
+fn released_response_headers_from_names(
+    response_config: &Value,
+    upstream_headers: &HeaderMap,
+    safe_headers: &[&str],
+) -> Result<SensitiveReleasedHeaders, Value> {
     let configured = response_config
         .get("allowedHeaders")
         .and_then(Value::as_array)
@@ -43196,7 +43230,7 @@ fn released_response_headers(
         .map(|name| name.to_ascii_lowercase())
         .collect::<HashSet<_>>();
     let mut released = Vec::new();
-    for name in SAFE_RESPONSE_HEADERS {
+    for name in safe_headers.iter().copied() {
         if !configured.contains(name) {
             continue;
         }
@@ -43310,7 +43344,7 @@ fn matched_response_proof_route<'a>(
     request: &IncomingRequest,
     authenticated_principal_id: Option<&str>,
 ) -> Option<RouteMatch<'a>> {
-    let (_, url) = gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+    let (_, url) = provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id).ok()?;
     let headers = lower_headers(&request.headers);
     let principal = if let Some(principal_id) = authenticated_principal_id {
@@ -44460,9 +44494,13 @@ fn validate_policy_json_response(
     }
     let mode = effective_response_mode(adapter_type, Some(response_config)).unwrap_or("any");
     if buffered_response::supported_mode(mode) {
-        return match buffered_response::inspect_body(
-            adapter_type, response_config, status, content_type, body, response_secret_guard,
-        ) {
+        let inspected = match decision_route_context(snapshot, decision, method, url) {
+            Ok(matched) if github_issues::selected(matched.route) => buffered_response::inspect_github_body(
+                matched.route, response_config, status, content_type, body, response_secret_guard),
+            _ => buffered_response::inspect_body(
+                adapter_type, response_config, status, content_type, body, response_secret_guard),
+        };
+        return match inspected {
             Ok(bytes) => release_forward_response(
                 state, snapshot, decision, method, url, status,
                 if buffered_response::json_or_empty_204_mode(mode) && status == StatusCode::NO_CONTENT { content_type } else { Some("application/json") },
@@ -45209,7 +45247,14 @@ fn finalize_upstream_response(
             metadata_v2 = true;
             let inspected = validate_route_response_release_mode(route_match.route)
                 .map_err(|_| json!({"error":"response_release_mode_invalid"}))
-                .and_then(|()| response_metadata::prepare(response.headers(), &route_match.route.constraints, response_secret_guard));
+                .and_then(|()| response_metadata::prepare(response.headers(), &route_match.route.constraints, response_secret_guard))
+                .and_then(|mut headers| {
+                    if github_issues::selected(route_match.route) {
+                        github_issues::prepare_response_headers(&mut headers, upstream_url, request_method,
+                            route_match.route, response_secret_guard)?;
+                    }
+                    Ok(headers)
+                });
             match inspected {
                 Ok(headers) => *response.headers_mut() = headers,
                 Err(payload) => metadata_v2_error = Some(payload),
@@ -45366,7 +45411,13 @@ fn finalize_upstream_response(
             "response-header-credential-reflection"
         );
     }
-    let released_headers = match released_response_headers(&response_config, response.headers()) {
+    let selected_headers = match decision_route_context(snapshot, decision, request_method, upstream_url) {
+        Ok(matched) if github_issues::selected(matched.route) => github_issues::validate_route(matched.route)
+            .map_err(|_| json!({"error":"response_release_mode_invalid"}))
+            .and_then(|()| released_response_headers_from_names(&response_config, response.headers(), github_issues::RESPONSE_HEADERS)),
+        _ => released_response_headers(&response_config, response.headers()),
+    };
+    let released_headers = match selected_headers {
         Ok(headers) => headers,
         Err(payload) => {
             block_buffered_upstream!(payload, "response-header-release-denied")
@@ -46103,7 +46154,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         }};
     }
 
-    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+    let (_, target_url) = match provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(detail) => {
@@ -46263,7 +46314,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         )),
     };
     let upstream_url =
-        match gmail_read::provider_url_for_decision(snapshot, &decision, &request.method, &target_url) {
+        match provider_query::provider_url_for_decision(snapshot, &decision, &request.method, &target_url) {
             Ok(url) => url,
             Err(_) => buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -46709,8 +46760,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         |built| {
             let route = decision_route_context(snapshot, &decision, &request_method, &upstream_url)
                 .map_err(|_| "provider_request_body_route_invalid")?.route;
-            if gmail_read::ordered_query(route) {
-                gmail_read::validate_built_request(&decision["canonical_request"], route, &upstream_url, built)?;
+            if provider_query::ordered_query(route) {
+                provider_query::validate_built_request(&decision["canonical_request"], route, &upstream_url, built)?;
             }
             if route.adapter_config.pointer("/request/bodyMode").and_then(Value::as_str) == Some(buffered_request::MODE) {
                 buffered_request::validate_built_body(&decision, built)
@@ -46973,7 +47024,7 @@ fn forward_absolute_request_inner<'a>(
     response_observation: Option<&mut ResponseObservationTrace>,
     keep_alive: bool,
 ) -> ForwardResult {
-    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+    let (_, target_url) = match provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(detail) => {
@@ -48451,7 +48502,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     response_proof: Option<ResponseProofRequestContext<'_>>,
     connection_identity_sha256: Option<&str>,
 ) -> bool {
-    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+    let (_, target_url) = match provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(detail) => {
@@ -49014,7 +49065,7 @@ fn request_streaming_preflight(
     request: &RequestHead,
     authenticated_principal_id: Option<&str>,
 ) -> RequestStreamingPreflight {
-    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+    let (_, target_url) = match provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(_) => return RequestStreamingPreflight::Buffer,
@@ -49122,7 +49173,7 @@ fn buffered_route_body_limit(
     request: &RequestHead,
     authenticated_principal_id: Option<&str>,
 ) -> u64 {
-    let (_, target_url) = match gmail_read::parse_target_for_route(snapshot, &request.method, &request.target,
+    let (_, target_url) = match provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
         Err(_) => return MAX_BUFFERED_REQUEST_BODY_BYTES,
@@ -49225,7 +49276,7 @@ fn read_request_head_with_ordered_query_from<R: Read>(
     } else if !target.starts_with('/') {
         validate_request_target_path(&target).or_else(|error| {
             if allow_ordered_intake {
-                gmail_read::parse_ordered_target(&method, &target).map(|(path, _)| path)
+                provider_query::parse_ordered_target(&method, &target).map(|(path, _)| path)
             } else { Err(error) }
         })
             .map_err(|err| format!("invalid request target: {err}"))?;
@@ -49878,7 +49929,7 @@ fn handle_connect_request(
         // Syntax intake is not authority: genuine CONNECT identity is rechecked
         // below and the selected inner route must carry the signed query mode.
         let intake_snapshot = current_snapshot(&state);
-        let ordered_intake = gmail_read::allows_ordered_intake(&intake_snapshot,
+        let ordered_intake = provider_query::allows_ordered_intake(&intake_snapshot,
             Some(connect_authentication.principal_id.as_str()));
         let head = match read_request_head_with_ordered_query_from(&mut ConnectOperationIo(&mut tls), client_ip.clone(), ordered_intake) {
             Ok(head) => head,
@@ -50071,7 +50122,7 @@ fn handle_connect_request(
         if tls.sock.check_operation_deadline().is_err() { break; }
         tls.sock.reset_read_deadline(state.request_body_deadline);
         let forwarded = match connect_inner_target_with_parser(&head.target, &host, port, |target|
-            gmail_read::parse_target_for_route(&request_snapshot, &head.method, target,
+            provider_query::parse_target_for_route(&request_snapshot, &head.method, target,
                 head.client_ip.as_deref(), &head.headers, Some(connect_authentication.principal_id.as_str()))) {
             Ok(target) => {
                 head.target = target;
@@ -50478,7 +50529,7 @@ fn handle_gate_connection(
         let _ = stream.flush();
         return;
     }
-    let ordered_intake = !management_listener && gmail_read::allows_ordered_intake(&intake_snapshot, None);
+    let ordered_intake = !management_listener && provider_query::allows_ordered_intake(&intake_snapshot, None);
     let mut head = match read_request_head_with_ordered_query_from(&mut stream, client_ip.clone(), ordered_intake) {
         Ok(head) => head,
         Err(err) => {

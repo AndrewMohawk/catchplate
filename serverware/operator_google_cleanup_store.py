@@ -610,6 +610,100 @@ def refuse_generic_completion(conn, work_id):
     _require(get_work(work_id, conn=conn) is None)
 
 
+REJECTION_EVENT = "operator_catalog.oauth.refresh_rejected"
+
+
+def retire_rejected_refresh(conn, rejection, summary):
+    """Retire only a fresh typed denial's unchanged, empty refresh reservation.
+
+    The caller consumed the transport-owned proof before entering this writer;
+    this writer separately burns its one-use retirement claim, even on rollback.
+    No account material is decrypted or changed; only the empty reservation is
+    opened. The audit and protected deletion share this caller's transaction.
+    """
+    from datetime import datetime
+    from serverware import db, operator_catalog_google as google, operator_catalog_schema as schema
+    from serverware.operator_google_token_response import RejectedRefresh, REJECTION_CODES_BY_STATUS
+    from serverware.operator_publication import assert_held
+    _transaction(conn)
+    assert_held()
+    _require(not db.audit_uses_postgres())
+    _require(type(rejection) is RejectedRefresh)
+    claimed = rejection.claim_retirement()
+    _require(type(claimed) is dict and claimed == summary)
+    _require(type(summary) is dict and set(summary) == {"work_id", "profile_binding_digest",
+        "oauth_client_id", "http_status", "error_code"} and _uuid(summary["work_id"])
+        and type(summary["http_status"]) is int
+        and summary["error_code"] in REJECTION_CODES_BY_STATUS.get(summary["http_status"], ()))
+    work_id = summary["work_id"]
+    work = get_work(work_id, conn=conn)
+    _require(work is not None and work["source"] == REFRESH_SOURCE
+        and work["status"] == "exchange_in_flight" and work["material_sha256"] is None
+        and work["fence"] is None and work["identity"] is not None)
+    association = work["association"]
+    profile = _check_profile(work)
+    _require(summary["profile_binding_digest"] == profile.binding_digest
+        and summary["oauth_client_id"] == profile.client_id and association["operation"] == "refresh")
+    schema.validate_bindings(conn)
+    records = [record for record in schema.read_catalog(conn)["credentials"]
+        if record["id"] == association["credential_id"]]
+    _require(len(records) == 1)
+    core = conn.execute("SELECT id,name,kind,metadata,lifecycle_status,credential_version "
+        "FROM credentials WHERE id=?", (association["credential_id"],)).fetchone()
+    metadata = google.validate_record(records[0], core, profile)
+    _require(core["credential_version"] == association["credential_generation"]
+        and _digest(metadata) == association["credential_metadata_sha256"]
+        and _identity(metadata, profile) == work["identity"]
+        and metadata.get("oauth_intent_id") == association["intent_id"]
+        and str(metadata.get("created_by") or "oauth-refresh") == association["actor_id"])
+    row = conn.execute("SELECT * FROM oauth_revocation_work WHERE id=?", (work_id,)).fetchone()
+    _require(row is not None and row["provider_id"] == "google" and row["source"] == REFRESH_SOURCE
+        and row["actor_id"] == association["actor_id"] and row["status"] == "exchange_in_flight"
+        and row["credential_version"] == 1 and row["attempts"] == 0 and row["last_error"] is None
+        and row["lease_owner"] is None and row["lease_until"] is None
+        and datetime.fromisoformat(row["next_attempt_at"]) > db.utcnow()
+        and db.decrypt_secret_envelope(row) == "{}")
+    event_id = "operator-google-refresh-rejected:" + work_id
+    # A pre-existing terminal receipt is not permission to mutate again.
+    _require(conn.execute("SELECT 1 FROM audit_events WHERE id=?", (event_id,)).fetchone() is None)
+    event = {"schema": "serverware.operatorGoogleRefreshRejected/v1", **summary,
+        "source": REFRESH_SOURCE, "credential_id": association["credential_id"],
+        "credential_generation": association["credential_generation"],
+        "credential_metadata_sha256": association["credential_metadata_sha256"],
+        "provider_subject": work["identity"]["provider_subject"], "outcome": "definite_refresh_rejected",
+        "issued_material": False, "provider_revocation": "not_requested"}
+    audit = db.append_audit_event(conn, event_type=REJECTION_EVENT,
+        actor_type="system", actor_id=association["actor_id"], event=event, idempotency_key=event_id)
+    _guarded_delete(conn, work_id, "exchange_in_flight")
+    return audit
+
+
+def observe_rejected_refresh(conn, audit):
+    """Exact readback after an attempted COMMIT; absence alone proves nothing."""
+    from serverware import db, operator_catalog_google
+    _transaction(conn)
+    profile = _profile()
+    _require(_exists(conn) and not db.audit_uses_postgres())
+    event = audit["event"]
+    _require(operator_catalog_google.validate_profile_binding(conn) == profile
+        and event["profile_binding_digest"] == profile.binding_digest
+        and event["oauth_client_id"] == profile.client_id)
+    work_id = event["work_id"]
+    _require(_uuid(work_id) and audit["id"] == "operator-google-refresh-rejected:" + work_id
+        and audit["event_type"] == REJECTION_EVENT and audit["actor_type"] == "system")
+    row = conn.execute("SELECT * FROM audit_events WHERE id=?", (audit["id"],)).fetchone()
+    _require(row is not None and row["event_type"] == audit["event_type"]
+        and row["actor_type"] == audit["actor_type"] and row["actor_id"] == audit["actor_id"]
+        and row["event_json"] == db.dumps(event) and row["event_hash"] == audit["event_hash"]
+        and row["prev_event_hash"] == audit["prev_event_hash"] and row["created_at"] == audit["created_at"]
+        and row["event_hash"] == db._audit_hash(event_id=row["id"], event_type=row["event_type"],
+            actor_type=row["actor_type"], actor_id=row["actor_id"], event_json=row["event_json"],
+            prev_event_hash=row["prev_event_hash"], created_at=row["created_at"]))
+    _require(get_work(work_id, conn=conn) is None
+        and conn.execute("SELECT 1 FROM oauth_revocation_work WHERE id=?", (work_id,)).fetchone() is None
+        and conn.execute("SELECT 1 FROM " + TABLE + " WHERE work_id=?", (work_id,)).fetchone() is None)
+
+
 def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
     """Retire protected work only through a verified, atomic parent cascade.
 
@@ -638,6 +732,13 @@ def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
         else:
             _require(eligible(conn, {"id": work_id, "source": work["source"]}))
         _require(_digest(_tokens(db.decrypt_secret_envelope(row))) == work["material_sha256"])
+    return _guarded_delete(conn, work_id, row["status"])
+
+
+def _guarded_delete(conn, work_id, status):
+    """Shared one-use cascade after the caller's purpose-specific guards."""
+    _transaction(conn)
+    _require(not _RETIRING.get())
     used = False
     armed = True
 
@@ -654,7 +755,7 @@ def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
         try:
             conn.create_function(_RETIRE_FUNCTION, 1, allow)
             deleted = conn.execute("DELETE FROM oauth_revocation_work WHERE id=? AND status=?",
-                (work_id, row["status"]))
+                (work_id, status))
             _require(deleted.rowcount == 1 and used
                 and conn.execute("SELECT 1 FROM " + TABLE + " WHERE work_id=?", (work_id,)).fetchone() is None)
         except BaseException:

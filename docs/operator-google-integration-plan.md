@@ -356,10 +356,60 @@ enable it. Keep native behavior unchanged.
 Application/rule revocation removes only that application's access. A shared
 Google credential must not enter the static credential-delete path. Explicit
 disconnect first requires an affected-assignment workflow, then uses the
-existing provider-aware pending/failed/retry lifecycle. Google reconnection
-remains disconnect then connect again because revocation is grant-wide.
-Do not bypass duplicate-account guards; prefer reuse of an already connected
-account. Local removal is not forensic erasure or provider-side revocation.
+existing provider-aware pending/failed/retry lifecycle. This is distinct from
+reauthorizing an active account: renewed consent for the same verified account,
+client and permissions must preserve its application assignments, not require
+disconnecting and rebuilding them. Google's grant-wide revocation prevents
+treating a superseded token as independently revocable; it does not require
+revocation before same-account reauthorization.
+
+The current generic reconnect writer queues superseded-token revocation and
+therefore correctly refuses Google. Do not remove that guard. The operator
+needs a separate same-account adoption operation, preserving the original
+enrollment binding, advancing the credential generation atomically, and keeping
+unadopted or uncertain candidate tokens in non-revoking custody. No provider
+exchange may be replayed merely because its response or commit was lost.
+
+An explicitly disconnected or quarantined account is a different recovery
+case. Reauthorization must not bypass its retained cleanup exclusion, silently
+restore revoked rules, or interpret provider revocation acceptance as proof
+that revocation has fully propagated. Do not bypass duplicate-account guards;
+prefer reuse of an already connected account. Local removal is not forensic
+erasure or provider-side revocation. Active-account reauthorization and
+disconnected-family succession remain separate unfinished workflows.
+
+### Definite refresh rejection and uncertain retirement
+
+Active-account reauthorization first needs an accurate refresh outcome. The
+operator previously classified every failure without attached token material
+as uncertain issuance, including an explicit rejection from the token endpoint.
+That can leave an otherwise unchanged account with an unresolved reservation
+which cannot legitimately be interpreted as issued tokens or safely discarded.
+
+The operator-only refresh path now distinguishes a bounded, duplicate-free
+JSON rejection from an unknown response. Its closed error/status pairs follow
+[RFC 6749 section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2): the six
+standard token errors on HTTP 400, or `invalid_client` on HTTP 401. Wrong media,
+unknown fields or errors, duplicate keys, contradictory token fields, HTTP 200
+error objects, malformed responses and lost responses do not prove rejection.
+Identifiable tokens in a parsed contradictory response still enter encrypted
+custody before that response is refused; they are not silently discarded.
+
+A fresh one-use rejection observation is bound to its exact work, profile and
+OAuth client. It may retire only an unchanged, empty, in-flight refresh
+reservation, with a redacted audit event in the same transaction. It changes no
+credential generation, application, rule or policy and makes no revocation
+request. Historical uncertainty, initial consent and material-bearing work
+cannot enter this path. A lost local commit acknowledgement is a separate
+uncertainty: only the exact audit event plus absence of both owned work rows
+establishes retirement; missing work alone does not.
+
+The provider rejection and local retirement results remain separate. Neither
+authorizes an automatic exchange replay, proves account health, or implements
+reauthorization. In particular, `invalid_client` calls for administrator
+configuration review, not an unconditional request for the user to reconnect.
+Google documents those distinct [error meanings](https://developers.google.com/identity/protocols/oauth2/web-server#errors).
+Focused synthetic verification is pending; this is not real Google acceptance.
 
 ### Explicit disconnect backend, October 9 source work
 

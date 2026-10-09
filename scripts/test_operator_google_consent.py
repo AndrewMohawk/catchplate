@@ -204,7 +204,9 @@ class Fixture:
             return SimpleNamespace(status=200, body=b"", headers={})
         else:
             raise AssertionError("provider transport attempted an unapproved endpoint")
-        return SimpleNamespace(status=200, body=json.dumps(payload).encode(), headers={})
+        return SimpleNamespace(status=200, body=json.dumps(payload).encode(),
+            headers={"content-type": "application/json"},
+            raw_headers=(("Content-Type", "application/json"),))
 
     def callback(self, **changes):
         query = {"code": CODE, "state": self.started["state"], **changes}

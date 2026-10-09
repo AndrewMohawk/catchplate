@@ -203,3 +203,43 @@ def retain_uncertain(work_id: str, *, material_attached: bool) -> CleanupOutcome
         pass
     return CleanupOutcome("deferred", work_id, reason="cleanup_fence_required" if material_attached
         else "material_retention_uncertain")
+
+
+def retire_definite_refresh_rejection(rejection) -> dict:
+    """Consume fresh transport proof once; never replay a terminal mutation.
+
+    Provider rejection is already known. A local failure reports uncertainty
+    only about retirement, not about whether this response issued material.
+    """
+    from contextlib import closing
+    from serverware.operator_google_token_response import RejectedRefresh
+    work_id = getattr(rejection, "work_id", None)
+    if not _store()._uuid(work_id):
+        work_id = None
+    deferred = {"status": "deferred", "work_id": work_id, "reason": "rejection_retirement_unconfirmed"}
+    audit, attempted_commit = None, False
+    try:
+        _store()._require(type(rejection) is RejectedRefresh)
+        summary = rejection.consume()  # Before EX, SQLite or any mutation.
+        _store()._require(type(summary) is dict and summary == {key: getattr(rejection, key) for key in
+            ("work_id", "profile_binding_digest", "oauth_client_id", "http_status", "error_code")})
+        with exclusive(), closing(db.connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            _store()._require(not db.audit_uses_postgres())
+            audit = _store().retire_rejected_refresh(conn, rejection, summary)
+            attempted_commit = True
+            conn.commit()
+        return {"status": "retired", "work_id": work_id, "reason": "definite_refresh_rejected"}
+    except Exception:
+        # Consumed/replayed proof or precommit failure has no observation
+        # authority. Only this invocation's exact prospective audit can prove
+        # a COMMIT that succeeded despite a lost acknowledgement/guard exit.
+        if attempted_commit and audit is not None:
+            try:
+                with closing(db.connect()) as conn:
+                    conn.execute("BEGIN")
+                    _store().observe_rejected_refresh(conn, audit)
+                return {"status": "retired", "work_id": work_id, "reason": "definite_refresh_rejected"}
+            except Exception:
+                pass
+        return deferred

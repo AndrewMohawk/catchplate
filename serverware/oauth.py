@@ -1123,15 +1123,41 @@ def refresh_access_token(
             "OAuth refresh is unavailable while revocation capacity is exhausted"
         ) from exc
 
+    from serverware.operator_google_token_response import (
+        RejectedRefresh, UncertainRefreshResponse, request_refresh,
+    )
+
     material_attached = False
     try:
         db.mark_oauth_exchange_started(revocation_work_id)
-        token_response = _post_token_request(
-            provider,
-            _refresh_token_request_body(provider, refresh_token),
-            _token_request_headers(provider),
-            operation=operation,
-        )
+        reject_response = False
+        if catalog_profile is None:
+            token_response = _post_token_request(
+                provider,
+                _refresh_token_request_body(provider, refresh_token),
+                _token_request_headers(provider),
+                operation=operation,
+            )
+        else:
+            # Only the admitted operator profile may classify a definite
+            # refresh rejection. Native/legacy exchange contracts are unchanged.
+            application_owner.require_parent_material(provider.id)
+            _application_check(operation)
+            try:
+                token_response = request_refresh(
+                    provider, _refresh_token_request_body(provider, refresh_token),
+                    _token_request_headers(provider), work_id=revocation_work_id,
+                    profile=catalog_profile, request=request_bytes,
+                )
+            except UncertainRefreshResponse as response_error:
+                if not isinstance(response_error.payload, dict):
+                    raise OAuthError("Operator Google refresh response is uncertain",
+                        issuance_uncertain=True) from response_error
+                # A contradictory error response can still contain issued
+                # tokens. Retain them before refusing adoption, just as for a
+                # malformed success response; never call this no-issuance.
+                token_response = response_error.payload
+                reject_response = True
         issued_secret = {
             key: value
             for key, value in {
@@ -1183,6 +1209,9 @@ def refresh_access_token(
             material_attached = True
 
         _application_check(operation)
+        if reject_response:
+            raise OAuthError("Operator Google refresh response is ambiguous",
+                issuance_uncertain=not material_attached)
 
         access_token = token_response.get("access_token")
         if not isinstance(access_token, str) or not access_token:
@@ -1288,6 +1317,16 @@ def refresh_access_token(
             result["_operator_google_work"] = revocation_work_id
         _application_check(operation)
         return result
+    except RejectedRefresh as exc:
+        from serverware import operator_google_cleanup
+        # This receipt proves only provider rejection of this one request.
+        # Whether the local audit/empty-reservation retirement committed is a
+        # separate result; neither outcome authorizes another token exchange.
+        disposition = operator_google_cleanup.retire_definite_refresh_rejection(exc)
+        failure = OAuthError("Google rejected the refresh request; inspect account status and audit logs",
+            actor_id=actor_id, issuance_uncertain=False)
+        failure.operator_refresh_rejection = disposition
+        raise failure from exc
     except Exception as exc:
         if catalog_profile is not None:
             from serverware import operator_google_cleanup

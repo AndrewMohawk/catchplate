@@ -18,6 +18,14 @@ unattempted. Do not bypass that guard or repair a retained/live database in plac
 See [backend verification](operator-google-backend-verification.md) for exact
 evidence and the still-open schema-ownership repair.
 
+The repair under review makes the operator-owned association the durable source
+of cleanup ownership. It places no trigger on the v9 core table. The core source
+is a checked mirror: changing it cannot turn owned work into legacy work. A
+persistent side-table deletion guard admits only validated transactional
+adoption or fenced cleanup completion. Missing or changed retained ownership
+schema is refused, not recreated; only a genuinely new profile initializes it.
+This is a source design until its fresh-start, restart and lifecycle tests pass.
+
 Read with `operator-workspace-requirements.md` and the OAuth onboarding section
 of `goal.md`. R96 remains terminal: no restart, new enrollment, real provider
 contact, configuration change or native authority is authorized by this plan.
@@ -121,16 +129,19 @@ fenced, even when the callback itself skips generic cleanup.
 
 The minimum required protocol is:
 
-1. **Reserve an immutable operator cleanup source before contact.** Both initial
+1. **Reserve immutable operator cleanup ownership before contact.** Both initial
    authorization-code exchange and managed-account refresh must reserve work
-   under a server-owned, immutable operator source and atomically retain a
+   under a server-owned, immutable canonical association and atomically retain a
    token-free association before any provider request. Bind the actual work ID,
    operation kind, admitted profile/client, consent intent or existing credential
    and generation, and verified account identity when available. Codes, tokens,
    PKCE verifiers and browser nonces do not belong in this association. Caller
    metadata cannot select the source or create the association. A missing,
    malformed or mismatched association on operator-tagged work fails closed;
-   it never converts the work into ordinary legacy cleanup.
+   retained ownership also remains protective if the core tag changes or the
+   core row disappears. Neither case converts the work into ordinary legacy
+   cleanup. Disabling the opt-in cannot authorize a generic revocation fallback
+   for the retained operator account store.
 2. **Make cleanup eligibility durable, not a callback-local decision.** Generic
    held-work promotion, pending claims, background/restart reconciliation, and
    every immediate revocation fallback must refuse operator work without its

@@ -73,6 +73,46 @@ mail with automatic refresh. Then expose the Gmail/X/npm/ECR operation bundles
 and optional restrictions. A larger generic editor, more field names, or more
 disabled buttons is not a substitute for these working journeys.
 
+## The minimum form and the optional policy
+
+The normal form should produce a sentence the operator can understand before
+it produces a policy document: **Allow this app to use this account at this
+service.** Authentication placement is part of that setup; restricting the
+content of an API conversation is a separate choice.
+
+| Question | Normal setup | Optional restriction |
+| --- | --- | --- |
+| What authenticates upstream? | A saved key or a connected account | None; do not attach response rules to the secret itself. |
+| Who may use it? | A selected application | Approval, schedule or usage quota. |
+| Where and for what? | A destination and an operation or supported operation bundle | Narrower paths, packages, repositories or request values. |
+| What should be replaced? | Insert authentication, or replace one exact dummy header value | Advanced supported credential placement, not arbitrary byte replacement. |
+| What comes back? | The provider response in the explicitly supported formats | Selected fields, age limits or other deliberate response policies. |
+
+For example, a basic rule should read "Invoice worker may call this billing
+API using Billing key; replace `Authorization: Bearer DEMO`; no optional
+content filtering." The Google equivalent is "Inbox worker may read mail
+using Andrew's connected Google account." Neither needs a response-field
+editor. Adding "only messages from the last 30 days" introduces an actual
+response-policy obligation, not merely a convenient query parameter.
+
+Google is an account connection, not the name of a single Gmail endpoint.
+The first supported preset may be Gmail read-only, but the UI must name that
+permission explicitly rather than imply it covers Calendar or every Google
+API. Adding provider permissions requires deliberate consent; choosing another
+application must not silently expand the account grant. Administrator OAuth
+application configuration belongs in Settings, with a clear missing-setup
+explanation when unavailable, not extra token-endpoint fields in each account
+form.
+
+Normal clients also need their request bodies, provider errors and supported
+response statuses to behave normally. "No optional content filtering" must
+therefore be implemented in the request and response paths, not achieved by
+hiding required field declarations. Unsupported formats must be explained
+before saving. The next bounded compatibility slice is unchanged JSON request
+bytes plus an explicit JSON-or-empty-204 response contract; ordinary query
+ordering, form, binary and streaming support remain separate work. Existing
+rules must not acquire any of these permissions through a default change.
+
 ## Requirement and scope
 
 The operator's October 8 feedback is the design input: connect an account such

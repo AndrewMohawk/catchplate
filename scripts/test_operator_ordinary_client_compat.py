@@ -370,7 +370,11 @@ def catalog_migration():
             record["request_fields"] = ["message"]
         rendered = policy.render(independent, state["sequence"], state["initial_hash"])
         compiled = bundles.compile_policy_bundle(rendered, validate_schema=True)
-        paired = compiled.routes[2].adapter_config
+        # Compilation sorts by route ID, not catalog insertion order. Inspect
+        # this exact rule even when a legacy rule sorts after it.
+        matches = [item for item in compiled.routes if item.id == record["route_id"]]
+        assert len(matches) == 1, "compiled rule identity is absent or ambiguous"
+        paired = matches[0].adapter_config
         assert paired["request"]["bodyMode"] == (fx.REQUEST_MODE if request_only else "json")
         assert paired["response"]["mode"] == ("json" if request_only else fx.RESPONSE_MODE)
     for change in ({"request_body_mode": None}, {"request_fields": ["message"]},

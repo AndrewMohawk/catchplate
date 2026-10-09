@@ -38,10 +38,42 @@ GMAIL_ORIGIN = "https://gmail.googleapis.com"
 GMAIL_AUTHORITY = "gmail.googleapis.com:443"
 CALLBACK_PATH = "/api/oauth/callback/google"
 MAX_HTTP_BODY = 65536
+RESPONSE_MODE = "unfiltered_json_or_empty_v2"
 STATE = re.compile(r"[A-Za-z0-9_-]{43,128}\Z")
 CODE = re.compile(r"[A-Za-z0-9._-]{1,256}\Z")
 STAGES = {"fresh": (0, 0, 0), "connected": (1, 0, 0),
           "first": (1, 0, 1), "expired": (1, 0, 1), "refreshed": (1, 1, 2)}
+
+
+def require_response_capability(catalog):
+    modes = catalog.get("capabilities", {}).get("response_modes")
+    require(isinstance(modes, list) and RESPONSE_MODE in modes,
+            "Google acceptance requires explicit ordinary response metadata support")
+
+
+def require_response_rule(rule):
+    require(rule.get("response_mode") == RESPONSE_MODE and rule.get("response_fields") == []
+            and rule.get("request_fields") == [] and "request_body_mode" not in rule
+            and rule.get("methods") == ["GET"],
+            "Google acceptance saved response or GET-only contract differs")
+
+
+def validate_gmail_response(status, fields, body, policy_hash):
+    headers = {name.lower(): value for name, value in fields}
+    require(status == 200 and body == fixture.GMAIL_RESPONSE_BODY
+            and len(headers) == len(fields) <= 64 and len(str(fields)) <= 16384
+            and headers.get("x-serverware-policy-hash") == policy_hash
+            and headers.get("x-serverware-response-body-sha256") == "sha256:" + hashlib.sha256(body).hexdigest(),
+            "normal Rust Gmail response or byte commitment differs")
+    # The unchanged synthetic provider's shared HTTP serializer emits these
+    # fields. V2 may admit that bounded metadata, but selects none for output.
+    require(not {"server", "date", "cache-control"}.intersection(headers),
+            "unselected provider response metadata was forwarded")
+    commitments = tuple(headers.get(name) for name in
+                        ("x-serverware-request-digest", "x-serverware-operation-digest"))
+    require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments),
+            "normal Rust Gmail request commitments unavailable")
+    return commitments
 
 
 def read_google_marker(path):
@@ -390,17 +422,8 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
                         require(response.status == 403 and document.get("allowed") is False
                                 and document.get("action") == "deny", "wrong method was not denied")
                     else:
-                        fields = response.getheaders()
-                        headers = dict((name.lower(), value) for name, value in fields)
-                        require(response.status == 200 and body == fixture.GMAIL_RESPONSE_BODY
-                                and len(headers) == len(fields) <= 64 and len(str(fields)) <= 16384
-                                and headers.get("x-serverware-policy-hash") == self.policy_hash
-                                and headers.get("x-serverware-response-body-sha256") == "sha256:" + hashlib.sha256(body).hexdigest(),
-                                "normal Rust Gmail response or byte commitment differs")
-                        commitments = tuple(headers.get(name) for name in ("x-serverware-request-digest", "x-serverware-operation-digest"))
-                        require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments),
-                                "normal Rust Gmail request commitments unavailable")
-                        self.wire_commitments.append(commitments)
+                        self.wire_commitments.append(validate_gmail_response(
+                            response.status, response.getheaders(), body, self.policy_hash))
                     return response.status
                 finally:
                     response.close()
@@ -419,6 +442,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
         initial = self.catalog()
         require(initial["revision"] == 1 and all(not initial[key] and initial["limits"][key]["retained"] == 0
                 for key in COLLECTIONS), "Google acceptance requires an empty fresh catalog")
+        require_response_capability(initial)
         self.policy_hash = initial["policy"]["policy_hash"]
         self.wait_catalog_loaded("fresh_google_catalog")
         self.observe("fresh")
@@ -432,10 +456,12 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
         rule, _, _ = self.mutate("/access-rules", {"name": self.run_id + "-gmail", "application_id": application["id"],
             "credential_id": credential["id"], "upstream_url": GMAIL_ORIGIN + fixture.GMAIL_PATH, "methods": ["GET"],
-            "request_fields": [], "response_fields": [], "response_mode": "unfiltered_json",
+            "request_fields": [], "response_fields": [], "response_mode": RESPONSE_MODE,
             "credential_input": "insert", "query_keys": [], "allowed_headers": ["accept", "user-agent"]},
             collection="access_rules", result_key="access_rule", event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
+        require_response_rule(rule)
         pinned, _ = self.wait_catalog_loaded("google_rule_loaded")
+        require_response_rule(self.resource(pinned, "access_rules", rule["id"]))
         require(len(pinned["credentials"]) == 1 and len(pinned["applications"]) == 2 and len(pinned["access_rules"]) == 1
                 and self.resource(pinned, "applications", unassigned["id"]).get("access_status") == "unassigned",
                 "wrong-app control is not a valid persisted unassigned application")
@@ -472,6 +498,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
         generations = generation_evidence(self.audit(), scope, credential["id"], self.wire_commitments)
         self.observe("refreshed")
         self.results.append("actual_expiry_automatic_refresh_new_generation_and_second_normal_rust_dispatch")
+        self.results.append("both_gmail_responses_preserve_body_without_forwarding_unselected_provider_metadata")
         result = {"ok": True, "schema": "serverware.operatorGoogleRefreshCheck/v1",
             "syntheticOnly": True, "realGoogleVerified": False, "browserUiVerified": False,
             "productionReady": False, "hardwareVerified": False, "checks": self.results,

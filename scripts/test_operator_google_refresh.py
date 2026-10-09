@@ -105,6 +105,39 @@ def generation_rows():
 
 
 class GoogleRefreshCheckerTests(unittest.TestCase):
+    def test_ordinary_metadata_capability_is_explicit_not_an_old_mode_fallback(self):
+        checker.require_response_capability({"capabilities": {"response_modes": [checker.RESPONSE_MODE]}})
+        for modes in ([], ["unfiltered_json"], ["unfiltered_json_or_empty_v1"], checker.RESPONSE_MODE, None):
+            with self.subTest(modes=modes), self.assertRaises(checker.CheckFailure):
+                checker.require_response_capability({"capabilities": {"response_modes": modes}})
+
+    def test_saved_google_rule_keeps_v2_without_request_body_or_field_projection(self):
+        rule = {"response_mode": checker.RESPONSE_MODE, "response_fields": [], "request_fields": [], "methods": ["GET"]}
+        checker.require_response_rule(rule)
+        for change in ({"response_mode": "unfiltered_json"}, {"response_fields": ["messages"]},
+                       {"request_fields": ["x"]}, {"request_body_mode": None},
+                       {"request_body_mode": "preserve_json_v1"}, {"methods": ["GET", "POST"]}):
+            with self.subTest(change=change), self.assertRaises(checker.CheckFailure):
+                checker.require_response_rule({**rule, **change})
+
+    def test_gmail_wire_oracle_retains_commitments_and_rejects_unselected_metadata(self):
+        body = checker.fixture.GMAIL_RESPONSE_BODY
+        fields = [("Content-Type", "application/json"), ("X-Serverware-Policy-Hash", POLICY),
+                  ("X-Serverware-Response-Body-Sha256", "sha256:" + hashlib.sha256(body).hexdigest()),
+                  ("X-Serverware-Request-Digest", COMMITMENTS[0][0]),
+                  ("X-Serverware-Operation-Digest", COMMITMENTS[0][1])]
+        self.assertEqual(checker.validate_gmail_response(200, fields, body, POLICY), COMMITMENTS[0])
+        for name in ("Server", "Date", "CACHE-CONTROL"):
+            with self.subTest(header=name), self.assertRaises(checker.CheckFailure):
+                checker.validate_gmail_response(200, fields + [(name, "synthetic-metadata")], body, POLICY)
+        cases = [(201, fields, body, POLICY), (200, fields, body + b" ", POLICY),
+                 (200, fields, body, "sha256:" + "f" * 64),
+                 (200, fields + [("content-type", "application/json")], body, POLICY),
+                 (200, fields[:-1], body, POLICY)]
+        for index, args in enumerate(cases):
+            with self.subTest(case=index), self.assertRaises(checker.CheckFailure):
+                checker.validate_gmail_response(*args)
+
     def test_exact_consent_url_scope_and_pkce_are_required(self):
         value = start_document()
         self.assertTrue(checker.authorization_target(value).startswith("/o/oauth2/v2/auth?"))

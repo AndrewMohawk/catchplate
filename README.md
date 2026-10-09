@@ -16,17 +16,24 @@ long-lived credential.
 
 ## Try the development console
 
-The persistent [sandbox console](https://serverware-sandbox.example.com/)
-uses the homelab login and synthetic credentials only. Its workspaces are
-**Overview, Proxy setup, Credentials, Access rules, and Audit log**.
-Proxy setup includes the public CA download and configurable cURL/Python client
-examples. The forward proxy is private to the sandbox Docker network; the
-public website is its management console, not a public proxy endpoint.
-Server listener settings remain deployment-managed, and real-provider setup
-is not enabled in this fixed sandbox. The [operator experience](docs/operator-experience.md)
-describes both the current UI and the full product workflow.
+The persistent [operator demo](https://serverware-demo.example.com/)
+uses the homelab login. Its guided setup joins separately managed credentials,
+applications and access rules; Proxy setup provides the proxy address, public
+CA download and client instructions, while Audit log shows recorded activity.
+New supported JSON rules can insert authentication or replace an exact dummy
+value without requiring request/response field lists. Existing restricted rules
+retain their restrictions.
 
-The sandbox does not establish native-pilot, hardware or production acceptance.
+This deployment permits only its synthetic upstream. Google consent and real
+provider destinations are not enabled. The console and forward proxy are
+different endpoints; public Internet proxy routing remains blocked on the
+reviewed infrastructure bootstrap, not an application setting. Listener settings
+remain deployment-managed. See [verification and current limits](docs/ordinary-client-verification.md)
+and the [credential-first workflow](docs/operator-workspace-requirements.md).
+The older [fixed sandbox](https://serverware-sandbox.example.com/) remains
+separate and is not the credential-management demo.
+
+Neither development environment establishes native-pilot, hardware or production acceptance.
 The production status and historical pilot evidence below are separate from
 this persistent testing environment.
 

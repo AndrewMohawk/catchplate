@@ -165,12 +165,21 @@ function projectCatalog(value) {
   const quarantinedAccounts = new Set(credentials.filter(item => item.status === 'quarantined').map(item => item.id));
   if (accessRules.some(rule => rule.status === 'active' && quarantinedAccounts.has(rule.credential_id)))
     throw operatorError('Saved Google account and access-rule states disagree. Changes are disabled.');
+  const capabilities = pick(value.capabilities || {}, ['credential_types', 'response_modes', 'request_body_modes',
+    'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
+  if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
+    throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
+  capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;
+  if (capabilities.google_oauth && !value.allowed_upstreams.includes('https://gmail.googleapis.com'))
+    throw operatorError('Google destination capability is inconsistent. Changes are disabled.');
   return {schema: value.schema, revision: value.revision, policy: pick(value.policy, ['policy_hash', 'loaded_policy_hash', 'sequence', 'activation']),
     proxy_url: value.proxy_url, allowed_upstreams: value.allowed_upstreams.filter(item => typeof item === 'string'),
-    credentials, applications, access_rules: accessRules, limits: value.limits, capabilities: value.capabilities};
+    credentials, applications, access_rules: accessRules, limits: value.limits, capabilities};
 }
 function createOperatorWorkspace() {
-  const state = {catalog: null, busy: false, uncertain: false};
+  let writeInFlight = false;
+  const state = {catalog: null, consentHold: false, uncertain: false,
+    get busy() { return writeInFlight || this.consentHold; }, set busy(value) { writeInFlight = value; }};
   const listeners = []; let epoch = 0; let poll; let polls = 0;
   const emit = () => {
     listeners.forEach(callback => callback());
@@ -241,5 +250,7 @@ function createOperatorWorkspace() {
     state.uncertain = false; element('mutation-review').hidden = true; emit();
   });
   window.addEventListener('pagehide', () => clearTimeout(poll));
-  return {state, api, refresh, mutate, ready, loaded, emit, subscribe: callback => listeners.push(callback)};
+  return {state, api, refresh, mutate, ready, loaded, emit, writeInFlight: () => writeInFlight,
+    setConsentHold(value) { if (state.consentHold !== value) { state.consentHold = value; emit(); } },
+    subscribe: callback => listeners.push(callback)};
 }

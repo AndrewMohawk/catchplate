@@ -135,7 +135,8 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-provider-status').textContent = (!provider ? 'Provider status is unavailable; refresh saved state.' :
       provider.auth_type === 'google_oauth' ? provider.status === 'quarantined' ?
         'Google account: quarantined and unavailable for use. Provider revocation is not proven. This setup does not start consent or cleanup.' :
-        'Google account: saved metadata only. This setup has not tested consent, token refresh or a Google request. Google account connection remains disabled here.' :
+        'Google account: saved metadata only. This setup has not tested consent, token refresh or a Google request. ' +
+          (catalog()?.capabilities.google_oauth ? 'Use Connect Google for a separate, explicit consent flow.' : 'Google account connection remains disabled here.') :
         'Provider key: stored, not tested here.') +
       ' Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.';
     const active = writable() && activePair() && workspace.loaded() && rule?.enforcement === 'active' && application()?.access_status === 'active' && supported(rule);
@@ -248,7 +249,12 @@ function createConnectView(workspace, applications, proxy) {
   });
   window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; });
   workspace.subscribe(render);
-  return {show(active) {
+  return {selectGoogleCredential(id) {
+    const item = catalog()?.credentials.find(value => value.id === id && value.status === 'active' && value.auth_type === 'google_oauth');
+    if (!item || !writable() || checkpoint) return false;
+    resetDraft(); selectedCredential = id; renderInputs(); element('connect-credential-choice').value = id;
+    message('Saved Google account selected. Choose an application; no access has been granted.'); goto(1); return true;
+  }, show(active) {
     open = active;
     applications.mount(active ? element('connect-token-slot') : null);
     if (!active || step !== 4) proxy.mount(null);

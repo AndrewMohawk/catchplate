@@ -66,7 +66,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
     credential?.auth_type === 'google_oauth' && hasFields ? 'Google permits GET with no request body. Clear the request fields.' : '';
   select.setCustomValidity(invalid);
   element(warningId).textContent = invalid || (credential?.auth_type === 'google_oauth' ?
-    'This Google account profile permits GET with no request body only. Google connection remains unavailable here.' : preserve ?
+    'This Google account profile permits GET with no request body only. Account consent does not configure a complete Gmail workflow.' : preserve ?
       'Keep your client’s JSON body unchanged, up to 64 KiB, or send no body. No field list is needed. Forms, binary and streaming are not supported.' :
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }

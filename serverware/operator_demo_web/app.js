@@ -54,6 +54,7 @@ else {
   const applications = createApplicationsView(workspace);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
   const connect = createConnectView(workspace, applications, proxy);
+  createGoogleView(workspace, applications, connect);
   function navigate() {
     let view = location.hash.slice(1) || 'connect';
     if (view === 'main-content') { element('main-content').focus(); return; }

@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 import re
 
-SCRIPT_FILES = ("workspace_core.js", "workspace_resources.js", "workspace_applications.js",
+SCRIPT_FILES = ("workspace_core.js", "workspace_google.js", "workspace_resources.js", "workspace_applications.js",
                 "workspace_proxy_audit.js", "workspace_connect.js", "app.js")
 
 

@@ -273,7 +273,10 @@ const tests = [
   ['Google is honestly unavailable and absent rule capabilities cannot produce a silent fallback grant', browser => fixture(browser,
     supplied({credentialInputModes: undefined}), async (page, state) => {
       await start(page); assert(await page.locator('#connect-google').isDisabled());
-      assert.match(await page.locator('#connect-credential-step').innerText(), /google.*not available.*consent.*refresh/is);
+      const googleStatus = await page.locator('#connect-google-status').innerText();
+      assert.match(googleStatus, /Google connection is unavailable in this deployment/);
+      assert.match(googleStatus, /administrator must enable the supported Google profile/);
+      assert.match(googleStatus, /Do not paste Google access or refresh tokens/);
       await useCredential(page); await useApplication(page); assert(await page.locator('#connect-review').isDisabled());
       assert.equal(state.posts.length, 0); assert(!state.requests.some(item => /oauth|google/.test(item.path)));
     })],

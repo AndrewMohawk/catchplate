@@ -127,5 +127,5 @@ function createApplicationsView(workspace) {
     else tokenHome.after(element('one-time-access'), element('token-expiry-status'));
     for (const link of element('one-time-access').querySelectorAll('a')) link.hidden = Boolean(container);
   }
-  workspace.subscribe(render); return {tokenFor, clear, render, create, mount};
+  workspace.subscribe(render); return {tokenFor, clear, render, create, mount, hasHeldToken() { reconcile(); return Boolean(held); }};
 }

@@ -853,7 +853,7 @@
             {
               "required": ["type"],
               "properties": {"type": {"const": "responseEnvelope"}},
-              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "statusCodes", "bodyPresence", "contentTypes", "allowedResponseHeaderNames", "responseHeaderRules", "operations"]}
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "statusCodes", "bodyPresence", "contentTypes", "allowedResponseHeaderNames", "responseHeaderRules", "operations", "unlistedHeaderPolicy"]}
             }
           ]
         },

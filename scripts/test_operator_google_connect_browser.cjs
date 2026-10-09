@@ -150,7 +150,45 @@ async function open(page) {
   await page.locator('#connect-google').click(); await page.locator('#google-consent-panel').waitFor({state: 'visible'});
   await page.waitForLoadState('networkidle');
 }
-async function start(page) { await page.locator('#google-account-name').fill('My Gmail account'); await page.locator('#google-consent-start').click(); await page.waitForLoadState('networkidle'); }
+async function start(page, state, observed, outcome) {
+  assert(['navigate', 'uncertain', 'unreconciled'].includes(outcome));
+  await page.locator('#google-account-name').fill('My Gmail account');
+  try {
+    if (outcome === 'navigate') {
+      // Arm the next-document event before the click. The old document's
+      // already-fired networkidle event does not await an async submit handler.
+      await Promise.all([
+        page.waitForURL(startReceipt().authorizationUrl, {timeout: 5000, waitUntil: 'domcontentloaded'}),
+        page.locator('#google-consent-start').click(),
+      ]);
+    } else {
+      await page.locator('#google-consent-start').click();
+      const text = outcome === 'uncertain' ? /^Consent may have started, but no exact receipt was confirmed\./ :
+        /^The exact consent attempt could not be reconciled\. No navigation or retry occurred\./;
+      await page.locator('#google-consent-status').filter({hasText: text}).waitFor({state: 'visible', timeout: 5000});
+      if (outcome === 'uncertain') await page.locator('#mutation-review').waitFor({state: 'visible', timeout: 5000});
+      await page.locator('#google-consent-leave:enabled').waitFor({state: 'visible', timeout: 5000});
+    }
+  } catch (_) {
+    // Never print the navigation exception: it can contain the OAuth URL/state.
+    const ui = await page.evaluate(() => {
+      const status = document.querySelector('#google-consent-status')?.textContent || '';
+      const phases = [['Saving...', 'saving'], ['Checking saved consent', 'checking'],
+        ['The exact consent attempt could not be reconciled.', 'reconciliation-refused'],
+        ['Consent may have started,', 'unconfirmed'], ['Waiting for Google consent', 'awaiting-consent'],
+        ['Saved Google connection status is unavailable.', 'status-unavailable']];
+      const review = document.querySelector('#mutation-review'); const leave = document.querySelector('#google-consent-leave');
+      return {phase: phases.find(([prefix]) => status.startsWith(prefix))?.[1] || 'other',
+        uncertaintyReviewVisible: Boolean(review && !review.hidden), leaveEnabled: Boolean(leave && !leave.disabled),
+        startDisabled: document.querySelector('#google-consent-start')?.matches(':disabled') ?? null,
+        operatorOrigin: location.origin === 'https://operator-catalog.example.test'};
+    }).catch(() => ({phase: 'document-unavailable'}));
+    console.log(JSON.stringify({phase: 'consent-checkpoint-failed', expected: outcome, ui,
+      startPosts: observed.posts.length, intentReads: observed.gets, catalogReads: state.catalogCalls,
+      syntheticNavigations: observed.navigations, fixtureErrorCount: state.errors.length, unexpectedRequestCount: state.unexpected.length}));
+    throw new Error('Consent completion checkpoint failed; see sanitized diagnostic receipt');
+  }
+}
 async function absent(page) {
   const surfaces = await page.evaluate(() => [document.documentElement.outerHTML, ...[...document.querySelectorAll('input,textarea')].map(node => node.value),
     ...Object.values(localStorage), ...Object.values(sessionStorage)].join('\n'));
@@ -163,7 +201,7 @@ const tests = [
   })],
   ['advertised profile uses exact CAS/preset and a single strictly validated Google navigation', browser => fixture(browser, {}, async (page, state, observed) => {
     await open(page); assert.equal(await page.locator('#google-start-form input').count(), 1);
-    await screenshot(page, 'google-connect-desktop'); await start(page);
+    await screenshot(page, 'google-connect-desktop'); await start(page, state, observed, 'navigate');
     assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 1); assert.equal(state.revision, 3);
     assert.equal(new URL(page.url()).origin, 'https://accounts.google.com'); assert.equal(state.posts.length, 0);
   })],
@@ -209,7 +247,7 @@ const tests = [
     })]),
   ...['lost', 'invalid'].map(startFault => ['uncertain ' + startFault + ' start never navigates/retries and exit retains generic uncertainty', browser => fixture(browser,
     {startFault}, async (page, state, observed) => {
-      await open(page); await start(page); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
+      await open(page); await start(page, state, observed, 'uncertain'); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
       assert(await page.locator('#google-consent-start').isDisabled()); await absent(page);
       await page.locator('#google-consent-leave').click(); assert(await page.locator('#application-create').isDisabled());
       assert(await page.locator('#mutation-review').isVisible()); assert.equal(observed.posts.length, 1);
@@ -217,12 +255,12 @@ const tests = [
     })]),
   ['failed fresh catalog after successful POST cannot navigate or submit again', browser => fixture(browser,
     {afterStart: observed => { observed.catalogFailure = true; }}, async (page, state, observed) => {
-      await open(page); await start(page); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
+      await open(page); await start(page, state, observed, 'unreconciled'); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
       assert(await page.locator('#google-consent-start').isDisabled()); assert(await page.locator('#load-error').isVisible()); await absent(page);
     })],
   ['capability withdrawal after start blocks navigation without fallback', browser => fixture(browser,
     {afterStart: observed => { observed.enabled = false; }}, async (page, state, observed) => {
-      await open(page); await start(page); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
+      await open(page); await start(page, state, observed, 'unreconciled'); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
       assert(await page.locator('#connect-google').isDisabled()); assert(await page.locator('#google-consent-use').isHidden());
     })],
   ['unacknowledged one-time app token blocks consent until the existing saved-and-clear action', browser => fixture(browser, {}, async (page, state, observed) => {
@@ -244,16 +282,22 @@ const tests = [
   })],
 ];
 async function main() {
-  assert.equal(process.argv.length, 2, 'No target, credential or runtime options accepted');
-  const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before})); console.log(JSON.stringify(pureChecks()));
+  const args = process.argv.slice(2);
+  assert(args.length === 0 || args.length === 2 && args[0] === '--from-group' && /^(?:[1-9]|1[0-9])$/.test(args[1]),
+    'Only no arguments or exact --from-group N (1..19) are accepted');
+  const firstGroup = args.length ? Number(args[1]) : 1; const selected = tests.slice(firstGroup - 1);
+  const runPure = args.length === 0;
+  const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
+  console.log(JSON.stringify({phase: 'selection', firstGroup, lastGroup: tests.length, renderedGroups: selected.length, pureGroups: runPure ? 1 : 0}));
+  if (runPure) console.log(JSON.stringify(pureChecks()));
   const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts'; assert((await stat(artifactRoot)).isDirectory());
   artifacts = await mkdtemp(join(artifactRoot, 'google-connect-synthetic-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;
   try {
     await Promise.race([(async () => {
-      for (const [name, run] of tests) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, renderedGroups: tests.length, pureGroups: 1, actualConsent: false,
+      for (const [name, run] of selected) { await run(browser); console.log('PASS ' + name); }
+      console.log(JSON.stringify({ok: true, firstGroup, lastGroup: tests.length, renderedGroups: selected.length, pureGroups: runPure ? 1 : 0, actualConsent: false,
         actualCallback: false, providerRequests: 0, proxyRequests: 0, nativeDownloads: 0, otherSuitesExecuted: false}));
     })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Google connect fixture absolute deadline')), 150000); })]);
   } finally {

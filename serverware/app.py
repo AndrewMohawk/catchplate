@@ -18985,7 +18985,7 @@ def _credential_for_lease(
             pass
         raise HTTPException(
             status_code=503,
-            detail="OAuth access token could not be refreshed; reconnect the provider account",
+            detail="OAuth access token could not be refreshed; check account status and audit logs before taking action",
         ) from exc
 
 

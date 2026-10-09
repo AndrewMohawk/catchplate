@@ -460,6 +460,60 @@ def expired_refresh(*, omit_scope=False):
     return {"automatic_refresh": True, "second_consent": False, "generation_advanced": True}
 
 
+def refresh_failure_guidance():
+    """Exercise the real refresh catch without diagnosing an uncertain outcome."""
+    f = Fixture()
+    with patch.object(f.oauth, "request_bytes", side_effect=f.transport):
+        f.begin()
+        assert f.callback()[0] == 200
+        core = f.connected()
+        secret = {**json.loads(core["secret"]), "expires_at_epoch_ms": 1}
+        expired, changed = f.db.update_credential_secret_if_version(core["id"],
+            expected_version=core["credential_version"], secret=json.dumps(secret),
+            metadata={**core["metadata"], "expires_at_epoch_ms": 1})
+        assert changed and expired["credential_version"] == core["credential_version"] + 1
+        f.app.runtime.invalidate_secret_leases(core["id"])
+        before = f.db.get_credential(core["id"], include_secret=True)
+        catalog_before = workspace.catalog(f.db, f.schema)
+        calls_before = list(f.calls)
+
+        def timeout(request, **options):
+            assert request.full_url == "https://oauth2.googleapis.com/token"
+            assert request.get_method() == "POST" and options["require_https"] is True
+            form = parse_qs(request.data.decode(), strict_parsing=True)
+            assert form["grant_type"] == ["refresh_token"] and form["refresh_token"] == [REFRESH]
+            f.calls.append(("POST", request.full_url))
+            raise TimeoutError("synthetic uncertain provider outcome " + REFRESH)
+
+        with patch.object(f.oauth, "request_bytes", side_effect=timeout):
+            try:
+                f.app._credential_for_lease(core["id"])
+            except f.app.HTTPException as exc:
+                assert exc.status_code == 503
+                assert exc.detail == ("OAuth access token could not be refreshed; "
+                    "check account status and audit logs before taking action")
+                assert "reconnect" not in exc.detail.lower() and REFRESH not in exc.detail
+            else:
+                raise AssertionError("uncertain OAuth refresh unexpectedly issued a credential")
+        assert f.calls == calls_before + [("POST", "https://oauth2.googleapis.com/token")]
+        assert f.db.get_credential(core["id"], include_secret=True) == before
+        assert workspace.catalog(f.db, f.schema) == catalog_before
+        work = f.rows("oauth_revocation_work")
+        assert len(work) == 1 and work[0]["status"] == "issuance_uncertain_unreported"
+        from serverware import operator_google_cleanup_store
+        retained = operator_google_cleanup_store.get_work(work[0]["id"])
+        assert retained["fence"] is None and retained["material_sha256"] is None
+        failed = [row for row in f.rows("audit_events")
+            if row["event_type"] == "credential.oauth_refresh_failed"]
+        assert len(failed) == 1
+        assert json.loads(failed[0]["event_json"]) == {"credential_id": core["id"],
+            "provider": "google", "credential_version": before["credential_version"], "reason": "OAuthError"}
+        assert f.db.verify_audit_chain()["ok"]
+        f.assert_redacted()
+    return {"status": 503, "reconnection_required_claimed": False,
+        "refresh_attempts": 1, "provider_revocations": 0, "uncertainty_retained": True}
+
+
 def state_durability(failure=None):
     f = Fixture()
     f.begin()
@@ -523,6 +577,7 @@ def http_guards():
 OPERATIONS = {"browser-denial": browser_and_denial, "callback-cleanup": callback_cleanup,
     "scope-schema": scope_schema_contract,
     "expired-refresh": expired_refresh, "refresh-omitted-scope": lambda: expired_refresh(omit_scope=True),
+    "refresh-failure-guidance": refresh_failure_guidance,
     "http-guards": http_guards, "state-durability": state_durability,
     "state-file-sync-failure": lambda: state_durability("file"),
     "state-directory-sync-failure": lambda: state_durability("directory")}

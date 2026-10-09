@@ -384,7 +384,31 @@ fn since(value: &str) -> bool {
     {
         return false;
     }
-    chrono::DateTime::parse_from_rfc3339(value).is_ok()
+    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).is_ok()
+}
+
+fn api_version_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || [0usize, 1, 2, 3, 5, 6, 8, 9]
+            .iter()
+            .any(|index| !bytes[*index].is_ascii_digit())
+        || &value[0..4] == "0000"
+    {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) = (
+        value[0..4].parse::<i32>(),
+        value[5..7].parse::<u8>(),
+        value[8..10].parse::<u8>(),
+    ) else {
+        return false;
+    };
+    time::Month::try_from(month)
+        .ok()
+        .is_some_and(|month| time::Date::from_calendar_date(year, month, day).is_ok())
 }
 
 fn query(url: &Url, resource: &Resource, method: &str) -> Result<(), String> {
@@ -492,13 +516,9 @@ pub(crate) fn validate_request(
             ]
             .contains(&value.as_str())
         })
-        || headers.get("x-github-api-version").is_some_and(|value| {
-            value.len() != 10
-                || value.starts_with("0000-")
-                || chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-                    .ok()
-                    .is_none_or(|date| date.format("%Y-%m-%d").to_string() != *value)
-        })
+        || headers
+            .get("x-github-api-version")
+            .is_some_and(|value| !api_version_date(value))
         || headers.contains_key("accept-encoding")
         || req.method == "GET" && !req.body.is_empty()
     {

@@ -281,6 +281,11 @@ fn github_request_scope_values_and_body_refuse_without_broadening_generic() {
         ("GET", "?since=2024-01-01T00:00:60Z"),
         ("GET", "?since=2024-01-01T00:00:00%2B01:60"),
         ("GET", "?since=0000-01-01T00:00:00Z"),
+        ("GET", "?since=1900-02-29T00:00:00Z"),
+        ("GET", "?since=2024-01-01T24:00:00Z"),
+        ("GET", "?since=2024-01-01T00:60:00Z"),
+        ("GET", "?since=2024-01-01T00:00:00%2B24:00"),
+        ("GET", "?since=2024-01-01T00:00:00.1234567890Z"),
     ] {
         assert!(
             admit_target(
@@ -336,6 +341,10 @@ fn github_request_scope_values_and_body_refuse_without_broadening_generic() {
     }
     for suffix in [
         "?since=2024-02-29T01:02:03.123456789Z",
+        "?since=2000-02-29t01:02:03z",
+        "?since=0001-01-01T00:00:00Z",
+        "?since=9999-12-31T23:59:59Z",
+        "?since=2024-02-29T01:02:03.1%2B23:59",
         "?labels=triage+needed",
         "?milestone=*&assignee=none",
     ] {
@@ -396,6 +405,10 @@ fn github_physical_replacement_and_header_ambiguity_stay_fail_closed() {
         ("accept", "text/html"),
         ("x-github-api-version", "2024-02-30"),
         ("x-github-api-version", "0000-01-01"),
+        ("x-github-api-version", "1900-02-29"),
+        ("x-github-api-version", "2024-2-29"),
+        ("x-github-api-version", "2024-02-29Z"),
+        ("x-github-api-version", "2024-13-01"),
         ("x-unexpected", "value"),
         ("accept-encoding", "gzip"),
     ] {
@@ -408,6 +421,24 @@ fn github_physical_replacement_and_header_ambiguity_stay_fail_closed() {
         assert!(
             validate_adapter(&req, &headers, &url, &matched).is_err(),
             "{name}"
+        );
+    }
+    for value in [
+        "0001-01-01",
+        "2000-02-29",
+        "2022-11-28",
+        "2024-02-29",
+        "9999-12-31",
+    ] {
+        let mut headers = req.headers.clone();
+        headers.insert("x-github-api-version".into(), value.into());
+        let matched = RouteMatch {
+            route,
+            params: BTreeMap::new(),
+        };
+        assert!(
+            validate_adapter(&req, &headers, &url, &matched).is_ok(),
+            "{value}"
         );
     }
 }

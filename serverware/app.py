@@ -16199,6 +16199,25 @@ def _fail_bound_oauth_setup_session(
         return
 
 
+def _operator_google_reauthorization_response(operation, cookie_name: str | None) -> HTMLResponse:
+    """Only a nonsecret locator leaves this callback; the UI rereads its receipt."""
+    from serverware import operator_google_landing
+
+    operation = operation if isinstance(operation, dict) else {}
+    adopted = operation.get("status") == "adopted" and isinstance(operation.get("receipt"), dict)
+    response = HTMLResponse(
+        "<h1>Check Google reauthorization</h1><p>Return to your saved account to check "
+        "the recorded result. Do not repeat this callback or consent automatically. "
+        "Reauthorization does not renew application tokens.</p>"
+        + operator_google_landing.reauthorization_link(operation.get("operation_id")),
+        status_code=200 if adopted else 409,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
+    if cookie_name:
+        response.delete_cookie(cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+    return response
+
+
 @app.get("/api/oauth/callback/{provider_id}")
 def oauth_callback(
     provider_id: str,
@@ -16259,6 +16278,15 @@ def oauth_callback(
                 status_code=400,
                 headers={"Cache-Control": "no-store"},
             )
+        if denied_state.get("operator_google_reauthorization_id") is not None:
+            from serverware import operator_google_reauthorization
+            try:
+                operation = operator_google_reauthorization.deny_consumed(denied_state, state)
+            except Exception:
+                # This trusted consumed-state locator is only a GET hint, not
+                # evidence that denial, rollback or token retirement committed.
+                operation = {"operation_id": denied_state.get("operator_google_reauthorization_id")}
+            return _operator_google_reauthorization_response(operation, oauth_cookie_name)
         setup_session_id = denied_state.get("setup_session_id")
         if denied_state.get("operator_catalog_intent_id") is not None:
             from serverware import operator_catalog_oauth as catalog_oauth
@@ -16302,6 +16330,11 @@ def oauth_callback(
         )
         if not isinstance(exchanged, dict):
             raise OAuthError("OAuth token exchange result is malformed")
+        if "_operator_google_reauthorization" in exchanged:
+            # This owner completed adoption or retained its candidate itself.
+            # Never route it through initial registration or grant-wide cleanup.
+            return _operator_google_reauthorization_response(
+                exchanged["_operator_google_reauthorization"], oauth_cookie_name)
         if exchanged.get("_operator_catalog_intent") is not None:
             from serverware import operator_catalog_oauth as catalog_oauth
             try:
@@ -16359,6 +16392,9 @@ def oauth_callback(
             reconnect_binding,
         )
     except OAuthError as exc:
+        if hasattr(exc, "operator_google_reauthorization"):
+            return _operator_google_reauthorization_response(
+                exc.operator_google_reauthorization, oauth_cookie_name)
         from serverware import operator_google_cleanup
         outcome = getattr(exc, "operator_google_outcome", None)
         if isinstance(outcome, operator_google_cleanup.CleanupOutcome):

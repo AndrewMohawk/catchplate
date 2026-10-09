@@ -274,6 +274,12 @@ function projectApplicationProxyAuthenticationCapability(value) {
       value.modes[1] !== 'basic_and_bearer_v1') return null;
   return {schema: value.schema, path: value.path, modes: ['bearer', 'basic_and_bearer_v1']};
 }
+function projectGoogleReauthorizationCapability(value) {
+  const expected = {schema: 'serverware.operatorGoogleReauthorizationCapability/v1',
+    path: '/api/operator-demo/oauth/google/reauthorize', status_path_prefix: '/api/operator-demo/oauth/google/reauthorize/',
+    review_path_suffix: '/review', preserves_assignments: true, existing_account_only: true};
+  return operatorExact(value, expected) ? {...expected} : null;
+}
 function applicationProxyAuthentication(application) {
   if (!application) return null;
   if (!Object.hasOwn(application, 'proxy_authentication')) return 'bearer';
@@ -338,6 +344,8 @@ function projectCatalog(value) {
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
     throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
   capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;
+  capabilities.google_reauthorization = capabilities.google_oauth ?
+    projectGoogleReauthorizationCapability(value.capabilities?.google_reauthorization) : null;
   capabilities.operation_bundles = projectOperationBundles(value.capabilities?.operation_bundles, capabilities.google_oauth);
   if (capabilities.google_oauth && !value.allowed_upstreams.includes('https://gmail.googleapis.com'))
     throw operatorError('Google destination capability is inconsistent. Changes are disabled.');
@@ -348,6 +356,7 @@ function projectCatalog(value) {
 }
 function createOperatorWorkspace() {
   let writeInFlight = false;
+  const consentOwners = new Set();
   const state = {catalog: null, consentHold: false, uncertain: false,
     get busy() { return writeInFlight || this.consentHold; }, set busy(value) { writeInFlight = value; }};
   const listeners = []; let epoch = 0; let poll; let polls = 0;
@@ -426,6 +435,10 @@ function createOperatorWorkspace() {
   });
   window.addEventListener('pagehide', () => clearTimeout(poll));
   return {state, api, refresh, mutate, requireReview, ready, loaded, emit, writeInFlight: () => writeInFlight,
-    setConsentHold(value) { if (state.consentHold !== value) { state.consentHold = value; emit(); } },
+    setConsentHold(value, owner = 'google-consent') {
+      if (value) consentOwners.add(owner); else consentOwners.delete(owner);
+      const held = consentOwners.size > 0;
+      if (state.consentHold !== held) { state.consentHold = held; emit(); }
+    },
     subscribe: callback => listeners.push(callback)};
 }

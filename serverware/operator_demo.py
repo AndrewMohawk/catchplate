@@ -222,6 +222,9 @@ def request_allowed(method: str, path: str) -> bool:
         if path == "/api/operator-demo/oauth/google/start":
             google_profile.require_profile()
             return method.upper() == "POST"
+        if path == "/api/operator-demo/oauth/google/reauthorization-storage":
+            google_profile.require_profile()
+            return method.upper() in {"GET", "POST"}
     if path.startswith(("/api/auth/oidc/", "/api/oauth/callback/")):
         return False
     mutations = {
@@ -232,7 +235,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/applications/proxy-authentication",
         "/api/operator-demo/applications/rotate-token", "/api/operator-demo/access-rules",
         "/api/operator-demo/access-rules/revoke", "/api/operator-demo/access-rules/gmail-read",
-        "/api/operator-demo/oauth/google/disconnect",
+        "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",
         "/api/data-plane/credential-leases", "/api/data-plane/audit"}
     if path in mutations:
         return method.upper() == "POST"

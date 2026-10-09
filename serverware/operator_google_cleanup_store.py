@@ -19,7 +19,8 @@ PREFIX = "operator_google_"
 INITIAL_SOURCE = PREFIX + "initial_v1"
 REFRESH_SOURCE = PREFIX + "refresh_v1"
 DISCONNECT_SOURCE = PREFIX + "disconnect_v1"
-SOURCES = frozenset({INITIAL_SOURCE, REFRESH_SOURCE, DISCONNECT_SOURCE})
+REAUTHORIZATION_SOURCE = PREFIX + "reauthorization_v1"
+SOURCES = frozenset({INITIAL_SOURCE, REFRESH_SOURCE, DISCONNECT_SOURCE, REAUTHORIZATION_SOURCE})
 TABLE = "operator_google_cleanup_work"
 _PROFILE_TABLE = "operator_catalog_oauth_profile"
 _RETIRE_FUNCTION = "operator_google_cleanup_retire_allowed"
@@ -181,10 +182,14 @@ def initialize(conn, *, fresh_profile=False) -> None:
     _require(_exists(conn))  # Retained schemas are verified, never repaired.
     from serverware import operator_google_disconnect_store
     operator_google_disconnect_store.initialize(conn, fresh_profile=fresh_profile)
+    from serverware import operator_google_reauthorization_store
+    operator_google_reauthorization_store.initialize(conn, fresh_profile=fresh_profile)
 
 
 def _association(value, row):
-    _require(isinstance(value, dict) and set(value) == _ASSOCIATION_FIELDS
+    fields = (_ASSOCIATION_FIELDS | {"reauthorization_id"}
+        if row["source"] == REAUTHORIZATION_SOURCE else _ASSOCIATION_FIELDS)
+    _require(isinstance(value, dict) and set(value) == fields
         and value["schema"] == ASSOCIATION_SCHEMA and value["source"] in SOURCES
         and value["source"] == row["source"] and value["work_id"] == row["id"]
         and value["actor_id"] == row["actor_id"] and row["provider_id"] == "google"
@@ -196,11 +201,14 @@ def _association(value, row):
         _require(value["operation"] == "initial" and value["credential_id"] is None
             and value["credential_generation"] is None and value["credential_metadata_sha256"] is None)
     else:
-        _require(value["operation"] == {REFRESH_SOURCE: "refresh", DISCONNECT_SOURCE: "disconnect"}[value["source"]]
+        _require(value["operation"] == {REFRESH_SOURCE: "refresh", DISCONNECT_SOURCE: "disconnect",
+            REAUTHORIZATION_SOURCE: "reauthorization"}[value["source"]]
             and _uuid(value["credential_id"])
             and type(value["credential_generation"]) is int and value["credential_generation"] > 0
             and isinstance(value["credential_metadata_sha256"], str)
             and _SHA.fullmatch(value["credential_metadata_sha256"]))
+    if value["source"] == REAUTHORIZATION_SOURCE:
+        _require(_uuid(value["reauthorization_id"]))
     return value
 
 
@@ -227,6 +235,7 @@ def get_work(work_id, conn=None):
     material = associated["material_sha256"]
     _require(material is None or isinstance(material, str) and _SHA.fullmatch(material))
     fence = _json(associated["fence_json"]) if associated["fence_json"] is not None else None
+    _require(row["source"] != REAUTHORIZATION_SOURCE or fence is None)
     if fence is not None:
         _require(isinstance(fence, dict) and set(fence) == _FENCE_FIELDS and fence["schema"] == FENCE_SCHEMA
             and all(fence[key] == association[key] for key in ("work_id", "source", "profile_binding_digest", "oauth_client_id"))
@@ -328,6 +337,8 @@ def on_reserve(conn, *, work_id, provider_id, actor_id, source, association):
         from serverware import operator_catalog_oauth as consent
         from serverware import operator_google_disconnect_store as disconnects
         disconnects.require_initial_admission(conn)
+        from serverware import operator_google_reauthorization_store as reauthorization
+        reauthorization.require_initial_admission(conn)
         consent._checked(conn, value["intent_id"], status="exchanging", actor_id=actor_id)
     else:
         from serverware import operator_catalog_schema as schema, operator_catalog_google as google
@@ -343,6 +354,11 @@ def on_reserve(conn, *, work_id, provider_id, actor_id, source, association):
         from serverware import operator_google_disconnect_store as disconnects
         if source == REFRESH_SOURCE:
             disconnects.require_refresh_admission(conn, metadata)
+            from serverware import operator_google_reauthorization_store as reauthorization
+            reauthorization.require_refresh_admission(conn, value["credential_id"])
+        elif source == REAUTHORIZATION_SOURCE:
+            from serverware import operator_google_reauthorization_store as reauthorization
+            reauthorization.require_reservation(conn, value, work_id=work_id)
         else:
             from serverware.operator_publication import assert_held
             assert_held()
@@ -356,6 +372,9 @@ def on_reserve(conn, *, work_id, provider_id, actor_id, source, association):
 def _bind_identity(conn, work_id, metadata):
     work = get_work(work_id, conn=conn)
     _require(work is not None)
+    if work["source"] == REAUTHORIZATION_SOURCE:
+        from serverware import operator_google_reauthorization_store as reauthorization
+        reauthorization.require_work(conn, work)
     identity = _identity(metadata, _check_profile(work))
     _require(work["identity"] is None or work["identity"] == identity)
     if work["identity"] is None:
@@ -395,11 +414,16 @@ def on_attach(conn, work_id, secret):
         return
     _check_profile(work)
     _require(work["fence"] is None)
+    if work["source"] == REAUTHORIZATION_SOURCE:
+        from serverware import operator_google_reauthorization_store as reauthorization
+        reauthorization.require_work(conn, work, statuses={"exchanging"})
+        _require(work["status"] == "exchange_in_flight" and work["material_sha256"] is None)
     conn.execute("UPDATE " + TABLE + " SET material_sha256=? WHERE work_id=?", (_digest(_tokens(secret)), work_id))
 
 
 def _fenced_snapshot(conn, work):
     from serverware import db, operator_catalog_schema as schema, operator_catalog_policy as policy
+    _require(work["source"] != REAUTHORIZATION_SOURCE)
     _check_profile(work)
     _require(work["identity"] is not None and work["material_sha256"] is not None)
     schema.validate_bindings(conn)
@@ -477,7 +501,7 @@ def authorize_fence(conn, *, work_id, metadata, policy_hash, catalog_revision):
 
 
 def _eligible_work(conn, work, *, terminal=False) -> bool:
-    _require(work["fence"] is not None)
+    _require(work["source"] != REAUTHORIZATION_SOURCE and work["fence"] is not None)
     identifiers, _current_hash, revision = _fenced_snapshot(conn, work)
     if work["source"] == DISCONNECT_SOURCE:
         from serverware import operator_google_disconnect_store as disconnects
@@ -561,6 +585,10 @@ def require_transition(conn, work_id, *, cleanup=False):
     if work is None:
         return
     _check_profile(work)
+    if work["source"] == REAUTHORIZATION_SOURCE:
+        from serverware import operator_google_reauthorization_store as reauthorization
+        reauthorization.require_work(conn, work)
+        _require(not cleanup)
     if cleanup:
         _require(eligible(conn, {"id": work_id, "source": work["source"]}))
 
@@ -569,6 +597,7 @@ def require_quarantine(conn, work_id, *, borrowed, oauth_client_id, provider_sub
     work = get_work(work_id, conn=conn)
     if work is None:
         return
+    _require(work["source"] != REAUTHORIZATION_SOURCE)
     from serverware.operator_publication import assert_held
     _transaction(conn)
     _require(borrowed)
@@ -584,7 +613,7 @@ def require_adoption(conn, work_id, credential_id):
     work = get_work(work_id, conn=conn)
     if work is None:
         return
-    _require(work["source"] != DISCONNECT_SOURCE)
+    _require(work["source"] not in {DISCONNECT_SOURCE, REAUTHORIZATION_SOURCE})
     profile = _check_profile(work)
     _require(_uuid(credential_id) and work["fence"] is None and work["identity"] is not None)
     row = conn.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
@@ -716,6 +745,7 @@ def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
     work = get_work(work_id, conn=conn)
     if work is None:
         return False
+    _require(work["source"] != REAUTHORIZATION_SOURCE)
     _transaction(conn)
     _require(not _RETIRING.get())
     _require((credential_id is None) != (worker_id is None))
@@ -733,6 +763,16 @@ def retire(conn, work_id, *, credential_id=None, worker_id=None) -> bool:
             _require(eligible(conn, {"id": work_id, "source": work["source"]}))
         _require(_digest(_tokens(db.decrypt_secret_envelope(row))) == work["material_sha256"])
     return _guarded_delete(conn, work_id, row["status"])
+
+
+def retire_reauthorization(conn, work_id, *, operation_id, actor_id):
+    """Only a same-transaction adopted receipt permits non-revoking retirement."""
+    from serverware import operator_google_reauthorization_store as reauthorization
+    _transaction(conn)
+    work = get_work(work_id, conn=conn)
+    _require(work is not None and work["source"] == REAUTHORIZATION_SOURCE and work["status"] == "held")
+    reauthorization.require_retirement(conn, work, operation_id=operation_id, actor_id=actor_id)
+    return _guarded_delete(conn, work_id, "held")
 
 
 def _guarded_delete(conn, work_id, status):

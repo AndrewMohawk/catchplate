@@ -56,8 +56,10 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
 if (typeof module !== 'undefined' && module.exports) module.exports = {buildCurlCommand, clientCredentialInput, credentialHeaderTarget};
 else {
   const workspace = createOperatorWorkspace();
-  createCredentialsView(workspace); createAccessRulesView(workspace);
+  let reauthorization;
+  createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id)}); createAccessRulesView(workspace);
   const applications = createApplicationsView(workspace);
+  reauthorization = createGoogleReauthorizationView(workspace, applications);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
   const connect = createConnectView(workspace, applications, proxy);
   createGoogleView(workspace, applications, connect);

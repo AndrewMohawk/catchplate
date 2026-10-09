@@ -55,11 +55,14 @@ class OAuthError(RuntimeError):
         setup_session_id: str | None = None,
         actor_id: str | None = None,
         issuance_uncertain: bool = False,
+        operator_google_reauthorization: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.setup_session_id = setup_session_id
         self.actor_id = actor_id
         self.issuance_uncertain = issuance_uncertain
+        if operator_google_reauthorization is not None:
+            self.operator_google_reauthorization = operator_google_reauthorization
 
 
 def browser_cookie_name(state: str) -> str:
@@ -454,6 +457,8 @@ def create_authorization_url(
     reconnect_binding: dict[str, Any] | None = None,
     setup_session_id: str | None = None,
     operator_catalog_intent_id: str | None = None,
+    operator_google_reauthorization_id: str | None = None,
+    operator_google_reauthorization_expires_at_epoch: int | None = None,
 ) -> dict[str, Any]:
     provider = provider_for(provider_id)
     if not provider.configured:
@@ -480,6 +485,15 @@ def create_authorization_url(
     reconnect_value = _bounded_reconnect_binding(provider, reconnect_binding)
     setup_session_value = _canonical_setup_session_id(setup_session_id)
     catalog_intent = _canonical_setup_session_id(operator_catalog_intent_id)
+    reauthorization = _canonical_setup_session_id(operator_google_reauthorization_id)
+    if reauthorization is not None and (catalog_intent is not None or provider.id != "google"
+            or operation is not None or setup_session_value is not None
+            or reconnect_value is not None or metadata_value):
+        raise OAuthError("Operator Google reauthorization binding refused")
+    if operator_google_reauthorization_expires_at_epoch is not None and (
+            reauthorization is None or type(operator_google_reauthorization_expires_at_epoch) is not int
+            or not _now() < operator_google_reauthorization_expires_at_epoch <= _now() + OAUTH_STATE_TTL_SECONDS):
+        raise OAuthError("Operator Google reauthorization lifetime refused")
     if catalog_intent is not None and (provider.id != "google" or operation is not None
             or setup_session_value is not None or reconnect_value is not None or metadata_value):
         raise OAuthError("Operator Google consent binding refused")
@@ -492,6 +506,8 @@ def create_authorization_url(
     verifier = _code_verifier()
     state = _b64url(secrets.token_bytes(32))
     expires_at = _now() + OAUTH_STATE_TTL_SECONDS
+    if operator_google_reauthorization_expires_at_epoch is not None:
+        expires_at = min(expires_at, operator_google_reauthorization_expires_at_epoch)
     record = {
         "provider": provider.id,
         "credential_name": credential_label,
@@ -512,6 +528,8 @@ def create_authorization_url(
         record["setup_session_id"] = setup_session_value
     if catalog_intent is not None:
         record["operator_catalog_intent_id"] = catalog_intent
+    if reauthorization is not None:
+        record["operator_google_reauthorization_id"] = reauthorization
     if operation is not None:
         record[application_owner.ASSOCIATION_KEY] = operation.association()
     _application_check(operation)
@@ -770,6 +788,9 @@ def exchange_authorization_code(
     record = consume_state(
         provider_id=provider.id, state=state, browser_nonce=browser_nonce
     )
+    if "operator_google_reauthorization_id" in record:
+        from serverware import operator_google_reauthorization
+        return operator_google_reauthorization.exchange_consumed(provider, record, code, state)
     # The browser/state check is consumed first. The durable catalog claim then
     # precedes cleanup reservation and every provider request; generic flows
     # retain their original owner when the operator profile is absent.
@@ -1114,7 +1135,14 @@ def refresh_access_token(
     try:
         if catalog_profile is not None:
             from serverware import operator_google_cleanup_store
-            revocation_work_id = operator_google_cleanup_store.reserve_refresh(metadata=metadata, actor_id=actor_id)
+            from serverware.operator_catalog_schema import CatalogConflict
+            from serverware.operator_google_reauthorization_store import ReauthorizationUnavailable
+            try:
+                revocation_work_id = operator_google_cleanup_store.reserve_refresh(metadata=metadata, actor_id=actor_id)
+            except (CatalogConflict, ReauthorizationUnavailable) as exc:
+                raise OAuthError(
+                    "Operator Google refresh is unavailable while reauthorization ownership is active or uncertain"
+                ) from exc
         else:
             revocation_work_id = db.reserve_oauth_revocation_work(
                 provider_id=provider.id, actor_id=actor_id, source="refresh_token_exchange")

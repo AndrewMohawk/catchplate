@@ -305,7 +305,7 @@ function createStaticKeyReplacementView(workspace) {
   window.addEventListener('pagehide', close);
   return {open, render};
 }
-function createCredentialsView(workspace) {
+function createCredentialsView(workspace, actions = {}) {
   const form = element('credential-form');
   const replacement = createStaticKeyReplacementView(workspace);
   element('credential-auth-type').addEventListener('change', () => {
@@ -343,6 +343,11 @@ function createCredentialsView(workspace) {
         appendOperatorAccountActivity(card, details, credential, catalog); card.append(details);
       }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
+      if (google && credential.status === 'active' && catalog.capabilities.google_reauthorization && typeof actions.reauthorize === 'function') {
+        const button = textNode('button', 'Reauthorize Google', 'secondary'); button.dataset.action = 'reauthorize-google';
+        button.disabled = workspace.state.busy || workspace.state.uncertain;
+        button.addEventListener('click', () => actions.reauthorize(credential.id)); card.append(button);
+      }
       if (credential.status === 'active' && !google) {
         if (staticKeyReplacementAvailable(catalog, credential)) {
           const replace = textNode('button', 'Replace key', 'secondary'); replace.dataset.action = 'replace-key';

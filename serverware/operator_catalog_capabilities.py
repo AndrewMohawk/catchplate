@@ -55,3 +55,24 @@ def google_disconnect(conn) -> dict | None:
         "requires_project_wide_revocation_acknowledgement": True,
         "reconnect_supported": False,
     }
+
+
+def google_reauthorization(conn) -> dict | None:
+    """Same-account replacement only; schema absence is not an upgrade grant."""
+    from serverware import operator_catalog_google, operator_google_reauthorization_store
+    from serverware.operator_catalog_schema import CatalogIntegrityError
+
+    if getattr(conn, "in_transaction", False) is not True:
+        raise CatalogIntegrityError("operator capability requires a catalog read snapshot")
+    if operator_catalog_google.validate_profile_binding(conn) is None:
+        return None
+    if not operator_google_reauthorization_store.available(conn):
+        return None
+    return {
+        "schema": "serverware.operatorGoogleReauthorizationCapability/v1",
+        "path": "/api/operator-demo/oauth/google/reauthorize",
+        "status_path_prefix": "/api/operator-demo/oauth/google/reauthorize/",
+        "review_path_suffix": "/review",
+        "preserves_assignments": True,
+        "existing_account_only": True,
+    }

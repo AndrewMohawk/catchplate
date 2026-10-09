@@ -23,7 +23,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/applications", "/applications/revoke",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read",
-    "/oauth/google/disconnect",
+    "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
 ))
 router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
@@ -289,3 +289,96 @@ async def google_disconnect_status(credential_id: str, request: Request,
     except (ValueError, TypeError, AttributeError):
         _reject(422, "invalid Google account identifier")
     return await _google_disconnect_result(lifecycle.status_for_credential, credential_id, identity.user_id)
+
+
+async def _google_reauthorization_result(function, *args):
+    """Never translate an unavailable receipt into rollback or a retry grant."""
+    from serverware.operator_catalog_schema import CatalogConflict
+
+    try:
+        result = await _blocking(function, *args)
+    except CatalogConflict:
+        _reject(409, "Google account or reviewed access changed; check saved reauthorization status")
+    except Exception:
+        _reject(503, "Google reauthorization outcome unavailable; check saved status without repeating the action")
+    if result is None:
+        _reject(404, "Google reauthorization record not found; absence does not authorize retry")
+    return result
+
+
+def _google_reauthorization_read(request: Request, identifier: str) -> None:
+    from serverware.operator_catalog_inputs import _identifier
+
+    _admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _reject(400, "Google reauthorization status accepts no body")
+    try:
+        _identifier(identifier)
+    except (ValueError, TypeError, AttributeError):
+        _reject(422, "invalid Google reauthorization identifier")
+
+
+@router.get("/oauth/google/reauthorize/{credential_id}/review")
+async def review_google_reauthorization(credential_id: str, request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_reauthorization as lifecycle
+
+    _google_reauthorization_read(request, credential_id)
+    result = await _google_reauthorization_result(lifecycle.review, credential_id, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)
+
+
+@router.get("/oauth/google/reauthorize/{operation_id}")
+async def google_reauthorization_status(operation_id: str, request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_reauthorization as lifecycle
+
+    _google_reauthorization_read(request, operation_id)
+    result = await _google_reauthorization_result(lifecycle.status, operation_id, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)
+
+
+@router.post("/oauth/google/reauthorize")
+async def reauthorize_google_account(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    import secrets
+    import time
+    from serverware import oauth, operator_google_reauthorization as lifecycle
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, lifecycle.ReauthorizeInput, 8192)
+    browser_nonce = secrets.token_urlsafe(32)
+    result = await _google_reauthorization_result(lifecycle.start, payload, identity.user_id, browser_nonce)
+    # Only a durably bound start may hand out a browser cookie. If constructing
+    # the response fails, the caller still owns its exact public operation ID.
+    try:
+        response = JSONResponse(result, headers=_HEADERS)
+        response.set_cookie(oauth.browser_cookie_name(result["state"]), browser_nonce,
+            max_age=max(1, result["expiresAtEpoch"] - int(time.time())),
+            path="/", secure=True, httponly=True, samesite="lax")
+        return response
+    except Exception:
+        _reject(503, "Google reauthorization start response unavailable; check saved status without repeating the action")
+
+
+@router.get("/oauth/google/reauthorization-storage")
+async def google_reauthorization_storage_status(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_reauthorization_setup as setup
+
+    _admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _reject(400, "Google reauthorization setup status accepts no body")
+    result = await _google_reauthorization_result(setup.status, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)
+
+
+@router.post("/oauth/google/reauthorization-storage")
+async def enable_google_reauthorization_storage(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_google_reauthorization_setup as setup
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, setup.SetupInput, 2048)
+    result = await _google_reauthorization_result(setup.enable, payload, identity.user_id)
+    return JSONResponse(result, headers=_HEADERS)

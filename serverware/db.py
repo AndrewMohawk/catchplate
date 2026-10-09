@@ -67538,6 +67538,44 @@ def replace_operator_static_credential_secret_if_version(
             "key_replaced_at": encrypted["secret_updated_at"]}
 
 
+def adopt_operator_google_reauthorization(conn, *, operation_id: str, actor_id: str) -> None:
+    """Borrow the exact operator custody transaction; never queue superseded Google tokens.
+
+    The owner completes its durable receipt, audit and protected work retirement
+    in this same transaction. No ordinary refresh/native writer gains authority.
+    """
+    from serverware import operator_google_reauthorization_store as reauthorization
+    reauthorization._transaction(conn)
+    item, secret, metadata = reauthorization.adoption_inputs(conn, operation_id, actor_id)
+    item_id = item["credential_id"]
+    expected_version = item["binding"]["expected_credential_generation"]
+    _lock_credential_mutation(conn, item_id)
+    current = conn.execute("SELECT * FROM credentials WHERE id=?", (item_id,)).fetchone()
+    reauthorization._require(current is not None and current["kind"] == "oauth2"
+        and current["lifecycle_status"] == "active" and current["credential_version"] == expected_version)
+    secret = validate_credential_secret(secret)
+    metadata = validate_credential_metadata(metadata)
+    operation = _oauth_application_operation(metadata)
+    # Operator admission rejects enrolled/native ownership; never borrow its
+    # existing application operation or weaken the same-account collision guard.
+    reauthorization._require(operation is None)
+    _same_oauth_application(item["binding"]["original_metadata"], metadata)
+    _oauth_application_secret(secret, metadata)
+    _raise_for_google_oauth_grant_collision(conn, metadata, exclude_credential_id=item_id)
+    next_version = expected_version + 1
+    encrypted = _envelope_values(item_id, secret, next_version)
+    changed = conn.execute("UPDATE credentials SET encrypted_secret=?,encrypted_dek=?,secret_nonce=?,"
+        "secret_ciphertext=?,secret_kek_id=?,credential_version=?,secret_updated_at=?,metadata=?,updated_at=? "
+        "WHERE id=? AND credential_version=? AND lifecycle_status='active'",
+        (encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+         encrypted["secret_ciphertext"], encrypted["secret_kek_id"], next_version,
+         encrypted["secret_updated_at"], dumps(metadata), encrypted["secret_updated_at"], item_id, expected_version)).rowcount
+    reauthorization._require(changed == 1)
+    _record_credential_generation(conn, item_id, next_version)
+    floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?", (item_id,)).fetchone()
+    reauthorization._require(floor is not None and floor["last_version"] == next_version)
+
+
 def update_credential_secret_if_version(
     item_id: str,
     *,

@@ -214,6 +214,8 @@ def begin(payload: GoogleStartInput, actor_id: str) -> dict:
         schema.validate_bindings(conn)
         from serverware.operator_google_disconnect_store import require_initial_admission
         require_initial_admission(conn)
+        from serverware import operator_google_reauthorization_store
+        operator_google_reauthorization_store.require_initial_admission(conn)
         rows = [_read(row) for row in conn.execute("SELECT * FROM operator_catalog_oauth_intents LIMIT ?",
             (MAX_RETAINED_INTENTS + 1,))]
         if len(rows) >= MAX_RETAINED_INTENTS:

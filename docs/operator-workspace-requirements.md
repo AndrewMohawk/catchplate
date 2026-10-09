@@ -124,8 +124,10 @@ the same frozen production UI, including inline API-key/app/rule creation,
 saved-resource reuse, token handling and uncertain-mutation guards. Its evidence
 is `connect-regression.vt9d2W/browser.log`; that scope also exited zero with
 unchanged sources. No provider or live API requests, consent, token refresh or
-generated client commands ran. This change is source/browser-fixture verified, not deployed in
-the retained `d2f645f6` demo snapshot.
+generated client commands ran in those fixtures. The change was absent from the
+then-deployed `d2f645f6` snapshot; it is now included in the retained `e19f8b5a`
+deployment alongside the subsequently tested activity display. See
+[current activity and live verification](operator-account-activity-verification.md).
 
 Evidence: `google-connect.FN6xrL/browser.log`; screenshots:
 `serverware-operator-artifacts/google-browser-synthetic-epbCb7` beneath projects.
@@ -143,7 +145,7 @@ IDs, and stays optional. Static-key actions remain unchanged. Desktop and mobile
 screenshots were inspected. After correcting only screenshot scroll positioning,
 the same focused checks passed again with unchanged production UI code.
 
-The final resource-script SHA-256 is
+The resource-script SHA-256 at that earlier checkpoint was
 `08338a6e1652e9077ca389619a3d82aec909fd4504f3ad435c4e2a9e748d3446`.
 Evidence is `google-cards.P18BigAf/browser.log`; screenshots are in
 `serverware-operator-artifacts/google-browser-synthetic-lQbkfL` under the projects

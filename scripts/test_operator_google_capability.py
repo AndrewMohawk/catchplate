@@ -114,18 +114,24 @@ def guarded_http():
             "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/other",
             "SERVERWARE_NATIVE_ENABLED": "1",
         }
+        # Every SERVERWARE_* environment drift invalidates the admitted process
+        # in outer middleware, before the catalog's fixed 503 boundary. The
+        # direct ASGI fixture propagates that exact guard error; these are not
+        # HTTP 503 observations. Retained-binding refusals are tested separately.
         for key, value in changes.items():
             with patch.dict(os.environ, {key: value}):
-                code, raw, _ = f.request("GET", "/api/operator-demo/catalog")
-                assert code == 503
-                body = json.loads(raw)
-                assert body.get("detail") in {"operator workspace unavailable", "operator catalog status unavailable"}
-                assert "capabilities" not in body and "google_oauth" not in body
+                try:
+                    f.request("GET", "/api/operator-demo/catalog")
+                except RuntimeError as exc:
+                    assert type(exc) is RuntimeError, key
+                    assert str(exc) == "operator demo process configuration changed", key
+                else:
+                    raise AssertionError(key + " drift did not invalidate operator admission")
         code, raw, _ = f.request("GET", "/api/operator-demo/catalog")
         assert code == 200 and json.loads(raw)["capabilities"]["oauth"] is True
         assert provider_request.call_count == 0, "discovery contacted a provider"
     f.assert_redacted()
-    return {"real_auth_required": True, "cold_drift_503": len(changes), "provider_contacts": 0}
+    return {"real_auth_required": True, "process_admission_refusals": len(changes), "provider_contacts": 0}
 
 
 OPERATIONS = {"disabled": disabled, "enabled-labels": enabled_labels,
@@ -157,7 +163,8 @@ class OperatorGoogleCapabilityTests(unittest.TestCase):
         self.assertEqual(self.worker("retained-binding")["retained_binding_refusals"], 4)
 
     def test_real_catalog_auth_and_cold_drift_fail_closed_without_provider_calls(self):
-        self.assertEqual(self.worker("guarded-http")["cold_drift_503"], 4)
+        self.assertEqual(self.worker("guarded-http"), {"real_auth_required": True,
+            "process_admission_refusals": 4, "provider_contacts": 0})
 
 
 if __name__ == "__main__":

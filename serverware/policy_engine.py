@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 from mitmproxy import http
 
 from serverware import db, runtime
-from serverware.adapters import get_adapter, preflight_request_admission
+from serverware.adapters import _parse_content_type, get_adapter, preflight_request_admission
 from serverware.constraints import (
     _request_value_predicate_matches,
     evaluate_request_constraints,
@@ -28,7 +28,9 @@ from serverware.constraints import (
 )
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
+    BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
     CredentialPolicy,
+    JSON_OR_EMPTY_204_BODY_PRESENCE,
     PolicyBundleError,
     PolicySnapshot,
     PrincipalPolicy,
@@ -49,6 +51,7 @@ from serverware.policy_bundle import (
     validated_request_url_parts,
     validated_request_urlsplit,
     validate_discard_headers,
+    validate_buffered_passthrough_response,
 )
 
 
@@ -2733,6 +2736,19 @@ def _legacy_mitm_route_admission(
         )
     if flow.metadata.get(LEGACY_MITM_TRANSPORT_METADATA_KEY) is not True:
         return None
+    if (
+        (route.adapter_config.get("response") or {}).get("mode")
+        == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+    ):
+        # OPEN legacy transport capability: parsed response objects cannot prove
+        # that hidden bytes after a 204 will not enter a reused connection.
+        # Do not authorize this profile until the transport owns that boundary.
+        return PolicyDecision(
+            False,
+            "JSON-or-empty-204 responses require a socket-owning decision gate",
+            503,
+            {"error": "python_json_or_empty_204_transport_unsupported"},
+        )
     if route.credential_ref:
         return PolicyDecision(
             False,
@@ -4426,6 +4442,25 @@ def _evaluate_response_envelope(
             502,
             {"error": "response_envelope_missing"},
         )
+    response_cfg = route.adapter_config.get("response") or {}
+    if (
+        response_cfg.get("mode") == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+        or any(
+            constraint.get("bodyPresence") == JSON_OR_EMPTY_204_BODY_PRESENCE
+            for constraint in route.constraints
+        )
+    ):
+        try:
+            validate_buffered_passthrough_response(
+                route.id, route.adapter_type, response_cfg, tuple(route.constraints)
+            )
+        except PolicyBundleError:
+            return PolicyDecision(
+                False,
+                "JSON-or-empty response envelope policy is invalid",
+                502,
+                {"error": "response_envelope_policy_invalid"},
+            )
     operation_fields = flow.metadata.get("serverware_operation") or {}
     operation = (
         operation_fields.get("operation")
@@ -4508,8 +4543,12 @@ def _evaluate_response_envelope(
                 },
             )
         body_presence = constraint.get("bodyPresence")
-        if (body_presence == "required" and not raw_body) or (
-            body_presence == "forbidden" and raw_body
+        json_or_empty = body_presence == JSON_OR_EMPTY_204_BODY_PRESENCE
+        empty_204 = json_or_empty and flow.response.status_code == 204
+        body_required = body_presence == "required" or (json_or_empty and not empty_204)
+        body_forbidden = body_presence == "forbidden" or empty_204
+        if (body_required and not raw_body) or (
+            body_forbidden and raw_body
         ):
             return PolicyDecision(
                 False,
@@ -4520,6 +4559,20 @@ def _evaluate_response_envelope(
                     "constraint_id": constraint_id,
                 },
             )
+        if empty_204 and (
+            "content-length" in values_by_name
+            or "transfer-encoding" in values_by_name
+            or getattr(flow.response, "trailers", None)
+        ):
+            return PolicyDecision(
+                False,
+                "upstream 204 response framing is not allowed",
+                502,
+                {
+                    "error": "response_envelope_no_content_framing_denied",
+                    "constraint_id": constraint_id,
+                },
+            )
         content_types = constraint.get("contentTypes") or []
         physical_content_types = values_by_name.get("content-type") or []
         if body_presence == "forbidden":
@@ -4527,6 +4580,23 @@ def _evaluate_response_envelope(
                 return PolicyDecision(
                     False,
                     "bodyless response declared a content type",
+                    502,
+                    {
+                        "error": "response_envelope_content_type_denied",
+                        "constraint_id": constraint_id,
+                    },
+                )
+        elif json_or_empty:
+            # Content-Type is optional representation metadata for 204, not
+            # evidence of a body. A present value must still strictly match the
+            # signed JSON media contract; other admitted statuses require it.
+            if not (empty_204 and not physical_content_types) and (
+                len(physical_content_types) != 1
+                or _parse_content_type(physical_content_types[0]) not in content_types
+            ):
+                return PolicyDecision(
+                    False,
+                    "upstream response content type is not allowed",
                     502,
                     {
                         "error": "response_envelope_content_type_denied",

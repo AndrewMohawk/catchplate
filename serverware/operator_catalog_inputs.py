@@ -75,10 +75,13 @@ class RuleInput(NamedInput):
     upstream_url: str = Field(min_length=1, max_length=2048)
     methods: list[Literal["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]] = Field(min_length=1, max_length=6)
     request_fields: list[_Item] = Field(default_factory=list, max_length=64)
+    # Absence retains the legacy request_fields/no-body contract. Explicit null
+    # is not an opt-out or an alias for another body mode.
+    request_body_mode: Literal["preserve_json_v1"] | None = None
     response_fields: list[_Item] = Field(default_factory=list, max_length=64)
     query_keys: list[_Item] = Field(default_factory=list, max_length=64)
     allowed_headers: list[_Item] = Field(default_factory=lambda: ["accept", "user-agent"], max_length=32)
-    response_mode: Literal["projected_json", "unfiltered_json"] = "projected_json"
+    response_mode: Literal["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1"] = "projected_json"
     credential_input: Literal["insert", "replace_exact"] = "insert"
     placeholder: str | None = Field(default=None, min_length=1, max_length=1024, repr=False)
     _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
@@ -102,6 +105,13 @@ class RuleInput(NamedInput):
     def response_mode_fields(self):
         if (self.response_mode == "projected_json") != bool(self.response_fields):
             raise ValueError("projected JSON requires fields; unfiltered JSON forbids them")
+        return self
+
+    @model_validator(mode="after")
+    def request_body_mode_fields(self):
+        if "request_body_mode" in self.model_fields_set:
+            if self.request_body_mode != "preserve_json_v1" or self.request_fields:
+                raise ValueError("explicit JSON preservation requires empty request fields")
         return self
 
     @model_validator(mode="after")

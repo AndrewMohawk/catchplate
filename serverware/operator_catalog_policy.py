@@ -8,24 +8,40 @@ from serverware import operator_catalog_schema as schema
 
 
 def _response_profile(rule: dict, route: dict) -> None:
-    mode = rule.get('response_mode', 'projected_json')
-    fields = rule.get('response_fields')
-    if (mode not in {'projected_json', 'unfiltered_json'} or not isinstance(fields, list)
-            or (mode == 'projected_json') != bool(fields)):
-        raise schema.CatalogIntegrityError('catalog response mode/fields refused')
+    _, mode = schema.rule_content_modes(rule)
     if mode == 'projected_json':
         return  # Preserve the complete legacy profile byte-for-byte.
+    profile_mode = 'bufferedJsonOrEmpty204V1' if mode == 'unfiltered_json_or_empty_v1' else 'bufferedPassthrough'
     config = route['adapter']['config']
     previous = config['response']
     config['response'] = {
-        'mode': 'bufferedPassthrough', 'bodyFormat': 'json',
+        'mode': profile_mode, 'bodyFormat': 'json',
         'maxBodyBytes': previous['maxBodyBytes'], 'contentTypes': ['application/json'],
         'allowedHeaders': [], 'error': {
-            'mode': 'bufferedPassthrough', 'bodyFormat': 'json',
+            'mode': profile_mode, 'bodyFormat': 'json',
             'maxBodyBytes': previous['error']['maxBodyBytes'], 'contentTypes': ['application/json'],
             'allowedHeaders': [], 'onInvalid': 'block',
         },
     }
+    if mode == 'unfiltered_json_or_empty_v1':
+        envelopes = [item for item in route['constraints'] if item.get('type') == 'responseEnvelope']
+        if not envelopes:
+            raise schema.CatalogIntegrityError('catalog JSON-or-empty response envelope missing')
+        for envelope in envelopes:
+            envelope['bodyPresence'] = 'jsonOrEmpty204V1'
+            envelope['contentTypes'] = ['application/json']
+            if 204 not in envelope['statusCodes']:
+                envelope['statusCodes'].append(204)
+
+
+def _request_profile(rule: dict, credential: dict, route: dict) -> None:
+    if schema.rule_request_body_mode(rule, credential) is None:
+        return  # Omitted mode retains both old no-body and declared-field JSON.
+    request = route['adapter']['config']['request']
+    if 'allowedFields' in request or any(item.get('type') == 'jsonBody' for item in route['constraints']):
+        raise schema.CatalogIntegrityError('catalog request preservation contradicts field rules')
+    request.update(bodyMode='bufferedJsonPassthroughV1',
+        allowedMediaTypes=['application/json'], maxBodyBytes=65536)
 
 
 def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
@@ -65,6 +81,7 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
             operator_catalog_google.validate_rule(rule, credential)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
+        _request_profile(rule, credential, route)
         _response_profile(rule, route)
         replacement = schema.rule_credential_header(rule, credential)
         if replacement is not None:

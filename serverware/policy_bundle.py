@@ -497,15 +497,22 @@ STREAMING_RESPONSE_MODES = {
     "csvStream",
 }
 STRUCTURED_STREAMING_MODES = STREAMING_RESPONSE_MODES - {"stream"}
+BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE = "bufferedJsonPassthroughV1"
+BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE = "bufferedJsonOrEmpty204V1"
+JSON_OR_EMPTY_204_BODY_PRESENCE = "jsonOrEmpty204V1"
 CREDENTIAL_BEARING_GENERIC_REQUEST_BODY_MODES = frozenset(
-    {"none", "json", "formUrlencoded"}
+    {"none", "json", "formUrlencoded", BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE}
 )
 BUFFERED_PASSTHROUGH_RESPONSE_MODE = "bufferedPassthrough"
+WHOLE_JSON_RESPONSE_MODES = frozenset(
+    {BUFFERED_PASSTHROUGH_RESPONSE_MODE, BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE}
+)
 CREDENTIAL_BEARING_GENERIC_RESPONSE_MODES = frozenset(
-    {"headersOnly", "json", BUFFERED_PASSTHROUGH_RESPONSE_MODE}
+    {"headersOnly", "json"} | WHOLE_JSON_RESPONSE_MODES
 )
 GENERIC_REQUEST_MEDIA_TYPES = {
     "json": "application/json",
+    BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE: "application/json",
     "formUrlencoded": "application/x-www-form-urlencoded",
     "jsonlStream": "application/x-ndjson",
     "jsonArrayStream": "application/json",
@@ -517,7 +524,7 @@ GENERIC_REQUEST_MEDIA_TYPES = {
 PROJECTED_RESPONSE_MODES = {"json"} | STRUCTURED_STREAMING_MODES
 BUFFERED_RESPONSE_MODES = {"any", "headersOnly", "json"}
 SUPPORTED_RESPONSE_MODES = (
-    BUFFERED_RESPONSE_MODES | STREAMING_RESPONSE_MODES | {BUFFERED_PASSTHROUGH_RESPONSE_MODE}
+    BUFFERED_RESPONSE_MODES | STREAMING_RESPONSE_MODES | WHOLE_JSON_RESPONSE_MODES
 )
 FORBIDDEN_AGENT_CREDENTIAL_HEADERS = {
     "authorization",
@@ -4720,9 +4727,15 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                     for content_type in content_types
                 )
                 or len(content_types) != len(set(content_types))
-                or body_presence not in {"required", "forbidden"}
+                or body_presence not in {"required", "forbidden", JSON_OR_EMPTY_204_BODY_PRESENCE}
                 or (body_presence == "required" and not content_types)
                 or (body_presence == "forbidden" and bool(content_types))
+                or (body_presence == JSON_OR_EMPTY_204_BODY_PRESENCE and (
+                    content_types != ["application/json"]
+                    or 204 not in status_codes
+                    or any(not (200 <= status <= 299 or 400 <= status <= 599)
+                        or status == 205 for status in status_codes)
+                ))
             ):
                 raise PolicyBundleError(
                     f"route {route_id} responseEnvelope {constraint_id} "
@@ -4930,6 +4943,74 @@ def _validate_credential_response_projections(
         )
 
 
+def validate_buffered_json_passthrough_request(
+    route_id: str,
+    adapter_type: str,
+    request: Any,
+    constraints: tuple[dict[str, Any], ...] = (),
+) -> None:
+    """Admit only the explicit, bounded byte-preserving JSON request profile.
+
+    Empty bytes are allowed; parsing and exact-byte dispatch are runtime duties.
+    The existing route/header/query/credential and operation-source validators
+    still apply. This helper does not turn an empty field allowlist into a grant.
+    """
+    if not isinstance(request, dict) or request.get("bodyMode") != BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE:
+        return
+    label = f"route {route_id} {BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE} request"
+    required = {"allowedQueryKeys", "allowedHeaders", "allowedMediaTypes",
+        "bodyMode", "maxBodyBytes", "operation", "valueRules"}
+    allowed = required | {"discardHeaders", "requiredHeaders"}
+    if adapter_type != "generic.rest" or not required.issubset(request) or set(request) - allowed:
+        raise PolicyBundleError(f"{label} must use the closed generic.rest request profile")
+    if request.get("allowedMediaTypes") != ["application/json"]:
+        raise PolicyBundleError(f"{label} requires exactly application/json")
+    _validate_response_body_limit(route_id, request, "buffered JSON request", 16 * 1024 * 1024)
+    for field, maximum_length in (("allowedQueryKeys", 256), ("allowedHeaders", 128)):
+        values = request[field]
+        if (not isinstance(values, list) or len(values) > 64
+                or any(not isinstance(value, str) or not 1 <= len(value) <= maximum_length
+                    for value in values)
+                or len(values) != len(set(values))):
+            raise PolicyBundleError(f"{label} {field} must contain unique bounded strings")
+    operation = request.get("operation")
+    if (not isinstance(operation, dict) or "name" not in operation
+            or set(operation) - {"name", "pathParams", "bodySha256Field"}
+            or not isinstance(operation["name"], str) or not 1 <= len(operation["name"]) <= 128):
+        raise PolicyBundleError(f"{label} cannot extract JSON or form operation fields")
+    path_params = operation.get("pathParams", [])
+    if (not isinstance(path_params, list) or len(path_params) > 16
+            or any(not isinstance(name, str) or OPERATION_FIELD_NAME_RE.fullmatch(name) is None
+                or name == "operation" for name in path_params)
+            or len(path_params) != len(set(path_params))):
+        raise PolicyBundleError(f"{label} pathParams must be unique bounded operation fields")
+    if "bodySha256Field" in operation:
+        name = operation["bodySha256Field"]
+        if (not isinstance(name, str) or OPERATION_FIELD_NAME_RE.fullmatch(name) is None
+                or name == "operation" or name in path_params):
+            raise PolicyBundleError(f"{label} bodySha256Field must be a unique non-reserved field")
+    value_rules = request.get("valueRules")
+    if not isinstance(value_rules, list) or len(value_rules) > 16:
+        raise PolicyBundleError(f"{label} valueRules must be a bounded array")
+    if value_rules:
+        _validate_constraints(route_id, [{"id": "adapter.request.valueRules",
+            "type": "requestValue", "rules": value_rules}])
+    all_rules = list(value_rules)
+    for constraint in constraints:
+        if not isinstance(constraint, dict):
+            raise PolicyBundleError(f"{label} constraints must be objects")
+        if constraint.get("type") in {"jsonBody", "formBody"}:
+            raise PolicyBundleError(f"{label} cannot combine field-constrained body policies")
+        if constraint.get("type") == "requestValue":
+            rules = constraint.get("rules")
+            if not isinstance(rules, list):
+                raise PolicyBundleError(f"{label} requestValue rules must be an array")
+            all_rules.extend(rules)
+    if any(not isinstance(rule, dict) or rule.get("source") in {"jsonBody", "formBody"}
+            for rule in all_rules):
+        raise PolicyBundleError(f"{label} cannot inspect or capture JSON or form fields")
+
+
 def _validate_credential_request_body_constraint(
     route_id: str,
     adapter_type: str,
@@ -5042,10 +5123,10 @@ def _validate_generic_operation_sources(
                 f"route {route_id} generic.rest request.operation.bodySha256Field "
                 "must name one valid non-reserved operation field"
             )
-        if body_mode not in {"json", "formUrlencoded"}:
+        if body_mode not in {"json", "formUrlencoded", BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE}:
             raise PolicyBundleError(
                 f"route {route_id} generic.rest request.operation.bodySha256Field requires "
-                "buffered bodyMode json or formUrlencoded"
+                "an admitted buffered JSON or form bodyMode"
             )
         if body_sha256_field in source_kinds:
             raise PolicyBundleError(
@@ -5628,41 +5709,49 @@ def validate_buffered_passthrough_response(
     route_id: str,
     adapter_type: str,
     response: Any,
-    constraints: tuple[dict[str, Any], ...] = (),
+    constraints: tuple[dict[str, Any], ...] | None = None,
 ) -> None:
-    """Validate the opt-in whole-JSON contract, independently of schema loading."""
+    """Validate explicit whole-JSON profiles independently of schema loading.
+
+    None selects shape-only validation before route constraints are compiled.
+    An actual tuple, including an empty tuple, also checks the envelope binding.
+    """
+    mode = response.get("mode") if isinstance(response, dict) else None
+    if constraints is not None:
+        _validate_json_or_empty_204_envelopes(route_id, adapter_type, mode, constraints)
     if not isinstance(response, dict):
         return
     error = response.get("error")
-    if response.get("mode") != BUFFERED_PASSTHROUGH_RESPONSE_MODE:
+    if not isinstance(mode, str) or mode not in WHOLE_JSON_RESPONSE_MODES:
         if "bodyFormat" in response or (
             isinstance(error, dict)
-            and ("bodyFormat" in error or error.get("mode") == BUFFERED_PASSTHROUGH_RESPONSE_MODE)
+            and ("bodyFormat" in error or error.get("mode") in (
+                BUFFERED_PASSTHROUGH_RESPONSE_MODE, BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE))
         ):
             raise PolicyBundleError(
                 f"route {route_id} bufferedPassthrough requires paired explicit success and error profiles"
             )
         return
     if adapter_type != "generic.rest":
-        raise PolicyBundleError(f"route {route_id} bufferedPassthrough is supported only by generic.rest")
+        raise PolicyBundleError(f"route {route_id} {mode} is supported only by generic.rest")
     if any(
         constraint.get("type")
         in {"slidingWindowLimit", "weightedBudget", "traversalBudget", "responseBinding"}
-        for constraint in constraints
+        for constraint in constraints or ()
     ):
         raise PolicyBundleError(
-            f"route {route_id} bufferedPassthrough does not support durable claims or responseBinding"
+            f"route {route_id} {mode} does not support durable claims or responseBinding"
         )
     common_fields = {"mode", "bodyFormat", "maxBodyBytes", "contentTypes", "allowedHeaders"}
     for profile, terminal_field, maximum in (
         (response, "error", 16 * 1024 * 1024),
         (error, "onInvalid", MAX_PROVIDER_ERROR_BODY_BYTES),
     ):
-        label = f"bufferedPassthrough {'success' if terminal_field == 'error' else 'error'} response"
+        label = f"{mode} {'success' if terminal_field == 'error' else 'error'} response"
         if not isinstance(profile, dict) or set(profile) != common_fields | {terminal_field}:
             raise PolicyBundleError(f"route {route_id} {label} must define exactly its closed profile fields")
         if (
-            profile.get("mode") != BUFFERED_PASSTHROUGH_RESPONSE_MODE
+            profile.get("mode") != mode
             or profile.get("bodyFormat") != "json"
             or profile.get("contentTypes") != ["application/json"]
             or (terminal_field == "onInvalid" and profile.get("onInvalid") != "block")
@@ -5672,12 +5761,43 @@ def validate_buffered_passthrough_response(
         _validate_response_headers(route_id, profile, label)
 
 
+def _validate_json_or_empty_204_envelopes(
+    route_id: str,
+    adapter_type: str,
+    response_mode: Any,
+    constraints: tuple[dict[str, Any], ...],
+) -> None:
+    """Neither half of the versioned 204 contract can broaden an old profile."""
+    if any(not isinstance(item, dict) for item in constraints):
+        raise PolicyBundleError(f"route {route_id} response constraints must be objects")
+    envelopes = [item for item in constraints if item.get("type") == "responseEnvelope"]
+    enabled = response_mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+    if not enabled:
+        if any(item.get("bodyPresence") == JSON_OR_EMPTY_204_BODY_PRESENCE for item in envelopes):
+            raise PolicyBundleError(f"route {route_id} jsonOrEmpty204V1 requires its explicit response profile")
+        return
+    if adapter_type != "generic.rest" or not envelopes:
+        raise PolicyBundleError(f"route {route_id} {response_mode} requires a generic.rest response envelope")
+    for envelope in envelopes:
+        statuses = envelope.get("statusCodes")
+        if (envelope.get("phase") != "response"
+                or envelope.get("bodyPresence") != JSON_OR_EMPTY_204_BODY_PRESENCE
+                or envelope.get("contentTypes") != ["application/json"]
+                or not isinstance(statuses, list) or not 1 <= len(statuses) <= 16
+                or any(type(status) is not int or status == 205
+                    or not (200 <= status <= 299 or 400 <= status <= 599) for status in statuses)
+                or len(statuses) != len(set(statuses)) or 204 not in statuses):
+            raise PolicyBundleError(
+                f"route {route_id} {response_mode} requires matching jsonOrEmpty204V1 envelopes with 204"
+            )
+
+
 def _validate_optional_response_release_contract(
     route_id: str,
     response: dict[str, Any],
     adapter_name: str,
 ) -> None:
-    if response.get("mode") == BUFFERED_PASSTHROUGH_RESPONSE_MODE:
+    if response.get("mode") in WHOLE_JSON_RESPONSE_MODES:
         validate_buffered_passthrough_response(route_id, adapter_name, response)
         return
     if response.get("mode") in PROJECTED_RESPONSE_MODES:
@@ -6607,7 +6727,7 @@ def compile_policy_bundle(
         ):
             raise PolicyBundleError(
                 f"route {route_id} credential-bearing generic.rest response mode "
-                "must be headersOnly, json or bufferedPassthrough"
+                "must use an admitted headers-only, projected or whole-JSON profile"
             )
         if credential_ref and response_mode in {"any", "stream"}:
             raise PolicyBundleError(
@@ -6873,6 +6993,9 @@ def compile_policy_bundle(
                 }
             )
         constraints = _validate_constraints(route_id, raw_constraints)
+        validate_buffered_json_passthrough_request(
+            route_id, adapter_type, adapter_config.get("request"), constraints
+        )
         validate_buffered_passthrough_response(
             route_id, adapter_type, adapter_config.get("response"), constraints
         )

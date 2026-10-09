@@ -120,11 +120,11 @@
       }
     },
     "credentialRequestBodyMode": {
-      "enum": ["none", "json", "formUrlencoded"],
+      "enum": ["none", "json", "formUrlencoded", "bufferedJsonPassthroughV1"],
       "$comment": "Closed buffered allowlist for credential-bearing generic.rest requests. Named streaming modes and unknown future modes deny for every HTTP method."
     },
     "credentialResponseMode": {
-      "enum": ["headersOnly", "json", "bufferedPassthrough"],
+      "enum": ["headersOnly", "json", "bufferedPassthrough", "bufferedJsonOrEmpty204V1"],
       "$comment": "Closed response allowlist for credential-bearing generic.rest routes."
     },
     "jsonOperationFields": {
@@ -158,6 +158,33 @@
         "contentTypes": {"const": ["application/json"]},
         "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
         "error": {"$ref": "#/$defs/bufferedPassthroughErrorResponse"}
+      }
+    },
+    "bufferedJsonOrEmpty204ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "bodyFormat", "maxBodyBytes", "contentTypes", "allowedHeaders", "onInvalid"],
+      "properties": {
+        "mode": {"const": "bufferedJsonOrEmpty204V1"},
+        "bodyFormat": {"const": "json"},
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "contentTypes": {"const": ["application/json"]},
+        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "onInvalid": {"const": "block"}
+      }
+    },
+    "bufferedJsonOrEmpty204Response": {
+      "$comment": "Versioned bounded JSON preservation with an explicitly admitted empty 204. Error statuses still require JSON. A 204 has no body, trailers, Content-Length or Transfer-Encoding; its Content-Type may be absent or one admitted JSON metadata value and must never be synthesized. Semantic admission requires the matching jsonOrEmpty204V1 envelope.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "bodyFormat", "maxBodyBytes", "contentTypes", "allowedHeaders", "error"],
+      "properties": {
+        "mode": {"const": "bufferedJsonOrEmpty204V1"},
+        "bodyFormat": {"const": "json"},
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "contentTypes": {"const": ["application/json"]},
+        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "error": {"$ref": "#/$defs/bufferedJsonOrEmpty204ErrorResponse"}
       }
     },
     "errorResponse": {
@@ -222,6 +249,24 @@
       "required": ["allowedQueryKeys", "allowedHeaders", "allowedMediaTypes", "bodyMode", "maxBodyBytes", "operation", "valueRules"],
       "additionalProperties": false,
       "allOf": [
+        {
+          "if": {"properties": {"bodyMode": {"const": "bufferedJsonPassthroughV1"}}, "required": ["bodyMode"]},
+          "then": {
+            "$comment": "An absent body is allowed. Every nonempty body is strictly parsed JSON and forwarded byte-for-byte, without field projection or body-field extraction. Raw bodySha256Field remains supported. Unknown, streaming and contradictory body restrictions deny.",
+            "not": {"anyOf": [
+              {"required": ["allowedFields"]}, {"required": ["maxLineBytes"]},
+              {"required": ["maxItemBytes"]}, {"required": ["maxEventBytes"]},
+              {"required": ["maxPairBytes"]}, {"required": ["maxRecordBytes"]},
+              {"required": ["maxNestedBytes"]}
+            ]},
+            "properties": {
+              "allowedMediaTypes": {"const": ["application/json"]},
+              "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+              "operation": {"not": {"anyOf": [{"required": ["jsonFields"]}, {"required": ["formFields"]}]}},
+              "valueRules": {"items": {"properties": {"source": {"not": {"enum": ["jsonBody", "formBody"]}}}}}
+            }
+          }
+        },
         {
           "if": {
             "properties": {
@@ -367,7 +412,7 @@
             "required": ["operation"]
           },
           "then": {
-            "properties": {"bodyMode": {"enum": ["json", "formUrlencoded"]}},
+            "properties": {"bodyMode": {"enum": ["json", "formUrlencoded", "bufferedJsonPassthroughV1"]}},
             "required": ["bodyMode"]
           }
         }
@@ -403,7 +448,7 @@
           },
           "additionalProperties": {"$ref": "#/$defs/requiredRequestHeader"}
         },
-        "bodyMode": {"enum": ["none", "any", "json", "formUrlencoded", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "bodyMode": {"enum": ["none", "any", "json", "formUrlencoded", "bufferedJsonPassthroughV1", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
@@ -436,8 +481,12 @@
           "if": {"properties": {"mode": {"const": "bufferedPassthrough"}}, "required": ["mode"]},
           "then": {"$ref": "#/$defs/bufferedPassthroughResponse"},
           "else": {
-            "not": {"required": ["bodyFormat"]},
-            "properties": {"error": {"$ref": "#/$defs/errorResponse"}}
+            "if": {"properties": {"mode": {"const": "bufferedJsonOrEmpty204V1"}}, "required": ["mode"]},
+            "then": {"$ref": "#/$defs/bufferedJsonOrEmpty204Response"},
+            "else": {
+              "not": {"required": ["bodyFormat"]},
+              "properties": {"error": {"$ref": "#/$defs/errorResponse"}}
+            }
           }
         },
         {
@@ -466,7 +515,7 @@
         }
       ],
       "properties": {
-        "mode": {"enum": ["headersOnly", "json", "bufferedPassthrough", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "mode": {"enum": ["headersOnly", "json", "bufferedPassthrough", "bufferedJsonOrEmpty204V1", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
         "bodyFormat": {"const": "json"},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "contentTypes": {"$ref": "#/$defs/contentTypes"},
@@ -478,7 +527,7 @@
         "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "allowedFields": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
         "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
-        "error": {"oneOf": [{"$ref": "#/$defs/errorResponse"}, {"$ref": "#/$defs/bufferedPassthroughErrorResponse"}]}
+        "error": {"oneOf": [{"$ref": "#/$defs/errorResponse"}, {"$ref": "#/$defs/bufferedPassthroughErrorResponse"}, {"$ref": "#/$defs/bufferedJsonOrEmpty204ErrorResponse"}]}
       }
     }
   }

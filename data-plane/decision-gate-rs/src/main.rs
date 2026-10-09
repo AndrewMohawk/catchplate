@@ -10,6 +10,9 @@ mod native_canary_opening;
 mod native_canary_runtime;
 mod response_v2;
 mod buffered_response;
+mod buffered_request;
+#[cfg(test)]
+mod ordinary_client_compat_tests;
 mod gate_state_init;
 mod control_plane_client_config;
 mod development_sandbox;
@@ -8533,7 +8536,7 @@ fn required_generic_body_constraint(body_mode: &str) -> Option<&'static str> {
 
 fn required_generic_body_media_type(body_mode: &str) -> Option<&'static str> {
     match body_mode {
-        "json" | "jsonArrayStream" | "jsonNestedStream" => Some("application/json"),
+        "json" | "bufferedJsonPassthroughV1" | "jsonArrayStream" | "jsonNestedStream" => Some("application/json"),
         "jsonlStream" => Some("application/x-ndjson"),
         "jsonSseStream" => Some("text/event-stream"),
         "formUrlencoded" | "formUrlencodedStream" => {
@@ -8621,12 +8624,19 @@ fn validate_runtime_credential_body_policy(route: &Route) -> Result<(), Value> {
         .and_then(|request| request.get("bodyMode"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    if !matches!(body_mode, "none" | "json" | "formUrlencoded") {
+    if !matches!(body_mode, "none" | "json" | "formUrlencoded" | "bufferedJsonPassthroughV1") {
         return Err(json!({
             "error":"credential_non_buffered_request_body_denied",
             "bodyMode":body_mode,
             "status_code":500,
         }));
+    }
+    if body_mode == buffered_request::MODE {
+        return buffered_request::validate_contract(
+            route.adapter_config.get("request").and_then(Value::as_object)
+                .ok_or_else(|| json!({"error":"generic_request_policy_missing","status_code":500}))?,
+            &route.constraints,
+        ).map_err(|_| json!({"error":"request_buffered_json_profile_invalid","status_code":500}));
     }
     let Some(constraint_type) = required_generic_body_constraint(body_mode) else {
         return Ok(());
@@ -8844,7 +8854,8 @@ fn generic_operation_sources<'a>(
                 "request.operation.{list_name} must contain at most {MAX_SOURCE_FIELDS} fields"
             ));
         }
-        if !fields.is_empty() && required_body_mode.is_some_and(|required| body_mode != required) {
+        if required_body_mode.is_some() && body_mode == buffered_request::MODE
+            || !fields.is_empty() && required_body_mode.is_some_and(|required| body_mode != required) {
             return Err(format!(
                 "request.operation.{list_name} requires bodyMode {}",
                 required_body_mode.unwrap_or_default()
@@ -8873,7 +8884,7 @@ fn generic_operation_sources<'a>(
                     .to_string(),
             );
         }
-        if !matches!(body_mode, "json" | "formUrlencoded") {
+        if !matches!(body_mode, "json" | "formUrlencoded" | "bufferedJsonPassthroughV1") {
             return Err(
                 "request.operation.bodySha256Field requires buffered bodyMode json or formUrlencoded"
                     .to_string(),
@@ -9518,9 +9529,13 @@ fn validate_response_envelope_constraint(
             format!("route {route_id} responseEnvelope {constraint_id} contentTypes invalid")
         })?;
     let mut seen_content_types = HashSet::new();
-    if !matches!(body_presence, "required" | "forbidden")
+    if !matches!(body_presence, "required" | "forbidden" | "jsonOrEmpty204V1")
         || (body_presence == "required" && content_types.is_empty())
         || (body_presence == "forbidden" && !content_types.is_empty())
+        || (body_presence == buffered_response::JSON_OR_EMPTY_204_PRESENCE
+            && (constraint.get("contentTypes") != Some(&json!(["application/json"]))
+                || !seen_statuses.contains(&204)
+                || seen_statuses.iter().any(|status| !((200..=299).contains(status) && *status != 205 || (400..=599).contains(status)))))
         || content_types.iter().any(|value| {
             value.as_str().is_none_or(|value| {
                 normalized_provider_request_media_type(value).as_deref() != Some(value)
@@ -11863,6 +11878,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             }));
         }
         let constraints = combined_constraints.as_slice();
+        if adapter_type == "generic.rest" {
+            buffered_request::validate_contract(request_config, constraints)?;
+        }
         let credential_bound = route
             .get("credentialRef")
             .and_then(Value::as_str)
@@ -11874,13 +11892,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(Value::as_str);
         let response_mode =
             effective_response_mode(adapter_type, adapter_config.get("response"));
+        buffered_response::validate_envelope_pairing(
+            adapter_type,
+            adapter_config.get("response").and_then(|profile| profile.get("mode")).and_then(Value::as_str),
+            constraints,
+        )?;
         if adapter_type == "generic.rest" && credential_bound {
             let Some(body_mode) = request_mode else {
                 return Err(format!(
                     "route {route_id} credential-bearing generic.rest bodyMode must be explicitly buffered"
                 ));
             };
-            if !matches!(body_mode, "none" | "json" | "formUrlencoded") {
+            if !matches!(body_mode, "none" | "json" | "formUrlencoded" | "bufferedJsonPassthroughV1") {
                 return Err(format!(
                     "route {route_id} credential-bearing generic.rest routes cannot use non-buffered bodyMode {body_mode}"
                 ));
@@ -11892,7 +11915,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     ));
                 }
             }
-            if !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough")) {
+            if !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1")) {
                 return Err(format!(
                     "route {route_id} credential-bearing generic.rest response mode must be explicitly buffered"
                 ));
@@ -11947,7 +11970,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let mode_supported = BUFFERED_RESPONSE_MODES.contains(&response_mode)
                 || (adapter_type == "generic.rest"
                     && (STREAMING_RESPONSE_MODES.contains(&response_mode)
-                        || response_mode == buffered_response::MODE))
+                        || buffered_response::supported_mode(response_mode)))
                 || (adapter_type != "generic.rest" && response_mode == "stream");
             if !mode_supported {
                 return Err(format!(
@@ -11966,9 +11989,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            if response_mode == buffered_response::MODE {
+            if buffered_response::supported_mode(response_mode) {
                 buffered_response::validate_contract(adapter_type, response)?;
-                buffered_response::validate_constraints(constraints)?;
+                buffered_response::validate_mode_constraints(response_mode, constraints)?;
             } else {
                 validate_optional_response_release_contract(
                     response,
@@ -12312,6 +12335,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 "none"
                     | "any"
                     | "json"
+                    | "bufferedJsonPassthroughV1"
                     | "formUrlencoded"
                     | "stream"
                     | "jsonlStream"
@@ -24107,6 +24131,11 @@ fn validate_resolved_addresses(
         .collect())
 }
 
+fn reuse_idle_upstream_connections(route: &Route, method: &str) -> bool {
+    matches!(method, "GET" | "HEAD" | "OPTIONS")
+        && route_response_mode(route) != Some(buffered_response::JSON_OR_EMPTY_204_MODE)
+}
+
 fn prepare_upstream(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -24124,7 +24153,9 @@ fn prepare_upstream(
     let addresses =
         validate_resolved_addresses(resolved, route.port, &route.resolved_address_policy)?;
     let socket_addr = addresses[0];
-    let reuse_idle_connections = matches!(method, "GET" | "HEAD" | "OPTIONS");
+    // A 204 parser may hide illegal trailing bytes. Never carry such bytes into
+    // another request via an idle pooled connection for the additive profile.
+    let reuse_idle_connections = reuse_idle_upstream_connections(route, method);
     let key = PinnedUpstreamClientKey {
         host: route.host.clone(),
         port: route.port,
@@ -31053,6 +31084,14 @@ fn validate_adapter_with_gmail_proof_mode(
                     body_mode,
                     body_length,
                 )?;
+                if body_mode == buffered_request::MODE {
+                    buffered_request::validate_contract(request_config, &route.constraints)
+                        .map_err(|_| json!({"error":"request_buffered_json_profile_invalid","status_code":500}))?;
+                    if body_length != req.body.len() as u64 {
+                        return Err(json!({"error":"request_buffered_json_length_mismatch","status_code":400}));
+                    }
+                    buffered_request::inspect_body(req.body.as_bytes(), req.forwarded_body_utf8_valid)?;
+                }
                 if body_mode == "json" && body_length != 0 {
                     let content_type = request_content_type(forwarded_headers);
                     if content_type.as_str() != "application/json" {
@@ -34521,6 +34560,7 @@ fn enforce_response_envelope(
     let body_matches = match (presence, body_length) {
         ("required", Some(length)) => length > 0,
         ("forbidden", Some(length)) => length == 0,
+        ("jsonOrEmpty204V1", Some(length)) => if status == StatusCode::NO_CONTENT { length == 0 } else { length > 0 },
         _ => false,
     };
     if !body_matches {
@@ -34599,7 +34639,15 @@ fn enforce_response_envelope(
         ));
     }
     let content_type_values = headers.get_all("content-type").iter().collect::<Vec<_>>();
-    match presence {
+    let effective_presence = if presence == buffered_response::JSON_OR_EMPTY_204_PRESENCE {
+        if status == StatusCode::NO_CONTENT {
+            buffered_response::validate_empty_204_headers(headers)?;
+            "optionalJson204"
+        } else if status == StatusCode::RESET_CONTENT || !(status.is_success() || status.is_client_error() || status.is_server_error()) {
+            return Err(constraint_error(constraint, "response_envelope_status_denied", "response status is outside the JSON-or-empty-204 envelope"));
+        } else { "required" }
+    } else { presence };
+    match effective_presence {
         "required" => {
             if content_type_values.len() != 1 {
                 return Err(constraint_error(
@@ -34634,7 +34682,7 @@ fn enforce_response_envelope(
                 "bodyless response envelope forbids content-type",
             ));
         }
-        "forbidden" => {}
+        "forbidden" | "optionalJson204" => {}
         _ => {
             return Err(constraint_error(
                 constraint,
@@ -42471,6 +42519,12 @@ fn release_forward_response(
             SensitiveString::new(response_body_sha256),
         ),
     ]);
+    if status == StatusCode::NO_CONTENT
+        && validation.get("mode").and_then(Value::as_str) == Some(buffered_response::JSON_OR_EMPTY_204_MODE)
+        && body.is_empty()
+    {
+        return buffered_response::serialize_empty_204(content_type, &headers);
+    }
     sensitive_http_binary_response_with_headers(status, content_type, body, &headers)
 }
 
@@ -42647,13 +42701,18 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
     let response_mode = route_response_mode(route);
-    if response_mode == Some(buffered_response::MODE) {
+    buffered_response::validate_envelope_pairing(
+        &route.adapter_type,
+        route.adapter_config.pointer("/response/mode").and_then(Value::as_str),
+        &route.constraints,
+    )?;
+    if response_mode.is_some_and(buffered_response::supported_mode) {
         buffered_response::validate_contract(
             &route.adapter_type,
             route.adapter_config.get("response").and_then(Value::as_object)
                 .ok_or("bufferedPassthrough response profile missing")?,
         )?;
-        buffered_response::validate_constraints(&route.constraints)?;
+        buffered_response::validate_mode_constraints(response_mode.unwrap_or_default(), &route.constraints)?;
     }
     if route_has_durable_policy_claim(route)
         && !matches!(response_mode, Some("headersOnly" | "json"))
@@ -42667,7 +42726,7 @@ fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
             .credential_ref
             .as_deref()
             .is_some_and(|credential_ref| !credential_ref.is_empty())
-        && !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough"))
+        && !matches!(response_mode, Some("headersOnly" | "json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1"))
     {
         return Err(
             "credential-bearing generic.rest requires an explicitly buffered response mode"
@@ -42901,7 +42960,7 @@ fn validate_selected_json_response_content_type(
     adapter_type: &str,
 ) -> Result<(), Value> {
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
-        Some("json" | "bufferedPassthrough")) {
+        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -44220,15 +44279,16 @@ fn validate_policy_json_response(
         return block_forward_response(state, decision, method, url, status, payload).into();
     }
     let mode = effective_response_mode(adapter_type, Some(response_config)).unwrap_or("any");
-    if mode == buffered_response::MODE {
+    if buffered_response::supported_mode(mode) {
         return match buffered_response::inspect_body(
             adapter_type, response_config, status, content_type, body, response_secret_guard,
         ) {
             Ok(bytes) => release_forward_response(
-                state, snapshot, decision, method, url, status, Some("application/json"),
+                state, snapshot, decision, method, url, status,
+                if mode == buffered_response::JSON_OR_EMPTY_204_MODE && status == StatusCode::NO_CONTENT { content_type } else { Some("application/json") },
                 released_headers, bytes, response_secret_guard,
                 merge_response_validation(
-                    json!({"ok":true,"mode":buffered_response::MODE,
+                    json!({"ok":true,"mode":mode,
                         "bodyFormat":"json","body_bytes_preserved":true,
                         "allowed_fields_redacted":false,"adapter":adapter_type}),
                     binding_validation,
@@ -45067,11 +45127,18 @@ fn finalize_upstream_response(
                 block_buffered_upstream!(payload, "response-status-policy-denied")
             }
         };
-    if let Err(payload) = validate_selected_json_response_content_type(
+    let empty_204 = response_config.get("mode").and_then(Value::as_str) == Some(buffered_response::JSON_OR_EMPTY_204_MODE)
+        && status == StatusCode::NO_CONTENT;
+    if empty_204 {
+        if let Err(payload) = buffered_response::validate_empty_204_headers(response.headers()) {
+            block_buffered_upstream!(payload, "response-empty-204-headers-denied");
+        }
+    }
+    if let Err(payload) = if empty_204 && !response.headers().contains_key("content-type") { Ok(()) } else { validate_selected_json_response_content_type(
         &response_config,
         response.headers(),
         &base_response_policy.adapter_type,
-    ) {
+    ) } {
         block_buffered_upstream!(payload, "response-content-type-denied");
     }
     if let Some(payload) = credential_response_projection_error(
@@ -45349,6 +45416,13 @@ fn finalize_upstream_response(
                 body.zeroize();
                 return ForwardResult::buffered(blocked);
             }
+            let canonical_content_type = if empty_204 {
+                None
+            } else {
+                Some(Zeroizing::new(canonical_response_content_type(
+                    content_type.as_ref().map(|value| value.as_str()),
+                )))
+            };
             let response = validate_forward_response(
                 state,
                 snapshot,
@@ -45356,12 +45430,11 @@ fn finalize_upstream_response(
                 request_method,
                 upstream_url,
                 status,
-                Some(
-                    canonical_response_content_type(
-                        content_type.as_ref().map(|value| value.as_str()),
-                    )
-                    .as_str(),
-                ),
+                if empty_204 {
+                    content_type.as_ref().map(|value| value.as_str())
+                } else {
+                    canonical_content_type.as_ref().map(|value| value.as_str())
+                },
                 &released_headers,
                 body,
                 response_secret_guard,
@@ -46397,13 +46470,21 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         }
         completed_response_proof_authorization = Some(authorization_context);
     }
-    let response = match send_upstream_request_with_current_lease_finalized(
+    let response = match send_upstream_request_with_current_lease_and_timeout_validated_and_finalized(
         state,
         snapshot,
         credential_release_binding.as_ref(),
         builder,
+        None,
         send_deadlines,
         response_proof_requested,
+        |built| {
+            let route = decision_route_context(snapshot, &decision, &request_method, &upstream_url)
+                .map_err(|_| "provider_request_body_route_invalid")?.route;
+            if route.adapter_config.pointer("/request/bodyMode").and_then(Value::as_str) == Some(buffered_request::MODE) {
+                buffered_request::validate_built_body(&decision, built)
+            } else { Ok(()) }
+        },
         |request| {
             let permit = record_shadow_dispatch_barrier(
                 snapshot,

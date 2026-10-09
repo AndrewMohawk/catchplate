@@ -15,6 +15,8 @@ from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 from serverware import db, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
+    BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
+    BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE,
     BUFFERED_PASSTHROUGH_RESPONSE_MODE,
     GMAIL_V1_OPERATION_QUERY_KEYS,
     NPM_PUBLIC_REGISTRY_HOST,
@@ -28,6 +30,7 @@ from serverware.policy_bundle import (
     is_serverware_internal_header,
     provider_request_profile,
     strict_json_loads,
+    validate_buffered_json_passthrough_request,
     validate_buffered_passthrough_response,
     validate_raw_absolute_target,
     validated_request_urlsplit,
@@ -61,6 +64,10 @@ _STREAMING_RESPONSE_MODES = {
 }
 _STRUCTURED_STREAMING_MODES = _STREAMING_RESPONSE_MODES - {"stream"}
 _PROJECTED_RESPONSE_MODES = {"json"} | _STRUCTURED_STREAMING_MODES
+_WHOLE_JSON_RESPONSE_MODES = {
+    BUFFERED_PASSTHROUGH_RESPONSE_MODE,
+    BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
+}
 _BUFFERED_REQUEST_CONSTRAINTS = {
     "json": "jsonBody",
     "formUrlencoded": "formBody",
@@ -76,6 +83,7 @@ _SAFE_RESPONSE_HEADERS = {
 _RESPONSE_CONTENT_TYPES = {
     "json": "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
+    BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
     "jsonlStream": "application/x-ndjson",
     "jsonArrayStream": "application/json",
     "jsonSseStream": "text/event-stream",
@@ -99,6 +107,51 @@ _GMAIL_STREAM_PROOF_NONCE_HEADER = "x-serverware-stream-proof-nonce"
 _MIN_GMAIL_CHILD_AUTHORITY_SECONDS = 0.250
 _GMAIL_INTERNAL_DATE_FUTURE_SKEW_MS = 5 * 60 * 1000
 _MAX_NPM_ATTACHMENT_BYTES = 16 * 1024 * 1024
+_BUFFERED_JSON_MAX_CONTAINER_DEPTH = 127
+
+
+def _strict_buffered_json(raw: bytes) -> Any:
+    """Inspect new whole-JSON modes without rewriting their wire bytes."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):
+            depth += 1
+            if depth > _BUFFERED_JSON_MAX_CONTAINER_DEPTH:
+                raise ValueError("buffered JSON container depth exceeded")
+        elif byte in (0x7D, 0x5D):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("buffered JSON container nesting is invalid")
+    payload = strict_json_loads(raw)
+    # The raw-byte limit bounds nodes and decoded text. Iterator frames use only
+    # O(depth) additional storage; no serialized copy becomes the dispatched body.
+    pending = [iter((payload,))]
+    while pending:
+        try:
+            value = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(value, str):
+            value.encode("utf-8")
+        elif isinstance(value, dict):
+            for key in value:
+                key.encode("utf-8")
+            pending.append(iter(value.values()))
+        elif isinstance(value, list):
+            pending.append(iter(value))
+    return payload
 
 
 def _parse_content_type(value: str) -> str | None:
@@ -188,6 +241,26 @@ def _secure_bounded_metadata_get(
     )
 
 
+def _buffered_json_request_policy_error(
+    route: Any, *, adapter_type: str | None = None
+) -> PolicyDecision | None:
+    try:
+        validate_buffered_json_passthrough_request(
+            str(getattr(route, "id", "runtime")),
+            adapter_type or getattr(route, "adapter_type", "generic.rest"),
+            route.adapter_config.get("request"),
+            tuple(getattr(route, "constraints", ()) or ()),
+        )
+    except PolicyBundleError:
+        return PolicyDecision(
+            allowed=False,
+            status_code=500,
+            reason="buffered JSON request policy is invalid",
+            payload={"error": "request_json_passthrough_policy_invalid"},
+        )
+    return None
+
+
 def preflight_request_admission(
     flow: Any,
     route: Any,
@@ -206,6 +279,9 @@ def preflight_request_admission(
             reason="request policy is missing",
             payload={"error": "request_policy_missing"},
         )
+    passthrough_error = _buffered_json_request_policy_error(route)
+    if passthrough_error is not None:
+        return passthrough_error
     max_body_bytes = request_cfg.get("maxBodyBytes")
     if (
         type(max_body_bytes) is not int
@@ -565,6 +641,11 @@ class ApiAdapter:
                 reason="generic request policy is missing",
                 payload={"error": "generic_request_policy_missing"},
             )
+        passthrough_error = _buffered_json_request_policy_error(
+            route, adapter_type=self.id
+        )
+        if passthrough_error is not None:
+            return passthrough_error
         credential_mode = route.adapter_config.get("credentialMode")
         if getattr(route, "credential_ref", None):
             if (
@@ -671,6 +752,16 @@ class ApiAdapter:
                 )
 
         body = flow.request.raw_content or b""
+        if (
+            request_cfg.get("bodyMode") == BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE
+            and not isinstance(flow.request.raw_content, bytes)
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=400,
+                reason="request body is not buffered bytes",
+                payload={"error": "request_body_not_buffered"},
+            )
         max_body = request_cfg.get("maxBodyBytes")
         if max_body is None:
             return PolicyDecision(
@@ -742,7 +833,7 @@ class ApiAdapter:
                 reason="generic request body is forbidden by policy",
                 payload={"error": "request_body_not_allowed"},
             )
-        if body_mode == "json" and body:
+        if body_mode in {"json", BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE} and body:
             content_type = str(flow.request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
             if content_type != "application/json":
                 return PolicyDecision(
@@ -752,7 +843,10 @@ class ApiAdapter:
                     payload={"error": "request_json_content_type_denied", "contentType": content_type},
                 )
             try:
-                strict_json_loads(body)
+                if body_mode == BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE:
+                    _strict_buffered_json(body)
+                else:
+                    strict_json_loads(body)
             except Exception:
                 return PolicyDecision(
                     allowed=False,
@@ -793,6 +887,13 @@ class ApiAdapter:
 
     def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         request_cfg = route.adapter_config.get("request") or {}
+        passthrough_error = _buffered_json_request_policy_error(
+            route, adapter_type=self.id
+        )
+        if passthrough_error is not None:
+            return passthrough_error
+        # bufferedJsonPassthroughV1 has no body rewrite: strict admission happens
+        # before authorization and the existing digest binds the exact raw bytes.
         if request_cfg.get("bodyMode") in _STRUCTURED_STREAMING_MODES:
             projection_error = self._request_projection_error(
                 request_cfg,
@@ -920,9 +1021,15 @@ class ApiAdapter:
         passthrough_error = self._buffered_passthrough_policy_error(route)
         if passthrough_error is not None:
             return passthrough_error
-        response_cfg, _profile_error = self._response_profile(flow, route)
-        if response_cfg is not None and response_cfg.get("mode") in {"json", BUFFERED_PASSTHROUGH_RESPONSE_MODE}:
-            media_type_error = self._json_response_media_type_error(flow)
+        response_cfg, profile_error = self._response_profile(flow, route)
+        if (
+            profile_error is not None
+            and (route.adapter_config.get("response") or {}).get("mode")
+            == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+        ):
+            return profile_error
+        if response_cfg is not None and response_cfg.get("mode") in {"json"} | _WHOLE_JSON_RESPONSE_MODES:
+            media_type_error = self._json_response_body_contract_error(flow, response_cfg)
             if media_type_error is not None:
                 return media_type_error
         return PolicyDecision(allowed=True)
@@ -937,8 +1044,8 @@ class ApiAdapter:
         if profile_error is not None:
             return profile_error
         assert response_cfg is not None
-        if response_cfg.get("mode") in {"json", BUFFERED_PASSTHROUGH_RESPONSE_MODE}:
-            media_type_error = self._json_response_media_type_error(flow)
+        if response_cfg.get("mode") in {"json"} | _WHOLE_JSON_RESPONSE_MODES:
+            media_type_error = self._json_response_body_contract_error(flow, response_cfg)
             if media_type_error is not None:
                 return media_type_error
         max_body = response_cfg.get("maxBodyBytes")
@@ -959,7 +1066,7 @@ class ApiAdapter:
         mode = response_cfg.get("mode")
         supported_modes = {"any", "headersOnly", "json"} | _STREAMING_RESPONSE_MODES
         if self.id == "generic.rest":
-            supported_modes.add(BUFFERED_PASSTHROUGH_RESPONSE_MODE)
+            supported_modes.update(_WHOLE_JSON_RESPONSE_MODES)
         if mode not in supported_modes:
             return PolicyDecision(
                 allowed=False,
@@ -974,6 +1081,12 @@ class ApiAdapter:
                 reason="credential-bearing response requires structured projection",
                 payload={"error": "credential_response_projection_required", "mode": mode},
             )
+        if mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE and flow.response.status_code == 204:
+            # The body/framing contract was checked above; do not manufacture a
+            # JSON value or assign content (the HTTP object may synthesize CL).
+            # Engine envelope/semantic and final release guards still run.
+            self._normalize_response_headers(flow, response_cfg, mode)
+            return PolicyDecision(allowed=True)
         if mode == "headersOnly":
             flow.response.content = b""
             self._normalize_response_headers(flow, response_cfg, mode)
@@ -1016,9 +1129,14 @@ class ApiAdapter:
                 )
             self._normalize_response_headers(flow, response_cfg, mode)
             return PolicyDecision(allowed=True)
-        if mode in {"json", BUFFERED_PASSTHROUGH_RESPONSE_MODE} or allowed_fields:
+        if mode in {"json"} | _WHOLE_JSON_RESPONSE_MODES or allowed_fields:
             try:
-                payload = strict_json_loads(flow.response.raw_content or b"")
+                raw_body = flow.response.raw_content or b""
+                payload = (
+                    _strict_buffered_json(raw_body)
+                    if mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+                    else strict_json_loads(raw_body)
+                )
             except Exception:
                 return PolicyDecision(
                     allowed=False,
@@ -1028,7 +1146,7 @@ class ApiAdapter:
                 )
             if allowed_fields:
                 payload = self._redact_json(payload, allowed_fields)
-            if mode == BUFFERED_PASSTHROUGH_RESPONSE_MODE:
+            if mode in _WHOLE_JSON_RESPONSE_MODES:
                 try:
                     inspection = json.dumps(
                         payload,
@@ -1087,6 +1205,16 @@ class ApiAdapter:
         status_code = int(flow.response.status_code)
         response_cfg = route.adapter_config.get("response") or {}
         if 200 <= status_code < 300:
+            if (
+                response_cfg.get("mode") == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+                and not self._response_envelope_admits_status(flow, route, status_code)
+            ):
+                return None, PolicyDecision(
+                    allowed=False,
+                    status_code=502,
+                    reason="provider success status is outside the explicit response envelope",
+                    payload={"error": "response_envelope_status_denied"},
+                )
             if response_cfg:
                 return response_cfg, None
             return None, PolicyDecision(
@@ -1185,6 +1313,40 @@ class ApiAdapter:
             payload={"error": "response_json_content_type_denied"},
         )
 
+    def _json_response_body_contract_error(
+        self, flow: Any, response_cfg: dict[str, Any]
+    ) -> PolicyDecision | None:
+        if response_cfg.get("mode") != BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE:
+            return self._json_response_media_type_error(flow)
+        if not isinstance(flow.response.raw_content, bytes):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="upstream response body bytes are unavailable",
+                payload={"error": "response_envelope_body_unavailable"},
+            )
+        if flow.response.status_code != 204:
+            return self._json_response_media_type_error(flow)
+        # Validate only evidence the HTTP implementation exposes. This is not a
+        # claim that bytes hidden beyond HTTP's bodyless framing are observable.
+        raw_body = flow.response.raw_content
+        trailers = getattr(flow.response, "trailers", None)
+        if (
+            raw_body
+            or self._response_header_values(flow.response.headers, "content-length")
+            or self._response_header_values(flow.response.headers, "transfer-encoding")
+            or trailers
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="upstream 204 response body or framing is invalid",
+                payload={"error": "response_empty_204_invalid"},
+            )
+        if self._response_header_values(flow.response.headers, "content-type"):
+            return self._json_response_media_type_error(flow)
+        return None
+
     def _normalize_response_headers(
         self, flow: Any, response_cfg: dict[str, Any], mode: str
     ) -> None:
@@ -1200,7 +1362,15 @@ class ApiAdapter:
             if len(text.encode("utf-8")) <= 8192 and "\r" not in text and "\n" not in text:
                 released[name] = text
 
-        content_type = _RESPONSE_CONTENT_TYPES.get(mode)
+        empty_204 = (
+            mode == BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE
+            and flow.response.status_code == 204
+        )
+        content_type = (
+            self._header_value(flow.response.headers, "content-type")
+            if empty_204
+            else _RESPONSE_CONTENT_TYPES.get(mode)
+        )
         if content_type is None and mode in {"any", "stream"}:
             upstream_type = str(flow.response.headers.get("content-type") or "")
             media_type = upstream_type.split(";", 1)[0].strip().lower()
@@ -1211,7 +1381,8 @@ class ApiAdapter:
             flow.response.headers["Content-Type"] = content_type
         for name, value in released.items():
             flow.response.headers[name] = value
-        flow.response.headers["Content-Length"] = str(len(flow.response.raw_content or b""))
+        if not empty_204:
+            flow.response.headers["Content-Length"] = str(len(flow.response.raw_content or b""))
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
         if any(
@@ -1283,7 +1454,9 @@ class ApiAdapter:
             isinstance(body_sha256_field, str)
             and body_sha256_field != "operation"
             and _OPERATION_FIELD_RE.fullmatch(body_sha256_field)
-            and request_config.get("bodyMode") in {"json", "formUrlencoded"}
+            and request_config.get("bodyMode") in {
+                "json", "formUrlencoded", BUFFERED_JSON_PASSTHROUGH_REQUEST_MODE
+            }
         ):
             raw_body = flow.request.raw_content or b""
             fields[body_sha256_field] = f"sha256:{hashlib.sha256(raw_body).hexdigest()}"

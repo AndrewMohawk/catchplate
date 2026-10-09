@@ -276,6 +276,32 @@ async def echo(request: Request) -> dict[str, Any]:
     return view
 
 
+@app.api_route("/ordinary-client", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"])
+async def ordinary_client(request: Request) -> Response:
+    # This dedicated route consumes bytes; the pre-existing echo paths do not.
+    # Count reached requests (including refused methods) without recording data.
+    _record_request(request)
+    import asyncio
+    from starlette.requests import ClientDisconnect
+    try:
+        from scripts import operator_ordinary_client_fixture as fixture
+    except ModuleNotFoundError:
+        import operator_ordinary_client_fixture as fixture
+    try:
+        admission = fixture.admit_request(request.method, request.scope.get("raw_path", b""),
+            request.scope.get("query_string", b""), request.scope.get("headers", []))
+        body = await asyncio.wait_for(fixture.read_bounded_body(request.stream()),
+            timeout=fixture.BODY_READ_TIMEOUT_SECONDS)
+        outcome = fixture.verify_body(admission, body)
+    except (fixture.FixtureRejected, TimeoutError, ClientDisconnect) as error:
+        status = error.status_code if isinstance(error, fixture.FixtureRejected) else 400
+        return Response(content=fixture.REJECTION_BODY, status_code=status,
+            headers={"content-type": "application/json", "connection": "close"})
+    # Explicit headers preserve the optional charset on 204. Starlette does not
+    # generate a Content-Length for 204, and media_type=None adds no type header.
+    return Response(content=outcome.body, status_code=outcome.status_code, headers=dict(outcome.headers))
+
+
 @app.api_route("/approval/echo", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def approval_echo(request: Request) -> dict[str, Any]:
     return request_view(request)

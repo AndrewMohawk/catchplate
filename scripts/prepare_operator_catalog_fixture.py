@@ -49,8 +49,16 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str):
+def validated_binary_sha256(value: str) -> str:
+    require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None,
+            "expected executable digest must be bare lowercase SHA-256")
+    return value
+
+
+def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str, *,
+          expected_binary_sha256: str = BINARY_SHA256):
     """Pure manifest builder: no filesystem, processes, sockets or writes."""
+    expected_binary_sha256 = validated_binary_sha256(expected_binary_sha256)
     require(root.parent == SCRATCH and re.fullmatch(r"serverware-catalog-private\.[A-Za-z0-9]{6,32}", root.name),
             "new catalog NVMe job root required")
     require(all(path.is_absolute() and ".." not in path.parts for path in (source, binary, initializer)),
@@ -84,7 +92,7 @@ def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str
         "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "1", "SERVERWARE_ADMIN_USER": "user:operator-demo-operator",
         "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
         "SERVERWARE_DECISION_GATE_BASE": "http://decision-gate-rs:9091",
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + BINARY_SHA256}
+        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + expected_binary_sha256}
     for role in ROLES:
         prefix = "ADMIN" if role == "admin" else "DATA_PLANE_" + role.upper().replace("-", "_")
         app["environment"]["SERVERWARE_" + prefix + "_TOKEN_FILE"] = "/run/secrets/serverware/" + role + ".token"
@@ -132,7 +140,7 @@ def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str
         "volumes": [bind(initializer, "/initialize.py"), bind(runtime, "/fixture-runtime", False)]}
     config = {"name": project, "services": services,
         "networks": {"fixture": {"internal": True, "ipam": {"config": [{"subnet": subnet}]}}}}
-    validate(config, source, binary, initializer, root)
+    validate(config, source, binary, initializer, root, expected_binary_sha256=expected_binary_sha256)
     return config
 
 
@@ -143,9 +151,12 @@ def health(url, *, start):
         "interval": "3s", "timeout": "3s", "retries": 20, "start_period": str(start) + "s"}
 
 
-def validate(config, source, binary, initializer, root):
+def validate(config, source, binary, initializer, root, *, expected_binary_sha256: str = BINARY_SHA256):
+    expected_binary_sha256 = validated_binary_sha256(expected_binary_sha256)
     require(set(config["services"]) == {"initialize", "serverware", "demo-upstream", "decision-gate-rs"},
             "unexpected fixture service")
+    require(config["services"]["serverware"]["environment"].get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST")
+            == "sha256:" + expected_binary_sha256, "expected executable digest binding differs")
     require(set(config["networks"]) == {"fixture"} and config["networks"]["fixture"].get("internal") is True
             and not config["networks"]["fixture"].get("external"), "internal-only network required")
     runtime = root / "runtime"
@@ -216,11 +227,13 @@ def fresh_root(root, *, must_exist):
 
 
 def prepare(args):
-    config = build(args.source, args.binary, args.initializer, args.job_root, args.subnet)
+    expected_binary_sha256 = validated_binary_sha256(getattr(args, "expected_binary_sha256", BINARY_SHA256))
+    config = build(args.source, args.binary, args.initializer, args.job_root, args.subnet,
+                   expected_binary_sha256=expected_binary_sha256)
     fresh_root(args.job_root, must_exist=args.write)
     for path in (args.source, args.binary, args.initializer):
         require(path.resolve() == path and not path.is_symlink(), "exact non-symlink inputs required")
-    require(digest(args.binary) == BINARY_SHA256 and digest(args.initializer) == INITIALIZER_SHA256,
+    require(digest(args.binary) == expected_binary_sha256 and digest(args.initializer) == INITIALIZER_SHA256,
             "reviewed executable or committed initializer differs")
     for image in (APP_IMAGE, FIXTURE_IMAGE, GATE_IMAGE):
         command(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
@@ -239,7 +252,7 @@ def prepare(args):
         "sourceHead": command(["git", "-C", str(args.source), "rev-parse", "HEAD"]).strip(),
         "sourceStatus": command(["git", "-C", str(args.source), "status", "--short"]).splitlines(),
         "sourceScope": "serverware, scripts and schemas tracked plus non-ignored files", "sourceSha256": hashes,
-        "binary": str(args.binary), "binarySha256": BINARY_SHA256,
+        "binary": str(args.binary), "binarySha256": expected_binary_sha256,
         "initializer": str(args.initializer), "initializerSha256": INITIALIZER_SHA256,
         "images": {"app": APP_IMAGE, "fixture": FIXTURE_IMAGE, "gate": GATE_IMAGE},
         "networkPreflight": network, "filesystem": filesystem, "launched": False, "productionReady": False,
@@ -261,6 +274,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "binary", "initializer", "job-root"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--expected-binary-sha256", type=validated_binary_sha256, default=BINARY_SHA256,
+        help="Reviewed executable SHA-256 (bare lowercase hex); defaults to the historical fixture pin")
     parser.add_argument("--subnet", default="172.16.249.48/28")
     parser.add_argument("--write", action="store_true")
     try:

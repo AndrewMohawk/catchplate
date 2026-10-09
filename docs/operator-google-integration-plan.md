@@ -2,14 +2,15 @@
 
 ## Status and objective
 
-Current joined checkpoint, 2026-10-09: the isolated normal-binary run passes
-application consent/callback/account storage and access-denial controls against
-a synthetic provider. Its first allowed request reaches upstream HTTP 200 but
-is blocked by the response-header envelope; actual expiry and refresh are not
-reached. Google remains disabled in the live demo and is not releasable. The
-[retained result](operator-google-backend-verification.md#corrected-joined-run-response-header-blocker)
-supersedes earlier startup-only uncertainty, not the open provider/browser and
-lifecycle acceptance requirements. Historical checkpoints follow.
+Current joined checkpoint, 2026-10-09: the fresh isolated V2 run passed
+consent/callback/account storage, access-denial controls, two normal Rust proxy
+requests and automatic refresh across actual synthetic-token expiry. The
+response-header blocker is repaired for this supported JSON contract. Google
+remains disabled in the live demo: this is synthetic provider/backend evidence,
+not real Google consent, a joined browser journey or deployment. See the
+[current acceptance result](operator-google-backend-verification.md#v2-joined-synthetic-refresh-passed).
+Earlier failures and the open provider/browser/lifecycle requirements remain
+recorded below; they are not erased by this focused success.
 
 Originally designed against workspace commit `10879772`. The 2026-10-08 shared
 working-tree checkpoint now contains cold profile, consent/catalog,

@@ -42,7 +42,7 @@ except ModuleNotFoundError:
 # operator_demo.origin canonicalizes default HTTPS port 443 out of catalog URLs.
 # Endpoint still requires/connects port 443 and verifies this exact TLS hostname.
 PROXY = "https://serverware-proxy.example.com"
-PIN = "sha256:eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d"
+PIN = "sha256:f430734734cb43fb60eb1e28a863b337c314bb3e5377b23b6671564c62a91d9b"
 RESPONSE_MODE = V2_RESPONSE_MODE
 RESPONSE_VALIDATION_MODE = RESPONSE_MODES[RESPONSE_MODE]
 DUMMY = "Bearer SERVERWARE_LIVE_SMOKE_DUMMY"

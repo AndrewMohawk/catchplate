@@ -104,6 +104,14 @@ application configuration belongs in Settings, with a clear missing-setup
 explanation when unavailable, not extra token-endpoint fields in each account
 form.
 
+Unattended use has two lifecycles: provider access-token refresh and the app's
+own Serverware identity. A long-running job needs a supported way to renew or
+rotate the latter before its finite expiry; automatic Google refresh alone is
+not indefinite job access. The current development token has an explicit
+30-day default and a 90-day maximum, with manual rotation. Show that limit in
+client setup and treat managed workload-identity renewal as separate unfinished
+work, not an excuse to silently renew tokens or remove their expiry.
+
 Normal clients also need their request bodies, provider errors and supported
 response statuses to behave normally. "No optional content filtering" must
 therefore be implemented in the request and response paths, not achieved by

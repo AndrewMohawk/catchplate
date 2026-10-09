@@ -409,7 +409,39 @@ authorizes an automatic exchange replay, proves account health, or implements
 reauthorization. In particular, `invalid_client` calls for administrator
 configuration review, not an unconditional request for the user to reconnect.
 Google documents those distinct [error meanings](https://developers.google.com/identity/protocols/oauth2/web-server#errors).
-Focused synthetic verification is pending; this is not real Google acceptance.
+
+#### Focused refresh rejection result, 2026-10-09
+
+Frozen commit `2075558b3f8750ee52bfa6e90e445057493304ef` passed all eight
+selected groups in one fail-fast run, with 16 sequential cold-process cases.
+The unittest log records 214.017 seconds, with no failures, errors, skips or
+retries. Coverage includes all supported rejection pairs, ambiguous empty
+responses, custody of contradictory token-bearing errors, refusal for initial
+or older work, current-generation binding, audit rollback, lost commit
+acknowledgement, one-use observations, successful refresh and restart recovery.
+Existing account permissions and policy bytes remain unchanged on definite
+rejection. Historical uncertainty is not retroactively cleared.
+
+The tests use real SQLite, encrypted storage, policy signing and production
+refresh/retirement code, with synthetic provider transport. Size controls test
+the classifier, not the underlying HTTP reader. This is not a full-suite,
+browser, Rust proxy, active-account reauthorization, real-Google, native-pilot
+or deployment result. The live demo was not changed.
+
+Evidence: `google-refresh-rejection.RWm7Qeez` under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence`.
+`test-result.json` SHA-256:
+`f85fb1a54993036a5f3c3061960ec45292166b0b540b6279f941096e66c275d4`.
+The frozen 4,765-file source manifest passed before/after checks and an
+independent host check after process exit; its SHA-256 is
+`61387aff80f816b95d7bf6ec3979f07b08905d1e50bdaa8719d0aa22af7164a9`.
+The cached-image container ran with network disabled, read-only source/root,
+UID 1000, one CPU, 1 GiB RAM, no additional swap and 96 PIDs. Its actual terminal
+state was exit zero, PID zero and no OOM. Independent result review found no
+contradiction. Only the exited container and 202 MiB task scratch were removed
+after terminal, mount and visible-open-file checks. `cleanup-receipt.json`
+records the visibility limit and verified removal; committed source and durable
+evidence remain.
 
 ### Explicit disconnect backend, October 9 source work
 

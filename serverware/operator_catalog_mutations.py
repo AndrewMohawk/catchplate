@@ -274,11 +274,12 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 
 def catalog_status() -> dict:
-    from serverware import operator_demo
+    from serverware import operator_catalog_capabilities, operator_demo
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
         schema.validate_bindings(conn, catalog)
+        google_oauth = operator_catalog_capabilities.google_oauth(conn)
         state = _state(conn)
         limits = {collection: {"active": sum(row["status"] == "active" for row in catalog[collection]),
             "retained": len(catalog[collection]) + schema.retained_legacy_count(conn, collection),
@@ -293,9 +294,10 @@ def catalog_status() -> dict:
         # Source capability, not proof of a deployed gate version. Publication
         # requires the co-versioned request/response/replacement gate (including
         # V2 metadata discard for that explicit mode); never downgrade.
-        "capabilities": {"credential_types": ["bearer", "header"],
+        "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else []),
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
-                "unfiltered_json_or_empty_v2"], "oauth": False,
+                "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None,
+            "google_oauth": google_oauth,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],
             "token_lifetime_seconds": {"min": MIN_TOKEN_LIFETIME_SECONDS, "max": MAX_TOKEN_LIFETIME_SECONDS,

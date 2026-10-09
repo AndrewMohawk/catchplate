@@ -14,30 +14,19 @@
   <main id="main-content" tabindex="-1">
     <div id="load-error" class="notice error" role="alert" hidden><span id="load-error-text"></span><div class="actions"><button id="retry-load" class="secondary">Refresh workspace</button><a href="/">Reload / sign in</a></div></div>
     <div id="mutation-review" class="notice" hidden><p id="mutation-review-text" role="status" aria-live="polite"></p><button id="mutation-review-confirm" class="secondary" disabled>I reviewed the saved state</button></div>
-    <article id="google-consent-panel" class="card" aria-labelledby="google-consent-title" hidden>
-      <h2 id="google-consent-title">Connect Google · Read Gmail</h2>
-      <p>Choose your account on Google. Serverware keeps provider tokens encrypted and manages renewal; this page does not check refresh health. Connecting an account alone grants no app access.</p>
-      <form id="google-start-form" autocomplete="off"><fieldset id="google-start-fields" disabled>
-        <label for="google-account-name">Account label</label><input id="google-account-name" maxlength="128" placeholder="My Gmail account" required>
-        <p class="small muted">Read Gmail plus account identity only. Other Google services and complete Gmail operation bundles are not configured by this step.</p>
-        <button id="google-consent-start" type="submit">Continue to Google</button>
-      </fieldset></form>
-      <p id="google-token-warning" class="notice" hidden>Save your one-time application token, then use “I've saved it; clear token” before leaving for Google. <a href="#applications">Open Applications</a>. It cannot be recovered after navigation.</p>
-      <p id="google-consent-status" role="status" aria-live="polite"></p>
-      <p id="google-consent-pending" class="notice" hidden>This consent attempt holds workspace changes while it is checked. You may leave explicitly; doing so does not cancel Google consent.</p>
-      <p id="google-consent-account" class="notice" hidden></p><button id="google-consent-use" hidden disabled>Use this account for an app</button>
-      <div class="actions"><button id="google-consent-refresh" class="secondary" disabled>Refresh Google status</button><button id="google-consent-leave" class="secondary">Leave Google setup</button></div>
-      <details id="google-consent-history" hidden><summary>Saved connection attempts</summary><p class="small muted">An older attempt does not grant app access or prove current account health. Inspect it before deciding what to do; requests are never retried automatically.</p><ul id="google-consent-intents"></ul></details>
-    </article>
     <noscript><p class="notice">Enable JavaScript to configure the workspace. <a href="/ca.pem">Download the public CA</a> after sign-in.</p></noscript>
     <section id="connect" class="page" aria-labelledby="connect-title" hidden>
       <h1 id="connect-title">Connect an app</h1>
       <p class="intro">Choose a provider credential, choose your app, then review exactly what it may do. We keep these resources separate so you can reuse them later.</p>
       <p id="connect-progress" class="eyebrow" role="status">1 of 5 · Provider credential</p>
       <div id="connect-credential-step">
-        <form id="connect-credential-form" class="card" autocomplete="off"><fieldset id="connect-credential-fields" disabled>
-          <h2>Which provider credential should it use?</h2>
-          <label for="connect-credential-choice">Saved credential or new key</label><select id="connect-credential-choice"></select>
+        <article id="connect-method-choice" class="card"><h2>How would you like to connect?</h2>
+          <div class="actions"><button id="connect-google" class="secondary" disabled>Google connection unavailable</button><button id="connect-use-key" class="secondary" disabled>Use an API key</button><button id="connect-use-saved" class="secondary" disabled>Use a saved connection</button></div>
+          <p id="connect-google-status" class="small muted">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p>
+        </article>
+        <form id="connect-credential-form" class="card" autocomplete="off" hidden><fieldset id="connect-credential-fields" disabled>
+          <h2 id="connect-credential-heading">Provider connection</h2>
+          <div id="connect-saved-choice" hidden><label for="connect-credential-choice">Saved connection</label><select id="connect-credential-choice" disabled></select></div>
           <div id="connect-credential-new">
             <label for="connect-credential-name">Give this credential a name</label><input id="connect-credential-name" maxlength="128" placeholder="My test API key" required>
             <label for="connect-credential-auth-type">How the provider expects it</label><select id="connect-credential-auth-type"><option value="bearer">Bearer token</option><option value="header">API key in a custom header</option></select>
@@ -47,7 +36,24 @@
           </div>
           <button id="connect-credential-next" type="submit">Save credential &amp; continue</button>
         </fieldset></form>
-        <p id="connect-google-status" class="small muted">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p><button id="connect-google" class="secondary" disabled>Google connection unavailable</button>
+        <button id="connect-method-change" class="secondary" hidden>Change connection method</button>
+        <div id="connect-google-slot" hidden>
+          <article id="google-consent-panel" class="card" aria-labelledby="google-consent-title" hidden>
+            <h2 id="google-consent-title">Connect Google · Read Gmail</h2>
+            <p>Choose your account on Google. Serverware keeps provider tokens encrypted and manages renewal; this page does not check refresh health. Connecting an account alone grants no app access.</p>
+            <form id="google-start-form" autocomplete="off"><fieldset id="google-start-fields" disabled>
+              <label for="google-account-name">Account label</label><input id="google-account-name" maxlength="128" placeholder="My Gmail account" required>
+              <p class="small muted">Read Gmail plus account identity only. Other Google services and complete Gmail operation bundles are not configured by this step.</p>
+              <button id="google-consent-start" type="submit">Continue to Google</button>
+            </fieldset></form>
+            <p id="google-token-warning" class="notice" hidden>Save your one-time application token, then use “I've saved it; clear token” before leaving for Google. <a href="#applications">Open Applications</a>. It cannot be recovered after navigation.</p>
+            <p id="google-consent-status" role="status" aria-live="polite"></p>
+            <p id="google-consent-pending" class="notice" hidden>This consent attempt holds workspace changes while it is checked. You may leave explicitly; doing so does not cancel Google consent.</p>
+            <p id="google-consent-account" class="notice" hidden></p><button id="google-consent-use" hidden disabled>Use this account for an app</button>
+            <div class="actions"><button id="google-consent-refresh" class="secondary" disabled>Refresh Google status</button><button id="google-consent-leave" class="secondary">Leave Google setup</button></div>
+            <details id="google-consent-history" hidden><summary>Saved connection attempts</summary><p class="small muted">An older attempt does not grant app access or prove current account health. Inspect it before deciding what to do; requests are never retried automatically.</p><ul id="google-consent-intents"></ul></details>
+          </article>
+        </div>
       </div>
       <div id="connect-application-step" hidden>
         <form id="connect-application-form" class="card" autocomplete="off"><fieldset id="connect-application-fields" disabled>
@@ -94,8 +100,8 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
       <div id="connect-setup-step" hidden><article class="card"><h2>Activate, then configure your client</h2><p id="connect-activation" role="status" aria-live="polite"></p><p id="connect-provider-status">Provider key: stored, not tested here. Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.</p></article><div id="connect-setup-slot" hidden></div></div>
       <details id="connect-compatibility"><summary>Compatibility limits</summary><div id="connect-compatibility-content"></div><p class="small muted">Queries must use the current proxy's canonical name ordering. Exact paths do not cover pagination or a provider's other operations automatically.</p></details>
       <p id="connect-status" role="status" aria-live="polite"></p>
-      <div class="actions"><button id="connect-back" class="secondary" hidden>Back</button><button id="connect-status-refresh" class="secondary">Refresh saved state</button><button id="connect-start-over" class="secondary" hidden>Connect another app</button><button id="connect-cancel" class="secondary">Leave setup</button></div>
-      <p class="small muted">Leaving or going back does not delete confirmed resources or revoke access. Use the management pages for explicit changes.</p>
+      <div id="connect-actions" class="actions"><button id="connect-back" class="secondary" hidden>Back</button><button id="connect-status-refresh" class="secondary">Refresh saved state</button><button id="connect-start-over" class="secondary" hidden>Connect another app</button><button id="connect-cancel" class="secondary">Leave setup</button></div>
+      <p id="connect-leave-help" class="small muted">Leaving or going back does not delete confirmed resources or revoke access. Use the management pages for explicit changes.</p>
     </section>
     <section id="overview" class="page" aria-labelledby="overview-title">
       <h1 id="overview-title">Your credentials. Your rules.</h1><p class="intro">Connect an app in one guided flow. Credentials, applications and access rules below are management views; saving a credential alone grants no access.</p><p><a href="#connect" class="button">Connect an app</a></p>

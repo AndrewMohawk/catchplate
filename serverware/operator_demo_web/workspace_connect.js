@@ -5,6 +5,7 @@ function createConnectView(workspace, applications, proxy) {
   const labels = ['Provider credential', 'Application', 'Allowed use', 'Review access', 'Client setup'];
   let step = 0; let selectedCredential = ''; let selectedApplication = ''; let selectedRule = '';
   let review = null; let checkpoint = null; let open = false;
+  let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
   const catalog = () => workspace.state.catalog;
   const writable = () => Boolean(catalog() && !workspace.state.busy && !workspace.state.uncertain);
   const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active');
@@ -18,7 +19,7 @@ function createConnectView(workspace, applications, proxy) {
   function renderGoogleAccount() {
     const id = step === 0 ? element('connect-credential-choice').value : selectedCredential;
     const item = catalog()?.credentials.find(item => item.id === id);
-    accountSummary.hidden = item?.auth_type !== 'google_oauth';
+    accountSummary.hidden = connectionMethod === 'google' || step === 0 && connectionMethod !== 'saved' || item?.auth_type !== 'google_oauth';
     accountSummary.replaceChildren();
     if (accountSummary.hidden) return;
     const details = textNode('dl', undefined, 'metadata');
@@ -52,6 +53,8 @@ function createConnectView(workspace, applications, proxy) {
     if (!item) { message('The exact saved resource cannot be confirmed. Review saved state; no repeat request was sent.'); return; }
     if (checkpoint.collection === 'credentials') {
       selectedCredential = item.id; selectedApplication = ''; selectedRule = ''; review = null;
+      connectionMethod = 'saved'; savedChoice = item.id;
+      element('connect-credential-choice').value = ''; renderInputs();
       element('connect-credential-choice').value = item.id; step = 1;
     }
     if (checkpoint.collection === 'applications') {
@@ -71,9 +74,10 @@ function createConnectView(workspace, applications, proxy) {
   }
   function renderInputs() {
     const value = catalog(); if (!value) return;
-    choices('connect-credential-choice', [...value.credentials.filter(item => item.status === 'active').map(item => ({id: item.id,
-      name: item.name + (item.auth_type === 'google_oauth' ? ' · Google account ' + item.provider_account : '') + ' · ' + item.id})),
-    {id: 'new', name: 'Save a new provider key'}], 'new');
+    if (connectionMethod === 'key') choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
+    if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: 'Choose a saved connection'},
+      ...value.credentials.filter(item => item.status === 'active').map(item => ({id: item.id,
+        name: item.name + (item.auth_type === 'google_oauth' ? ' · Google account ' + item.provider_account : '') + ' · ' + item.id}))], savedChoice);
     choices('connect-application-choice', [...value.applications.filter(item => item.status === 'active').map(item => ({id: item.id, name: item.name + ' · ' + item.id})), {id: 'new', name: 'Create a new application'}], 'new');
     choices('connect-rule-choice', [{id: 'new', name: 'Grant a new permission'}, ...matchingRules().map(item => ({id: item.id, name: item.name + ' · ' + item.id}))], 'new');
     choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
@@ -82,10 +86,11 @@ function createConnectView(workspace, applications, proxy) {
     choices('connect-response-mode', responseChoices, responseChoices[0]?.id);
   }
   function renderForms() {
-    const newCredential = element('connect-credential-choice').value === 'new';
+    const newCredential = connectionMethod === 'key';
     const newApp = element('connect-application-choice').value === 'new';
     const newRule = element('connect-rule-choice').value === 'new';
-    fields('connect-credential-new', newCredential); fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
+    fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential);
+    fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
     const custom = newCredential && element('connect-credential-auth-type').value === 'header';
     fields('connect-credential-header-group', custom); element('connect-credential-header-name').required = custom;
     const replacing = newRule && element('connect-credential-input').value === 'replace_exact';
@@ -111,7 +116,7 @@ function createConnectView(workspace, applications, proxy) {
     const selected = catalog()?.applications.find(item => item.id === element('connect-application-choice').value);
     element('connect-application-note').textContent = newApp ? '' : selected ?
       'Expires ' + new Date(selected.token_expires_at_epoch_ms).toLocaleString() + '. Use the token already configured in your app. If lost or expired, rotate explicitly in Applications; this flow does not retrieve or renew it.' : 'Select an available application.';
-    element('connect-credential-fields').disabled = !writable() || Boolean(checkpoint) || newCredential && !workspace.ready('credentials');
+    element('connect-credential-fields').disabled = !['key', 'saved'].includes(connectionMethod) || !writable() || Boolean(checkpoint) || newCredential && !workspace.ready('credentials');
     element('connect-application-fields').disabled = !writable() || Boolean(checkpoint) || !credential() || newApp && !workspace.ready('applications');
     element('connect-access-fields').disabled = !writable() || Boolean(checkpoint) || !activePair() || newRule &&
       (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length || !availableResponseModes(catalog()).length || !catalog()?.allowed_upstreams.length);
@@ -149,6 +154,16 @@ function createConnectView(workspace, applications, proxy) {
   }
   function render() {
     renderInputs(); confirmCheckpoint(); renderForms(); renderReview(); renderGoogleAccount();
+    const googleOpen = connectionMethod === 'google';
+    element('connect-method-choice').hidden = connectionMethod !== null;
+    element('connect-credential-form').hidden = !['key', 'saved'].includes(connectionMethod);
+    element('connect-credential-heading').textContent = connectionMethod === 'key' ? 'Use an API key' : 'Use a saved connection';
+    element('connect-google-slot').hidden = !googleOpen;
+    element('connect-method-change').hidden = connectionMethod === null || googleOpen;
+    element('connect-method-change').disabled = !writable() || Boolean(checkpoint);
+    element('connect-use-key').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials');
+    element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item => item.status === 'active');
+    for (const id of ['connect-actions', 'connect-leave-help', 'connect-compatibility']) element(id).hidden = googleOpen;
     steps.forEach((name, index) => { element('connect-' + name + '-step').hidden = index !== step; });
     element('connect-progress').textContent = (step + 1) + ' of 5 · ' + labels[step];
     element('connect-back').hidden = step === 0 || step === 4;
@@ -166,11 +181,11 @@ function createConnectView(workspace, applications, proxy) {
   }
 
   element('connect-credential-form').addEventListener('submit', async event => {
-    event.preventDefault(); if (step !== 0 || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
+    event.preventDefault(); if (step !== 0 || !['key', 'saved'].includes(connectionMethod) || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
     const choice = element('connect-credential-choice').value;
-    if (choice !== 'new') {
+    if (connectionMethod === 'saved') {
       if (!catalog().credentials.some(item => item.id === choice && item.status === 'active')) return;
-      selectedCredential = choice; selectedApplication = ''; selectedRule = ''; review = null; goto(1); return;
+      savedChoice = choice; selectedCredential = choice; selectedApplication = ''; selectedRule = ''; review = null; goto(1); return;
     }
     if (!workspace.ready('credentials')) return;
     const body = {name: element('connect-credential-name').value.trim(), auth_type: element('connect-credential-auth-type').value,
@@ -225,14 +240,29 @@ function createConnectView(workspace, applications, proxy) {
     if (!workspace.ready('access_rules')) return;
     await workspace.mutate('access-rules', {...review.rule}, 'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
-  for (const id of ['connect-credential-choice', 'connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
+  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
     element(id).addEventListener('change', render);
+  element('connect-credential-choice').addEventListener('change', () => {
+    if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
+    render();
+  });
+  for (const [id, method] of [['connect-use-key', 'key'], ['connect-use-saved', 'saved']]) element(id).addEventListener('click', () => {
+    if (step !== 0 || connectionMethod !== null || !writable() || checkpoint) return;
+    connectionMethod = method;
+    element('connect-credential-choice').value = ''; render();
+  });
+  element('connect-method-change').addEventListener('click', () => {
+    if (step !== 0 || !['key', 'saved'].includes(connectionMethod) || !writable() || checkpoint) return;
+    if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
+    connectionMethod = null; render();
+  });
   element('connect-request-fields').addEventListener('input', renderForms);
   element('connect-query-keys').addEventListener('input', renderForms);
   element('connect-back').addEventListener('click', () => { if (step > 0 && step < 4 && !workspace.state.busy && !checkpoint) { review = null; goto(step - 1); } });
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null;
+    connectionMethod = null; savedChoice = ''; beforeGoogle = null;
     for (const id of ['connect-credential-form', 'connect-application-form', 'connect-access-form']) element(id).reset();
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
     for (const id of ['connect-response-mode', 'connect-request-body-mode']) element(id).value = '';
@@ -249,10 +279,22 @@ function createConnectView(workspace, applications, proxy) {
   });
   window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; });
   workspace.subscribe(render);
-  return {selectGoogleCredential(id) {
+  return {openGoogle({returning = false} = {}) {
+    if (connectionMethod === 'google') return true;
+    if (!returning && (!writable() || checkpoint)) return false;
+    beforeGoogle = {step, method: connectionMethod};
+    if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
+    connectionMethod = 'google'; goto(0); location.hash = 'connect'; return true;
+  }, leaveGoogle() {
+    if (connectionMethod !== 'google') return;
+    const previous = beforeGoogle; beforeGoogle = null;
+    connectionMethod = previous?.method || null; step = previous?.step || 0;
+    render();
+  }, selectGoogleCredential(id) {
     const item = catalog()?.credentials.find(value => value.id === id && value.status === 'active' && value.auth_type === 'google_oauth');
     if (!item || !writable() || checkpoint) return false;
-    resetDraft(); selectedCredential = id; renderInputs(); element('connect-credential-choice').value = id;
+    resetDraft(); selectedCredential = id; connectionMethod = 'saved'; savedChoice = id;
+    element('connect-credential-choice').value = ''; renderInputs(); element('connect-credential-choice').value = id;
     message('Saved Google account selected. Choose an application; no access has been granted.'); goto(1); return true;
   }, show(active) {
     open = active;

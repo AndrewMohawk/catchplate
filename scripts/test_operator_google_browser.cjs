@@ -47,7 +47,8 @@ async function refresh(page) {
   await page.locator('#connect-status-refresh').click(); await response; await page.waitForLoadState('networkidle');
 }
 async function useGoogle(page) {
-  await ready(page); await view(page, 'connect'); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+  await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+  await page.locator('#connect-credential-choice').selectOption(IDS.credential);
   await page.locator('#connect-credential-next').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
   await page.locator('#connect-application-choice').selectOption(IDS.application); await page.locator('#connect-application-next').click();
   await page.locator('#connect-access-step').waitFor({state: 'visible'});
@@ -112,6 +113,7 @@ const tests = [
       for (const value of [SUBJECT, CLIENT]) assert((await card.locator('[data-google-identity]').innerText()).includes(value));
       assert(await page.locator('#credential-google-connect').isDisabled()); await screenshot(page, 'google-account-desktop');
       await view(page, 'connect'); assert(await page.locator('#connect-google').isDisabled());
+      await page.locator('#connect-use-saved').click();
       assert((await page.locator('#connect-credential-choice option[value="' + IDS.credential + '"]').innerText()).includes(ACCOUNT));
       await page.locator('#connect-credential-choice').selectOption(IDS.credential);
       assert((await page.locator('#connect-google-account-summary').innerText()).includes(ACCOUNT));
@@ -174,7 +176,8 @@ const tests = [
     })],
   ['quarantining the selected account at step one preserves the unavailable choice and cannot resubmit it', browser => fixture(browser,
     supplied({credentials: [google(), credential({id: STATIC_ID})]}), async (page, state) => {
-      await ready(page); await page.locator('#connect-credential-choice').selectOption(IDS.credential); quarantineState(state); await refresh(page);
+      await ready(page); await page.locator('#connect-use-saved').click();
+      await page.locator('#connect-credential-choice').selectOption(IDS.credential); quarantineState(state); await refresh(page);
       assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
       assert(await page.locator('#connect-credential-choice option:checked').evaluate(item => item.disabled));
       assert(await page.locator('#connect-credential-next').isDisabled());

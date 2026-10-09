@@ -102,6 +102,7 @@ function createGoogleView(workspace, applications, connect) {
       'Connect with Google for Read Gmail. Provider tokens stay in Serverware; apps receive a separate, scoped identity.' :
       'Google connection is unavailable in this deployment. An administrator must enable the supported Google profile. Do not paste Google access or refresh tokens.';
     element('google-consent-panel').hidden = !opened;
+    element('google-start-form').hidden = attempted;
     element('google-start-fields').disabled = !available || !checked || attempted || held();
     element('google-token-warning').hidden = !held();
     element('google-consent-refresh').disabled = !enabled || checking || workspace.writeInFlight();
@@ -147,6 +148,7 @@ function createGoogleView(workspace, applications, connect) {
   }
   function open() {
     if (!capability() || workspace.state.busy || workspace.state.uncertain) return;
+    if (!connect.openGoogle()) return;
     opened = true; notice = ''; render(); element('google-consent-panel').scrollIntoView({block: 'nearest'});
     observe();
   }
@@ -176,7 +178,8 @@ function createGoogleView(workspace, applications, connect) {
   element('google-consent-refresh').addEventListener('click', observe);
   element('google-consent-leave').addEventListener('click', () => {
     if (checking || workspace.writeInFlight() || !window.confirm('Leave Google connection setup? This does not cancel consent or revoke anything at Google. Other workspace changes can invalidate a pending flow. An uncertain write still needs the existing saved-state review. No request will be retried.')) return;
-    ++generation; currentId = null; attempted = false; opened = false; notice = ''; workspace.setConsentHold(false); render();
+    ++generation; currentId = null; attempted = false; opened = false; notice = ''; workspace.setConsentHold(false);
+    connect.leaveGoogle(); render();
   });
   element('google-consent-use').addEventListener('click', () => {
     const account = checked && googleConnectedAccount(current(), workspace.state.catalog);
@@ -193,7 +196,7 @@ function createGoogleView(workspace, applications, connect) {
     render();
   });
   window.addEventListener('pageshow', event => { if (event.persisted) { checked = false; if (attempted) workspace.setConsentHold(true); observe(); } });
-  if (attempted) workspace.setConsentHold(true);
+  if (attempted) { connect.openGoogle({returning: true}); workspace.setConsentHold(true); }
   render();
 }
 

@@ -16,7 +16,7 @@ const ALL = ['projected_json', 'unfiltered_json', V1, V2];
 const options = changes => supplied({responseModes: ALL, ...changes});
 const SOURCE_FILES = ['scripts/test_operator_minimum_setup_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
-    'workspace_core.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
+    'workspace_core.js', 'workspace_google.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async name =>
@@ -82,7 +82,9 @@ const tests = [
   })],
   ['guided replacement creates an app and exports setup with zero content decisions', browser => fixture(browser,
     options({applications: [], credentials: [credential({secret: PRIVATE[0], refresh_token: PRIVATE[1]})]}), async (page, state) => {
-      await ready(page); await watchContentDecisions(page); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+      await ready(page); await watchContentDecisions(page); await page.locator('#connect-use-saved').click();
+      assert(await page.locator('#connect-credential-new').isHidden()); assert(await page.locator('#connect-google').isHidden());
+      await page.locator('#connect-credential-choice').selectOption(IDS.credential);
       await page.locator('#connect-credential-next').click(); await step(page, 'application');
       await page.locator('#connect-application-name').fill('Billing worker'); await page.locator('#connect-application-next').click(); await step(page, 'access');
       const token = await page.locator('#client-token').inputValue(); assert(token.startsWith('synthetic_application_'));

@@ -78,6 +78,18 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertEqual(fields['credential-secret'][1]['type'], 'password')
         self.assertNotIn('value', fields['credential-secret'][1])
 
+    def test_connection_method_choice_precedes_separate_hidden_forms(self):
+        index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in self.elements() if 'id' in attrs}
+        for name in ('connect-google', 'connect-use-key', 'connect-use-saved'):
+            self.assertEqual(index[name][0], 'button')
+            self.assertIsNone(index[name][2])
+            self.assertIn('disabled', index[name][1])
+        for name in ('connect-credential-form', 'connect-google-slot', 'google-consent-panel'):
+            self.assertIn('hidden', index[name][1])
+        self.assertEqual(index['connect-credential-secret'][2], 'connect-credential-form')
+        self.assertEqual(index['google-account-name'][2], 'google-start-form')
+        self.assertIsNone(index['google-consent-use'][2])
+
     def test_application_has_explicit_bounded_lifetime_and_empty_one_time_token(self):
         index = {attrs['id']: (tag, attrs) for tag, attrs, _ in self.elements() if 'id' in attrs}
         self.assertEqual(index['application-token-ttl'][0], 'select')

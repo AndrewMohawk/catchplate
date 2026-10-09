@@ -148,7 +148,16 @@ async function fixture(browser, options, exercise) {
 }
 async function open(page) {
   await page.locator('#connect-google').click(); await page.locator('#google-consent-panel').waitFor({state: 'visible'});
+  await exclusiveGoogle(page);
   await page.waitForLoadState('networkidle');
+}
+async function exclusiveGoogle(page, expectedForms = 1) {
+  assert(await page.locator('#connect').isVisible()); assert(await page.locator('#google-consent-panel').isVisible());
+  assert(await page.locator('#connect-method-choice').isHidden()); assert(await page.locator('#connect-credential-form').isHidden());
+  assert(await page.locator('#connect-google').isHidden()); assert(await page.locator('#connect-method-change').isHidden());
+  assert.equal(await page.locator('#google-consent-panel').count(), 1);
+  assert.equal(await page.locator('#connect-credential-step form:visible').count(), expectedForms);
+  assert.equal(await page.locator('form form').count(), 0, 'forms remain siblings, never nested');
 }
 async function start(page, state, observed, outcome) {
   assert(['navigate', 'uncertain', 'unreconciled'].includes(outcome));
@@ -196,7 +205,9 @@ async function absent(page) {
 }
 const tests = [
   ['disabled profile makes no consent request and does not block static configuration', browser => fixture(browser, {enabled: false}, async (page, state, observed) => {
-    await ready(page); assert(await page.locator('#connect-google').isDisabled()); await view(page, 'credentials');
+    await ready(page); assert(await page.locator('#connect-method-choice').isVisible());
+    assert.equal(await page.locator('#connect-credential-step form:visible').count(), 0);
+    assert(await page.locator('#connect-google').isDisabled()); await view(page, 'credentials');
     assert(await page.locator('#credential-google-connect').isDisabled()); assert.equal(observed.gets, 0); assert.equal(observed.posts.length, 0);
   })],
   ['advertised profile uses exact CAS/preset and a single strictly validated Google navigation', browser => fixture(browser, {}, async (page, state, observed) => {
@@ -208,9 +219,11 @@ const tests = [
   ['return reconciles exact saved account before explicit app selection, never creates an app or rule', browser => fixture(browser,
     {credentials: [google()], intents: [intent({status: 'connected', credential_id: IDS.credential, secret: PRIVATE[0]})]}, async (page, state, observed, controls) => {
       await controls.returnToWorkspace(); await page.locator('#google-consent-use').waitFor({state: 'visible'});
+      await exclusiveGoogle(page, 0);
       assert.match(await page.locator('#google-consent-account').innerText(), /ordinary-fixture@example.test.*Read Gmail.*health.*not been checked/);
       await absent(page); await page.setViewportSize({width: 390, height: 844}); await screenshot(page, 'google-return-mobile');
       await page.locator('#google-consent-use').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+      assert(await page.locator('#google-consent-panel').isHidden()); assert(await page.locator('#connect-credential-form').isHidden());
       assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
       assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
     })],
@@ -230,7 +243,10 @@ const tests = [
   ...['awaiting_consent', 'exchanging'].map(statusValue => ['selected ' + statusValue + ' holds writes but explicit exit preserves server intent', browser => fixture(browser,
     {intents: [intent({status: statusValue, expires_at_epoch: statusValue === 'exchanging' ? NOW / 1000 - 10 : NOW / 1000 + 600})]}, async (page, state, observed, controls) => {
       await controls.returnToWorkspace(); assert(await page.locator('#application-create').isDisabled()); assert(await page.locator('#credential-save').isDisabled());
+      await exclusiveGoogle(page, 0); await view(page, 'overview'); assert(await page.locator('#google-consent-panel').isHidden());
+      await view(page, 'connect'); await exclusiveGoogle(page, 0);
       await page.locator('#google-consent-leave').click(); await ready(page); assert.equal(observed.intents[0].status, statusValue);
+      assert(await page.locator('#connect-method-choice').isVisible()); assert(await page.locator('#google-consent-panel').isHidden());
       assert.equal(observed.posts.length, 0); assert.equal(state.posts.length, 0);
     })]),
   ['unrelated historical exchanging intent does not permanently freeze the workspace', browser => fixture(browser,
@@ -270,6 +286,7 @@ const tests = [
     assert.equal(await page.locator('#client-token').inputValue(), token); assert(await page.locator('#google-token-warning').isVisible());
     await view(page, 'applications'); await page.locator('#dismiss-token').click();
     assert.equal(await page.locator('#client-token').inputValue(), ''); assert(!await page.locator('#google-consent-start').isDisabled());
+    await view(page, 'connect'); await exclusiveGoogle(page);
     assert.equal(observed.posts.length, 0);
   })],
   ['unexpected return parameters are removed, rejected and never treated as connected', browser => fixture(browser,
@@ -280,11 +297,36 @@ const tests = [
   ['malformed public intent response fails closed without retaining private extras', browser => fixture(browser, {badStatus: true}, async (page, state, observed) => {
     await open(page); assert(await page.locator('#google-consent-start').isDisabled()); await absent(page); assert.equal(observed.posts.length, 0);
   })],
+  ['management Google action reuses the one Connect panel and Leave restores the untouched application draft', browser => fixture(browser,
+    {credentials: [credential()], applications: [application()]}, async (page, state, observed) => {
+      await page.locator('#connect-use-saved').click(); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+      await page.locator('#connect-credential-next').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+      await page.locator('#connect-application-name').fill('Keep this application draft');
+      await page.locator('#connect-token-ttl').selectOption('3600');
+      await view(page, 'credentials'); await page.locator('#credential-google-connect').click();
+      await page.locator('#google-consent-panel').waitFor({state: 'visible'}); await exclusiveGoogle(page);
+      assert(await page.locator('#credential-google-connect').isHidden());
+      await page.locator('#google-consent-leave').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#connect-application-name').inputValue(), 'Keep this application draft');
+      assert.equal(await page.locator('#connect-token-ttl').inputValue(), '3600');
+      assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+      assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
+    })],
+  ['changing to Google and explicitly leaving preserves the unsaved API-key draft', browser => fixture(browser, {}, async (page, state, observed) => {
+    await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Keep this API-key draft');
+    await page.locator('#connect-credential-secret').fill('synthetic-layout-key-draft');
+    await page.locator('#connect-method-change').click(); await open(page);
+    assert(await page.locator('#connect-credential-secret').isDisabled());
+    await page.locator('#google-consent-leave').click(); await page.locator('#connect-use-key').click();
+    assert.equal(await page.locator('#connect-credential-name').inputValue(), 'Keep this API-key draft');
+    assert.equal(await page.locator('#connect-credential-secret').inputValue(), 'synthetic-layout-key-draft');
+    assert(await page.locator('#google-consent-panel').isHidden()); assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
+  })],
 ];
 async function main() {
   const args = process.argv.slice(2);
-  assert(args.length === 0 || args.length === 2 && args[0] === '--from-group' && /^(?:[1-9]|1[0-9])$/.test(args[1]),
-    'Only no arguments or exact --from-group N (1..19) are accepted');
+  assert(args.length === 0 || args.length === 2 && args[0] === '--from-group' && /^(?:[1-9]|1[0-9]|2[01])$/.test(args[1]),
+    'Only no arguments or exact --from-group N (1..21) are accepted');
   const firstGroup = args.length ? Number(args[1]) : 1; const selected = tests.slice(firstGroup - 1);
   const runPure = args.length === 0;
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));

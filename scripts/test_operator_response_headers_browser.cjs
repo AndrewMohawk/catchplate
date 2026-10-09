@@ -95,7 +95,8 @@ const tests = [
   })],
   ['guided create/review/setup and private export round-trip V2 without exposing provider material', browser => fixture(browser,
     suppliedV2({applications: [], credentials: [credential({secret: PRIVATE[0], refresh_token: PRIVATE[1]})]}), async (page, state) => {
-      await ready(page); await view(page, 'connect'); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+      await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+      await page.locator('#connect-credential-choice').selectOption(IDS.credential);
       await page.locator('#connect-credential-next').click(); await step(page, 'application');
       await page.locator('#connect-application-name').fill('V2 metadata client'); await page.locator('#connect-token-ttl').selectOption('3600');
       await page.locator('#connect-application-next').click(); await step(page, 'access');

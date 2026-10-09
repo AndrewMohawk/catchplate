@@ -150,7 +150,8 @@ async function privateAbsent(page) {
 async function idle(page) { await page.waitForFunction(() => !document.querySelector('#connect-status-refresh').disabled); }
 async function step(page, name) { await page.locator('#connect-' + name + '-step').waitFor({state: 'visible'}); await idle(page); }
 async function pair(page) {
-  await ready(page); await view(page, 'connect'); await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+  await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+  await page.locator('#connect-credential-choice').selectOption(IDS.credential);
   await page.locator('#connect-credential-next').click(); await step(page, 'application');
   await page.locator('#connect-application-choice').selectOption(IDS.application);
   await page.locator('#connect-application-next').click(); await step(page, 'access');
@@ -247,7 +248,8 @@ const tests = [
     assert.match(await page.locator('#client-guidance').innerText(), /204/); assert.equal(state.posts.length, 1);
   })],
   ['guided empty workspace keeps provider secret separate and downloads exact additive client metadata', browser => fixture(browser, capabilities, async (page, state) => {
-    await ready(page); await view(page, 'connect'); await page.locator('#connect-credential-name').fill('Reusable static key');
+    await ready(page); await view(page, 'connect'); await page.locator('#connect-use-key').click();
+    await page.locator('#connect-credential-name').fill('Reusable static key');
     await page.locator('#connect-credential-secret').fill(PRIVATE[0]); await page.locator('#connect-credential-next').click(); await step(page, 'application');
     assert.equal(await page.locator('#connect-credential-secret').inputValue(), ''); await privateAbsent(page);
     await page.locator('#connect-application-name').fill('Ordinary JSON client'); await page.locator('#connect-token-ttl').selectOption('3600');

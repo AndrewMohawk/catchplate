@@ -21,7 +21,7 @@ const savedRule = (changes = {}) => rule({credential_input: 'replace_exact', pla
   response_mode: 'unfiltered_json', response_fields: [], ...changes});
 const SOURCE_FILES = ['scripts/test_operator_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js',
-    'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
+    'workspace_google.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 
@@ -40,13 +40,24 @@ async function start(page) {
   assert.equal(await page.locator('.page:visible').count(), 1);
   assert.equal(await page.locator('nav a[href="#connect"]').getAttribute('aria-current'), 'page');
   await step(page, 'credential');
+  assert(await page.locator('#connect-method-choice').isVisible());
+  assert(await page.locator('#connect-credential-form').isHidden()); assert(await page.locator('#google-consent-panel').isHidden());
+}
+async function chooseMethod(page, method) {
+  const active = method === 'key' ? '#connect-credential-new' : '#connect-saved-choice';
+  if (await page.locator(active).isVisible()) return;
+  if (await page.locator('#connect-method-change').isVisible()) await page.locator('#connect-method-change').click();
+  await page.locator('#connect-use-' + method).click();
+  assert(await page.locator('#connect-method-choice').isHidden()); assert(await page.locator(active).isVisible());
+  assert(await page.locator('#google-consent-panel').isHidden());
 }
 async function useCredential(page, id = IDS.credential) {
+  await chooseMethod(page, 'saved');
   await page.locator('#connect-credential-choice').selectOption(id);
   await page.locator('#connect-credential-next').click(); await step(page, 'application');
 }
 async function fillCredential(page, name = 'Reusable provider key') {
-  await page.locator('#connect-credential-choice').selectOption('new');
+  await chooseMethod(page, 'key');
   await page.locator('#connect-credential-name').fill(name);
   await page.locator('#connect-credential-secret').fill(SECRET);
 }
@@ -109,6 +120,26 @@ async function chooseSavedRule(page, id = IDS.rule) {
 function changePolicy(state) { state.revision++; state.active = state.loaded = digest(++state.sequence); }
 
 const tests = [
+  ['exclusive method choice preserves both key draft and exact saved selection without writes', browser => fixture(browser,
+    supplied({credentials: [credential(), credential({id: OTHER_CREDENTIAL, name: 'Another saved key'})]}), async (page, state) => {
+      await start(page); await chooseMethod(page, 'key');
+      await page.locator('#connect-credential-name').fill('Keep this draft'); await page.locator('#connect-credential-auth-type').selectOption('header');
+      await page.locator('#connect-credential-header-name').fill('X-Draft-Key'); await page.locator('#connect-credential-secret').fill(SECRET);
+      assert(await page.locator('#connect-saved-choice').isHidden()); assert(await page.locator('#connect-google').isHidden());
+      await chooseMethod(page, 'saved'); assert(await page.locator('#connect-credential-new').isHidden());
+      assert(await page.locator('#connect-credential-secret').isDisabled());
+      assert.equal(await page.locator('#connect-credential-choice option[value="new"]').count(), 0);
+      await page.locator('#connect-credential-choice').selectOption(OTHER_CREDENTIAL); await chooseMethod(page, 'key');
+      assert.equal(await page.locator('#connect-credential-name').inputValue(), 'Keep this draft');
+      assert.equal(await page.locator('#connect-credential-auth-type').inputValue(), 'header');
+      assert.equal(await page.locator('#connect-credential-header-name').inputValue(), 'X-Draft-Key');
+      assert.equal(await page.locator('#connect-credential-secret').inputValue(), SECRET);
+      await chooseMethod(page, 'saved'); assert.equal(await page.locator('#connect-credential-choice').inputValue(), OTHER_CREDENTIAL);
+      state.credentials[1].status = 'revoked'; state.revision++; await refresh(page);
+      assert.equal(await page.locator('#connect-credential-choice').inputValue(), OTHER_CREDENTIAL);
+      assert(await page.locator('#connect-credential-choice option:checked').evaluate(item => item.disabled));
+      assert(await page.locator('#connect-credential-next').isDisabled()); assert.equal(state.posts.length, 0);
+    })],
   ['empty workspace connects inline with exact CAS writes, separate token, and a private client configuration', browser => fixture(browser, capabilities, async (page, state) => {
     await start(page); await createCredential(page);
     assert.equal(state.active, digest(1)); assert.equal(state.rules.length, 0); assert.equal(state.applications.length, 0);
@@ -233,6 +264,7 @@ const tests = [
     state.credentials[0].status = 'revoked'; state.revision++; state.catalogStatus = 200; await refresh(page);
     await step(page, 'credential'); assert(await page.locator('#connect-credential-next').isDisabled());
     await page.locator('#connect-cancel').click(); await view(page, 'connect'); await step(page, 'credential');
+    assert(await page.locator('#connect-method-choice').isVisible()); await chooseMethod(page, 'key');
     assert(!await page.locator('#connect-credential-next').isDisabled()); assert.equal(state.posts.length, 1);
     assert.equal(state.credentials.length, 1); assert.equal(state.credentials[0].status, 'revoked');
   })],

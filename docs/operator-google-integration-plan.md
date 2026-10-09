@@ -2,7 +2,14 @@
 
 ## Status and objective
 
-Current joined checkpoint, 2026-10-09: the fresh isolated V2 run passed
+Current joined checkpoint, 2026-10-09: the isolated **Read Gmail** job passed
+list/pagination/message reads before and after actual synthetic-token expiry:
+eight proxy requests, one automatic refresh and eight matching audit attempts.
+The same account and application continued without reconnection. This used
+Requests with a CONNECT Bearer adapter, not a stock Google SDK or real Google.
+See the [ordinary-client Gmail job record](operator-gmail-job-verification.md).
+
+The earlier fresh isolated V2 run passed
 consent/callback/account storage, access-denial controls, two normal Rust proxy
 requests and automatic refresh across actual synthetic-token expiry. The
 response-header blocker is repaired for this supported JSON contract. Google
@@ -57,9 +64,12 @@ Earlier Gmail batches retain their failures: JSON MIME admission, then a test
 that incorrectly put overlapping old and new routes on the same app. Those
 were corrected separately; this targeted run is not a full-suite pass.
 
-The Gmail Rust changes have not been built or run. A real ordinary-client
-list/paginate/read job and the same job across token expiry remain required
-before this bundle is accepted. A URL-library limitation refuses raw apostrophes
+The Gmail Rust changes now have compiled and focused-test evidence, followed
+by an isolated ordinary-client list/paginate/read job across actual synthetic
+token expiry. The [verification record](operator-gmail-job-verification.md)
+distinguishes the historical harness results from the final production parser
+correction and its six focused checks. This is not a full-suite or real-provider
+acceptance result. A URL-library limitation refuses raw apostrophes
 when parsing would rewrite their spelling; percent-encoded `%27` is the intended
 supported spelling. Query helper tests alone do not establish wire acceptance.
 

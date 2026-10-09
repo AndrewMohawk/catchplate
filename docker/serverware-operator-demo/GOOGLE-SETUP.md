@@ -8,10 +8,12 @@ replace retained data, register a Google client, or authorize a deployment.
 
 Use `docker-compose.yml`, exactly one reviewed immutable app/gate source
 override, then `docker-compose.google.yml`, in that order. The Google layer does
-not select application source or a binary. The existing accepted override pins
-`c4611550`/`e7529b44`; do not assume that older application implements the new
-retained-store first-enable transition. Freeze and review the integrated source
-and matching gate identity before selecting the pair.
+not select application source or a binary. The retained deployment now uses
+setup-capable application `1deb896c` and the unchanged normal `e7529b44` gate,
+with Google still disabled. Deploying that source does not prepare or activate
+a Google operation. The explicit reviewed transition, private client inputs
+and separate provider acceptance below remain required; do not enable this
+layer merely because the Google-OFF application update passed preservation.
 
 ## Required operator inputs
 

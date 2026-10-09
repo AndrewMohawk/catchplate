@@ -1,7 +1,7 @@
-# Prepared Google-OFF app-only candidate; not the deployed selection.
+# Recorded Google-OFF app-only rollout selection; app deployed on 2026-10-09.
 # Combine with docker-compose.yml and the retained private environment only.
 # Do not combine with another source override or docker-compose.google.yml.
-# Maintenance approval and retained-state checks remain required.
+# This record does not authorize another rollout or Google enablement.
 services:
   serverware:
     environment:

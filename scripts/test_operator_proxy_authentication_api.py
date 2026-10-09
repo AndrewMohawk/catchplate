@@ -39,10 +39,15 @@ class OperatorProxyAuthenticationApiTests(unittest.TestCase):
 
     def record(self, identifier):
         with closing(self.database()) as conn:
-            row = conn.execute("SELECT data_json FROM operator_catalog_applications WHERE id=?",
-                (identifier,)).fetchone()
+            cursor = conn.execute("SELECT * FROM operator_catalog_applications WHERE id=?", (identifier,))
+            row = cursor.fetchone()
+            columns = [item[0] for item in cursor.description]
         self.assertIsNotNone(row)
-        return json.loads(row[0])
+        stored = dict(zip(columns, row))
+        data = json.loads(stored.pop("data_json"))
+        self.assertIsInstance(data, dict)
+        self.assertFalse(set(stored) & set(data), "catalog metadata overlaps storage columns")
+        return {**stored, **data}
 
     def payload(self, identifier, mode=contract.MODE, **changes):
         return {**self.review(), "id": identifier, "proxy_authentication": mode, **changes}

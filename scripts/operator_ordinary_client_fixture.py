@@ -3,6 +3,7 @@
 This is not a general echo endpoint. All cases accept only REQUEST_BODY and a
 synthetic injected credential. Nothing returns request headers or their digests.
 The explicit V2 cases add fixed ordinary metadata, never caller-selected fields.
+The Basic-client case additionally closes every admitted physical header value.
 Header checks concern physical fields exposed by ASGI, not bytes an HTTP parser
 has already rejected or normalized. There are no network or filesystem effects.
 """
@@ -33,7 +34,8 @@ JSON_RESPONSE_BODY = REQUEST_BODY
 REQUEST_BODY_SHA256 = hashlib.sha256(REQUEST_BODY).hexdigest()
 REQUEST_BODY_LENGTH = len(REQUEST_BODY)
 EMPTY_RESPONSE_CONTENT_TYPE = "application/json; charset=utf-8"
-FIXTURE_CASES = ("json", "empty", "json_v2", "empty_v2")
+PROXY_BASIC_CASE = "json_proxy_basic_v1"
+FIXTURE_CASES = ("json", "empty", "json_v2", "empty_v2", PROXY_BASIC_CASE)
 V2_RESPONSE_METADATA = (
     ("server", "serverware-synthetic-upstream"),
     ("date", "Thu, 01 Jan 1970 00:00:00 GMT"),
@@ -43,12 +45,20 @@ REJECTION_BODY = b'{"error":"ordinary_client_fixture_rejected"}'
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _QUERY = re.compile(
-    rb"case=(json|empty|json_v2|empty_v2)&expectedAuthorizationSha256=([0-9a-f]{64})"
+    rb"case=(json|empty|json_v2|empty_v2|json_proxy_basic_v1)&expectedAuthorizationSha256=([0-9a-f]{64})"
     rb"&expectedBodySha256=([0-9a-f]{64})\Z"
 )
 _HEADER_NAME = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 _SYNTHETIC_AUTHORIZATION = re.compile(rb"Bearer synthetic-operator-[A-Za-z0-9_-]{32,128}\Z")
 _CONTENT_LENGTH = re.compile(rb"(?:0|[1-9][0-9]{0,4})\Z")
+_PROXY_BASIC_REQUIRED_HEADERS = frozenset({
+    b"host", b"authorization", b"content-type", b"content-length", b"accept", b"user-agent",
+})
+_PROXY_BASIC_OPTIONAL_HEADERS = frozenset({b"connection", b"accept-encoding"})
+_PROXY_BASIC_ACCEPT = frozenset({
+    b"application/json", b"application/json;q=0.9", b"application/json;q=0.8", b"application/json;q=0.7",
+})
+_PROXY_BASIC_USER_AGENT = re.compile(rb"serverware-test-run/operator-check-[0-9a-f]{32}\Z")
 
 
 class FixtureRejected(ValueError):
@@ -83,6 +93,22 @@ def build_target(case: str, expected_authorization_sha256: str) -> str:
             + "&expectedBodySha256=" + REQUEST_BODY_SHA256)
 
 
+def _admit_proxy_basic_headers(physical: dict[bytes, list[bytes]]) -> None:
+    """No spare field/value can carry workload authentication to this oracle."""
+    if (not _PROXY_BASIC_REQUIRED_HEADERS.issubset(physical)
+            or set(physical) - (_PROXY_BASIC_REQUIRED_HEADERS | _PROXY_BASIC_OPTIONAL_HEADERS)
+            or any(len(values) != 1 for values in physical.values())):
+        raise FixtureRejected()
+    if (physical[b"host"] != [b"demo-upstream:8443"]
+            or physical[b"accept"][0] not in _PROXY_BASIC_ACCEPT
+            or _PROXY_BASIC_USER_AGENT.fullmatch(physical[b"user-agent"][0]) is None
+            or physical.get(b"connection", []) not in ([], [b"close"], [b"keep-alive"])
+            or physical.get(b"accept-encoding", []) not in ([], [b"identity"])):
+        raise FixtureRejected()
+    # Authorization remains independently hash-bound to the expected synthetic
+    # provider secret below; Content-Type and Content-Length use its fixed body.
+
+
 def admit_request(method: str, raw_path: bytes, raw_query: bytes,
                   headers: Sequence[tuple[bytes, bytes]]) -> Admission:
     """Reject malformed declarations before the bounded body is consumed."""
@@ -110,6 +136,8 @@ def admit_request(method: str, raw_path: bytes, raw_query: bytes,
         if total > MAX_HEADER_BYTES or any(byte < 32 or byte == 127 for byte in value):
             raise FixtureRejected()
         physical.setdefault(name.lower(), []).append(value)
+    if query[1] == PROXY_BASIC_CASE.encode("ascii"):
+        _admit_proxy_basic_headers(physical)
     if any(name in physical for name in (b"proxy-authorization", b"transfer-encoding", b"trailer")):
         raise FixtureRejected()
     if physical.get(b"content-encoding", []) not in ([], [b"identity"]):
@@ -153,7 +181,7 @@ def verify_body(admission: Admission, body: bytes) -> Outcome:
             or not hmac.compare_digest(hashlib.sha256(body).hexdigest(), REQUEST_BODY_SHA256)
             or body != REQUEST_BODY):
         raise FixtureRejected()
-    metadata = V2_RESPONSE_METADATA if admission.case in ("json_v2", "empty_v2") else ()
+    metadata = V2_RESPONSE_METADATA if admission.case in ("json_v2", "empty_v2", PROXY_BASIC_CASE) else ()
     if admission.case in ("empty", "empty_v2"):
         return Outcome(204, b"", (("content-type", EMPTY_RESPONSE_CONTENT_TYPE),) + metadata)
     return Outcome(200, body, (("content-type", "application/json"),) + metadata)

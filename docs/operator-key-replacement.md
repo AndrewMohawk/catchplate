@@ -119,6 +119,59 @@ to `private-fixture-retained/` within the evidence directory, preserving its
 ownership and private permissions. Its claimed checker must not be replayed.
 The completed browser scopes left no processes; their empty scratch was removed.
 
-The retained live `e19f8b5a` deployment is unchanged. These results do not
-establish provider-key validity or revocation, real Google consent/refresh,
-public-route, native, or production acceptance.
+## Retained demo rollout, 2026-10-09
+
+The demo now runs immutable app source
+`ca08fd353da6188bc4c0849974403f7b9189f8f7` with the same f430 Rust executable.
+Only the app container was recreated. A fresh stopped-consistent backup and
+independent observer preserved all seven credentials, generation rows, catalog
+accounts, applications and rules, 92 nonces, all 176 prior audits, 29 non-SQLite
+files and the original empty publication-lock inode. No CA, token, key or policy
+was regenerated. The before/after app-proxy observations retained revision 10,
+policy sequence 8, identical active/loaded policy and zero audit pending/errors.
+
+The console maintenance window was 10:45:07–10:46:45 UTC. Public console/catalog
+kept their authentication redirects; lab health returned 200, and monitoring
+confirmed successful checks at 10:47:20 and 10:48:20 UTC. All four services are
+healthy with zero restarts and no host-published ports. See the
+[deployment checkpoint](../docker/serverware-operator-demo/README.md#current-live-ca08fd35f4307347-checkpoint).
+
+The bounded internal read-only browser check used actual deployed HTML/catalog
+and kept administrator authentication out of the browser. Attempt 1 stopped at
+an incorrect test expectation for the dynamically updated page title. After
+correcting that assertion, attempt 2 verified all seven replacement actions,
+the desktop review's actual assignments, blank password field and Cancel, then
+stopped on **mobile horizontal overflow** with long retained names. Neither
+attempt submitted a key, sent a provider/proxy request or changed catalog state.
+The full browser acceptance is therefore not passed. Both attempts and their
+terminal isolated scopes are retained, without an unchanged third full rerun.
+
+The specific layout issue is long credential/app names in the replacement
+heading and affected-app list. A source-only correction adds scoped
+`overflow-wrap:anywhere` to that panel, preserving all text and controls rather
+than clipping overflow. The focused `--layout-only` browser regression passed
+one rendered group at 320, 390 and 1280 pixels, with full text and usable
+controls. Temporarily removing wrapping in the synthetic page reproduced
+overflow at both mobile widths; restoring the actual CSS removed it. Cancel
+cleared a synthetic draft, and no POST or live request ran. The unchanged
+13 groups were not repeated. Source hashes remained unchanged and the isolated
+scope exited zero with no remaining cgroup processes.
+
+CSS SHA-256 is
+`614743f565589e21396a46a6347c56c93bc48ed79b365b8d375f27c558b4f163`;
+test SHA-256 is
+`f54ebd23ae1d32a3e8fe55ec8bf5d57e943866cfdba325b230be78675708f336`.
+The result is `layout.log` in the rollout evidence directory below. Desktop and
+320-pixel screenshots were inspected in
+`/srv/catchplate-fast/projects/serverware-operator-artifacts/key-replacement-browser-synthetic-avW5sC`.
+This regression uses intercepted fixtures. The fix is **not deployed**;
+follow-up rollout and actual deployed mobile acceptance remain open.
+
+Rollout evidence is
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/key-replacement-live.63FFg1d3`.
+The live read-only browser receipts are `runtime-browser/receipt.json` and
+`runtime-browser-attempt2/receipt.json`; the retained-state result is
+`retained-observer-regexp.json`. The private key-change proof above remains
+separate from this rollout: no saved live key was replaced during verification.
+Provider-key validity/revocation, real Google consent/refresh, external-Internet,
+native and production acceptance remain unproven.

@@ -198,6 +198,84 @@ function projectionChecks() {
   assert.equal(oauth.available, false); assert(!Object.hasOwn(oauth.result.credentials[0], 'credential_generation'));
   return {ok: true, groups: 1, scope: 'real public capability/metadata projection only; no replacement runtime or provider validation'};
 }
+async function replacementLayout(page) {
+  return page.evaluate(() => {
+    const parent = document.querySelector('#credential-replace-panel').getBoundingClientRect();
+    const selectors = ['#credential-replace-panel', '#credential-replace-title', '#credential-replace-apps',
+      '#credential-replace-apps li', '#credential-replace-panel .actions', '#credential-replace-secret',
+      '#credential-replace-submit', '#credential-replace-cancel'];
+    const inside = (rect, outer) => rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+    const items = selectors.map(selector => {
+      const node = document.querySelector(selector); const box = node.getBoundingClientRect();
+      return {selector, visible: box.width > 0 && box.height > 0,
+        fits: box.left >= -1 && box.right <= innerWidth + 1 && inside(box, parent) &&
+          node.scrollWidth <= node.clientWidth + 1};
+    });
+    const text = ['#credential-replace-title', '#credential-replace-apps li'].map(selector => {
+      const node = document.querySelector(selector); const box = node.getBoundingClientRect();
+      const range = document.createRange(); range.selectNodeContents(node);
+      const lines = [...range.getClientRects()];
+      let unclipped = true;
+      for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (['hidden', 'clip'].includes(style.overflowX) || ['hidden', 'clip'].includes(style.overflowY) ||
+            style.textOverflow === 'ellipsis' || style.clipPath !== 'none' ||
+            !['none', ''].includes(style.getPropertyValue('-webkit-line-clamp'))) unclipped = false;
+        if (ancestor.id === 'credential-replace-panel') break;
+      }
+      return {selector, unclipped, fits: lines.length > 0 && lines.every(rect => inside(rect, box) &&
+        inside(rect, parent) && rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1)};
+    });
+    return {viewport: innerWidth, documentFits: document.documentElement.scrollWidth <= innerWidth + 1, items, text};
+  });
+}
+function assertReplacementLayout(measured, width) {
+  assert.equal(measured.viewport, width);
+  assert(measured.documentFits, 'replacement review must not create horizontal document scrolling at ' + width);
+  for (const item of measured.items) assert(item.visible && item.fits, item.selector + ' must fit at ' + width);
+  for (const item of measured.text) assert(item.unclipped && item.fits, item.selector + ' must show every wrapped text line at ' + width);
+}
+const layoutTest = ['long live-style names wrap without clipping and keep replacement controls usable on mobile', browser => {
+  const prefix = 'serverware-live-smoke-aebf2cf3eea3401d9accc224004dfd85';
+  const credentialName = prefix + '-credential'; const applicationName = prefix + '-application';
+  return fixture(browser, {credentials: [staticKey({name: credentialName})],
+    applications: [application({name: applicationName})], rules: [rule()]}, async (page, state) => {
+    const before = clone({credentials: state.credentials, applications: state.applications,
+      rules: state.rules, revision: state.revision, policy: catalog(state).policy});
+    // One group: two bounded mobile widths plus unchanged desktop rendering.
+    for (const width of [390, 320, 1280]) {
+      await page.setViewportSize({width, height: width < 800 ? 844 : 960}); await open(page);
+      assert.equal(await page.locator('#credential-replace-title').innerText(), 'Replace key · ' + credentialName);
+      assert.deepEqual(await page.locator('#credential-replace-apps li').allTextContents(), [applicationName]);
+      assertReplacementLayout(await replacementLayout(page), width);
+      if (width < 800) {
+        // Synthetic causal control only: temporarily undo the scoped wrapping
+        // rule in this intercepted document, never production files/live DOM.
+        const control = await page.addStyleTag({content: '#credential-replace-panel{overflow-wrap:normal}'});
+        try {
+          const unwrapped = await replacementLayout(page);
+          assert(!unwrapped.documentFits || unwrapped.items.some(item => !item.fits) ||
+            unwrapped.text.some(item => !item.fits), 'unwrapped long-name control must reproduce overflow at ' + width);
+        } finally { await control.evaluate(node => node.remove()); }
+        assertReplacementLayout(await replacementLayout(page), width);
+      }
+      assert(await secret(page).isEditable());
+      assert(!await page.locator('#credential-replace-submit').isDisabled());
+      assert(!await page.locator('#credential-replace-cancel').isDisabled());
+      // Trial checks click reachability without submitting even an empty form.
+      await page.locator('#credential-replace-submit').click({trial: true});
+      await screenshot(page, 'replace-key-long-names-' + width);
+      await secret(page).fill(KEY); assert.equal(await secret(page).inputValue(), KEY);
+      await page.locator('#credential-replace-cancel').click();
+      assert(!await panel(page).isVisible()); await noSecret(page);
+      await open(page); await page.locator('#credential-replace-cancel').click();
+    }
+    assert.equal(state.replacementRequests.length, 0); assert.equal(state.replacements.length, 0);
+    assert.equal(state.posts.length, 0); assert(state.requests.every(request => request.method === 'GET'));
+    assert.deepEqual({credentials: state.credentials, applications: state.applications,
+      rules: state.rules, revision: state.revision, policy: catalog(state).policy}, before);
+  });
+}];
 const tests = [
   ...['bearer', 'header'].map(auth_type => [auth_type + ' replacement reviews exact affected apps and preserves identity and assignments', browser => fixture(browser,
     {credentials: [staticKey({auth_type, header_name: auth_type === 'bearer' ? 'Authorization' : 'X-Reporting-Key'}), supplied().credentials[1]],
@@ -346,13 +424,18 @@ const tests = [
       assert.match(text, /does not revoke it at the provider/i); assert(!/all (new )?requests use|provider (valid|healthy)|revoked at provider/i.test(text));
       assert.equal(state.replacements.length, 1); assert.equal(state.posts.length, 0);
     })],
+  layoutTest,
 ];
 
 async function main() {
-  assert.equal(process.argv.length, 2, 'replacement UI fixtures accept no live target, token or extra arguments');
-  assert.equal(tests.length, 13, 'focused rendered group count stays exact');
+  const args = process.argv.slice(2); const layoutOnly = args.length === 1 && args[0] === '--layout-only';
+  assert(args.length === 0 || layoutOnly, 'usage: test_operator_key_replacement_browser.cjs [--layout-only]; no live target or token accepted');
+  assert.equal(tests.length, 14, 'focused rendered group count stays exact');
+  const selected = layoutOnly ? [layoutTest] : tests;
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-  console.log(JSON.stringify(projectionChecks()));
+  console.log(JSON.stringify({phase: 'selection', groups: selected.length, totalGroups: tests.length,
+    layoutOnly, projectionGroups: layoutOnly ? 0 : 1, names: selected.map(([name]) => name)}));
+  if (!layoutOnly) console.log(JSON.stringify(projectionChecks()));
   const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'key-replacement-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic replacement review screenshots only; password fields masked'}));
@@ -360,11 +443,12 @@ async function main() {
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;
   try {
     await Promise.race([(async () => {
-      for (const [name, run] of tests) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'intercepted static key replacement UI fixtures only',
+      for (const [name, run] of selected) { await run(browser); console.log('PASS ' + name); }
+      console.log(JSON.stringify({ok: true, groups: selected.length, totalGroups: tests.length, layoutOnly,
+        scope: 'intercepted static key replacement UI fixtures only',
         backendTransactionTested: false, cacheInvalidationTested: false, providerValidationTested: false,
         liveRequests: 0, generatedCommandsExecuted: false, productionAcceptance: false}));
-    })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('key replacement fixture absolute deadline')), 150000); })]);
+    })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('key replacement fixture absolute deadline')), layoutOnly ? 60000 : 150000); })]);
   } finally {
     clearTimeout(deadline); try { await browser.close(); }
     finally { const after = await hashes(); console.log(JSON.stringify({phase: 'source-after', hashes: after})); assert.deepEqual(after, before, 'sources remained frozen'); }

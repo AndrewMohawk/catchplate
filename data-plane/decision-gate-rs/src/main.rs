@@ -22,6 +22,8 @@ mod buffered_request;
 #[cfg(test)]
 mod ordinary_client_compat_tests;
 #[cfg(test)]
+mod ordinary_request_semantics_tests;
+#[cfg(test)]
 mod response_metadata_tests;
 mod gate_state_init;
 mod control_plane_client_config;
@@ -35337,6 +35339,8 @@ fn decide_internal_for_forward_with_shadow<'a>(
         false,
         Some(&mut release_authorization),
         Some(shadow_admission),
+        #[cfg(test)]
+        None,
     );
     let _ = shadow_finalization;
     (decision, release_authorization)
@@ -35371,6 +35375,8 @@ fn decide_internal_with_mode<'a>(
         preview,
         accepted_release_output,
         Some(shadow_admission),
+        #[cfg(test)]
+        None,
     );
     let _ = shadow_finalization;
     decision
@@ -35384,6 +35390,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
     preview: bool,
     mut accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
     precomputed_shadow_admission: Option<ShadowAdmission>,
+    #[cfg(test)] decision_at_epoch_ms_override: Option<u128>,
 ) -> Value {
     let started = Instant::now();
     if let Err(error) = proxy_basic_transport::require_runtime(state, snapshot) {
@@ -35425,11 +35432,14 @@ fn decide_internal_with_mode_and_shadow<'a>(
         );
     }
     let shadow_finalization = shadow_admission.finalization_handle();
+    let decision_at_epoch_ms = now_epoch_ms();
+    #[cfg(test)]
+    let decision_at_epoch_ms = decision_at_epoch_ms_override.unwrap_or(decision_at_epoch_ms);
     let shadow_admission = shadow_admission.bind_decision_time(
         snapshot,
         &req,
         authenticated_principal_id,
-        now_epoch_ms(),
+        decision_at_epoch_ms,
     );
     if shadow_admission.must_fail_closed() {
         return deny(
@@ -35661,59 +35671,6 @@ fn decide_internal_with_mode_and_shadow<'a>(
             return deny(status, &reason, payload, started);
         }
     }
-    let x_app_metadata_required = route.adapter_type == "x.v2"
-        && route
-            .adapter_config
-            .get("appIds")
-            .and_then(Value::as_array)
-            .is_some_and(|app_ids| !app_ids.is_empty());
-    let preadmission_credential_info = if x_app_metadata_required {
-        let Some(credential_id) = credential_ref.as_ref() else {
-            return deny_for_route(
-                500,
-                "X app admission requires a credential binding",
-                json!({"error":"x_app_credential_missing"}),
-                route,
-                started,
-            );
-        };
-        let Some(scope) = credential_scope.as_ref() else {
-            return deny_for_route(
-                500,
-                "X app admission requires a credential scope",
-                json!({"error":"x_app_credential_scope_missing"}),
-                route,
-                started,
-            );
-        };
-        let info = match execute_shadow_credential_effect(
-            state,
-            shadow_finalization.as_ref(),
-            snapshot,
-            ActiveMutableEffectKind::CredentialGeneration,
-            scope,
-            || ensure_scoped_credential_generation(state, snapshot, scope),
-        ) {
-            Ok(info) => info,
-            Err(_) => {
-                return deny_for_route(
-                    503,
-                    "X credential metadata is unavailable for app admission",
-                    json!({
-                        "error":"x_app_metadata_unavailable",
-                        "credential_ref":credential_id,
-                    }),
-                    route,
-                    started,
-                )
-            }
-        };
-        req.credential_metadata
-            .insert(credential_id.clone(), info.info.metadata.clone());
-        Some(info)
-    } else {
-        None
-    };
     let precredential_gmail_version =
         if route.adapter_type == "gmail.v1" && route_match.params.contains_key("message_id") {
             let credential_id = credential_ref.as_deref().unwrap_or_default();
@@ -35868,6 +35825,59 @@ fn decide_internal_with_mode_and_shadow<'a>(
             .to_string();
         return deny_for_route(status, &reason, payload, route, started);
     }
+    // Ordinary operator/development requests can have shadow evaluation disabled.
+    // Revalidate the actual provider target and run the shared pure checks here,
+    // before any new credential acquisition, canonical digest, or quota effect.
+    let (revalidated_operation, revalidated_rewrite) =
+        match validate_adapter(&req, &forwarded_headers, &provider_url, &provider_route_match) {
+            Ok(semantics) => semantics,
+            Err(payload) => {
+                let status = payload.get("status_code").and_then(Value::as_u64).unwrap_or(403) as u16;
+                let reason = payload.get("error").and_then(Value::as_str)
+                    .unwrap_or("rewritten adapter request denied").to_string();
+                return deny_for_route(status, &reason, payload, route, started);
+            }
+        };
+    let mut converged_url = provider_url.clone();
+    if provider_query::apply_route_rewrite(route, &mut converged_url, &revalidated_rewrite).is_err()
+        || converged_url != provider_url
+        || revalidated_operation != operation
+    {
+        return deny_for_route(
+            500,
+            "adapter query rewrite did not converge",
+            json!({"error":"adapter_query_rewrite_not_converged"}),
+            route,
+            started,
+        );
+    }
+    let credential_policy = credential_ref.as_ref()
+        .and_then(|credential_id| snapshot.credentials.get(credential_id));
+    if let Err(payload) = bind_provider_account_scope(route, credential_policy, &mut operation) {
+        let reason = payload.get("error").and_then(Value::as_str)
+            .unwrap_or("provider account identity unavailable").to_string();
+        return deny_for_route(500, &reason, payload, route, started);
+    }
+    if let Err(payload) = evaluate_request_semantic_constraints_at_ms(
+        route,
+        &req,
+        &headers,
+        &provider_url,
+        &provider_route_match.params,
+        &mut operation,
+        i128::try_from(decision_at_epoch_ms).unwrap_or(i128::MAX),
+    ) {
+        let status = payload.get("status_code").and_then(Value::as_u64).unwrap_or(403) as u16;
+        let reason = payload.get("error").and_then(Value::as_str)
+            .unwrap_or("request constraint denied").to_string();
+        return deny_for_route(status, &reason, payload, route, started);
+    }
+    if let Err(payload) = validate_response_binding_sources(route, &operation) {
+        let status = payload.get("status_code").and_then(Value::as_u64).unwrap_or(403) as u16;
+        let reason = payload.get("error").and_then(Value::as_str)
+            .unwrap_or("response binding source denied").to_string();
+        return deny_for_route(status, &reason, payload, route, started);
+    }
     let identity_encoded_headers = match strip_identity_request_content_encoding(&req.headers) {
         Ok(headers) => headers,
         Err(_) => {
@@ -35894,6 +35904,62 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     let headers = lower_headers(&req.headers);
+
+    // X adapter admission uses signed policy bindings, not runtime metadata.
+    // Resolve that metadata only after all pure request constraints pass.
+    let x_app_metadata_required = route.adapter_type == "x.v2"
+        && route
+            .adapter_config
+            .get("appIds")
+            .and_then(Value::as_array)
+            .is_some_and(|app_ids| !app_ids.is_empty());
+    let preadmission_credential_info = if x_app_metadata_required {
+        let Some(credential_id) = credential_ref.as_ref() else {
+            return deny_for_route(
+                500,
+                "X app admission requires a credential binding",
+                json!({"error":"x_app_credential_missing"}),
+                route,
+                started,
+            );
+        };
+        let Some(scope) = credential_scope.as_ref() else {
+            return deny_for_route(
+                500,
+                "X app admission requires a credential scope",
+                json!({"error":"x_app_credential_scope_missing"}),
+                route,
+                started,
+            );
+        };
+        let info = match execute_shadow_credential_effect(
+            state,
+            shadow_finalization.as_ref(),
+            snapshot,
+            ActiveMutableEffectKind::CredentialGeneration,
+            scope,
+            || ensure_scoped_credential_generation(state, snapshot, scope),
+        ) {
+            Ok(info) => info,
+            Err(_) => {
+                return deny_for_route(
+                    503,
+                    "X credential metadata is unavailable for app admission",
+                    json!({
+                        "error":"x_app_metadata_unavailable",
+                        "credential_ref":credential_id,
+                    }),
+                    route,
+                    started,
+                )
+            }
+        };
+        req.credential_metadata
+            .insert(credential_id.clone(), info.info.metadata.clone());
+        Some(info)
+    } else {
+        None
+    };
 
     let jit_required = route
         .jit

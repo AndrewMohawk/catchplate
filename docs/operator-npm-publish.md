@@ -700,6 +700,28 @@ resolution, using the same decision-time sample, while preserving quota-only
 effects and the late dispatch guard. An actual operator-profile denial test
 must cover this join, not just the existing time-window helper tests.
 
+### Ordinary request admission repair candidate
+
+The ordinary decision path now revalidates the rewritten provider target and
+requires adapter rewrites to converge before binding the provider account from
+the compiled credential, evaluating request semantics, and checking response
+binding sources. The account and captured request fields remain in the operation
+used by subsequent canonical digests and quota keys. Shadow binding and semantic
+checks share one decision-time sample; a per-call test-only override permits
+deterministic window controls without changing the production clock.
+
+These checks precede new credential acquisition. X metadata acquisition moves
+after them because X adapter admission consumes signed policy bindings, not
+runtime credential metadata. Its existing credential validation remains intact.
+Gmail's earlier cached-generation and prior-search-proof prerequisite is retained.
+Rate-limit-only effect passes and the late upstream-send expiry guard are
+unchanged. The repair does not substitute a shadow verdict for the ordinary
+request path or broaden scoped npm admission.
+
+This is a source candidate pending a fresh genuine Rust build, ordinary-path
+regression results, and a complete isolated stock-client acceptance run. It is
+not a deployed repair or native pilot acceptance.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

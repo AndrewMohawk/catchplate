@@ -106,9 +106,12 @@ async function screenshot(page, directory, name) {
     mask: [node(page, 'client-secret'), page.locator('#client-token'), page.locator('#connect-credential-secret')]});
 }
 async function fixture(browser, options, exercise) {
+  activeVariant = options.external ? 'external-profile' : options.unsupported ? 'unsupported-profile' : 'managed-profile';
+  activeStep = 'fixture-shell-start';
   return ordinaryFixture(browser, {credentials: [], applications: [], rules: [], allowedUpstreams: [...OLD.allowed_upstreams],
     responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'], requestBodyModes: ['preserve_json_v1'],
     credentialInputModes: ['insert', 'replace_exact']}, async (page, state, controls) => {
+    activeStep = 'fixture-install-overrides';
     state.settings = clone(options.external ? TARGET : OLD);
     if (options.external) state.allowedUpstreams = [...TARGET.allowed_upstreams];
     const observed = {requests: [], prepares: [], cancels: [], operation: null, owned: true, pairReady: true,
@@ -201,10 +204,14 @@ async function fixture(browser, options, exercise) {
       } catch (_) { state.errors.push('Google configuration attempted a non-observation consent request'); await route.abort(); }
     });
     try {
-      await page.reload({waitUntil: 'networkidle'}); await ready(page);
+      activeStep = 'fixture-assets-reload'; await page.reload({waitUntil: 'networkidle'});
+      activeStep = 'fixture-catalog-admission'; await ready(page);
+      activeStep = 'fixture-shell-assertions';
       assert.equal(await page.title(), 'Overview - Serverware operator workspace'); assert.equal(new URL(page.url()).origin, ORIGIN);
       await exercise(page, state, observed, {...controls, prepareArrival, releasePrepare: () => releasePrepare?.()});
+      activeStep = 'fixture-final-material';
       await noMaterial(page);
+      activeStep = 'fixture-final-write-origins';
       assert.deepEqual(state.posts, [], 'configuration never writes credentials, accounts, applications, rules, tokens or notifications');
       assert.deepEqual({credentials: state.credentials, applications: state.applications, rules: state.rules}, resources);
       assert.equal(new URL(page.url()).origin, ORIGIN, 'no provider or restart navigation');
@@ -214,6 +221,30 @@ async function fixture(browser, options, exercise) {
 
 let activeGroup = 0;
 let activeStep = 'not-started';
+let activeVariant = 'not-started';
+function safeFrames(error) {
+  // Do not emit error.message, raw stack lines, URL paths or assertion values.
+  // Only an exact local harness filename and bounded source coordinates leave
+  // this parser, even when the first stack line contains a synthetic secret.
+  const frames = [];
+  try {
+    if (typeof error?.stack !== 'string') return frames;
+    const names = ['test_operator_google_configuration_browser.cjs',
+      'test_operator_ordinary_modes_browser.cjs', 'test_operator_catalog_browser.cjs'];
+    for (const line of error.stack.slice(0, 32768).split('\n').slice(1, 65)) {
+      for (const name of names) {
+        const prefix = join(ROOT, 'scripts', name) + ':';
+        const offset = line.indexOf(prefix); if (offset < 0) continue;
+        const suffix = line.slice(offset + prefix.length);
+        const match = /^(\d{1,6}):(\d{1,6})\)?\s*$/.exec(suffix);
+        if (!match || Number(match[1]) < 1 || Number(match[2]) < 1) continue;
+        frames.push({file: 'scripts/' + name, line: Number(match[1]), column: Number(match[2])});
+        if (frames.length === 8) return frames;
+      }
+    }
+  } catch (_) { /* Fixed empty projection if an unusual error object refuses inspection. */ }
+  return frames;
+}
 async function settled(page) { await page.waitForLoadState('networkidle'); }
 async function reloadUnresolved(page) {
   // The stored locator intentionally holds ordinary writes after reload until
@@ -252,12 +283,17 @@ async function refreshCatalog(page) {
 const tests = [
   ['opening settings is inert; unsupported and externally configured profiles preserve static UI', async browser => {
     for (const options of [{unsupported: true}, {external: true}]) await fixture(browser, options, async (page, state, observed) => {
+      activeStep = 'compatibility-open-proxy';
       await view(page, 'proxy'); assert.equal(observed.requests.length, 0);
+      activeStep = 'compatibility-initial-controls';
       assert(await node(page, 'form').isHidden()); assert(await node(page, 'prepare').isDisabled());
+      activeStep = 'compatibility-review-unsupported';
       await node(page, 'review').click(); await settled(page);
+      activeStep = 'compatibility-refused-controls';
       assert(await node(page, 'form').isHidden()); assert(await node(page, 'prepare').isDisabled());
       assert.match(await node(page, 'status').innerText(), /not supported|unavailable|deployment/i);
       assert.equal(observed.prepares.length + observed.cancels.length, 0);
+      activeStep = 'compatibility-static-controls';
       await view(page, 'credentials'); assert(!await page.locator('#credential-save').isDisabled());
     });
   }],
@@ -436,10 +472,23 @@ async function hashes() {
   return Object.fromEntries(await Promise.all(files.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
-async function runSuite(browser) {
+function selectedGroups(args) {
+  if (args.length === 0) return tests.map((_, index) => index + 1);
+  assert.equal(args.length, 2, 'Only the bounded --groups selector is accepted');
+  assert.equal(args[0], '--groups', 'Only the bounded --groups selector is accepted');
+  assert(typeof args[1] === 'string' && args[1].length <= 47 && /^[1-9]\d?(?:,[1-9]\d?)*$/.test(args[1]),
+    'Group selector requires canonical comma-separated group numbers');
+  const values = args[1].split(',').map(Number);
+  assert(values.length <= tests.length && new Set(values).size === values.length &&
+    values.every(value => value <= tests.length), 'Group selector is bounded to the fixed suite');
+  return values;
+}
+async function runSuite(browser, groups = selectedGroups([])) {
+  const selected = tests.map(([name, test], index) => ({group: index + 1, name, test})).filter(item => groups.includes(item.group));
   const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-google-configuration-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory,
-    tests: tests.map(([name], index) => ({group: index + 1, name})), scope: 'intercepted synthetic API, actual rendered assets'}));
+    tests: selected.map(({group, name}) => ({group, name})), totalGroups: tests.length,
+    scope: 'intercepted synthetic API, actual rendered assets'}));
   const contexts = new Set(); let finished = false; let timeout; let passed = 0;
   const bounded = {async newContext(...args) {
     assert(!finished); const context = await browser.newContext(...args);
@@ -448,18 +497,19 @@ async function runSuite(browser) {
   }};
   try {
     await Promise.race([(async () => {
-      for (const [index, [name, test]] of tests.entries()) {
-        activeGroup = index + 1; activeStep = 'fixture-start'; await test(bounded, directory);
+      for (const {group, name, test} of selected) {
+        activeGroup = group; activeStep = 'fixture-start'; activeVariant = 'not-started'; await test(bounded, directory);
         passed++; console.log('PASS ' + name);
       }
     })(), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Bounded synthetic browser suite expired')), 180000); })]);
-    const result = {ok: true, renderedGroups: tests.length, passed, artifactDirectory: directory,
+    const result = {ok: true, renderedGroups: selected.length, totalGroups: tests.length,
+      selectedGroups: selected.map(item => item.group), passed, artifactDirectory: directory,
       backendAcceptance: false, realSQLiteVerified: false, providerRequests: 0, consentStarts: 0,
       proxyRequests: 0, externalRequests: 0, restarted: false, deploymentFilesChanged: false};
     console.log(JSON.stringify(result)); return result;
-  } catch (_) {
-    console.log(JSON.stringify({phase: 'fixed-failure-checkpoint', group: activeGroup, step: activeStep, passed,
-      rawErrorSuppressed: true, syntheticOnly: true}));
+  } catch (error) {
+    console.log(JSON.stringify({phase: 'fixed-failure-checkpoint', group: activeGroup, variant: activeVariant,
+      step: activeStep, passed, frames: safeFrames(error), rawErrorSuppressed: true, syntheticOnly: true}));
     throw new Error('Google configuration rendered regression refused; fixed checkpoint retained');
   } finally {
     finished = true; clearTimeout(timeout);
@@ -472,17 +522,17 @@ async function runSuite(browser) {
 }
 async function run(page) { return runSuite(page.context().browser()); }
 async function main() {
-  assert.equal(process.argv.length, 2, 'No live target or execution arguments accepted');
+  const groups = selectedGroups(process.argv.slice(2));
   assert.equal(process.version, 'v25.5.0', 'use the fixed cached Node runner');
   assert.equal(require(PLAYWRIGHT + '/package.json').version, '1.58.2', 'fixed cached Playwright version');
   const {chromium} = require(PLAYWRIGHT);
   const browser = await chromium.launch({headless: true, timeout: 20000, args: ['--no-sandbox', '--disable-background-networking']});
   try {
     assert.equal(browser.version(), '145.0.7632.6', 'fixed cached Chromium revision1208');
-    await runSuite(browser);
+    await runSuite(browser, groups);
   } finally { await browser.close(); }
 }
-module.exports = {run, profile, review, operation, terminal, discovery, digest, OLD, TARGET};
+module.exports = {run, profile, review, operation, terminal, discovery, digest, OLD, TARGET, selectedGroups, safeFrames};
 if (require.main === module) main().catch(() => {
   console.error('Google configuration browser regression refused; raw errors and request bodies suppressed'); process.exitCode = 1;
 });

@@ -246,6 +246,9 @@ async function story(context, bridge, directory, evidence, progress) {
     ORIGIN + '/api/oauth/callback/google');
   assert.equal(observed.discovery.state, 'unconfigured'); assert.equal(observed.discovery.review.eligible, true);
   assert.equal((await node(page, 'callback').innerText()).trim(), ORIGIN + '/api/oauth/callback/google');
+  await node(page, 'scopes').locator('..').locator(':scope > summary').click();
+  assert(await node(page, 'scopes').isVisible());
+  assert.equal((await node(page, 'scopes').innerText()).trim(), observed.discovery.scopes.join('\n'));
   assert.match(await node(page, 'added-upstream').innerText(), /https:\/\/gmail\.googleapis\.com/);
   assert.equal(await node(page, 'client-secret').getAttribute('type'), 'password');
   await node(page, 'client-id').fill(CLIENT); await node(page, 'client-secret').fill(SECRET); await noMaterial(page, true);

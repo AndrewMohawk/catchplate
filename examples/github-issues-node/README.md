@@ -127,8 +127,8 @@ separate TLS trust, fixed dummy authentication, request bounds and redacted
 failures. They do not prove real Octokit serialization, TLS, proxy forwarding or
 GitHub success; those require a separately authorized integration run.
 
-All eight mocked test groups passed locally on 2026-10-10. That result does not
-establish that the newly checked-in entrypoint has passed a proxy integration run.
+All eight mocked test groups passed locally on 2026-10-10. That result alone is
+not proxy integration evidence.
 
 After installing the checked-in dependencies, run the separate real-SDK checks:
 
@@ -143,6 +143,12 @@ They check exact inner URLs, headers and dummy authorization, proxy-identity
 separation, invalid pagination targets and errors without SDK retries. Fetch
 returns synthetic `Response` objects and `ProxyAgent` is an inert configuration
 stub; no actual TLS, proxy forwarding or GitHub request is established.
+
+The later 2026-10-10 [actual-entrypoint acceptance](../../docs/operator-github-client-compatibility.md#checked-in-node-python-and-go-examples)
+passed this program through the normal Rust proxy with verified TLS and a
+synthetic GitHub service: two-page reads succeeded, and wrong-application and
+wrong-repository requests were denied before dispatch. No real GitHub request
+or GitHub Actions execution is claimed.
 
 ## GitHub Actions sample
 

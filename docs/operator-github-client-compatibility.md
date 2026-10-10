@@ -2,8 +2,8 @@
 
 The operator-workspace feature at `7ee40d18` implements a reusable GitHub token
 connection and two named-repository permissions. This document describes that
-source contract, not a deployed GitHub integration or a successful real-provider
-request. Runtime acceptance remains incomplete as recorded below.
+source contract and the isolated runtime checkpoints below, not a deployed
+GitHub integration or a successful real-provider request.
 
 ## Operator journey
 
@@ -83,7 +83,50 @@ metadata does not make an uncertain write safe to replay. A denial before
 dispatch differs from a lost response after dispatch; issue/comment creation is
 never automatically retried by the supplied recipe.
 
-## Verification checkpoint
+## Checked-in Node, Python and Go examples
+
+On 2026-10-10, the actual entrypoints in `examples/github-issues-node`,
+`examples/github-issues-python` and `examples/github-issues-go` passed through
+the normal Rust proxy built from clean commit
+`0b1fafe21d39ab98f4b4bef8674c2cae50e88726`. Its executable SHA-256 is
+`a3d88673d40179864a52d3bd6902af7700fbe3562e8fbee423e3be73edc7ad10`.
+This includes the exact stock Go issue-list Accept compatibility fix.
+
+- Node 25.5.0 used Octokit 22.0.1 and Undici 8.11.2.
+- Python 3.12.14 used PyGithub 2.10.0, Requests 2.34.2, urllib3 2.8.0 and
+  certifi 2026.7.22. Its client-only combined CA bundle is not independently
+  isolated outer/inner trust.
+- The Go program was built with Go 1.23.12 and go-github/v74 74.0.0. Its
+  executable SHA-256 is
+  `28bec0ac7acc14475617f366e33de772e9b3780522cce1f40aef85748e9947f0`.
+
+Each program completed two pages using the normal SDK, with genuine outer and
+inner TLS verification, exact placeholder replacement and application proxy
+authentication. The six provider requests and six released responses matched
+their independently reconstructed canonical request/operation digests and six
+distinct durable audit start/release pairs. Wrong-application and
+wrong-repository attempts from each program produced six pre-dispatch denials.
+No SDK request rewriting, real GitHub token or external provider contact was used.
+
+The receiver ran on loopback inside an isolated network-none namespace. Runtime
+inspection verified the executable digest, exact read-only source/client mounts,
+shared private namespace and absence of host ports. The one-shot check passed
+without retry. All six temporary containers were removed; cleanup reported no
+errors and retained the fixture state and evidence. The run including startup
+and cleanup took 70.492 seconds **after compilation**; this is not a native
+pilot startup or cache-speed measurement.
+
+Evidence is retained under
+`serverware-operator-workspace-evidence/github-examples-acceptance.eZt0lZhl/`:
+`build-result.json`, `run-inputs.json`, `selected-revision.json`,
+`container-observations.json`, `checker-result.stdout.log`, and `terminal.json`.
+The checker is [check_operator_github_examples.py](../scripts/check_operator_github_examples.py).
+Cached dependencies were reused, not independently reproduced or fully
+reinventoried. This engineering result is not production-release provenance.
+GitHub Actions execution, actual provider permissions, deployed public routes
+and the native hardware pilot still require their own acceptance.
+
+## Earlier stock Octokit verification checkpoint
 
 Recorded checkpoints (the earlier Python and browser suites were not rerun for
 the Rust freshness fix):

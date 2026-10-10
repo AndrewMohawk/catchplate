@@ -81,8 +81,13 @@ SDK headers or weakening the permission.
 The checked-in `go.sum` records resolved dependency checksums. All six top-level
 test groups passed with Go 1.23.12 on 2026-10-10, including actual SDK request
 serialization and crossed-CA rejection. Compiled-gate acceptance and running this
-entrypoint through a real proxy are **pending**.
-In-memory tests alone do not establish deployed or real-GitHub compatibility.
+entrypoint through the normal Rust proxy subsequently passed in the
+2026-10-10 [isolated acceptance](../../docs/operator-github-client-compatibility.md#checked-in-node-python-and-go-examples):
+two-page reads succeeded against a synthetic GitHub service, while
+wrong-application and wrong-repository attempts were denied before dispatch.
+The actual stock SDK media type passed without client header rewriting.
+Neither in-memory tests nor that isolated run establish public deployment or
+real-GitHub compatibility with your token and repository.
 No provider token, real repository, native enrollment, or deployment is created
 by this example.
 

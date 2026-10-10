@@ -97,9 +97,17 @@ separate Basic proxy credentials, minimal child environment, CA pool settings,
 lazy route selection and fixed errors. A socket audit hook is installed after
 dependency imports (urllib3 may probe local IPv6 support during import).
 
-These are **offline checks, not a successful proxy/TLS/GitHub integration claim**.
+These tests are **offline checks, not proxy/TLS/GitHub integration evidence**.
 All eight groups passed locally on 2026-10-10 with the pinned dependencies.
-A real operator permission,
-valid app token and running proxy are still needed to run the example. The four
+
+The later 2026-10-10 [actual-entrypoint acceptance](../../docs/operator-github-client-compatibility.md#checked-in-node-python-and-go-examples)
+passed this launcher and its SDK child through the normal Rust proxy using
+Python 3.12.14, verified TLS and a synthetic GitHub service. Two-page reads
+succeeded; wrong-application and wrong-repository attempts were denied before
+dispatch. The client-only combined CA trust remains the tradeoff described above.
+No real GitHub request or public deployment is established by that isolated run.
+
+A saved operator permission, valid app token and running proxy are still needed
+to run against your repository. The four
 SDK/transport/trust dependencies are pinned in `requirements.txt`; this is not a
 hash-locked inventory of all transitive packages.

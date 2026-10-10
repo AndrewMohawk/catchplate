@@ -1,5 +1,6 @@
 # INACTIVE SAMPLE. Review and copy deliberately into .github/workflows/.
-# The prepared dependency lock and actual proxy acceptance are not yet verified.
+# Installed pinned SDK and isolated actual-proxy checks passed.
+# This workflow is unrun; real X access remains unverified.
 name: Read one X username through Serverware
 on:
   workflow_dispatch:

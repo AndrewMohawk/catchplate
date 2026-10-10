@@ -1,11 +1,15 @@
 # One X username lookup through Serverware
 
-**Offline SDK checks passed; proxy acceptance pending.** On 2026-10-10, Node
-25.5.0 passed seven configuration tests and four tests using the installed pinned
-XDK with Undici MockAgent. Actual proxy/TLS acceptance, real X access and a GitHub
-Actions run remain pending. Mocked transport is not deployment proof. The
-[preset implementation plan](../../docs/operator-provider-presets.md) defines
-the separate acceptance gates.
+**Isolated SDK-through-proxy acceptance passed.** On 2026-10-10, this actual
+entrypoint passed through the genuine Rust proxy to a network-isolated synthetic
+X service, with verified outer and inner TLS and server-side token replacement.
+Wrong application, username and revoked-grant controls were refused. The run
+used source `eb5d12e5`; it contacted no provider and proves neither deployment
+acceptance, real X access nor a GitHub Actions run. See the
+[verification record](../../docs/operator-x-username-verification.md).
+
+Separately, Node 25.5.0 passed seven configuration tests and four installed-XDK
+tests using Undici MockAgent. Those offline results are not proxy/TLS proof.
 
 The actual official `@xdevplatform/xdk` **0.6.6** generates one
 `client.users.getByUsername(username, ...)` request. It uses the fixed public
@@ -82,8 +86,9 @@ The pinned SDK emits `Authorization: Bearer serverware-x-placeholder-v1`,
 `Accept: application/json`, `Content-Type: application/json` even on GET, and
 `User-Agent: xdk-typescript/0.6.6`. Native fetch adds transport headers such as
 `accept-language`, `sec-fetch-mode` and `accept-encoding`; the proxy's narrow
-admission must account for those without broadening generic rules. These are
-source-derived expectations, not a captured-wire acceptance claim.
+admission accounts for those without broadening generic rules. The isolated
+acceptance run exercised this entrypoint's actual SDK-generated request; it did
+not contact the real X service.
 
 Success prints only a validated matching username and numeric user ID.
 HTTP200 with provider errors or missing/mismatched user data is not success.
@@ -92,7 +97,7 @@ request objects, provider response bodies or credentials. A refused lookup can
 mean missing permission, policy not loaded, provider entitlement or token
 failure; saving a token alone proves none of those.
 
-## Prepared checks and inactive workflow
+## Offline checks and inactive workflow
 
 ```sh
 npm test
@@ -104,7 +109,7 @@ second uses the **real pinned XDK**, native fetch and Undici MockAgent with real
 networking forbidden. It checks serialization, fixed diagnostics, no retry,
 redirect refusal and provider-error handling. Neither proves HTTPS trust,
 proxy-authentication, server-side token injection or provider access. Both
-suites are prepared but unexecuted by the source author.
+suites passed separately from the actual isolated proxy run above.
 
 `workflow.example.yml` is inactive. Review it and its dependency lock before
 copying it into `.github/workflows/`. It runs only by explicit manual dispatch

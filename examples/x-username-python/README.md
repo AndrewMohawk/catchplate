@@ -1,10 +1,16 @@
 # X username lookup with the official Python XDK
 
-**Offline SDK checks passed; proxy acceptance pending.** On 2026-10-10, all 11
-tests passed with Python 3.12 and the pinned SDK/transport packages. They execute
-the ordinary SDK against a substituted Requests transport, not a real proxy or
-TLS handshake. No real X request, provider entitlement or deployed preset is
-established by this result.
+**Isolated SDK-through-proxy acceptance passed.** On 2026-10-10, this actual
+entrypoint passed through the genuine Rust proxy to a network-isolated synthetic
+X service, with separate verified outer and inner TLS roots and server-side
+token replacement. Wrong application, username and revoked-grant controls were
+refused. The run used source `eb5d12e5` and contacted no provider; real X access,
+provider entitlement and deployment acceptance remain unverified. See the
+[verification record](../../docs/operator-x-username-verification.md).
+
+Separately, all 11 offline tests passed with Python 3.12 and the pinned
+SDK/transport packages. Their substituted Requests transport is not a real
+proxy or TLS handshake.
 
 Look up one explicitly permitted lowercase username with the official
 [xdk 0.10.6](https://pypi.org/project/xdk/0.10.6/). The normal SDK call is
@@ -109,10 +115,11 @@ verified TLS settings, temporary public CA handling and redacted output. A socke
 audit hook follows dependency imports, which may probe local IPv6 support.
 The TLS policy test is configuration inspection, not a handshake.
 
-These tests are not proxy/provider acceptance. Next, the actual entrypoint must
-pass through the genuine Rust gate to a network-isolated synthetic X service,
-including wrong application, dummy, username and revoked-grant controls and both
-TLS legs. Real-provider checks require separate authorization.
+These offline tests are not proxy/provider acceptance. The separate isolated
+run above exercised the actual entrypoint through the genuine Rust gate and
+both TLS legs. Its wrong-dummy, method, query and hostile-response probes were
+raw protocol controls, not additional SDK cases. Real-provider checks require
+separate authorization.
 
 All six SDK/direct transport dependencies are pinned in `requirements.txt`,
 including the SDK's Pydantic and requests-oauthlib dependencies. This is not a

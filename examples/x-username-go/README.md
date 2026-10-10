@@ -1,20 +1,27 @@
 # Go: look up one X username through Serverware
 
-**Offline SDK checks passed; proxy acceptance pending.** This example uses the real, pinned community
+**Isolated SDK-through-proxy acceptance passed.** This example uses the real, pinned community
 [`g8rswimmer/go-twitter/v2` v2.1.5](https://github.com/g8rswimmer/go-twitter/tree/v2.1.5/v2)
 SDK, not an official X SDK. Its ordinary `UserNameLookup` call reads exactly one
 saved username with no query, pagination, posting, search, OAuth exchange or
 provider token in the client. The response summary contains only a user count.
 
-All six test groups passed on 2026-10-10 using Go 1.23.12, the pinned SDK,
-in-memory HTTP responses and synthetic certificates. This is not a proxy/TLS
-handshake or provider acceptance result.
+On 2026-10-10, this actual entrypoint passed through the genuine Rust proxy to a
+network-isolated synthetic X service, with separate verified TLS trust roots
+and server-side token replacement. Wrong application, username and revoked-grant
+controls were refused. The run used source `eb5d12e5` and contacted no provider.
+See the [verification record](../../docs/operator-x-username-verification.md).
 
-Do not enable this recipe on a deployment until the complete X preset and its
-paired proxy implementation pass the
-[provider acceptance gates](../../docs/operator-provider-presets.md#acceptance-gates-in-order).
-Source and in-memory tests alone do not prove a working deployed proxy, provider
-entitlement, or that your real X token is valid.
+Separately, all six offline test groups passed using Go 1.23.12, the pinned SDK,
+in-memory HTTP responses and synthetic certificates. Those tests are not a
+proxy/TLS handshake or provider acceptance result.
+
+Before using this recipe on your deployment, confirm that its complete X preset
+and paired proxy implementation are available and the saved policy is loaded.
+The isolated result does not establish deployment acceptance, provider
+entitlement, or that your real X token is valid. The
+[acceptance gates](../../docs/operator-provider-presets.md#acceptance-gates-in-order)
+keep these boundaries separate.
 
 ## Configure and run
 
@@ -96,9 +103,9 @@ the tag resolves to `cec1b956cc1113a84c20d4a5f5e02b4d5534c0af`.
 The source has no external module dependencies. Generate/verify dependency
 checksums with normal Go module tooling; never substitute guessed checksums.
 
-Tests are prepared for actual SDK request serialization, exact target and dummy
+The passed offline tests cover actual SDK request serialization, exact target and dummy
 authentication, CONNECT-only application authentication, no redirects/retries,
 bounded configuration, fixed error messages, structured-error rejection and
-per-hop TLS trust. Execution and isolated real-proxy acceptance must be recorded
-separately before claiming this recipe is verified. Nothing here creates a
-provider credential, destination approval, native enrollment or deployment.
+per-hop TLS trust. Their results remain separate from the passed isolated
+real-proxy run above. Nothing here creates a provider credential, destination
+approval, native enrollment or deployment; real X access remains unverified.

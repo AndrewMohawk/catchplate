@@ -322,7 +322,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-x-status').textContent = !catalog()?.capabilities.x ?
       'X app-only username lookup is not advertised by this deployment. No generic fallback or provider request is sent.' : !xDestinationAvailable(catalog()) ?
       'X username lookup needs the exact api.x.com destination approved in Proxy setup first. This page will not add it or restart services.' :
-      'X: save an app-only bearer token, choose an app and allow one exact username lookup. No posting or user OAuth. Ordinary SDK verification is pending; this page does not test the provider.';
+      'X: save an app-only bearer token, choose an app and allow one exact username lookup. No posting or user OAuth. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement.';
     element('connect-npm-status').textContent = catalog()?.capabilities.npm_publish ?
       catalog().capabilities.npm_publish.destination_allowed && catalog().allowed_upstreams.includes(operatorNpm.origin) ?
         'npm: choose Read package metadata or Publish package for explicit package access. Publishing can be limited to daily UTC hours. This page has not tested the provider.' :

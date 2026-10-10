@@ -15,7 +15,11 @@ function operatorExampleProjects(rule, catalog) {
       guide('npm metadata guide', 'operator-npm-metadata.md')];
     case 'npm_publish_v1': return [project('npm registry project', 'npm-registry'),
       guide('npm publishing guide', 'operator-npm-publish.md')];
-    case 'x_username_read_v1': return [guide('X preset scope and compatibility', 'operator-provider-presets.md')];
+    case 'x_username_read_v1': return [project('Node.js', 'x-username-node'),
+      project('Python', 'x-username-python'), project('Go', 'x-username-go'),
+      {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
+        href: source + 'blob/' + branch + 'examples/x-username-node/workflow.example.yml'},
+      guide('X preset scope and compatibility', 'operator-provider-presets.md')];
     case 'gmail_read_v1': return [
       ...(rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' ?
         [project('Go + Gmail SDK', 'google-gmail-go')] : []),
@@ -28,7 +32,7 @@ function renderOperatorExampleProjects(rule, catalog) {
   const projects = operatorExampleProjects(rule, catalog);
   links.replaceChildren(); panel.hidden = projects.length === 0;
   element('client-example-note').textContent = !projects.length ? '' : isXRule(rule) ?
-    'Public scope and compatibility documentation. Ordinary X SDK verification is pending; this page has not run a client or verified provider access.' : projects[0].kind === 'project' ?
+    'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires the documented exact Gmail dummy-header replacement. The public guide contains no private client config and does not verify your access.';
   for (const project of projects) {
@@ -82,7 +86,7 @@ function createProxyView(workspace, applications) {
     element('gmail-message-group').hidden = !messageRead;
     element('client-template-title').textContent = x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
     element('client-template-warning').textContent = x ?
-      'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. Ordinary SDK verification is pending; the page does not execute a lookup or prove provider entitlement.' : npmPublish ?
+      'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
       'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmail ?
@@ -152,7 +156,8 @@ function createProxyView(workspace, applications) {
         'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
         'Look up ' + rule.username + ' at api.x.com, GET only with no query or body. No posting, search, pagination, user OAuth, DMs, media or streams. ' +
         'Send the exact public dummy Bearer serverware-x-placeholder-v1 once. Your Serverware app token authenticates only to the proxy; never give the client the real provider token. ' +
-        'No response-field setup; supported full JSON can contain provider errors even with HTTP 200. Keep both TLS legs verified. Ordinary SDK verification is pending.';
+        'No response-field setup; supported full JSON can contain provider errors even with HTTP 200. Keep both TLS legs verified. ' +
+        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.';
       return;
     }
     if (npmPublish) {

@@ -1,11 +1,19 @@
-# Alchemy and X operator presets: bounded implementation plan
+# X operator preset and Alchemy implementation plan
 
-Status (2026-10-10): **X source implemented; through-proxy acceptance pending.
-Alchemy remains design only.** X now has a separate adapter, catalog/API, guided
-UI and pinned Node/Python/Go examples. Local checks are recorded in
+Status (2026-10-10): **X isolated SDK-through-proxy acceptance passed;
+Alchemy remains design only.** X has a separate adapter, catalog/API, guided
+UI and pinned Node/Python/Go examples. All three actual entrypoints passed using
+source `eb5d12e5` and the normal Rust binary recorded below. Each client's
+wrong-application, wrong-username and revoked-grant controls were refused.
+Separate raw controls refused the wrong dummy, method and query, released a
+bounded HTTP 429 JSON response intact and blocked four hostile responses. The
+network-none fixture verified eight upstream arrivals, 20 proxy connections,
+durable audit and separate TLS roots, with no host ports or provider contact.
+Its 82.017 seconds cover the fixture and cleanup, not native startup.
+Offline tests remain separate results in
 [the X verification record](operator-x-username-verification.md). Neither a live
-X request nor deployment acceptance is claimed. X controls require a fresh
-matching gate capability; an older gate cannot implicitly enable the preset.
+X request, GitHub Actions run nor deployment acceptance is claimed. X controls
+require a fresh matching gate capability; an older gate cannot implicitly enable the preset.
 The Alchemy names below remain proposed contracts, not usable API endpoints.
 
 ## Ship X username reads first
@@ -33,11 +41,11 @@ Two existing shortcuts would be incorrect:
   the whole stock-SDK slice needs a narrow versioned admission path; do not claim
   current generic rules already accept it or loosen generic admission globally.
 
-Prefer small isolated `x.app_read.v1` and `alchemy.rpc_read.v1` adapters, using
-the existing static-custody, bounded-response and final-dispatch machinery. This
-keeps compatibility changes out of legacy X OAuth and generic rules. If a smaller
-named generic profile is chosen instead, it must prove the same exact contract
-and keep the existing unmarked-profile behavior unchanged.
+X uses the separate `x.app_read.v1` adapter; the proposed Alchemy equivalent is
+`alchemy.rpc_read.v1`. They use the existing static-custody, bounded-response
+and final-dispatch machinery, keeping compatibility changes out of legacy X
+OAuth and generic rules. Alchemy JSON-RPC remains unimplemented; an NFT GET or
+generic POST is not a substitute for its method/parameter guard.
 
 ## Fixed X contract and proposed Alchemy contract
 
@@ -84,7 +92,7 @@ requires one. Pin the actual dependency versions and confirm their wire headers
 before freezing these lists; do not learn a broader allowlist from traffic.
 
 Responses remain full bounded strict JSON, not user-configured field projection.
-Propose success HTTP 200 only, X up to 1 MiB and Alchemy up to 64 KiB; supported
+X admits success HTTP 200 up to 1 MiB; the proposed Alchemy limit is 64 KiB. Supported
 HTTP errors 400/401/403/404/429/500/502/503/504 up to 64 KiB. Accept only
 `application/json`, optionally UTF-8 charset; no compressed bodies, redirects,
 empty 204/304 or streaming. Validate and discard bounded unselected metadata;
@@ -106,9 +114,10 @@ the original posting example. [X authentication](https://docs.x.com/fundamentals
 
 Assign one owner to each shared-file group; do not split the two providers across
 agents editing the same catalog or UI dispatch chain. No registry framework or
-general adapter refactor is needed for these two slices.
+general adapter refactor is needed for these two slices. X now occupies the
+implementation seams below; the Alchemy work remains proposed.
 
-| Owner | Exact proposed files and work |
+| Owner | Files and work |
 | --- | --- |
 | Python contract/catalog | New `serverware/x_app_read.py`, `alchemy_rpc_read.py`, `operator_catalog_x.py`, `operator_catalog_alchemy.py`; modify `operator_catalog_inputs.py`, `operator_catalog_schema.py`, `operator_catalog_mutations.py`, `operator_catalog_policy.py`, `adapters.py`, `policy_bundle.py`. Own strict inputs, closed connection dispatch, derived rules, signed policy rendering, parser parity and public capabilities. |
 | Rust/schema | New `data-plane/decision-gate-rs/src/x_app_read.rs`, `alchemy_rpc_read.rs` and focused tests; narrow joins in `main.rs` and `buffered_response.rs`; new schemas under `schemas/adapters/` plus `schemas/policy-bundle.v1.schema.json`. Own startup embedded-schema compilation, request normalization, typed operation fields/read classification, response profile/finalizer joins and actual no-body/body preparation paths. |
@@ -117,7 +126,8 @@ general adapter refactor is needed for these two slices.
 | Runnable examples | New `examples/x-username-{node,python,go}/` and `examples/alchemy-chain-status-{node,python,go}/`, with pinned dependency files, README, tests and Node GitHub Actions example. Own ordinary SDK configuration, not a replacement HTTP implementation masquerading as the SDK. |
 | Acceptance | New focused catalog/API/browser/provider-fixture tests, reusing the existing GitHub/npm isolated fixture architecture. Rust tests stay with the Rust owner. One runtime owner executes frozen source and records results; source authors do not imply execution. |
 
-Proposed API base is `/api/operator-demo`:
+The API base is `/api/operator-demo`; the X paths below are implemented, while
+the Alchemy paths remain proposed:
 
 - `POST /credentials/x-app-bearer` and `/credentials/alchemy-key`: exact
   `{expected_revision, expected_policy_hash, name, secret}`, maximum 16 KiB.
@@ -133,8 +143,8 @@ or `alchemy` is a public catalog label, not fabricated upstream identity.
 Existing generic rows remain unmarked. Explicit provider markers must never fall
 through to generic rules or another provider's token validator.
 
-The catalog seams that are easy to miss are `_public`'s current npm/otherwise-
-GitHub provider label, `replace_credential_key`'s validator selection,
+The catalog seams that must remain consistent are `_public`'s explicit provider
+label, `replace_credential_key`'s validator selection,
 `validate_static_connection`, content-mode dispatch, and renderer dispatch.
 Update them together with revoke/rotation/restart tests; no separate vault is
 needed. Reuse `_mutate`'s publication EX, SQLite transaction, catalog CAS, audit
@@ -154,23 +164,34 @@ audit and final-send barriers; no lease/deadline/retry changes are part of this 
 ## Runnable clients and GitHub Actions
 
 Use the provider's supported hooks, with the saved username/chain and public
-dummy credential. Dependencies listed here are candidates, not accepted pins:
+dummy credential. The passed X recipes are:
 
-- Node: official `@xdevplatform/xdk`; official `alchemy-sdk` with keyless `url`,
-  dummy bearer in `connectionInfoOverrides.headers`, and batching disabled.
-  The X client uses native fetch; Alchemy's ethers-v5 path uses `https.request`.
-  Node 25.5's documented `--use-env-proxy` supports both global transports.
-  Keep TLS verification and `NODE_EXTRA_CA_CERTS`; clear conflicting proxy/bypass
-  configuration. X uses `retry: false` for bounded testing, not `maxRetries: 0`.
-  Alchemy's current `maxRetries || default` also needs an actually supported
-  bounded retry setting; zero must not be described as working without proof.
-- Python: official `xdk` and `web3.py`, using explicitly configured Requests
-  sessions/proxy/trust. Web3.py supports disabling exception retries. XDK calls
-  its exposed session; establish a bounded request timeout with a documented
-  session/adapter hook or report the gap, rather than claiming a timeout argument
-  it does not expose. Avoid ambient `.netrc`, token discovery and proxy fallback.
-- Go: `go-twitter/v2` (community, not an official X SDK) with fixed `Host`, dummy
-  `Authorizer` and configured `http.Client`; `go-ethereum/rpc` with
+- [Node](../examples/x-username-node/README.md): official XDK **0.6.6**, Undici
+  **8.11.2**, Node **25.5.0**. Native fetch uses an explicit documented global
+  ProxyAgent dispatcher with separate TLS roots and a one-dispatch interceptor.
+  The SDK uses `retry: false`, not `maxRetries: 0`.
+- [Python](../examples/x-username-python/README.md): official XDK **0.10.6**
+  with its exposed Requests session, a documented timeout adapter and separate
+  verified proxy/destination TLS configuration; exercised on Python **3.12**.
+- [Go](../examples/x-username-go/README.md): community `go-twitter/v2`
+  **v2.1.5**, exercised on Go **1.23.12**, with its supported HTTP client and
+  authorizer hooks and per-host TLS verification. It is not an official X SDK.
+
+These are explicit supported client configurations, not a claim that ambient
+proxy settings or unchanged retry defaults suffice. The Alchemy candidates
+below still need implementation and acceptance:
+
+- Node: official `alchemy-sdk` with keyless `url`, dummy bearer in
+  `connectionInfoOverrides.headers`, and batching disabled. Its ethers-v5 path
+  uses `https.request`; Node 25.5's documented `--use-env-proxy` is a candidate
+  transport configuration, with TLS verification retained and conflicting
+  proxy/bypass settings cleared. Alchemy's current `maxRetries || default` needs
+  an actually supported bounded retry setting; zero must not be described as
+  working without proof.
+- Python: `web3.py`, using explicitly configured Requests sessions/proxy/trust
+  and disabling exception retries. Avoid ambient `.netrc`, token discovery and
+  proxy fallback.
+- Go: `go-ethereum/rpc` with
   `WithHTTPClient` and `WithHeader`. Use context deadlines, explicit HTTPS proxy,
   a CA pool retaining required public roots, and no redirects.
 
@@ -184,7 +205,8 @@ Source references: [X SDKs](https://docs.x.com/tools-and-libraries),
 [Go Twitter](https://raw.githubusercontent.com/g8rswimmer/go-twitter/master/v2/client.go),
 [Go Ethereum RPC options](https://raw.githubusercontent.com/ethereum/go-ethereum/master/rpc/client_opt.go).
 
-GitHub Actions stores only the scoped **Serverware application token** as a
+The X Node Actions recipe remains an inactive, unexecuted example. GitHub Actions
+stores only the scoped **Serverware application token** as a
 secret. Application ID, proxy URL, public CA and dummy provider token are client
 configuration, never Alchemy/X key material. Use explicit manual workflow
 dispatch and pinned actions/dependencies; no provider request on PRs or page
@@ -221,7 +243,9 @@ verified trust; never use TLS-disable settings.
    prove provider entitlement, billing, token validity or a live GitHub Actions
    run. Never turn source/UI completion into these claims.
 
-Until the through-proxy gates are recorded, label the projects **proxy acceptance
-pending** and do not deploy/enable the new paired preset. Offline SDK checks must
-remain distinct from proxy/TLS and provider acceptance. Keep existing
-GitHub/npm/Google and manual workflows unchanged while adding each complete slice.
+The X projects have passed the isolated through-proxy gate; this is not permission
+to deploy or proof that a deployment has the paired preset. Alchemy remains
+design-only and must not be enabled as a completed preset. Offline SDK checks,
+isolated proxy/TLS acceptance, deployment acceptance and real-provider access
+remain separate results. Keep existing GitHub/npm/Google and manual workflows
+unchanged while adding each complete slice.

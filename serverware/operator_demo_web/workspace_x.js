@@ -73,6 +73,6 @@ function renderXCompatibility(id) {
     'No response-field setup. HTTP 200 JSON is bounded to 1 MiB; supported errors 400, 401, 403, 404, 429, 500, 502, 503 and 504 are bounded to 64 KiB. Provider error bodies remain errors, not evidence of a successful lookup.',
     'Standard response metadata is checked and discarded; no response headers are forwarded. Client compression offers are removed before forwarding. Compressed responses, redirects, empty 204/304 and streaming are unsupported.',
     'A GET may omit Content-Type or use the admitted JSON/UTF-8 Content-Type while still sending zero body bytes. Keep both proxy and destination TLS verification enabled with the downloaded CA and the required outer proxy trust.',
-    'A saved or loaded policy is not provider acceptance. Ordinary SDK verification is pending; this page does not run a client or contact X. Alchemy requires a separate JSON-RPC permission and remains unavailable.'
+    'A saved or loaded policy is not provider acceptance. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run. Alchemy requires a separate JSON-RPC permission and remains unavailable.'
   ].map(value => textNode('p', value, 'small muted')));
 }

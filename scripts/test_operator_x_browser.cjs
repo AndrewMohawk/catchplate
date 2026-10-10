@@ -50,13 +50,28 @@ async function recipe(page) {
   assert.match(await page.locator('#connect-activation').innerText(), /no upstream request has been tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No X lookup was tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No posting.*user OAuth/);
-  assert.equal(await page.locator('#client-example-links a').count(), 1);
-  const guide = page.locator('#client-example-links a');
-  assert.equal(await guide.getAttribute('href'),
-    'https://github.com/AndrewMohawk/serverware/blob/serverware/operator-workspace/docs/operator-provider-presets.md');
-  assert.equal(await guide.getAttribute('rel'), 'noopener noreferrer');
-  assert.equal(await guide.getAttribute('referrerpolicy'), 'no-referrer');
-  assert.match(await page.locator('#client-example-note').innerText(), /verification is pending/);
+  const source = 'https://github.com/AndrewMohawk/serverware/';
+  const branch = 'serverware/operator-workspace/';
+  const expectedLinks = [
+    ['Node.js', source + 'tree/' + branch + 'examples/x-username-node'],
+    ['Python', source + 'tree/' + branch + 'examples/x-username-python'],
+    ['Go', source + 'tree/' + branch + 'examples/x-username-go'],
+    ['GitHub Actions recipe (inactive)', source + 'blob/' + branch + 'examples/x-username-node/workflow.example.yml'],
+    ['X preset scope and compatibility', source + 'blob/' + branch + 'docs/operator-provider-presets.md'],
+  ];
+  const links = page.locator('#client-example-links a');
+  assert.deepEqual(await links.evaluateAll(items => items.map(item => [item.textContent, item.getAttribute('href')])), expectedLinks);
+  for (const link of await links.all()) {
+    assert.equal(await link.getAttribute('target'), '_blank');
+    assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
+    assert.equal(await link.getAttribute('referrerpolicy'), 'no-referrer');
+  }
+  const acceptance = 'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
+    'This page has not tested your X credentials or provider entitlement. ' +
+    'The GitHub Actions recipe is inactive and has not been run.';
+  assert.equal(await page.locator('#client-example-note').innerText(),
+    'Public source only, separate from your private client config. ' + acceptance);
+  assert((await page.locator('#client-guidance').innerText()).endsWith(acceptance));
   await privateAbsent(page); return text;
 }
 async function noAutomaticWrite(page, observed, expected = 1) {

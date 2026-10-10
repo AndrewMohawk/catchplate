@@ -84,9 +84,10 @@ test('actual SDK serializes exactly two permitted JSON-RPC POSTs without discove
     assert.equal(call.hostname, 'eth-mainnet.g.alchemy.com');
     assert.deepEqual(call.body, { method: index === 0 ? 'eth_chainId' : 'eth_blockNumber',
       params: [], id: 42 + index, jsonrpc: '2.0' });
-    assert.deepEqual(Object.keys(call.headers).sort(), ['alchemy-ethers-sdk-method', 'alchemy-ethers-sdk-version',
+    assert.deepEqual(Object.keys(call.headers).sort(), ['accept', 'alchemy-ethers-sdk-method', 'alchemy-ethers-sdk-version',
       'authorization', 'connection', 'content-length', 'content-type', 'host']);
     assert.equal(call.headers.authorization, 'Bearer serverware-alchemy-placeholder-v1');
+    assert.equal(call.headers.accept, 'application/json');
     assert.equal(call.headers['alchemy-ethers-sdk-method'], 'send');
     assert.equal(call.headers['alchemy-ethers-sdk-version'], '3.6.5');
     assert.equal(call.headers['content-type'], 'application/json');

@@ -18,7 +18,7 @@ export function sdkSettings(config) {
     maxRetries: 1,
     connectionInfoOverrides: {
       // This replaces the SDK headers object, so retain its actual version.
-      headers: { Authorization: 'Bearer ' + PUBLIC_ALCHEMY_DUMMY,
+      headers: { Authorization: 'Bearer ' + PUBLIC_ALCHEMY_DUMMY, Accept: 'application/json',
         'Alchemy-Ethers-Sdk-Version': SDK_VERSION },
       allowGzip: false,
       throttleLimit: 1,

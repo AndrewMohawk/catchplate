@@ -26,11 +26,12 @@ def raw_request(client="node", method="eth_chainId", case="success"):
 
 def fields(client, raw, case="success", chain="eth-mainnet"):
     result = [("Host", receiver.HOSTS[chain]), ("Authorization", "Bearer " + receiver.TOKEN),
-        ("Content-Type", "application/json"), ("Content-Length", str(len(raw))), ("Connection", "close")]
+        ("Content-Type", "application/json"), ("Content-Length", str(len(raw))), ("Connection", "close"),
+        ("Accept", receiver.MEDIA[client])]
     if client == "node":
         result += [("Alchemy-Ethers-Sdk-Method", "send"), ("Alchemy-Ethers-Sdk-Version", "3.6.5")]
     else:
-        result += [("Accept", receiver.MEDIA[client]), ("User-Agent",
+        result += [("User-Agent",
             "serverware-alchemy-probe/" + case if client == "probe" else receiver.AGENTS[client])]
     return result
 
@@ -106,6 +107,14 @@ class ReceiverTests(unittest.TestCase):
                     receiver.validated_headers(client, changed)
         with self.assertRaises(ValueError):
             receiver.validated_headers("node", fields("node", raw_request()) + [("User-Agent", "node")])
+
+    def test_node_explicit_accept_is_bound_and_transport_defaults_are_not_inferred(self):
+        original = fields("node", raw_request())
+        self.assertEqual(receiver.validated_headers("node", original)["accept"], "application/json")
+        missing = [(name, value) for name, value in original if name != "Accept"]
+        for invalid in (missing, missing + [("Accept", "*/*")], missing + [("Accept", "text/plain")]):
+            with self.assertRaises(ValueError):
+                receiver.validated_headers("node", invalid)
 
     def test_rpc_write_batch_notification_ids_and_duplicate_fields_remain_counted_refusals(self):
         good = json.loads(raw_request())

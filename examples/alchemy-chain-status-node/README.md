@@ -92,7 +92,10 @@ set a 15-second request timeout. `throttleLimit: 1` and a callback returning
 `maxRetries: 0`: this SDK replaces zero with its default. POST redirects are not
 followed by the pinned ethers implementation. It sends SDK method `send`, SDK
 version `3.6.5`, JSON content type and the public dummy bearer, without a default
-User-Agent or Accept header. Serverware owns the bounded 64-KiB response policy.
+User-Agent. This example explicitly sets `Accept: application/json` through the
+SDK's supported header configuration so the request does not depend on an
+upstream HTTP client's default Accept value. Serverware owns the bounded
+64-KiB response policy.
 [SDK configuration](https://github.com/alchemyplatform/alchemy-sdk-js/blob/v3.6.5/src/api/alchemy-config.ts),
 [SDK provider](https://github.com/alchemyplatform/alchemy-sdk-js/blob/v3.6.5/src/api/alchemy-provider.ts),
 [ethers retries](https://github.com/ethers-io/ethers.js/blob/v5.8.0/packages/web/src.ts/index.ts).

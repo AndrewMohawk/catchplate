@@ -49,7 +49,8 @@ test('SDK settings use supported keyless and one-attempt overrides', async () =>
   assert.equal(options.connectionInfoOverrides.timeout, 15000);
   assert.equal(options.connectionInfoOverrides.allowGzip, false);
   assert.deepEqual(options.connectionInfoOverrides.headers, {
-    Authorization: 'Bearer serverware-alchemy-placeholder-v1', 'Alchemy-Ethers-Sdk-Version': '3.6.5',
+    Authorization: 'Bearer serverware-alchemy-placeholder-v1', Accept: 'application/json',
+    'Alchemy-Ethers-Sdk-Version': '3.6.5',
   });
 });
 

@@ -38,7 +38,7 @@ BLOCK_NUMBER = "0x10"
 METHODS = ("eth_chainId", "eth_blockNumber")
 TOKEN = "serverware_alchemy_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
 AGENTS = {"node": None, "python": "web3.py/7.13.0/web3.providers.rpc.rpc.HTTPProvider", "go": "Go-http-client/1.1"}
-MEDIA = {"python": "*/*", "go": "application/json", "probe": "application/json"}
+MEDIA = {"node": "application/json", "python": "*/*", "go": "application/json", "probe": "application/json"}
 ROW_KEYS = {"ordinal", "accepted", "client", "case", "method", "target", "chain", "rpcMethod", "requestId",
     "semanticHeaders", "requestBodyBase64", "requestBodySha256", "requestBodyBytes", "responseBodySha256",
     "responseBodyBytes", "status", "providerCredentialMatched", "proxyAuthorizationPresent", "allParsedHeadersValidated"}
@@ -78,13 +78,14 @@ def validated_headers(client, fields, case="success"):
     require(client in (*CLIENTS, "probe") and type(case) is str and case in CASES
         and (case != "success") == (client == "probe"))
     headers = _headers(fields)
-    required = {"host", "authorization", "content-type", "content-length"}
+    required = {"host", "authorization", "content-type", "content-length", "accept"}
     required.update({"alchemy-ethers-sdk-method", "alchemy-ethers-sdk-version"} if client == "node"
         else {"accept", "user-agent"})
     require(required <= headers.keys() <= required | {"connection"}
         and headers["host"] in PROVIDER_HOSTS
         and hmac.compare_digest(headers["authorization"], "Bearer " + TOKEN)
         and headers["content-type"] == "application/json"
+        and headers["accept"] == MEDIA[client]
         and re.fullmatch(r"[1-9][0-9]{0,4}", headers["content-length"])
         and 1 <= int(headers["content-length"]) <= MAX_BODY
         and headers.get("connection", "close") in {"close", "keep-alive"})

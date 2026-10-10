@@ -29,7 +29,7 @@ all 13 checks. That combined run is not recorded as a clean pass. The optimized
 Rust build succeeded and all 12 Alchemy Rust groups passed. Browser checks passed
 16 Alchemy groups and 13 X regression groups with unchanged source; those checks
 use synthetic intercepted APIs, not the real backend. Actual SDK-through-proxy/TLS
-acceptance has not run; real-provider, native and deployment acceptance remain
+acceptance has not passed; real-provider, native and deployment acceptance remain
 unverified.
 
 ## Ship X username reads first

@@ -28,7 +28,7 @@ across `fee6a0ee` and a single test-only correction; see the exact result record
 | [`local_artifact_witness.py`](../scripts/authority/local_artifact_witness.py) | Verifies persistent signed history and appends the actual generation/checkpoint under an exclusive lock | Pinned root0700 store, external high-water, authorized witness key and exact expected prior head; no external trust advance |
 | [`assemble_local_package.py`](../scripts/authority/assemble_local_package.py) | Derives the real pre-witness generation core, then assembles the unsigned package with the actual checkpoint | Genuine signed configs/trust and measured originals; fixed core/package modes, no authority issuance |
 | [`local_artifacts.py`](../scripts/authority/local_artifacts.py) | Remeasures source, authenticates upstream evidence, signs package/generation and artifact-verification originals | Unsigned package, genuine snapshot/closure/provenance/witness originals, independently selected trust and purpose-specific keys |
-| [`local_install.py`](../scripts/authority/local_install.py) | Copies and verifies files, applies fs-verity/immutability, publishes an absent generation and its signed receipt | Genuine signed package and verification receipt, protected current trust/high-water, authorized provisioner key, capable destination |
+| [`local_install.py`](../scripts/authority/local_install.py) | Full-copy mode copies and seals files; explicit prepared-static mode adopts verified sealed static files and copies fresh files, then publishes an absent generation and its signed receipt | Genuine signed package and verification receipt, protected current trust/high-water, authorized provisioner key, capable destination; prepared mode additionally requires the exact selected static subtree |
 | [`commission_development_policy.py`](../scripts/commission_development_policy.py) | Calls genuine policy preparation, retains its actual result, then calls finalization after independently supplied audit and WebAuthn evidence | Admitted authority runtime, exact signed demo policy, real enrolled operator and independently produced/registered evidence |
 | [`local_audit_inclusion.py`](../scripts/authority/local_audit_inclusion.py) | Reads actual committed metadata/audit snapshots and signs first-genesis inclusion under its scoped key | Genuine audited preparation, current signer and separately provisioned fixed reader grants/authentication; first inclusion only |
 
@@ -44,6 +44,67 @@ The local installation plan/receipt have explicit local schema names. Native
 plans remain native-only. The local installer freezes descendants, performs the
 no-replace generation rename, then freezes the published root and fsyncs it.
 Freezing the staging root before renaming would prevent that operation.
+
+## Prepared-static local installation
+
+The source now implements an explicit second installation mode. Configuration
+`serverware.authorityTrustedHostLocalInstallation/v2` selects local plan
+`serverware.authorityTrustedHostLocalProvisioningPlan/v3` and local receipt
+`serverware.authorityTrustedHostLocalProvisioningReceipt/v2`. The original
+configuration v1, local plan v2 and local receipt v1 retain their full-copy
+behavior and wire formats. Native/production provisioning is not admitted by
+the new local mode; command-line descriptors and the installation result shape
+are unchanged.
+
+Configuration v2 adds one closed `preparedStatic` object: `relativePath` must
+be the literal `prepared-static`; `device`, `inode` and `generation` select the
+actual subtree; `freshPaths` is a sorted, unique, nonempty proper subset of the
+current signed package's file paths. There is no separate manifest authority or
+saved installation receipt. The signed package remains the complete source of
+expected content and metadata. Every other package entry must already exist in
+the prepared subtree, and its exact files and implied directories must contain
+no extras or missing members.
+
+The COMMON pilot prepares independent sealed static leaves once in its unsigned
+base image, then uses a fresh session COW. It selects these three late files for
+fresh copying: `configurations/authority-service.json`,
+`configurations/witness.json`, and `sbom/selected-files.spdx.json`. This split
+includes the exact selected pilot public keys and role manifests in the static
+roster; it is not permission to reuse a different pilot's inputs or any prior
+session authority. The SDK does not assume that every package has this same
+three-file split.
+
+Under the existing generation lock, the installer checks the selected root and
+all static files before consuming the template. Directories must be private
+root-owned mutable mode0700 directories on the destination's device and mount.
+Leaves must be single-link regular files with the exact signed size, ownership
+and mode, actual inode generation, immutable flag and kernel-enforced ext4
+SHA-256 fs-verity. Actual bytes must match the signed content hash. A previously
+observed sealed-content digest in the bounded process memo can satisfy that
+hash observation; a cold standalone invocation reads the bytes. Claimed hashes
+never populate the memo. Invalid prepared inputs are refused, not silently
+converted to full-copy mode.
+
+After validation, the installer publishes the fresh plan and Prepared state,
+moves the selected subtree into private staging with `RENAME_NOREPLACE`, and
+creates the selected fresh files through the existing exclusive copy,
+readback, sealing and synchronization path. It then freezes descendants,
+publishes the generation without replacement and freezes its root. Plan v3 and
+receipt v2 record each entry's `adopt-prepared-static` or `copy-fresh` action;
+the receipt records actual installed inode/verity identities and uses separate
+v2 signing and digest domains. The selected prepared root's device, inode and
+generation must survive publication. Trust commit independently reconstructs
+the plan from the current verified package and selector, then checks the actual
+installed tree and fresh signed receipt.
+
+All existing package/verification signatures, current trust, signer authority,
+boot/clock limits, high-water and publication checks remain fresh. A template
+does not activate anything, advance trust, extend an approval or allow retry of
+a partial installation. Tests and the root-owned KVM component probe for this
+mode are in progress. It is not deployed to R97, no new end-to-end startup
+improvement has been measured, and no production/native signed-install
+acceptance is claimed. See [startup cost](native-pilot-startup-performance.md)
+for the separate completed cache-test evidence and observed R97 timings.
 
 ## Actual filesystem constraint
 
@@ -62,11 +123,12 @@ No shared filesystem feature, mount option or immutable flag was changed.
 
 The subsequent [isolated KVM guest](trusted-host-local-storage.md) successfully
 provides a task-dedicated fs-verity/immutable-capable filesystem without host-root
-access. Its read-only second boot also verifies persistence. No Serverware
-authority has been installed there yet. Deployment needs that separate guest
-integration and its scoped installer identities. Do not enable
+access. Its read-only second boot also verifies persistence. That storage probe
+did not install a Serverware authority. Installation needs separate guest
+integration and scoped installer identities. Do not enable
 features on a shared homelab filesystem or grant a general privileged container
-just to pass commissioning. There is no successful signed-package install yet.
+just to pass commissioning. Filesystem support alone is not signed-package
+installation acceptance.
 
 ## Evidence integration still pending
 

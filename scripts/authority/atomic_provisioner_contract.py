@@ -37,6 +37,10 @@ LOCAL_GENERATION_DIRECTORY_MODE = 0o755
 LOCAL_PROVISIONING_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningReceipt/v1"
 LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptSignature/v1"
 LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptDigest/v1"
+LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningPlan/v3"
+LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningReceipt/v2"
+LOCAL_PREPARED_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptSignature/v2"
+LOCAL_PREPARED_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptDigest/v2"
 PROVISIONING_RECEIPT_SCHEMA = (
     "serverware.authorityAtomicProvisioningReceipt/v2"
 )
@@ -99,6 +103,18 @@ LOCAL_PROVISIONING_STEPS = (
     "set-published-generation-root-immutable",
     "fsync-generations-directory",
     "write-sign-fsync-terminal-receipt",
+)
+LOCAL_PREPARED_PROVISIONING_STEPS = (
+    *ATOMIC_PROVISIONING_STEPS[:4],
+    "open-and-validate-private-prepared-static-tree",
+    "open-package-files-by-retained-descriptor",
+    "measure-and-adopt-prepared-static-files",
+    "renameat2-prepared-staging-noreplace",
+    "copy-measure-and-fsync-fresh-files",
+    "apply-owner-mode-and-fs-verity-to-fresh-files",
+    "verify-complete-python-and-native-closure",
+    "fsync-staging-tree-bottom-up",
+    *LOCAL_PROVISIONING_STEPS[10:],
 )
 
 
@@ -288,7 +304,8 @@ def provisioning_plan_digest(plan: Mapping[str, Any]) -> str:
 
 def provisioning_receipt_digest(receipt: Mapping[str, Any]) -> str:
     validate_provisioning_receipt(receipt)
-    return _document_digest(LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN
+    return _document_digest(LOCAL_PREPARED_PROVISIONING_RECEIPT_DIGEST_DOMAIN
+        if receipt["schema"] == LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA else LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN
         if receipt["schema"] == LOCAL_PROVISIONING_RECEIPT_SCHEMA else PROVISIONING_RECEIPT_DIGEST_DOMAIN, receipt)
 
 
@@ -641,6 +658,34 @@ def _generation_directory_name(
     return f"{sequence:020d}-{generation_digest[7:]}"
 
 
+def validate_prepared_static(
+    value: object,
+    entries: Sequence[Mapping[str, Any]] | None = None,
+) -> Mapping[str, Any]:
+    """Select current-package files; no historical receipt or claimed hash authority."""
+    selected = _closed(value, name="prepared static selection",
+        keys={"relativePath", "device", "inode", "generation", "freshPaths"})
+    if selected["relativePath"] != "prepared-static":
+        raise ProvisioningContractError("prepared static directory changed")
+    for field, minimum in (("device", 0), ("inode", 1), ("generation", 1)):
+        _integer(selected[field], name=f"prepared static {field}", minimum=minimum, maximum=2**64 - 1)
+    fresh = _bounded_list(selected["freshPaths"], name="fresh installation paths", minimum=1, maximum=MAX_FILES - 1)
+    for path in fresh:
+        _relative_path(path, name="fresh installation path")
+    if list(fresh) != sorted(set(fresh)):
+        raise ProvisioningContractError("fresh installation paths are not sorted and unique")
+    if entries is not None:
+        rows = _bounded_list(entries, name="prepared package entries", minimum=2, maximum=MAX_FILES)
+        paths = []
+        for entry in rows:
+            if not isinstance(entry, Mapping) or "path" not in entry:
+                raise ProvisioningContractError("prepared package entry has no path")
+            paths.append(_relative_path(entry["path"], name="prepared package path"))
+        if paths != sorted(set(paths)) or not set(fresh) < set(paths):
+            raise ProvisioningContractError("fresh paths are not a proper current-package subset")
+    return selected
+
+
 def build_provisioning_plan(
     verified_package: VerifiedArtifactPackage,
     receipt: Mapping[str, Any],
@@ -651,6 +696,7 @@ def build_provisioning_plan(
     owner_uid: int,
     owner_gid: int,
     trusted_host_local: bool = False,
+    prepared_static: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(verified_package, VerifiedArtifactPackage):
         raise ProvisioningContractError(
@@ -663,6 +709,8 @@ def build_provisioning_plan(
         raise ProvisioningContractError("local provisioning requires the explicit local package")
     if not trusted_host_local and verified_package.stage_zero_contract == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA:
         raise ProvisioningContractError("local Python package requires explicit local provisioning selection")
+    if prepared_static is not None and not trusted_host_local:
+        raise ProvisioningContractError("prepared static adoption requires explicit local provisioning")
     verify_verification_receipt(
         receipt,
         verified_package=verified_package,
@@ -683,6 +731,11 @@ def build_provisioning_plan(
         owner_gid, name="provisioning owner gid", minimum=0, maximum=2**32 - 2
     )
     bundle = package["bundle"]
+    prepared = prepared_static is not None
+    if prepared:
+        prepared_static = dict(validate_prepared_static(prepared_static, bundle["files"]))
+        prepared_static["freshPaths"] = list(prepared_static["freshPaths"])
+    fresh_paths = set(prepared_static["freshPaths"]) if prepared else set()
     generation = package["generation"]
     generation_digest = generation_statement_digest(generation)
     directory_name = _generation_directory_name(
@@ -698,19 +751,23 @@ def build_provisioning_plan(
             "gid": entry["gid"],
             "requireFsVerity": True,
             "requireImmutable": True,
+            **({"action": "copy-fresh" if entry["path"] in fresh_paths else "adopt-prepared-static"} if prepared else {}),
         }
         for entry in bundle["files"]
     ]
+    step_names = (LOCAL_PREPARED_PROVISIONING_STEPS if prepared else
+        LOCAL_PROVISIONING_STEPS if trusted_host_local else ATOMIC_PROVISIONING_STEPS)
     steps = [
         {"ordinal": index, "step": step}
-        for index, step in enumerate(LOCAL_PROVISIONING_STEPS if trusted_host_local else ATOMIC_PROVISIONING_STEPS, start=1)
+        for index, step in enumerate(step_names, start=1)
     ]
     step_contract_digest = domain_digest(
         PROVISIONING_STEP_CONTRACT_DOMAIN,
         canonical_json_bytes(steps),
     )
     plan_without_id = {
-        "schema": LOCAL_PROVISIONING_PLAN_SCHEMA if trusted_host_local else PROVISIONING_PLAN_SCHEMA,
+        "schema": LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA if prepared else
+            LOCAL_PROVISIONING_PLAN_SCHEMA if trusted_host_local else PROVISIONING_PLAN_SCHEMA,
         "packageDigest": signed_package_digest(package),
         "artifactBundleDigest": artifact_bundle_digest(bundle),
         "generationDigest": generation_digest,
@@ -775,6 +832,8 @@ def build_provisioning_plan(
         executor = plan_without_id.pop("nativeExecutor")
         executor.update(pythonExecutionAuthorized=True)
         plan_without_id["localExecutor"] = executor
+    if prepared:
+        plan_without_id["preparedStatic"] = prepared_static
     plan = {
         **plan_without_id,
         "planId": domain_digest(
@@ -787,7 +846,8 @@ def build_provisioning_plan(
 
 
 def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
-    local = isinstance(plan, Mapping) and plan.get("schema") == LOCAL_PROVISIONING_PLAN_SCHEMA
+    prepared = isinstance(plan, Mapping) and plan.get("schema") == LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA
+    local = prepared or isinstance(plan, Mapping) and plan.get("schema") == LOCAL_PROVISIONING_PLAN_SCHEMA
     value = _closed(
         plan,
         name="provisioning plan",
@@ -807,9 +867,9 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
             "stepContractDigest",
             "activation",
             "localExecutor" if local else "nativeExecutor",
-        },
+        } | ({"preparedStatic"} if prepared else set()),
     )
-    if value["schema"] not in {PROVISIONING_PLAN_SCHEMA, LOCAL_PROVISIONING_PLAN_SCHEMA}:
+    if value["schema"] not in {PROVISIONING_PLAN_SCHEMA, LOCAL_PROVISIONING_PLAN_SCHEMA, LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA}:
         raise ProvisioningContractError("provisioning plan schema changed")
     for field in (
         "planId",
@@ -951,7 +1011,7 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
                 "gid",
                 "requireFsVerity",
                 "requireImmutable",
-            },
+            } | ({"action"} if prepared else set()),
         )
         _relative_path(entry["path"], name="provisioning path")
         _digest(entry["sourceSha256"], name="provisioning source digest")
@@ -995,16 +1055,23 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
         raise ProvisioningContractError(
             "aggregate provisioning bytes exceed the streaming limit"
         )
+    if prepared:
+        selected = validate_prepared_static(value["preparedStatic"], entries)
+        fresh_paths = set(selected["freshPaths"])
+        if any(entry["action"] != ("copy-fresh" if entry["path"] in fresh_paths else "adopt-prepared-static")
+                for entry in entries):
+            raise ProvisioningContractError("prepared installation action differs from current-package selection")
 
+    step_names = LOCAL_PREPARED_PROVISIONING_STEPS if prepared else LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS
     steps = _bounded_list(
         value["steps"],
         name="provisioning steps",
-        minimum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
-        maximum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
+        minimum=len(step_names),
+        maximum=len(step_names),
     )
     expected_steps = [
         {"ordinal": index, "step": step}
-        for index, step in enumerate(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS, start=1)
+        for index, step in enumerate(step_names, start=1)
     ]
     if list(steps) != expected_steps:
         raise ProvisioningContractError(
@@ -1080,7 +1147,8 @@ def validate_provisioning_receipt(
     *,
     plan: Mapping[str, Any] | None = None,
 ) -> None:
-    local = isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_PROVISIONING_RECEIPT_SCHEMA
+    prepared = isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA
+    local = prepared or isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_PROVISIONING_RECEIPT_SCHEMA
     value = _closed(
         receipt,
         name="provisioning receipt",
@@ -1105,7 +1173,7 @@ def validate_provisioning_receipt(
             "signatureBase64Url",
         },
     )
-    if value["schema"] not in {PROVISIONING_RECEIPT_SCHEMA, LOCAL_PROVISIONING_RECEIPT_SCHEMA}:
+    if value["schema"] not in {PROVISIONING_RECEIPT_SCHEMA, LOCAL_PROVISIONING_RECEIPT_SCHEMA, LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA}:
         raise ProvisioningContractError(
             "provisioning receipt schema changed"
         )
@@ -1168,7 +1236,7 @@ def validate_provisioning_receipt(
                 "gid",
                 "size",
                 "immutable",
-            },
+            } | ({"action"} if prepared else set()),
         )
         _relative_path(entry["path"], name="installed path")
         _digest(entry["sha256"], name="installed digest")
@@ -1192,18 +1260,21 @@ def validate_provisioning_receipt(
             raise ProvisioningContractError(
                 "installed entry is not immutable"
             )
+        if prepared and entry["action"] not in ("adopt-prepared-static", "copy-fresh"):
+            raise ProvisioningContractError("installed entry action changed")
     paths = [entry["path"] for entry in installed]
     if paths != sorted(set(paths)):
         raise ProvisioningContractError(
             "installed entries are not sorted and unique"
         )
+    step_names = LOCAL_PREPARED_PROVISIONING_STEPS if prepared else LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS
     completed_steps = _bounded_list(
         value["completedSteps"],
         name="completed steps",
-        minimum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
-        maximum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
+        minimum=len(step_names),
+        maximum=len(step_names),
     )
-    if list(completed_steps) != list(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS):
+    if list(completed_steps) != list(step_names):
         raise ProvisioningContractError(
             "provisioning receipt is not terminal"
         )
@@ -1231,7 +1302,8 @@ def validate_provisioning_receipt(
     if plan is not None:
         validate_provisioning_plan(plan)
         if (
-            local != (plan["schema"] == LOCAL_PROVISIONING_PLAN_SCHEMA)
+            prepared != (plan["schema"] == LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA)
+            or local != (plan["schema"] in (LOCAL_PROVISIONING_PLAN_SCHEMA, LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA))
             or
             value["planDigest"] != provisioning_plan_digest(plan)
             or value["planId"] != plan["planId"]
@@ -1265,6 +1337,14 @@ def validate_provisioning_receipt(
             raise ProvisioningContractError(
                 "provisioning receipt does not bind the plan"
             )
+        if prepared:
+            selected = plan["preparedStatic"]
+            if (any(value["generationDirectoryIdentity"][field] != selected[field]
+                    for field in ("device", "inode", "generation"))
+                    or value["destinationRootIdentity"]["device"] != selected["device"]
+                    or any(entry["device"] != selected["device"] for entry in installed)
+                    or [entry["action"] for entry in installed] != [entry["action"] for entry in plan["entries"]]):
+                raise ProvisioningContractError("prepared receipt does not bind adopted identity and actions")
 
 
 def provisioning_receipt_signature_message(
@@ -1277,7 +1357,8 @@ def provisioning_receipt_signature_message(
         )
     payload.pop("signatureBase64Url")
     return domain_digest(
-        LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN if receipt.get("schema") == LOCAL_PROVISIONING_RECEIPT_SCHEMA
+        LOCAL_PREPARED_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN if receipt.get("schema") == LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA
+        else LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN if receipt.get("schema") == LOCAL_PROVISIONING_RECEIPT_SCHEMA
         else PROVISIONING_RECEIPT_SIGNATURE_DOMAIN,
         canonical_json_bytes(payload),
     ).encode("ascii")
@@ -1392,11 +1473,12 @@ def verify_provisioning_receipt(
     exact_retry_digest: str | None = None,
 ) -> str:
     validate_provisioning_receipt(receipt, plan=plan)
-    if plan["schema"] == LOCAL_PROVISIONING_PLAN_SCHEMA and (
+    local = plan["schema"] in (LOCAL_PROVISIONING_PLAN_SCHEMA, LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA)
+    if local and (
             verified_package.trust_mode != "trusted-host-local" or
             verified_package.stage_zero_contract != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA):
         raise ProvisioningContractError("local provisioning cannot admit a native or production package")
-    if plan["schema"] != LOCAL_PROVISIONING_PLAN_SCHEMA and verified_package.stage_zero_contract == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA:
+    if not local and verified_package.stage_zero_contract == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA:
         raise ProvisioningContractError("local package cannot claim native provisioning")
     if _timestamp(receipt["completedAt"], name="completedAt") > _timestamp(
         validation_time,

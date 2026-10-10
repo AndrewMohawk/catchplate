@@ -330,9 +330,11 @@ class LocalArtifactTrustCommit:
             (selected["planSha256"], selected["provisioningReceiptSha256"], selected["terminalStateSha256"]))
         plan, receipt, verification = document(plan_raw), document(receipt_raw), document(self._verification_raw)
         contract.validate_provisioning_plan(plan)
+        prepared = ({"prepared_static": plan["preparedStatic"]}
+            if plan["schema"] == contract.LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA else {})
         require(plan == contract.build_provisioning_plan(verified, verification, validation_time=self._instant(),
             source_root_fd=plan["sourceRoot"]["fd"], destination_root=selected["destination"]["path"],
-            owner_uid=0, owner_gid=0, trusted_host_local=True))
+            owner_uid=0, owner_gid=0, trusted_host_local=True, **prepared))
         contract.verify_provisioning_receipt(receipt, plan=plan, verified_package=verified, validation_time=self._instant())
         states = [document(raw) for raw in state_raws]
         terminal_chain(states, plan=plan, receipt_raw=receipt_raw, request_id=selected["requestId"],

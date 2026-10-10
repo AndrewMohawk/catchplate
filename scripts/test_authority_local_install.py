@@ -81,7 +81,7 @@ class LocalInstallTests(unittest.TestCase):
         self.assertEqual(install.configuration(artifact.canonical_json_bytes(value)), value)
         for change in (dict(extra=True), dict(schema=contract.PROVISIONING_PLAN_SCHEMA),
                        dict(deadlineBoottimeNs=value["issuedAtBoottimeNs"]),
-                       dict(expiresAtUnixNanos=value["issuedAtUnixNanos"] + 3601 * 10**9),
+                       dict(expiresAtUnixNanos=value["issuedAtUnixNanos"] + (install.MAX_SECONDS + 1) * 10**9),
                        dict(destination=dict(path="/", device=1, inode=2)), dict(packageSha256="not-a-pin")):
             with self.subTest(change=change), self.assertRaises((ValueError, contract.ProvisioningContractError)):
                 install.configuration(artifact.canonical_json_bytes(dict(value, **change)))

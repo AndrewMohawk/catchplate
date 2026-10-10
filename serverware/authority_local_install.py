@@ -26,9 +26,11 @@ from cryptography.hazmat.primitives import serialization
 from scripts.authority import atomic_provisioner_contract as contract
 from scripts.authority import native_pilot_authority_io as protected
 from serverware import authority_artifact_spec as artifact
+from serverware import authority_local_artifact_measure as measure
 from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 CONFIGURATION_SCHEMA = "serverware.authorityTrustedHostLocalInstallation/v1"
+PREPARED_CONFIGURATION_SCHEMA = "serverware.authorityTrustedHostLocalInstallation/v2"
 MAX_CONFIGURATION = 16384
 TRUST_NAME = "trust-state.json"
 MAX_SECONDS = LOCAL_SETUP_MAX_NS // 1_000_000_000
@@ -71,10 +73,14 @@ def _document(raw, maximum=contract.MAX_DOCUMENT_BYTES):
 
 def configuration(raw):
     value = _document(raw, MAX_CONFIGURATION)
+    prepared = value.get("schema") == PREPARED_CONFIGURATION_SCHEMA
     _require(set(value) == {"schema", "destination", "trustStateSha256", "packageSha256",
         "verificationReceiptSha256", "keyId", "executorMeasurementDigest", "requestId", "transitionId",
         "bootIdDigest", "issuedAtBoottimeNs", "deadlineBoottimeNs", "issuedAtUnixNanos", "expiresAtUnixNanos"}
-        and value["schema"] == CONFIGURATION_SCHEMA)
+        | ({"preparedStatic"} if prepared else set())
+        and value["schema"] in {CONFIGURATION_SCHEMA, PREPARED_CONFIGURATION_SCHEMA})
+    if prepared:
+        contract.validate_prepared_static(value["preparedStatic"])
     destination = value["destination"]
     _require(type(destination) is dict and set(destination) == {"path", "device", "inode"})
     path = contract._runtime_path(destination["path"], name="destination")
@@ -376,7 +382,8 @@ class LocalAuthorityInstaller:
         self._source_tree()
         self.plan = contract.build_provisioning_plan(self.verified, self.verification,
             validation_time=_timestamp(), source_root_fd=self.source_root,
-            destination_root=self.value["destination"]["path"], owner_uid=0, owner_gid=0, trusted_host_local=True)
+            destination_root=self.value["destination"]["path"], owner_uid=0, owner_gid=0, trusted_host_local=True,
+            prepared_static=self.value.get("preparedStatic"))
         signer = self.verified.require_key(self.value["keyId"], "artifact-provisioner", at=_timestamp())
         bundle = self.verified.package["bundle"]
         self.epoch_limit = min(_unix_limit(value) for value in (
@@ -463,6 +470,96 @@ class LocalAuthorityInstaller:
         self._drop(target); self.check()
         return row
 
+    def _adopt(self, entry):
+        """Measure one already sealed static leaf without rewriting or sealing it."""
+        self.check()
+        _require(entry["action"] == "adopt-prepared-static")
+        path = entry["path"]
+        with _owning(): fd = self._hold(_open_beneath(self.tree, path, _READ))
+        try:
+            before = os.fstat(fd)
+            _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and before.st_size == entry["size"]
+                and (stat.S_IMODE(before.st_mode), before.st_uid, before.st_gid)
+                    == (entry["mode"], entry["uid"], entry["gid"])
+                and before.st_dev == os.fstat(self.root).st_dev
+                and _mount_id(fd) == _mount_id(self.root))
+            identity, stamp = _identity(fd), protected._identity(before)
+            _require(_flags(fd) & _IMMUTABLE)
+            # A caller-supplied SHA or a userspace-emulated verity measurement
+            # cannot seed the memo. Only an actual ext4 SHA256 identity admits
+            # reuse; on a cold memo the helper hashes the actual opened bytes.
+            key = measure._file_cache_key(fd, before.st_size)
+            _require(key is not None)
+
+            def check_adopted():
+                self.check()
+                _require(protected._identity(os.fstat(fd)) == stamp
+                    and protected._identity(os.stat(path, dir_fd=self.tree, follow_symlinks=False)) == stamp
+                    and _identity(fd) == identity and _flags(fd) & _IMMUTABLE
+                    and _mount_id(fd) == _mount_id(self.root))
+
+            digest = measure._digest_owned_file(fd, maximum=artifact.MAX_FILE_BYTES, check=check_adopted)
+            _require(digest == entry["sourceSha256"]
+                and measure._file_cache_key(fd, before.st_size) == key)
+            check_adopted()
+            row = dict(path=path, sha256=digest, fsVerityDigest="sha256:" + key[0].hex(),
+                **identity, size=before.st_size, immutable=True, action="adopt-prepared-static")
+        finally:
+            self._drop(fd)
+        self.check()
+        return row
+
+    def _prepared_tree(self):
+        """Validate the exact private static complement before consuming it."""
+        self.check()
+        selected = contract.validate_prepared_static(self.value["preparedStatic"], entries=self.plan["entries"])
+        fresh = set(selected["freshPaths"])
+        _require(all(row["action"] == ("copy-fresh" if row["path"] in fresh else "adopt-prepared-static")
+            for row in self.plan["entries"]))
+        rows = {row["path"]: row for row in self.plan["entries"] if row["path"] not in fresh}
+        _require(rows and all(len(PurePosixPath(path).parts) <= 64 for path in rows))
+        directories = {str(parent) for path in rows for parent in PurePosixPath(path).parents if str(parent) != "."}
+        _require(len(directories) <= 64 * contract.MAX_FILES)
+        with _owning():
+            self.tree = self._hold(_open_beneath(self.root, selected["relativePath"], _READ | os.O_DIRECTORY))
+        identity = _identity(self.tree)
+        _require(all(identity[name] == selected[name] for name in ("device", "inode", "generation")))
+        info = os.fstat(self.tree)
+        self.links.append((self.root, selected["relativePath"], self.tree, (info.st_dev, info.st_ino)))
+        parents, installed, seen_directories = {"": self.tree}, {}, set()
+        mount_id = _mount_id(self.root)
+
+        def visit(fd, prefix):
+            self.check()
+            before = os.fstat(fd)
+            _require(stat.S_ISDIR(before.st_mode) and before.st_uid == before.st_gid == 0
+                and stat.S_IMODE(before.st_mode) == 0o700
+                and before.st_dev == os.fstat(self.root).st_dev and _mount_id(fd) == mount_id
+                and not os.fstatvfs(fd).f_flag & os.ST_RDONLY and not _flags(fd) & _IMMUTABLE)
+            _identity(fd)  # Every retained directory needs a real inode generation.
+            with os.scandir(fd) as children:
+                for child in children:
+                    self.check()
+                    path = prefix + child.name
+                    _require(path in rows or path in directories)
+                    if path in rows:
+                        _require(path not in installed)
+                        installed[path] = self._adopt(rows[path])
+                    else:
+                        _require(path not in seen_directories)
+                        with _owning(): held = self._hold(_open_beneath(fd, child.name, _READ | os.O_DIRECTORY))
+                        current = os.fstat(held)
+                        self.links.append((fd, child.name, held, (current.st_dev, current.st_ino)))
+                        parents[path] = held; seen_directories.add(path)
+                        visit(held, path + "/")
+            _require(protected._identity(os.fstat(fd)) == protected._identity(before))
+
+        visit(self.tree, "")
+        _require(set(installed) == set(rows) and seen_directories == directories)
+        self.check()
+        return parents, installed
+
     def run(self):
         try:
             self.check(); _require(not self.started); self.started = True
@@ -476,6 +573,10 @@ class LocalAuthorityInstaller:
             self.links.append((self.root, ".authority-generation.lock", self.lock, (info.st_dev, info.st_ino)))
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB); os.fsync(self.root)
             self.stage = "authenticating"; self._authenticate()
+            prepared = self.value["schema"] == PREPARED_CONFIGURATION_SCHEMA
+            if prepared:
+                self.stage = "validating-prepared-static"
+                parents, adopted = self._prepared_tree()
             for name in (".incoming", "generations", "receipts"):
                 self.directories[name] = self._directory(self.root, name)
             self.name = self.plan["destination"]["generationDirectory"]
@@ -487,10 +588,23 @@ class LocalAuthorityInstaller:
                 else: raise ValueError("existing installation attempt refused")
             self._publish(self.name + ".plan.json", artifact.canonical_json_bytes(self.plan))
             self._state("Prepared")
-            self.tree = self._directory(self.directories[".incoming"], self.name, absent=True)
+            if prepared:
+                self.check()
+                _rename(self.root, self.value["preparedStatic"]["relativePath"], self.directories[".incoming"], self.name)
+                self.links = [row for row in self.links if row[2] != self.tree]
+                info = os.fstat(self.tree)
+                self.links.append((self.directories[".incoming"], self.name, self.tree, (info.st_dev, info.st_ino)))
+                os.fsync(self.root); os.fsync(self.directories[".incoming"])
+                self.check()
+            else:
+                self.tree = self._directory(self.directories[".incoming"], self.name, absent=True)
+                parents = {"": self.tree}
             self.stage = "copying"
-            parents = {"": self.tree}
-            installed = [self._copy(entry, parents) for entry in self.plan["entries"]]
+            if prepared:
+                installed = [adopted[entry["path"]] if entry["action"] == "adopt-prepared-static"
+                    else dict(self._copy(entry, parents), action="copy-fresh") for entry in self.plan["entries"]]
+            else:
+                installed = [self._copy(entry, parents) for entry in self.plan["entries"]]
             self.stage = "freezing"
             for path in sorted(parents, key=lambda name: (name.count("/"), name), reverse=True):
                 self.check(); fd = parents[path]
@@ -510,12 +624,13 @@ class LocalAuthorityInstaller:
             artifact.verify_signed_artifact_package(dict(self.verified.package), trust_state=_document(self.sources["trust"][2]), validation_time=_timestamp())
             contract.verify_verification_receipt(self.verification, verified_package=self.verified, validation_time=_timestamp(), accepted_receipt_digests=())
             self.verified.require_key(self.value["keyId"], "artifact-provisioner", at=_timestamp())
-            receipt = dict(schema=contract.LOCAL_PROVISIONING_RECEIPT_SCHEMA,
+            receipt = dict(schema=contract.LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA if prepared else contract.LOCAL_PROVISIONING_RECEIPT_SCHEMA,
                 planDigest=contract.provisioning_plan_digest(self.plan), planId=self.plan["planId"],
                 generationDigest=self.plan["generationDigest"], generationSequence=self.plan["generationSequence"],
                 destinationRootIdentity=_identity(self.root), generationDirectoryIdentity=_identity(self.tree),
                 installedEntries=installed, stepContractDigest=self.plan["stepContractDigest"],
-                completedSteps=list(contract.LOCAL_PROVISIONING_STEPS), activated=False, completedAt=_timestamp(),
+                completedSteps=list(contract.LOCAL_PREPARED_PROVISIONING_STEPS if prepared else contract.LOCAL_PROVISIONING_STEPS),
+                activated=False, completedAt=_timestamp(),
                 executorIdentity="trusted-host-local-python-installer", executorMeasurementDigest=self.measurement,
                 signatureKeyId=self.value["keyId"], signatureAuthorizationDigest=self.authorization,
                 signatureAlgorithm="Ed25519", signatureBase64Url="")

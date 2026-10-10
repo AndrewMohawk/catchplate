@@ -119,40 +119,63 @@ container capabilities, or active-pilot changes were made to obtain a test pass.
 
 ## Remaining work and evidence boundary
 
-These changes do not provide cross-session artifact reuse or eliminate fresh
-installation, destination readback, synchronization, ELF metadata analysis, or
-launch authorization itself. Removing those recurring costs requires a
-separate reusable immutable-build artifact and fresh session authorization,
-rather than treating a stored hash as proof that mutable files are unchanged.
+The three measurement-cache changes alone do not provide cross-session artifact
+reuse or eliminate installation, destination readback, synchronization, ELF
+metadata analysis, or launch authorization. The additional prepared-static
+implementation below targets the repeated static installation work; it does not
+treat a stored hash as proof that mutable files are unchanged.
 
 No active R97 assembly is modified by source changes in this workspace. A
 startup-time improvement must be measured on a newly authorized deployment;
 source review or an isolated cache test is not end-to-end latency acceptance.
 
-## Next installation optimization (design only)
+## Prepared-static installation (source implemented)
 
 The existing COMMON pilot assembly already reuses prepared static bytes:
 `assembly/host/prepare_live.py.tmpl` creates `active-package.qcow2` over
 `package.ext4`. `package_tree.stage()` populates and seals its static leaves;
 finalization adds only the service configuration, witness configuration and
-SBOM. The installer nevertheless copies every entry into a separate fresh
-installation tree, reads it back, seals it and synchronizes it again.
+SBOM. The original full-copy installer then copies every entry into a separate
+fresh installation tree, reads it back, seals it and synchronizes it again.
 
-A prospective narrow improvement is to prepare an authority-less static
-installation template in that same base image. A fresh session COW could admit
-the exact template, create the three late files and publish a freshly verified
-generation. Its identity must include the complete static roster, including
-pilot public keys and role manifests—not just the source commit or runtime
-image. The three-file distinction applies only when those staged inputs match;
-it does not permit arbitrary cross-pilot reuse or reuse of a completed session.
+The new source prepares an authority-less `prepared-static` installation subtree
+in that base image. Its static leaves are independent, fs-verity-sealed immutable
+files, not hardlinks to the package source. A fresh session COW retains those
+bytes without inheriting an installed generation, trust advance or authority
+receipt. The complete selected static roster includes pilot public keys and
+role manifests, not just a source commit or runtime image.
 
-This is **unimplemented** and requires an explicit new local prepared-static
-mode/version. The current pilot requires an empty installation destination,
-and the installer creates every file exclusively. Its local provisioning plan
-v2 and receipt v1 also require steps claiming that every file was copied and
-sealed. Adoption cannot truthfully claim those unchanged steps. Any new mode
-must preserve the original full-copy path, freshly verify template contents and
-actual installed inode/verity identities against the new signed bundle, and
-retain generation locking, high-water, expiry and publication checks. No old
-authority receipt would be reused. This design is not a startup improvement
-measurement or authorization to change the active R97 assembly.
+Explicit installation configuration v2 selects local provisioning plan v3 and
+receipt v2; the original configuration v1, plan v2 and receipt v1 full-copy path
+remain unchanged. The new plan and receipt distinguish `adopt-prepared-static`
+from `copy-fresh`. The current signed package supplies the complete content and
+metadata roster. Its exact complement of the selected fresh paths must match
+the prepared tree, including directories, with no extra or missing entries.
+Before consuming the subtree, the installer checks actual file contents,
+fs-verity, immutability, metadata and physical identities on the destination's
+device and mount. It then uses a no-replace move and copies only the fresh files.
+
+The COMMON pilot selects exactly three per-session fresh paths:
+
+- `configurations/authority-service.json`
+- `configurations/witness.json`
+- `sbom/selected-files.spdx.json`
+
+Those files still receive the full copy, readback, sealing and synchronization
+path. The SDK selector requires a sorted nonempty proper subset of the current
+signed package; it does not silently infer a three-file exception for other
+packages. A warm process memo may avoid rereading an adopted file's sealed
+content. A cold standalone installer still hashes its actual bytes; no claimed
+hash or historical receipt seeds the memo.
+
+Package and verification signatures, current trust and signer authorization,
+generation locking, original deadlines, publication, fresh receipt signing and
+trust-commit checks remain required. The prepared template is not authority,
+does not renew a deadline, and cannot substitute a completed session. See
+[the installation contract](trusted-host-local-installation.md#prepared-static-local-installation)
+for the versioned interface.
+
+This mode is implemented in SDK and COMMON source. Its tests and root-owned KVM
+component probe are in progress. It is **not deployed to R97**, has no measured
+new startup improvement yet, and does not establish production/native signed
+installation acceptance. The earlier cache-test results above are unchanged.

@@ -12,7 +12,7 @@ The October 10 paired app/gate rollout verified the deployed read-only UI and
 preserved retained data and empty app-only custody. Outbound DNS/TLS was verified
 at the earlier notification-enabled rollout checkpoint, without sending HTTP.
 No real receiver or native hardware source is configured.
-See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment).
+See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-managed-capable-deployment).
 
 The mental model is simple: **action alerts mean "someone needs to do something";
 audit alerts mean "this happened."** Configure either, both or neither. An action
@@ -285,7 +285,7 @@ history or implicit loss of uncertain receipts.
 | Integrated audit delivery | Current **25/25** source-event checks pass. All six proxy-destination/Google-setup event types also pass actual producer-writer → committed source → outbox/worker → verified local TLS acceptance, audit-only without private configuration fields. Four explicit slot tests and two adapter copies of one committed fixture application audit event pass separately within the same integration suite | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
 | Failure and backpressure | Connected fixtures pass default-off, worker lifecycle, unknown-outcome no-replay and final pre-dispatch-disable checks. Simulated ingestion-capacity failure still drains a real retained queue. Store fixtures cover bounded retries and 60-second uncertainty recovery | Real crash/restart, lost acknowledgement, saturation and operational retention in the deployed profile |
 | Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
-| Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. The latest deployed read-only browser checkpoint passes **13 GETs**, with two channels and four disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks are separate retained fixture results | Deployed save/test, actual receiver and operator workflow |
+| Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. The latest deployed read-only browser checkpoint passes **17 GETs**, with two channels and four disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks are separate retained fixture results | Deployed save/test, actual receiver and operator workflow |
 
 ### Independent-channel regression checkpoint (October 10, 2026)
 
@@ -329,39 +329,57 @@ configuration checkpoint is documented in
 Evidence is retained under
 `serverware-operator-workspace-evidence/notification-setup-events.HhSqenQS`,
 including the exact source archive/manifest, bounded network-none command, test
-log, successful termination and removal receipt. No real receiver, live
-destination setting, native source or deployment was changed by this correction.
-These source changes are not included in the deployed checkpoint below.
+log, successful termination and removal receipt. That isolated correction run
+changed no real receiver, live destination setting, native source or deployment.
+The later deployed source `9222b4c090d77aa983d3c01be34e0a2ba79f8e6c`
+includes this commit and the identical `operator_notification_events.py` Git
+blob. Inclusion does not establish deployed event delivery: all destinations
+remain unconfigured.
 
 ### Current deployed read-only checkpoint (October 10, 2026)
 
-The paired rollout runs app source
-`577badff84b32eea052c53d6df8f6fd5de61d66a` in container `e4573ccd832c…`
+The managed-capable paired rollout runs app source
+`9222b4c090d77aa983d3c01be34e0a2ba79f8e6c` in container `d992e9cb5215…`
 and gate binary SHA-256
-`2bfe5e384d7e9c655de70704c25350c16336c55a2584fc59f363f12164f297d6`
-in container `348cfd58…`. The existing edge and synthetic fixture were retained.
+`333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0`
+in container `c416f85fdecd…`. Current read-only inspection confirms those
+containers and immutable source/executable mounts; the mounted executable hash
+matches the retained actual-process hash. The existing edge and synthetic
+fixture were retained.
 
 The actual internal browser receipt is
-`/tmp/serverware-destinations-runtime-arih/receipt.json`, with five screenshots
-beside it. Its **13 GETs** cover the real application HTML, catalog,
-Notifications and proxy-upstream APIs, with no refused requests, page errors or
-console errors. Notifications shows two channels and four disabled, unconfigured
-slots on desktop and mobile; no native source is selected. This run performed no
-Save, synthetic test, provider request, notification send or native action. It
-does not establish external SSO, proxy traffic or receiver delivery.
+`/tmp/serverware-managed-runtime-wb0masgw/receipt.json`, with seven screenshots
+beside it. Its **17 GETs** cover the real application HTML, catalog,
+Notifications, proxy-upstream and managed Google configuration APIs, with no
+refused requests, page errors or console errors. Notifications shows two channels
+and four disabled, unconfigured slots on desktop and mobile; no native source is
+selected. Google is unconfigured at catalog revision 13: the app/gate pair is
+ready, consent is not, and the write-only provider form is empty. This run
+performed no Save, Prepare, synthetic test, provider request, notification send
+or native action. It does not establish external SSO, proxy traffic or receiver
+delivery.
 
 The private-copy preservation receipt is
-`serverware-operator-workspace-evidence/destinations-rollout.ArihVAhH/preservation.json`.
+`serverware-operator-workspace-evidence/managed-rollout.wB0mAsgW/first-live-preservation.json`.
 It confirms equal complete schemas (**1,335 objects**, including SQLite internal
 objects), **210 unchanged non-audit tables**, eight retained credentials,
 applications and rules, **108 nonces**, and the unchanged **204-row audit prefix**.
 Notification tables are absent in both copies because settings have never been
 saved; the empty notification custody directory and its identity are unchanged.
-The explicit exceptions are three migration `applied_at`-only changes and new
+The provider custody directory is also empty. The explicit exceptions are eight
+derived gate-runtime entries, three migration `applied_at`-only changes and new
 inodes for the two derived decision-gate CA publication copies; their content
 and other checked metadata are preserved. This is not a whole-database byte
-equality claim. The earlier rollout and isolated fixture results below remain
-distinct historical checkpoints, not tests repeated by this browser run.
+equality claim.
+
+The superseded destination-setup rollout used app source
+`577badff84b32eea052c53d6df8f6fd5de61d66a` and gate binary
+`2bfe5e384d7e9c655de70704c25350c16336c55a2584fc59f363f12164f297d6`.
+Its **13-GET**, five-screenshot receipt remains at
+`/tmp/serverware-destinations-runtime-arih/receipt.json`, with preservation
+evidence under `serverware-operator-workspace-evidence/destinations-rollout.ArihVAhH/`.
+That earlier rollout and the isolated fixture results below remain distinct
+historical checkpoints, not tests repeated by the latest browser run.
 
 ### Retained isolated verification checkpoints
 

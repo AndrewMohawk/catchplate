@@ -152,6 +152,17 @@ The current bounded checks passed:
   15 metadata and seven shared send-deadline/revocation regressions. A separate
   normal gate binary was then built, SHA-256
   `09b9551d63b77353b50cd52aa0beb2e746314ff4f2e16a469b7017555f13abff`.
+- 49 of 49 genuine Rust tests at `15119cfe`, including the earlier 33, eight
+  static-preparation checks and eight bounded acquisition-diagnostic checks.
+  An interleaved diagnostic/libtest-log parser refusal was corrected before
+  running the remaining eight checks; the first 41 tests were not rerun or
+  replaced. The separate normal binary is SHA-256
+  `3ab55d012e6ae8aa2681cc833fb869a08556a99011b122d242e4700ad4ecbb46`.
+- 11 of 11 actual SQLite outbox checks at `f6352287`. Empty fresh SQLite drains
+  now avoid acquiring a write lock; pending/claimed work retains the locked
+  re-read, audit append and terminal update. PostgreSQL and active borrowed
+  transactions keep their existing behavior. These tests do not establish
+  end-to-end latency or a permanently empty queue.
 
 The earlier failed Rust run and first two bounded stock-checker failures remain
 retained. A third isolated stock run passed the exact prerequisite-read and
@@ -168,9 +179,37 @@ This is not proof of the expected HTTP 403 time-window denial. The client exited
 with status 1; its exact npm error code was not established. Five earlier
 upstream releases completed, and both scoped and unscoped versions were stored.
 The gate logged lease-renewal failures; their underlying cause remains under
-diagnosis. No fresh end-to-end run has followed this diagnosis, and no expiry
-extension, retry workaround or live-deployment change has been made. The
-complete stock-client flow has not passed; no production defect is inferred.
+diagnosis.
+
+A fifth isolated run at `15119cfe` completed prerequisite reads and both
+unscoped/scoped publications, then failed the unchanged zero-audit-failure
+requirement. Its retained diagnostic records a transport-stage failure with
+3,095 ms total attempt time and unknown HTTP status and delivery outcome. This
+duration includes publication-lock/policy work; it is not an HTTP-only timing
+or proof of the underlying transport error. Observed application
+HTTP 200 audit responses cannot be correlated to that failed batch, and no
+static acquisition-failure diagnostic was emitted. The run stopped before the
+remaining controls; it neither repeats nor resolves the fourth run's 503.
+Both source and stock npm inventories remained unchanged after teardown.
+
+The app-only SQLite optimization at `f6352287` retains the same normal Rust
+binary: all 497 compiler inputs and all 740 crate files match `15119cfe` byte
+for byte. No new Rust build is claimed. A sixth isolated run of this pair
+completed prerequisite reads, both publications and the wrong-package
+checkpoint. The audit transport failure did not recur in its retained log;
+this is not causal proof that the optimization resolved it. The run stopped
+on the outside-window npm command (exit 1, `npm_denial` stage, closed error code
+`unrecognized`). The stopped database contains six response-release events
+and the three earlier expected 403 denials, but no outside-window denial
+record. Neither the intended time-window 403 nor a repeated 503 is established
+for this run. Seventeen lease-renewal warnings remain, without a static
+preparation diagnostic. Generation acquisition and pre-diagnostic admission
+paths remain under investigation.
+
+All sixth-run containers were removed, private evidence retained, and the
+4,933-file source and 1,782-file stock npm inventories remained unchanged.
+No expiry extension, retry workaround or live-deployment change has been made.
+The complete stock-client flow has not passed; no production defect is inferred.
 
 The isolated fixture must prove metadata GETs independently: npm can suppress
 preflight GET errors, so a

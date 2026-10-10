@@ -12,16 +12,26 @@ publish acceptance result.
 
 The separate [package-publishing permission](operator-npm-publish.md) is now
 implemented with one exact package/tag, prerequisite metadata reads and optional
-UTC publishing hours. Its 33 genuine Rust tests passed and a normal gate binary
-was built. The third isolated stock run stopped on a synthetic-registry HTTP 400
-for scoped publication. That condition did not recur in the fourth diagnostic
+UTC publishing hours. Its latest 49 genuine Rust tests passed and a normal gate
+binary was built. The third isolated stock run stopped on a synthetic-registry
+HTTP 400 for scoped publication. That condition did not recur in the fourth diagnostic
 run, which completed prerequisite reads, both unscoped and scoped publications,
 and the wrong-package check. Stopped-state evidence shows the outside-window
 GET and PUT then received proxy credential-generation-unavailable HTTP 503
 before the time-window guard, not the expected HTTP 403. The underlying
 lease-renewal failure remains under diagnosis; the exact npm error code was not
-established. No fresh end-to-end run, expiry extension, retry workaround or live
-change has followed. The failures remain retained and full stock-publishing
+established. A fifth isolated run completed both publications but stopped on
+the unchanged zero-audit-failure requirement: a transport-stage audit failure
+had 3,095 ms total attempt time and an unknown delivery outcome. That duration
+includes pre-HTTP work, not just transport. Eleven actual SQLite regression
+checks pass for an app-only empty-outbox write-lock optimization; all compiled
+Rust inputs remain identical. The sixth isolated run of that optimization
+completed both publications and the wrong-package checkpoint without another
+logged audit failure, but its outside-window command still failed. Its closed
+client error code is `unrecognized`; the stopped audit store does not establish
+either the intended time-window 403 or a repeated 503 for that command. Lease
+renewal remains under investigation. No expiry extension, retry workaround or
+live change has been made. The failures remain retained and full stock-publishing
 acceptance is still pending, with no production defect inferred. This does not
 implement or prove installation, tarball reads or default auditing.
 

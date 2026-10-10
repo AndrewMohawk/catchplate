@@ -66,6 +66,31 @@ class GithubTokenInput(NamedInput):
         return validate_token(value)
 
 
+class XAppBearerInput(NamedInput):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    secret: str = Field(min_length=1, max_length=8192, repr=False)
+
+    @field_validator("secret")
+    @classmethod
+    def opaque_token(cls, value: str) -> str:
+        from serverware.operator_catalog_x import validate_token
+        return validate_token(value)
+
+
+class XUsernameRuleInput(NamedInput):
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["x_username_read_v1"]
+    username: str = Field(min_length=1, max_length=15)
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+    @field_validator("username")
+    @classmethod
+    def exact_username(cls, value: str) -> str:
+        from serverware.x_app_read import validate_username
+        return validate_username(value)
+
+
 class NpmTokenInput(NamedInput):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     secret: str = Field(min_length=1, max_length=8192, repr=False)

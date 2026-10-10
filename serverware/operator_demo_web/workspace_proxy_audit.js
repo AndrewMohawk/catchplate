@@ -15,6 +15,7 @@ function operatorExampleProjects(rule, catalog) {
       guide('npm metadata guide', 'operator-npm-metadata.md')];
     case 'npm_publish_v1': return [project('npm registry project', 'npm-registry'),
       guide('npm publishing guide', 'operator-npm-publish.md')];
+    case 'x_username_read_v1': return [guide('X preset scope and compatibility', 'operator-provider-presets.md')];
     case 'gmail_read_v1': return [
       ...(rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' ?
         [project('Go + Gmail SDK', 'google-gmail-go')] : []),
@@ -26,7 +27,8 @@ function renderOperatorExampleProjects(rule, catalog) {
   const panel = element('client-examples'); const links = element('client-example-links');
   const projects = operatorExampleProjects(rule, catalog);
   links.replaceChildren(); panel.hidden = projects.length === 0;
-  element('client-example-note').textContent = !projects.length ? '' : projects[0].kind === 'project' ?
+  element('client-example-note').textContent = !projects.length ? '' : isXRule(rule) ?
+    'Public scope and compatibility documentation. Ordinary X SDK verification is pending; this page has not run a client or verified provider access.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires the documented exact Gmail dummy-header replacement. The public guide contains no private client config and does not verify your access.';
   for (const project of projects) {
@@ -62,6 +64,7 @@ function createProxyView(workspace, applications) {
     const github = isGithubRule(rule);
     const npm = isNpmRule(rule);
     const npmPublish = isNpmPublishRule(rule);
+    const x = isXRule(rule);
     element('npm-publish-client-controls').hidden = !npmPublish;
     element('npm-publish-client-summary').textContent = npmPublish ? npmPublishReview(rule) : '';
     element('npm-client-controls').hidden = !npm;
@@ -70,15 +73,16 @@ function createProxyView(workspace, applications) {
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github || npm || npmPublish; element('proxy-method').disabled = github || npm || npmPublish;
-    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish;
+    element('proxy-method').hidden = github || npm || npmPublish || x; element('proxy-method').disabled = github || npm || npmPublish || x;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || x;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail;
     const messageRead = gmail && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = npmPublish ?
+    element('client-template-title').textContent = x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = x ?
+      'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. Ordinary SDK verification is pending; the page does not execute a lookup or prove provider entitlement.' : npmPublish ?
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
       'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmail ?
@@ -143,6 +147,14 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (x) {
+      element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No X lookup was tested here. ' :
+        'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
+        'Look up ' + rule.username + ' at api.x.com, GET only with no query or body. No posting, search, pagination, user OAuth, DMs, media or streams. ' +
+        'Send the exact public dummy Bearer serverware-x-placeholder-v1 once. Your Serverware app token authenticates only to the proxy; never give the client the real provider token. ' +
+        'No response-field setup; supported full JSON can contain provider errors even with HTTP 200. Keep both TLS legs verified. Ordinary SDK verification is pending.';
+      return;
+    }
     if (npmPublish) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No npm publication was tested here. ' :
         'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') + npmPublishReview(rule) +
@@ -223,6 +235,10 @@ function createProxyView(workspace, applications) {
       {proxy_authentication: 'basic_and_bearer_v1', proxy_username: application.id, proxy_password: token});
     else config.proxy_authorization = 'Bearer ' + token;
     if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
+    if (isXRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.username = rule.username;
+      config.note += ' X app-only username lookup only: GET with no query or body. Fixed public dummy; no posting or user OAuth. Provider entitlement and ordinary SDK compatibility have not been verified by this page.';
+    }
     if (isGmailRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.age_policy = {mode: rule.age_policy.mode};
       if (Object.hasOwn(rule, 'query_mode')) config.query_mode = rule.query_mode;

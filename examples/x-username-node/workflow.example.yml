@@ -1,0 +1,69 @@
+# INACTIVE SAMPLE. Review and copy deliberately into .github/workflows/.
+# The prepared dependency lock and actual proxy acceptance are not yet verified.
+name: Read one X username through Serverware
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: serverware-x-username-example
+  cancel-in-progress: false
+jobs:
+  lookup:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    environment: serverware-demo
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+        working-directory: examples/x-username-node
+    steps:
+      - name: Check out the trusted dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up the reviewed Node version
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '25.5.0'
+          package-manager-cache: false
+          token: ''
+      - name: Install without application credentials or lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Make one explicitly permitted read-only lookup
+        timeout-minutes: 2
+        env:
+          SERVERWARE_PROXY_URL: ${{ vars.SERVERWARE_PROXY_URL }}
+          SERVERWARE_APP_ID: ${{ vars.SERVERWARE_APP_ID }}
+          SERVERWARE_PROXY_TOKEN: ${{ secrets.SERVERWARE_PROXY_TOKEN }}
+          SERVERWARE_X_USERNAME: ${{ vars.SERVERWARE_X_USERNAME }}
+          TRUSTED_SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
+          TRUSTED_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(node --version)" = v25.5.0
+          ca_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-x-ca.XXXXXXXX")
+          trap 'rm -f -- "$ca_dir/serverware-ca.pem" "$ca_dir/proxy-ca.pem"; rmdir -- "$ca_dir"' EXIT
+          export SERVERWARE_CA_FILE="$ca_dir/serverware-ca.pem"
+          unset SERVERWARE_PROXY_CA_FILE
+          if [[ -n "$TRUSTED_PROXY_CA_PEM" ]]; then
+            export SERVERWARE_PROXY_CA_FILE="$ca_dir/proxy-ca.pem"
+          fi
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          for (const [path, pem] of [
+            [process.env.SERVERWARE_CA_FILE, process.env.TRUSTED_SERVERWARE_CA_PEM],
+            [process.env.SERVERWARE_PROXY_CA_FILE, process.env.TRUSTED_PROXY_CA_PEM],
+          ]) {
+            if (!path) continue;
+            if (!pem || !pem.includes('-----BEGIN CERTIFICATE-----') || Buffer.byteLength(pem) > 262144) {
+              throw new Error('Explicit trusted CA input required');
+            }
+            writeFileSync(path, pem, { mode: 0o600, flag: 'wx' });
+          }
+          NODE
+          unset TRUSTED_SERVERWARE_CA_PEM TRUSTED_PROXY_CA_PEM
+          timeout --signal=TERM --kill-after=5s 45s node client.mjs

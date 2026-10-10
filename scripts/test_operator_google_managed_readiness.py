@@ -55,16 +55,47 @@ def owners(**modules):
 
 
 class ReadinessTests(unittest.TestCase):
-    def observe(self, received=None, *, before=None, after=None, enabled=True):
+    def observe(self, received=None, *, before=None, after=None, enabled=True, require_x=False):
         before = snapshot() if before is None else before
         after = deepcopy(before) if after is None else after
         reader = Mock(return_value=health() if received is None else received)
         with owners(operator_google_managed_config=SimpleNamespace(enabled=lambda: enabled),
                 operator_demo_store=SimpleNamespace(loaded_gate_status=reader)), \
                 patch.object(readiness, "_snapshot", side_effect=[before, after]) as snapshots:
-            result = readiness.observe()
+            result = readiness.observe_x() if require_x else readiness.observe()
         self.assertEqual(set(result), {"ready", "policy_hash", "loaded_policy_hash", "managed_google"})
         return result, reader, snapshots
+
+    def test_x_feature_is_bound_to_the_same_managed_gate_observation(self):
+        descriptor = {"schema": "serverware.operatorXAppReadGate/v1",
+            "adapter": "x.app_read.v1", "operation": "x.username.read"}
+        received = {**health(), "operator_x_app_read": descriptor}
+        result, reader, snapshots = self.observe(received, require_x=True)
+        self.assertTrue(result["ready"])
+        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(snapshots.call_count, 2)
+        for changes in ({"data_plane_binary_digest": "sha256:" + "9" * 64},
+                {"policy_hash": "sha256:" + "9" * 64}):
+            result, reader, _ = self.observe({**received, **changes}, require_x=True)
+            self.assertFalse(result["ready"])
+            self.assertEqual(reader.call_count, 1)
+        after = snapshot()
+        after["expected_binary_digest"] = "sha256:" + "9" * 64
+        self.assertFalse(self.observe(received, after=after, require_x=True)[0]["ready"])
+
+    def test_missing_or_malformed_x_feature_does_not_change_legacy_readiness(self):
+        descriptor = {"schema": "serverware.operatorXAppReadGate/v1",
+            "adapter": "x.app_read.v1", "operation": "x.username.read"}
+        for marker in (None, {}, True, {**descriptor, "extra": True},
+                {**descriptor, "schema": "old"}, {**descriptor, "operation": "x.write"},
+                {**descriptor, "adapter": "generic.rest"}):
+            received = {**health(), "operator_x_app_read": marker}
+            result, reader, snapshots = self.observe(received, require_x=True)
+            self.assertFalse(result["ready"])
+            self.assertEqual(reader.call_count, 1)
+            self.assertEqual(snapshots.call_count, 1)
+            self.assertTrue(self.observe(received)[0]["ready"])
+        self.assertFalse(self.observe(health(), require_x=True)[0]["ready"])
 
     def test_exact_pair_and_unconfigured_pair(self):
         result, reader, snapshots = self.observe()

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json",
+  "title": "Serverware closed X app-only username read v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["credentialBinding", "username", "request", "response"],
+  "$defs": {
+    "username": {"type": "string", "minLength": 1, "maxLength": 15, "pattern": "^[a-z0-9_]+$"}
+  },
+  "properties": {
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "properties": {
+        "credentialType": {"const": "static"}, "provider": {"const": "operator-demo"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "secretClass": {"const": "bearerToken"}
+      }
+    },
+    "username": {"$ref": "#/$defs/username"},
+    "request": {"const": {
+      "allowedHeaders": ["accept", "accept-language", "sec-fetch-mode", "user-agent"],
+      "discardHeaders": ["accept-encoding"], "allowedQueryKeys": [],
+      "allowedMediaTypes": ["application/json"], "maxBodyBytes": 0, "valueRules": []
+    }},
+    "response": {"const": {
+      "mode": "xAppReadJsonV1", "maxBodyBytes": 1048576,
+      "contentTypes": ["application/json"], "allowedHeaders": [],
+      "error": {"mode": "xAppReadJsonV1", "maxBodyBytes": 65536,
+        "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}
+    }}
+  }
+}

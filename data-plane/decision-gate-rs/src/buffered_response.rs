@@ -131,6 +131,12 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if adapter_type == crate::x_app_read::ADAPTER {
+        return crate::x_app_read::validate_envelope(mode, constraints);
+    }
+    if mode == Some(crate::x_app_read::MODE) {
+        return Err("xAppReadJsonV1 requires its explicit X app read adapter".into());
+    }
     if adapter_type == crate::npm_publish::ADAPTER {
         return crate::npm_publish::validate_envelope(mode, constraints);
     }

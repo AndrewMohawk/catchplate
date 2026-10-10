@@ -14,6 +14,7 @@ mod response_metadata;
 mod gmail_read;
 mod github_issues;
 mod npm_metadata;
+mod x_app_read;
 mod npm_publish;
 mod provider_query;
 mod request_query_compat;
@@ -461,7 +462,7 @@ const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
 const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
-const SUPPORTED_ADAPTER_TYPES: [&str; 7] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1"];
+const SUPPORTED_ADAPTER_TYPES: [&str; 8] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
 const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
 const NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS: [&str; 2] = ["ok", "published"];
@@ -8727,7 +8728,7 @@ fn validate_provider_request_admission(
 ) -> Result<(), Value> {
     if !matches!(
         route.adapter_type.as_str(),
-        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1"
+        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1"
     ) {
         return Ok(());
     }
@@ -8753,6 +8754,9 @@ fn validate_provider_request_admission(
     }
     if route.adapter_type == npm_metadata::ADAPTER {
         npm_metadata::validate_request(req, url, route)?;
+    }
+    if route.adapter_type == x_app_read::ADAPTER {
+        x_app_read::validate_request(req, url, route)?;
     }
     if route.adapter_type == npm_publish::ADAPTER {
         npm_publish::validate_request(req, url, route)?;
@@ -9030,6 +9034,7 @@ fn operation_field_catalog(
     let fields_for = |operation: &str| -> Option<HashSet<String>> {
         let fields: &[&str] = match (adapter_type, operation) {
             (npm_metadata::ADAPTER, "npm.metadata.read") => &["operation", "package"],
+            (x_app_read::ADAPTER, x_app_read::OPERATION) => &["operation", "username"],
             (npm_publish::ADAPTER, "npm.publish") => &["operation", "packageName", "packageVersion",
                 "tag", "tarballIntegrity", "tarballShasum", "attachmentName", "attachmentBytes"],
             ("gmail.v1" | "gmail.read.v1", "gmail.messages.list") => &["operation", "gmailUser"],
@@ -9578,7 +9583,7 @@ fn validate_response_envelope_constraint(
     constraint: &Map<String, Value>,
 ) -> Result<(), String> {
     if constraint.get("contentTypePolicy").is_some_and(|value|
-        !matches!(value.as_str(), Some(github_issues::CONTENT_TYPE_POLICY | npm_metadata::CONTENT_TYPE_POLICY))) {
+        !matches!(value.as_str(), Some(github_issues::CONTENT_TYPE_POLICY | npm_metadata::CONTENT_TYPE_POLICY | x_app_read::CONTENT_TYPE_POLICY))) {
         return Err("responseEnvelope contentTypePolicy is invalid".into());
     }
     let statuses = constraint
@@ -10610,6 +10615,7 @@ fn provider_request_profile(
 ) -> Result<Option<ProviderRequestProfile>, String> {
     let profile = match adapter_type {
         npm_metadata::ADAPTER => npm_metadata::request_profile(),
+        x_app_read::ADAPTER => x_app_read::request_profile(),
         npm_publish::ADAPTER => npm_publish::request_profile(),
         gmail_read::ADAPTER => gmail_read::request_profile(false),
         "gmail.v1" => ProviderRequestProfile {
@@ -11196,6 +11202,14 @@ fn declared_policy_operations(
             }
             HashSet::from(["npm.publish".to_string()])
         }
+        x_app_read::ADAPTER => {
+            let name = adapter_config.get("username").and_then(Value::as_str)
+                .filter(|name| x_app_read::username(name)).ok_or("X app read username missing")?;
+            if paths != [json!(x_app_read::path(name))] {
+                return Err("X app read requires its exact literal username path".into());
+            }
+            HashSet::from([x_app_read::OPERATION.to_string()])
+        }
         npm_metadata::ADAPTER => {
             if paths != [json!(npm_metadata::PATH)] {
                 return Err("npm metadata requires its exact package capture".into());
@@ -11451,6 +11465,14 @@ fn validate_route_credential_binding(
             || credential.injection.get("field").is_some() || credential.injection.get("prefix").is_some())
     {
         return Err("typed npm requires fixed static operator Authorization bearer injection".into());
+    }
+    if adapter_type == x_app_read::ADAPTER
+        && (credential.kind() != "static" || credential.provider != "operator-demo"
+            || credential.injection.get("type").and_then(Value::as_str) != Some("bearer")
+            || credential.injection.get("header").and_then(Value::as_str) != Some("Authorization")
+            || credential.injection.get("field").is_some() || credential.injection.get("prefix").is_some())
+    {
+        return Err("X app read requires fixed static operator Authorization bearer injection".into());
     }
     let expected_fields: &[&str] = if credential.kind() == "oauth2" {
         &[
@@ -11932,7 +11954,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
-        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1") {
+        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1") {
             validate_provider_request_profile_config(route_id, adapter_type, adapter_config)?;
         }
         let request_config = adapter_config
@@ -12011,11 +12033,14 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         let constraints = combined_constraints.as_slice();
         if constraints.iter().any(|constraint| constraint.get("contentTypePolicy").is_some())
             && !github_issues::marked(&Value::Object(adapter_config.clone()))
-            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER) {
+            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER) {
             return Err("contentTypePolicy requires a closed provider profile".into());
         }
         if adapter_type == npm_metadata::ADAPTER {
             npm_metadata::validate_policy(route)?;
+        }
+        if adapter_type == x_app_read::ADAPTER {
+            x_app_read::validate_policy(route)?;
         }
         if adapter_type == npm_publish::ADAPTER {
             npm_publish::validate_policy(route)?;
@@ -12134,6 +12159,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let mode_supported = BUFFERED_RESPONSE_MODES.contains(&response_mode)
                 || (adapter_type == gmail_read::ADAPTER && response_mode == gmail_read::MODE)
                 || (adapter_type == npm_metadata::ADAPTER && response_mode == npm_metadata::MODE)
+                || (adapter_type == x_app_read::ADAPTER && response_mode == x_app_read::MODE)
                 || (adapter_type == npm_publish::ADAPTER && response_mode == npm_publish::MODE)
                 || (adapter_type == "generic.rest"
                     && (STREAMING_RESPONSE_MODES.contains(&response_mode)
@@ -12156,7 +12182,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER) {
+            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER) {
                 // The closed typed contract above owns whole-JSON release;
                 // it is not admitted through generic REST's profile guard.
             } else if buffered_response::supported_mode(response_mode) {
@@ -14496,6 +14522,9 @@ fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static st
         "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json" => {
             Some(("adapter_npm_metadata_v1", include_str!("../../../schemas/adapters/npm.metadata.v1.schema.json")))
         }
+        "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json" => {
+            Some(("adapter_x_app_read_v1", include_str!("../../../schemas/adapters/x.app_read.v1.schema.json")))
+        }
         "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json" => {
             Some(("adapter_npm_publish_v1", include_str!("../../../schemas/adapters/npm.publish.v1.schema.json")))
         }
@@ -14563,6 +14592,7 @@ fn closed_embedded_policy_schema() -> Result<Value, String> {
         "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json",
         "https://serverware.local/schemas/adapters/npm.registry.schema.json",
         "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json",
+        "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json",
         "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
         "https://serverware.local/schemas/adapters/x.v2.schema.json",
     ];
@@ -24446,6 +24476,7 @@ fn reuse_idle_upstream_connections(route: &Route, method: &str) -> bool {
         && !route_response_mode(route).is_some_and(buffered_response::json_or_empty_204_mode)
         && route.adapter_type != gmail_read::ADAPTER
         && route.adapter_type != npm_metadata::ADAPTER
+        && route.adapter_type != x_app_read::ADAPTER
 }
 
 fn prepare_upstream(
@@ -31344,6 +31375,7 @@ fn validate_adapter_with_gmail_proof_mode(
     let config = &route.adapter_config;
     match route.adapter_type.as_str() {
         npm_metadata::ADAPTER => npm_metadata::normalize_request(req, url, route_match),
+        x_app_read::ADAPTER => x_app_read::normalize_request(req, url, route_match),
         npm_publish::ADAPTER => npm_publish::normalize_request(req, url, route_match),
         gmail_read::ADAPTER => gmail_read::normalize_request(req, forwarded_headers, url, route),
         "generic.rest" => {
@@ -35002,6 +35034,7 @@ fn enforce_response_envelope(
         value.to_str().ok().is_none_or(|value| match media_policy {
             Some(github_issues::CONTENT_TYPE_POLICY) => !github_issues::is_json_content_type(value),
             Some(npm_metadata::CONTENT_TYPE_POLICY) => !npm_metadata::is_json_content_type(value),
+            Some(x_app_read::CONTENT_TYPE_POLICY) => !x_app_read::is_json_content_type(value),
             _ => true,
         })) {
         return Err(constraint_error(constraint, "response_envelope_content_type_denied", "response content type is outside the provider media policy"));
@@ -35119,7 +35152,9 @@ fn validate_response_envelopes(
     body_length: Option<u64>,
     operation: Option<&Value>,
 ) -> Result<(), Value> {
-    let media_policy = if route.adapter_type == npm_metadata::ADAPTER {
+    let media_policy = if route.adapter_type == x_app_read::ADAPTER {
+        x_app_read::validate_route(route).map(|()| Some(x_app_read::CONTENT_TYPE_POLICY))
+    } else if route.adapter_type == npm_metadata::ADAPTER {
         npm_metadata::validate_route(route).map(|()| Some(npm_metadata::CONTENT_TYPE_POLICY))
     } else if route.adapter_type == npm_publish::ADAPTER {
         npm_publish::validate_route(route).map(|()| Some(npm_publish::CONTENT_TYPE_POLICY))
@@ -43167,6 +43202,9 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 }
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
+    if route.adapter_type == x_app_read::ADAPTER {
+        return x_app_read::validate_route(route);
+    }
     if route.adapter_type == npm_metadata::ADAPTER {
         return npm_metadata::validate_route(route);
     }
@@ -43447,7 +43485,7 @@ fn validate_selected_json_response_content_type(
     adapter_type: &str,
 ) -> Result<(), Value> {
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
-        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1" | "npmPublishJsonV1")) {
+        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1" | "npmPublishJsonV1" | "xAppReadJsonV1")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -43472,6 +43510,10 @@ fn validate_selected_json_response_content_type(
     if adapter_type == npm_metadata::ADAPTER {
         return if npm_metadata::is_json_content_type(value) { Ok(()) }
             else { Err(json!({"error":"response_json_content_type_mismatch","adapter":adapter_type})) };
+    }
+    if adapter_type == x_app_read::ADAPTER {
+        return if x_app_read::is_json_content_type(value) { Ok(()) }
+            else { Err(json!({"error":"response_content_type_invalid"})) };
     }
     if adapter_type == npm_publish::ADAPTER {
         return if npm_publish::is_json_content_type(value) { Ok(()) }
@@ -44782,6 +44824,17 @@ fn validate_policy_json_response(
     binding_validation: &Value,
     response_secret_guard: &ResponseSecretGuard,
 ) -> SensitiveResponseBytes {
+    if adapter_type == x_app_read::ADAPTER {
+        return match x_app_read::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
+            Ok(bytes) => release_forward_response(
+                state, snapshot, decision, method, url, status, Some("application/json"),
+                released_headers, bytes, response_secret_guard,
+                json!({"ok":true,"mode":x_app_read::MODE,"body_bytes_preserved":true,
+                    "allowed_fields_redacted":false,"adapter":x_app_read::ADAPTER}),
+            ),
+            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+        };
+    }
     if adapter_type == npm_publish::ADAPTER {
         return match npm_publish::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
             Ok(bytes) => release_forward_response(
@@ -50635,6 +50688,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
             "policy_hash":snapshot.hash,
             "policy_signing_key_id":snapshot.policy_signing_key_id,
             "policy_trust_root_source":state.policy_trust_root_source.label(),
+            "operator_x_app_read":x_app_read::gate_capability(),
             "attested_response_context":snapshot.attested_response_context,
             "data_plane_binary_digest":state.binary_digest,
             "routes":snapshot.routes.len(),

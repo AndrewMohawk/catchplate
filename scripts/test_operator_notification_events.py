@@ -162,17 +162,19 @@ class EventTests(unittest.TestCase):
             with self.reader() as conn:
                 self.assertTrue(events.native_action_matches_source(conn, source.action_payload, now_unix_nanos=NOW_MS * 1_000_000))
 
-    def test_npm_catalog_events_are_audit_only_and_project_safe_details(self):
+    def test_provider_catalog_events_are_audit_only_and_project_safe_details(self):
         resource = str(uuid.uuid4())
         kinds = ("operator_catalog.credential.npm_token_created",
             "operator_catalog.access_rule.npm_metadata_created",
-            "operator_catalog.access_rule.npm_publish_created")
+            "operator_catalog.access_rule.npm_publish_created",
+            "operator_catalog.credential.x_app_bearer_created",
+            "operator_catalog.access_rule.x_username_created")
         for kind in kinds:
             self.assertIn(kind, events.AUDIT_EVENT_TYPES)
             self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
             self.append(kind, {"resource_id": resource, "revision": 2,
                 "policy_hash": DIGEST, "secret": CANARY,
-                "packages": [CANARY], "package": CANARY, "tag": CANARY,
+                "packages": [CANARY], "package": CANARY, "tag": CANARY, "username": CANARY,
                 "publishing_window": {"start": CANARY, "end": CANARY},
                 "destination_url": "https://example.invalid/" + CANARY})
         batch, cursor = self.read()

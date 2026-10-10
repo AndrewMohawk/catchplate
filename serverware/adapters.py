@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
-from serverware import db, github_issues, http_client, npm_metadata, npm_publish, runtime
+from serverware import db, github_issues, http_client, npm_metadata, npm_publish, runtime, x_app_read
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
@@ -99,6 +99,7 @@ _RESPONSE_CONTENT_TYPES = {
     GMAIL_READ_RESPONSE_MODE: "application/json",
     npm_metadata.MODE: "application/json",
     npm_publish.MODE: "application/json",
+    x_app_read.MODE: "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE: "application/json",
@@ -200,6 +201,10 @@ def npm_metadata_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearr
 
 
 def npm_publish_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+    return _bounded_json_inspection(raw, maximum)
+
+
+def x_app_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
     return _bounded_json_inspection(raw, maximum)
 
 
@@ -1341,7 +1346,8 @@ class ApiAdapter:
     @staticmethod
     def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
         if (route.adapter_config.get("response") or {}).get("mode") not in {
-            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
+            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE
         }:
             return None
         try:
@@ -3302,6 +3308,87 @@ class XV2Adapter(ApiAdapter):
         return fields
 
 
+class XAppReadAdapter(ApiAdapter):
+    """One saved username; no OAuth lifecycle, search or write authority."""
+    id = x_app_read.ADAPTER
+
+    @staticmethod
+    def _denied(error: str, status: int = 403) -> PolicyDecision:
+        return PolicyDecision(False, "X app read contract refused", status, {"error": error})
+
+    def _username(self, flow: Any, route: Any, params: dict[str, str]) -> str:
+        x_app_read.validate_route(route)
+        if params != {}:
+            raise ValueError("X app read capture refused")
+        headers = {}
+        for name in [*x_app_read.REQUEST_HEADERS, "content-type"]:
+            values = self._response_header_values(flow.request.headers, name)
+            if len(values) > 1:
+                raise ValueError("X app read duplicate header refused")
+            if values:
+                headers[name] = values[0]
+        return x_app_read.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, username=route.adapter_config["username"], headers=headers)
+
+    def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        try:
+            self._username(flow, route, params)
+            return self._validate_provider_request_profile(flow, route)
+        except (TypeError, ValueError, UnicodeError):
+            return self._denied("x_app_read_request_denied")
+
+    def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        return {"operation": x_app_read.OPERATION, "username": self._username(flow, route, params)}
+
+    def _response_contract(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if not flow.response:
+            return self._denied("x_app_read_response_missing", 502)
+        try:
+            self._username(flow, route, params)
+        except (TypeError, ValueError, UnicodeError):
+            return self._denied("x_app_read_response_policy_invalid", 502)
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
+        if flow.response.status_code not in x_app_read.STATUSES:
+            return self._denied("x_app_read_response_status_denied", 502)
+        content_types = self._response_header_values(flow.response.headers, "content-type")
+        if len(content_types) != 1 or not x_app_read.is_json_content_type(content_types[0]):
+            return self._denied("x_app_read_response_content_type_denied", 502)
+        maximum = x_app_read.MAX_RESPONSE_BYTES if flow.response.status_code == 200 else x_app_read.MAX_ERROR_BYTES
+        body = flow.response.raw_content
+        if not isinstance(body, bytes) or not 1 <= len(body) <= maximum:
+            return self._denied("x_app_read_response_body_denied", 502)
+        return PolicyDecision(allowed=True)
+
+    def prepare_response(self, flow: Any, route: Any, params: dict[str, str], *,
+            authorization_factory: Callable[[], tuple[str, float]] | None = None) -> PolicyDecision:
+        return self._response_contract(flow, route, params)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        decision = self._response_contract(flow, route, params)
+        if not decision.allowed:
+            return decision
+        inspection = bytearray()
+        try:
+            payload, inspection = x_app_read_json_inspection(flow.response.raw_content,
+                x_app_read.MAX_RESPONSE_BYTES if flow.response.status_code == 200 else x_app_read.MAX_ERROR_BYTES)
+            if not isinstance(payload, dict):
+                raise ValueError("X app read response object required")
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("x_app_read_response_invalid", 502)
+        finally:
+            inspection[:] = b"\x00" * len(inspection)
+        profile = route.adapter_config["response"]
+        if flow.response.status_code != 200:
+            profile = profile["error"]
+        self._normalize_response_headers(flow, profile, x_app_read.MODE)
+        return PolicyDecision(allowed=True)
+
+
 class NpmMetadataAdapter(ApiAdapter):
     """Exact allowlisted metadata GETs; no implicit install or write authority."""
     id = npm_metadata.ADAPTER
@@ -4210,6 +4297,7 @@ ADAPTERS: dict[str, ApiAdapter] = {
     "gmail.v1": GmailV1Adapter(),
     GMAIL_READ_ADAPTER: GmailReadV1Adapter(),
     "x.v2": XV2Adapter(),
+    x_app_read.ADAPTER: XAppReadAdapter(),
     "npm.registry": NpmRegistryAdapter(),
     npm_metadata.ADAPTER: NpmMetadataAdapter(),
     npm_publish.ADAPTER: NpmPublishAdapter(),

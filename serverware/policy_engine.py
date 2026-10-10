@@ -15,10 +15,11 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 
 from mitmproxy import http
 
-from serverware import db, github_issues, npm_metadata, npm_publish, runtime
+from serverware import db, github_issues, npm_metadata, npm_publish, runtime, x_app_read
 from serverware.adapters import (
     _parse_content_type, get_adapter, gmail_read_json_inspection,
     npm_metadata_json_inspection, npm_publish_json_inspection, preflight_request_admission,
+    x_app_read_json_inspection,
 )
 from serverware.constraints import (
     _request_value_predicate_matches,
@@ -627,7 +628,8 @@ def _validate_response_content_encoding(
         )
     route = flow.metadata.get("serverware_route")
     if route and (route.adapter_config.get("response") or {}).get("mode") in {
-            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE}:
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
+            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE}:
         try:
             _v2_response_header_entries(flow, route)
         except HeaderCompatibilityError as error:
@@ -4609,7 +4611,7 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
         guard: _ResponseCredentialGuard | None = None) -> PolicyDecision:
     """Inspect decoded content before release, without changing dispatched bytes."""
     mode = (route.adapter_config.get("response") or {}).get("mode")
-    if mode not in {GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE}:
+    if mode not in {GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE}:
         return PolicyDecision(True)
     guard = guard if guard is not None else getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
     if route.credential_ref and not isinstance(guard, _ResponseCredentialGuard):
@@ -4618,7 +4620,8 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
     inspection = bytearray()
     try:
         raw = flow.response.raw_content
-        inspect_json = (npm_publish_json_inspection if mode == npm_publish.MODE
+        inspect_json = (x_app_read_json_inspection if mode == x_app_read.MODE
+            else npm_publish_json_inspection if mode == npm_publish.MODE
             else npm_metadata_json_inspection if mode == npm_metadata.MODE else gmail_read_json_inspection)
         _, inspection = inspect_json(raw,
             1048576 if mode != npm_publish.MODE and flow.response.status_code == 200 else 65536)
@@ -4627,7 +4630,8 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
                 {"error": "response_credential_reflection"})
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return PolicyDecision(False, "typed JSON response inspection refused", 502,
-            {"error": "npm_publish_response_invalid" if mode == npm_publish.MODE
+            {"error": "x_app_read_response_invalid" if mode == x_app_read.MODE
+                else "npm_publish_response_invalid" if mode == npm_publish.MODE
                 else "npm_metadata_response_invalid" if mode == npm_metadata.MODE else "gmail_read_response_invalid"})
     finally:
         inspection[:] = b"\x00" * len(inspection)
@@ -4691,7 +4695,8 @@ def _evaluate_response_envelope(
             {"error": "response_envelope_policy_missing"},
         )
     v2 = response_cfg.get("mode") in {
-        BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE}
+        BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
+        npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE}
     inspection_decision = _typed_json_response_inspection(flow, route, credential_guard)
     if not inspection_decision.allowed:
         return inspection_decision
@@ -4802,25 +4807,31 @@ def _evaluate_response_envelope(
                     },
                 )
         elif "contentTypePolicy" in constraint:
-            npm_content_type = (route.adapter_type == npm_metadata.ADAPTER
+            typed_content_type = (route.adapter_type == npm_metadata.ADAPTER
                 and response_cfg.get("mode") == npm_metadata.MODE
                 and constraint["contentTypePolicy"] == npm_metadata.CONTENT_TYPE_POLICY
                 and content_types == npm_metadata.CONTENT_TYPES
                 and len(physical_content_types) == 1
                 and npm_metadata.is_json_content_type(physical_content_types[0]))
-            npm_content_type = npm_content_type or (route.adapter_type == npm_publish.ADAPTER
+            typed_content_type = typed_content_type or (route.adapter_type == npm_publish.ADAPTER
                 and response_cfg.get("mode") == npm_publish.MODE
                 and constraint["contentTypePolicy"] == npm_publish.CONTENT_TYPE_POLICY
                 and content_types == npm_publish.CONTENT_TYPES
                 and len(physical_content_types) == 1
                 and npm_publish.is_json_content_type(physical_content_types[0]))
-            if not npm_content_type and (constraint["contentTypePolicy"] != github_issues.CONTENT_TYPE_POLICY
+            typed_content_type = typed_content_type or (route.adapter_type == x_app_read.ADAPTER
+                and response_cfg.get("mode") == x_app_read.MODE
+                and constraint["contentTypePolicy"] == x_app_read.CONTENT_TYPE_POLICY
+                and content_types == x_app_read.CONTENT_TYPES
+                and len(physical_content_types) == 1
+                and x_app_read.is_json_content_type(physical_content_types[0]))
+            if not typed_content_type and (constraint["contentTypePolicy"] != github_issues.CONTENT_TYPE_POLICY
                     or not github_issues.selected(route.adapter_config)
                     or content_types != ["application/json"]
                     or not (empty_204 and not physical_content_types) and (
                         len(physical_content_types) != 1
                         or not github_issues.is_json_content_type(physical_content_types[0]))):
-                return PolicyDecision(False, "GitHub response Content-Type is not allowed", 502,
+                return PolicyDecision(False, "upstream response Content-Type is not allowed", 502,
                     {"error": "response_envelope_content_type_denied", "constraint_id": constraint_id})
         elif json_or_empty or response_cfg.get("mode") == GMAIL_READ_RESPONSE_MODE:
             # Content-Type is optional representation metadata for 204, not

@@ -75,6 +75,9 @@ function createConnectView(workspace, applications, proxy) {
   function supported(rule) { return operatorRuleSupported(rule, catalog()); }
   function confirmCheckpoint() {
     if (!checkpoint || !catalog() || workspace.state.busy || workspace.state.uncertain || catalog().revision < checkpoint.revision) return;
+    if (checkpoint.xPolicyHash && catalog().revision === checkpoint.revision && catalog().policy.policy_hash !== checkpoint.xPolicyHash) {
+      checkpoint.message = 'The saved X receipt and refreshed policy disagree. Inspect saved state; do not submit again.'; return;
+    }
     const item = catalog()[checkpoint.collection].find(item => item.id === checkpoint.id && item.status === 'active');
     if (!item) { message('The exact saved resource cannot be confirmed. Review saved state; no repeat request was sent.'); return; }
     if (checkpoint.collection === 'credentials') {
@@ -83,6 +86,11 @@ function createConnectView(workspace, applications, proxy) {
       }
       if (checkpoint.npm && !isNpmCredential(item)) {
         message('The saved npm connection cannot be confirmed. Refresh saved state; do not submit again.'); return;
+      }
+      if (checkpoint.x) {
+        if (!xCredentialReceiptMatches(item, checkpoint.x)) {
+          checkpoint.message = 'The saved X connection does not match its creation receipt. Inspect saved state; do not submit again.'; return;
+        }
       }
       selectedCredential = item.id; selectedApplication = ''; selectedRule = ''; review = null;
       connectionMethod = 'saved'; savedChoice = item.id;
@@ -112,20 +120,34 @@ function createConnectView(workspace, applications, proxy) {
           !operatorExact(npmPublishRulePayload(item), npmPublishRulePayload(review.rule)))) {
         message('The saved publishing permission does not match the reviewed package, tag and UTC hours. Refresh; no repeat request was sent.'); return;
       }
+      if (isXRule(review?.rule) && (!xRuleValid(item, credential()) ||
+          !operatorExact(xRulePayload(item), xRulePayload(review.rule)))) {
+        checkpoint.message = 'The saved X permission does not match the reviewed username and connection. Inspect saved state; no repeat request was sent.'; return;
+      }
       selectedRule = item.id; step = 4;
     }
     checkpoint = null; message('Saved resource confirmed in the refreshed catalog.');
   }
-  function receipt(result, collection, key) {
+  function receipt(result, collection, key, xName) {
     if (!result[key] || typeof result[key].id !== 'string' || !Number.isSafeInteger(result.revision))
       throw operatorError('The saved resource receipt was incomplete. Review saved state; do not repeat automatically.');
+    const xMutation = xName !== undefined || collection === 'access_rules' && isXRule(review?.rule);
+    if (xMutation && (result.revision < 1 || result.revision <= catalog().revision || result[key].status !== 'active' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(result[key].id) ||
+        !/^sha256:[a-f0-9]{64}$/.test(result.policy?.policy_hash || '')))
+      throw operatorError('The saved X receipt was incomplete. Inspect saved state; do not repeat automatically.');
+    if (collection === 'access_rules' && isXRule(review?.rule) && (!xRuleValid(result[key], credential()) ||
+        !operatorExact(xRulePayload(result[key]), xRulePayload(review.rule))))
+      throw operatorError('The X permission receipt did not match the reviewed username. Inspect saved state; do not repeat automatically.');
     checkpoint = {collection, id: result[key].id, revision: result.revision,
+      ...(xMutation ? {xPolicyHash: result.policy.policy_hash} : {}),
+      ...(collection === 'credentials' && xName !== undefined ? {x: xCredentialReceipt(result[key], xName)} : {}),
       ...(collection === 'credentials' && connectionMethod === 'github' ? {github: true} : {}),
       ...(collection === 'credentials' && connectionMethod === 'npm' ? {npm: true} : {})};
   }
   function renderInputs() {
     const value = catalog(); if (!value) return;
-    if (['key', 'github', 'npm'].includes(connectionMethod)) choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
+    if (['key', 'github', 'npm', 'x'].includes(connectionMethod)) choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
     if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: actionLabels.credential},
       ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active'), [actionLabels.credential])], savedChoice);
     choices('connect-application-choice', [...operatorConnectResourceChoices(value.applications.filter(item => item.status === 'active'), [actionLabels.application]), {id: 'new', name: actionLabels.application}], 'new');
@@ -138,24 +160,27 @@ function createConnectView(workspace, applications, proxy) {
       const bundle = gmailAvailable(value, credential());
       const github = isGithubCredential(credential());
       const npm = isNpmCredential(credential());
+      const x = isXCredential(credential());
       const npmChoices = npm ? [...(npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : []),
         ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
-      choices('connect-operation', npm ? npmChoices : github ? githubAvailable(value, credential()) ?
+      choices('connect-operation', x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
         [operatorGithub.read, operatorGithub.write].map(id => ({id, name: githubPermissionName(id)})) : [] :
         [...(bundle ? [{id: operatorGmail.bundle, name: 'Read Gmail'}] : []),
-          {id: 'exact', name: 'Advanced: one exact endpoint'}], npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
+          {id: 'exact', name: 'Advanced: one exact endpoint'}], x ? operatorX.bundle : npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
     }
   }
   function renderForms() {
-    const newCredential = ['key', 'github', 'npm'].includes(connectionMethod);
+    const newCredential = ['key', 'github', 'npm', 'x'].includes(connectionMethod);
     const newApp = element('connect-application-choice').value === 'new';
     const newRule = element('connect-rule-choice').value === 'new';
     const gmail = newRule && element('connect-operation').value === operatorGmail.bundle;
     const github = newRule && (isGithubCredential(credential()) || isGithubRule({operation_bundle: element('connect-operation').value}));
     const npm = newRule && (isNpmCredential(credential()) || isNpmRule({operation_bundle: element('connect-operation').value}));
     const npmPublish = npm && isNpmPublishRule({operation_bundle: element('connect-operation').value});
-    const providerPreset = github || npm;
-    fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential);
+    const x = newRule && (isXCredential(credential()) || isXRule({operation_bundle: element('connect-operation').value}));
+    const providerPreset = github || npm || x;
+    fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential && connectionMethod !== 'x');
+    fields('connect-x-new', connectionMethod === 'x');
     fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
     fields('connect-credential-auth-group', connectionMethod === 'key');
     element('connect-github-token-note').hidden = connectionMethod !== 'github';
@@ -191,11 +216,15 @@ function createConnectView(workspace, applications, proxy) {
     renderBasicCompatibility('connect', catalog(), credential());
     // Apply these last: nested legacy field renderers must not re-enable hidden
     // required controls. Switching permissions never clears the exact-rule draft.
-    element('connect-operation-group').hidden = !newRule || credential()?.auth_type !== 'google_oauth' && !gmail && !providerPreset;
+    element('connect-operation-group').hidden = x || !newRule || credential()?.auth_type !== 'google_oauth' && !gmail && !providerPreset;
     fields('connect-exact-destination', newRule && !gmail && !providerPreset);
     element('connect-credential-input-group').hidden = !newRule || providerPreset;
     if (!newRule || providerPreset) for (const input of element('connect-credential-input-group').querySelectorAll('input,select,textarea')) input.disabled = true;
     fields('connect-github-repository', github);
+    fields('connect-x-username-group', x);
+    element('connect-x-summary').textContent = !xAvailable(catalog(), credential()) ?
+      'X username lookup is unavailable: the exact preset and approved api.x.com destination are required. No fallback permission is sent.' :
+      'Look up this one exact username. GET only, with no query or body. Fixed public dummy authentication; no response-field setup. No posting, search, user OAuth or provider verification.';
     fields('connect-npm-packages-group', npm && !npmPublish);
     fields('connect-npm-publish-group', npmPublish);
     fields('connect-npm-publish-window', npmPublish && element('connect-npm-publish-hours').value === 'window');
@@ -228,19 +257,21 @@ function createConnectView(workspace, applications, proxy) {
     const selected = catalog()?.applications.find(item => item.id === element('connect-application-choice').value);
     element('connect-application-note').textContent = newApp ? '' : selected ?
       'Expires ' + new Date(selected.token_expires_at_epoch_ms).toLocaleString() + '. Use the token already configured in your app. If lost or expired, rotate explicitly in Applications; this flow does not retrieve or renew it.' : 'Select an available application.';
-    element('connect-credential-fields').disabled = !['key', 'github', 'npm', 'saved'].includes(connectionMethod) || !writable() || Boolean(checkpoint) ||
+    element('connect-credential-fields').disabled = !['key', 'github', 'npm', 'x', 'saved'].includes(connectionMethod) || !writable() || Boolean(checkpoint) ||
       newCredential && !workspace.ready('credentials') || connectionMethod === 'github' && !catalog()?.capabilities.github ||
-      connectionMethod === 'npm' && !catalog()?.capabilities.npm;
+      connectionMethod === 'npm' && !catalog()?.capabilities.npm || connectionMethod === 'x' && !xDestinationAvailable(catalog());
     element('connect-application-fields').disabled = !writable() || Boolean(checkpoint) || !credential() || newApp && !workspace.ready('applications');
     element('connect-access-fields').disabled = !writable() || Boolean(checkpoint) || !activePair() || newRule &&
       (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length ||
         (!gmail && !providerPreset && !availableResponseModes(catalog()).length) || !catalog()?.allowed_upstreams.length);
     element('connect-review').disabled = newRule && (gmail && !gmailAvailable(catalog(), credential()) || github && !githubAvailable(catalog(), credential()) ||
+      x && !xAvailable(catalog(), credential()) ||
       npm && (npmPublish ? !npmPublishAvailable(catalog(), credential()) || !npmPublishNewRuleAvailable(catalog(), selectedApplication) :
         !npmAvailable(catalog(), credential()) || !metadataGrantAvailable()));
   }
   function reviewCurrent() {
-    return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule);
+    return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule) &&
+      (!isXRule(review.rule) || xCredentialReceiptMatches(credential(), review.xCredential));
   }
   function renderReview() {
     if (!review) return;
@@ -279,14 +310,19 @@ function createConnectView(workspace, applications, proxy) {
     renderInputs(); confirmCheckpoint(); renderForms(); renderReview(); renderGoogleAccount();
     const googleOpen = connectionMethod === 'google';
     element('connect-method-choice').hidden = connectionMethod !== null;
-    element('connect-credential-form').hidden = !['key', 'github', 'npm', 'saved'].includes(connectionMethod);
-    element('connect-credential-heading').textContent = connectionMethod === 'npm' ? 'Save an npm token' : connectionMethod === 'github' ? 'Save a GitHub token' : connectionMethod === 'key' ? 'Use an API key' : 'Use a saved connection';
+    element('connect-credential-form').hidden = !['key', 'github', 'npm', 'x', 'saved'].includes(connectionMethod);
+    element('connect-credential-heading').textContent = connectionMethod === 'x' ? 'Save an X app-only bearer token' : connectionMethod === 'npm' ? 'Save an npm token' : connectionMethod === 'github' ? 'Save a GitHub token' : connectionMethod === 'key' ? 'Use an API key' : 'Use a saved connection';
     element('connect-google-slot').hidden = !googleOpen;
     element('connect-method-change').hidden = connectionMethod === null || googleOpen;
     element('connect-method-change').disabled = !writable() || Boolean(checkpoint);
     element('connect-use-key').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials');
     element('connect-use-github').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !catalog()?.capabilities.github;
     element('connect-use-npm').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !catalog()?.capabilities.npm;
+    element('connect-use-x').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !xDestinationAvailable(catalog());
+    element('connect-x-status').textContent = !catalog()?.capabilities.x ?
+      'X app-only username lookup is not advertised by this deployment. No generic fallback or provider request is sent.' : !xDestinationAvailable(catalog()) ?
+      'X username lookup needs the exact api.x.com destination approved in Proxy setup first. This page will not add it or restart services.' :
+      'X: save an app-only bearer token, choose an app and allow one exact username lookup. No posting or user OAuth. Ordinary SDK verification is pending; this page does not test the provider.';
     element('connect-npm-status').textContent = catalog()?.capabilities.npm_publish ?
       catalog().capabilities.npm_publish.destination_allowed && catalog().allowed_upstreams.includes(operatorNpm.origin) ?
         'npm: choose Read package metadata or Publish package for explicit package access. Publishing can be limited to daily UTC hours. This page has not tested the provider.' :
@@ -313,12 +349,27 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-token-note').hidden = !missingToken;
     element('connect-token-note').textContent = 'This page does not hold this application’s one-time token. Use the token you already saved. If it was lost or cleared, explicitly rotate it in Applications; no token is retrieved or renewed by this flow.';
     if (!catalog()) element('connect-credential-secret').value = '';
-    if (checkpoint) message('Save received, but the exact resource is not yet confirmed in refreshed state. Refresh; do not submit again.');
+    if (!catalog() || workspace.state.uncertain || !xDestinationAvailable(catalog())) element('connect-x-secret').value = '';
+    if (checkpoint) message(checkpoint.message || 'Save received, but the exact resource is not yet confirmed in refreshed state. Refresh; do not submit again.');
     renderSetup();
   }
 
   element('connect-credential-form').addEventListener('submit', async event => {
-    event.preventDefault(); if (step !== 0 || !['key', 'github', 'npm', 'saved'].includes(connectionMethod) || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
+    event.preventDefault();
+    if (connectionMethod === 'x') {
+      let body;
+      try {
+        if (step !== 0 || !writable() || checkpoint || !workspace.ready('credentials') ||
+            !xDestinationAvailable(catalog()) || !event.currentTarget.reportValidity()) return;
+        body = {name: element('connect-x-name').value.trim(), secret: element('connect-x-secret').value};
+        element('connect-x-secret').value = '';
+        const name = body.name;
+        await workspace.mutate('credentials/x-app-bearer', body, 'connect-status', result => receipt(result, 'credentials', 'credential', name));
+      } catch (error) { message(operatorMessage(error)); }
+      finally { element('connect-x-secret').value = ''; if (body) body.secret = ''; render(); }
+      return;
+    }
+    if (step !== 0 || !['key', 'github', 'npm', 'saved'].includes(connectionMethod) || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
     const choice = element('connect-credential-choice').value;
     if (connectionMethod === 'saved') {
       if (!catalog().credentials.some(item => item.id === choice && item.status === 'active')) return;
@@ -346,6 +397,14 @@ function createConnectView(workspace, applications, proxy) {
     render();
   });
   function draftRule() {
+    if (isXCredential(credential())) {
+      if (element('connect-operation').value !== operatorX.bundle) throw operatorError('Choose the advertised X username permission. No fallback grant was sent.');
+      const username = element('connect-x-username').value;
+      const rule = {...xRuleFields(username), name: 'Look up X username · ' + username,
+        application_id: selectedApplication, credential_id: selectedCredential};
+      if (!supported(rule)) throw operatorError('X username lookup or its approved destination is unavailable. No grant was sent.');
+      return rule;
+    }
     if (isNpmCredential(credential())) {
       if (isNpmPublishRule({operation_bundle: element('connect-operation').value})) {
         if (!npmPublishNewRuleAvailable(catalog(), selectedApplication)) throw operatorError('An existing npm permission or overlapping registry GET/PUT rule conflicts. Reuse it or explicitly revoke it before a new grant.');
@@ -405,6 +464,7 @@ function createConnectView(workspace, applications, proxy) {
       const rule = existing ? matchingRules().find(item => item.id === element('connect-rule-choice').value) : draftRule();
       if (!supported(rule)) throw operatorError('The selected saved rule is unavailable or unsupported. Choose again; no permissions were changed.');
       review = {existing, rule: JSON.parse(JSON.stringify(rule)), revision: catalog().revision, policyHash: catalog().policy.policy_hash};
+      if (isXRule(rule)) review.xCredential = xCredentialReceipt(credential(), credential().name);
       message('Review the exact effective permissions before continuing.'); goto(3);
     } catch (error) { message(operatorMessage(error)); }
   });
@@ -415,8 +475,8 @@ function createConnectView(workspace, applications, proxy) {
       selectedRule = review.rule.id; goto(4); return;
     }
     if (!workspace.ready('access_rules')) return;
-    await workspace.mutate(isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
-      isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
+    await workspace.mutate(isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
+      isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
   for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours'])
@@ -425,16 +485,19 @@ function createConnectView(workspace, applications, proxy) {
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     render();
   });
-  for (const [id, method] of [['connect-use-key', 'key'], ['connect-use-github', 'github'], ['connect-use-npm', 'npm'], ['connect-use-saved', 'saved']]) element(id).addEventListener('click', () => {
+  for (const [id, method] of [['connect-use-key', 'key'], ['connect-use-github', 'github'], ['connect-use-npm', 'npm'], ['connect-use-x', 'x'], ['connect-use-saved', 'saved']]) element(id).addEventListener('click', () => {
     if (step !== 0 || connectionMethod !== null || !writable() || checkpoint) return;
     if (method === 'github' && !catalog()?.capabilities.github) return;
     if (method === 'npm' && !catalog()?.capabilities.npm) return;
+    if (method === 'x' && !xDestinationAvailable(catalog())) return;
+    element('connect-x-secret').value = '';
     if (['github', 'npm'].includes(method)) element('connect-credential-secret').value = '';
     connectionMethod = method;
     element('connect-credential-choice').value = ''; render();
   });
   element('connect-method-change').addEventListener('click', () => {
-    if (step !== 0 || !['key', 'github', 'npm', 'saved'].includes(connectionMethod) || !writable() || checkpoint) return;
+    if (step !== 0 || !['key', 'github', 'npm', 'x', 'saved'].includes(connectionMethod) || !writable() || checkpoint) return;
+    element('connect-x-secret').value = '';
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     if (['github', 'npm'].includes(connectionMethod)) element('connect-credential-secret').value = '';
     connectionMethod = null; render();
@@ -450,7 +513,7 @@ function createConnectView(workspace, applications, proxy) {
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
     for (const id of ['connect-response-mode', 'connect-request-body-mode', 'connect-operation']) element(id).value = '';
     element('connect-restrictions').open = false;
-    element('connect-credential-secret').value = ''; proxy.mount(null); step = 0;
+    element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; proxy.mount(null); step = 0;
   }
   element('connect-cancel').addEventListener('click', () => {
     if (workspace.state.busy || !window.confirm('Leave setup and discard this local draft? Saved credentials, applications and access rules remain. An uncertain operation must still be reconciled before another change. Any held one-time token remains under Applications until cleared or reloaded; save it before leaving the page. Nothing will be deleted, retried or renewed.')) return;
@@ -460,11 +523,14 @@ function createConnectView(workspace, applications, proxy) {
     if (workspace.state.busy || checkpoint || !window.confirm('Start another setup? Confirmed resources remain saved. Save any one-time token before creating another application. Nothing will be revoked.')) return;
     resetDraft(); message('Start a new setup. Existing resources and any held token remain.'); goto(0);
   });
-  window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; });
+  element('connect-credential-form').addEventListener('invalid', () => { if (connectionMethod === 'x') element('connect-x-secret').value = ''; }, true);
+  window.addEventListener('hashchange', () => { element('connect-x-secret').value = ''; });
+  window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; });
   workspace.subscribe(render);
   return {openGoogle({returning = false} = {}) {
     if (connectionMethod === 'google') return true;
     if (!returning && (!writable() || checkpoint)) return false;
+    element('connect-x-secret').value = '';
     beforeGoogle = {step, method: connectionMethod};
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     connectionMethod = 'google'; goto(0); location.hash = 'connect'; return true;
@@ -481,6 +547,7 @@ function createConnectView(workspace, applications, proxy) {
     message('Saved Google account selected. Choose an application; no access has been granted.'); goto(1); return true;
   }, show(active) {
     open = active;
+    if (!active) element('connect-x-secret').value = '';
     if (!active && ['github', 'npm'].includes(connectionMethod)) element('connect-credential-secret').value = '';
     applications.mount(active ? element('connect-token-slot') : null);
     if (!active || step !== 4) proxy.mount(null);

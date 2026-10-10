@@ -1,9 +1,12 @@
 # Alchemy and X operator presets: bounded implementation plan
 
-Status (2026-10-10): **design only; neither preset is implemented or accepted**.
-This document adds no route, capability, UI control, provider contact or deployment
-change. The names below are proposed versioned contracts to freeze before coding,
-not currently usable API endpoints. Source inspection is not SDK or provider proof.
+Status (2026-10-10): **X source implemented; through-proxy acceptance pending.
+Alchemy remains design only.** X now has a separate adapter, catalog/API, guided
+UI and pinned Node/Python/Go examples. Local checks are recorded in
+[the X verification record](operator-x-username-verification.md). Neither a live
+X request nor deployment acceptance is claimed. X controls require a fresh
+matching gate capability; an older gate cannot implicitly enable the preset.
+The Alchemy names below remain proposed contracts, not usable API endpoints.
 
 ## Ship X username reads first
 
@@ -36,7 +39,7 @@ keeps compatibility changes out of legacy X OAuth and generic rules. If a smalle
 named generic profile is chosen instead, it must prove the same exact contract
 and keep the existing unmarked-profile behavior unchanged.
 
-## Proposed fixed contracts
+## Fixed X contract and proposed Alchemy contract
 
 | Item | X app-only username read | Alchemy chain status read |
 | --- | --- | --- |
@@ -218,6 +221,7 @@ verified trust; never use TLS-disable settings.
    prove provider entitlement, billing, token validity or a live GitHub Actions
    run. Never turn source/UI completion into these claims.
 
-Until these gates are recorded, label the projects **prepared, not verified**
-and keep the provider controls unavailable. Keep existing GitHub/npm/Google and
-manual workflows unchanged while adding each complete slice.
+Until the through-proxy gates are recorded, label the projects **proxy acceptance
+pending** and do not deploy/enable the new paired preset. Offline SDK checks must
+remain distinct from proxy/TLS and provider acceptance. Keep existing
+GitHub/npm/Google and manual workflows unchanged while adding each complete slice.

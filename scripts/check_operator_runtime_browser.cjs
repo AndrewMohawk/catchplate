@@ -14,7 +14,7 @@ const PATHS = ['/', CATALOG, NOTIFICATIONS, UPSTREAMS], FIXTURE = 'https://demo-
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2', GMAIL = 'https://gmail.googleapis.com';
 const GOOGLE_SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
-const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
+const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
   'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?

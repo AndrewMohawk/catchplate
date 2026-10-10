@@ -21,10 +21,12 @@
       <p id="connect-progress" class="eyebrow" role="status">1 of 5 · Account or API key</p>
       <div id="connect-credential-step">
         <article id="connect-method-choice" class="card"><h2>Choose a provider or set up manually</h2>
-          <div class="actions"><button id="connect-google" class="secondary" disabled>Google connection unavailable</button><button id="connect-use-github" class="secondary" disabled>GitHub</button><button id="connect-use-npm" class="secondary" disabled>npm</button><button id="connect-use-key" class="secondary" disabled>Manual API key</button><button id="connect-use-saved" class="secondary" disabled>Use a saved connection</button></div>
+          <div class="actions"><button id="connect-google" class="secondary" disabled>Google connection unavailable</button><button id="connect-use-github" class="secondary" disabled>GitHub</button><button id="connect-use-npm" class="secondary" disabled>npm</button><button id="connect-use-x" class="secondary" disabled>X · username lookup</button><button id="connect-use-key" class="secondary" disabled>Manual API key</button><button id="connect-use-saved" class="secondary" disabled>Use a saved connection</button></div>
           <p id="connect-google-status" class="small muted">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p>
           <p id="connect-github-status" class="small muted">GitHub presets require an enabled destination and their paired proxy implementation. AWS presets are not available here.</p>
           <p id="connect-npm-status" class="small muted">npm metadata lookup is unavailable until this deployment advertises its paired proxy support. No install, publish, tarball downloads or npm audit.</p>
+          <p id="connect-x-status" class="small muted">X app-only username lookup requires its advertised preset and approved api.x.com destination. No posting or user OAuth.</p>
+          <p class="small muted">Alchemy is unavailable: it needs a separate JSON-RPC method guard. A manual key is not an Alchemy preset.</p>
         </article>
         <form id="connect-credential-form" class="card" autocomplete="off" hidden><fieldset id="connect-credential-fields" disabled>
           <h2 id="connect-credential-heading">Provider connection</h2>
@@ -37,6 +39,11 @@
             <p class="small muted">Stored encrypted by this development server. Cleared when submitted, never returned to apps. Saving it does not test the provider key or grant access.</p>
             <p id="connect-github-token-note" class="small muted" hidden>Use a GitHub personal access token limited to the intended repositories and issue permissions. Serverware does not renew it. Apps use a public dummy token, never this provider token.</p>
             <p id="connect-npm-token-note" class="small muted" hidden>Use a least-privilege npm token for reading the intended packages at registry.npmjs.org. It is saved only in Serverware, never put in the client recipe. Serverware does not renew or test this token.</p>
+          </div>
+          <div id="connect-x-new" hidden>
+            <label for="connect-x-name">Give this X connection a name</label><input id="connect-x-name" maxlength="128" placeholder="My X lookup token" autocomplete="off" required disabled>
+            <label for="connect-x-secret">X app-only bearer token</label><input id="connect-x-secret" type="password" minlength="1" maxlength="8192" autocomplete="new-password" spellcheck="false" required disabled>
+            <p class="small muted">Use the provider's app-only bearer token, not an OAuth user token, API secret or full Authorization header. It stays encrypted in Serverware, is cleared on submission or navigation, and is never put in client configuration. Saving grants no access, tests no provider entitlement and does not renew the token.</p>
           </div>
           <button id="connect-credential-next" type="submit">Save credential &amp; continue</button>
         </fieldset></form>
@@ -79,6 +86,7 @@
           <div id="connect-rule-new">
             <div id="connect-operation-group" hidden><label for="connect-operation">Permission</label><select id="connect-operation"><option value="">Choose permitted use</option></select></div>
             <p id="connect-gmail-summary" class="notice" hidden>Read Gmail: list messages, follow pagination and read individual messages in this account. No age restriction or optional content filtering. No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.</p>
+            <div id="connect-x-username-group" hidden><label for="connect-x-username">X username this app may look up</label><input id="connect-x-username" minlength="1" maxlength="15" pattern="[a-z0-9_]{1,15}" autocomplete="off" spellcheck="false" placeholder="example_user" required disabled><p class="small muted">One exact lowercase username; no @, URL, whitespace or wildcard. No response-field setup.</p><p id="connect-x-summary" class="notice"></p></div>
             <div id="connect-github-repository" hidden><div class="two-column"><div><label for="connect-github-owner">Repository owner</label><input id="connect-github-owner" maxlength="39" autocomplete="off" spellcheck="false" required disabled></div><div><label for="connect-github-repo">Repository name</label><input id="connect-github-repo" maxlength="100" autocomplete="off" spellcheck="false" required disabled></div></div><p id="connect-github-summary" class="notice"></p><p class="small muted">This is the exact named repository you authorize, not a discovered or verified account relationship. The saved token must already have the required GitHub permission. No response-field setup is needed.</p></div>
             <div id="connect-npm-packages-group" hidden><label for="connect-npm-packages">Package names this app may read</label><textarea id="connect-npm-packages" rows="4" maxlength="14080" autocomplete="off" spellcheck="false" placeholder="example-package&#10;@example/example-package" required disabled></textarea><p class="small muted">One exact package name per line, 1–64 unique names. Scoped names use @scope/name. No wildcard, version suffix, URL or dependency-wide access.</p><p id="connect-npm-summary" class="notice"></p></div>
             <div id="connect-npm-publish-group" hidden>

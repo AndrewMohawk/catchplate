@@ -54,8 +54,10 @@ function publishing() {
 }
 const tests = [
   ['provider-first entry choices preserve the existing controls and forms', () => {
-    for (const [id, label] of [['connect-use-github', 'GitHub'], ['connect-use-npm', 'npm'], ['connect-use-key', 'Manual API key']])
+    for (const [id, label] of [['connect-use-github', 'GitHub'], ['connect-use-npm', 'npm'],
+      ['connect-use-x', 'X · username lookup'], ['connect-use-key', 'Manual API key']])
       assert.match(HTML, new RegExp('<button id="' + id + '"[^>]*>' + label + '</button>'));
+    assert.equal([...HTML.matchAll(/id="connect-use-x"/g)].length, 1);
     assert.equal([...HTML.matchAll(/id="connect-credential-form"/g)].length, 1);
     assert.equal([...HTML.matchAll(/id="credential-form"/g)].length, 1);
     assert(!/id="connect-use-(?:alchemy|twitter|actions)"/.test(HTML));

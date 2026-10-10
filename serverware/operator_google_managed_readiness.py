@@ -70,7 +70,7 @@ def _snapshot():
                     "expected_binary_digest": config.EXPECTED_DATA_PLANE_BINARY_DIGEST}
 
 
-def observe() -> dict:
+def _observe(*, require_x: bool = False) -> dict:
     """Fixed public outcome; unavailable observation never implies rollback.
 
     Must be called outside ALL caller-owned publication/SQLite transactions.
@@ -92,6 +92,9 @@ def observe() -> dict:
         observed = store.loaded_gate_status()
         if observed is None:
             return result
+        if require_x:
+            from serverware.operator_catalog_x import gate_descriptor_matches
+            _require(gate_descriptor_matches(observed.get("operator_x_app_read")))
         result["loaded_policy_hash"] = observed["policy_hash"]
         shadow = observed.get("policy_shadow")
         _require(type(shadow) is dict)
@@ -109,6 +112,16 @@ def observe() -> dict:
         # transport/SQLite error. A failed observer cannot undo a prior commit.
         result["ready"] = False
     return result
+
+
+def observe() -> dict:
+    """Observe the existing exact managed pair without requiring an X adapter."""
+    return _observe()
+
+
+def observe_x() -> dict:
+    """Join X compatibility to that same fresh, exactly bound gate response."""
+    return _observe(require_x=True)
 
 
 def _start_observation(value):

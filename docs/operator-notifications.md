@@ -8,8 +8,10 @@ safe audit projections, Slack/generic HTTPS transport, administrator API routes
 and a Notifications panel. A separately admitted, read-only native observation
 bridge is implemented in source. The feature remains default-off for new
 deployments; the running demo now enables it with all destinations unconfigured.
-The deployed UI, private app-only custody, retained data and outbound TLS were
-verified on October 10. No real receiver or native hardware source is configured.
+The October 10 paired app/gate rollout verified the deployed read-only UI and
+preserved retained data and empty app-only custody. Outbound DNS/TLS was verified
+at the earlier notification-enabled rollout checkpoint, without sending HTTP.
+No real receiver or native hardware source is configured.
 See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment).
 
 The mental model is simple: **action alerts mean "someone needs to do something";
@@ -267,21 +269,51 @@ history or implicit loss of uncertain receipts.
 
 | Check | Source/fixture evidence | Deployment or hardware proof still required |
 | --- | --- | --- |
-| Four slots and secret custody | **9/9** custody checks; current **13/13** connected store checks pass; deployed app-only private empty mount survives restart | Deployed administrator save/reload and saved-key recovery |
+| Four slots and secret custody | **9/9** custody checks and **13/13** connected store checks pass; the latest rollout preserves the empty app-only private mount. Notification tables are absent in both retained copies because no destination has been configured | Deployed administrator save/reload and saved-key recovery |
 | Save versus explicit test | **5/5** integration groups and **15/15** intercepted Notifications browser groups pass. Administrator/origin checks, Save without send, exact-revision queueing and read-only acknowledgement receipts are exercised | Exact saved revision queued from deployed UI and retained receipt inspected |
-| Egress and acknowledgement | **31/31** isolated transport checks pass; actual deployment DNS and verified TLS 1.3 to Slack pass without HTTP or a webhook post | Real configured receiver acknowledgement |
+| Egress and acknowledgement | **31/31** isolated transport checks pass; the earlier notification-enabled deployment checkpoint verified DNS and TLS 1.3 to Slack without HTTP or a webhook post | Real configured receiver acknowledgement |
 | Integrated audit delivery | Current **23/23** source-event checks pass, including npm token/metadata-permission and proxy destination configuration events projected only into audit notifications. Destination arrays are omitted from the notification payload. The earlier API/TLS checkpoint sends four explicit synthetic slot tests plus two adapter copies of one committed fixture application audit event through actual handlers/store/worker | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
 | Failure and backpressure | Connected fixtures pass default-off, worker lifecycle, unknown-outcome no-replay and final pre-dispatch-disable checks. Simulated ingestion-capacity failure still drains a real retained queue. Store fixtures cover bounded retries and 60-second uncertainty recovery | Real crash/restart, lost acknowledgement, saturation and operational retention in the deployed profile |
 | Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
-| Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. Deployed read-only browser passes eight GETs and four independently disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks also pass | Deployed save/test, actual receiver and operator workflow |
+| Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. The latest deployed read-only browser checkpoint passes **13 GETs**, with two channels and four disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks are separate retained fixture results | Deployed save/test, actual receiver and operator workflow |
+
+### Current deployed read-only checkpoint (October 10, 2026)
+
+The paired rollout runs app source
+`577badff84b32eea052c53d6df8f6fd5de61d66a` in container `e4573ccd832c…`
+and gate binary SHA-256
+`2bfe5e384d7e9c655de70704c25350c16336c55a2584fc59f363f12164f297d6`
+in container `348cfd58…`. The existing edge and synthetic fixture were retained.
+
+The actual internal browser receipt is
+`/tmp/serverware-destinations-runtime-arih/receipt.json`, with five screenshots
+beside it. Its **13 GETs** cover the real application HTML, catalog,
+Notifications and proxy-upstream APIs, with no refused requests, page errors or
+console errors. Notifications shows two channels and four disabled, unconfigured
+slots on desktop and mobile; no native source is selected. This run performed no
+Save, synthetic test, provider request, notification send or native action. It
+does not establish external SSO, proxy traffic or receiver delivery.
+
+The private-copy preservation receipt is
+`serverware-operator-workspace-evidence/destinations-rollout.ArihVAhH/preservation.json`.
+It confirms equal complete schemas (**1,335 objects**, including SQLite internal
+objects), **210 unchanged non-audit tables**, eight retained credentials,
+applications and rules, **108 nonces**, and the unchanged **204-row audit prefix**.
+Notification tables are absent in both copies because settings have never been
+saved; the empty notification custody directory and its identity are unchanged.
+The explicit exceptions are three migration `applied_at`-only changes and new
+inodes for the two derived decision-gate CA publication copies; their content
+and other checked metadata are preserved. This is not a whole-database byte
+equality claim. The earlier rollout and isolated fixture results below remain
+distinct historical checkpoints, not tests repeated by this browser run.
 
 ### Retained isolated verification checkpoints
 
-The current native-aware source-event suite completed **21/21** checks in
+The retained native-aware source-event checkpoint completed **21/21** checks in
 **1.248 seconds**, and connected store suite completed **13/13** in
 **95.952 seconds**, as verified by the root runner.
 
-Current native evidence is retained under
+Native fixture evidence is retained under
 `serverware-operator-workspace-evidence/notification-native.vDixx1QB/`:
 
 - `pilot-source-client-tests.log`: **17/17** in **0.899 seconds**.
@@ -290,7 +322,7 @@ Current native evidence is retained under
   admission, committed storage, worker and verified local TLS. Action/audit
   delivery and post-TLS phase-change suppression are checked independently.
 - `rendered-notifications.log`: **15/15** intercepted browser groups against
-  the current UI; screenshots are in
+  that checkpoint's UI; screenshots are in
   `serverware-operator-artifacts/notifications-browser-synthetic-wDkWee/`.
 - `assets-tests.log`: **10/10** in **0.080 seconds**. The separate native UI
   checks also pass **11/11**.
@@ -334,7 +366,7 @@ custody SHA-256 is
 
 The earlier integration suite completed **5/5** groups in **42.736 seconds**:
 `serverware-operator-workspace-evidence/notification-integration-final.eFVUpZEx/tests.log`.
-The current native-aware worker also passes those **5/5** groups in
+At the native-aware checkpoint, the worker also passed those **5/5** groups in
 **43.665 seconds**; see `notification-native.vDixx1QB/api-integration-tests.log`
 under the same external evidence root. Its network-none container exited 0
 without OOM. This is still isolated API/TLS acceptance, not live delivery.
@@ -374,7 +406,8 @@ the transport-test SHA-256 is
 The TLS fixture's private test-only resolver/admission seams map to synthetic
 loopback receivers; they are not deployment egress exceptions.
 
-No result in this document claims production acceptance, a completed native
-pilot, a real Slack post, or a live notification rollout. Test results must be
-reported with their exact frozen source and fixture scope; a synthetic test does
-not establish that a real action producer is connected.
+The deployed feature and its read-only UI are verified within the checkpoint
+above; configured live delivery is not. No result in this document claims
+production acceptance, a completed native pilot or a real Slack post. Test
+results must be reported with their exact frozen source and fixture scope; a
+synthetic test does not establish that a real action producer is connected.

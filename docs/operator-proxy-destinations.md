@@ -76,7 +76,12 @@ file paths, shell commands, arbitrary environment assignments or restart inputs.
 ## Verification and deployment boundary
 
 Source implementation and focused isolated acceptance passed on October 10,
-2026. The new workflow has **not been deployed** to the live demo.
+2026. The workflow is now deployed as immutable app `577badff`, paired with the
+verified `2bfe5e38` proxy executable. An actual internal browser made 13 read-only
+GETs and exercised **Review destination settings** without preparing a change.
+Its desktop/mobile screenshots and unchanged-state checks passed. The retained
+allowlist remains fixture-only; no live destination change was prepared or
+activated. See the [paired rollout evidence and limits](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment).
 
 - **8/8 connected groups** use real application ASGI handlers, retained SQLite,
   encryption, signing, publication and fresh-process cold startup. They cover
@@ -101,11 +106,12 @@ states and source hashes are under
 `../serverware-operator-workspace-evidence/upstream-setup.CVVfT8/` relative to the
 checkout. Browser screenshots are under `/tmp/serverware-upstreams-browser-vA61Mo/`.
 
-This document does not authorize or establish a live destination change. The
+The rollout does not authorize or establish a live destination change. The
 current demo still permits only its synthetic upstream, and the waiting native
 pilot is unchanged. Actual native commissioning, provider access and production
-acceptance remain separate. The shared startup tests do not prove that a paired
-running gate has received the new deployment environment.
+acceptance remain separate. Matching running app/gate and retained policy were
+verified, but activation of a different origin list and actual provider traffic
+remain untested on this live deployment.
 
 Use the [retained-state maintenance procedure](../docker/serverware-operator-demo/README.md#approval-and-state-preservation-gate),
 preserving the separate notification custody directory with its corresponding

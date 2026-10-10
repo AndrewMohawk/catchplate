@@ -94,10 +94,14 @@ release compilation and actual gate startup/client acceptance were executed.
 
 This is **private synthetic metadata acceptance**, not real npm account access,
 public registry/DNS acceptance, installation, publication, or production release.
-No real provider was contacted. This feature has not been deployed to the demo;
-the live operator deployment and waiting native pilot retain their own frozen
-source snapshots. Actual native-key notification and hardware acceptance are
-also separate from these client results.
+No real provider was contacted. The implementation is now deployed in the
+[retained operator demo pair](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment):
+app `577badff` and actual executable `2bfe5e38`. That code-only rollout preserved
+the fixture-only allowlist and all saved resources; it did not create an npm
+connection or execute another proxy request. All retained application tokens
+are expired. The waiting native pilot retains its separate frozen source.
+Actual native-key notification and hardware acceptance are also separate from
+these client results.
 
 The broader installation/publishing requirements remain in
 [ordinary npm client compatibility](operator-npm-client-compatibility.md).

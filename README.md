@@ -79,9 +79,10 @@ default-off operator-development source now includes a read-only native phase
 bridge with exact owner/source and original-expiry checks; legacy approval/JIT
 alerts remain suppressed. The isolated browser-to-application-to-TLS workflow
 passes, including independent saves, explicit tests and selected audit delivery.
-The demo now enables the feature with four unconfigured destinations; its
-read-only browser flow, retained data, app-only custody and outbound TLS are
-verified. Real receiver delivery and deployed save/test remain unverified.
+The demo now enables the feature with four unconfigured destinations. The latest
+paired rollout verified its read-only browser flow, retained data and empty
+app-only custody; outbound TLS was verified at the earlier notification rollout.
+Real receiver delivery and deployed save/test remain unverified.
 The native relay is not running: configuration does not establish a live YubiKey
 action or physical-key acceptance, or grant proxied webhook permissions.
 

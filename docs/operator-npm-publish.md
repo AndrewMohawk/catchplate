@@ -278,6 +278,26 @@ warnings were retained. All eighth-run containers were removed, no project
 network remained, private evidence was retained, and the complete 4,935-file
 source and 1,782-file npm inventories remained unchanged after teardown.
 
+The ninth isolated run at `ffd635a0` reproduced the outside-window `E503` after
+the same four successful checkpoints. Its 23 emitted audit observations all
+report `complete`, with a maximum post-parse duration of 1,947 ms. Waiting for
+the existing policy lock reached 1,268 ms; loading/checking/copying after
+acquisition reached 727 ms. Those maxima belong to different requests. Across
+the observations, those intervals totaled 4,608 ms and 3,945 ms respectively.
+This proves meaningful lock contention, not the exact cause of the npm 503.
+No audit-post or static-preparation failure diagnostic was retained; 16
+background lease-renewal warnings remain.
+
+Stopped-state scope projections for both the eighth and ninth runs confirm
+the sixth response release was the outside-window metadata GET. The ninth
+store contains 63 lease issuances, including two generation and two secret
+issuances for the outside-window publish route; issuance is not proof of proxy
+receipt or acceptance. Both runs contain only the three earlier request denials,
+five established/keep-alive CONNECT pairs, and no upstream-resolution or CONNECT
+denial. The failed command exits before its audit-drain checkpoint, so missing
+later denial records cannot locate the failure. Ninth-run cleanup completed,
+and both full source/npm inventories remained unchanged.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

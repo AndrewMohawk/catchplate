@@ -12,6 +12,10 @@ services:
       outbound:
         # The gate reserves .34, including while stopped during maintenance.
         ipv4_address: 172.16.249.35
+    # The gate's management listener binds only its sandbox address. Docker's
+    # shared-network DNS could otherwise select its outbound-only interface.
+    extra_hosts:
+      decision-gate-rs: 172.16.249.20
     environment:
       SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED: ${OPERATOR_DEMO_NOTIFICATIONS_ENABLED:-0}
       SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR: /notification-custody

@@ -17,6 +17,7 @@ import sys
 PUBLIC = "https://serverware-demo.example.com"
 TOKEN_FILE = "/run/secrets/serverware/admin.token"
 PATHS = {"/", "/api/operator-demo/catalog", "/api/operator-demo/notifications", "/api/operator-demo/proxy/upstreams"}
+GOOGLE_CONFIGURATION = "/api/operator-demo/oauth/google/configuration/v2"
 PRIVATE = {"secret", "client_token", "access_token", "refresh_token", "id_token", "admin_token", "encrypted_secret",
            "token_hash", "secret_nonce", "encrypted_dek", "client_secret", "provider_secret", "password",
            "proxy_password", "proxy_authorization", "authorization", "cookie", "set_cookie", "private_key"}
@@ -65,8 +66,20 @@ def source(command):
     return {"ok": True, "files": len(manifest), "manifest_sha256": digest}
 
 
+def get_path(command):
+    """Closed opt-in route admission, before any token or socket access."""
+    require(type(command) is dict and command.get("op") == "get" and type(command.get("path")) is str)
+    managed = "managed_google_unconfigured" in command
+    require(set(command) == ({"op", "path", "managed_google_unconfigured"} if managed else {"op", "path"}))
+    if managed:
+        require(command["managed_google_unconfigured"] is True
+            and os.environ.get("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1")
+    require(command["path"] in PATHS or managed and command["path"] == GOOGLE_CONFIGURATION)
+    return command["path"]
+
+
 def get(command):
-    require(set(command) == {"op", "path"} and command["op"] == "get" and command["path"] in PATHS)
+    path = get_path(command)
     descriptor = os.open(TOKEN_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         info = os.fstat(descriptor)
@@ -75,7 +88,7 @@ def get(command):
     finally:
         os.close(descriptor)
     require(32 <= len(token_bytes) <= 8192 and all(33 <= byte <= 126 for byte in token_bytes))
-    token, path = token_bytes.decode("ascii"), command["path"]
+    token = token_bytes.decode("ascii")
     connection = http.client.HTTPConnection("127.0.0.1", 3000, timeout=5)
     try:
         media = "text/html" if path == "/" else "application/json"
@@ -88,7 +101,7 @@ def get(command):
                     key.lower() not in {"location", "set-cookie", "content-encoding", "transfer-encoding", "www-authenticate"} for key, value in headers))
         mapped = {key.lower(): value for key, value in headers}
         require(mapped.get("content-type", "").split(";", 1)[0].strip().lower() == media and "no-store" in mapped.get("cache-control", ""))
-        maximum = 32768 if path.endswith("/upstreams") else 131072 if path.endswith("/notifications") else 2 * 1024 * 1024
+        maximum = 32768 if path.endswith("/upstreams") or path == GOOGLE_CONFIGURATION else 131072 if path.endswith("/notifications") else 2 * 1024 * 1024
         body = response.read(maximum + 1)
         require(0 < len(body) <= maximum and token_bytes not in body and b"PRIVATE KEY-----" not in body)
         if "content-length" in mapped:

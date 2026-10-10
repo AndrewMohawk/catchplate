@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Pure independent publish-fixture controls, never runtime acceptance.
 
-Receiver handlers use in-memory requests and an explicitly simulated file sink;
-no HTTP parser, socket, container, provider, executable or durable write runs.
+Receiver handlers use in-memory requests and an explicitly simulated file sink.
+A bounded Node VM evaluates actual job JavaScript with synthetic fs/spawn seams;
+no npm process, HTTP parser, socket, container, provider or durable write runs.
 """
 import ast
 import base64
@@ -15,6 +16,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tarfile
 from types import SimpleNamespace
 import unittest
@@ -657,9 +660,11 @@ class NpmPublishFixtureTests(unittest.TestCase):
             "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
             "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
             "error": "stock npm publish operation failed", "stage": "npm_process", "errorCode": "E403",
-            "processExitCode": 1, "stdoutBytes": 0, "stderrBytes": 40}
+            "processExitCode": 1, "stdoutBytes": 0, "stderrBytes": 40,
+            "stdoutShape": "empty", "stdoutCodeKind": "not_observed", "stdoutContext": "none"}
         self.assertEqual(set(check.client_failure_observation(failure, "unscoped")),
-            {"phase", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes"})
+            {"phase", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes",
+                "stdoutShape", "stdoutCodeKind", "stdoutContext"})
         for key, value in (("raw", "synthetic-secret"), ("error", "synthetic-secret"), ("stage", "synthetic-secret"),
                 ("errorCode", "synthetic-secret"), ("processExitCode", True), ("stdoutBytes", 262145),
                 ("stderrBytes", -1), ("configuredRetries", False), ("configuredRetries", 0.0),
@@ -674,9 +679,11 @@ class NpmPublishFixtureTests(unittest.TestCase):
             "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
             "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
             "error": "stock npm publish operation failed", "stage": "npm_process", "errorCode": "E400",
-            "processExitCode": 1, "stdoutBytes": 76, "stderrBytes": 0}
+            "processExitCode": 1, "stdoutBytes": 76, "stderrBytes": 0,
+            "stdoutShape": "npm_error", "stdoutCodeKind": "recognized", "stdoutContext": "http_error"}
         expected = {"phase": "scoped", "stage": "npm_process", "errorCode": "E400", "processExitCode": 1,
-            "stdoutBytes": 76, "stderrBytes": 0}
+            "stdoutBytes": 76, "stderrBytes": 0,
+            "stdoutShape": "npm_error", "stdoutCodeKind": "recognized", "stdoutContext": "http_error"}
         self.assertEqual(check.client_failure_observation(failure, "scoped"), expected)
         error = check.ClientFailure("scoped", failure)
         self.assertEqual(error.observation, expected)
@@ -807,10 +814,10 @@ class NpmPublishFixtureTests(unittest.TestCase):
             self.assertEqual((fresh.total, fresh.attempts, fresh.stored), (1, [{"ordinal": 1, "accepted": False}], []))
 
     def test_job_nonzero_positive_result_is_process_stage_and_e400_is_diagnostic_only(self):
-        # Source-order coverage only: no Node VM, npm executable or subprocess
-        # runs in this pure Python suite. Root's stock client lane is separate.
+        # Complement the actual JS VM tests below with unchanged source gates.
+        # Root's genuine stock client lane remains separate acceptance evidence.
         job = (Path(__file__).parent / "operator_npm_publish_job.mjs").read_text()
-        self.assertIn("new Set(['E400', 'E403'", job)
+        self.assertIn("new Set(['E400', 'E401', 'E403'", job)
         positive = job.split("  } else {\n", 1)[1].split("} catch (error)", 1)[0]
         self.assertTrue(positive.startswith("    stage = 'npm_process';\n    assert(invocation.status === 0);\n    stage = 'npm_receipt';\n"))
         denial = job.split("  if (!['unscoped', 'scoped'].includes(phase)) {\n", 1)[1].split("  } else {\n", 1)[0]
@@ -862,6 +869,168 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertFalse(any(name and name.startswith("serverware") for name in imports))
         self.assertIn(b"93.184.216.34 registry.npmjs.org\n", network.HOSTS)
         self.assertEqual(network.RESOLV, b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n")
+
+
+_NODE_DIAGNOSTIC_VM = r"""
+'use strict';
+const fs = require('node:fs'), vm = require('node:vm'), crypto = require('node:crypto');
+const raw = fs.readFileSync(0); if (raw.length > 2097152) throw new Error('VM input bound');
+const input = JSON.parse(raw);
+if (!['classifier', 'job'].includes(input.mode) || typeof input.source !== 'string'
+    || input.source.length > 32768 || !Array.isArray(input.cases) || input.cases.length > 128) throw new Error('VM contract');
+const options = { timeout: 1000, contextCodeGeneration: { strings: false, wasm: false } };
+const output = input.cases.map(item => {
+  if (input.mode === 'classifier') {
+    const start = input.source.indexOf('const safeCodes = '), end = input.source.indexOf('// END pure stdout diagnostics.');
+    if (start < 0 || end <= start) throw new Error('VM source boundary');
+    return vm.runInNewContext(input.source.slice(start, end) + '\nclassifyNpmStdout(stdout, expectedVersion);',
+      { Buffer, stdout: item.stdout, expectedVersion: item.version ?? '5.0.0' }, options);
+  }
+  // Evaluate the complete real job body with only its three static imports
+  // replaced by explicitly synthetic capabilities. No npm child or file opens.
+  const imports = input.source.match(/^import .* from 'node:(?:fs|crypto|child_process)';$/gm);
+  if (imports?.length !== 3) throw new Error('VM imports changed');
+  const source = input.source.replace(/^import .* from 'node:(?:fs|crypto|child_process)';\n/gm, '');
+  const phase = item.phase ?? 'outside_window', payload = Buffer.from('synthetic tarball bytes');
+  const packageName = phase === 'scoped' ? '@serverware-fixture/publish' : 'serverware-fixture-publish';
+  const version = '5.0.0', hash = (algorithm, encoding = 'hex') => crypto.createHash(algorithm).update(payload).digest(encoding);
+  const command = { phase, package: packageName, version, applicationId: 'a1111111-1111-4111-8111-111111111111',
+    token: 'a'.repeat(43), runId: 'operator-check-' + 'a'.repeat(32), tarballSha256: 'sha256:' + hash('sha256') };
+  const files = new Map([[0, Buffer.from(JSON.stringify(command))], ['/npm/package.json', '{"name":"npm","version":"11.8.0"}'],
+    ['/npm/node_modules/pacote/package.json', '{"name":"pacote","version":"21.0.4"}'],
+    ['/npm/node_modules/npm-registry-fetch/package.json', '{"name":"npm-registry-fetch","version":"19.1.1"}'],
+    ['/client-trust/requests-ca.pem', 'outer\ninner\n'], ['/client-trust/outer-ca.pem', 'outer\n'],
+    ['/client-trust/inner-ca.pem', 'inner\n'], ['/client-packages/' + phase + '.tgz', payload]]);
+  let emitted = '', spawnCalls = 0, writes = 0;
+  const process = { version: 'v25.5.0', env: { NODE_EXTRA_CA_CERTS: '/client-trust/requests-ca.pem' },
+    stdout: { write: value => { emitted += value; } }, exitCode: null, exit: () => { throw new Error('VM unexpected exit'); } };
+  const receipt = { name: packageName, version, id: packageName + '@' + version,
+    integrity: 'sha512-' + hash('sha512', 'base64'), shasum: hash('sha1'), size: payload.length };
+  const invocation = { status: item.status ?? 1, signal: null, stdout: item.receipt ? JSON.stringify({ ...receipt, ...item.change }) : item.stdout,
+    stderr: item.stderr ?? '', error: item.spawnError ? { code: item.spawnError } : undefined };
+  vm.runInNewContext(source, { Buffer, process, createHash: crypto.createHash,
+    readFileSync: (path, encoding) => { if (!files.has(path)) throw new Error('VM unexpected file');
+      const value = Buffer.from(files.get(path)); return encoding ? value.toString(encoding) : value; },
+    writeFileSync: () => { writes++; }, mkdtempSync: () => '/client-work/synthetic', mkdirSync: () => {},
+    statSync: () => ({ mode: 0o700 }), setTimeout: () => 1, clearTimeout: () => {},
+    spawnSync: (file, args) => { if (file !== '/node' || args[0] !== '/npm/bin/npm-cli.js'
+      || !args.includes('publish')) throw new Error('VM unexpected child'); spawnCalls++; return invocation; },
+  }, options);
+  if (emitted.length > 16384) throw new Error('VM output bound');
+  return { value: JSON.parse(emitted), exitCode: process.exitCode, spawnCalls, writes };
+});
+process.stdout.write(JSON.stringify(output));
+"""
+
+
+class NpmPublishClientDiagnosticTests(unittest.TestCase):
+    """Actual JS execution under pure VM seams; not stock-client acceptance."""
+
+    def evaluate(self, mode, cases):
+        node = os.environ.get("SERVERWARE_NPM_DIAGNOSTIC_NODE") or shutil.which("node")
+        self.assertTrue(node and Path(node).is_absolute(), "provide an absolute diagnostic Node executable; tests never skip")
+        source = (Path(__file__).parent / "operator_npm_publish_job.mjs").read_text()
+        completed = subprocess.run([node, "--max-old-space-size=64", "-e", _NODE_DIAGNOSTIC_VM],
+            input=encoded({"mode": mode, "source": source, "cases": cases}), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=8, check=False, env={"LANG": "C.UTF-8"})
+        self.assertEqual(completed.returncode, 0, "pure diagnostic JS VM failed")
+        self.assertEqual(completed.stderr, b"", "pure diagnostic JS VM emitted stderr")
+        self.assertLess(len(completed.stdout), 131072)
+        result = json.loads(completed.stdout)
+        self.assertEqual(len(result), len(cases))
+        return result
+
+    def test_actual_js_shapes_code_types_bounds_and_redaction(self):
+        canary = "synthetic-secret-canary https://private.invalid/path?token=canary"
+        shapes = [(None, "not_observed"), (" \n", "empty"), ("x" * 262145, "oversized"), ("{", "invalid_json"),
+            ("null", "json_null"), ("true", "json_scalar"), ('"text"', "json_scalar"), ("[]", "json_array"),
+            ("{}", "json_object"), ('{"error":null}', "npm_error_invalid"), ('{"error":[]}', "npm_error_invalid")]
+        cases = [{"stdout": raw} for raw, _ in shapes]
+        kinds = [({}, "absent"), ({"code": None}, "null"), ({"code": "E503"}, "recognized"),
+            ({"code": canary}, "unsupported_string"), ({"code": 503}, "other_type"), ({"code": {}}, "other_type")]
+        cases += [{"stdout": json.dumps({"error": {**value, "summary": canary, "detail": canary}})} for value, _ in kinds]
+        results = self.evaluate("classifier", cases)
+        for result, (_, shape) in zip(results, shapes):
+            self.assertEqual(result, {"stdoutShape": shape, "stdoutCodeKind": "not_observed", "stdoutContext": "none"})
+        for result, (_, kind) in zip(results[len(shapes):], kinds):
+            self.assertEqual(set(result), {"stdoutShape", "stdoutCodeKind", "stdoutContext"})
+            self.assertEqual((result["stdoutShape"], result["stdoutCodeKind"]), ("npm_error", kind))
+        self.assertNotIn(canary, json.dumps(results))
+        self.assertNotIn("private.invalid", json.dumps(results))
+
+    def test_actual_js_fixed_version_and_fetch_contexts_are_bounded(self):
+        duplicate = "You cannot publish over the previously published versions: 5.0.0."
+        latest = 'Cannot implicitly apply the "latest" tag because previously published version 6.0.0 is higher than the new version 5.0.0. You must specify a tag using --tag.'
+        private = "https://private.invalid/path?token=synthetic-canary"
+        cases = [(duplicate, None, "duplicate_version"), (latest, None, "implicit_latest"),
+            (duplicate.replace("5.0.0", "4.0.0"), None, "unrecognized"), (latest.replace("6.0.0", "06.0.0"), None, "unrecognized"),
+            (duplicate + "\n", None, "unrecognized"), (duplicate + "x" * 8192, None, "unrecognized"),
+            (duplicate, "FETCH_ERROR", "fetch_other"),
+            ("request to " + private + " failed, reason: write EPIPE", "FETCH_ERROR", "fetch_broken_pipe"),
+            ("request to " + private + " failed, reason: read ECONNRESET", None, "fetch_connection_reset"),
+            ("request to " + private + " failed, reason: socket hang up", "FETCH_ERROR", "fetch_socket_hang_up"),
+            ("request to " + private + " failed, reason: synthetic-canary", "FETCH_ERROR", "fetch_other"),
+            ("network timeout at: " + private, "FETCH_ERROR", "fetch_network_timeout"),
+            ("Response timeout while trying to fetch " + private + " (over 10000ms)", "FETCH_ERROR", "fetch_response_timeout")]
+        raw = [{"stdout": json.dumps({"error": {"summary": summary, **({"code": code} if code else {})}})}
+            for summary, code, _ in cases]
+        results = self.evaluate("classifier", raw)
+        self.assertEqual([item["stdoutContext"] for item in results], [expected for _, _, expected in cases])
+        self.assertNotIn(private, json.dumps(results))
+        self.assertNotIn("synthetic-canary", json.dumps(results))
+        self.assertTrue(all(set(row) == {"stdoutShape", "stdoutCodeKind", "stdoutContext"} for row in results))
+
+    def test_actual_job_keeps_exact_four_denials_and_js_python_code_parity(self):
+        accepted = {"E403", "E407", "ECONNRESET", "ECONNREFUSED"}
+        codes = sorted(check.CLIENT_ERRORS - {"unrecognized"}) + ["E418", "synthetic-secret-code-canary"]
+        cases = [{"stdout": json.dumps({"error": {"code": code, "summary": "synthetic-summary-canary", "detail": "synthetic-detail-canary"}})}
+            for code in codes]
+        cases += [{"stdout": json.dumps({"error": {"code": code}}), "status": 0} for code in sorted(accepted)]
+        cases += [{"stdout": json.dumps({"error": {"summary": "You cannot publish over the previously published versions: 5.0.0."}})}]
+        results = self.evaluate("job", cases)
+        for index, row in enumerate(results):
+            value = row["value"]
+            self.assertEqual((row["spawnCalls"], row["writes"]), (1, 1))
+            success = index < len(codes) and codes[index] in accepted
+            self.assertEqual((value["ok"], row["exitCode"]), (success, 0 if success else 1))
+            if success:
+                self.assertTrue(value["refused"])
+                self.assertNotIn("stdoutShape", value)
+            else:
+                self.assertEqual(value["stage"], "npm_denial")
+                observation = check.client_failure_observation(value, "outside_window")
+                self.assertIsNotNone(observation)
+                if index < len(codes):
+                    known = codes[index] in check.CLIENT_ERRORS
+                    self.assertEqual(value["errorCode"], codes[index] if known else "unrecognized")
+                    self.assertEqual(value["stdoutCodeKind"], "recognized" if known else "unsupported_string")
+        last = results[-1]["value"]
+        self.assertEqual((last["errorCode"], last["stdoutCodeKind"], last["stdoutContext"]),
+            ("unrecognized", "absent", "duplicate_version"))
+        output = json.dumps(results)
+        for canary in ("synthetic-secret-code-canary", "synthetic-summary-canary", "synthetic-detail-canary"):
+            self.assertNotIn(canary, output)
+
+    def test_actual_job_positive_receipt_and_closed_checker_remain_strict(self):
+        cases = [{"phase": "scoped", "receipt": True, "status": 0}]
+        for field, value in (("name", "other"), ("version", "1.0.0"), ("id", "other"), ("integrity", "wrong"),
+                ("shasum", "wrong"), ("size", 0)):
+            cases.append({"phase": "scoped", "receipt": True, "status": 0, "change": {field: value}})
+        cases += [{"phase": "scoped", "stdout": json.dumps({"error": {"code": code}})} for code in ("E400", "E503", "FETCH_ERROR")]
+        results = self.evaluate("job", cases)
+        self.assertTrue(results[0]["value"]["ok"])
+        self.assertEqual(results[0]["exitCode"], 0)
+        for row in results[1:]:
+            self.assertFalse(row["value"]["ok"])
+            self.assertEqual(row["exitCode"], 1)
+            self.assertIsNotNone(check.client_failure_observation(row["value"], "scoped"))
+        self.assertTrue(all(row["value"]["stage"] == "npm_receipt" for row in results[1:7]))
+        self.assertTrue(all(row["value"]["stage"] == "npm_process" for row in results[7:]))
+        failure = results[-1]["value"]
+        for key, value in (("stdoutShape", "raw-canary"), ("stdoutCodeKind", []), ("stdoutContext", "raw-canary"),
+                ("raw", "raw-canary"), ("stdoutShape", "empty"), ("stdoutCodeKind", "not_observed"), ("stdoutContext", "none")):
+            self.assertIsNone(check.client_failure_observation({**failure, key: value}, "scoped"))
+        self.assertIsNone(check.client_failure_observation({key: value for key, value in failure.items() if key != "stdoutContext"}, "scoped"))
 
 
 if __name__ == "__main__":

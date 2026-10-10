@@ -33,13 +33,21 @@ CONNECT_DENIED = metadata.CONNECT_DENIED
 KEEP_ALIVE = "data_plane.connect.keep_alive"
 PHASES = tuple(spec["case"] for spec in fixture.SPECS)
 CLIENT_STAGES = {"input", "identity", "trust", "package", "workspace", "npm_spawn", "npm_process", "npm_json", "npm_denial", "npm_receipt"}
-CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E400", "E409"}
+CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E400", "E401", "E409", "E422", "E429", "E500", "E503", "E504",
+    "EPUBLISHCONFLICT", "EPRIVATE", "EUNSCOPED", "EBADSEMVER", "FETCH_ERROR", "EPIPE"}
+CLIENT_STDOUT_SHAPES = {"not_observed", "empty", "oversized", "invalid_json", "json_null", "json_scalar", "json_array",
+    "json_object", "npm_error", "npm_error_invalid", "npm_receipt"}
+CLIENT_STDOUT_CODE_KINDS = {"not_observed", "absent", "null", "recognized", "unsupported_string", "other_type"}
+CLIENT_STDOUT_CONTEXTS = {"none", "unrecognized", "http_error", "publish_conflict", "package_private", "unscoped_access",
+    "invalid_version", "auth_required", "transport_error", "tls_error", "duplicate_version", "implicit_latest",
+    "fetch_broken_pipe", "fetch_connection_reset", "fetch_socket_hang_up", "fetch_other", "fetch_network_timeout", "fetch_response_timeout"}
 
 
 def client_failure_observation(value, phase):
     keys = {"schema", "phase", "npmVersion", "pacoteVersion", "registryFetchVersion", "strictSSL",
         "extraCaPreservesDefaultRoots", "configuredRetries", "isolatedCache", "requestRewrite", "force",
-        "dryRun", "provenance", "ok", "error", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes"}
+        "dryRun", "provenance", "ok", "error", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes",
+        "stdoutShape", "stdoutCodeKind", "stdoutContext"}
     if not isinstance(phase, str) or phase not in PHASES or not isinstance(value, dict) or set(value) != keys:
         return None
     if (value.get("schema") != "serverware.privateNpmPublishClient/v1" or value.get("ok") is not False
@@ -47,6 +55,9 @@ def client_failure_observation(value, phase):
             or value.get("error") != "stock npm publish operation failed"
             or not isinstance(value.get("stage"), str) or value["stage"] not in CLIENT_STAGES
             or not isinstance(value.get("errorCode"), str) or value["errorCode"] not in CLIENT_ERRORS
+            or not isinstance(value.get("stdoutShape"), str) or value["stdoutShape"] not in CLIENT_STDOUT_SHAPES
+            or not isinstance(value.get("stdoutCodeKind"), str) or value["stdoutCodeKind"] not in CLIENT_STDOUT_CODE_KINDS
+            or not isinstance(value.get("stdoutContext"), str) or value["stdoutContext"] not in CLIENT_STDOUT_CONTEXTS
             or value.get("npmVersion") != "11.8.0" or value.get("pacoteVersion") != "21.0.4"
             or value.get("registryFetchVersion") != "19.1.1"
             or any(value.get(key) is not True for key in ("strictSSL", "extraCaPreservesDefaultRoots", "isolatedCache"))
@@ -56,7 +67,13 @@ def client_failure_observation(value, phase):
             or value.get("processExitCode") is not None and
                 (type(value["processExitCode"]) is not int or not 0 <= value["processExitCode"] <= 255)):
         return None
-    return {key: value[key] for key in ("phase", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes")}
+    if value["stdoutShape"] != "npm_error":
+        if value["stdoutCodeKind"] != "not_observed" or value["stdoutContext"] != "none":
+            return None
+    elif value["stdoutCodeKind"] == "not_observed" or value["stdoutContext"] == "none":
+        return None
+    return {key: value[key] for key in ("phase", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes",
+        "stdoutShape", "stdoutCodeKind", "stdoutContext")}
 
 
 class ClientFailure(CheckFailure):

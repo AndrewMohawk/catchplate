@@ -215,7 +215,24 @@ async function story(context, bridge, directory, evidence, progress) {
       await route.fulfill({status: response.status, headers: Object.fromEntries(response.headers), body: raw});
     } catch (error) { diagnose(error); await route.abort('failed').catch(() => {}); }
   });
-  const settled = () => page.waitForLoadState('networkidle');
+  const act = async (control, method, path) => {
+    const before = observed.requests.length;
+    // Install the exact response observation before dispatch. An already-idle
+    // navigation cannot satisfy this boundary, even when the click is fast.
+    const completed = page.waitForResponse(response => response.url() === ORIGIN + path
+      && response.request().method() === method, {timeout: 30000});
+    await Promise.all([completed, node(page, control).click()]);
+    await page.waitForFunction(() => document.readyState === 'complete'
+      && document.querySelector('#google-configuration-review')?.disabled === false);
+    assert(observed.requests.slice(before).some(item => item.method === method && item.path === path),
+      'controller action must complete its exact real ASGI request');
+  };
+  const pendingDOM = () => page.waitForFunction(() => {
+    const status = document.querySelector('#google-configuration-operation-status')?.textContent || '';
+    return /prepared|pending/i.test(status) && /restart/i.test(status)
+      && document.querySelector('#google-configuration-prepare')?.disabled === true
+      && document.querySelector('#google-configuration-client-secret')?.value === '';
+  });
   const screenshot = async name => { await noMaterial(page); await page.screenshot({path: join(directory, name + '.png'), fullPage: true,
     mask: [node(page, 'client-secret'), page.locator('#client-token'), page.locator('#connect-credential-secret')]}); };
   progress.stage = 'initial_document';
@@ -224,14 +241,16 @@ async function story(context, bridge, directory, evidence, progress) {
   assert.equal(new URL(page.url()).origin, ORIGIN); assert.match(await page.title(), /Serverware operator workspace/);
   assert.equal(observed.posts.length, 0); assert.equal(await noMaterial(page), null);
   progress.stage = 'explicit_review';
-  await node(page, 'review').click(); await settled(); await node(page, 'form').waitFor({state: 'visible'});
+  await act('review', 'GET', PREFIX); await node(page, 'form').waitFor({state: 'visible'});
+  await page.waitForFunction(callback => document.querySelector('#google-configuration-callback')?.textContent.trim() === callback,
+    ORIGIN + '/api/oauth/callback/google');
   assert.equal(observed.discovery.state, 'unconfigured'); assert.equal(observed.discovery.review.eligible, true);
   assert.equal((await node(page, 'callback').innerText()).trim(), ORIGIN + '/api/oauth/callback/google');
   assert.match(await node(page, 'added-upstream').innerText(), /https:\/\/gmail\.googleapis\.com/);
   assert.equal(await node(page, 'client-secret').getAttribute('type'), 'password');
   await node(page, 'client-id').fill(CLIENT); await node(page, 'client-secret').fill(SECRET); await noMaterial(page, true);
   progress.stage = 'explicit_prepare';
-  await node(page, 'prepare').click(); await settled(); await noMaterial(page);
+  await act('prepare', 'POST', PREFIX); await pendingDOM(); await noMaterial(page);
   assert.equal(observed.posts.length, 1); assert.equal(observed.operation.status, 'pending');
   assert.match(await node(page, 'operation-status').innerText(), /prepared|pending/i);
   assert.match(await node(page, 'operation-status').innerText(), /restart/i);
@@ -244,18 +263,22 @@ async function story(context, bridge, directory, evidence, progress) {
   const beforeReload = observed.requests.length;
   await page.reload({waitUntil: 'networkidle'});
   await page.waitForFunction(() => document.querySelector('#google-configuration-check')
-    && !document.querySelector('#google-configuration-check').disabled);
+    && !document.querySelector('#google-configuration-check').disabled
+    && document.querySelector('#credential-fields')?.disabled === true);
   assert(observed.requests.slice(beforeReload).some(item => item.path === CATALOG));
-  assert(await page.locator('#credential-fields').isDisabled(), 'unresolved retained operation holds ordinary writes');
+  assert(await page.locator('#credential-save').isDisabled(), 'unresolved retained operation holds ordinary writes');
   assert.equal(observed.posts.length, 1); assert.deepEqual(await noMaterial(page), reference);
   assert(await node(page, 'prepare').isDisabled());
-  await node(page, 'check').click(); await settled(); await noMaterial(page);
+  await act('check', 'GET', PREFIX + '/' + reference.operation_id); await pendingDOM(); await noMaterial(page);
   assert.equal(observed.operation.status, 'pending'); assert.equal(observed.posts.length, 1);
   assert(observed.requests.slice(beforeReload).every(item => item.method === 'GET'));
   assert(observed.requests.slice(beforeReload).some(item => item.path === PREFIX + '/' + reference.operation_id));
   progress.stage = 'explicit_current_cancel';
   const beforeCancel = observed.requests.length;
-  await node(page, 'cancel').click(); await settled(); await noMaterial(page);
+  await act('cancel', 'POST', PREFIX + '/cancel');
+  await page.waitForFunction(() => /cancelled/i.test(document.querySelector('#google-configuration-operation-status')?.textContent || '')
+    && document.querySelector('#google-configuration-cancel')?.disabled === true);
+  await noMaterial(page);
   assert.equal(observed.posts.length, 2); assert.equal(observed.operation.status, 'cancelled');
   assert(observed.posts[1].expected_revision > observed.posts[0].expected_revision);
   const cancellation = observed.requests.slice(beforeCancel);

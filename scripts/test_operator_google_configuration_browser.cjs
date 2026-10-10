@@ -245,7 +245,17 @@ function safeFrames(error) {
   } catch (_) { /* Fixed empty projection if an unusual error object refuses inspection. */ }
   return frames;
 }
-async function settled(page) { await page.waitForLoadState('networkidle'); }
+async function settled(page) {
+  // A fulfilled synthetic request may begin after the document's existing
+  // network-idle milestone. The controller disables Review synchronously for
+  // its operation, then reenables it only after DTO projection/catalog refresh
+  // or the fixed error path and finally cleanup. Wait for that actual UI state.
+  const idle = () => document.readyState === 'complete' &&
+    document.querySelector('#google-configuration-review')?.disabled === false;
+  await page.waitForFunction(idle);
+  await page.waitForLoadState('networkidle');
+  await page.waitForFunction(idle);
+}
 async function reloadUnresolved(page) {
   // The stored locator intentionally holds ordinary writes after reload until
   // an explicit Check recovers the receipt. The inherited ready() waits for
@@ -257,7 +267,7 @@ async function reloadUnresolved(page) {
   await page.waitForFunction(() => !document.querySelector('#google-configuration-check').disabled &&
     document.querySelector('#credential-fields').disabled && document.querySelector('#load-error').hidden);
   assert.equal((await page.locator('#proxy-url').innerText()).trim(), 'https://proxy.example.test');
-  assert(await page.locator('#credential-fields').isDisabled());
+  assert(await page.locator('#credential-save').isDisabled(), 'the held fieldset disables its actual Save control');
   await noMaterial(page);
 }
 async function inspect(page) {

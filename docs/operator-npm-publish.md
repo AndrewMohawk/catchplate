@@ -980,3 +980,51 @@ schema inputs, including Git modes. That evidence must retain distinct source
 and binary-build commit identities; it is not a new Rust build or a new run of
 the previously retained 116 Rust tests. The stock-client acceptance outcome
 remains separate from these focused checks.
+
+### Run nineteen: revocation POST remains unresolved
+
+The fresh isolated run of source `869fbbe8` ran from **2026-10-10
+19:11:32 to 19:12:55 UTC** and failed with `TimeoutError` at
+`phase=revoked_app`, **`stage=revocation_post`**. The first six client phases
+passed: prerequisite, unscoped, scoped, wrong package, outside window and
+wrong placeholder. The revoked-client command and final audit-chain check were
+not reached. Cleanup succeeded; no fixture containers or networks remained.
+The normal entrypoint, original deadlines and 64-issued-lease bound were
+unchanged. The mutation was not retried.
+
+The frozen-source comparison verified all 4,952 candidate Git blobs and modes,
+plus the unchanged Rust input sets described above. This run reused the genuine
+`b55f3024` executable; it did not rebuild Rust or rerun its retained tests.
+The source-equality receipt SHA-256 is
+`5b307ad51ca6fbee4e7fbba24a83c1632a6bfeb60a2ee43e4281f612c8e6df5a`.
+
+A bounded, network-none inspection of an ephemeral copy of the stopped SQLite
+database and its WAL/SHM confirmed `quick_check=ok`, **four active applications,
+zero revocation audit rows, 46 issued leases and zero rejected leases**. It
+also found four setup reloads, six paired credential-release/response events,
+six request denials, six established CONNECT events and six keep-alive events.
+Unlike run eighteen, no committed revocation was visible. The strict final-policy
+inspection correctly refused its missing-revocation prerequisite, so there is
+no final-policy ordering result for this run. The original storage was retained
+read-only during inspection.
+
+Nine terminal catalog timing records describe earlier setup mutations only.
+They completed in 72–544 ms, with publication waits of 0–373 ms, SQLite opens
+of 19–33 ms, BEGIN marks of 0 ms and commits of 4–18 ms. **There is no terminal
+`revoke_application` record or completed revocation HTTP response.** Those
+earlier timings do not attribute the revocation delay to publication ownership,
+SQLite or any other stage, and the absent commit does not prove rollback.
+
+The runner captured service logs before stopping the containers; a later
+terminal record could therefore be absent from retained logs. A next diagnostic
+can add bounded, fixed-label progress records to the admitted revocation tracker
+and retain a separate post-stop log snapshot, without changing transaction
+ordering or deadlines. Neither diagnostic is implemented by this checkpoint.
+
+Originals are retained in `serverware-catalog-receipt-validation.koRjRmL8` and
+`serverware-npm-publish-private.KtH13Z0W`. Run-receipt SHA-256:
+`740e035d094627a603038a2e932497c5c3eadd331dbbd7e50c2d291176786efd`.
+Checker-result SHA-256:
+`960fa4414339f8f41161a92f423205a80aac93817547a5a3402d8e21c7585536`.
+The complete stock-client flow still has not passed. No live rollout, real
+provider request, notification delivery or native-pilot action was performed.

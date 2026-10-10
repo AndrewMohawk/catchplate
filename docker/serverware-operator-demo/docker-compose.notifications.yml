@@ -9,7 +9,9 @@ services:
     # Reuse the existing outbound network without changing either subnet.
     dns: !reset []
     networks:
-      outbound: {}
+      outbound:
+        # The gate reserves .34, including while stopped during maintenance.
+        ipv4_address: 172.16.249.35
     environment:
       SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED: ${OPERATOR_DEMO_NOTIFICATIONS_ENABLED:-0}
       SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR: /notification-custody

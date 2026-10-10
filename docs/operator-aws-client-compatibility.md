@@ -1,10 +1,43 @@
 # AWS ordinary-client compatibility plan
 
-Status: **plan only; not implemented or accepted**. This document proposes a
-bounded operator-development feature, not AWS-wide SDK support, a production
-credential service, or completion of the native pilot. No AWS access or runtime
-validation was performed to prepare it. The earlier observation of local
-Boto3/Botocore 1.34.46 source availability is not a tested compatibility pin.
+Status: **standalone signing foundation tested; proxy integration not implemented
+or accepted**. This document proposes a bounded operator-development feature,
+not AWS-wide SDK support, a production credential service, or completion of the
+native pilot. No AWS requests were sent. The checks below exercise local SDK
+serialization and isolated signing, not a working AWS connection.
+
+## Verified foundation (2026-10-10)
+
+[`aws_ecr_signing.py`](../serverware/aws_ecr_signing.py) and
+[`aws_ecr_signing.rs`](../data-plane/decision-gate-rs/src/aws_ecr_signing.rs)
+implement a closed five-action ECR SigV4 primitive, exact outbound request
+comparison, and separate freshness checks. They are **not wired into credential
+storage, policy authorization, the proxy dispatch path or the operator UI**.
+Signing opaque body bytes does not authorize their JSON contents. A caller must
+still supply trusted clocks and recheck current authority, credential generation,
+expiry and the request deadline at dispatch; the primitive is not an atomic-send
+or revocation barrier.
+
+The retained local checks are:
+
+- Six Boto3/Botocore **1.34.46** SDK-contract groups passed. Five ordinary ECR
+  methods prepared requests with explicit public dummy credentials; an audit
+  guard denied socket/DNS access, and a sentinel stopped each request before
+  HTTP dispatch. No simulated response was presented as a successful upload.
+- Ten Python signer groups passed across the initial run and one corrected
+  empty-body oracle rerun. The correction accommodates Botocore representing an
+  empty prepared body as `None`, while checking the original bytes and requiring
+  exact equality for every nonempty body. This was not a full corrected rerun.
+- Eleven standalone Rust groups passed using pinned Rust **1.88.0**, including
+  twelve literal Botocore signature/canonical-request vectors. The helper ran
+  without network access; this was not a new decision-gate build or activation.
+
+Reproducible test sources:
+[`test_aws_ecr_signing.py`](../scripts/test_aws_ecr_signing.py),
+[`test_aws_ecr_sdk_contract.py`](../scripts/test_aws_ecr_sdk_contract.py), and the
+Rust module's embedded tests. Local receipts are retained under
+`serverware-operator-workspace-evidence/aws-ecr-signing.EWMxu1ty` (outside Git).
+The integration and real-provider acceptance gates below remain open.
 
 ## Product flow and existing source boundary
 

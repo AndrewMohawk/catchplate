@@ -5,6 +5,10 @@ Root owns service stops, archives and extraction. Inventory reads only files;
 compare accepts private extracted trees and recovers further disposable SQLite
 copies. It neither stops services nor proves they stopped. Output contains
 metadata/counts/digests only. No output or archive files are created here.
+
+The explicit managed-unconfigured mode adds only a closed derived gate tree;
+it never authorizes setup, custody creation, settings changes or schema repair.
+Its CLI requires private-copy acknowledgement even for inventory capture.
 """
 from collections import Counter
 from contextlib import ExitStack
@@ -22,6 +26,17 @@ import sys
 import tempfile
 
 SCHEMA = "serverware.operatorRolloutInventory/v1"
+MANAGED_SCHEMA = "serverware.operatorRolloutInventory/v2"
+GATE_ROOT = "app-data/gate-runtime"
+POLICY = "app-data/policy-bundle.json"
+GATE_POLICY = GATE_ROOT + "/policy-bundle.json"
+GATE_GOOGLE = GATE_ROOT + "/operator-google-configuration.json"
+GATE_DIRECTORIES = frozenset((GATE_ROOT, GATE_ROOT + "/mitmproxy"))
+GATE_PLACEHOLDERS = frozenset(GATE_ROOT + "/" + name for name in (
+    ".operator-publication.lock", ".serverware-operator-demo.json",
+    "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem"))
+GATE_MEMBERS = GATE_DIRECTORIES | GATE_PLACEHOLDERS | {GATE_POLICY, GATE_GOOGLE}
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 DB_MAIN = "app-data/serverware.sqlite3"
 DB_FILES = frozenset(DB_MAIN + suffix for suffix in ("", "-wal", "-shm", "-journal"))
 DERIVED = frozenset("app-data/decision-gate-ca-" + kind + ".pem" for kind in ("cert", "key"))
@@ -66,7 +81,7 @@ def metadata(value):
     return result, (info.st_mtime_ns, info.st_ctime_ns)
 
 
-def tree(root):
+def tree(root, *, empty_placeholders=frozenset()):
     root = path(root)
     initial, _ = metadata(root)
     require(initial["kind"] == "directory")
@@ -80,6 +95,15 @@ def tree(root):
             relative = str(current.relative_to(root))
             info, stamps = metadata(current)
             if info["kind"] == "file":
+                if relative in empty_placeholders:
+                    # A regular, single-link file of size zero has no bytes to
+                    # read. Do not chmod/open the deliberately inaccessible 000
+                    # mountpoints. This exception is opt-in and exact-path only.
+                    require(info["mode"] == 0 and info["size"] == 0, "gate_placeholder")
+                    require(metadata(current) == (info, stamps), "file_changed_during_read")
+                    info["sha256"] = EMPTY_SHA256
+                    result[relative] = info
+                    continue
                 maximum = MAX_DB if relative in DB_FILES else MAX_FILE
                 total += info["size"]
                 require(info["size"] <= maximum and total <= MAX_TOTAL, "file_bound")
@@ -97,10 +121,12 @@ def tree(root):
     return result
 
 
-def inventory(persistent_root, custody_root):
+def inventory(persistent_root, custody_root, *, managed_unconfigured=False, provider_custody_root=None):
+    require(managed_unconfigured == (provider_custody_root is not None), "managed_options")
     persistent_root, custody_root = path(persistent_root), path(custody_root)
     require(not persistent_root.is_relative_to(custody_root) and not custody_root.is_relative_to(persistent_root))
-    persistent, custody = tree(persistent_root), tree(custody_root)
+    persistent = tree(persistent_root, empty_placeholders=GATE_PLACEHOLDERS if managed_unconfigured else frozenset())
+    custody = tree(custody_root)
     require(DB_MAIN in persistent, "database_missing")
     owner = tuple(persistent[DB_MAIN][key] for key in ("uid", "gid"))
     for name in DB_FILES & persistent.keys():
@@ -112,19 +138,68 @@ def inventory(persistent_root, custody_root):
         key = custody["notification-key.json"]
         require(key["kind"] == "file" and key["mode"] == 0o600 and 1 <= key["size"] <= 512
             and (key["uid"], key["gid"]) == (custody["."]["uid"], custody["."]["gid"]), "custody_inventory")
-    return {"schema": SCHEMA, "persistent": persistent, "custody": custody, "live_sqlite_opened": False}
+    result = {"schema": SCHEMA, "persistent": persistent, "custody": custody, "live_sqlite_opened": False}
+    if managed_unconfigured:
+        provider_root = path(provider_custody_root)
+        require(all(not provider_root.is_relative_to(other) and not other.is_relative_to(provider_root)
+            for other in (persistent_root, custody_root)), "provider_custody_overlap")
+        provider = tree(provider_root)
+        require(set(provider) == {"."} and provider["."]["mode"] == 0o700
+            and (provider["."]["uid"], provider["."]["gid"]) == owner, "provider_custody_not_empty_private")
+        provider_identity = tuple(provider["."][key] for key in ("dev", "ino"))
+        require(all(provider_identity != tuple(info[key] for key in ("dev", "ino"))
+            for area in (persistent, custody) for info in area.values() if info["kind"] == "directory"),
+            "provider_custody_alias")
+        require(persistent["."]["mode"] == custody["."]["mode"] == 0o700
+            and persistent.get("app-data", {}).get("mode") == 0o700, "private_copies_required")
+        result.update(schema=MANAGED_SCHEMA, provider_custody=provider, managed_unconfigured=True)
+        managed_gate_inventory(result)
+    return result
+
+
+def gate_members(snapshot):
+    return {name for name in snapshot["persistent"] if name == GATE_ROOT or name.startswith(GATE_ROOT + "/")}
+
+
+def managed_gate_inventory(snapshot):
+    """Closed derived inventory, never a prefix exclusion from preservation."""
+    persistent = snapshot["persistent"]
+    owner = tuple(persistent[DB_MAIN][key] for key in ("uid", "gid"))
+    names = gate_members(snapshot)
+    require(not names or names == GATE_MEMBERS, "gate_inventory")
+    for name in {POLICY} | names:
+        info = persistent.get(name, {})
+        directory, placeholder = name in GATE_DIRECTORIES, name in GATE_PLACEHOLDERS
+        require(info.get("kind") == ("directory" if directory else "file")
+            and info.get("mode") == (0o700 if directory else 0 if placeholder else 0o600)
+            and (info.get("uid"), info.get("gid")) == owner, "gate_file_identity")
+        if placeholder:
+            require(info.get("size") == 0 and info.get("sha256") == EMPTY_SHA256, "gate_placeholder")
+    if names:
+        require(all(persistent[GATE_POLICY][key] == persistent[POLICY][key] for key in ("size", "sha256")), "gate_policy_changed")
 
 
 def content(info):
     return {key: value for key, value in info.items() if key not in {"dev", "ino"}}
 
 
-def compare_files(before, after, *, identities):
-    require(before["schema"] == after["schema"] == SCHEMA)
-    require(set(before["persistent"]) - DB_FILES == set(after["persistent"]) - DB_FILES, "file_inventory_changed")
+def compare_files(before, after, *, identities, managed_transition=None):
+    require(managed_transition in {None, "first", "retained"}, "managed_options")
+    require(before["schema"] == after["schema"] == (MANAGED_SCHEMA if managed_transition else SCHEMA))
+    added = set()
+    if managed_transition:
+        for snapshot in (before, after):
+            require(snapshot.get("managed_unconfigured") is True, "receipt_contract")
+            managed_gate_inventory(snapshot)
+        require(gate_members(before) == (set() if managed_transition == "first" else GATE_MEMBERS)
+            and gate_members(after) == GATE_MEMBERS, "gate_transition")
+        added = GATE_MEMBERS if managed_transition == "first" else set()
+    require(((set(before["persistent"]) - DB_FILES) | added) == set(after["persistent"]) - DB_FILES, "file_inventory_changed")
     require(set(before["custody"]) == set(after["custody"]), "custody_inventory_changed")
     recreated = []
-    for namespace in ("persistent", "custody"):
+    for namespace in (("persistent", "custody", "provider_custody") if managed_transition else ("persistent", "custody")):
+        if namespace == "provider_custody":
+            require(set(before[namespace]) == set(after[namespace]) == {"."}, "provider_custody_not_empty_private")
         for name, old in before[namespace].items():
             if namespace == "persistent" and name in DB_FILES:
                 continue
@@ -215,6 +290,58 @@ def compare_databases(before, after):
         "prior_audit_prefix_sha256": digest([columns, old_audit]), "database_schema_equal": True}
 
 
+def managed_database_identity(connection, snapshot):
+    """Join public file bytes to preserved SQL, not to caller-supplied settings.
+
+    This is a preservation check on a further disposable SQLite copy, not an
+    alternate startup/profile validator. No product modules or secrets load.
+    Provider custody must be empty, so even cancelled setup history is outside
+    this deliberately first-configuration-only transition.
+    """
+    objects = connection.execute("SELECT name,tbl_name FROM sqlite_master").fetchall()
+    forbidden = ("operator_google_", "operator_provider_custody", "operator_catalog_oauth_")
+    require(not any(value.lower().startswith(forbidden) for row in objects for value in row), "managed_state_present")
+    tables = {row[0] for row in objects}
+    for table, column in (("operator_catalog_credentials", "data_json"), ("operator_demo_connections", "metadata_json")):
+        if table in tables:
+            for (raw,) in connection.execute('SELECT "' + column + '" FROM "' + table + '" LIMIT ?', (MAX_ROWS + 1,)):
+                require(type(raw) is str and len(raw.encode("utf-8")) <= MAX_FILE, "credential_metadata")
+                value = json.loads(raw)
+                require(type(value) is dict and value.get("auth_type") != "google_oauth", "managed_state_present")
+    settings_rows = connection.execute("SELECT singleton,settings_json FROM operator_demo_settings LIMIT 2").fetchall()
+    require(len(settings_rows) == 1 and type(settings_rows[0][0]) is int and settings_rows[0][0] == 1, "managed_settings")
+    raw = settings_rows[0][1]
+    require(type(raw) is str and len(raw.encode("utf-8")) <= 16384, "managed_settings")
+    settings = json.loads(raw)
+    require(type(settings) is dict and set(settings) == {"allowed_upstreams", "fixture_cidrs"}
+        and type(settings["allowed_upstreams"]) is list and 1 <= len(settings["allowed_upstreams"]) <= 16
+        and all(type(item) is str and 1 <= len(item) <= 2048 for item in settings["allowed_upstreams"])
+        and len(set(settings["allowed_upstreams"])) == len(settings["allowed_upstreams"])
+        and type(settings["fixture_cidrs"]) is list and len(settings["fixture_cidrs"]) <= 16
+        and all(type(item) is str and 1 <= len(item) <= 128 for item in settings["fixture_cidrs"])
+        and raw == json.dumps(settings, sort_keys=True), "managed_settings")
+    policy = connection.execute("SELECT singleton,signed_bundle_json FROM operator_demo_policy LIMIT 2").fetchall()
+    require(len(policy) == 1 and type(policy[0][0]) is int and policy[0][0] == 1
+        and type(policy[0][1]) is str and 0 < len(policy[0][1].encode("utf-8")) <= MAX_FILE, "managed_policy")
+    policy_bytes = policy[0][1].encode("utf-8")
+    policy_sha = hashlib.sha256(policy_bytes).hexdigest()
+    require(snapshot["persistent"][POLICY]["size"] == len(policy_bytes)
+        and snapshot["persistent"][POLICY]["sha256"] == policy_sha, "policy_not_authoritative")
+    expected = {"schema": "serverware.operatorGoogleGateConfiguration/v1", "operation": None,
+        "profile_binding": None, "profile_binding_digest": None, "effective_settings": settings,
+        "effective_settings_digest": "sha256:" + digest(settings)}
+    public_bytes = canonical(expected).encode("ascii")
+    require(len(public_bytes) <= 32768, "managed_public_bound")
+    public_sha = hashlib.sha256(public_bytes).hexdigest()
+    if gate_members(snapshot):
+        # Exact canonical bytes also reject extra/duplicate fields and any
+        # non-null operation/profile, without echoing or parsing file contents.
+        public = snapshot["persistent"][GATE_GOOGLE]
+        require(public["size"] == len(public_bytes) and public["sha256"] == public_sha, "managed_public_not_authoritative")
+    return {"effective_settings_digest": expected["effective_settings_digest"],
+        "policy_file_sha256": policy_sha, "google_public_sha256": public_sha}
+
+
 def private_database(root, expected, scratch):
     for name in sorted(DB_FILES & expected["persistent"].keys()):
         source, target = root / name, scratch / Path(name).name
@@ -233,24 +360,37 @@ def private_database(root, expected, scratch):
     return connection
 
 
-def load_receipt(filename):
+def load_receipt(filename, *, managed_unconfigured=False):
     filename = path(filename)
     require(filename.is_file() and filename.stat().st_size <= 2 * 1024**2, "receipt_bound")
     value = json.loads(filename.read_text())
-    require(isinstance(value, dict) and set(value) == {"schema", "persistent", "custody", "live_sqlite_opened"}
-        and value["schema"] == SCHEMA and value["live_sqlite_opened"] is False, "receipt_contract")
+    fields = {"schema", "persistent", "custody", "live_sqlite_opened"}
+    if managed_unconfigured:
+        fields |= {"provider_custody", "managed_unconfigured"}
+    require(isinstance(value, dict) and set(value) == fields
+        and value["schema"] == (MANAGED_SCHEMA if managed_unconfigured else SCHEMA)
+        and value["live_sqlite_opened"] is False
+        and (not managed_unconfigured or value["managed_unconfigured"] is True), "receipt_contract")
     return value
 
 
-def compare(before_root, after_root, before_custody, after_custody, before_inventory, after_inventory):
+def compare(before_root, after_root, before_custody, after_custody, before_inventory, after_inventory,
+        *, managed_transition=None, before_provider_custody=None, after_provider_custody=None):
+    require(managed_transition in {None, "first", "retained"}, "managed_options")
+    require((before_provider_custody is not None) == (after_provider_custody is not None) == bool(managed_transition), "managed_options")
     roots = [path(value) for value in (before_root, after_root, before_custody, after_custody)]
-    require(len(set(roots)) == 4 and all(not left.is_relative_to(right) for left in roots for right in roots if left != right))
-    before, after = inventory(roots[0], roots[2]), inventory(roots[1], roots[3])
+    if managed_transition:
+        roots += [path(before_provider_custody), path(after_provider_custody)]
+    require(len(set(roots)) == len(roots) and all(not left.is_relative_to(right) for left in roots for right in roots if left != right))
+    options = [{"managed_unconfigured": True, "provider_custody_root": roots[index + 4]} if managed_transition else {}
+        for index in range(2)]
+    before, after = inventory(roots[0], roots[2], **options[0]), inventory(roots[1], roots[3], **options[1])
+    areas = ("persistent", "custody", "provider_custody") if managed_transition else ("persistent", "custody")
     for copied, recorded in ((before, before_inventory), (after, after_inventory)):
         require(all({name: content(info) for name, info in copied[area].items()}
-            == {name: content(info) for name, info in recorded[area].items()} for area in ("persistent", "custody")), "copy_not_bound_to_inventory")
-    compare_files(before, after, identities=False)
-    recreated = compare_files(before_inventory, after_inventory, identities=True)
+            == {name: content(info) for name, info in recorded[area].items()} for area in areas), "copy_not_bound_to_inventory")
+    compare_files(before, after, identities=False, managed_transition=managed_transition)
+    recreated = compare_files(before_inventory, after_inventory, identities=True, managed_transition=managed_transition)
     with tempfile.TemporaryDirectory(prefix="operator-rollout-sqlite-") as temporary, ExitStack() as stack:
         scratch = Path(temporary)
         connections = []
@@ -261,11 +401,21 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
             stack.callback(connection.close)
             connections.append(connection)
         database = compare_databases(*connections)
-    require(inventory(roots[0], roots[2]) == before and inventory(roots[1], roots[3]) == after, "source_copy_changed")
-    return {"schema": "serverware.operatorRolloutComparison/v1", "ok": True, **database,
+        managed = None
+        if managed_transition:
+            managed = managed_database_identity(connections[0], before)
+            require(managed_database_identity(connections[1], after) == managed, "managed_identity_changed")
+    require(inventory(roots[0], roots[2], **options[0]) == before
+        and inventory(roots[1], roots[3], **options[1]) == after, "source_copy_changed")
+    result = {"schema": "serverware.operatorRolloutComparison/v1", "ok": True, **database,
         "non_sqlite_files_and_custody_preserved": True, "custody_live_identity_preserved": True,
         "derived_ca_publication_inode_changes": recreated, "live_sqlite_opened": False,
         "whole_database_byte_equality_claimed": False, "services_stopped_verified": False}
+    if managed_transition:
+        result.update(schema="serverware.operatorRolloutComparison/v2", managed_transition=managed_transition,
+            managed_unconfigured=managed, derived_gate_files_added=sorted(GATE_MEMBERS) if managed_transition == "first" else [],
+            provider_custody_empty=True, provider_custody_live_identity_preserved=True)
+    return result
 
 
 def main():
@@ -274,18 +424,31 @@ def main():
     capture = commands.add_parser("inventory")
     capture.add_argument("--persistent-root", required=True)
     capture.add_argument("--custody-root", required=True)
+    capture.add_argument("--managed-unconfigured", action="store_true")
+    capture.add_argument("--provider-custody-root")
+    capture.add_argument("--private-copies-acknowledged", action="store_true")
     comparison = commands.add_parser("compare")
     for name in ("before-root", "after-root", "before-custody", "after-custody", "before-inventory", "after-inventory"):
         comparison.add_argument("--" + name, required=True)
     comparison.add_argument("--private-copies-acknowledged", action="store_true", required=True)
+    comparison.add_argument("--managed-unconfigured", action="store_true")
+    comparison.add_argument("--managed-transition", choices=("first", "retained"))
+    comparison.add_argument("--before-provider-custody")
+    comparison.add_argument("--after-provider-custody")
     args = parser.parse_args()
     signal.alarm(120)
     os.umask(0o077)
     if args.command == "inventory":
-        result = inventory(args.persistent_root, args.custody_root)
+        require(not args.managed_unconfigured or args.private_copies_acknowledged, "private_copies_required")
+        result = inventory(args.persistent_root, args.custody_root, managed_unconfigured=args.managed_unconfigured,
+            provider_custody_root=args.provider_custody_root)
     else:
+        require(args.managed_unconfigured == (args.managed_transition is not None), "managed_options")
         result = compare(args.before_root, args.after_root, args.before_custody, args.after_custody,
-            load_receipt(args.before_inventory), load_receipt(args.after_inventory))
+            load_receipt(args.before_inventory, managed_unconfigured=args.managed_unconfigured),
+            load_receipt(args.after_inventory, managed_unconfigured=args.managed_unconfigured),
+            managed_transition=args.managed_transition, before_provider_custody=args.before_provider_custody,
+            after_provider_custody=args.after_provider_custody)
     print(json.dumps(result, sort_keys=True))
 
 

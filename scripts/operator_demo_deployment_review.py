@@ -152,8 +152,14 @@ def discover():
     return result
 
 
-def compare_service(name, proposed, live, image, networks, digest_file=file_digest):
+def compare_service(name, proposed, live, image, networks, digest_file=file_digest, *, transition=None):
     """Compare effective settings; do not return environments or engine objects."""
+    # Existing callers retain the exact historical pair. A separate closed
+    # reviewer may supply its independently admitted pair without mutating
+    # these module constants or weakening any retained-setting comparison.
+    old_source, new_source, old_sha, new_sha, old_binary, new_binary = (
+        (OLD_SOURCE, NEW_SOURCE, OLD_SHA, NEW_SHA, OLD_BINARY, NEW_BINARY)
+        if transition is None else transition)
     config, host = live["Config"], live["HostConfig"]
     image_config = image["Config"]
     deltas = set()
@@ -173,8 +179,8 @@ def compare_service(name, proposed, live, image, networks, digest_file=file_dige
         require(expected_env.get("NGINX_ENVSUBST_FILTER") == "^TRAEFIK_IPV4$$", "edge filter model")
         expected_env["NGINX_ENVSUBST_FILTER"] = "^TRAEFIK_IPV4$"
     if name == "serverware":
-        require(actual_env.get(EXPECTED_DIGEST) == "sha256:" + OLD_SHA
-            and expected_env.get(EXPECTED_DIGEST) == "sha256:" + NEW_SHA, "exact paired expected gate digest")
+        require(actual_env.get(EXPECTED_DIGEST) == "sha256:" + old_sha
+            and expected_env.get(EXPECTED_DIGEST) == "sha256:" + new_sha, "exact paired expected gate digest")
         require({key: value for key, value in actual_env.items() if key.startswith("SERVERWARE_OPERATOR_NOTIFICATIONS_")}
             == NOTIFICATION_ENV, "retained enabled notification configuration")
         expected_env[EXPECTED_DIGEST] = actual_env[EXPECTED_DIGEST]
@@ -254,10 +260,10 @@ def compare_service(name, proposed, live, image, networks, digest_file=file_dige
             and volume.get("bind", {}).get("create_host_path") is False
             and actual.get("Propagation", "rprivate") == volume.get("bind", {}).get("propagation", "rprivate"), name + " mount boundary")
         if name == "serverware" and volume["target"] == "/app":
-            require(actual["Source"] == OLD_SOURCE and volume["source"] == NEW_SOURCE and volume.get("read_only") is True, "exact app source change")
+            require(actual["Source"] == old_source and volume["source"] == new_source and volume.get("read_only") is True, "exact app source change")
             deltas.add(APP_DELTA)
         elif name == "decision-gate-rs" and volume["target"] == BINARY_TARGET:
-            require(actual["Source"] == OLD_BINARY and volume["source"] == NEW_BINARY and volume.get("read_only") is True, "exact gate executable change")
+            require(actual["Source"] == old_binary and volume["source"] == new_binary and volume.get("read_only") is True, "exact gate executable change")
             deltas.add(BINARY_DELTA)
         elif name == "edge" and volume["target"] == "/etc/nginx/templates/nginx.conf.template":
             require(Path(actual["Source"]).name == "nginx.conf.template" and volume["source"] == str(STACK / "config/nginx.conf.template")

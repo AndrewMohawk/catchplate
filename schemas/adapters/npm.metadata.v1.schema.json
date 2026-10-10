@@ -5,6 +5,10 @@
   "$comment": "Metadata only; no installation, tarballs, query, audit or writes. Compiler also enforces strictly sorted packages and exact bound GET authority.",
   "type": "object", "additionalProperties": false,
   "required": ["credentialBinding", "packages", "request", "response"],
+  "$defs": {
+    "packageName": {"type": "string", "minLength": 1, "maxLength": 214,
+      "pattern": "^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$"}
+  },
   "properties": {
     "credentialBinding": {
       "type": "object", "additionalProperties": false,
@@ -18,8 +22,7 @@
       }
     },
     "packages": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
-      "items": {"type": "string", "minLength": 1, "maxLength": 214,
-        "pattern": "^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$"}},
+      "items": {"$ref": "#/$defs/packageName"}},
     "request": {"const": {
       "allowedHeaders": ["accept", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope", "pacote-pkg-id", "pacote-req-type", "pacote-version", "user-agent"],
       "discardHeaders": ["accept-encoding", "npm-session"],

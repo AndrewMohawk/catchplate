@@ -166,6 +166,54 @@ fn npm_metadata_contract_and_embedded_schema_are_closed() {
 }
 
 #[test]
+fn npm_metadata_startup_policy_schema_validators_compile_and_remain_closed() {
+    // Exercise the same cached v1/v2 schema compiler used by policy startup,
+    // not only the standalone adapter validator. This is structural validation,
+    // not a signature, authority-classifier or serving acceptance claim.
+    let embedded = closed_embedded_policy_schema().unwrap();
+    let root = &embedded["$defs"]["adapter_npm_metadata_v1__root"];
+    assert_eq!(
+        root["properties"]["packages"]["items"]["$ref"],
+        "#/$defs/adapter_npm_metadata_v1__packageName"
+    );
+    let package = &embedded["$defs"]["adapter_npm_metadata_v1__packageName"];
+    assert_eq!(package["type"], "string");
+    assert_eq!(package["maxLength"], 214);
+    assert!(package["pattern"]
+        .as_str()
+        .is_some_and(|pattern| !pattern.is_empty()));
+    for version in ["serverware.policy/v1", policy_route_authority::BUNDLE] {
+        let mut raw = policy();
+        raw["apiVersion"] = json!(version);
+        raw["kind"] = json!("PolicyBundle");
+        raw["metadata"] = json!({"id":"npm-startup-schema-fixture","sequence":1,"rollbackEpoch":1});
+        if version == policy_route_authority::BUNDLE {
+            let placeholder = format!("sha256:{}", "0".repeat(64));
+            raw["routeAuthority"] = json!({"apiVersion":"serverware.compiledRouteAuthority/v1",
+                "genericOperations":[],"mappingSha256":placeholder,"routeAuthorityRootSha256":placeholder,
+                "operationAuthorityRootSha256":placeholder});
+        }
+        validate_policy_schema(&raw)
+            .expect("startup must compile and resolve the embedded npm adapter");
+        for packages in [
+            json!(["Fixture"]),
+            json!(["@fixture%2fpkg"]),
+            json!(["fixture", "fixture"]),
+        ] {
+            let mut changed = raw.clone();
+            changed["routes"][0]["adapter"]["config"]["packages"] = packages;
+            assert!(validate_policy_schema(&changed).is_err());
+        }
+        let mut changed = raw.clone();
+        changed["routes"][0]["adapter"]["config"]["request"]["maxBodyBytes"] = json!(1);
+        assert!(validate_policy_schema(&changed).is_err());
+        changed = raw;
+        changed["routes"][0]["adapter"]["config"]["unknown"] = json!(true);
+        assert!(validate_policy_schema(&changed).is_err());
+    }
+}
+
+#[test]
 fn npm_metadata_v2_authority_is_exactly_source_classified_read() {
     let pin = |value: &Value| {
         sha256_prefixed(policy_route_authority::canonical(value).unwrap().as_bytes())

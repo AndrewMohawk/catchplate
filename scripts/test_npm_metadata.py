@@ -65,6 +65,36 @@ def compile_route(value=None, *, schema=True):
 
 
 class NpmMetadataPureTests(unittest.TestCase):
+    def test_embedded_schema_has_real_local_definitions_and_closed_root(self):
+        # The gate embeds every adapter schema before admitting any policy.
+        # Guard the required registry shape here; actual gate initialization
+        # remains covered by its Rust validate_policy_schema regression.
+        for adapter in sorted(pb.SUPPORTED_ADAPTERS):
+            schema = json.loads((ROOT / "schemas/adapters" / f"{adapter}.schema.json").read_text())
+            with self.subTest(adapter=adapter):
+                self.assertIsInstance(schema.get("$defs"), dict)
+        schema = json.loads((ROOT / "schemas/adapters/npm.metadata.v1.schema.json").read_text())
+        self.assertEqual(schema["type"], "object")
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(set(schema["required"]), {"credentialBinding", "packages", "request", "response"})
+        self.assertEqual(set(schema["properties"]), set(schema["required"]))
+        self.assertEqual(schema["properties"]["packages"]["items"], {"$ref": "#/$defs/packageName"})
+        self.assertEqual(schema["$defs"], {"packageName": {"type": "string", "minLength": 1,
+            "maxLength": 214, "pattern": "^" + npm.PACKAGE_PATTERN + "$"}})
+        self.assertEqual(schema["properties"]["request"]["const"], npm.request_profile())
+        self.assertEqual(schema["properties"]["response"]["const"], npm.response_profile())
+        pending = [schema]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if "$ref" in value:
+                    reference = value["$ref"]
+                    self.assertTrue(reference.startswith("#/$defs/"))
+                    self.assertIn(reference.removeprefix("#/$defs/"), schema["$defs"])
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+
     def test_exact_schema_compiler_v1_v2_and_hash_binding(self):
         value = document()
         before = deepcopy(value)

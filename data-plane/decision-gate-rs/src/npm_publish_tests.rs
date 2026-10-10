@@ -44,7 +44,7 @@ fn policy() -> Value {
         "adapter":{"type":ADAPTER,"config":config("fixture")},"constraints":[envelope("npm-publish-response")]});
     let mut policy = policy_with_route(wire.clone()); policy["routes"] = json!([wire]);
     policy["credentials"] = json!([{"id":CREDENTIAL,"credentialType":"static","provider":"operator-demo",
-        "providerSubject":"synthetic-npm","secretClass":"bearerToken","injection":{"type":"bearer","header":"Authorization"}}]);
+        "providerSubject":"synthetic-npm","injection":{"type":"bearer","header":"Authorization"}}]);
     policy
 }
 
@@ -337,18 +337,35 @@ fn npm_publish_response_preserves_strict_object_bytes_and_scans_reflection() {
 
 #[test]
 fn npm_publish_dispatch_barrier_cannot_rearm_expired_window_or_contact_target() {
-    let snapshot=snapshot("fixture"); let state=test_gate_state(Arc::clone(&snapshot));
+    let mut held=(*snapshot("fixture")).clone();
+    held.policy_id="serverware-operator-demo".into();
+    held.principals[0].proxy_authorization=Some(ProxyAuthorizationPolicy::BearerToken {
+        token_sha256:sha256_prefixed(b"synthetic-publish-deadline-client"),source_cidrs:vec![],
+        expires_at_ms:Some(now_epoch_ms()+60_000),basic_transport:None });
+    held.routes[0].resolved_address_policy=ResolvedAddressPolicy::PublicOnly;
+    let profile=operator_demo::test_publish_dispatch_profile(&held);
+    let snapshot=Arc::new(held); let mut state=test_gate_state(Arc::clone(&snapshot));
+    state.policy_shadow=ShadowRuntime::new_operator_demo(profile);
     let listener=TcpListener::bind("127.0.0.1:0").unwrap(); listener.set_nonblocking(true).unwrap();
-    let address=listener.local_addr().unwrap(); let deadline=u64::try_from(now_epoch_ms()).unwrap()+100;
+    let address=listener.local_addr().unwrap();
+    // The exact registry URL has no explicit port, so reqwest's fixed DNS
+    // override selects this loopback listener's port. TLS remains verified.
+    let client=Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
+        .resolve(HOST,address).timeout(Duration::from_secs(2)).build().unwrap();
+    let deadline=u64::try_from(now_epoch_ms()).unwrap()+100;
     let mut reached=false;
     let result=send_upstream_request_with_current_lease_finalized(&state,&snapshot,None,
-        test_upstream_client().put(format!("http://{address}/fixture")).body("synthetic"),
+        client.put(format!("{BASE}/fixture")).body("synthetic"),
         UpstreamSendDeadlines {policy_expires_at_epoch_ms:Some(deadline),..UpstreamSendDeadlines::default()},false,
         |_| { reached=true; let bound=Instant::now()+Duration::from_secs(2);
             while now_epoch_ms()<u128::from(deadline) && Instant::now()<bound {thread::sleep(Duration::from_millis(1));}
             Ok(None) });
     assert!(reached,"the deadline must still be live at the initial send check");
-    assert!(matches!(result,Err(UpstreamSendError::CredentialAuthority("upstream_send_authority_expired"))));
+    let result_kind=match &result {Ok(_)=>"response",Err(UpstreamSendError::CredentialAuthority(_))=>"credential-authority",
+        Err(UpstreamSendError::DispatchBarrier(_))=>"dispatch-barrier",Err(UpstreamSendError::RequestBuild(_))=>"request-build",
+        Err(UpstreamSendError::Request(_))=>"request"};
+    assert!(matches!(result,Err(UpstreamSendError::CredentialAuthority("upstream_send_authority_expired"))),
+        "expected original deadline refusal, got {result_kind}");
     assert_eq!(listener.accept().expect_err("expired after barrier: no target connection").kind(),io::ErrorKind::WouldBlock);
 }
 

@@ -47,7 +47,7 @@ fn policy() -> Value {
     let mut policy = policy_with_route(wire.clone());
     policy["routes"] = json!([wire]);
     policy["credentials"] = json!([{"id":CREDENTIAL,"credentialType":"static","provider":"operator-demo",
-        "providerSubject":"synthetic-npm","secretClass":"bearerToken","injection":{"type":"bearer","header":"Authorization"}}]);
+        "providerSubject":"synthetic-npm","injection":{"type":"bearer","header":"Authorization"}}]);
     policy
 }
 

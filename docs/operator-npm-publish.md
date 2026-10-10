@@ -6,7 +6,8 @@ permission also includes metadata GETs for that same package. This is separate
 from the metadata-only preset and the legacy `npm.registry` approval workflow;
 neither existing permission is automatically upgraded.
 
-**Verification status: source verification and isolated acceptance are pending.**
+**Verification status: focused Python, UI and fixture checks have passed;
+compiled acceptance and stock-client runtime acceptance remain pending.**
 This document describes the authored contract and client recipe, not a successful
 publish, a live deployment, or public npm registry acceptance.
 
@@ -137,9 +138,22 @@ provider 2FA, trusted publishing, token renewal or a JIT approval ceremony.
 It does not modify the legacy adapter's approval requirements. The broader
 requirements remain in [ordinary npm client compatibility](operator-npm-client-compatibility.md).
 
-Source checks, a genuinely compiled matching gate, and the isolated stock-client
-fixture must pass before this document can claim acceptance. The fixture must
-prove metadata GETs independently: npm can suppress preflight GET errors, so a
+## Verification boundary
+
+The current bounded checks passed:
+
+- 77 focused Python tests covering protocol, catalog, metadata, publishing hours
+  and events at `37a3b36d`.
+- UI source and pure checks, plus six of six rendered-browser groups, at
+  `e841f843`. These do not execute a real registry publish.
+- 11 of 11 stock-fixture pure tests at `bb3988d7`.
+
+The first genuine Rust run passed nine of 11 tests; two test-setup failures are
+being corrected. Rust acceptance, a genuinely compiled matching gate's isolated
+stock-client runtime acceptance, and live deployment remain pending.
+
+The isolated fixture must prove metadata GETs independently: npm can suppress
+preflight GET errors, so a
 successful publish command alone is insufficient. No real provider token,
 public registry mutation, live operator rollout or native hardware acceptance
 is claimed here. Existing metadata-only acceptance does not prove publishing.

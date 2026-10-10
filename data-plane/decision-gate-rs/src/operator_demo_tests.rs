@@ -60,6 +60,12 @@ fn public_deployment() -> Deployment {
     Deployment::parse(r#"["https://api.example.com"]"#, None).unwrap()
 }
 
+/// A validated synthetic operator permit for the publish deadline unit test.
+/// No fixed-path deployment admission, filesystem initialization or env edits.
+pub(crate) fn test_publish_dispatch_profile(snapshot: &Snapshot) -> Profile {
+    profile(snapshot, Deployment::parse(r#"["https://registry.npmjs.org"]"#, None).unwrap())
+}
+
 #[test]
 fn operator_demo_managed_google_status_and_disabled_cold_scope() {
     let original = snapshot(1);

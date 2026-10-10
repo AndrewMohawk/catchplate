@@ -599,3 +599,6 @@ impl DispatchPermit {
 #[cfg(test)]
 #[path = "operator_demo_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::test_publish_dispatch_profile;

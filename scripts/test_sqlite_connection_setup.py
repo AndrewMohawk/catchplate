@@ -159,6 +159,10 @@ class SqliteConnectionSetupTests(unittest.TestCase):
             try:
                 threads[0].start()
                 self.assertTrue(entered.wait(3))
+                acquired = native_gate.acquire(blocking=False)
+                if acquired:
+                    native_gate.release()
+                self.assertFalse(acquired, "registration must still own the setup gate")
                 threads[1].start()
                 self.assertTrue(waiter.wait(3))
                 self.assertEqual(len(self.connections), 1)

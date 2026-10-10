@@ -631,7 +631,74 @@ the initial two-strategy source from the later serialized-only supplement.
 Before any application setup-serialization change, aggregate waiting must stay
 within the existing budget and held-lock, nested-call, failure-cleanup and
 process-lifecycle behavior need explicit controls. No connection pool,
-authority cache, deadline increase or live rollout has been introduced.
+authority cache, deadline increase or live rollout had been introduced at that
+checkpoint.
+
+### Bounded setup candidate and stock run sixteen
+
+Commit `5afe10e1` adds a process-local setup gate in
+`serverware/sqlite_connection_setup.py`, reached only by `db.connect()`'s
+existing SQLite branch. Every caller still gets a fresh handle, both SQL
+functions, row factory, WAL assignment and foreign-key enforcement. Borrowed
+connections and PostgreSQL bypass the helper. The gate ends before caller
+queries or transactions; it does not cache schema, mode or authority state.
+
+The original ten-second allowance is shared by setup-gate waiting and sampled
+SQLite busy-timeout allowances. Nested setup inherits the earlier deadline;
+failed handles close without replacing the original exception. Returned handles
+retain their original 10,000 ms busy timeout. Forked children reset the gate
+and thread-local deadline; inherited SQLite handles are not made fork-safe.
+Late completion is refused, but this is not a hard interruption of SQLite CPU
+or filesystem work. See [SQLite's busy-timeout semantics](https://www.sqlite.org/c3ref/busy_timeout.html).
+
+Eight focused groups pass in **3.503 seconds** in the pinned, network-none app
+image. They cover real SQLite setup and foreign keys, fresh/replaced paths,
+concurrency, nested/expired budgets, failed-handle ownership, a real exclusive
+lock and recovery, an actual bounded fork child, and the real `db.connect()`
+branch selection. Review strengthened one concurrency assertion to directly
+probe lock ownership while registration is held; that affected group passes
+in **0.007 seconds**. The fixture retains the original `5afe10e1` test text;
+the strengthened test changes no application source. Both test hashes and
+results are retained separately in `sqlite-setup-test-context.json`.
+
+The fresh **stock** run from **17:25:10 to 17:26:40 UTC on October 10** uses
+the complete 4,946-file `5afe10e1` snapshot and the unchanged genuine `92ee92a2`
+gate. All 498 compiler inputs and 742 crate files match its original build.
+After substituting only fresh source/job identities, the runner, inspector and
+Compose recipe match run fourteen exactly. The normal application entrypoint,
+all seven client phases, deadlines, resources and acceptance predicates remain
+unchanged; the run-fifteen stack wrapper is absent.
+
+This run completes **prerequisite, unscoped, scoped and wrong_package**, then
+fails **outside_window / client** with npm `E503` instead of the expected
+policy denial. Its one bounded 503 record is
+`request_policy_deadline_invalid`, not `credential_generation_missing`.
+No static-preparation, lease-renewal or audit-post failure was retained. The
+failure observer successfully reads 98 durable events, with one event queued
+and zero failed sends/retry batches. All 25 emitted application audit timing
+records complete (30 events; median/maximum 433/896 ms); those completed
+records are not measurements of the failed request or a matched latency test.
+
+The stopped database copy passes `quick_check` and retains six releases,
+including scoped metadata/publish and outside-window metadata, three denials,
+five CONNECTs, five keep-alives and 64 credential leases. There is no retained
+outside-window publish release. Cleanup succeeds, no project containers or
+networks remain, and all 4,946 source and 1,782 npm files remain unchanged.
+Evidence is in `serverware-npm-publish-runner.FTgo1eR4`; stopped private data is
+in `serverware-npm-publish-private.bOrnkKZe`. The run receipt SHA-256 is
+`9a6cb1794b6fdba79160394695c6d17f0fa2f09fa63f5fe4024db57e99f31a60`.
+
+Source inspection identifies the next integration defect: matching
+operator-demo shadow admission is inactive, and binding its decision time does
+not evaluate the pure policy plan. Ordinary forwarding's remaining constraint
+calls select rate limits only, so the request-time semantic check is skipped
+before credential preparation. The late send-deadline guard still refuses the
+closed window. This is not a near-expiry race: the fixture selected
+06:00–07:00 UTC during a 17:25 UTC run. The required next change is to call the
+existing semantic evaluator in the ordinary decision path before credential
+resolution, using the same decision-time sample, while preserving quota-only
+effects and the late dispatch guard. An actual operator-profile denial test
+must cover this join, not just the existing time-window helper tests.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

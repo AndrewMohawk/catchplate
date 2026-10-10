@@ -90,6 +90,34 @@ checked, and the observed digest must match the selected roster. Cold or
 unsupported inputs stream through bounded 1 MiB reads, not a whole-file buffer.
 The existing retained-launch reader and generic tree measurement are unchanged.
 
+## Startup supervisor: retained-file checks
+
+The local startup supervisor was a separate uncached caller. For each role it
+hashes retained files on acquisition and at four subsequent full-check
+boundaries: completion of open, beginning of run, receipt of late originals,
+and authenticated child admission. Both digest sites now use the same
+sealed-content memo. All five boundaries remain; their per-file checks use
+captured descriptor/name ownership in constant time rather than recursively
+scanning the complete owner for every file.
+
+Every hit still checks the actual held and named file metadata, read-only
+descriptor, owning process/thread, original clocks and kernel content identity.
+The existing 64 KiB reader remains the fallback, including empty public modules.
+Plan, credential and late-original byte readers are unchanged. The memo is
+process-local and resets at fork: this does not skip another process's first
+measurement or cache child admission. Savings from this integration are not yet
+measured on a native startup.
+
+## Installation phase timing
+
+Prospective COMMON source now emits nine bounded `INSTALL_*` durations for
+configuration issuance, package finalization, post preparation, measured
+evidence, installation preparation, core remount, witness/package signing,
+actual installation and trust commit. These use the existing best-effort
+diagnostic helper, not an authorization clock or another startup gate. Original
+phase markers and call order remain intact; a failed phase does not emit a
+successful completion duration. These timings are not present in frozen R97.
+
 ## Local verification
 
 Nine cache test groups pass with real temporary files and synthetic kernel
@@ -114,6 +142,17 @@ cover cold streaming, warm reuse, changed content and metadata, fresh ELF
 admission, unsupported inputs, EOF and size bounds, wrong claimed digests, and
 cancellation or short reads without publishing a partial digest.
 
+The startup-supervisor follow-up passed 40 tests in the cached offline
+engineering image: 15 existing startup tests, six failure-diagnostic tests,
+nine shared-cache tests and ten new startup-content-cache groups. The new
+groups use real files, descriptors and byte reads with explicitly synthetic
+kernel seals, ownership and clocks. They cover cold/warm reads, empty retained
+files, false claims, changed metadata/content/names, original lifetime checks,
+cancellation, unsupported inputs and preservation of all five digest
+boundaries. They do not run an admitted startup or establish latency savings.
+COMMON also passed five installation-timing groups and reran all 28
+prepared-static groups. The timing change is committed as `69b5a2a59`.
+
 The opt-in real-kernel test was attempted on the host's ext4 temporary volume
 and **skipped** because that filesystem/kernel does not support fs-verity there.
 It is not a passing real-fs-verity acceptance result. No new mounts, elevated
@@ -121,7 +160,7 @@ container capabilities, or active-pilot changes were made to obtain a test pass.
 
 ## Remaining work and evidence boundary
 
-The three measurement-cache changes alone do not provide cross-session artifact
+The measurement-cache changes alone do not provide cross-session artifact
 reuse or eliminate installation, destination readback, synchronization, ELF
 metadata analysis, or launch authorization. The additional prepared-static
 implementation below targets the repeated static installation work; it does not

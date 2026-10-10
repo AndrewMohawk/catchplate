@@ -27,6 +27,7 @@ import time
 from serverware import authority_fd_entrypoint as entrypoint
 from serverware import authority_launcher as launcher
 from serverware import authority_stage_zero_contract as contract
+from serverware import authority_local_artifact_measure as measure
 from serverware.authority_local_limits import LOCAL_SETUP_MAX_NS
 
 PLAN_SCHEMA = "serverware.authorityTrustedHostLocalStartup/v1"
@@ -272,6 +273,7 @@ class LocalAuthorityStartup:
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.handles, self.names, self.sockets = [], [], []
         self.path_directories = {}
+        self.resource_file_custody = {}
         self.child_pid = self.child_pidfd = self.child_start = None
         self.child_status = None
         self.closed = self.uncertain = self.failed = self.admitted = False
@@ -297,6 +299,7 @@ class LocalAuthorityStartup:
             self.uncertain = True
             raise
         self.handles.remove(row)
+        self.resource_file_custody.pop(fd, None)
 
     def _close_socket(self, channel):
         _require(not self.uncertain and channel in self.sockets)
@@ -359,6 +362,39 @@ class LocalAuthorityStartup:
         next(row for row in self.handles if row[0] == fd)[1] = _identity(os.fstat(fd))
         return fd
 
+    def _retained_digest(self, fd, *, read, startup=True):
+        """Content-only reuse with constant-time custody checks for this leaf."""
+        _require(type(startup) is bool and fd in self.resource_file_custody)
+        custody = self.resource_file_custody[fd]
+        held, named = custody
+        parent, name, child, identity, directory = named
+        _require(child == fd and directory is False)
+        previous_boot, previous_epoch = self.last_boot, self.last_epoch
+
+        def check_retained():
+            nonlocal previous_boot, previous_epoch
+            _require(_LIVE is self and (os.getpid(), threading.get_ident()) == (self.pid, self.thread)
+                and os.geteuid() == os.getegid() == 0 and not (self.closed or self.uncertain)
+                and self.resource_file_custody.get(fd) is custody
+                and held[0] == fd and held[1] == identity)
+            if startup:
+                value = self.value
+                current_boot, current_epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+                _require(value is not None and _boot() == value["bootIdDigest"]
+                    and value["issuedAtBoottimeNs"] <= current_boot < value["deadlineBoottimeNs"]
+                    and value["issuedAtUnixNanos"] <= current_epoch < value["expiresAtUnixNanos"]
+                    and (previous_boot is None or previous_boot <= current_boot)
+                    and (previous_epoch is None or previous_epoch <= current_epoch))
+                previous_boot, previous_epoch = current_boot, current_epoch
+            _require(_identity(os.fstat(fd)) == identity
+                and _identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) == identity
+                and fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
+
+        # The caller's original reader remains the fallback, including empty
+        # public modules. No claimed SHA, owner or session result seeds the memo.
+        return measure._digest_owned_file(fd, maximum=launcher.MAX_CLOSURE_FILE_BYTES,
+            read=read, check=check_retained)
+
     @classmethod
     def open(cls, *, plan_fd, plan_sha256, listener_fd):
         global _LIVE
@@ -394,8 +430,14 @@ class LocalAuthorityStartup:
                 owner.resource_files, owner.resource_directories = [], []
                 for item in owner.value["retainedFiles"]:
                     fd = owner._open(item["path"])
+                    held, named = owner.handles[-1], owner.names[-1]
+                    _require(held[0] == named[2] == fd and named[4] is False
+                        and fd not in owner.resource_file_custody
+                        and len(owner.resource_file_custody) < len(owner.value["retainedFiles"]))
+                    owner.resource_file_custody[fd] = (held, named)
                     _require(STATIC_FD_MIN <= fd <= 2**31 - 1
-                        and sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES, allow_empty=True)) == item["sha256"])
+                        and owner._retained_digest(fd,
+                            read=lambda: _read(fd, launcher.MAX_CLOSURE_FILE_BYTES, allow_empty=True)) == item["sha256"])
                     owner.resource_files.append(fd)
                 for item in owner.value["retainedDirectories"]:
                     fd = owner._open(item["path"], directory=True)
@@ -452,7 +494,8 @@ class LocalAuthorityStartup:
             _require(_read(self.plan_fd, MAX_PLAN) == self.raw)
         if full and hasattr(self, "resource_files"):
             for row, fd in zip(self.value["retainedFiles"], self.resource_files):
-                _require(sha(_read(fd, launcher.MAX_CLOSURE_FILE_BYTES, allow_empty=True)) == row["sha256"])
+                _require(self._retained_digest(fd, startup=startup,
+                    read=lambda: _read(fd, launcher.MAX_CLOSURE_FILE_BYTES, allow_empty=True)) == row["sha256"])
         if self.child_pid is not None and self.child_status is None:
             _require(_start(self.child_pid) == (self.child_start, self.pid))
             if child_live:

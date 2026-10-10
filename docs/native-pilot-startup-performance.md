@@ -108,6 +108,79 @@ process-local and resets at fork: this does not skip another process's first
 measurement or cache child admission. Savings from this integration are not yet
 measured on a native startup.
 
+## Package loading: populate the shared memo on the first read
+
+COMMON `package_tree.check_file()` previously performed its own full-file SHA
+pass without populating the SDK memo. `load_stage()` calls it for every static
+file, so the subsequent SDK tree measurement unnecessarily read those bytes
+again. The loader now uses the existing guarded content-measurement helper.
+It also shares measurements between independently sealed source and prepared
+installation files when their kernel content identities match.
+
+The caller still compares the result with the selected expected hash and
+checks actual ownership, mode, link count, size, held/named identity and the
+original deadline. Unsupported or cold content still takes the full-read path;
+neither a selected hash nor a previous successful authorization seeds the memo.
+This closes an actual same-process cache integration gap, not cross-session
+reuse or an end-to-end startup performance result.
+
+COMMON commit `51c03edde` passed 40 focused tests: eight new connected
+loader/SDK cache groups, four existing preseal controls and 28 prepared-static
+controls. The new groups use actual temporary file bytes, hashes, descriptors
+and the SDK measurement functions; filesystem eligibility, kernel seals and
+root ownership are explicitly synthetic. They show that the first loader pass
+reads the body and the following measurement performs only its EOF read.
+Wrong claimed hashes, changed content/metadata/names, unsupported filesystems
+and the original deadline remain covered. No build, native startup or pilot
+mutation was used for these tests.
+
+## Installed-file readers: share content, not physical identity
+
+COMMON commit `3d286f298` updates `RuntimeLayout._installed()` and
+`StartupResources._installed()`, which also
+used independent full readers. Both now use the existing SDK content memo,
+which can already be warm from installation in their shared parent process.
+Each caller still measures its own inode/generation and compares every field
+of the current installed-file selection. Held/named file and parent identity,
+read-only descriptor mode, frozen state, current kernel digest and original
+clocks are checked on hits, including after the final physical comparison.
+The existing full-owner and mount checks are unchanged. Cold or ineligible
+inputs retain the original reader, including its different empty-file limits:
+startup allows empty public modules; layout requires nonempty originals.
+
+Seven new connected component groups passed alongside ten existing layout
+checks and three cohort checks. They exercise the actual reader/clock methods
+and SDK memo with real temporary files and explicitly synthetic root/kernel
+observations. A separate existing listener test initially failed because it
+still expected an inline `listen()` call instead of the already-existing
+role-identity helper. Its fixture now extracts that helper's actual socket
+call, verifies the caller wiring, and passed on its own targeted rerun. No
+production listener behavior was changed. These are 61 distinct passing groups
+across the package and installed-reader runs, not a native startup benchmark.
+
+The cached offline engineering image ran all checks with network disabled,
+read-only source, no capabilities or host ports, and temporary fixture storage.
+The logs, including the initial listener-test failure, are retained under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/startup-cache-integration.3IvDdJ6F`.
+
+## Cross-session reuse: remaining implementation boundary
+
+A new process still starts with an empty measurement memo. Persisting that
+dictionary without an independently trusted binding is not sufficient: the
+ordinary file SHA-256 and its kernel fs-verity digest are different values.
+Likewise, a hash computed after loading `stage.json` does not independently
+authenticate the file that supplied it.
+
+The remaining design is a bounded, content-only catalog produced after actual
+static-file measurement and sealing. It would map each kernel content digest
+and size to its observed file SHA-256. The catalog's expected hash must be
+selected outside the writable session package, through the existing frozen
+assembly and read-only payload chain, before any fresh process imports it.
+The three late files, path/roster checks, ELF admission, current signatures,
+trust state, authorization and deadlines remain outside that reusable catalog.
+This catalog and its consumer integration are **not implemented**; the current
+memo must not be described as a persistent or cross-session cache.
+
 ## Installation phase timing
 
 Prospective COMMON source now emits nine bounded `INSTALL_*` durations for

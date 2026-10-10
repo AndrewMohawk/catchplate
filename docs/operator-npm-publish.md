@@ -718,9 +718,10 @@ Rate-limit-only effect passes and the late upstream-send expiry guard are
 unchanged. The repair does not substitute a shadow verdict for the ordinary
 request path or broaden scoped npm admission.
 
-This is a source candidate pending a fresh genuine Rust build, ordinary-path
-regression results, and a complete isolated stock-client acceptance run. It is
-not a deployed repair or native pilot acceptance.
+This remains a repair candidate until the complete isolated stock-client
+acceptance run passes. The fresh genuine Rust build and focused ordinary-path
+regressions below passed; they are not a deployed repair or native pilot
+acceptance.
 
 The first `73479a8c` test compilation was deliberately stopped after source
 review caught an incorrect test assertion: ordinary legacy success omits a
@@ -741,6 +742,70 @@ admission. The test now requires the exact quota error and canonical `%3A`
 query encoding; production behavior is unchanged. Evidence remains in
 `serverware-genuine-rust-ordinary-semantics.gE6GcmF4`. The six additional exact
 tests, normal release build and stock fixture did not run from that snapshot.
+
+The final corrected source snapshot `995d5d18911256491846cf4d585f09e4a854bcaf`
+(tree `494fab7775f2f5a230d670eb57ada25492782ace`, 4,947 manifest-verified
+files) passed **74 tests across 15 phases**, with zero failures or ignored
+tests. This includes all six ordinary decision groups and the six additional
+exact semantic, response-source, provider-account, rewrite, shared-rate and
+client-proof checks. Test compilation took **4 minutes 52 seconds**; the
+reported test execution times totalled **6.79 seconds**.
+
+The separate normal release build completed in **5 minutes 48 seconds** and
+produced a new 40,897,712-byte executable, SHA-256
+`5c803d937fa0c3fc6ee72ef73bd503e27da2756b5bfac0f590a220735d0c1fe4`.
+Both runs exited successfully without OOM or deadline termination. Frozen
+source, original phase logs, manifests and terminal receipts are retained in
+`serverware-genuine-rust-ordinary-fixed.TJMtScbX`. Test receipt SHA-256:
+`10c7b042d9cec69cc6fab8d6bb79ce41da7778e2993f550075cccd6824c28677`;
+normal-build receipt SHA-256:
+`05702c90c63cc158a8a2f0912151c1be450ceead8146fa2539fad18f1a36fcb6`.
+This isolated dependency/build result is not production release approval.
+
+### Seventeenth isolated stock-client run: client phases complete, audit gate fails
+
+The fresh run used that exact source and newly built executable from
+**18:07:55–18:09:29 UTC on October 10, 2026**. All seven client phases
+completed: prerequisite, unscoped, scoped, wrong package, outside publishing
+window, wrong placeholder and revoked application. The first six checkpoints
+passed. The final revoked-application checkpoint failed with
+`unaccounted publish audit event`; full acceptance and the final audit-chain
+verification therefore did **not** complete.
+
+A bounded, network-isolated inspection of a private stopped SQLite copy passed
+`quick_check` and found six response releases (four metadata GETs and two publish
+PUTs), six request denials and two revoked CONNECT denials. The outside-window
+PUT now has the intended early 403 denial rather than the previous late 503.
+The release audit's status field is 200 for both PUTs; it is not being presented
+as an independently captured provider response status.
+
+The unexpected records are two `data_plane.credential_lease.rejected` events.
+Both are previous-policy `dispatchSecret` requests, ordered after the
+application-revocation audit and before the gate's reload audit. One was refused
+with 503 (`active signed policy bundle is unavailable`); the other with 409
+(`data-plane policy hash is not active`). The database also contains 64 issued
+leases, including two under the replacement policy. The retained gate log has
+five renewal-failure records. No credentials were disclosed by this inspection.
+
+The old-policy refusals are correct fail-closed broker behavior during the
+publication transition; they do not demonstrate unauthorized provider dispatch.
+Source review separately identifies preventable background work: queued workers
+do not recheck whether their scope cooled or was refreshed, and scope-only
+activity survives policy reload. The current projection cannot distinguish
+already in-flight acquisitions from queued ones. A correct follow-up must
+address stale work without suppressing rejection audits or claiming that a
+local dequeue check alone eliminates the distributed publication race. No
+renewal change or acceptance relaxation was made in this run.
+
+The original seven phases, 64-issued-lease bound, deadlines, resource limits,
+zero client retries and normal app entrypoint were unchanged. The runner exited
+1 and its scoped cleanup succeeded; no fixture containers or networks remain.
+Runtime files and originals are retained in
+`serverware-npm-publish-private.P9QtY1Ru` and
+`serverware-npm-publish-runner.f4Ash5Tj`. Run-receipt SHA-256:
+`ba87a77fa9193113c6f810c89d7a892f28df3b9290c8a1947712ae43daf102c2`.
+The failed fixture was not restarted, and the live demo/native pilot was not
+changed.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

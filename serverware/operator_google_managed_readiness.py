@@ -12,6 +12,7 @@ import re
 import uuid
 
 _SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_START_ERROR = "operator Google managed consent unavailable"
 
 
 def _require(value):
@@ -108,3 +109,109 @@ def observe() -> dict:
         # transport/SQLite error. A failed observer cannot undo a prior commit.
         result["ready"] = False
     return result
+
+
+def _start_observation(value):
+    """Validate and detach the closed, non-capability consent observation."""
+    _require(type(value) is dict and set(value) == {
+        "ready", "policy_hash", "loaded_policy_hash", "managed_google"}
+        and value["ready"] is True and _digest(value["policy_hash"])
+        and _digest(value["loaded_policy_hash"])
+        and value["policy_hash"] == value["loaded_policy_hash"])
+    identity = _identity(value["managed_google"])
+    _require(identity["operation"] is not None)
+    return {"ready": True, "policy_hash": value["policy_hash"],
+        "loaded_policy_hash": value["loaded_policy_hash"], "managed_google": {
+            "operation": dict(identity["operation"]),
+            "profile_binding_digest": identity["profile_binding_digest"],
+            "effective_settings_digest": identity["effective_settings_digest"]}}
+
+
+def capture_start():
+    """Observe before consent owns a publication lock or SQLite transaction.
+
+    Disabled managed configuration preserves the legacy path without any gate
+    request. This point-in-time observation is not a lease or provider health.
+    The caller must recheck it with require_start before its first local write.
+    """
+    try:
+        from serverware import operator_google_managed_config as managed
+        if not managed.enabled():
+            return None
+        from serverware import operator_publication as publication
+        publication.assert_not_held()
+        return _start_observation(observe())
+    except Exception:
+        from serverware.operator_catalog_schema import CatalogConflict
+        raise CatalogConflict(_START_ERROR) from None
+
+
+def _start_writer(conn):
+    """Admit the caller's fresh BEGIN IMMEDIATE connection, never acquire it.
+
+    Consent callers establish BEGIN IMMEDIATE. Python's connection attributes
+    prove an active writable transaction, not SQLite's reserved-lock state; no
+    lock probe, no-op write or second connection is used to manufacture proof.
+    """
+    import sqlite3
+    from serverware import config, operator_publication as publication
+
+    publication.assert_held()
+    _require(isinstance(conn, sqlite3.Connection) and conn.in_transaction
+        and conn.total_changes == 0
+        and conn.execute("PRAGMA query_only").fetchone()[0] == 0
+        and conn.execute("PRAGMA read_uncommitted").fetchone()[0] == 0)
+    databases = conn.execute("PRAGMA database_list").fetchall()
+    _require(len(databases) == 1 and tuple(databases[0]) == (0, "main", str(config.DB_PATH)))
+
+
+def require_start(conn, observation):
+    """Recheck only local state in the consent writer before any writes.
+
+    This does not call the gate or the public projection's fresh query-only
+    entrypoint. It reuses that projection's retained settings decoder without
+    weakening its separate read-only admission contract. Callback, refresh,
+    disconnect and existing-intent recovery do not use this new-start guard.
+    """
+    try:
+        from serverware import operator_google_managed_config as managed
+        if not managed.enabled():
+            return
+        captured = _start_observation(observation)
+        _start_writer(conn)
+        from serverware import operator_catalog_oauth_profile as profiles, operator_demo
+        from serverware import operator_google_gate_configuration as public, operator_google_setup as setup
+
+        selected = managed.validate_selection(conn)
+        _require(type(selected) is dict and selected["schema"] == setup.MANAGED_PUBLIC_V2
+            and selected["setup_contract"] == setup.MANAGED_BINDING_V2
+            and selected["status"] == "activated" and selected["activation_receipt"] is not None)
+        profile = profiles.require_profile()
+        _require(selected["profile_binding"] == profiles._record(profile.client_id, profile.redirect_uri)
+            and selected["profile_binding_digest"] == profile.binding_digest)
+        settings = public._settings(conn)
+        process_settings = operator_demo.settings()
+        _require(settings == {key: process_settings[key] for key in ("allowed_upstreams", "fixture_cidrs")}
+            and set(profiles.API_ORIGINS) <= set(settings["allowed_upstreams"]))
+        reference = selected["custody_ref"]
+        identity = _identity({"operation": {"operation_id": selected["operation_id"],
+            "owner_id": reference["owner_id"], "config_version": reference["config_version"]},
+            "profile_binding_digest": selected["profile_binding_digest"],
+            "effective_settings_digest": setup._digest(settings)})
+
+        committed = managed.committed_identity()
+        _require(type(committed) is dict and set(committed) == {
+            "operation_id", "owner_id", "config_version", "profile_binding_digest"})
+        process_identity = _identity({"operation": {key: committed[key] for key in (
+            "operation_id", "owner_id", "config_version")},
+            "profile_binding_digest": committed["profile_binding_digest"],
+            "effective_settings_digest": setup._digest({
+                key: process_settings[key] for key in ("allowed_upstreams", "fixture_cidrs")})})
+        _require(identity == process_identity == captured["managed_google"])
+        rows = conn.execute("SELECT singleton,policy_hash FROM operator_demo_policy LIMIT 2").fetchall()
+        _require(len(rows) == 1 and type(rows[0][0]) is int and rows[0][0] == 1
+            and _digest(rows[0][1]) and rows[0][1] == captured["policy_hash"])
+        _start_writer(conn)
+    except Exception:
+        from serverware.operator_catalog_schema import CatalogConflict
+        raise CatalogConflict(_START_ERROR) from None

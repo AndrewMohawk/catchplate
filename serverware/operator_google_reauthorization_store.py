@@ -378,7 +378,7 @@ def review(conn, credential_id, actor_id):
         "application_ids": applications, "eligible": eligible}
 
 
-def begin(conn, payload, actor_id):
+def begin(conn, payload, actor_id, *, managed_readiness=None):
     _transaction(conn)
     data = payload.model_dump() if hasattr(payload, "model_dump") else payload
     _require(isinstance(data, dict) and set(data) == {"operation_id", "credential_id", "expected_revision",
@@ -390,6 +390,10 @@ def begin(conn, payload, actor_id):
     for key in ("expected_revision", "expected_policy_hash", "expected_credential_generation", "affected_rule_ids"):
         if type(data[key]) is not type(current[key]) or data[key] != current[key]:
             raise catalog.CatalogConflict()
+    from serverware import operator_google_managed_readiness as readiness
+    # This is a local-only join after the existing review CAS, not another
+    # gate request. Managed callers cannot omit the captured start observation.
+    readiness.require_start(conn, managed_readiness)
     _require(len(_rows(conn)) < MAX_OPERATIONS)
     if conn.execute("SELECT 1 FROM " + TABLE + " WHERE operation_id=?", (data["operation_id"],)).fetchone():
         raise catalog.CatalogConflict()

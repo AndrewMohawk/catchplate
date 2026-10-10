@@ -108,7 +108,10 @@ def start(payload, actor_id, browser_nonce):
     profile = _admit()
     # Revalidate even internal callers; no permissive DTO or POST replay.
     payload = ReauthorizeInput.model_validate(payload.model_dump() if isinstance(payload, ReauthorizeInput) else payload)
-    operation = _write(durable.begin, payload, actor_id)
+    from serverware import operator_google_managed_readiness as readiness
+    # No publication or SQLite ownership may cross the gate observation.
+    managed_readiness = readiness.capture_start()
+    operation = _write(durable.begin, payload, actor_id, managed_readiness=managed_readiness)
     identifier = payload.operation_id
     started = None
     try:

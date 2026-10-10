@@ -206,11 +206,16 @@ def _advance(conn, value: dict, event: str) -> None:
 def begin(payload: GoogleStartInput, actor_id: str) -> dict:
     profile = _profile()
     from serverware.config import OAUTH_STATE_TTL_SECONDS
+    from serverware import operator_google_managed_readiness as readiness
     if not isinstance(actor_id, str) or not 1 <= len(actor_id) <= 512:
         raise GoogleConsentError("Google consent actor unavailable")
+    # Observe the managed app/gate pair before taking publication or SQLite
+    # ownership. Only the local identity is rechecked inside the existing CAS.
+    managed_readiness = readiness.capture_start()
     with exclusive(), db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _cas(conn, payload.expected_revision, payload.expected_policy_hash)
+        readiness.require_start(conn, managed_readiness)
         schema.validate_bindings(conn)
         from serverware.operator_google_disconnect_store import require_initial_admission
         require_initial_admission(conn)

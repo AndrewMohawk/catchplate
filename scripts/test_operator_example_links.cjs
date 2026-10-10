@@ -15,11 +15,9 @@ const BASE = 'https://github.com/AndrewMohawk/serverware/';
 const BRANCH = 'serverware/operator-workspace/';
 const HTML = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
 const PROXY = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
-const X = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_x.js'), 'utf8');
 const f = context();
 let networkCalls = 0;
 f.value.fetch = () => { networkCalls++; throw new Error('No network permitted'); };
-vm.runInContext(X, f.value, {timeout: 1000});
 vm.runInContext(PROXY, f.value, {timeout: 1000});
 const links = value => clone(f.run('operatorExampleProjects(input.access_rules[0], input)', value));
 const node = id => f.dom.getElementById(id);
@@ -74,12 +72,14 @@ function x() {
 const tests = [
   ['provider-first entry choices preserve the existing controls and forms', () => {
     for (const [id, label] of [['connect-use-github', 'GitHub'], ['connect-use-npm', 'npm'],
-      ['connect-use-x', 'X · username lookup'], ['connect-use-key', 'Manual API key']])
+      ['connect-use-x', 'X · username lookup'], ['connect-use-alchemy', 'Alchemy · chain status'],
+      ['connect-use-key', 'Manual API key']])
       assert.match(HTML, new RegExp('<button id="' + id + '"[^>]*>' + label + '</button>'));
     assert.equal([...HTML.matchAll(/id="connect-use-x"/g)].length, 1);
+    assert.equal([...HTML.matchAll(/id="connect-use-alchemy"/g)].length, 1);
     assert.equal([...HTML.matchAll(/id="connect-credential-form"/g)].length, 1);
     assert.equal([...HTML.matchAll(/id="credential-form"/g)].length, 1);
-    assert(!/id="connect-use-(?:alchemy|twitter|actions)"/.test(HTML));
+    assert(!/id="connect-use-(?:twitter|actions)"/.test(HTML));
     assert(HTML.indexOf('id="client-examples"') > HTML.indexOf('id="download-config"'));
   }],
   ['both validated GitHub bundles link only the three public project directories', () => {

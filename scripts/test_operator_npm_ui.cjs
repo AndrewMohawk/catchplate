@@ -9,7 +9,8 @@ const {credential, application, rule, IDS, NOW} = require('./test_operator_catal
 const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
 const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
 const ASSETS = resolve(__dirname, '../serverware/operator_demo_web');
-const FILES = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_resources.js', 'workspace_connect.js'];
+const FILES = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
+  'workspace_x.js', 'workspace_alchemy.js', 'workspace_resources.js', 'workspace_connect.js'];
 const SOURCE = FILES.map(name => readFileSync(resolve(ASSETS, name), 'utf8')).join('\n');
 const HTML = readFileSync(resolve(ASSETS, 'index.html'), 'utf8');
 const ORIGIN = 'https://registry.npmjs.org';

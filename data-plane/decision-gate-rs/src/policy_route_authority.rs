@@ -68,6 +68,7 @@ fn builtin(kind: &str, name: &str) -> Result<&'static str, String> {
         ("npm.registry", "npm.read") => "read", ("npm.registry", "npm.publish") => "publish",
         ("npm.metadata.v1", "npm.metadata.read") => "read",
         ("x.app_read.v1", "x.username.read") => "read",
+        ("alchemy.rpc_read.v1", "alchemy.rpc.read") => "read",
         ("npm.publish.v1", "npm.publish") => "publish",
         ("npm.registry", "npm.unpublish") => "delete", ("npm.registry", "npm.tokenWrite") => "administrative",
         ("npm.registry", "npm.distTagWrite" | "npm.metadataWrite") => "write",

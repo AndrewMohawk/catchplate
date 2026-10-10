@@ -41,6 +41,7 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isAlchemyRule(rule)) { renderAlchemyCompatibility(id); return; }
   if (isXRule(rule)) { renderXCompatibility(id); return; }
   if (isNpmPublishRule(rule)) { renderNpmPublishCompatibility(id); return; }
   if (isNpmRule(rule)) { renderNpmCompatibility(id); return; }
@@ -90,6 +91,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isAlchemyRule(rule)) return alchemyRuleRestrictions(rule);
   if (isXRule(rule)) return xRuleRestrictions(rule);
   if (isNpmPublishRule(rule)) return npmPublishRuleRestrictions(rule);
   if (isNpmRule(rule)) return npmRuleRestrictions(rule);
@@ -358,6 +360,8 @@ function createCredentialsView(workspace, actions = {}) {
       const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
         operatorCredentialUseRows(credential, catalog));
       if (!google) {
+        if (isAlchemyCredential(credential)) card.append(textNode('p',
+          'Alchemy chain-status reads only. Stored API or access key, never a key-bearing URL. Validity and provider entitlement are not tested here; Serverware does not renew this key.', 'small muted'));
         if (isXCredential(credential)) card.append(textNode('p',
           'X app-only username lookup only. Stored token; validity and provider entitlement are not tested here. No posting or user OAuth. Serverware does not renew this token.', 'small muted'));
         if (isGithubCredential(credential)) card.append(textNode('p',
@@ -370,7 +374,7 @@ function createCredentialsView(workspace, actions = {}) {
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');
         for (const [label, value] of [['Credential ID', credential.id],
-          ['Authentication', isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
+          ['Authentication', isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
           ['Header name', credential.header_name], ['Active rules', String(credential.active_rule_count)],
           ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
         details.append(identity);
@@ -524,13 +528,13 @@ function createAccessRulesView(workspace) {
     const catalog = workspace.state.catalog;
     const responseModes = availableResponseModes(catalog);
     const credentialInputModes = availableCredentialInputModes(catalog);
-    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item)) ||
+    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isAlchemyCredential(item)) ||
       !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
     if (!catalog) { renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item)), 'Use Connect an app for GitHub, npm or X presets');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isAlchemyCredential(item)), 'Use Connect an app for GitHub, npm, X or Alchemy presets');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

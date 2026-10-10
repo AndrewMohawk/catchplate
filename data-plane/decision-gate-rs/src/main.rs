@@ -15,6 +15,7 @@ mod gmail_read;
 mod github_issues;
 mod npm_metadata;
 mod x_app_read;
+mod alchemy_rpc_read;
 mod npm_publish;
 mod provider_query;
 mod request_query_compat;
@@ -462,7 +463,7 @@ const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
 const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
-const SUPPORTED_ADAPTER_TYPES: [&str; 8] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1"];
+const SUPPORTED_ADAPTER_TYPES: [&str; 9] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1", "alchemy.rpc_read.v1"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
 const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
 const NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS: [&str; 2] = ["ok", "published"];
@@ -8728,7 +8729,7 @@ fn validate_provider_request_admission(
 ) -> Result<(), Value> {
     if !matches!(
         route.adapter_type.as_str(),
-        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1"
+        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1" | "alchemy.rpc_read.v1"
     ) {
         return Ok(());
     }
@@ -8757,6 +8758,9 @@ fn validate_provider_request_admission(
     }
     if route.adapter_type == x_app_read::ADAPTER {
         x_app_read::validate_request(req, url, route)?;
+    }
+    if route.adapter_type == alchemy_rpc_read::ADAPTER {
+        alchemy_rpc_read::validate_request(req, url, route)?;
     }
     if route.adapter_type == npm_publish::ADAPTER {
         npm_publish::validate_request(req, url, route)?;
@@ -9035,6 +9039,7 @@ fn operation_field_catalog(
         let fields: &[&str] = match (adapter_type, operation) {
             (npm_metadata::ADAPTER, "npm.metadata.read") => &["operation", "package"],
             (x_app_read::ADAPTER, x_app_read::OPERATION) => &["operation", "username"],
+            (alchemy_rpc_read::ADAPTER, alchemy_rpc_read::OPERATION) => &["operation", "chain", "method", "requestId"],
             (npm_publish::ADAPTER, "npm.publish") => &["operation", "packageName", "packageVersion",
                 "tag", "tarballIntegrity", "tarballShasum", "attachmentName", "attachmentBytes"],
             ("gmail.v1" | "gmail.read.v1", "gmail.messages.list") => &["operation", "gmailUser"],
@@ -9583,7 +9588,7 @@ fn validate_response_envelope_constraint(
     constraint: &Map<String, Value>,
 ) -> Result<(), String> {
     if constraint.get("contentTypePolicy").is_some_and(|value|
-        !matches!(value.as_str(), Some(github_issues::CONTENT_TYPE_POLICY | npm_metadata::CONTENT_TYPE_POLICY | x_app_read::CONTENT_TYPE_POLICY))) {
+        !matches!(value.as_str(), Some(github_issues::CONTENT_TYPE_POLICY | npm_metadata::CONTENT_TYPE_POLICY | x_app_read::CONTENT_TYPE_POLICY | alchemy_rpc_read::CONTENT_TYPE_POLICY))) {
         return Err("responseEnvelope contentTypePolicy is invalid".into());
     }
     let statuses = constraint
@@ -10616,6 +10621,7 @@ fn provider_request_profile(
     let profile = match adapter_type {
         npm_metadata::ADAPTER => npm_metadata::request_profile(),
         x_app_read::ADAPTER => x_app_read::request_profile(),
+        alchemy_rpc_read::ADAPTER => alchemy_rpc_read::request_profile(),
         npm_publish::ADAPTER => npm_publish::request_profile(),
         gmail_read::ADAPTER => gmail_read::request_profile(false),
         "gmail.v1" => ProviderRequestProfile {
@@ -11196,6 +11202,13 @@ fn declared_policy_operations(
     paths: &[Value],
 ) -> Result<HashSet<String>, String> {
     let operations = match adapter_type {
+        alchemy_rpc_read::ADAPTER => {
+            if adapter_config.get("chain").and_then(Value::as_str).and_then(alchemy_rpc_read::host).is_none()
+                || paths != [json!(alchemy_rpc_read::PATH)] {
+                return Err("Alchemy read requires its selected chain and exact keyless path".into());
+            }
+            HashSet::from([alchemy_rpc_read::OPERATION.to_string()])
+        }
         npm_publish::ADAPTER => {
             if paths != [json!(npm_publish::PATH)] {
                 return Err("npm publish requires its exact package capture".into());
@@ -11473,6 +11486,14 @@ fn validate_route_credential_binding(
             || credential.injection.get("field").is_some() || credential.injection.get("prefix").is_some())
     {
         return Err("X app read requires fixed static operator Authorization bearer injection".into());
+    }
+    if adapter_type == alchemy_rpc_read::ADAPTER
+        && (credential.kind() != "static" || credential.provider != "operator-demo"
+            || credential.injection.get("type").and_then(Value::as_str) != Some("bearer")
+            || credential.injection.get("header").and_then(Value::as_str) != Some("Authorization")
+            || credential.injection.get("field").is_some() || credential.injection.get("prefix").is_some())
+    {
+        return Err("Alchemy read requires fixed static operator Authorization bearer injection".into());
     }
     let expected_fields: &[&str] = if credential.kind() == "oauth2" {
         &[
@@ -11954,7 +11975,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
-        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1") {
+        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1" | "alchemy.rpc_read.v1") {
             validate_provider_request_profile_config(route_id, adapter_type, adapter_config)?;
         }
         let request_config = adapter_config
@@ -12033,7 +12054,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         let constraints = combined_constraints.as_slice();
         if constraints.iter().any(|constraint| constraint.get("contentTypePolicy").is_some())
             && !github_issues::marked(&Value::Object(adapter_config.clone()))
-            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER) {
+            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER | alchemy_rpc_read::ADAPTER) {
             return Err("contentTypePolicy requires a closed provider profile".into());
         }
         if adapter_type == npm_metadata::ADAPTER {
@@ -12041,6 +12062,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         }
         if adapter_type == x_app_read::ADAPTER {
             x_app_read::validate_policy(route)?;
+        }
+        if adapter_type == alchemy_rpc_read::ADAPTER {
+            alchemy_rpc_read::validate_policy(route)?;
         }
         if adapter_type == npm_publish::ADAPTER {
             npm_publish::validate_policy(route)?;
@@ -12160,6 +12184,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 || (adapter_type == gmail_read::ADAPTER && response_mode == gmail_read::MODE)
                 || (adapter_type == npm_metadata::ADAPTER && response_mode == npm_metadata::MODE)
                 || (adapter_type == x_app_read::ADAPTER && response_mode == x_app_read::MODE)
+                || (adapter_type == alchemy_rpc_read::ADAPTER && response_mode == alchemy_rpc_read::MODE)
                 || (adapter_type == npm_publish::ADAPTER && response_mode == npm_publish::MODE)
                 || (adapter_type == "generic.rest"
                     && (STREAMING_RESPONSE_MODES.contains(&response_mode)
@@ -12182,7 +12207,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER) {
+            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER | alchemy_rpc_read::ADAPTER) {
                 // The closed typed contract above owns whole-JSON release;
                 // it is not admitted through generic REST's profile guard.
             } else if buffered_response::supported_mode(response_mode) {
@@ -14525,6 +14550,9 @@ fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static st
         "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json" => {
             Some(("adapter_x_app_read_v1", include_str!("../../../schemas/adapters/x.app_read.v1.schema.json")))
         }
+        "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json" => {
+            Some(("adapter_alchemy_rpc_read_v1", include_str!("../../../schemas/adapters/alchemy.rpc_read.v1.schema.json")))
+        }
         "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json" => {
             Some(("adapter_npm_publish_v1", include_str!("../../../schemas/adapters/npm.publish.v1.schema.json")))
         }
@@ -14593,6 +14621,7 @@ fn closed_embedded_policy_schema() -> Result<Value, String> {
         "https://serverware.local/schemas/adapters/npm.registry.schema.json",
         "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json",
         "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json",
+        "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
         "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
         "https://serverware.local/schemas/adapters/x.v2.schema.json",
     ];
@@ -24628,11 +24657,16 @@ fn prepare_upstream_for_forward_body(
     let Ok(forwarded_body_length) = u64::try_from(request.content_length) else {
         return Ok(None);
     };
-    // This typed write validates the actual bounded body before resolution and
-    // credential preparation. Header-only/streaming paths cannot invent it.
-    let body = if route.adapter_type == npm_publish::ADAPTER {
+    // Body-bearing typed adapters validate the complete body before resolution
+    // and credential preparation. Header-only/streaming paths cannot invent it.
+    let typed_body_limit = match route.adapter_type.as_str() {
+        npm_publish::ADAPTER => Some(npm_publish::REQUEST_BYTES),
+        alchemy_rpc_read::ADAPTER => Some(alchemy_rpc_read::REQUEST_BYTES),
+        _ => None,
+    };
+    let body = if let Some(limit) = typed_body_limit {
         let Some(bytes) = buffered_body.filter(|bytes| bytes.len() == request.content_length
-            && bytes.len() as u64 <= npm_publish::REQUEST_BYTES) else { return Ok(None); };
+            && bytes.len() as u64 <= limit) else { return Ok(None); };
         let Ok(text) = std::str::from_utf8(bytes) else { return Ok(None); };
         text.to_owned()
     } else { String::new() };
@@ -31376,6 +31410,7 @@ fn validate_adapter_with_gmail_proof_mode(
     match route.adapter_type.as_str() {
         npm_metadata::ADAPTER => npm_metadata::normalize_request(req, url, route_match),
         x_app_read::ADAPTER => x_app_read::normalize_request(req, url, route_match),
+        alchemy_rpc_read::ADAPTER => alchemy_rpc_read::normalize_request(req, url, route_match),
         npm_publish::ADAPTER => npm_publish::normalize_request(req, url, route_match),
         gmail_read::ADAPTER => gmail_read::normalize_request(req, forwarded_headers, url, route),
         "generic.rest" => {
@@ -35035,6 +35070,7 @@ fn enforce_response_envelope(
             Some(github_issues::CONTENT_TYPE_POLICY) => !github_issues::is_json_content_type(value),
             Some(npm_metadata::CONTENT_TYPE_POLICY) => !npm_metadata::is_json_content_type(value),
             Some(x_app_read::CONTENT_TYPE_POLICY) => !x_app_read::is_json_content_type(value),
+            Some(alchemy_rpc_read::CONTENT_TYPE_POLICY) => !alchemy_rpc_read::is_json_content_type(value),
             _ => true,
         })) {
         return Err(constraint_error(constraint, "response_envelope_content_type_denied", "response content type is outside the provider media policy"));
@@ -35154,6 +35190,8 @@ fn validate_response_envelopes(
 ) -> Result<(), Value> {
     let media_policy = if route.adapter_type == x_app_read::ADAPTER {
         x_app_read::validate_route(route).map(|()| Some(x_app_read::CONTENT_TYPE_POLICY))
+    } else if route.adapter_type == alchemy_rpc_read::ADAPTER {
+        alchemy_rpc_read::validate_route(route).map(|()| Some(alchemy_rpc_read::CONTENT_TYPE_POLICY))
     } else if route.adapter_type == npm_metadata::ADAPTER {
         npm_metadata::validate_route(route).map(|()| Some(npm_metadata::CONTENT_TYPE_POLICY))
     } else if route.adapter_type == npm_publish::ADAPTER {
@@ -43202,6 +43240,9 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 }
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
+    if route.adapter_type == alchemy_rpc_read::ADAPTER {
+        return alchemy_rpc_read::validate_route(route);
+    }
     if route.adapter_type == x_app_read::ADAPTER {
         return x_app_read::validate_route(route);
     }
@@ -43485,7 +43526,7 @@ fn validate_selected_json_response_content_type(
     adapter_type: &str,
 ) -> Result<(), Value> {
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
-        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1" | "npmPublishJsonV1" | "xAppReadJsonV1")) {
+        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1" | "npmPublishJsonV1" | "xAppReadJsonV1" | "alchemyRpcReadJsonV1")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -43513,6 +43554,10 @@ fn validate_selected_json_response_content_type(
     }
     if adapter_type == x_app_read::ADAPTER {
         return if x_app_read::is_json_content_type(value) { Ok(()) }
+            else { Err(json!({"error":"response_content_type_invalid"})) };
+    }
+    if adapter_type == alchemy_rpc_read::ADAPTER {
+        return if alchemy_rpc_read::is_json_content_type(value) { Ok(()) }
             else { Err(json!({"error":"response_content_type_invalid"})) };
     }
     if adapter_type == npm_publish::ADAPTER {
@@ -44824,6 +44869,18 @@ fn validate_policy_json_response(
     binding_validation: &Value,
     response_secret_guard: &ResponseSecretGuard,
 ) -> SensitiveResponseBytes {
+    if adapter_type == alchemy_rpc_read::ADAPTER {
+        return match alchemy_rpc_read::inspect_response(url, status, content_type, response_config,
+            &decision["operation"], body, response_secret_guard) {
+            Ok(bytes) => release_forward_response(
+                state, snapshot, decision, method, url, status, Some("application/json"),
+                released_headers, bytes, response_secret_guard,
+                json!({"ok":true,"mode":alchemy_rpc_read::MODE,"body_bytes_preserved":true,
+                    "allowed_fields_redacted":false,"adapter":alchemy_rpc_read::ADAPTER}),
+            ),
+            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+        };
+    }
     if adapter_type == x_app_read::ADAPTER {
         return match x_app_read::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
             Ok(bytes) => release_forward_response(
@@ -50689,6 +50746,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
             "policy_signing_key_id":snapshot.policy_signing_key_id,
             "policy_trust_root_source":state.policy_trust_root_source.label(),
             "operator_x_app_read":x_app_read::gate_capability(),
+            "operator_alchemy_rpc_read":alchemy_rpc_read::gate_capability(),
             "attested_response_context":snapshot.attested_response_context,
             "data_plane_binary_digest":state.binary_digest,
             "routes":snapshot.routes.len(),

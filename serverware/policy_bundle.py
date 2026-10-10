@@ -25,7 +25,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from serverware import github_issues, npm_metadata, npm_publish, x_app_read
+from serverware import alchemy_rpc_read, github_issues, npm_metadata, npm_publish, x_app_read
 from serverware import operator_audit_timing as _audit_timing
 from serverware.config import (
     POLICY_BUNDLE_PATH,
@@ -108,7 +108,7 @@ def _deep_freeze(value: Any) -> Any:
 
 
 SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry",
-    npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER}
+    npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, alchemy_rpc_read.ADAPTER}
 GMAIL_READ_ADAPTER = "gmail.read.v1"
 ORDERED_FORM_QUERY_MODE = "orderedFormV1"
 GMAIL_READ_RESPONSE_MODE = "gmailReadJsonV1"
@@ -439,6 +439,8 @@ def adapter_operation_field_names(
         return npm_publish.OPERATION_FIELDS if operation == npm_publish.OPERATION else None
     if adapter_type == x_app_read.ADAPTER:
         return x_app_read.OPERATION_FIELDS if operation == x_app_read.OPERATION else None
+    if adapter_type == alchemy_rpc_read.ADAPTER:
+        return alchemy_rpc_read.OPERATION_FIELDS if operation == alchemy_rpc_read.OPERATION else None
     return None
 
 
@@ -466,7 +468,8 @@ def adapter_operation_query_fields(
         return frozenset(
             (adapter_config.get("request") or {}).get("allowedQueryKeys") or []
         )
-    if adapter_type in {"npm.registry", npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER}:
+    if adapter_type in {"npm.registry", npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER,
+            alchemy_rpc_read.ADAPTER}:
         return frozenset()
     return None
 SUPPORTED_CONSTRAINTS = {
@@ -4800,7 +4803,7 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
             if ("contentTypePolicy" in constraint
                     and constraint["contentTypePolicy"] not in {
                         github_issues.CONTENT_TYPE_POLICY, npm_metadata.CONTENT_TYPE_POLICY,
-                        x_app_read.CONTENT_TYPE_POLICY}):
+                        x_app_read.CONTENT_TYPE_POLICY, alchemy_rpc_read.CONTENT_TYPE_POLICY}):
                 raise PolicyBundleError(f"route {route_id} responseEnvelope contentTypePolicy is invalid")
             status_codes = constraint.get("statusCodes")
             if (
@@ -5705,6 +5708,8 @@ def _declared_route_operations(
     adapter_config: dict[str, Any],
     paths: tuple[str, ...],
 ) -> set[str]:
+    if adapter_type == alchemy_rpc_read.ADAPTER:
+        return {alchemy_rpc_read.OPERATION}
     if adapter_type == x_app_read.ADAPTER:
         return {x_app_read.OPERATION}
     if adapter_type == npm_metadata.ADAPTER:
@@ -5829,6 +5834,14 @@ def validate_buffered_passthrough_response(
     """
     safe_headers = SAFE_RESPONSE_HEADERS
     mode = response.get("mode") if isinstance(response, dict) else None
+    if adapter_type == alchemy_rpc_read.ADAPTER or mode == alchemy_rpc_read.MODE:
+        try:
+            if adapter_type != alchemy_rpc_read.ADAPTER:
+                raise ValueError("typed adapter required")
+            alchemy_rpc_read.validate_response_profile(response, constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} Alchemy RPC read response profile is invalid") from None
+        return
     if adapter_type == x_app_read.ADAPTER or mode == x_app_read.MODE:
         try:
             if adapter_type != x_app_read.ADAPTER:
@@ -5979,7 +5992,7 @@ def _validate_optional_response_release_contract(
     adapter_name: str,
     *, adapter_config: dict[str, Any] | None = None,
 ) -> None:
-    if adapter_name in {npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER}:
+    if adapter_name in {npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, alchemy_rpc_read.ADAPTER}:
         validate_buffered_passthrough_response(route_id, adapter_name, response,
             adapter_config=adapter_config)
         return
@@ -6193,6 +6206,8 @@ def provider_request_profile(adapter_type: str, mode: str | None = None, *,
         raise PolicyBundleError("unsupported provider query mode")
     if adapter_type == x_app_read.ADAPTER:
         return x_app_read.request_profile()
+    if adapter_type == alchemy_rpc_read.ADAPTER:
+        return alchemy_rpc_read.request_profile()
     if adapter_type == npm_metadata.ADAPTER:
         return npm_metadata.request_profile()
     if adapter_type == npm_publish.ADAPTER:
@@ -6357,6 +6372,12 @@ def _validate_adapter_security_invariants(
     signed_policy: bool,
 ) -> None:
     request_query_mode(adapter_type, adapter_config)
+    if adapter_type == alchemy_rpc_read.ADAPTER:
+        try:
+            alchemy_rpc_read.validate_authority(adapter_config, adapter=adapter_type, host=host,
+                credential_ref=credential_ref, jit=jit, methods=methods, paths=paths, constraints=constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} Alchemy RPC read authority is invalid") from None
     if adapter_type == x_app_read.ADAPTER:
         try:
             x_app_read.validate_authority(adapter_config, adapter=adapter_type, host=host,
@@ -6382,7 +6403,7 @@ def _validate_adapter_security_invariants(
         except (TypeError, ValueError):
             raise PolicyBundleError(f"route {route_id} GitHub authority is invalid") from None
     if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2", "npm.registry",
-            npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER}:
+            npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, alchemy_rpc_read.ADAPTER}:
         _validate_provider_request_profile(route_id, adapter_type, adapter_config)
 
     if adapter_type == GMAIL_READ_ADAPTER:
@@ -7014,6 +7035,7 @@ def compile_policy_bundle(
             supported_modes = ({npm_metadata.MODE} if adapter_type == npm_metadata.ADAPTER
                 else {npm_publish.MODE} if adapter_type == npm_publish.ADAPTER
                 else {x_app_read.MODE} if adapter_type == x_app_read.ADAPTER
+                else {alchemy_rpc_read.MODE} if adapter_type == alchemy_rpc_read.ADAPTER
                 else {GMAIL_READ_RESPONSE_MODE} if adapter_type == GMAIL_READ_ADAPTER
                 else SUPPORTED_RESPONSE_MODES if adapter_type == "generic.rest" else BUFFERED_RESPONSE_MODES | {"stream"})
             if not isinstance(response_mode, str) or response_mode not in supported_modes:
@@ -7439,6 +7461,15 @@ def compile_policy_bundle(
             or "jit" in item or "responseObservation" in item
         ):
             raise PolicyBundleError(f"route {route_id} X app read transport or authority extension is invalid")
+        if adapter_type == alchemy_rpc_read.ADAPTER and (
+            match.get("scheme") != "https" or match.get("host") != alchemy_rpc_read.host(adapter_config["chain"])
+            or type(match.get("port")) is not int or match["port"] != 443
+            or match.get("methods") != ["POST"]
+            or item.get("credentialHeader") != alchemy_rpc_read.REPLACEMENT
+            or credentials[credential_ref].injection != {"type": "bearer", "header": "Authorization"}
+            or "jit" in item or "responseObservation" in item
+        ):
+            raise PolicyBundleError(f"route {route_id} Alchemy RPC read transport or authority extension is invalid")
         if adapter_type == npm_publish.ADAPTER and (
             match.get("scheme") != "https" or match.get("host") != npm_publish.HOST
             or type(match.get("port")) is not int or match["port"] != 443
@@ -9576,6 +9607,9 @@ def validated_request_routing_target(pretty_url: str, method: str) -> SplitResul
 
 
 def validated_request_urlsplit_for_route(pretty_url: str, route: Any) -> SplitResult:
+    if route.adapter_type == alchemy_rpc_read.ADAPTER:
+        alchemy_rpc_read.validate_route(route)
+        return alchemy_rpc_read.target_parts(pretty_url)
     if route.adapter_type == x_app_read.ADAPTER:
         x_app_read.validate_route(route)
         return x_app_read.target_parts(pretty_url)

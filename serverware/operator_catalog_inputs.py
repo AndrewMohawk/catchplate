@@ -91,6 +91,25 @@ class XUsernameRuleInput(NamedInput):
         return validate_username(value)
 
 
+class AlchemyKeyInput(NamedInput):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    secret: str = Field(min_length=1, max_length=8192, repr=False)
+
+    @field_validator("secret")
+    @classmethod
+    def opaque_token(cls, value: str) -> str:
+        from serverware.operator_catalog_alchemy import validate_token
+        return validate_token(value)
+
+
+class AlchemyChainStatusRuleInput(NamedInput):
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["alchemy_chain_status_read_v1"]
+    chain: Literal["eth-mainnet", "eth-sepolia"]
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+
 class NpmTokenInput(NamedInput):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     secret: str = Field(min_length=1, max_length=8192, repr=False)

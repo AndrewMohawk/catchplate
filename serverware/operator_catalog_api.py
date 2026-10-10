@@ -22,8 +22,10 @@ PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/credentials/npm-token", "/credentials/x-app-bearer", "/applications", "/applications/revoke",
+    "/credentials/alchemy-key",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username",
+    "/access-rules/alchemy-chain-status",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
     "/proxy/upstreams", "/proxy/upstreams/cancel",
@@ -231,6 +233,11 @@ async def create_x_credential(request: Request, identity: auth.AdminIdentity = D
     return await _mutate(request, identity, "XAppBearerInput", "create_x_credential", 16384, created=True)
 
 
+@router.post("/credentials/alchemy-key")
+async def create_alchemy_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "AlchemyKeyInput", "create_alchemy_credential", 16384, created=True)
+
+
 @router.post("/applications")
 async def create_application(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "ApplicationInput", "create_application", 2048, created=True)
@@ -284,6 +291,11 @@ async def create_npm_publish_rule(request: Request, identity: auth.AdminIdentity
 @router.post("/access-rules/x-username")
 async def create_x_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "XUsernameRuleInput", "create_x_rule", 4096, created=True)
+
+
+@router.post("/access-rules/alchemy-chain-status")
+async def create_alchemy_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "AlchemyChainStatusRuleInput", "create_alchemy_rule", 4096, created=True)
 
 
 async def _google_disconnect_result(function, *args, accepted: bool = False) -> JSONResponse:

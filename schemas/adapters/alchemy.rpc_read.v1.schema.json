@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
+  "title": "Closed Alchemy JSON-RPC read adapter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["credentialBinding", "chain", "request", "response"],
+  "$defs": {"chain": {"enum": ["eth-mainnet", "eth-sepolia"]}},
+  "properties": {
+    "chain": {"$ref": "#/$defs/chain"},
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "properties": {
+        "credentialType": {"const": "static"}, "provider": {"const": "operator-demo"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "secretClass": {"const": "bearerToken"}
+      }
+    },
+    "request": {"const": {
+      "allowedHeaders": ["accept", "accept-language", "alchemy-ethers-sdk-method", "alchemy-ethers-sdk-version", "sec-fetch-mode", "user-agent"],
+      "discardHeaders": ["accept-encoding"], "allowedQueryKeys": [],
+      "allowedMediaTypes": ["application/json"], "maxBodyBytes": 65536, "valueRules": []
+    }},
+    "response": {"const": {
+      "mode": "alchemyRpcReadJsonV1", "maxBodyBytes": 65536,
+      "contentTypes": ["application/json"], "allowedHeaders": [],
+      "error": {"mode": "alchemyRpcReadJsonV1", "maxBodyBytes": 65536,
+        "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}
+    }}
+  }
+}

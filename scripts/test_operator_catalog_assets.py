@@ -65,6 +65,11 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertLess(reads.index('workspace_npm_publish.js'), reads.index('workspace_resources.js'))
         self.assertLess(reads.index('workspace_npm_publish.js'), reads.index('workspace_proxy_audit.js'))
         self.assertLess(reads.index('workspace_npm_publish.js'), reads.index('workspace_connect.js'))
+        for provider in ('workspace_x.js', 'workspace_alchemy.js'):
+            self.assertEqual(reads.count(provider), 1)
+            self.assertLess(reads.index('workspace_core.js'), reads.index(provider))
+            for consumer in ('workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'app.js'):
+                self.assertLess(reads.index(provider), reads.index(consumer))
         self.assertEqual(reads.count('workspace_notifications.js'), 1)
         self.assertEqual(reads.count('workspace_upstreams.js'), 1)
         self.assertLess(reads.index('workspace_upstreams.js'), reads.index('app.js'))

@@ -1,0 +1,17 @@
+{
+  "name": "serverware-alchemy-chain-status-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "25.5.0" },
+  "scripts": {
+    "start": "node client.mjs",
+    "test": "node --test client.test.mjs",
+    "test:sdk": "node --test client.sdk.test.mjs"
+  },
+  "dependencies": { "alchemy-sdk": "3.6.5" },
+  "overrides": {
+    "@ethersproject/providers": "5.8.0",
+    "@ethersproject/web": "5.8.0"
+  }
+}

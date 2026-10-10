@@ -215,7 +215,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
-    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x
+    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
+    if operator_catalog_alchemy.selected(rule):
+        operator_catalog_alchemy.validate_shape(rule)
+        return None, operator_catalog_alchemy.RESPONSE_MODE
     if operator_catalog_x.selected(rule):
         operator_catalog_x.validate_shape(rule)
         return None, operator_catalog_x.RESPONSE_MODE
@@ -251,7 +254,10 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
     request_mode, _ = rule_content_modes(rule)
-    from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x
+    from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
+    if operator_catalog_alchemy.selected(rule):
+        operator_catalog_alchemy.validate_rule(rule, credential)
+        return None
     if operator_catalog_x.selected(rule):
         operator_catalog_x.validate_rule(rule, credential)
         return None
@@ -275,7 +281,9 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
 
 def validate_static_connection(record: dict, metadata: dict | None = None) -> bool:
     """Closed dispatch keeps generic credentials unmarked and retained unchanged."""
-    from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x
+    from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
+    if record.get('connection_type') == operator_catalog_alchemy.CONNECTION:
+        return operator_catalog_alchemy.validate_credential(record, metadata)
     if record.get('connection_type') == operator_catalog_x.CONNECTION:
         return operator_catalog_x.validate_credential(record, metadata)
     if record.get('connection_type') == operator_catalog_npm.CONNECTION:
@@ -376,9 +384,10 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
             operator_catalog_google.validate_rule(row, credential, profile=metadata_profile)
         if row['status'] == 'active' and (app['status'] != 'active' or credential['status'] != 'active'):
             raise CatalogIntegrityError('active rule has an inactive parent')
-    from serverware import operator_catalog_npm_publish, operator_catalog_x
+    from serverware import operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     operator_catalog_npm_publish.validate_route_coexistence(catalog['access_rules'])
     operator_catalog_x.validate_route_coexistence(catalog['access_rules'])
+    operator_catalog_alchemy.validate_route_coexistence(catalog['access_rules'])
 
 
 def initialize(conn) -> None:

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
-from serverware import db, github_issues, http_client, npm_metadata, npm_publish, runtime, x_app_read
+from serverware import alchemy_rpc_read, db, github_issues, http_client, npm_metadata, npm_publish, runtime, x_app_read
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
@@ -100,6 +100,7 @@ _RESPONSE_CONTENT_TYPES = {
     npm_metadata.MODE: "application/json",
     npm_publish.MODE: "application/json",
     x_app_read.MODE: "application/json",
+    alchemy_rpc_read.MODE: "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE: "application/json",
@@ -205,6 +206,10 @@ def npm_publish_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearra
 
 
 def x_app_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+    return _bounded_json_inspection(raw, maximum)
+
+
+def alchemy_rpc_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
     return _bounded_json_inspection(raw, maximum)
 
 
@@ -1347,7 +1352,7 @@ class ApiAdapter:
     def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
         if (route.adapter_config.get("response") or {}).get("mode") not in {
             BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
-            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE
+            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE
         }:
             return None
         try:
@@ -3389,6 +3394,87 @@ class XAppReadAdapter(ApiAdapter):
         return PolicyDecision(allowed=True)
 
 
+class AlchemyRpcReadAdapter(ApiAdapter):
+    """Typed single-call JSON-RPC reads; HTTP POST grants no write operation."""
+    id = alchemy_rpc_read.ADAPTER
+
+    @staticmethod
+    def _denied(error: str, status: int = 403) -> PolicyDecision:
+        return PolicyDecision(False, "Alchemy RPC read contract refused", status, {"error": error})
+
+    def _fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, Any]:
+        alchemy_rpc_read.validate_route(route)
+        if params != {}:
+            raise ValueError("Alchemy RPC read capture refused")
+        headers = {}
+        for name in [*alchemy_rpc_read.REQUEST_HEADERS, "content-type"]:
+            values = self._response_header_values(flow.request.headers, name)
+            if len(values) > 1:
+                raise ValueError("Alchemy RPC read duplicate header refused")
+            if values:
+                headers[name] = values[0]
+        return alchemy_rpc_read.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, chain=route.adapter_config["chain"], headers=headers)
+
+    def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        try:
+            self._fields(flow, route, params)
+            return self._validate_provider_request_profile(flow, route)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("alchemy_rpc_read_request_denied")
+
+    def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, Any]:
+        return self._fields(flow, route, params)
+
+    def _response_contract(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if not flow.response:
+            return self._denied("alchemy_rpc_read_response_missing", 502)
+        try:
+            self._fields(flow, route, params)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("alchemy_rpc_read_response_policy_invalid", 502)
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
+        if type(flow.response.status_code) is not int or flow.response.status_code not in alchemy_rpc_read.STATUSES:
+            return self._denied("alchemy_rpc_read_response_status_denied", 502)
+        content_types = self._response_header_values(flow.response.headers, "content-type")
+        if len(content_types) != 1 or not alchemy_rpc_read.is_json_content_type(content_types[0]):
+            return self._denied("alchemy_rpc_read_response_content_type_denied", 502)
+        body = flow.response.raw_content
+        if not isinstance(body, bytes) or not 1 <= len(body) <= alchemy_rpc_read.MAX_RESPONSE_BYTES:
+            return self._denied("alchemy_rpc_read_response_body_denied", 502)
+        return PolicyDecision(allowed=True)
+
+    def prepare_response(self, flow: Any, route: Any, params: dict[str, str], *,
+            authorization_factory: Callable[[], tuple[str, float]] | None = None) -> PolicyDecision:
+        return self._response_contract(flow, route, params)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        decision = self._response_contract(flow, route, params)
+        if not decision.allowed:
+            return decision
+        inspection = bytearray()
+        try:
+            fields = self._fields(flow, route, params)
+            payload, inspection = alchemy_rpc_read_json_inspection(flow.response.raw_content,
+                alchemy_rpc_read.MAX_RESPONSE_BYTES)
+            alchemy_rpc_read.validate_response(payload, status=flow.response.status_code,
+                request_id=fields["requestId"])
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("alchemy_rpc_read_response_invalid", 502)
+        finally:
+            inspection[:] = b"\x00" * len(inspection)
+        profile = route.adapter_config["response"]
+        if flow.response.status_code != 200:
+            profile = profile["error"]
+        self._normalize_response_headers(flow, profile, alchemy_rpc_read.MODE)
+        return PolicyDecision(allowed=True)
+
+
 class NpmMetadataAdapter(ApiAdapter):
     """Exact allowlisted metadata GETs; no implicit install or write authority."""
     id = npm_metadata.ADAPTER
@@ -4298,6 +4384,7 @@ ADAPTERS: dict[str, ApiAdapter] = {
     GMAIL_READ_ADAPTER: GmailReadV1Adapter(),
     "x.v2": XV2Adapter(),
     x_app_read.ADAPTER: XAppReadAdapter(),
+    alchemy_rpc_read.ADAPTER: AlchemyRpcReadAdapter(),
     "npm.registry": NpmRegistryAdapter(),
     npm_metadata.ADAPTER: NpmMetadataAdapter(),
     npm_publish.ADAPTER: NpmPublishAdapter(),

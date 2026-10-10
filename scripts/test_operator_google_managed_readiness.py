@@ -55,14 +55,16 @@ def owners(**modules):
 
 
 class ReadinessTests(unittest.TestCase):
-    def observe(self, received=None, *, before=None, after=None, enabled=True, require_x=False):
+    def observe(self, received=None, *, before=None, after=None, enabled=True,
+            require_x=False, require_alchemy=False):
         before = snapshot() if before is None else before
         after = deepcopy(before) if after is None else after
         reader = Mock(return_value=health() if received is None else received)
         with owners(operator_google_managed_config=SimpleNamespace(enabled=lambda: enabled),
                 operator_demo_store=SimpleNamespace(loaded_gate_status=reader)), \
                 patch.object(readiness, "_snapshot", side_effect=[before, after]) as snapshots:
-            result = readiness.observe_x() if require_x else readiness.observe()
+            observer = readiness.observe_alchemy if require_alchemy else readiness.observe_x if require_x else readiness.observe
+            result = observer()
         self.assertEqual(set(result), {"ready", "policy_hash", "loaded_policy_hash", "managed_google"})
         return result, reader, snapshots
 
@@ -96,6 +98,82 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(snapshots.call_count, 1)
             self.assertTrue(self.observe(received)[0]["ready"])
         self.assertFalse(self.observe(health(), require_x=True)[0]["ready"])
+
+    def test_alchemy_feature_joins_the_same_health_policy_binary_and_identity(self):
+        descriptor = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+            "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
+        received = {**health(), "operator_alchemy_rpc_read": descriptor}
+        result, reader, snapshots = self.observe(received, require_alchemy=True)
+        self.assertTrue(result["ready"])
+        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(snapshots.call_count, 2)
+        for mutate in (
+                lambda value: value.update(ok=False),
+                lambda value: value.update(policy_hash="sha256:" + "9" * 64),
+                lambda value: value.update(data_plane_binary_digest="sha256:" + "9" * 64),
+                lambda value: value["policy_shadow"]["managed_google"]["operation"].update(config_version=2),
+                lambda value: value["policy_shadow"]["managed_google"]["operation"].update(owner_id="bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+                lambda value: value["policy_shadow"]["managed_google"].update(profile_binding_digest="sha256:" + "9" * 64),
+                lambda value: value["policy_shadow"]["managed_google"].update(effective_settings_digest="sha256:" + "9" * 64)):
+            changed = deepcopy(received)
+            mutate(changed)
+            result, reader, snapshots = self.observe(changed, require_alchemy=True)
+            self.assertFalse(result["ready"])
+            self.assertEqual(reader.call_count, 1)
+            self.assertEqual(snapshots.call_count, 2)
+
+    def test_missing_or_malformed_alchemy_descriptor_never_uses_other_capability(self):
+        descriptor = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+            "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
+        x_descriptor = {"schema": "serverware.operatorXAppReadGate/v1",
+            "adapter": "x.app_read.v1", "operation": "x.username.read"}
+        for marker in (None, {}, True, {**descriptor, "extra": True}, x_descriptor,
+                {**descriptor, "schema": "old"}, {**descriptor, "operation": "alchemy.rpc.write"},
+                {**descriptor, "adapter": "generic.rest"}):
+            received = {**health(), "operator_x_app_read": x_descriptor,
+                "operator_alchemy_rpc_read": marker}
+            result, reader, snapshots = self.observe(received, require_alchemy=True)
+            self.assertFalse(result["ready"])
+            self.assertEqual(reader.call_count, 1)
+            self.assertEqual(snapshots.call_count, 1)
+            self.assertTrue(self.observe(received)[0]["ready"])
+            self.assertTrue(self.observe(received, require_x=True)[0]["ready"])
+        self.assertFalse(self.observe(health(), require_alchemy=True)[0]["ready"])
+
+    def test_alchemy_pending_or_changed_pair_is_not_a_cached_capability(self):
+        descriptor = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+            "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
+        received = {**health(), "operator_alchemy_rpc_read": descriptor}
+        self.assertTrue(self.observe(received, require_alchemy=True)[0]["ready"])
+        for key in ("policy_hash", "expected_binary_digest"):
+            after = snapshot()
+            after[key] = "sha256:" + "9" * 64
+            result, reader, snapshots = self.observe(received, after=after, require_alchemy=True)
+            self.assertFalse(result["ready"])
+            self.assertEqual(reader.call_count, 1)
+            self.assertEqual(snapshots.call_count, 2)
+        after = snapshot()
+        after["managed_google"]["effective_settings_digest"] = "sha256:" + "9" * 64
+        self.assertFalse(self.observe(received, after=after, require_alchemy=True)[0]["ready"])
+        # A following observation cannot reuse the earlier valid descriptor.
+        self.assertFalse(self.observe(health(), require_alchemy=True)[0]["ready"])
+        before = snapshot()
+        before["managed_google"].update(operation=None, profile_binding_digest=None)
+        unconfigured = deepcopy(received)
+        unconfigured["policy_shadow"]["managed_google"] = deepcopy(before["managed_google"])
+        self.assertTrue(self.observe(unconfigured, before=before, require_alchemy=True)[0]["ready"])
+
+    def test_alchemy_observation_disabled_or_owned_never_starts_health_request(self):
+        result, reader, snapshots = self.observe(enabled=False, require_alchemy=True)
+        self.assertFalse(result["ready"])
+        reader.assert_not_called()
+        snapshots.assert_not_called()
+        for attribute, value in (("depth", 1), ("bootstrap", True)):
+            with patch.object(publication._state, attribute, value, create=True):
+                result, reader, snapshots = self.observe(require_alchemy=True)
+            self.assertFalse(result["ready"])
+            reader.assert_not_called()
+            snapshots.assert_not_called()
 
     def test_exact_pair_and_unconfigured_pair(self):
         result, reader, snapshots = self.observe()

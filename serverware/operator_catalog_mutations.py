@@ -20,6 +20,7 @@ from serverware.operator_catalog_inputs import (
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
     GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput,
     XAppBearerInput, XUsernameRuleInput,
+    AlchemyKeyInput, AlchemyChainStatusRuleInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -131,10 +132,11 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             if "key_replaced_at" in record:
                 result["key_replaced_at"] = record["key_replaced_at"]
         if "connection_type" in record:
-            from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x
+            from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
             schema.validate_static_connection(record)
             providers = {operator_catalog_github.CONNECTION: "github",
-                operator_catalog_npm.CONNECTION: "npm", operator_catalog_x.CONNECTION: "x"}
+                operator_catalog_npm.CONNECTION: "npm", operator_catalog_x.CONNECTION: "x",
+                operator_catalog_alchemy.CONNECTION: "alchemy"}
             result.update(connection_type=record["connection_type"], provider_id=providers[record["connection_type"]])
     elif collection == "applications":
         count = len(_active_rules(catalog, "application_id", record["id"]))
@@ -161,8 +163,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["placeholder"] = record["placeholder"]
         if "request_body_mode" in record:
             result["request_body_mode"] = record["request_body_mode"]
-        from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x
-        if operator_catalog_x.selected(record):
+        from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
+        if operator_catalog_alchemy.selected(record):
+            result.update(operator_catalog_alchemy.public_fields(record))
+        elif operator_catalog_x.selected(record):
             result.update(operator_catalog_x.public_fields(record))
         elif operator_catalog_npm_publish.selected(record):
             result.update(operator_catalog_npm_publish.public_fields(record))
@@ -300,10 +304,10 @@ def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) ->
         record = _target(catalog, "credentials", payload.id)
         if record["auth_type"] not in {"bearer", "header"}:
             raise CatalogConflict()
-        from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x
+        from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
         if schema.validate_static_connection(record):
             providers = {item.CONNECTION: item for item in
-                (operator_catalog_github, operator_catalog_npm, operator_catalog_x)}
+                (operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy)}
             provider = providers[record["connection_type"]]
             provider.validate_token(payload.secret)
         receipt = db.replace_operator_static_credential_secret_if_version(conn, payload.id,
@@ -445,6 +449,46 @@ def create_x_rule(payload: XUsernameRuleInput, actor_id: str) -> dict:
     return _mutate(payload, actor_id, "access_rules", "access_rule.x_username_created", change)
 
 
+def create_alchemy_credential(payload: AlchemyKeyInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_alchemy as alchemy
+    alchemy.require_available(payload.expected_policy_hash)
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "credentials")
+        subject = str(uuid.uuid4())
+        credential = db.create_credential(payload.name, "bearer", payload.secret,
+            {"provider_id": "operator-demo", "provider_subject": subject,
+                "secret_class": "bearerToken", "connection_type": alchemy.CONNECTION}, _connection=conn)
+        record = {"id": credential["id"], "name": payload.name, "auth_type": "bearer",
+            "header_name": "Authorization", "connection_type": alchemy.CONNECTION,
+            "provider_subject": subject, "created_at": db.iso_now(), "status": "active"}
+        return _Change(schema.save_resource(conn, "credentials", record, create=True))
+    return _mutate(payload, actor_id, "credentials", "credential.alchemy_key_created", change)
+
+
+def create_alchemy_rule(payload: AlchemyChainStatusRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_alchemy as alchemy, alchemy_rpc_read, operator_demo
+    if alchemy_rpc_read.origin(payload.chain) not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("Alchemy destination is not deployment-allowlisted")
+    alchemy.require_available(payload.expected_policy_hash)
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        record = alchemy.record_fields(payload)
+        alchemy.admit_rule(record, catalog)
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        try:
+            alchemy.validate_rule(record, credential)
+            schema.rule_credential_header(record, credential)
+        except CatalogIntegrityError:
+            raise ValueError("Alchemy chain-status preset requires an Alchemy key connection") from None
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.alchemy_chain_status_created", change)
+
+
 def create_npm_credential(payload: NpmTokenInput, actor_id: str) -> dict:
     from serverware import operator_catalog_npm as npm
 
@@ -568,7 +612,7 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 
 def catalog_status() -> dict:
-    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_demo
+    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy, operator_demo
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
@@ -607,6 +651,7 @@ def catalog_status() -> dict:
             "google_reauthorization": google_reauthorization,
             "github": operator_catalog_github.capability(),
             "x": operator_catalog_x.capability(state["policy_hash"]),
+            "alchemy": operator_catalog_alchemy.capability(state["policy_hash"]),
             "npm": operator_catalog_npm.capability(),
             "npm_publish": operator_catalog_npm_publish.capability(),
             "operation_bundles": operation_bundles,

@@ -615,6 +615,12 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_npm_weekday_hours_example.py \
+	scripts/test_alchemy_rpc_read.py \
+	scripts/test_alchemy_policy_engine.py \
+	scripts/test_operator_catalog_alchemy.py \
+	scripts/test_operator_alchemy_api.py \
+	scripts/test_operator_alchemy_fixture.py \
+	scripts/test_operator_examples_fixture_runner.py \
 	scripts/test_agent_trust_import_identity.py \
 	scripts/test_codebase_attestation.py \
 	scripts/test_native_postgres_contract.py \
@@ -4133,6 +4139,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 		frozen_source_digest="$$(source_tree_digest)"; \
 			for required_source_file in \
 				Makefile \
+				serverware/alchemy_rpc_read.py \
+				serverware/operator_catalog_alchemy.py \
+				schemas/adapters/alchemy.rpc_read.v1.schema.json \
+				scripts/fixtures/alchemy_rpc_read_v1.json \
 				serverware/authority_local_artifact_measure.py \
 				serverware/authority_local_content_catalog.py \
 				serverware/authority_local_artifact_witness.py \

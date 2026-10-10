@@ -168,13 +168,15 @@ class EventTests(unittest.TestCase):
             "operator_catalog.access_rule.npm_metadata_created",
             "operator_catalog.access_rule.npm_publish_created",
             "operator_catalog.credential.x_app_bearer_created",
-            "operator_catalog.access_rule.x_username_created")
+            "operator_catalog.access_rule.x_username_created",
+            "operator_catalog.credential.alchemy_key_created",
+            "operator_catalog.access_rule.alchemy_chain_status_created")
         for kind in kinds:
             self.assertIn(kind, events.AUDIT_EVENT_TYPES)
             self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
             self.append(kind, {"resource_id": resource, "revision": 2,
                 "policy_hash": DIGEST, "secret": CANARY,
-                "packages": [CANARY], "package": CANARY, "tag": CANARY, "username": CANARY,
+                "packages": [CANARY], "package": CANARY, "tag": CANARY, "username": CANARY, "chain": CANARY,
                 "publishing_window": {"start": CANARY, "end": CANARY},
                 "destination_url": "https://example.invalid/" + CANARY})
         batch, cursor = self.read()

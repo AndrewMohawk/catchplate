@@ -1,8 +1,9 @@
-# X operator preset and Alchemy implementation plan
+# X and Alchemy operator presets
 
 Status (2026-10-10): **X isolated SDK-through-proxy acceptance passed;
-Alchemy remains design only.** X has a separate adapter, catalog/API, guided
-UI and pinned Node/Python/Go examples. All three actual entrypoints passed using
+Alchemy is implemented and component-verified, with proxy acceptance pending.**
+X has a separate adapter, catalog/API, guided UI and pinned Node/Python/Go
+examples. All three actual entrypoints passed using
 source `eb5d12e5` and the normal Rust binary recorded below. Each client's
 wrong-application, wrong-username and revoked-grant controls were refused.
 Separate raw controls refused the wrong dummy, method and query, released a
@@ -14,7 +15,22 @@ Offline tests remain separate results in
 [the X verification record](operator-x-username-verification.md). Neither a live
 X request, GitHub Actions run nor deployment acceptance is claimed. X controls
 require a fresh matching gate capability; an older gate cannot implicitly enable the preset.
-The Alchemy names below remain proposed contracts, not usable API endpoints.
+
+Alchemy's adapter, catalog/API, UI source, examples and isolated fixture/checker
+are implemented. Its UI remains guide-only pending acceptance; this does not
+establish support in a deployed app/gate pair.
+
+The component checkpoint in `alchemy-verification.1YKDDXyl` records 33 passing
+core/fixture/runner checks, 11 catalog checks and 5 API checks. The installed SDK
+checks passed: Node 15, Python 10 with its full transitive dependencies, and Go
+8 main test groups plus a built example binary. The shared 75-test Python run
+had one cross-suite import-isolation failure; the isolated asset rerun passed
+all 13 checks. That combined run is not recorded as a clean pass. The optimized
+Rust build succeeded and all 12 Alchemy Rust groups passed. Browser checks passed
+16 Alchemy groups and 13 X regression groups with unchanged source; those checks
+use synthetic intercepted APIs, not the real backend. Actual SDK-through-proxy/TLS
+acceptance has not run; real-provider, native and deployment acceptance remain
+unverified.
 
 ## Ship X username reads first
 
@@ -41,13 +57,13 @@ Two existing shortcuts would be incorrect:
   the whole stock-SDK slice needs a narrow versioned admission path; do not claim
   current generic rules already accept it or loosen generic admission globally.
 
-X uses the separate `x.app_read.v1` adapter; the proposed Alchemy equivalent is
+X uses the separate `x.app_read.v1` adapter; Alchemy uses
 `alchemy.rpc_read.v1`. They use the existing static-custody, bounded-response
 and final-dispatch machinery, keeping compatibility changes out of legacy X
-OAuth and generic rules. Alchemy JSON-RPC remains unimplemented; an NFT GET or
-generic POST is not a substitute for its method/parameter guard.
+OAuth and generic rules. Alchemy's implemented JSON-RPC method/parameter guard
+is not an NFT GET or a generic POST grant.
 
-## Fixed X contract and proposed Alchemy contract
+## Fixed X and Alchemy contracts
 
 | Item | X app-only username read | Alchemy chain status read |
 | --- | --- | --- |
@@ -92,7 +108,7 @@ requires one. Pin the actual dependency versions and confirm their wire headers
 before freezing these lists; do not learn a broader allowlist from traffic.
 
 Responses remain full bounded strict JSON, not user-configured field projection.
-X admits success HTTP 200 up to 1 MiB; the proposed Alchemy limit is 64 KiB. Supported
+X admits success HTTP 200 up to 1 MiB; the Alchemy limit is 64 KiB. Supported
 HTTP errors 400/401/403/404/429/500/502/503/504 up to 64 KiB. Accept only
 `application/json`, optionally UTF-8 charset; no compressed bodies, redirects,
 empty 204/304 or streaming. Validate and discard bounded unselected metadata;
@@ -110,12 +126,12 @@ signatures are not static header replacement. This lookup slice does not fulfill
 the original posting example. [X authentication](https://docs.x.com/fundamentals/authentication/overview),
 [username lookup](https://docs.x.com/x-api/users/get-user-by-username).
 
-## Required integration seams and ownership
+## Implementation seams and ownership
 
 Assign one owner to each shared-file group; do not split the two providers across
 agents editing the same catalog or UI dispatch chain. No registry framework or
-general adapter refactor is needed for these two slices. X now occupies the
-implementation seams below; the Alchemy work remains proposed.
+general adapter refactor is needed for these two slices. Both implementations
+occupy the seams below; their verification levels remain separate.
 
 | Owner | Files and work |
 | --- | --- |
@@ -126,8 +142,8 @@ implementation seams below; the Alchemy work remains proposed.
 | Runnable examples | New `examples/x-username-{node,python,go}/` and `examples/alchemy-chain-status-{node,python,go}/`, with pinned dependency files, README, tests and Node GitHub Actions example. Own ordinary SDK configuration, not a replacement HTTP implementation masquerading as the SDK. |
 | Acceptance | New focused catalog/API/browser/provider-fixture tests, reusing the existing GitHub/npm isolated fixture architecture. Rust tests stay with the Rust owner. One runtime owner executes frozen source and records results; source authors do not imply execution. |
 
-The API base is `/api/operator-demo`; the X paths below are implemented, while
-the Alchemy paths remain proposed:
+The API base is `/api/operator-demo`; these typed paths are implemented in
+source and require their matching app/gate capabilities:
 
 - `POST /credentials/x-app-bearer` and `/credentials/alchemy-key`: exact
   `{expected_revision, expected_policy_hash, name, secret}`, maximum 16 KiB.
@@ -178,22 +194,22 @@ dummy credential. The passed X recipes are:
   authorizer hooks and per-host TLS verification. It is not an official X SDK.
 
 These are explicit supported client configurations, not a claim that ambient
-proxy settings or unchanged retry defaults suffice. The Alchemy candidates
-below still need implementation and acceptance:
+proxy settings or unchanged retry defaults suffice. The implemented Alchemy
+examples have passed offline SDK checks, not actual-proxy acceptance:
 
-- Node: official `alchemy-sdk` with keyless `url`, dummy bearer in
-  `connectionInfoOverrides.headers`, and batching disabled. Its ethers-v5 path
-  uses `https.request`; Node 25.5's documented `--use-env-proxy` is a candidate
-  transport configuration, with TLS verification retained and conflicting
-  proxy/bypass settings cleared. Alchemy's current `maxRetries || default` needs
-  an actually supported bounded retry setting; zero must not be described as
-  working without proof.
-- Python: `web3.py`, using explicitly configured Requests sessions/proxy/trust
-  and disabling exception retries. Avoid ambient `.netrc`, token discovery and
-  proxy fallback.
-- Go: `go-ethereum/rpc` with
-  `WithHTTPClient` and `WithHeader`. Use context deadlines, explicit HTTPS proxy,
-  a CA pool retaining required public roots, and no redirects.
+- [Node](../examples/alchemy-chain-status-node/README.md): pinned official
+  `alchemy-sdk` **3.6.5**, ethers **5.8.0**, Node **25.5.0**, with keyless `url`,
+  dummy bearer and batching disabled. Its normal `https.request` path uses a
+  dedicated-process HTTPS Agent with explicit `proxyEnv` and separate TLS roots.
+  `throttleLimit: 1` plus a refusing throttle callback bounds each method to one
+  attempt; `maxRetries: 0` is not used. This archived SDK is a pinned compatibility
+  example, not a claim of active maintenance.
+- [Python](../examples/alchemy-chain-status-python/README.md): `web3.py`
+  **7.13.0**, using explicitly configured Requests sessions/proxy/trust and
+  disabled exception retries, without ambient `.netrc` or proxy fallback.
+- [Go](../examples/alchemy-chain-status-go/README.md): `go-ethereum/rpc`
+  **v1.15.11**, with `WithHTTPClient` and `WithHeader`, context deadlines,
+  explicit HTTPS proxy, per-host verified TLS trust and no redirects or retries.
 
 Source references: [X SDKs](https://docs.x.com/tools-and-libraries),
 [X TS client](https://raw.githubusercontent.com/xdevplatform/xdk-typescript/main/src/client.ts),
@@ -244,8 +260,8 @@ verified trust; never use TLS-disable settings.
    run. Never turn source/UI completion into these claims.
 
 The X projects have passed the isolated through-proxy gate; this is not permission
-to deploy or proof that a deployment has the paired preset. Alchemy remains
-design-only and must not be enabled as a completed preset. Offline SDK checks,
-isolated proxy/TLS acceptance, deployment acceptance and real-provider access
-remain separate results. Keep existing GitHub/npm/Google and manual workflows
-unchanged while adding each complete slice.
+to deploy or proof that a deployment has the paired preset. Alchemy is implemented
+and component-verified, but its guide-only UI must not imply completed proxy/TLS
+acceptance. Offline SDK checks, isolated proxy/TLS acceptance, deployment
+acceptance and real-provider access remain separate results. Keep existing
+GitHub/npm/Google and manual workflows unchanged while adding each complete slice.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import importlib
 import json
 import os
 from pathlib import Path
@@ -51,7 +52,40 @@ def limit_command_logs():
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_LOG_BYTES, MAX_LOG_BYTES))
 
 
+def failure_site(error, source):
+    """Return a source code location only, never exception text or local values."""
+    site = None
+    trace = error.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        try:
+            relative = Path(frame.f_code.co_filename).resolve().relative_to(source)
+        except (OSError, ValueError, RuntimeError):
+            relative = None
+        if (relative is not None and relative.suffix == ".py"
+                and relative.parts[0] in {"scripts", "serverware"}
+                and all(re.fullmatch(r"[A-Za-z0-9_]+", part) for part in relative.with_suffix("").parts)
+                and frame.f_code.co_name != "require"):
+            site = {"module": ".".join(relative.with_suffix("").parts), "line": trace.tb_lineno}
+        trace = trace.tb_next
+    return site
+
+
 class Run:
+    # These are source-fixed profiles, not CLI options or configuration imports.
+    SOURCE_FILE = Path(__file__).resolve()
+    SOURCE_SCRIPT = "scripts/run_operator_x_examples_fixture.py"
+    RECIPE_MODULE = "scripts.prepare_operator_x_fixture"
+    CHECKER_MODULE = "scripts.check_operator_x_examples"
+    CHECKER_SCRIPT = "/app/scripts/check_operator_x_examples.py"
+    PROVIDER_SERVICE = "x"
+    PROVIDER_PKI_SERVICE = "x-pki"
+    NODE_EXAMPLE_DIRECTORY = "examples/x-username-node"
+    GO_MOUNT_TARGET = "/example-go/x-username"
+    CLAIM_SCHEMA = "serverware.privateXExamplesRunClaim/v1"
+    TERMINAL_SCHEMA = "serverware.privateXExamplesRun/v1"
+    REAL_PROVIDER_VERIFIED = "realXVerified"
+
     def __init__(self, args):
         self.args = args
         self.project = None
@@ -150,17 +184,18 @@ class Run:
             info = directory.stat()
             require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700)
         require(not list(args.job_root.iterdir()))
-        self.save("run.claim.json", {"schema": "serverware.privateXExamplesRunClaim/v1",
+        self.save("run.claim.json", {"schema": self.CLAIM_SCHEMA,
             "sourceCommit": args.commit, "jobRoot": str(args.job_root)})
         phase, success, armed, cleanup = "inputs", False, False, False
+        failure = None
         errors = []
         begun = time.monotonic()
         try:
             require(self.command("source-commit", ["git", "rev-parse", "HEAD"], 10).decode().strip() == args.commit)
             require(not self.command("source-status", ["git", "status", "--porcelain=v1"], 10).strip())
-            require(Path(__file__).resolve() == args.source / "scripts/run_operator_x_examples_fixture.py")
+            require(self.SOURCE_FILE == args.source / self.SOURCE_SCRIPT)
             sys.path.insert(0, str(args.source))
-            from scripts import prepare_operator_x_fixture as recipe
+            recipe = importlib.import_module(self.RECIPE_MODULE)
             from scripts.prepare_operator_catalog_fixture import bind, digest
 
             for path, expected in ((args.binary, args.expected_binary_sha256),
@@ -168,26 +203,27 @@ class Run:
                     (args.initializer, recipe.base.INITIALIZER_SHA256)):
                 require(path.is_file() and not path.is_symlink() and digest(path) == expected)
             require(LIBATOMIC.is_file() and (args.python_runtime / "pyvenv.cfg").is_file()
-                and (args.source / "examples/x-username-node/node_modules").is_dir())
+                and (args.source / self.NODE_EXAMPLE_DIRECTORY / "node_modules").is_dir())
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root,
-                args.node, args.source / "examples/x-username-node",
+                args.node, args.source / self.NODE_EXAMPLE_DIRECTORY,
                 expected_binary_sha256=args.expected_binary_sha256)
             self.project, self.services = config["name"], config["services"]
-            require(set(self.services) == RUNTIME_SERVICES | {"initialize", "x-pki", "basic-pki"}
+            runtime_services = (RUNTIME_SERVICES - {"x"}) | {self.PROVIDER_SERVICE}
+            require(set(self.services) == runtime_services | {"initialize", self.PROVIDER_PKI_SERVICE, "basic-pki"}
                 and "networks" not in config)
             check = self.services["check"]
             check["image"], check["entrypoint"] = PYTHON_IMAGE, ["/example-python/bin/python", "-B"]
-            require(check["command"][0] == "/app/scripts/check_operator_x_examples.py")
+            require(check["command"][0] == self.CHECKER_SCRIPT)
             require(check["command"][check["command"].index("--timeout-seconds") + 1] == "180")
             check["command"] += ["--expected-go-sha256", args.expected_go_sha256,
                 "--expected-initial-revision", "1"]
-            node_target = "/app/examples/x-username-node/node_modules"
+            node_target = "/app/" + self.NODE_EXAMPLE_DIRECTORY + "/node_modules"
             require([mount for mount in check["volumes"] if mount["target"] == node_target] ==
-                [bind(args.source / "examples/x-username-node/node_modules", node_target)])
+                [bind(args.source / self.NODE_EXAMPLE_DIRECTORY / "node_modules", node_target)])
             check["volumes"] += [bind(LIBATOMIC, "/usr/lib/x86_64-linux-gnu/libatomic.so.1"),
                 bind(args.python_runtime, "/example-python"),
                 bind(args.python_packages, "/example-python/lib/python3.12/site-packages"),
-                bind(args.go, "/example-go/x-username")]
+                bind(args.go, self.GO_MOUNT_TARGET)]
             require(all("requests-ca" not in mount["target"] for mount in check["volumes"])
                 and len({mount["target"] for mount in check["volumes"]}) == len(check["volumes"]))
             image_ids = {}
@@ -212,12 +248,12 @@ class Run:
                 "composeSha256": digest(compose_path), "project": self.project, "images": image_ids,
                 "pythonRuntime": str(args.python_runtime), "pythonPackages": str(args.python_packages),
                 "cachedDependenciesReused": True, "dependencyPayloadRehashed": False,
-                "syntheticOnly": True, "productionReady": False, "realXVerified": False})
+                "syntheticOnly": True, "productionReady": False, self.REAL_PROVIDER_VERIFIED: False})
             for phase, seconds, arguments in (
                 ("initialize", 30, ["--profile", "prepare", "run", "--rm", "--no-deps", "--pull", "never", "initialize"]),
-                ("x-pki", 30, ["--profile", "x-pki", "run", "--rm", "--no-deps", "--pull", "never", "x-pki"]),
+                (self.PROVIDER_PKI_SERVICE, 30, ["--profile", self.PROVIDER_PKI_SERVICE, "run", "--rm", "--no-deps", "--pull", "never", self.PROVIDER_PKI_SERVICE]),
                 ("network", 25, ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "20", "network"]),
-                ("baseline", 95, ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "80", "x", "serverware", "decision-gate-rs"]),
+                ("baseline", 95, ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "80", self.PROVIDER_SERVICE, "serverware", "decision-gate-rs"]),
                 ("basic-pki", 30, ["--profile", "basic-pki", "run", "--rm", "--no-deps", "--pull", "never", "basic-pki"]),
                 ("edge", 15, ["--profile", "edge", "up", "-d", "--no-build", "--pull", "never", "--no-deps", "edge"])):
                 self.command(phase, compose + arguments, seconds)
@@ -232,7 +268,7 @@ class Run:
             phase = "create-check"
             self.command(phase, compose + ["--profile", "check", "up", "--no-start", "--no-recreate", "--no-build", "--pull", "never", "--no-deps", "check"], 15)
             rows = self.container_rows("created")
-            require(len(rows) == 6 and {row["Config"]["Labels"]["com.docker.compose.service"] for row in rows} == RUNTIME_SERVICES)
+            require(len(rows) == 6 and {row["Config"]["Labels"]["com.docker.compose.service"] for row in rows} == runtime_services)
             network = next(row for row in rows if row["Config"]["Labels"]["com.docker.compose.service"] == "network")
             observations = []
             for row in rows:
@@ -244,7 +280,7 @@ class Run:
                 actual = {(mount["Source"], mount["Destination"], not mount["RW"]) for mount in row["Mounts"] if mount["Type"] == "bind"}
                 require(actual == {(mount["source"], mount["target"], mount["read_only"]) for mount in service["volumes"]})
                 require(row["State"]["Status"] == ("created" if name == "check" else "running"))
-                if name in {"network", "x", "edge"}:
+                if name in {"network", self.PROVIDER_SERVICE, "edge"}:
                     started = datetime.datetime.fromisoformat(row["State"]["StartedAt"].replace("Z", "+00:00"))
                     age = (datetime.datetime.now(datetime.timezone.utc) - started).total_seconds()
                     require(0 <= age < (45 if name == "edge" else 105))
@@ -262,33 +298,34 @@ class Run:
             raw = self.command("checker-result", ["docker", "logs", checker], 10)
             terminal = json.loads(self.command("checker-state", ["docker", "inspect", "--format", "{{json .State}}", checker], 10))
             require(exit_code == 0 and terminal["Status"] == "exited" and terminal["ExitCode"] == 0 and not terminal["OOMKilled"])
-            from scripts.check_operator_x_examples import validate_success_result
-            validate_success_result(json.loads(raw))
+            importlib.import_module(self.CHECKER_MODULE).validate_success_result(json.loads(raw))
             success, phase = True, "complete"
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as error:
             # Details remain in bounded phase logs; never print environment,
             # token-bearing input, provider content, or exception representations.
             success = False
+            failure = failure_site(error, args.source)
         finally:
             if armed:
                 cleanup, errors = self.cleanup()
-            self.save("terminal.json", {"schema": "serverware.privateXExamplesRun/v1", "phase": phase,
+            self.save("terminal.json", {"schema": self.TERMINAL_SCHEMA, "phase": phase,
                 "success": success, "cleanup": cleanup, "cleanupErrors": errors,
                 "elapsedSeconds": round(time.monotonic() - begun, 3),
-                "syntheticOnly": True, "productionReady": False, "realXVerified": False})
+                "syntheticOnly": True, "productionReady": False, self.REAL_PROVIDER_VERIFIED: False,
+                **({"failureSite": failure} if failure is not None else {})})
             print(json.dumps({"phase": phase, "success": success, "cleanup": cleanup}), flush=True)
         return 0 if success and cleanup else 1
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(run_type=Run, *, description=__doc__):
+    parser = argparse.ArgumentParser(description=description)
     for name in ("source", "job-root", "evidence", "binary", "node", "go", "python-runtime", "python-packages", "initializer"):
         parser.add_argument("--" + name, type=absolute_path, required=True)
     parser.add_argument("--commit", required=True)
     for name in ("expected-binary-sha256", "expected-go-sha256"):
         parser.add_argument("--" + name, type=sha256, required=True)
     os.umask(0o077)
-    return Run(parser.parse_args()).execute()
+    return run_type(parser.parse_args()).execute()
 
 
 if __name__ == "__main__":

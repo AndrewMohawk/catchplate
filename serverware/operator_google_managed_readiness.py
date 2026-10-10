@@ -70,7 +70,7 @@ def _snapshot():
                     "expected_binary_digest": config.EXPECTED_DATA_PLANE_BINARY_DIGEST}
 
 
-def _observe(*, require_x: bool = False) -> dict:
+def _observe(*, require_x: bool = False, require_alchemy: bool = False) -> dict:
     """Fixed public outcome; unavailable observation never implies rollback.
 
     Must be called outside ALL caller-owned publication/SQLite transactions.
@@ -95,6 +95,9 @@ def _observe(*, require_x: bool = False) -> dict:
         if require_x:
             from serverware.operator_catalog_x import gate_descriptor_matches
             _require(gate_descriptor_matches(observed.get("operator_x_app_read")))
+        if require_alchemy:
+            from serverware.operator_catalog_alchemy import gate_descriptor_matches
+            _require(gate_descriptor_matches(observed.get("operator_alchemy_rpc_read")))
         result["loaded_policy_hash"] = observed["policy_hash"]
         shadow = observed.get("policy_shadow")
         _require(type(shadow) is dict)
@@ -115,13 +118,18 @@ def _observe(*, require_x: bool = False) -> dict:
 
 
 def observe() -> dict:
-    """Observe the existing exact managed pair without requiring an X adapter."""
+    """Observe the existing exact managed pair without a provider-adapter check."""
     return _observe()
 
 
 def observe_x() -> dict:
     """Join X compatibility to that same fresh, exactly bound gate response."""
     return _observe(require_x=True)
+
+
+def observe_alchemy() -> dict:
+    """Join Alchemy compatibility to the same fresh, exactly bound gate response."""
+    return _observe(require_alchemy=True)
 
 
 def _start_observation(value):

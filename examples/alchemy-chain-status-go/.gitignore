@@ -1,0 +1,8 @@
+/alchemy-chain-status
+/alchemy-chain-status-go
+*.pem
+*.crt
+*.key
+.env
+.env.*
+!.env.example

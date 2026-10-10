@@ -735,7 +735,7 @@
         },
         "bodyPresence": {"enum": ["required", "forbidden", "jsonOrEmpty204V1"]},
         "unlistedHeaderPolicy": {"const": "discardUnselectedV1"},
-        "contentTypePolicy": {"enum": ["githubJsonUtf8V1", "npmJsonUtf8V1", "xAppReadJsonUtf8V1"]},
+        "contentTypePolicy": {"enum": ["githubJsonUtf8V1", "npmJsonUtf8V1", "xAppReadJsonUtf8V1", "alchemyRpcReadJsonUtf8V1"]},
         "allowedResponseHeaderNames": {
           "type": "array",
           "maxItems": 32,
@@ -1499,6 +1499,13 @@
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
+                  "type": {"const": "alchemy.rpc_read.v1"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json"}
+                }
+              },
+              {
+                "type": "object", "required": ["type", "config"], "additionalProperties": false,
+                "properties": {
                   "type": {"const": "npm.publish.v1"},
                   "config": {"$ref": "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json"}
                 }
@@ -1729,12 +1736,12 @@
               "properties": {"adapter": {
                 "required": ["type", "config"],
                 "properties": {
-                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1"]},
+                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1", "alchemy.rpc_read.v1"]},
                   "config": {
                     "required": ["response"],
                     "properties": {"response": {
                       "required": ["mode"],
-                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1", "npmPublishJsonV1", "xAppReadJsonV1"]}}
+                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1", "npmPublishJsonV1", "xAppReadJsonV1", "alchemyRpcReadJsonV1"]}}
                     }}
                   }
                 }
@@ -1819,9 +1826,20 @@
                       "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "xAppReadJsonUtf8V1"}
                     }}
                   }}},
-                  "else": {"properties": {"constraints": {"items": {
-                    "not": {"required": ["contentTypePolicy"]}
-                  }}}}
+                  "else": {
+                    "if": {"required": ["adapter"], "properties": {"adapter": {
+                      "required": ["type"], "properties": {"type": {"const": "alchemy.rpc_read.v1"}}
+                    }}},
+                    "then": {"required": ["constraints"], "properties": {"constraints": {
+                      "minItems": 1, "maxItems": 1,
+                      "items": {"required": ["type", "contentTypePolicy"], "properties": {
+                        "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "alchemyRpcReadJsonUtf8V1"}
+                      }}
+                    }}},
+                    "else": {"properties": {"constraints": {"items": {
+                      "not": {"required": ["contentTypePolicy"]}
+                    }}}}
+                  }
                 }
               }
             }
@@ -1831,7 +1849,7 @@
               "properties": {
                 "adapter": {
                   "required": ["type"],
-                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1"]}}
+                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1", "alchemy.rpc_read.v1"]}}
                 }
               },
               "required": ["adapter"]

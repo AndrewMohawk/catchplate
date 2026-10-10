@@ -54,9 +54,11 @@ def _request_profile(rule: dict, credential: dict, route: dict) -> None:
 
 def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=None) -> dict:
     from serverware import operator_demo_store as legacy
-    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x
+    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     for rule in catalog['access_rules']:
-        if operator_catalog_x.selected(rule):
+        if operator_catalog_alchemy.selected(rule):
+            operator_catalog_alchemy.validate_shape(rule)
+        elif operator_catalog_x.selected(rule):
             operator_catalog_x.validate_shape(rule)
         elif operator_catalog_npm_publish.selected(rule):
             operator_catalog_npm_publish.validate_shape(rule)
@@ -103,7 +105,9 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             operator_catalog_google.validate_rule(rule, credential, profile=metadata_profile)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
-        if operator_catalog_x.selected(rule):
+        if operator_catalog_alchemy.selected(rule):
+            route = operator_catalog_alchemy.render_route(rule, credential, application['principal_id'])
+        elif operator_catalog_x.selected(rule):
             route = operator_catalog_x.render_route(rule, credential, application['principal_id'])
         elif operator_catalog_npm_publish.selected(rule):
             emitted = operator_catalog_npm_publish.render_routes(rule, credential, application['principal_id'])

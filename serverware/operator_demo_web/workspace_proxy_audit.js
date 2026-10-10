@@ -20,6 +20,7 @@ function operatorExampleProjects(rule, catalog) {
       {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
         href: source + 'blob/' + branch + 'examples/x-username-node/workflow.example.yml'},
       guide('X preset scope and compatibility', 'operator-provider-presets.md')];
+    case 'alchemy_chain_status_read_v1': return [guide('Alchemy preset scope and compatibility', 'operator-provider-presets.md')];
     case 'gmail_read_v1': return [
       ...(rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' ?
         [project('Go + Gmail SDK', 'google-gmail-go')] : []),
@@ -31,7 +32,8 @@ function renderOperatorExampleProjects(rule, catalog) {
   const panel = element('client-examples'); const links = element('client-example-links');
   const projects = operatorExampleProjects(rule, catalog);
   links.replaceChildren(); panel.hidden = projects.length === 0;
-  element('client-example-note').textContent = !projects.length ? '' : isXRule(rule) ?
+  element('client-example-note').textContent = !projects.length ? '' : isAlchemyRule(rule) ?
+    'Public scope and compatibility guide only. Ordinary Alchemy SDK verification is pending; this page has not run a client or verified provider access.' : isXRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires the documented exact Gmail dummy-header replacement. The public guide contains no private client config and does not verify your access.';
@@ -47,6 +49,7 @@ function createProxyView(workspace, applications) {
   let command = '';
   let gmailContext = '';
   let githubContext = '';
+  let alchemyContext = '';
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
@@ -55,6 +58,7 @@ function createProxyView(workspace, applications) {
     element('github-client-controls').hidden = true;
     element('npm-client-controls').hidden = true;
     element('npm-publish-client-controls').hidden = true;
+    element('alchemy-client-controls').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -69,6 +73,10 @@ function createProxyView(workspace, applications) {
     const npm = isNpmRule(rule);
     const npmPublish = isNpmPublishRule(rule);
     const x = isXRule(rule);
+    const alchemy = isAlchemyRule(rule);
+    const alchemySelection = alchemy ? application?.id + ':' + rule.id : '';
+    if (alchemySelection !== alchemyContext) { element('alchemy-client-method').value = 'eth_chainId'; alchemyContext = alchemySelection; }
+    element('alchemy-client-controls').hidden = !alchemy;
     element('npm-publish-client-controls').hidden = !npmPublish;
     element('npm-publish-client-summary').textContent = npmPublish ? npmPublishReview(rule) : '';
     element('npm-client-controls').hidden = !npm;
@@ -77,15 +85,16 @@ function createProxyView(workspace, applications) {
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github || npm || npmPublish || x; element('proxy-method').disabled = github || npm || npmPublish || x;
-    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || x;
+    element('proxy-method').hidden = github || npm || npmPublish || x || alchemy; element('proxy-method').disabled = github || npm || npmPublish || x || alchemy;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || x || alchemy;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail;
     const messageRead = gmail && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = x ?
+    element('client-template-title').textContent = alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = alchemy ?
+      'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here; ordinary SDK verification is pending.' : x ?
       'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
@@ -124,7 +133,9 @@ function createProxyView(workspace, applications) {
       proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = npmPublish ? buildNpmPublishClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+      command = alchemy ? buildAlchemyClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+        chain: rule.chain, method: element('alchemy-client-method').value, caPath: element('ca-path').value,
+        proxyCaPath: element('alchemy-proxy-ca-path').value}) : npmPublish ? buildNpmPublishClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         packageName: rule.package, tag: rule.tag, publishingWindow: rule.publishing_window, caPath: element('ca-path').value}) :
         npm ? buildNpmClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         packages: rule.packages, packageName: element('npm-client-package').value, caPath: element('ca-path').value}) : github ? buildGithubClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
@@ -151,6 +162,13 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (alchemy) {
+      element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No Alchemy request was tested here. ' :
+        'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
+        'Read ' + rule.chain + ' only: eth_chainId and eth_blockNumber, POST to keyless /v2, params: [] and no URL query. No arbitrary RPC, batches, notifications, transactions, wallets, WebSockets, NFT or Notify APIs. ' +
+        'The fixed public dummy is not your Alchemy key. The app token authenticates separately to the proxy. Keep both TLS legs verified. HTTP 200 can contain an RPC error. Ordinary Alchemy SDK verification is pending; this page has not verified provider access.';
+      return;
+    }
     if (x) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No X lookup was tested here. ' :
         'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
@@ -208,15 +226,17 @@ function createProxyView(workspace, applications) {
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
-  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package']) element(id).addEventListener('change', render);
+  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package', 'alchemy-client-method']) element(id).addEventListener('change', render);
   element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
   element('github-proxy-ca-path').addEventListener('input', render);
+  element('alchemy-proxy-ca-path').addEventListener('input', render);
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = !element('npm-publish-client-controls').hidden ?
+      element('client-copy-status').textContent = !element('alchemy-client-controls').hidden ?
+        'Copied the fixed Alchemy JSON-RPC read template. Set the Serverware app token locally, never the provider key. No request was executed by this page.' : !element('npm-publish-client-controls').hidden ?
         'Copied npmrc settings and the separate publishing command. Review the local package before running it; this page sent no publish request.' : !element('npm-client-controls').hidden ?
         'Copied npmrc settings and the separate metadata command. Set the app token and a fresh private cache locally; no lookup was executed by this page.' : !element('github-client-controls').hidden ?
         'Copied the GitHub client recipe. Set the application token and any creation content locally. No request was executed by this page.' :
@@ -240,6 +260,14 @@ function createProxyView(workspace, applications) {
       {proxy_authentication: 'basic_and_bearer_v1', proxy_username: application.id, proxy_password: token});
     else config.proxy_authorization = 'Bearer ' + token;
     if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
+    if (isAlchemyRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.chain = rule.chain;
+      config.rpc_methods = [...operatorAlchemy.rpcMethods];
+      config.request_headers['Content-Type'] = 'application/json';
+      config.request_body = alchemyRpcRequest(element('alchemy-client-method').value);
+      config.proxy_ca_file = element('alchemy-proxy-ca-path').value || null;
+      config.note += ' Alchemy chain-status reads only, POST to keyless /v2 with empty params. Fixed public dummy; never put the real Alchemy key in a URL or client. No arbitrary RPC or transactions. Ordinary SDK verification and provider access remain unverified by this page.';
+    }
     if (isXRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.username = rule.username;
       config.note += ' X app-only username lookup only: GET with no query or body. Fixed public dummy; no posting or user OAuth. Provider entitlement and ordinary SDK compatibility have not been verified by this page.';

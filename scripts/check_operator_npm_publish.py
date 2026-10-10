@@ -32,6 +32,9 @@ from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, DRAIN
 CONNECT_DENIED = metadata.CONNECT_DENIED
 KEEP_ALIVE = "data_plane.connect.keep_alive"
 PHASES = tuple(spec["case"] for spec in fixture.SPECS)
+FAILURE_PHASES = frozenset((*PHASES, "startup", "final", "unknown"))
+FAILURE_STAGES = frozenset({"startup", "pre_client_catalog", "client", "checkpoint_registry",
+    "checkpoint_audit", "checkpoint_health", "post_checkpoint_catalog", "final_verification", "unknown"})
 CLIENT_STAGES = {"input", "identity", "trust", "package", "workspace", "npm_spawn", "npm_process", "npm_json", "npm_denial", "npm_receipt"}
 CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E400", "E401", "E409", "E422", "E429", "E500", "E503", "E504",
     "EPUBLISHCONFLICT", "EPRIVATE", "EUNSCOPED", "EBADSEMVER", "FETCH_ERROR", "EPIPE"}
@@ -41,6 +44,19 @@ CLIENT_STDOUT_CODE_KINDS = {"not_observed", "absent", "null", "recognized", "uns
 CLIENT_STDOUT_CONTEXTS = {"none", "unrecognized", "http_error", "publish_conflict", "package_private", "unscoped_access",
     "invalid_version", "auth_required", "transport_error", "tls_error", "duplicate_version", "implicit_latest",
     "fetch_broken_pipe", "fetch_connection_reset", "fetch_socket_hang_up", "fetch_other", "fetch_network_timeout", "fetch_response_timeout"}
+
+
+def failure_location(check):
+    """Closed failure-only breadcrumb; never export inputs or exception text."""
+    if check is None:
+        return {"phase": "startup", "stage": "startup"}
+    try:
+        phase = getattr(check, "failure_phase", None)
+        stage = getattr(check, "failure_stage", None)
+    except Exception:
+        return {"phase": "unknown", "stage": "unknown"}
+    return {"phase": phase if type(phase) is str and phase in FAILURE_PHASES else "unknown",
+        "stage": stage if type(stage) is str and stage in FAILURE_STAGES else "unknown"}
 
 
 def client_failure_observation(value, phase):
@@ -280,6 +296,7 @@ def validate_denial(event, expected):
 
 class NpmPublishCheck(metadata.NpmMetadataCheck):
     def __init__(self, args):
+        self.failure_phase, self.failure_stage = "startup", "startup"
         super().__init__(args)
         self.completed, self.expected_denial_rows, self.phase_scopes = [], [], []
         self.cutoff, self.baseline, self.revocation = {}, {}, None
@@ -424,16 +441,20 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
     def checkpoint(self):
         drained = None
         while True:
+            self.failure_stage = "checkpoint_registry"
             self.accept_observation(self.observe())
+            self.failure_stage = "checkpoint_audit"
             events = self.audit()
             if drained is not None:
                 require(all(row["id"] in drained or row["event_type"] == LEASE for row in events),
                     "new non-lease event appeared after complete drained publish checkpoint")
             complete, evidence = self.validate_audits(events)
-            if complete and self.audit_drained():
-                if drained is not None:
-                    return evidence
-                drained = dict(self.cutoff)
+            if complete:
+                self.failure_stage = "checkpoint_health"
+                if self.audit_drained():
+                    if drained is not None:
+                        return evidence
+                    drained = dict(self.cutoff)
             time.sleep(min(0.1, self.timeout()))
 
     def client(self, spec, app, token):
@@ -494,6 +515,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
         self.baseline = self.cutoff = features.audit_cutoff(self.audit())
         for spec in fixture.SPECS:
             phase = spec["case"]
+            self.failure_phase, self.failure_stage = phase, "unknown"
             selected = "unscoped" if phase in {"wrong_package", "wrong_placeholder"} else "scoped" if phase == "revoked_app" else phase
             app, token = apps[selected]; rule = rules[selected]
             if phase == "revoked_app":
@@ -506,6 +528,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
                 require(self.resource(pins, "applications", app["id"])["status"] == "revoked"
                     and self.resource(pins, "access_rules", rule["id"])["status"] == "revoked",
                     "publish application and paired permission did not revoke together")
+            self.failure_stage = "pre_client_catalog"
             self.unchanged(pins)
             route_scopes = {"GET": (app["principal_id"], rule["route_id"] + ("" if phase == "prerequisite" else ".metadata"), self.policy_hash)}
             if phase != "prerequisite":
@@ -513,6 +536,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
             self.phase_scopes.append({"phase": phase, "principal": app["principal_id"], "policy": self.policy_hash, "routes": route_scopes})
             self.expected_denial_rows += expected_denials(phase, app, rule)
             try:
+                self.failure_stage = "client"
                 self.client(spec, app, token)
             except ClientFailure:
                 try:
@@ -524,7 +548,10 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
                         "auditRead": "not_attempted", "durableEventCount": None}
                 raise
             self.completed.append(phase)
-            evidence = self.checkpoint(); self.unchanged(pins)
+            evidence = self.checkpoint()
+            self.failure_stage = "post_checkpoint_catalog"
+            self.unchanged(pins)
+        self.failure_phase, self.failure_stage = "final", "final_verification"
         stored = self.accept_observation(self.observe())
         require(len(stored) == 2 and len(self.wire) == 6, "final publication inventory differs")
         verified = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
@@ -561,7 +588,8 @@ def main():
     except Exception as error:
         result = {"ok": False, "syntheticOnly": True, "productionReady": False,
             "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__,
-            "completedClientPhases": [] if check is None else [row["phase"] for row in check.clients]}
+            "completedClientPhases": [] if check is None else [row["phase"] for row in check.clients],
+            "failureLocation": failure_location(check)}
         if isinstance(error, ClientFailure) and error.observation is not None:
             result["failedClient"] = error.observation
         if isinstance(error, ClientFailure) and check is not None and check.failure_audit is not None:

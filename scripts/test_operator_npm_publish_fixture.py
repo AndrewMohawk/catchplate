@@ -1056,7 +1056,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertEqual([row.args for row in alarm.call_args_list], [(180,), (0,)])
         claim.assert_called_once_with(args.fixture_marker_file, args.run_claim_file)
         value = json.loads(output.getvalue())
-        self.assertEqual(set(value), {"ok", "syntheticOnly", "productionReady", "error", "completedClientPhases", "failureAuditObservation"})
+        self.assertEqual(set(value), {"ok", "syntheticOnly", "productionReady", "error", "completedClientPhases", "failureAuditObservation", "failureLocation"})
         self.assertIs(value["ok"], False)
         self.assertEqual(value["error"], str(failure))
         self.assertEqual(value["completedClientPhases"], ["prerequisite"])

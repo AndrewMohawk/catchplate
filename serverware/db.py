@@ -26560,7 +26560,12 @@ def drain_metadata_audit_outbox(limit: int = 100) -> dict[str, int]:
                 "metadata audit outbox drain limit must be between 1 and 500"
             )
         audited = 0
-        with connect() as conn:
+        connection = connect()
+        # Check ownership before __enter__: borrowed facades expose their
+        # caller-owned SQLite connection without granting close/commit rights.
+        close_owned = (contextlib.closing(connection) if isinstance(connection, sqlite3.Connection)
+            else contextlib.nullcontext())
+        with close_owned, connection as conn:
             if isinstance(conn, sqlite3.Connection) and not conn.in_transaction:
                 # This is only an empty observation, not a delivery receipt for
                 # a concurrent later enqueue. Finish the read before acquiring

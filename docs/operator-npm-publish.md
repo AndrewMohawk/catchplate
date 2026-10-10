@@ -424,7 +424,57 @@ each). These isolated measurements do not attribute the failed transport or
 prove full-request improvement. The initial diagnostic probes needed the
 schema's REGEXP function and explicit frozen-source import precedence;
 corrected probes changed no product code or live state. The reader correction
-still requires another full stock-client run.
+was then exercised in the twelfth stock-client run described below.
+
+The twelfth isolated run used app source `dee69622` with the same genuine
+`dbcb36d4` Rust binary (`92ee92…`); all 498 compiler inputs and 742 crate files
+were verified unchanged, not rebuilt or relabelled. From 16:03:43 to 16:05:07 UTC
+on October 10, it completed prerequisite and unscoped client receipts, then
+ended with a generic `TimeoutError`. A client receipt is recorded before its
+audit/catalog checkpoint: this does not establish that the unscoped checkpoint
+finished or that the scoped npm command began. The existing receipt cannot
+distinguish registry observation, audit, health or catalog HTTP reads. Neither
+an npm-child failure observation nor an audit transport/terminal-503/static-
+preparation diagnostic was emitted. Seven renewal warnings were retained.
+
+All 12 admitted application audit observations completed, covering 15 events.
+Observed elapsed time had a 244 ms median and 1,619 ms maximum. Initial
+policy-lock and worker-slot waits were zero; policy validation/copy/final merge
+had a 168.5 ms median and 1,007 ms maximum. Ingestion and outbox-worker maxima
+were 309 ms and 321 ms respectively. These are different-record maxima, not
+components of one correlated failed request; they do not identify the timeout
+or prove end-to-end improvement from the reader correction.
+
+The stopped database passed `quick_check`: three response releases were the
+prerequisite GET, unscoped metadata GET and unscoped PUT; one earlier denial,
+two established CONNECTs, two keep-alives and 11 issued leases were retained.
+No CONNECT/upstream-resolution denial was stored. All project containers and
+networks were removed, private runtime evidence retained, and all 4,939 source
+and 1,782 npm files remained unchanged. Receipts are in
+`serverware-npm-publish-runner.lOXT2PYo`, runtime data in
+`serverware-npm-publish-private.fpE8q8SZ`. The run was not retried or promoted.
+
+A second narrow lifecycle correction closes the SQLite connection owned by
+`drain_metadata_audit_outbox()` after its existing transaction context exits,
+including empty returns and failures. Ownership is determined on the factory
+return before a borrowed facade can expose its caller's raw connection.
+Borrowed handles, PostgreSQL paths, SQL, locking and audit results are unchanged.
+All **18** real-SQLite controls pass in **0.055 seconds**, including seven new
+lifecycle groups. Two selected tests against the frozen pre-fix source detect
+three missing-close assertions in 0.008 seconds, as intended. This proves the
+resource-lifetime correction, not the cause or repair of the HTTP timeout.
+
+The checker now adds a failure-only, allowlisted `failureLocation` containing
+phase and stage. It distinguishes pre-client catalog, client, checkpoint
+registry/audit/health and post-checkpoint catalog work, with bounded startup,
+final and unknown states. These are enclosing checker steps, not transport
+sub-stages or root causes. No additional request, polling, clock, retry or
+deadline change is introduced; success receipts and acceptance remain unchanged.
+The six new breadcrumb groups and 32 existing fixture controls all pass in
+**0.856 seconds**, including the four actual Node-VM groups under synthetic
+I/O seams. Review caught and corrected a test-helper ownership mismatch before
+execution. These are isolated controls, not another stock-client run or a live
+rollout; neither follow-up change has end-to-end acceptance yet.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

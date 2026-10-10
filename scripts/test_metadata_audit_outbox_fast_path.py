@@ -5,7 +5,9 @@ Run only in the isolated backend test environment. This imports the actual db
 module but replaces its connection factory and backend selectors; it does not
 call db.init_db, app startup, a provider, or a PostgreSQL server. The minimal
 tables exercise actual audit hashing, append, outbox verification and CAS, not
-the complete deployed schema or native authority. No latency claim is made.
+the complete deployed schema or native authority. Owned-handle controls return
+an actual SQLite connection from the patched factory and inspect its close,
+commit and rollback lifecycle. No latency or deployment claim is made.
 """
 from __future__ import annotations
 
@@ -81,6 +83,55 @@ class ObservedConnection(sqlite3.Connection):
         return cursor
 
 
+class LifecycleConnection(ObservedConnection):
+    """A real SQLite handle with observable, otherwise unchanged lifecycle."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lifecycle = []
+        self.close_calls = 0
+        self.closed = False
+        self.transaction_at_close = None
+        self.fail_enter = self.fail_exit = False
+
+    def __enter__(self):
+        self.lifecycle.append("enter")
+        if self.fail_enter:
+            raise RuntimeError("synthetic connection entry failure")
+        return super().__enter__()
+
+    def __exit__(self, exc_type, exc, tb):
+        result = super().__exit__(exc_type, exc, tb)
+        self.lifecycle.append("exit")
+        if self.fail_exit:
+            raise RuntimeError("synthetic connection exit failure")
+        return result
+
+    def close(self):
+        self.close_calls += 1
+        if not self.closed:
+            self.transaction_at_close = self.in_transaction
+        self.lifecycle.append("close")
+        super().close()
+        self.closed = True
+
+
+class YieldingConnectionContext:
+    """Not an owned raw connection, although __enter__ yields exactly one."""
+    def __init__(self, connection):
+        self.connection = connection
+        self.close_calls = 0
+
+    def __enter__(self):
+        return self.connection.__enter__()
+
+    def __exit__(self, exc_type, exc, tb):
+        return self.connection.__exit__(exc_type, exc, tb)
+
+    def close(self):
+        self.close_calls += 1
+        raise AssertionError("drainer closed its non-SQLite context wrapper")
+
+
 class EmptyOutboxFastPathTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="metadata-outbox-unit-")
@@ -110,6 +161,25 @@ class EmptyOutboxFastPathTests(unittest.TestCase):
                 yield conn
         finally:
             conn.close()
+
+    def owned_connection(self):
+        # Unlike connection(), this returns the raw SQLite object, just as the
+        # real nonborrowed SQLite db.connect() does. Cleanup is only a fallback:
+        # every owning test asserts production closed it before cleanup runs.
+        conn = sqlite3.connect(self.path, timeout=0, factory=LifecycleConnection)
+        conn.owner, conn.row_factory = self, sqlite3.Row
+        conn.set_trace_callback(self.queries.append)
+        self.addCleanup(lambda: None if conn.closed else conn.close())
+        return conn
+
+    def assert_owned_closed(self, conn, *, entered=True):
+        self.assertEqual(conn.close_calls, 1)
+        self.assertTrue(conn.closed)
+        self.assertFalse(conn.transaction_at_close)
+        self.assertEqual(conn.lifecycle, ["enter", "exit", "close"] if entered
+            else ["enter", "close"])
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
 
     def seed(self, identifier, status="pending", *, connection=None):
         event = {"synthetic": True, "identifier": identifier}
@@ -263,6 +333,140 @@ class EmptyOutboxFastPathTests(unittest.TestCase):
             conn.execute("DROP TABLE metadata_audit_outbox")
         with self.assertRaises(sqlite3.OperationalError):
             db.drain_metadata_audit_outbox()
+
+    def test_owned_empty_and_audited_only_close_after_context_exit(self):
+        for audited_only in (False, True):
+            with self.subTest(audited_only=audited_only):
+                if audited_only:
+                    self.seed("already-terminal-owned", "audited")
+                conn = self.owned_connection()
+                self.queries.clear()
+                factory = Mock(return_value=conn)
+                with patch.object(db, "connect", factory):
+                    self.assertEqual(db.drain_metadata_audit_outbox(), ZERO)
+                factory.assert_called_once_with()
+                self.assert_read_only_probe(self.queries)
+                self.assert_owned_closed(conn)
+
+    def test_owned_pending_and_claimed_close_after_real_commit(self):
+        self.seed("owned-pending", "pending")
+        self.seed("owned-claimed", "claimed")
+        conn = self.owned_connection()
+        self.queries.clear()
+        with patch.object(db, "connect", lambda: conn):
+            self.assertEqual(db.drain_metadata_audit_outbox(),
+                {"claimed": 2, "audited": 2, "failed": 0, "pending": 0})
+        self.assertIn("COMMIT", self.queries)
+        self.assertNotIn("ROLLBACK", self.queries)
+        self.assert_owned_closed(conn)
+        audits, outbox = self.rows("audit_events"), self.rows("metadata_audit_outbox")
+        self.assertEqual(len(audits), 2)
+        self.assertEqual([row["status"] for row in outbox], ["audited", "audited"])
+        by_id = {row["id"]: row for row in audits}
+        for row in outbox:
+            self.assertEqual(row["audit_event_hash"], by_id[row["id"]]["event_hash"])
+
+    def test_owned_partial_delivery_error_rolls_back_then_closes(self):
+        self.seed("000-first-valid")
+        self.seed("001-second-corrupt")
+        with self.connection() as conn:
+            conn.execute("UPDATE metadata_audit_outbox SET event_digest = ? WHERE id = ?",
+                ("sha256:" + "0" * 64, "001-second-corrupt"))
+        before = self.rows("metadata_audit_outbox")
+        conn = self.owned_connection()
+        self.queries.clear()
+        with patch.object(db, "connect", lambda: conn), self.assertRaises(db.AuditStoreError):
+            db.drain_metadata_audit_outbox()
+        # The first item really mutated both tables before the second refused;
+        # neither mutation may survive the original transaction's rollback.
+        self.assertTrue(any("INSERT INTO audit_events" in sql for sql in self.queries))
+        self.assertTrue(any("UPDATE metadata_audit_outbox SET status = 'audited'" in sql
+            for sql in self.queries))
+        self.assertIn("ROLLBACK", self.queries)
+        self.assertNotIn("COMMIT", self.queries)
+        self.assert_owned_closed(conn)
+        self.assertEqual(self.rows("audit_events"), [])
+        self.assertEqual(self.rows("metadata_audit_outbox"), before)
+
+    def test_owned_probe_error_closes_without_writer_acquisition(self):
+        with self.connection() as conn:
+            conn.execute("DROP TABLE metadata_audit_outbox")
+        conn = self.owned_connection()
+        self.queries.clear()
+        with patch.object(db, "connect", lambda: conn), self.assertRaises(sqlite3.OperationalError):
+            db.drain_metadata_audit_outbox()
+        self.assertNotIn("BEGIN IMMEDIATE", self.queries)
+        self.assert_owned_closed(conn)
+
+    def test_owned_context_entry_and_exit_errors_still_close(self):
+        conn = self.owned_connection()
+        conn.fail_enter = True
+        self.queries.clear()
+        with patch.object(db, "connect", lambda: conn), \
+                self.assertRaisesRegex(RuntimeError, "synthetic connection entry failure"):
+            db.drain_metadata_audit_outbox()
+        self.assertEqual(self.queries, [])
+        self.assert_owned_closed(conn, entered=False)
+
+        self.seed("committed-before-context-exit-error")
+        conn = self.owned_connection()
+        conn.fail_exit = True
+        self.queries.clear()
+        with patch.object(db, "connect", lambda: conn), \
+                self.assertRaisesRegex(RuntimeError, "synthetic connection exit failure"):
+            db.drain_metadata_audit_outbox()
+        self.assertIn("COMMIT", self.queries)
+        self.assert_owned_closed(conn)
+        # Do not turn a postcommit context error into success or undo a commit.
+        self.assertEqual(len(self.rows("audit_events")), 1)
+        self.assertEqual(self.rows("metadata_audit_outbox")[0]["status"], "audited")
+
+    def test_borrowed_raw_handle_remains_open_and_uncommitted(self):
+        conn = self.owned_connection()
+        conn.execute("BEGIN IMMEDIATE")
+        self.seed("caller-owned-delivery", connection=conn)
+        conn.execute("INSERT INTO unrelated VALUES ('caller-owned')")
+        self.queries.clear()
+        # The actual facade returns this raw SQLite handle from __enter__ and
+        # forwards close via __getattr__. Ownership must use the factory return.
+        with patch.object(db, "connect", lambda: db._BorrowedMetadataConnection(conn)):
+            self.assertEqual(db.drain_metadata_audit_outbox(),
+                {"claimed": 1, "audited": 1, "failed": 0, "pending": 0})
+        self.assertEqual(conn.close_calls, 0)
+        self.assertFalse(conn.closed)
+        self.assertEqual(conn.lifecycle, [])
+        self.assertTrue(conn.in_transaction)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0], 1)
+        self.assertNotIn(PROBE, self.queries)
+        self.assertNotIn("COMMIT", self.queries)
+        self.assertNotIn("ROLLBACK", self.queries)
+        self.assertEqual(self.rows("audit_events"), [])
+        self.assertEqual(self.rows("metadata_audit_outbox"), [])
+        self.assertEqual(self.rows("unrelated"), [])
+        conn.rollback()
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0], 0)
+        self.assertEqual(conn.close_calls, 0)
+        self.assertEqual(self.rows("unrelated"), [])
+
+    def test_non_sqlite_context_wrapper_is_never_explicitly_closed(self):
+        for pending in (False, True):
+            with self.subTest(pending=pending):
+                if pending:
+                    self.seed("wrapper-pending")
+                conn = self.owned_connection()
+                wrapper = YieldingConnectionContext(conn)
+                with patch.object(db, "connect", lambda: wrapper):
+                    result = db.drain_metadata_audit_outbox()
+                self.assertEqual(result, {"claimed": int(pending), "audited": int(pending),
+                    "failed": 0, "pending": 0})
+                self.assertEqual(wrapper.close_calls, 0)
+                self.assertEqual(conn.close_calls, 0)
+                self.assertEqual(conn.lifecycle, ["enter", "exit"])
+                self.assertFalse(conn.in_transaction)
+                self.assertEqual(conn.execute("SELECT 1").fetchone()[0], 1)
+                # Only the caller now releases this wrapper-owned handle.
+                conn.close()
+                self.assertEqual(conn.close_calls, 1)
 
     def test_borrowed_active_transaction_keeps_original_path_and_owner_commit(self):
         with self.connection() as conn:

@@ -25,6 +25,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
+    "/notifications/settings", "/notifications/test",
 ))
 router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}

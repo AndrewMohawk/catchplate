@@ -1,0 +1,435 @@
+#!/usr/bin/env node
+// Rendered notification protocol fixtures only. Every API response is synthetic
+// and intercepted; no app, destination, Slack, provider, CA or proxy is contacted.
+const assert = require('node:assert/strict');
+const {createHash} = require('node:crypto');
+const {execFileSync} = require('node:child_process');
+const {readFile, mkdtemp, stat} = require('node:fs/promises');
+const {join, resolve} = require('node:path');
+const {fixture: baseFixture, ready, view, credential, application, rule, NOW} = require('./test_operator_catalog_browser.cjs');
+
+const ROOT = resolve(__dirname, '..');
+const PATH = '/api/operator-demo/notifications';
+const STORAGE = 'serverware.operator.notifications.operation.v1';
+const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
+const STATES = ['queued', 'sending', 'acknowledged', 'failed', 'outcome_unknown', 'suppressed', 'expired'];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PRIVATE = ['https://notify.example.test/synthetic-private-destination',
+  'https://hooks.slack.com/services/T00000000/B00000000/SYNTHETIC_NOT_A_REAL_WEBHOOK',
+  'synthetic-private-error-MUST-NOT-RENDER'];
+const clone = value => JSON.parse(JSON.stringify(value));
+const EVENTS = JSON.parse(execFileSync('python3', ['-I', '-B', '-c',
+  'import ast,json,pathlib; tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_text()); assignments={n.targets[0].id: n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}; summaries=ast.literal_eval(assignments["_SUMMARIES"]); catalog=ast.literal_eval(assignments["_CATALOG"]); print(json.dumps({"action_required":ast.literal_eval(assignments["ACTION_EVENT_TYPES"]),"audit_log":sorted([*summaries,*["operator_catalog."+key for key in catalog]])}))'],
+{cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
+const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
+  'serverware/operator_demo_portal.py', 'serverware/operator_notification_api.py', 'serverware/operator_notifications.py',
+  'serverware/operator_notification_store.py', 'serverware/operator_notification_events.py',
+  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js',
+    'workspace_google_reauthorization.js', 'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js',
+    'workspace_connect.js', 'workspace_notifications.js'].map(name => 'serverware/operator_demo_web/' + name)];
+let artifacts;
+
+function slot(name, changes = {}) {
+  const [channel, adapter] = name.split('.');
+  return {slot: name, channel, adapter, revision: 1, label: name + ' destination', enabled: true,
+    secret_present: true, event_types: [EVENTS[channel][0]], max_attempts: 1, last_delivery: null, ...changes};
+}
+function delivery(changes = {}) {
+  return {delivery_id: '77777777-7777-4777-8777-777777777777', status: 'queued', attempts: 0, code: null,
+    http_status: null, created_at_epoch_ms: NOW, updated_at_epoch_ms: NOW, ...changes};
+}
+function status(changes = {}) {
+  return {schema: 'serverware.operatorNotifications/v1', available: true, slots: SLOTS.map(name => slot(name)),
+    queue: Object.fromEntries(STATES.map(state => [state, 0])), cursor: null,
+    backlog: {pending_source_events: 0, queue_capacity: 256, retained_capacity: 10000},
+    capabilities: {audit_log: {source_available: true, event_types: [...EVENTS.audit_log]},
+      action_required: {source_available: false, event_types: [...EVENTS.action_required]}, native_hardware: {source_available: false},
+      source_note: 'Native security-key action notifications are not connected in this deployment.',
+      test_note: 'A synthetic delivery test does not establish hardware readiness or approval.'},
+    worker: {state: 'running', last_cycle_at_epoch_ms: NOW, last_code: 'ready'}, ...changes};
+}
+function operation(body, kind, changes = {}) {
+  return {schema: 'serverware.operatorNotificationOperation/v1', operation_id: body.operation_id, kind,
+    slot: body.slot, revision: body.expected_revision + (kind === 'save' ? 1 : 0), status: kind === 'save' ? 'saved' : 'queued',
+    delivery_id: kind === 'test' ? delivery().delivery_id : null, slot_state: null, ...changes};
+}
+async function fixture(browser, options, exercise) {
+  const observed = {snapshot: status(options.status), posts: [], reads: [], operations: new Map(),
+    nextFault: null, readFault: null, statusFault: null, receiptTransform: null, statusTransform: null};
+  const notificationHandler = async ({route, request, path, body, state, answer}) => {
+    if (request.method() === 'GET') {
+      observed.reads.push(path);
+      if (path === PATH) {
+        if (observed.statusFault) {
+          state.expectedFailures.add(path);
+          return answer(route, {detail: PRIVATE[2]}, observed.statusFault);
+        }
+        const result = clone(observed.snapshot);
+        return answer(route, observed.statusTransform ? observed.statusTransform(result) : result);
+      }
+      assert(path.startsWith(PATH + '/operations/') && UUID.test(path.slice((PATH + '/operations/').length)));
+      const receipt = observed.operations.get(path.slice((PATH + '/operations/').length));
+      if (observed.readFault || !receipt) {
+        state.expectedFailures.add(path);
+        return answer(route, {detail: PRIVATE[2]}, observed.readFault || 404);
+      }
+      return answer(route, observed.receiptTransform ? observed.receiptTransform(clone(receipt)) : clone(receipt));
+    }
+    assert.equal(request.method(), 'POST'); assert(body && typeof body === 'object' && !Array.isArray(body));
+    assert(UUID.test(body.operation_id)); assert(SLOTS.includes(body.slot));
+    assert(Number.isSafeInteger(body.expected_revision) && body.expected_revision >= 0 && body.expected_revision <= 1024);
+    const retained = await request.frame().evaluate(key => JSON.parse(sessionStorage.getItem(key)), STORAGE);
+    assert.deepEqual(retained, {operation_id: body.operation_id,
+      kind: path === PATH + '/settings' ? 'save' : 'test', slot: body.slot, expected_revision: body.expected_revision},
+    'the closed public recovery reference is persisted before the single POST');
+    assert(!observed.posts.some(item => item.body.operation_id === body.operation_id), 'no automatic POST replay of an operation UUID');
+    const target = observed.snapshot.slots.find(item => item.slot === body.slot); assert(target);
+    assert.equal(body.expected_revision, target.revision, 'exact saved slot CAS, independent of catalog revision');
+    const kind = path === PATH + '/settings' ? 'save' : 'test';
+    if (kind === 'save') {
+      assert.deepEqual(Object.keys(body).sort(), ['operation_id', 'slot', 'expected_revision', 'label', 'enabled',
+        'event_types', 'max_attempts', 'url_action', ...(body.url_action === 'replace' ? ['url'] : [])].sort());
+      assert.equal(typeof body.label, 'string'); assert(body.label.length >= 1 && body.label.length <= 80 && body.label.trim() === body.label);
+      assert.equal(typeof body.enabled, 'boolean'); assert(['keep', 'replace', 'clear'].includes(body.url_action));
+      assert(Number.isInteger(body.max_attempts) && body.max_attempts >= 1 && body.max_attempts <= 3);
+      assert.deepEqual(body.event_types, [...new Set(body.event_types)].sort());
+      assert(body.event_types.every(value => EVENTS[target.channel].includes(value)));
+      if (body.url_action === 'replace') assert(PRIVATE.slice(0, 2).includes(body.url), 'only synthetic fixture destinations accepted');
+      if (body.url_action === 'clear') assert.equal(body.enabled, false);
+      if (body.url_action === 'keep') assert.equal(target.secret_present, true);
+    } else {
+      assert.equal(path, PATH + '/test'); assert(body.expected_revision > 0);
+      assert.deepEqual(Object.keys(body).sort(), ['operation_id', 'slot', 'expected_revision'].sort());
+      assert.equal(target.enabled, true); assert.equal(target.secret_present, true);
+    }
+    observed.posts.push({path, kind, body: clone(body)});
+    const fault = observed.nextFault; observed.nextFault = null;
+    if (fault && fault !== 'lost-after-commit' && fault !== 'malformed-after-commit') {
+      state.expectedFailures.add(path);
+      if (fault.raw !== undefined) return route.fulfill({status: fault.status, contentType: fault.contentType || 'application/json', body: fault.raw});
+      const detail = fault.detail || (fault.status === 422 ? 'invalid notification input' : PRIVATE[2]);
+      return answer(route, fault.payload || {detail, ...(fault.code ? {code: fault.code} : {})}, fault.status || 503);
+    }
+    if (kind === 'save') Object.assign(target, {revision: target.revision + 1, label: body.label, enabled: body.enabled,
+      secret_present: body.url_action === 'replace' || body.url_action === 'keep' && target.secret_present,
+      event_types: [...body.event_types], max_attempts: body.max_attempts, last_delivery: null});
+    else { target.last_delivery = delivery(); observed.snapshot.queue.queued++; }
+    const receipt = operation(body, kind, {slot_state: kind === 'save' ? clone(target) : null});
+    observed.operations.set(body.operation_id, clone(receipt));
+    if (fault === 'lost-after-commit') { state.expectedFailures.add(path); return route.abort('failed'); }
+    if (fault === 'malformed-after-commit') return answer(route, {...receipt, slot: 'invalid.slot'}, kind === 'test' ? 202 : 200);
+    return answer(route, observed.receiptTransform ? observed.receiptTransform(clone(receipt)) : receipt, kind === 'test' ? 202 : 200);
+  };
+  return baseFixture(browser, {credentials: [credential()], applications: [application()], rules: [rule()], notificationHandler},
+    async (page, state, controls) => {
+      const resources = JSON.stringify([state.credentials, state.applications, state.rules, state.revision, state.sequence, state.active]);
+      await exercise(page, observed, state, controls);
+      assert.equal(JSON.stringify([state.credentials, state.applications, state.rules, state.revision, state.sequence, state.active]), resources,
+        'notification UI never mutates credentials, application tokens, permissions or proxy policy');
+      assert.equal(state.posts.length, observed.posts.length);
+      assert(state.posts.every(item => ['notifications/settings', 'notifications/test'].includes(item.name)));
+      assert(state.requests.every(item => !/oauth|ca\.pem|\/echo/.test(item.path)));
+    });
+}
+async function hashes() {
+  return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
+    [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
+}
+async function clean(page) {
+  const surfaces = await page.evaluate(() => ({html: document.documentElement.outerHTML,
+    fields: [...document.querySelectorAll('input,textarea')].map(item => item.value),
+    local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
+  for (const secret of PRIVATE) assert(!JSON.stringify(surfaces).includes(secret), 'destination URL/raw error never retained in visible DOM, fields or storage');
+  assert.deepEqual(surfaces.local, []);
+  assert(surfaces.session.every(([key]) => key === STORAGE), 'only exact public operation recovery metadata may persist');
+  for (const [, value] of surfaces.session) {
+    const ref = JSON.parse(value);
+    assert.deepEqual(Object.keys(ref).sort(), ['operation_id', 'kind', 'slot', 'expected_revision'].sort());
+    assert(UUID.test(ref.operation_id) && ['save', 'test'].includes(ref.kind) && SLOTS.includes(ref.slot));
+    assert(Number.isSafeInteger(ref.expected_revision) && ref.expected_revision >= 0 && ref.expected_revision <= 1024);
+  }
+}
+async function screenshot(page, name) {
+  await clean(page); await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true});
+}
+const form = (page, name = 'audit_log.webhook') => page.locator('form[data-notification-slot="' + name + '"]');
+async function settled(page) {
+  await page.waitForLoadState('networkidle');
+  await page.waitForFunction(() => !document.getElementById('notifications-refresh').disabled);
+}
+async function open(page) {
+  await ready(page); await view(page, 'notifications'); await settled(page);
+  assert.equal(await page.locator('form[data-notification-slot]').count(), 4);
+}
+async function submit(page, target = form(page), kind = 'save') {
+  await target.locator('[data-notification-' + kind + ']').click(); await settled(page); await clean(page);
+}
+async function checkOperation(page) {
+  await page.locator('#notification-check-operation').click(); await settled(page); await clean(page);
+}
+async function recovery(page) {
+  const value = await page.evaluate(key => sessionStorage.getItem(key), STORAGE);
+  if (value === null) return null;
+  const result = JSON.parse(value);
+  assert.deepEqual(Object.keys(result).sort(), ['operation_id', 'kind', 'slot', 'expected_revision'].sort());
+  assert(UUID.test(result.operation_id)); assert(['save', 'test'].includes(result.kind)); assert(SLOTS.includes(result.slot));
+  assert(Number.isSafeInteger(result.expected_revision)); return result;
+}
+async function writesDisabled(page) {
+  const buttons = page.locator('[data-notification-save],[data-notification-test]');
+  assert.equal(await buttons.count(), 8);
+  for (const button of await buttons.all()) assert(await button.isDisabled());
+}
+async function savedRevision(page, name, revision) {
+  assert.match(await form(page, name).locator('[data-slot-revision]').innerText(), new RegExp('(?:^|\\D)' + revision + '(?:$|\\D)'));
+}
+
+const tests = [
+  ['Notifications is lazy and feature-off accepts four default slots but exposes no forms or actions', browser => fixture(browser,
+    {status: status({available: false, disabled_reason: 'deployment_disabled',
+      slots: SLOTS.map(name => slot(name, {revision: 0, label: '', enabled: false, secret_present: false, event_types: []})),
+      capabilities: {...status().capabilities, audit_log: {source_available: false, event_types: [...EVENTS.audit_log]}},
+      worker: {state: 'disabled', last_cycle_at_epoch_ms: null, last_code: null}})}, async (page, observed, state) => {
+      await ready(page); assert.deepEqual(observed.reads, []); await view(page, 'notifications'); await settled(page);
+      assert.equal(observed.reads.length, 1);
+      assert.equal(await page.locator('form[data-notification-slot],[data-notification-save],[data-notification-test]').count(), 0);
+      assert.match(await page.locator('#notifications-status').innerText(), /disabled|unavailable|not enabled/i);
+      assert.match(await page.locator('#notifications-worker').innerText(), /disabled/i);
+      assert.equal(observed.snapshot.slots.length, 4); assert(observed.snapshot.slots.every(item => item.revision === 0));
+      assert.equal(observed.posts.length, 0); assert.equal(state.posts.length, 0);
+      await screenshot(page, 'notifications-deployment-disabled');
+    })],
+  ['four independent destinations separate action and audit source availability honestly', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page);
+      assert.equal(await page.locator('[data-notification-channel="action_required"]').count(), 1);
+      assert.equal(await page.locator('[data-notification-channel="audit_log"]').count(), 1);
+      assert.match(await page.locator('#notifications').innerText(), /not connected|not available|unavailable/i);
+      assert.match(await page.locator('#notifications').innerText(), /synthetic.*(?:not|does not).*(?:hardware|approval)/is);
+      for (const name of SLOTS) {
+        const target = form(page, name); const stored = observed.snapshot.slots.find(item => item.slot === name);
+        assert.equal(await target.locator('[name="label"]').inputValue(), stored.label);
+        assert.equal(await target.locator('[name="url"]').getAttribute('type'), 'password');
+        assert.equal(await target.locator('[name="url"]').inputValue(), '');
+        assert.equal(await target.locator('[name="enabled"]').isChecked(), true);
+        assert.equal(await target.locator('[name="event_types"]').count(), EVENTS[stored.channel].length);
+        await savedRevision(page, name, 1);
+      }
+      await form(page).locator('[name="label"]').fill('An unsaved label in one slot');
+      await form(page).locator('[name="max_attempts"]').selectOption('3');
+      for (const name of SLOTS.filter(name => name !== 'audit_log.webhook')) {
+        assert.equal(await form(page, name).locator('[name="label"]').inputValue(), name + ' destination');
+        assert.equal(await form(page, name).locator('[name="max_attempts"]').inputValue(), '1');
+      }
+      assert.equal(observed.posts.length, 0); await screenshot(page, 'four-independent-notification-slots');
+    })],
+  ['explicit saves use each slot revision and leave all other destinations and application resources unchanged', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page);
+      for (const name of SLOTS) {
+        const others = clone(observed.snapshot.slots.filter(item => item.slot !== name)); const target = form(page, name);
+        await target.locator('[name="label"]').fill('Saved ' + name);
+        await target.locator('[name="url_action"]').selectOption('keep');
+        await target.locator('[name="max_attempts"]').selectOption('2');
+        await submit(page, target);
+        const post = observed.posts.at(-1); assert.equal(post.kind, 'save'); assert.equal(post.body.slot, name);
+        assert.equal(post.body.expected_revision, 1); assert.equal(post.body.max_attempts, 2); assert(!Object.hasOwn(post.body, 'url'));
+        assert.deepEqual(observed.snapshot.slots.filter(item => item.slot !== name), others);
+        await savedRevision(page, name, 2);
+      }
+      assert.equal(observed.posts.length, 4); assert(observed.posts.every(item => item.kind === 'save'));
+      assert.equal(observed.snapshot.queue.queued, 0, 'save never queues a test');
+      await clean(page);
+    })],
+  ['replace, keep and clear are explicit and never retrieve or retain the destination URL', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page); const target = form(page);
+      await target.locator('[name="url_action"]').selectOption('replace'); await target.locator('[name="url"]').fill(PRIVATE[0]);
+      await submit(page, target); assert.equal(observed.posts[0].body.url, PRIVATE[0]);
+      await savedRevision(page, 'audit_log.webhook', 2); assert.equal(await target.locator('[name="url"]').inputValue(), '');
+      await target.locator('[name="url_action"]').selectOption('keep'); await submit(page, target);
+      assert(!Object.hasOwn(observed.posts[1].body, 'url')); assert.equal(observed.posts[1].body.expected_revision, 2);
+      await target.locator('[name="url_action"]').selectOption('clear'); await target.locator('[name="enabled"]').uncheck();
+      await submit(page, target); assert.equal(observed.posts[2].body.url_action, 'clear');
+      assert(!Object.hasOwn(observed.posts[2].body, 'url')); assert.equal(observed.posts[2].body.enabled, false);
+      assert.equal(observed.snapshot.slots.find(item => item.slot === 'audit_log.webhook').secret_present, false);
+      await savedRevision(page, 'audit_log.webhook', 4); assert(await target.locator('[data-notification-test]').isDisabled());
+      assert.equal(observed.posts.length, 3); await screenshot(page, 'cleared-notification-destination');
+    })],
+  ['test is explicit, uses only saved slot revision and does not imply delivery or hardware approval', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page);
+      await form(page).locator('[name="label"]').fill('An unsaved destination label');
+      assert(await form(page).locator('[data-notification-test]').isDisabled());
+      await form(page).locator('[name="url_action"]').selectOption('replace'); await form(page).locator('[name="url"]').fill(PRIVATE[0]);
+      assert(await form(page).locator('[data-notification-test]').isDisabled());
+      await page.locator('#notifications-refresh').click(); await settled(page); await clean(page);
+      assert.equal(observed.posts.length, 0); await submit(page, form(page), 'test');
+      assert.equal(observed.posts.length, 1); const post = observed.posts[0];
+      assert.equal(post.kind, 'test'); assert.equal(post.body.expected_revision, 1);
+      assert.deepEqual(Object.keys(post.body).sort(), ['operation_id', 'slot', 'expected_revision'].sort());
+      assert(observed.snapshot.slots.every(item => item.revision === 1));
+      assert.match(await page.locator('#notification-operation-status').innerText(), /queued|pending/i);
+      const ref = await recovery(page); assert.equal(ref.operation_id, post.body.operation_id); assert.equal(ref.kind, 'test');
+      observed.operations.get(ref.operation_id).status = 'acknowledged';
+      observed.snapshot.slots.find(item => item.slot === ref.slot).last_delivery = delivery({status: 'acknowledged', attempts: 1,
+        code: 'acknowledged', http_status: 200});
+      observed.snapshot.queue.queued = 0; observed.snapshot.queue.acknowledged = 1;
+      await checkOperation(page);
+      assert.match(await page.locator('#notification-operation-status').innerText(), /acknowledged/i);
+      assert.match(await page.locator('#notifications').innerText(), /not.*(?:approval|hardware)|does not.*(?:approval|hardware)/is);
+      assert.equal(observed.posts.length, 1); await screenshot(page, 'synthetic-test-receipt-not-approval');
+    })],
+  ['unsaved and disabled destinations cannot send a saved-destination test', browser => fixture(browser,
+    {status: {slots: SLOTS.map((name, index) => slot(name, index < 2 ?
+      {revision: 0, label: '', enabled: false, secret_present: false, event_types: []} : {enabled: false}))}},
+    async (page, observed) => {
+      await open(page);
+      for (const name of SLOTS) assert(await form(page, name).locator('[data-notification-test]').isDisabled());
+      assert.equal(observed.posts.length, 0); await clean(page);
+    })],
+  ['lost save, receipt 404 and reload retain exact public recovery identity without replay or secret persistence', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page); const target = form(page);
+      observed.nextFault = 'lost-after-commit'; observed.readFault = 404;
+      await target.locator('[name="url_action"]').selectOption('replace'); await target.locator('[name="url"]').fill(PRIVATE[0]);
+      await submit(page, target); await writesDisabled(page);
+      const reference = await recovery(page); assert(reference); assert.equal(reference.expected_revision, 1);
+      assert.equal(observed.posts.length, 1); assert.equal(observed.snapshot.slots.find(item => item.slot === reference.slot).revision, 2);
+      await checkOperation(page); assert.deepEqual(await recovery(page), reference); await writesDisabled(page);
+      await screenshot(page, 'lost-save-404-held-no-replay');
+      await page.reload({waitUntil: 'networkidle'}); await open(page); await writesDisabled(page);
+      assert.deepEqual(await recovery(page), reference); assert.equal(observed.posts.length, 1); await clean(page);
+      await checkOperation(page); assert.deepEqual(await recovery(page), reference); await writesDisabled(page);
+      observed.readFault = null; await checkOperation(page);
+      assert(await form(page).locator('[data-notification-save]').isEnabled());
+      await savedRevision(page, reference.slot, 2); assert.equal(observed.posts.length, 1);
+      assert(observed.reads.filter(path => path.includes('/operations/')).every(path => path === PATH + '/operations/' + reference.operation_id));
+      assert.deepEqual(await recovery(page), reference, 'known receipt remains available for explicit inspection');
+    })],
+  ['lost explicit test is inspected by GET and unknown delivery is never automatically re-sent', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page); observed.nextFault = 'lost-after-commit'; await submit(page, form(page), 'test');
+      await writesDisabled(page); const reference = await recovery(page); assert.equal(reference.kind, 'test');
+      observed.operations.get(reference.operation_id).status = 'outcome_unknown';
+      observed.snapshot.slots.find(item => item.slot === reference.slot).last_delivery = delivery({status: 'outcome_unknown', attempts: 1,
+        code: 'delivery_unknown'});
+      observed.snapshot.queue.queued = 0; observed.snapshot.queue.outcome_unknown = 1;
+      await checkOperation(page);
+      assert.match(await page.locator('#notification-operation-status').innerText(), /unknown|uncertain/i);
+      await page.locator('#notifications-refresh').click(); await settled(page);
+      assert.equal(observed.posts.length, 1); assert.equal(observed.snapshot.queue.outcome_unknown, 1); await clean(page);
+    })],
+  ['422 and exact revision/capacity conflicts are definite refusals without implicit retry', async browser => {
+    for (const fault of [{status: 422}, {status: 422, detail: 'invalid operator catalog input'}, {status: 409, code: 'notification_revision_conflict'},
+      {status: 409, code: 'notification_capacity_conflict'}]) await fixture(browser, {}, async (page, observed) => {
+      await open(page); observed.nextFault = fault; await submit(page);
+      assert.equal(await recovery(page), null); assert.equal(observed.posts.length, 1);
+      assert(observed.snapshot.slots.every(item => item.revision === 1));
+      await page.locator('#notifications-refresh').click(); await settled(page);
+      assert.equal(observed.posts.length, 1); assert(await form(page).locator('[data-notification-save]').isEnabled()); await clean(page);
+    });
+  }],
+  ['ambiguous conflicts, 503 and malformed 422 retain uncertainty after fresh status and receipt 404', async browser => {
+    for (const fault of [{status: 409, code: 'notification_operation_conflict'}, {status: 409, code: 'notification_conflict'},
+      {status: 409, code: 'unknown_conflict'}, {status: 503}, {status: 422, detail: PRIVATE[2]},
+      {status: 422, payload: {}}, {status: 422, raw: '{not-json'},
+      {status: 422, raw: PRIVATE[2], contentType: 'text/plain'}]) await fixture(browser, {}, async (page, observed) => {
+      await open(page); observed.nextFault = fault; await submit(page); await writesDisabled(page);
+      const reference = await recovery(page); assert(reference);
+      await page.locator('#notifications-refresh').click(); await settled(page); await writesDisabled(page);
+      await checkOperation(page); await writesDisabled(page);
+      assert.deepEqual(await recovery(page), reference); assert.equal(observed.posts.length, 1); await clean(page);
+    });
+  }],
+  ['malformed positive receipts hold the exact operation until a matching public GET receipt is reviewed', async browser => {
+    for (const transform of [value => ({...value, slot: 'invalid.slot'}),
+      value => ({...value, operation_id: '99999999-9999-4999-8999-999999999999'}),
+      value => ({...value, revision: value.revision + 1}), value => ({...value, url: PRIVATE[0]})])
+      await fixture(browser, {}, async (page, observed) => {
+        await open(page); observed.receiptTransform = transform; await submit(page); await writesDisabled(page);
+        const reference = await recovery(page); assert(reference); assert.equal(observed.posts.length, 1);
+        observed.receiptTransform = null; await checkOperation(page);
+        assert(await form(page).locator('[data-notification-save]').isEnabled()); assert.equal(observed.posts.length, 1); await clean(page);
+      });
+  }],
+  ['malformed or unavailable status never enables writes or exposes raw response fields', async browser => {
+    for (const transform of [value => ({...value, slots: value.slots.slice(1)}),
+      value => ({...value, slots: [value.slots[0], value.slots[0], ...value.slots.slice(2)]}),
+      value => ({...value, slots: value.slots.map((item, index) => index === 0 ? {...item, secret_present: 'yes'} : item)}),
+      value => ({...value, url: PRIVATE[0]})]) await fixture(browser, {}, async (page, observed) => {
+      observed.statusTransform = transform; await ready(page); await view(page, 'notifications'); await settled(page);
+      for (const button of await page.locator('[data-notification-save],[data-notification-test]').all()) assert(await button.isDisabled());
+      assert.match(await page.locator('#notifications-status').innerText(), /unavailable|invalid|could not|cannot|failed/i);
+      assert.equal(observed.posts.length, 0); await clean(page);
+    });
+    await fixture(browser, {}, async (page, observed) => {
+      observed.statusFault = 503; await ready(page); await view(page, 'notifications'); await settled(page);
+      for (const button of await page.locator('[data-notification-save],[data-notification-test]').all()) assert(await button.isDisabled());
+      assert.equal(observed.posts.length, 0); await clean(page);
+    });
+  }],
+  ['leaving Notifications clears an unsaved destination without saving or testing it', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page); const target = form(page);
+      await target.locator('[name="url_action"]').selectOption('replace'); await target.locator('[name="url"]').fill(PRIVATE[0]);
+      await view(page, 'overview'); await clean(page); await open(page);
+      assert.equal(await target.locator('[name="url"]').inputValue(), ''); assert.equal(observed.posts.length, 0);
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await screenshot(page, 'notifications-mobile-secret-free');
+    })],
+  ['blocked recovery storage prevents the POST and clears the typed destination', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page);
+      await page.evaluate(() => { Storage.prototype.setItem = () => { throw new DOMException('Synthetic storage refusal', 'SecurityError'); }; });
+      await form(page).locator('[name="url_action"]').selectOption('replace'); await form(page).locator('[name="url"]').fill(PRIVATE[0]);
+      await submit(page); await writesDisabled(page);
+      assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
+      assert.match(await page.locator('#notification-operation-status').innerText(), /reference.*(?:read|stored)|duplicate/is); await clean(page);
+    })],
+  ['backlog and terminal delivery statuses remain distinct from successful action or hardware completion', browser => fixture(browser,
+    {status: {backlog: {pending_source_events: 47, queue_capacity: 256, retained_capacity: 10000},
+      worker: {state: 'running', last_cycle_at_epoch_ms: NOW, last_code: 'notification_source_backlog'},
+      slots: SLOTS.map((name, index) => slot(name, {last_delivery: delivery([
+        {status: 'failed', attempts: 1, code: 'connect_unavailable'},
+        {status: 'outcome_unknown', attempts: 1, code: 'delivery_unknown'},
+        {status: 'suppressed', code: 'configuration_changed'},
+        {status: 'expired', code: 'action_expired'}][index])})),
+      queue: {...status().queue, queued: 256, failed: 1, outcome_unknown: 1, suppressed: 1, expired: 1}}}, async (page, observed) => {
+      await open(page);
+      assert.match(await page.locator('#notifications-worker').innerText(), /backlog.*retained|queued.*drained/i);
+      assert.match(await page.locator('#notifications-queue').innerText(), /Pending source events: 47/);
+      assert.match(await page.locator('#notifications-queue').innerText(), /Queue limit: 256/);
+      for (const [index, text] of [/Delivery failed/, /outcome unknown/, /Delivery suppressed/, /Delivery expired/].entries())
+        assert.match(await form(page, SLOTS[index]).innerText(), text);
+      assert.match(await form(page, SLOTS[3]).innerText(), /deadline.*not.*extended/i);
+      assert.equal(observed.posts.length, 0); await screenshot(page, 'notification-backlog-and-distinct-outcomes');
+    })],
+];
+
+async function main() {
+  assert.equal(process.argv.length, 2, 'notification fixtures accept no live target or credentials');
+  assert(tests.length > 0, 'fixture cases must be finalized before execution');
+  const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
+  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'notifications-browser-synthetic-'));
+  console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic notification fixtures; no actual destinations'}));
+  const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
+  const browser = await chromium.launch({headless: true,
+    args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--disable-sync', '--host-resolver-rules=MAP * ~NOTFOUND']});
+  let deadline;
+  try {
+    await Promise.race([(async () => {
+      for (const [name, run] of tests) { await run(browser); console.log('PASS ' + name); }
+      console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'intercepted synthetic Notifications browser fixtures only',
+        liveRequests: 0, destinationDeliveries: 0, sourceWorkerExecuted: false, productionAcceptance: false}));
+    })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('notification fixture absolute deadline')), 150000); })]);
+  } finally {
+    clearTimeout(deadline);
+    try { await browser.close(); }
+    finally { const after = await hashes(); console.log(JSON.stringify({phase: 'source-after', hashes: after}));
+      assert.deepEqual(after, before, 'source bytes stayed frozen throughout fixture run'); }
+  }
+}
+if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });

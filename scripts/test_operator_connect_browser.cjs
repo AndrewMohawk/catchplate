@@ -24,7 +24,7 @@ const savedRule = (changes = {}) => rule({credential_input: 'replace_exact', pla
   response_mode: 'unfiltered_json', response_fields: [], ...changes});
 const SOURCE_FILES = ['scripts/test_operator_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
-    'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
+    'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 

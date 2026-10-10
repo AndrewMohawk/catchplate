@@ -140,7 +140,7 @@ function chooseModeOptions(id, items, placeholder) {
   }
 }
 const operatorViews = {connect: 'Connect an app', overview: 'Overview', credentials: 'Accounts & keys', applications: 'Applications',
-  'access-rules': 'Permissions', proxy: 'Proxy setup', audit: 'Audit log'};
+  'access-rules': 'Permissions', proxy: 'Proxy setup', audit: 'Audit log', notifications: 'Notifications'};
 function operatorSyntheticPermissions(catalog) {
   // Destination matching is not provenance: preserve names/records and require
   // an explicit choice even if only one saved permission matches the fixture.

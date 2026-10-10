@@ -719,6 +719,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         "/api/data-plane/oauth-refresh-cleanup": measured_cleanup_contract.MAX_REQUEST,
         "/api/data-plane/oauth-pending-retirement": pending_retirement_contract.MAX_REQUEST,
         "/api/data-plane/oauth-capture-retirement": capture_retirement_contract.MAX_REQUEST,
+        "/api/operator-demo/notifications/settings": 16384,
+        "/api/operator-demo/notifications/test": 1024,
         "/api/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/auth/session/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/webauthn/register/prepare-execution": _REGISTRATION_PREPARATION_MAX_BYTES,
@@ -3660,6 +3662,14 @@ def startup() -> None:
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()
     _start_oauth_revocation_reconciler()
+    from serverware import operator_notifications
+    operator_notifications.start_worker()
+
+
+@app.on_event("shutdown")
+def stop_operator_notification_worker() -> None:
+    from serverware import operator_notifications
+    operator_notifications.stop_worker()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -29260,6 +29270,7 @@ from serverware import control_plane_oidc_session_activation_recovery_routes as 
 from serverware import portal_session_activation_confirmation_routes as _activation_confirmation_routes
 from serverware import control_plane_workload_identity_routes as _workload_identity_routes
 from serverware import operator_catalog_api as _operator_catalog_api
+from serverware import operator_notification_api as _operator_notification_api
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -29274,4 +29285,5 @@ _fastapi_app.include_router(_activation_recovery_routes.router)
 _fastapi_app.include_router(_activation_confirmation_routes.router)
 _fastapi_app.include_router(_workload_identity_routes.router)
 _fastapi_app.include_router(_operator_catalog_api.router)
+_fastapi_app.include_router(_operator_notification_api.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

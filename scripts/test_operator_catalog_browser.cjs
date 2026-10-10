@@ -18,6 +18,8 @@ const VIEWS = ['overview', 'credentials', 'applications', 'access-rules', 'proxy
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const LIMITS = {credentials: 16384, 'credentials/revoke': 1024, applications: 2048,
   'applications/revoke': 1024, 'applications/rotate-token': 2048, 'access-rules': 32768, 'access-rules/revoke': 1024};
+const NOTIFICATIONS = '/api/operator-demo/notifications';
+const NOTIFICATION_LIMITS = {[NOTIFICATIONS + '/settings']: 16384, [NOTIFICATIONS + '/test']: 1024};
 const digest = number => 'sha256:' + number.toString(16).padStart(64, '0');
 const token = (id, generation = 1) => 'synthetic_application_' + id.replaceAll('-', '') + '_generation_' + generation;
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -176,6 +178,22 @@ async function fixture(browser, options, exercise) {
       }
       if (request.method() === 'GET' && url.pathname === '/api/audit/verify' && !url.search)
         return await answer(route, {ok: true, complete: true, backend: 'sqlite'});
+      // Optional synthetic protocol fixture only; unchanged default behavior.
+      // Origin, overall request count and GET-body guards have already run.
+      if (typeof options.notificationHandler === 'function' && url.pathname.startsWith(NOTIFICATIONS)) {
+        const read = request.method() === 'GET' && (url.pathname === NOTIFICATIONS ||
+          /^\/api\/operator-demo\/notifications\/operations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(url.pathname));
+        const write = request.method() === 'POST' && Object.hasOwn(NOTIFICATION_LIMITS, url.pathname) &&
+          bytes && bytes.length <= NOTIFICATION_LIMITS[url.pathname] && state.posts.length < 16;
+        if (url.search || !(read || write)) return await refuse('unknown or unbounded notification fixture operation');
+        let body = null;
+        if (write) {
+          assert(request.headers()['content-type']?.startsWith('application/json'));
+          body = JSON.parse(bytes.toString());
+          state.posts.push({name: url.pathname.slice('/api/operator-demo/'.length), body});
+        }
+        return await options.notificationHandler({route, request, path: url.pathname, body, state, answer});
+      }
       const name = url.pathname.startsWith('/api/operator-demo/') ? url.pathname.slice('/api/operator-demo/'.length) : '';
       if (request.method() !== 'POST' || !Object.hasOwn(LIMITS, name) || url.search || !bytes || bytes.length > LIMITS[name] || state.posts.length >= 16)
         return await refuse('unknown or unbounded operation');
@@ -204,7 +222,9 @@ async function fixture(browser, options, exercise) {
     await exercise(page, state, {context, openPage});
     assert.deepEqual(state.errors, []); assert.deepEqual(state.unexpected, []);
     for (const entry of state.consoleErrors) assert(entry.url && state.expectedFailures.has(new URL(entry.url).pathname), 'unexpected browser console error');
-    assert(state.requests.every(item => item.method === 'GET' || item.method === 'POST' && Object.hasOwn(LIMITS, item.path.slice('/api/operator-demo/'.length))));
+    assert(state.requests.every(item => item.method === 'GET' || item.method === 'POST' &&
+      (Object.hasOwn(LIMITS, item.path.slice('/api/operator-demo/'.length)) ||
+        typeof options.notificationHandler === 'function' && Object.hasOwn(NOTIFICATION_LIMITS, item.path))));
   } finally { await context.close(); }
 }
 async function ready(page) { await page.waitForFunction(() => !document.querySelector('#credential-fields').disabled); }

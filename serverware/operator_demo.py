@@ -240,6 +240,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/access-rules/github",
         "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",
         "/api/operator-demo/oauth/google/setup/cancel",
+        "/api/operator-demo/notifications/settings", "/api/operator-demo/notifications/test",
         "/api/data-plane/credential-leases", "/api/data-plane/audit"}
     if path in mutations:
         return method.upper() == "POST"

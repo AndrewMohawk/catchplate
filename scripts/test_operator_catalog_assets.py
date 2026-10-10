@@ -61,12 +61,12 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertNotIn('serverware.app', sys.modules)
         self.assertNotIn('serverware.config', sys.modules)
 
-    def test_unique_ids_and_six_separate_navigation_targets(self):
+    def test_unique_ids_and_separate_navigation_targets(self):
         items = self.elements()
         ids = [attrs['id'] for _, attrs, _ in items if 'id' in attrs]
         self.assertEqual(len(ids), len(set(ids)))
         index = {attrs['id']: (tag, attrs) for tag, attrs, _ in items if 'id' in attrs}
-        for name in ('overview', 'credentials', 'applications', 'access-rules', 'proxy', 'audit'):
+        for name in ('overview', 'credentials', 'applications', 'access-rules', 'proxy', 'audit', 'notifications'):
             self.assertEqual(index[name][0], 'section')
             self.assertTrue(any(tag == 'a' and attrs.get('href') == '#' + name for tag, attrs, _ in items))
 
@@ -125,7 +125,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name != 'workspace_google_reauthorization.js':
+            if name not in {'workspace_google_reauthorization.js', 'workspace_notifications.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
@@ -133,6 +133,22 @@ class OperatorCatalogAssets(unittest.TestCase):
         recovery = scripts['workspace_google_reauthorization.js']
         self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', recovery), ['storageKey, id'])
         self.assertIn('reauthorizationUuid(id)', recovery)
+        # Notifications stores a different closed public recovery reference
+        # before its one POST. Real browser fixtures check the exact stored
+        # fields, secret clearing, uncertainty, 404 retention and no replay.
+        notifications = scripts['workspace_notifications.js']
+        self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', notifications),
+                         ['notificationOperationKey, JSON.stringify(nextReference'])
+        self.assertIn("notificationOperationKey = 'serverware.operator.notifications.operation.v1'", notifications)
+        self.assertIn("notificationObject(value, ['operation_id', 'kind', 'slot', 'expected_revision'])", notifications)
+        reference = re.search(r'const nextReference = \{([^}]+)\};', notifications)
+        self.assertIsNotNone(reference)
+        self.assertEqual(re.findall(r'([a-z_]+):', reference.group(1)) +
+                         re.findall(r'(?:^|,)\s*(kind)\s*(?:,|$)', reference.group(1)),
+                         ['operation_id', 'slot', 'expected_revision', 'kind'])
+        self.assertNotIn('url', reference.group(1))
+        self.assertLess(notifications.index('sessionStorage.setItem(notificationOperationKey'),
+                        notifications.index("const response = request(prefix +"))
         self.assertIn('BroadcastChannel', script)
         self.assertIn('/api/operator-demo/catalog', script)
         self.assertNotIn('/api/operator-demo/connections', script)

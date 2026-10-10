@@ -70,8 +70,13 @@ depends on the deployment's advertised capabilities and approved destinations.
 The files under `policies/` are policy examples and engineering fixtures. They
 are not ready-to-use provider accounts or safe defaults to import wholesale.
 Serverware's own [action alerts and audit delivery](docs/operator-notifications.md)
-are a separate specification, not implemented notification settings or an
-application's proxied webhook permission.
+have an optional, default-off operator-development implementation: four separate
+Slack/webhook settings, encrypted URLs, audit-copy delivery and explicit synthetic
+tests. Isolated verification now covers administrator API → encrypted storage →
+worker → verified local TLS, plus separate rendered-browser fixtures. This source
+slice is not deployed; real action/key alerts remain disabled
+until their source owners are connected. It is not an application's proxied
+webhook permission or proof of native-pilot acceptance.
 
 ## Design examples, not demo defaults
 

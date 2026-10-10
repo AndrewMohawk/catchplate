@@ -1,4 +1,70 @@
-# Private managed-Google retained-state rehearsal
+# Private managed retained-state rehearsals
+
+## npm candidate: two retained cold starts passed
+
+On October 10, 2026, the stock-client-passing app snapshot
+`3724110941888e753bc194459e14170bc2a28916` and actual gate executable
+`82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85`
+passed two cold process starts on fresh isolated copies of the historical
+managed `9222b4c0` store. This is **not a live deployment**. The running demo
+continues to use its previously deployed pair.
+
+The immutable app has 4,952 manifest-verified files. The existing compiler-input
+equality receipt joins it to the genuine `b55f3024` build: 499 compiler inputs,
+745 crate files, Git modes and Cargo files match. No new Rust build or Rust test
+run was performed. The input was `managed-rollout.wB0mAsgW/after-app`, captured
+after the `9222b4c0` app had stopped during the earlier rollout. It is a historical
+recovery set, not a fresh snapshot of today's live store. Original archives,
+live data and native pilot state were not changed.
+
+Both starts strictly completed app health and a read-only publication check
+before starting the gate. That check used the original shared lock and required
+the canonical and exported policy, unconfigured managed manifest and empty
+provider custody to agree. The subsequent actual pair observation joined the
+same app container/process and file identities, checked the real executable,
+curated gate mounts, loaded policy and complete audit chain. The second start
+reused the same containers with new app/gate processes and the original keeper.
+
+Both stopped-state comparisons passed with 1,335 schema objects, 210 non-audit
+tables, all 204 audit events, eight credentials/applications/rules and 108 nonces
+preserved. Credential generations, application token state, signed policy and
+high-water state, original CA/key and shared lock remained intact. No gate export
+entries were added. The only admitted exceptions were three migration timestamps
+and two derived CA-publication inode changes with identical contents. No expired
+application token was renewed.
+
+Each runtime check reported catalog revision 13, active/loaded policy sequence 9,
+Google unconfigured, and a running notification worker with four independently
+disabled, unconfigured destinations. Action-required alerts and audit-log
+delivery remained separate. Notification tables remained absent and both
+custody directories stayed empty. No native observation source was configured
+and no message was sent.
+
+The keeper ran from **19:45:14 to 19:46:28 UTC**, within its original 600-second
+lifetime; work and cleanup retained their 480/60-second bounds. The fixture had
+only loopback networking, no external route, host ports, upstream listener,
+provider exchange or native action. App/gate stopped deliberately with exit 143;
+the keeper exited 0, with no OOM or automatic restart. The runner exited 0 and
+cleanup succeeded. All private service/helper containers were removed; all
+remaining-container, helper and network listings were empty. Private recovery
+copies and evidence remain retained.
+
+Evidence is in `../serverware-operator-workspace-evidence/npm-retained-372.8WNw8TNL/`:
+the two pre-gate publication observations, pair observations, stopped inspections,
+preservation comparisons and cold-process identity join. Result SHA-256:
+`912491b78f58d279d47231bbc0d21aa80ee297f2da121a84d95697686c1560cb`.
+Terminal receipt SHA-256:
+`c7d8398dbe18be28dbddda2ddbc21ddcc839a880085518fb37963c87f36f3bb6`.
+The one-shot fixture is terminal and must not be replayed.
+
+Live rollout still requires an explicit candidate Compose selection and retained
+reviewer support for the existing rich compiler-equality receipt, followed by
+current configuration review, a fresh stopped-consistent backup and the normal
+paired runtime/browser gates. Do not flatten that receipt into the older
+eight-field format or imply that the app and compiler commits are identical.
+The earlier deployed selection remains unchanged until those gates pass.
+
+## Earlier managed-Google introduction rehearsal
 
 On October 10, 2026, the managed-capable app and actual decision gate passed an
 initial cold start and a second cold process start using an isolated copy of the

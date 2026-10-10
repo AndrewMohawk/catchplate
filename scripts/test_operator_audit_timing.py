@@ -99,20 +99,24 @@ class PolicyLookupFixture:
         self.path = Path("/synthetic-audit-timing/policy.json")
         self.lock = threading.RLock()
         self.snapshot = policy.PolicySnapshot(
-            raw={"synthetic": {"copy": [1]}}, hash="sha256:" + "2" * 64,
+            raw={"metadata": {"id": "synthetic-timing", "sequence": 1, "rollbackEpoch": 0},
+                 "synthetic": {"copy": [1]}}, hash="sha256:" + "2" * 64,
             principals={}, credentials={}, routes=(),
         )
         self.identity = policy.PolicyFileIdentity(1, 2, 3, 4, 0o100600, 1, 2, 5, 6, "sha256:" + "4" * 64)
         names = ("st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
         file_stat = SimpleNamespace(**dict(zip(names, self.identity.stat_components)))
-        self.trust = SimpleNamespace(identity=("synthetic-trust",))
+        self.trust = SimpleNamespace(identity=policy.PolicySigningTrustIdentity(
+            policy.SecureFileIdentity(1, 3, 3, 4, 0o100600, 1, 2, 5, 6, "sha256:" + "5" * 64),
+            "sha256:" + "6" * 64, "sha256:" + "7" * 64))
         self.loader = policy.PolicyBundleLoader(self.path)
         for name, value in (("POLICY_BUNDLE_PATH", self.path), ("_SNAPSHOT_CACHE_LOCK", self.lock),
-                ("_SNAPSHOT_CACHE", None), ("_POLICY_BUNDLE_LOADER", self.loader)):
+                ("_SNAPSHOT_CACHE", None), ("_SNAPSHOT_CACHE_GENERATION", 0),
+                ("_POLICY_BUNDLE_LOADER", self.loader)):
             stack.enter_context(patch.object(policy, name, value))
         def observed(label, result):
             def call(*args, **kwargs):
-                test.assertTrue(self.lock._is_owned(), label)
+                test.assertFalse(self.lock._is_owned(), label)
                 self.calls.append(label)
                 return result
             return call
@@ -126,7 +130,7 @@ class PolicyLookupFixture:
                 ("_recheck_policy_signing_trust", "trust_recheck", None)):
             stack.enter_context(patch.object(policy, name, observed(label, result)))
         def compile_bundle(raw, **kwargs):
-            test.assertTrue(self.lock._is_owned())
+            test.assertFalse(self.lock._is_owned())
             test.assertEqual(raw, {})
             test.assertEqual(kwargs, {"verify_signature": True, "validate_schema": True, "signing_trust": self.trust})
             self.calls.append("compile")
@@ -339,7 +343,7 @@ class AuditTimingPolicyLookupTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             first.raw["synthetic"]["copy"] = CANARY
         self.assertEqual(second.raw["synthetic"]["copy"], [1])
-        self.assertEqual(fixture.snapshot.raw, {"synthetic": {"copy": [1]}})
+        self.assertEqual(fixture.snapshot.raw["synthetic"], {"copy": [1]})
         fixture.calls.clear()
         fixture.policy._SNAPSHOT_CACHE = None
         broken_clock_tracker = timing.create(1, DIGEST)
@@ -353,12 +357,12 @@ class AuditTimingPolicyLookupTests(unittest.TestCase):
                           side_effect=fixture.policy.PolicyBundleError(CANARY)):
             self.assertIsNone(fixture.policy.get_policy_snapshot(_audit_observation=broken_clock_tracker))
         self.assertIsNone(fixture.loader.cache)
-        self.assertIsNone(fixture.policy._SNAPSHOT_CACHE)
+        self.assertEqual(fixture.policy._SNAPSHOT_CACHE, (None, None, None))
         # An unrelated loader failure is propagated as the exact original object.
         failure = RuntimeError(CANARY)
         tracker = timing.create(1, DIGEST)
         timing.activate(tracker)
-        with patch.object(fixture.loader, "load", side_effect=failure):
+        with patch.object(fixture.policy, "_read_secure_file_stat", side_effect=failure):
             with self.assertRaises(RuntimeError) as caught:
                 fixture.policy.get_policy_snapshot(_audit_observation=tracker)
         self.assertIs(caught.exception, failure)

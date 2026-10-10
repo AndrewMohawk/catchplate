@@ -253,11 +253,11 @@ and is not claimed to be immune to backpressure. Worker bounds, shielding,
 database operations, signed response contents and deadlines remain unchanged.
 This source diagnostic is not a live deployment or a latency fix.
 
-The follow-up observation adds fixed marks immediately before and after taking
+The ninth-run observation added fixed marks immediately before and after taking
 the existing policy-snapshot lock. Together with the policy-completion mark,
 these distinguish mutex waiting from loader/validation/copying time. They apply
-only to the already-admitted audit signer; ordinary calls keep their existing
-argument-free path, and the lock scope and all policy checks are unchanged.
+only to the already-admitted audit signer; ordinary calls kept their existing
+argument-free path, and that revision changed neither lock scope nor policy checks.
 
 An eighth isolated run at `7989eee9` used the same verified normal Rust binary
 and unchanged limits. It completed prerequisite reads, both publications and
@@ -297,6 +297,27 @@ five established/keep-alive CONNECT pairs, and no upstream-resolution or CONNECT
 denial. The failed command exits before its audit-drain checkpoint, so missing
 later denial records cannot locate the failure. Ninth-run cleanup completed,
 and both full source/npm inventories remained unchanged.
+
+The subsequent concurrency change gives each caller a private loader seeded
+from the shared cache. Every existing file, trust, publication, high-water and
+snapshot-copy check still runs for that caller, outside the short bookkeeping
+lock. Explicit invalidation generations and configured-path/loader/configuration
+checks prevent an older reader from repopulating invalidated state. Concurrent
+fills can agree only on the complete file/trust identity and policy authority;
+the caller returns its own verified snapshot, never another reader's cached
+result as a fallback. A late failed read cannot clear a newer winning cache.
+The global loader identity and existing outer-lock publication consumer remain
+supported. The cache generation is not publication authority, and the existing
+compiled-route-authority alias is unchanged; this is not new object-graph
+hardening. With this change, the interval after initial lock acquisition includes
+validation/copying and final merge-lock waiting, not just loader work.
+
+The focused concurrency, audit-timing and legacy scheduling batch passed all
+24 tests in 0.530 seconds in the isolated retained Python image, with no
+network or writable source mount. The concurrency controls use the actual
+getter/loader with synthetic external policy I/O; the publication-owner checks
+are source checks, not publication-transaction acceptance. This result does
+not establish runtime latency improvement or resolution of the stock npm 503.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

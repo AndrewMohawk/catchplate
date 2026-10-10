@@ -3781,6 +3781,7 @@ PolicySnapshotCache = tuple[
 ]
 _SNAPSHOT_CACHE: PolicySnapshotCache | None = (None, None, None)
 _SNAPSHOT_CACHE_LOCK = threading.RLock()
+_SNAPSHOT_CACHE_GENERATION = 0
 _POLICY_PUBLICATION_THREAD_LOCK = threading.RLock()
 _POLICY_PUBLICATION_LOCK_STATE = threading.local()
 _PRODUCTION_POLICY_PUBLICATION_LOCK_PATH = POLICY_BUNDLE_PATH.parent
@@ -7530,6 +7531,46 @@ def compile_policy_bundle(
     )
 
 
+def _invalidate_policy_snapshot_cache_locked() -> None:
+    """Caller owns _SNAPSHOT_CACHE_LOCK; even empty-to-empty invalidates readers."""
+    global _SNAPSHOT_CACHE, _SNAPSHOT_CACHE_GENERATION
+    _SNAPSHOT_CACHE_GENERATION += 1
+    _POLICY_BUNDLE_LOADER.cache = None
+    # Consume a public None reset once. Concurrent cold readers must not each
+    # invalidate the work of readers which already captured the empty cache.
+    _SNAPSHOT_CACHE = (None, None, None)
+
+
+def _policy_snapshot_configuration() -> tuple[Any, ...]:
+    return (
+        POLICY_BUNDLE_PATH, POLICY_SIGNING_PUBLIC_KEY_PATH, SCHEMA_DIR,
+        POLICY_MIN_SEQUENCE, POLICY_MIN_ROLLBACK_EPOCH, RELEASE_CHANNEL,
+        os.environ.get("SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS", ""),
+    )
+
+
+def _equivalent_policy_snapshot_cache(
+    left: PolicySnapshotCache | None, right: PolicySnapshotCache | None,
+) -> bool:
+    if not (type(left) is tuple and type(right) is tuple
+            and len(left) == len(right) == 3):
+        return False
+    left_identity, left_snapshot, left_trust = left
+    right_identity, right_snapshot, right_trust = right
+    if not (type(left_identity) is PolicyFileIdentity
+            and type(right_identity) is PolicyFileIdentity
+            and type(left_trust) is PolicySigningTrustIdentity
+            and type(right_trust) is PolicySigningTrustIdentity
+            and type(left_snapshot) is PolicySnapshot
+            and type(right_snapshot) is PolicySnapshot
+            and left_identity == right_identity and left_trust == right_trust):
+        return False
+    try:
+        return _policy_snapshot_authority(left_snapshot) == _policy_snapshot_authority(right_snapshot)
+    except PolicyBundleError:
+        return False
+
+
 def get_policy_snapshot(
     *, _audit_observation: _audit_timing.AuditTiming | None = None,
 ) -> PolicySnapshot | None:
@@ -7541,11 +7582,39 @@ def get_policy_snapshot(
             _audit_timing.mark(_audit_observation, "sign_policy_lock_acquired")
         if _POLICY_BUNDLE_LOADER.path != POLICY_BUNDLE_PATH:
             _POLICY_BUNDLE_LOADER = PolicyBundleLoader(POLICY_BUNDLE_PATH)
+            _invalidate_policy_snapshot_cache_locked()
         elif _SNAPSHOT_CACHE is None:
-            _POLICY_BUNDLE_LOADER.cache = None
-        snapshot = _POLICY_BUNDLE_LOADER.load()
-        _SNAPSHOT_CACHE = _POLICY_BUNDLE_LOADER.cache
-        return snapshot
+            _invalidate_policy_snapshot_cache_locked()
+        loader = _POLICY_BUNDLE_LOADER
+        path = loader.path
+        base_cache = loader.cache
+        base_public_cache = _SNAPSHOT_CACHE
+        generation = _SNAPSHOT_CACHE_GENERATION
+        configuration = _policy_snapshot_configuration()
+
+    # Each caller performs every original loader check and makes its own fresh
+    # snapshot. Only bookkeeping is shared; no validation is skipped or joined.
+    local_loader = PolicyBundleLoader(path)
+    local_loader.cache = base_cache
+    snapshot = local_loader.load()
+
+    with _SNAPSHOT_CACHE_LOCK:
+        if (_SNAPSHOT_CACHE_GENERATION != generation
+                or _POLICY_BUNDLE_LOADER is not loader or loader.path != path
+                or POLICY_BUNDLE_PATH != path
+                or _policy_snapshot_configuration() != configuration):
+            return None
+        if loader.cache is base_cache and _SNAPSHOT_CACHE is base_public_cache:
+            loader.cache = local_loader.cache
+            _SNAPSHOT_CACHE = local_loader.cache if local_loader.cache is not None else (None, None, None)
+            return snapshot
+        # A late failure must not clear a newer result. An equivalent winner
+        # permits only this caller's independently validated fresh snapshot;
+        # it never supplies a fallback snapshot or gets overwritten here.
+        if (snapshot is not None and _SNAPSHOT_CACHE is loader.cache
+                and _equivalent_policy_snapshot_cache(local_loader.cache, loader.cache)):
+            return snapshot
+        return None
 
 
 def policy_uses_atomic_release_authorization(snapshot: PolicySnapshot) -> bool:
@@ -7866,10 +7935,8 @@ def _write_policy_bundle_in_transaction(
         staged_publication,
         connection=connection,
     )
-    global _POLICY_BUNDLE_LOADER, _SNAPSHOT_CACHE
     with _SNAPSHOT_CACHE_LOCK:
-        _SNAPSHOT_CACHE = None
-        _POLICY_BUNDLE_LOADER.cache = None
+        _invalidate_policy_snapshot_cache_locked()
     return snapshot
 
 
@@ -7905,7 +7972,6 @@ def write_policy_bundle(
         raise PolicyBundleError(
             "active policy publication path is fixed by configuration"
         )
-    global _POLICY_BUNDLE_LOADER, _SNAPSHOT_CACHE
     with _policy_publication_lock():
         prepared = _prepare_policy_publication(raw)
         try:
@@ -7919,8 +7985,7 @@ def write_policy_bundle(
             else:
                 raise
         with _SNAPSHOT_CACHE_LOCK:
-            _SNAPSHOT_CACHE = None
-            _POLICY_BUNDLE_LOADER.cache = None
+            _invalidate_policy_snapshot_cache_locked()
         # This commit is deliberately separate: a crash leaves durable pending
         # intent, never reader authority. The transaction below revalidates the
         # same digest after acquiring the metadata publication lock.

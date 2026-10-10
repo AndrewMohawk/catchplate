@@ -100,11 +100,13 @@ installed tree and fresh signed receipt.
 All existing package/verification signatures, current trust, signer authority,
 boot/clock limits, high-water and publication checks remain fresh. A template
 does not activate anything, advance trust, extend an approval or allow retry of
-a partial installation. Tests and the root-owned KVM component probe for this
-mode are in progress. It is not deployed to R97, no new end-to-end startup
-improvement has been measured, and no production/native signed-install
-acceptance is claimed. See [startup cost](native-pilot-startup-performance.md)
-for the separate completed cache-test evidence and observed R97 timings.
+a partial installation. The 41 focused SDK tests and an offline real-kernel
+filesystem component probe passed; the latter exercised sealed-file adoption,
+fresh copying, identity preservation and refusal controls, not full signed
+installation. It is not deployed to R97, no new end-to-end startup improvement
+has been measured, and no production/native signed-install acceptance is
+claimed. See [startup cost](native-pilot-startup-performance.md)
+for test boundaries, retained probe evidence and observed R97 timings.
 
 ## Actual filesystem constraint
 

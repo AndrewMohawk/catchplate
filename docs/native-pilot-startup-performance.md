@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Native pilot startup cost
 
 This describes the native pilot, not a browser reload of the operator demo.
@@ -175,7 +177,47 @@ does not renew a deadline, and cannot substitute a completed session. See
 [the installation contract](trusted-host-local-installation.md#prepared-static-local-installation)
 for the versioned interface.
 
-This mode is implemented in SDK and COMMON source. Its tests and root-owned KVM
-component probe are in progress. It is **not deployed to R97**, has no measured
-new startup improvement yet, and does not establish production/native signed
-installation acceptance. The earlier cache-test results above are unchanged.
+This mode is implemented in SDK commit `a1114063` and COMMON commit `89e442916`.
+It is **not deployed to R97**, has no measured new startup improvement yet, and
+does not establish production/native signed installation acceptance.
+
+### Prepared-static verification on 2026-10-10
+
+The focused SDK run passed all 41 prepared-contract, filesystem-component,
+legacy installer and trust-commit tests, including the root-owned DAC checks,
+using the cached offline engineering image. The 91 measurement/launch/closure
+tests also passed again. A stale legacy test's rejection boundary was corrected
+to the existing setup ceiling plus one second; no runtime deadline was changed.
+
+COMMON passed 28 prepared-static tests, 10 existing preseal/loader/cohort tests,
+two Rust-input roster tests, and inert rendering/syntax checks for 26 assembly
+templates. The current SDK embeds `npm.publish.v1`; its omission from the
+prospective assembly's Rust external-input roster was corrected. Rendering
+invoked no build or preparation producer and establishes no build provenance.
+
+The optional [kernel component checker](../scripts/check_authority_prepared_static_kernel.py)
+ran once from SDK `a1114063` in a bounded offline Linux 6.8 KVM guest with a fresh
+64 MiB ext4 filesystem supporting fs-verity. The runtime and source were
+read-only, there was no network or host share, and the guest used no authority
+keys or pilot runtime. Two independently prepared static files preserved their
+actual inode/generation/verity identities through adoption and both moves; one
+fresh file was copied and sealed. Real writes to sealed content were refused.
+Wrong bytes, missing/extra files, absent verity, absent immutable flags,
+hardlinks and a wrong generation were refused before template consumption.
+
+Actual source `pread` counts were six cold versus three warm for three files;
+warm reads were EOF checks, not full-content rehashes. Static adoption made two
+EOF checks for its two files. The checker returned `ok: true`, the final guest
+marker was success, QEMU exited zero and its bounded scope was inactive. This
+is filesystem-component evidence only: the owner/lifetime fixture is synthetic,
+full signed installation was not run, cross-mount behavior was not exercised
+in the guest, and startup latency was not measured. Unit tests cover synthetic
+cross-mount refusal separately.
+
+Retained evidence directory:
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/prepared-static-kernel.vdQ0u0O4`.
+Its `guest.log` SHA-256 is
+`794f548fdd5b27924d4f15737c34bbe4fdffba45cf0f5707c27423e31132843c`.
+The guest ran from 21:53:23 to 21:53:27 UTC. Those four seconds are the tiny
+component probe, **not Serverware startup time**. The images, harness and log
+were retained; no native pilot was restarted or altered.

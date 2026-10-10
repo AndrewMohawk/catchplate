@@ -134,26 +134,39 @@ def _cache_remember(key, digest):
             _FILE_DIGEST_CACHE.popitem(last=False)
 
 
-def _digest_owned_file(fd, *, maximum, read, check):
+def _digest_owned_file(fd, *, maximum, read=None, check):
     """Content-only measurement of a caller-owned FD, never a claimed digest.
 
     ``check`` must freshly validate that owner's custody/lifetime and path.
-    ``read`` must return the actual FD bytes using the owner's existing guarded
-    reader. Neither callback nor descriptor is retained. Cache misses preserve
-    that reader; hits reuse only the ext4-enforced content identity.
+    If supplied, ``read`` must return the actual FD bytes using the owner's
+    existing guarded reader. Otherwise misses stream in at most 1MiB chunks,
+    checking the caller before each read. Neither callback nor descriptor is
+    retained. Hits reuse only the ext4-enforced content identity.
     """
     _require(type(fd) is int and fd >= 3 and type(maximum) is int
-             and 0 < maximum <= spec.MAX_FILE_BYTES and callable(read) and callable(check))
+             and 0 < maximum <= spec.MAX_FILE_BYTES and (read is None or callable(read))
+             and callable(check))
     check()
     before = os.fstat(fd)
     _require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= maximum)
     cache_key = _file_cache_key(fd, before.st_size)
     content_digest = None if cache_key is None else _cache_lookup(cache_key)
     if content_digest is None:
-        raw = read()
-        _require(type(raw) is bytes and len(raw) == before.st_size)
-        content_digest = hashlib.sha256(raw).hexdigest()
-        del raw
+        if read is None:
+            digest = hashlib.sha256()
+            offset = 0
+            while offset < before.st_size:
+                check()
+                raw = os.pread(fd, min(1024 * 1024, before.st_size - offset), offset)
+                _require(bool(raw))
+                digest.update(raw)
+                offset += len(raw)
+            content_digest = digest.hexdigest()
+        else:
+            raw = read()
+            _require(type(raw) is bytes and len(raw) == before.st_size)
+            content_digest = hashlib.sha256(raw).hexdigest()
+            del raw
     _require(not os.pread(fd, 1, before.st_size))
     _require(_file_cache_key(fd, before.st_size) == cache_key)
     _require(_identity(os.fstat(fd)) == _identity(before))

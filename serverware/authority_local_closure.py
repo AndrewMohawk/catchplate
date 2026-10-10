@@ -8,7 +8,6 @@ the issuer measures its bytes and ordinary ELF metadata without executing it.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 import os
 import stat
 import struct
@@ -174,16 +173,23 @@ def verify_roster(selected, measured, root_fd, *, check):
                  {"elf-executable", "elf-shared-object", "native-stage-zero", "python-extension"})
         fd = _open(root_fd, row["path"])
         try:
+            before = os.fstat(fd)
+            _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and before.st_size == actual["size"]
+                and stat.S_IMODE(before.st_mode) == actual["mode"]
+                and before.st_uid == actual["uid"] and before.st_gid == actual["gid"])
+            identity = io._identity(before)
+            def check_native():
+                check()
+                measure._frozen(fd)
+                _require(io._identity(os.fstat(fd)) == identity)
+            # ELF reads remain unconditional on this same opened FD. Only its
+            # whole-file digest may reuse an enforced content identity; an
+            # unsealed file still streams through the guarded hash loop.
             measure._frozen(fd)
             value = elf_metadata(fd, check=check)
-            # Re-measure the opened inode, not merely a previous pathname lookup.
-            digest = hashlib.sha256()
-            offset = 0
-            while offset < actual["size"]:
-                check()
-                chunk = os.pread(fd, min(1024*1024, actual["size"]-offset), offset)
-                _require(bool(chunk)); digest.update(chunk); offset += len(chunk)
-            _require(not os.pread(fd, 1, offset) and "sha256:" + digest.hexdigest() == actual["sha256"])
+            digest = measure._digest_owned_file(fd, maximum=spec.MAX_FILE_BYTES, check=check_native)
+            _require(digest == actual["sha256"])
         finally:
             os.close(fd)
         _require(value["elfClass"] == row["elfClass"] and value["machine"] == row["machine"])

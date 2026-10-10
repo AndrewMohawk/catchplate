@@ -21,6 +21,12 @@ The unchanged R97 attempt reached `REGISTRATION_START_BROWSER_READY` at
 21:11:02 UTC, about 23 minutes after Start. This is registration readiness,
 not completed enrollment or an optimized-startup measurement.
 
+The seven logged launch triplets total about 346 seconds: 116 seconds acquiring
+inputs, 87 seconds acquiring issuers, and 143 seconds publishing. Installation
+phase markers do not include individual timestamps, so the log cannot apportion
+the remaining startup time. The 127-second guard aggregate is nested in other
+stages and must not be added to their durations.
+
 These are distinct costs. A count of repeated hash passes is not a measurement
 of how much wall-clock time each pass consumes.
 
@@ -68,6 +74,20 @@ The matching COMMON change is in
 `docker/serverware/pilot/prepare_authority_launch.py`. This integration and the
 SDK change must be assembled together; neither changes the frozen R97 runtime.
 
+## Third optimization: share the memo with native roster inspection
+
+Native roster inspection previously read and hashed every complete executable
+and shared object immediately after the tree measurement had already populated
+the content memo. It now reuses that same sealed-content measurement. ELF header
+and dependency inspection still reads the actual newly opened descriptor on
+every call; parsed metadata and admission decisions are not cached.
+
+The opened file must match the measured size, mode, ownership and single-link
+requirements. Caller lifetime, frozen state, descriptor identity and EOF remain
+checked, and the observed digest must match the selected roster. Cold or
+unsupported inputs stream through bounded 1 MiB reads, not a whole-file buffer.
+The existing retained-launch reader and generic tree measurement are unchanged.
+
 ## Local verification
 
 Nine cache test groups pass with real temporary files and synthetic kernel
@@ -84,6 +104,14 @@ live-owner controls. They exercise shared content reuse, fresh ownership,
 wrong claimed hashes, changed metadata and post-EOF conditions, and unchanged
 default and unsupported paths. Three COMMON cohort integration tests also pass.
 
+The third optimization passes the same suite plus 12 new native-roster cache
+groups: 91 tests in total, using the cached offline engineering image without a
+build or dependency installation. The new groups use real temporary files,
+descriptors and ELF reads with explicitly synthetic kernel/owner controls. They
+cover cold streaming, warm reuse, changed content and metadata, fresh ELF
+admission, unsupported inputs, EOF and size bounds, wrong claimed digests, and
+cancellation or short reads without publishing a partial digest.
+
 The opt-in real-kernel test was attempted on the host's ext4 temporary volume
 and **skipped** because that filesystem/kernel does not support fs-verity there.
 It is not a passing real-fs-verity acceptance result. No new mounts, elevated
@@ -91,9 +119,9 @@ container capabilities, or active-pilot changes were made to obtain a test pass.
 
 ## Remaining work and evidence boundary
 
-These changes do not provide cross-session artifact reuse or eliminate
-fresh installation, destination readback, synchronization, separate closure
-analysis, or launch authorization itself. Removing those recurring costs requires a
+These changes do not provide cross-session artifact reuse or eliminate fresh
+installation, destination readback, synchronization, ELF metadata analysis, or
+launch authorization itself. Removing those recurring costs requires a
 separate reusable immutable-build artifact and fresh session authorization,
 rather than treating a stored hash as proof that mutable files are unchanged.
 

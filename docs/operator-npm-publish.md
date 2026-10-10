@@ -383,8 +383,10 @@ The eleventh isolated stock-client run used that exact new normal binary and
 source, with unchanged deadlines, resource limits, seven-command recipe and
 acceptance predicate. It completed prerequisite and unscoped client commands,
 then stopped on **ordinary audit delivery failed**. The gate recorded one
-initial audit transport failure with unknown outcome after 2,947 ms, for a
-two-event batch with matching policy snapshot and sequence. This is not an npm
+initial audit transport failure with unknown outcome at an attempt age of
+2,947 ms, for a two-event batch with matching policy snapshot and sequence.
+That timer includes preflight work before HTTP execution; it is not measured
+HTTP transport latency. This is not an npm
 503 reproduction or a passing publishing flow. The npm-child failure observer
 was not invoked because this failure occurred at the subsequent audit check.
 

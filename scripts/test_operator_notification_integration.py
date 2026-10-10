@@ -278,6 +278,119 @@ def api_tls():
         tls_fixture.TlsTests.tearDownClass()
 
 
+def setup_audit_tls():
+    """Actual producer append -> committed projection -> outbox -> verified TLS.
+
+    Direct producer helpers intentionally isolate writer-to-delivery plumbing.
+    These synthetic source rows do not exercise Prepare/Cancel/Activate or prove
+    any configuration activation, provider consent, approval or native action.
+    """
+    fixture = fixtures.Fixture()
+    from serverware import operator_google_setup as google, operator_upstream_setup as upstream
+    from serverware import operator_notification_events as events, operator_notifications as notifications
+    from serverware import operator_publication as publication
+
+    actions = ("prepared", "cancelled", "activated")
+    event_types = sorted("operator_catalog." + family + "." + action
+        for family in ("upstream_setup", "google_setup") for action in actions)
+    assert set(event_types) <= set(events.AUDIT_EVENT_TYPES)
+    assert not set(event_types) & set(events.ACTION_EVENT_TYPES)
+    saved = fixture.save("audit_log.webhook", url=WEBHOOK, event_types=event_types)
+    baseline = events.EventCursor(**fixture.store.status()["cursor"])
+    policy_hash = fixture.demo.get_policy_high_water()["policy_hash"]
+    revision = fixtures.workspace.review(fixture.db, fixture.demo, fixture.catalog)["expected_revision"]
+    canaries = ("SYNTHETIC_SETUP_SECRET_MUST_STAY_LOCAL", "123-private-client.apps.googleusercontent.com",
+        "https://private-setup.example.test", "PRIVATE_SETUP_CIPHERTEXT_CANARY")
+
+    def authority(conn):
+        return {table: [tuple(row) for row in conn.execute("SELECT * FROM " + table)]
+            for table in ("operator_demo_policy", "operator_demo_settings", "operator_catalog_state")}
+
+    with closing(fixture.db.connect()) as conn:
+        retained = authority(conn)
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name IN (?,?)", (google.TABLE, upstream.TABLE)).fetchall()
+    expected = {}
+    with publication.exclusive(), closing(fixture.db.connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        publication.assert_held()
+        for family in ("upstream", "google"):
+            for action in actions:
+                identifier = str(uuid.uuid4())
+                event_id = "operator-" + family + "-setup:" + identifier + ":" + action
+                kind = "operator_catalog." + family + "_setup." + action
+                # Real writers own the IDs/type/actor. Extra synthetic private
+                # canaries stress the existing closed projection, not a fake
+                # successful lifecycle binding or an outbound payload fixture.
+                event = {"operation_id": identifier, "policy_hash": policy_hash, "revision": revision,
+                    "client_id": canaries[1], "client_secret": canaries[0],
+                    "profile_binding": {"client_id": canaries[1], "redirect_uri": canaries[2] + "/callback"},
+                    "old_settings": {"allowed_upstreams": [canaries[2]], "fixture_cidrs": ["127.0.0.1/32"]},
+                    "target_settings": {"allowed_upstreams": [canaries[2]], "fixture_cidrs": []},
+                    "custody_ref": {"owner_id": str(uuid.uuid4()), "config_version": 1},
+                    "ciphertext": canaries[3]}
+                if family == "upstream":
+                    upstream._append(conn, {"operation_id": identifier, "actor_id": fixtures.ACTOR}, action, event)
+                else:
+                    google._append(conn, identifier, fixtures.ACTOR, action, event)
+                row = conn.execute("SELECT id,event_hash,event_type,created_at,event_json FROM audit_events WHERE id=?",
+                    (event_id,)).fetchone()
+                assert row is not None and row[2] == kind and json.loads(row[4])["operation_id"] == identifier
+                expected[event_id] = {"source": dict(zip(("event_id", "event_hash", "event_type", "created_at"), row[:4])),
+                    "details": {"actor_type": "admin", "operation_id": identifier, "policy_hash": policy_hash, "revision": revision}}
+        conn.commit()
+
+    # Real source reader and exact final-source validator, with no successful
+    # projection or HTTP DTO stub. The worker repeats these joins at dispatch.
+    with fixture.store._read() as conn:
+        sources, _ = events.read_batch(conn, baseline, now_epoch_ms=fixture.store._now())
+        assert {item.event_id for item in sources} == set(expected)
+        for source in sources:
+            assert source.action_payload is None
+            assert source.audit_payload["source"] == expected[source.event_id]["source"]
+            assert source.audit_payload["details"] == expected[source.event_id]["details"]
+            assert events.payload_matches_source(conn, source.audit_payload, now_epoch_ms=fixture.store._now())
+
+    tls_fixture.TlsTests.setUpClass()
+    delivered = {}
+    try:
+        for _ in range(6):
+            head, payload = receiver_attempt(fixture)
+            assert b"Host: receiver.example.test" in head and tls_fixture.TlsTests.sni[-1] == "receiver.example.test"
+            assert set(payload) == {"schema", "channel", "source", "summary", "review_path", "details", "projection",
+                "delivery_id", "slot", "revision", "review_url"}
+            source = payload["source"]
+            assert source["event_id"] not in delivered and source["event_id"] in expected
+            assert source == expected[source["event_id"]]["source"]
+            assert payload["details"] == expected[source["event_id"]]["details"]
+            assert payload["channel"] == "audit_log" and payload["slot"] == "audit_log.webhook"
+            assert payload["revision"] == saved["revision"] and payload["projection"] == "approved_fields"
+            assert payload["review_path"] == "/#audit" and payload["review_url"] == ORIGIN + "/#audit"
+            assert all(canary not in json.dumps(payload) for canary in canaries)
+            delivered[source["event_id"]] = payload["delivery_id"]
+    finally:
+        tls_fixture.TlsTests.tearDownClass()
+    assert set(delivered) == set(expected) and len(set(delivered.values())) == 6
+    with closing(fixture.db.connect()) as conn:
+        rows = conn.execute("SELECT source_event_id,delivery_id,slot,status,attempts,last_code,http_status,payload_json "
+            "FROM operator_notification_deliveries ORDER BY source_event_id").fetchall()
+        assert len(rows) == 6
+        for row in rows:
+            assert row[1] == delivered[row[0]] and tuple(row[2:7]) == ("audit_log.webhook", "acknowledged", 1, "acknowledged", 200)
+            assert all(canary not in row[7] for canary in canaries)
+        assert authority(conn) == retained
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name IN (?,?)", (google.TABLE, upstream.TABLE)).fetchall()
+    status = fixture.store.status()
+    assert status["queue"]["acknowledged"] == 6
+    assert all(not slot["enabled"] and not slot["secret_present"] and slot["revision"] == 0
+        for slot in status["slots"] if slot["channel"] == "action_required")
+    with patch.object(fixture.transport, "deliver", side_effect=AssertionError("setup source delivered twice")):
+        assert not notifications.run_once()
+    assert fixture.db.verify_audit_chain()["ok"]
+    return {"actual_setup_writer_audit_types": 6, "verified_TLS_acknowledgements": 6,
+        "action_deliveries": 0, "private_setup_fields_exported": False,
+        "configuration_lifecycle_or_approval_proven": False}
+
+
 def disabled():
     fixture = fixtures.Fixture()
     from serverware import operator_notifications
@@ -404,12 +517,19 @@ class NotificationIntegrationTests(unittest.TestCase):
     def test_unknown_receipt_and_final_predispatch_disable(self):
         self.assertTrue(self.run_worker("unknown")["unknown_not_retried"])
 
+    def test_setup_producer_audits_reach_verified_TLS_without_private_fields_or_actions(self):
+        result = self.run_worker("setup-audit-tls")
+        self.assertEqual(result["actual_setup_writer_audit_types"], 6)
+        self.assertEqual(result["verified_TLS_acknowledgements"], 6)
+        self.assertEqual(result["action_deliveries"], 0)
+        self.assertFalse(result["configuration_lifecycle_or_approval_proven"])
+
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--worker":
         os.umask(0o077)
         actions = {"api-tls": api_tls, "disabled": disabled, "lifecycle": lifecycle,
-            "backpressure": backpressure, "unknown": unknown_and_predispatch}
+            "backpressure": backpressure, "unknown": unknown_and_predispatch, "setup-audit-tls": setup_audit_tls}
         print(json.dumps(actions[sys.argv[2]](), sort_keys=True))
     else:
         unittest.main()

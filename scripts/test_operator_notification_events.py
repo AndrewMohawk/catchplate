@@ -184,26 +184,120 @@ class EventTests(unittest.TestCase):
             with self.reader() as conn:
                 self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
 
-    def test_upstream_setup_events_remain_audit_only_without_destination_contents(self):
-        operation = str(uuid.uuid4())
-        kinds = tuple("operator_catalog.upstream_setup." + action for action in ("prepared", "cancelled", "activated"))
-        for kind in kinds:
-            self.assertIn(kind, events.AUDIT_EVENT_TYPES)
-            self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
-            self.append(kind, {"operation_id": operation, "policy_hash": DIGEST, "revision": 3,
-                "old_settings": {"allowed_upstreams": [CANARY]},
-                "target_settings": {"allowed_upstreams": [CANARY]}, "secret": CANARY})
+    def test_setup_writer_ids_remain_audit_only_without_private_configuration(self):
+        expected = []
+        # Both production _append helpers use this exact ID/type pairing. These
+        # are isolated audit rows, not a claim that a setup lifecycle ran here.
+        for family in ("upstream", "google"):
+            for action in ("prepared", "cancelled", "activated"):
+                operation = str(uuid.uuid4())
+                kind = "operator_catalog." + family + "_setup." + action
+                identifier = "operator-" + family + "-setup:" + operation + ":" + action
+                self.assertIn(kind, events.AUDIT_EVENT_TYPES)
+                self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
+                self.append(kind, {"operation_id": operation, "policy_hash": DIGEST, "revision": 3,
+                    "old_settings": {"allowed_upstreams": [CANARY]},
+                    "target_settings": {"allowed_upstreams": [CANARY]}, "secret": CANARY,
+                    "client_id": CANARY, "client_secret": CANARY, "public_url": CANARY,
+                    "redirect_uri": CANARY, "profile_binding": {"client_id": CANARY},
+                    "custody_ref": {"owner_id": CANARY}}, actor_type="admin", identifier=identifier)
+                expected.append((kind, identifier, operation))
         batch, cursor = self.read()
-        self.assertEqual(cursor.rowid, 3)
-        self.assertEqual(tuple(item.event_type for item in batch), kinds)
-        for item in batch:
+        self.assertEqual(cursor.rowid, 6)
+        self.assertEqual(len(batch), 6)
+        for item, (kind, identifier, operation) in zip(batch, expected):
+            self.assertEqual((item.event_type, item.event_id), (kind, identifier))
             self.assertIsNone(item.action_payload)
             self.assertEqual(item.audit_payload["channel"], "audit_log")
-            self.assertEqual(item.audit_payload["details"], {"actor_type": "data-plane",
+            self.assertEqual(item.audit_payload["projection"], "approved_fields")
+            self.assertEqual(item.audit_payload["details"], {"actor_type": "admin",
                 "operation_id": operation, "policy_hash": DIGEST, "revision": 3})
             self.assertNotIn(CANARY, json.dumps(item.audit_payload))
-            with self.reader() as conn:
+            with self.reader(forbid_secrets=True) as conn:
                 self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+                self.assertFalse(events.action_is_current(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+
+    def test_setup_type_id_body_and_actor_mismatches_never_project_or_revalidate(self):
+        identifiers = []
+        for family in ("upstream", "google"):
+            other = "google" if family == "upstream" else "upstream"
+            for case in ("wrong_action", "wrong_namespace", "noncanonical_uuid", "trailing",
+                         "ordinary_uuid", "ordinary_hash", "wrong_event_type", "wrong_operation",
+                         "missing_operation", "boolean_operation", "wrong_actor", "malformed", "oversized"):
+                with self.subTest(family=family, case=case):
+                    operation = str(uuid.uuid4())
+                    kind = "operator_catalog." + family + "_setup.prepared"
+                    identifier = "operator-" + family + "-setup:" + operation + ":prepared"
+                    payload = {"operation_id": operation, "policy_hash": DIGEST, "revision": 3}
+                    actor_type, raw = "admin", None
+                    if case == "wrong_action":
+                        identifier = identifier.removesuffix(":prepared") + ":cancelled"
+                    elif case == "wrong_namespace":
+                        identifier = "operator-" + other + "-setup:" + operation + ":prepared"
+                    elif case == "noncanonical_uuid":
+                        identifier = "operator-" + family + "-setup:{" + operation + "}:prepared"
+                    elif case == "trailing":
+                        identifier += ":extra"
+                    elif case == "ordinary_uuid":
+                        identifier = operation
+                    elif case == "ordinary_hash":
+                        identifier = "sha256:" + hashlib.sha256(operation.encode()).hexdigest()
+                    elif case == "wrong_event_type":
+                        kind = "operator_catalog.credential.created"
+                    elif case == "wrong_operation":
+                        payload["operation_id"] = str(uuid.uuid4())
+                    elif case == "missing_operation":
+                        del payload["operation_id"]
+                    elif case == "boolean_operation":
+                        payload["operation_id"] = True
+                    elif case == "wrong_actor":
+                        actor_type = "data-plane"
+                    elif case == "malformed":
+                        raw = "[]"
+                    elif case == "oversized":
+                        payload["private"] = CANARY * 1000
+                    self.append(kind, payload, raw=raw, actor_type=actor_type, identifier=identifier)
+                    identifiers.append(identifier)
+        batch, cursor = self.read()
+        self.assertEqual(batch, ())
+        self.assertEqual(cursor.rowid, len(identifiers))
+        with self.reader(forbid_secrets=True) as conn:
+            for identifier in identifiers:
+                with self.subTest(identifier=identifier):
+                    row = events._metadata(conn.execute("SELECT " + events._COLUMNS +
+                        " FROM audit_events WHERE id=?", (identifier,)).fetchone())
+                    # Deliberately bypass admission when constructing a queued
+                    # copy. Even an otherwise exact safe projection must fail
+                    # final dispatch if its retained producer binding is bad.
+                    candidate = events._audit_projection(row, events._payload(conn, row["rowid"]))
+                    self.assertFalse(events.payload_matches_source(conn, candidate, now_epoch_ms=NOW_MS))
+                    self.assertFalse(events.action_is_current(conn, candidate, now_epoch_ms=NOW_MS))
+
+    def test_setup_queued_copy_rechecks_original_operation_binding(self):
+        for family in ("upstream", "google"):
+            operation = str(uuid.uuid4())
+            identifier = "operator-" + family + "-setup:" + operation + ":prepared"
+            kind = "operator_catalog." + family + "_setup.prepared"
+            payload = {"operation_id": operation, "policy_hash": DIGEST, "revision": 3}
+            self.append(kind, payload, actor_type="admin", identifier=identifier)
+            batch, _ = self.read()
+            original = next(item.audit_payload for item in batch if item.event_id == identifier)
+            with self.reader(forbid_secrets=True) as conn:
+                self.assertTrue(events.payload_matches_source(conn, original, now_epoch_ms=NOW_MS))
+                for changed_type in ("operator_catalog." + family + "_setup.cancelled",
+                                     "operator_catalog.credential.created"):
+                    changed = {**original, "source": {**original["source"], "event_type": changed_type}}
+                    self.assertFalse(events.payload_matches_source(conn, changed, now_epoch_ms=NOW_MS))
+            changed_body = {**payload, "operation_id": str(uuid.uuid4())}
+            self.writer.execute("UPDATE audit_events SET event_json=? WHERE id=?",
+                (json.dumps(changed_body), identifier))
+            self.writer.commit()
+            with self.reader(forbid_secrets=True) as conn:
+                self.assertFalse(events.payload_matches_source(conn, original, now_epoch_ms=NOW_MS))
+                row = events._metadata(conn.execute("SELECT " + events._COLUMNS +
+                    " FROM audit_events WHERE id=?", (identifier,)).fetchone())
+                rebound = events._audit_projection(row, events._payload(conn, row["rowid"]))
+                self.assertFalse(events.payload_matches_source(conn, rebound, now_epoch_ms=NOW_MS))
 
     def test_native_exact_nanosecond_expiry_and_historical_audit(self):
         expires = NOW_MS * 1_000_000 + 1

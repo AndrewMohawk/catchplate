@@ -73,8 +73,18 @@ _CATALOG = {
     "upstream_setup.prepared": "Proxy destination change prepared; restart required",
     "upstream_setup.cancelled": "Prepared proxy destination change cancelled",
     "upstream_setup.activated": "Proxy destination configuration activated",
+    "google_setup.prepared": "Google provider configuration prepared; restart required",
+    "google_setup.cancelled": "Prepared Google provider configuration cancelled",
+    "google_setup.activated": "Google provider configuration activated",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
+# These producers use idempotency keys as audit IDs, not generated event UUIDs.
+# Only their six exact type/namespace/action pairings are admitted; this is not
+# a general extension to notification IDs or to action-required sources.
+_SETUP_IDS = {"operator_catalog." + kind + "." + action: (prefix, ":" + action)
+    for kind, prefix in (("upstream_setup", "operator-upstream-setup:"),
+                         ("google_setup", "operator-google-setup:"))
+    for action in ("prepared", "cancelled", "activated")}
 ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", *NATIVE_EVENT_TYPES)))
 AUDIT_EVENT_TYPES = tuple(sorted((*_SUMMARIES, *NATIVE_EVENT_TYPES)))
 _LEGACY = {"approval_request_id", "route_id", "method", "url_commitment", "expires_at"}
@@ -125,6 +135,31 @@ def _uuid(value):
 
 def _hash(value):
     return isinstance(value, str) and _HASH.fullmatch(value) is not None
+
+
+def _setup_operation(identifier, event_type):
+    pair = _SETUP_IDS.get(event_type)
+    if pair is None or not isinstance(identifier, str):
+        return None
+    prefix, suffix = pair
+    if not identifier.startswith(prefix) or not identifier.endswith(suffix):
+        return None
+    operation = identifier[len(prefix):-len(suffix)]
+    return operation if _uuid(operation) else None
+
+
+def _event_identifier(identifier, event_type):
+    if event_type in _SETUP_IDS:
+        return _setup_operation(identifier, event_type) is not None
+    return _uuid(identifier) or _hash(identifier)
+
+
+def _setup_binding(row, event):
+    if row["event_type"] not in _SETUP_IDS:
+        return True
+    operation = _setup_operation(row["event_id"], row["event_type"])
+    return (operation is not None and row["actor_type"] == "admin" and type(event) is dict
+        and event.get("operation_id") == operation)
 
 
 def _identifier(value):
@@ -425,9 +460,11 @@ def _project(conn, row, now):
                 audit, action, record["observation"]["eventType"])
         except (ValueError, TypeError, OverflowError, RecursionError, KeyError, AttributeError):
             return None  # An invalid observation is not an actionable source.
-    if row["event_type"] not in _SUMMARIES or not (_uuid(row["event_id"]) or _hash(row["event_id"])):
+    if row["event_type"] not in _SUMMARIES or not _event_identifier(row["event_id"], row["event_type"]):
         return None
     event = _payload(conn, row["rowid"])
+    if not _setup_binding(row, event):
+        return None
     audit = _audit_projection(row, event)
     try:
         action = _approval(conn, row, event, now)
@@ -482,7 +519,7 @@ def payload_matches_source(conn, payload, *, now_epoch_ms: int) -> bool:
         _snapshot(conn)
         _require(_integer(now_epoch_ms) and type(payload) is dict)
         source = payload.get("source")
-        _require(type(source) is dict and (_uuid(source.get("event_id")) or _hash(source.get("event_id"))))
+        _require(type(source) is dict and _event_identifier(source.get("event_id"), source.get("event_type")))
         raw = conn.execute("SELECT " + _COLUMNS + " FROM audit_events WHERE id=?", (source["event_id"],)).fetchone()
         row = _metadata(raw)
         if row["event_type"] == NATIVE_OBSERVATION_TYPE:
@@ -490,7 +527,10 @@ def payload_matches_source(conn, payload, *, now_epoch_ms: int) -> bool:
         elif row["event_type"] not in _SUMMARIES:
             return False
         else:
-            expected = _audit_projection(row, _payload(conn, row["rowid"]))
+            event = _payload(conn, row["rowid"])
+            if not _event_identifier(row["event_id"], row["event_type"]) or not _setup_binding(row, event):
+                return False
+            expected = _audit_projection(row, event)
         return _same_projection(payload, expected)
     except (sqlite3.Error, ValueError, TypeError, OverflowError, RecursionError, KeyError, AttributeError):
         return False

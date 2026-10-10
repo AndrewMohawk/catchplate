@@ -32,6 +32,7 @@ mod operator_google_managed;
 mod operator_google_reconciliation;
 mod operator_static_preparation;
 mod operator_static_preparation_diagnostics;
+mod operator_response_failure_diagnostics;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
@@ -48961,7 +48962,12 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             Err(error) => {
                 audit_upstream_preparation_error(state, &request.method, &target_url, &error);
                 let response = upstream_preparation_error_response(&error);
-                let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+                let written = write_snapshot_guarded_response(state, snapshot, writer, &response);
+                if response_proof.is_none() {
+                    operator_response_failure_diagnostics::observe(state,
+                        operator_response_failure_diagnostics::Boundary::UpstreamPreparation,
+                        &response, written);
+                }
                 return false;
             }
         }
@@ -49194,6 +49200,11 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             }
             let response = override_response_connection(response, keep_alive);
             let written = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            if response_proof.is_none() {
+                operator_response_failure_diagnostics::observe(state,
+                    operator_response_failure_diagnostics::Boundary::BufferedTerminal,
+                    &response, written);
+            }
             if written {
                 if let (
                     Some(ResponseProofRequestContext::Buffered(context)),

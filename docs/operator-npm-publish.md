@@ -354,6 +354,21 @@ at the first Node launch because that image lacks `libatomic.so.1`; the correcte
 run used the same client image and Node binary as the stock fixture. These are
 synthetic fixture controls, not another end-to-end publication run.
 
+The Rust follow-up observes the existing guarded-write result at both ordinary
+503 sites in `forward_absolute_request_to`: upstream preparation and the final
+buffered response. It excludes proof requests, production and non-operator or
+non-legacy profiles. At most 64 records contain a fixed call-site boundary,
+allowlisted response-body category, body shape and write-result boolean. It
+does not log raw response text, identifiers, URLs, credentials or hashes, and
+does not change response bytes, admission, deadlines or the original return.
+Classification is bounded to 24 KiB total, 8 KiB headers and 16 KiB JSON; its
+additional sensitive JSON temporary is scrubbed after use. Unknown or malformed
+503 bodies produce only a fixed unclassified category. A matching body label
+does not prove its producer or internal cause, and a completed guarded write
+does not prove client receipt. The stderr sink is synchronous, not a guaranteed
+nonblocking channel. This source diagnostic still requires a genuine new Rust
+test/build and isolated stock-client execution before it provides runtime evidence.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

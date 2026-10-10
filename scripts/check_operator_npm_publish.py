@@ -112,14 +112,23 @@ def closed_window(now):
 
 
 def canonical_digests(row, scope, credential):
-    headers = row["requestHeaders"]
+    observed_headers = row["requestHeaders"]
+    body_bytes = row["requestBodyBytes"]
     common = {"host", "accept", "user-agent", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope"}
     allowed = common | ({"pacote-version", "pacote-req-type", "pacote-pkg-id"}
         if row["method"] == "GET" else {"content-type"})
-    require(row["method"] in {"GET", "PUT"} and isinstance(headers, dict) and set(headers) <= allowed
-        and headers.get("host") == "registry.npmjs.org" and headers.get("npm-command") == "publish"
-        and all(isinstance(value, str) and value.isascii() and len(value) <= 8192 for value in headers.values()),
+    require(row["method"] in {"GET", "PUT"} and isinstance(observed_headers, dict) and set(observed_headers) <= allowed
+        and observed_headers.get("host") == "registry.npmjs.org" and observed_headers.get("npm-command") == "publish"
+        and all(isinstance(value, str) and value.isascii() and len(value) <= 8192 for value in observed_headers.values()),
         "unexpected canonical publish request header")
+    require(type(body_bytes) is int and (body_bytes == 0 if row["method"] == "GET"
+        else 1 <= body_bytes <= fixture.MAX_BODY), "canonical publish observed body length differs")
+    headers = dict(observed_headers)
+    if row["method"] == "PUT":
+        # Rust commits the derived framing for a nonempty buffered request.
+        # Reconstruct it only from independently observed bytes, never from a
+        # receiver-provided framing header or the caller's claimed value.
+        headers["content-length"] = str(body_bytes)
     canonical = {"v": 2, "principal": scope[0], "client_ip": "127.0.0.1", "route_id": scope[1],
         "credential_ref": credential, "credential_version": "1", "policy_hash": scope[2],
         "request": {"method": row["method"], "scheme": "https", "authority": "registry.npmjs.org",

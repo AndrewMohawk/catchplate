@@ -372,11 +372,15 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertEqual(len(instance.wire), 6)
         self.assertEqual(len({(row["requestDigest"], row["operationDigest"]) for row in instance.wire}), 6)
         for row in instance.wire:
+            expected_headers = dict(row["requestHeaders"])
+            self.assertNotIn("content-length", expected_headers)
+            if row["method"] == "PUT":
+                expected_headers["content-length"] = str(row["requestBodyBytes"])
             canonical = {"v": 2, "principal": row["scope"][0], "client_ip": "127.0.0.1",
                 "route_id": row["scope"][1], "credential_ref": "synthetic-credential", "credential_version": "1",
                 "policy_hash": row["scope"][2], "request": {"method": row["method"], "scheme": "https",
                     "authority": "registry.npmjs.org", "path": row["rawTarget"], "query": [],
-                    "headers": row["requestHeaders"], "body_sha256": row["requestBodySha256"],
+                    "headers": expected_headers, "body_sha256": row["requestBodySha256"],
                     "discard_headers": ["accept-encoding", "npm-session"]}, "operation": row["operation"]}
             encode = lambda value: json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
             self.assertEqual(row["requestDigest"], digest(encode(canonical)))
@@ -396,6 +400,91 @@ class NpmPublishFixtureTests(unittest.TestCase):
             elif change == "stored-version": value["stored"][0]["version"] = "9.9.9"
             else: value["stored"][0]["tarballSha256"] = "sha256:" + "f" * 64
             with self.subTest(change=change), self.assertRaises(check.CheckFailure): instance.accept_observation(value)
+
+    def test_put_framing_matches_independent_literal_canonical_v2_vector(self):
+        # A canonical-layer vector, not an admitted publish document. Expected
+        # bytes are literal and never come from the checker or its serializer.
+        body_hash = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        self.assertEqual(digest(b"{}"), body_hash)
+        scope = ("principal", "route", "sha256:" + "a" * 64)
+        row = {"method": "PUT", "rawTarget": "/synthetic", "requestBodyBytes": 2,
+            "requestBodySha256": body_hash, "requestHeaders": {"accept": "*/*", "content-type": "application/json",
+                "host": "registry.npmjs.org", "npm-command": "publish"},
+            "operation": {"operation": "npm.publish", "packageName": "synthetic"}}
+        expected_operation = (
+            b'{"credential_ref":"credential","credential_version":"1",'
+            b'"operation":{"operation":"npm.publish","packageName":"synthetic"},'
+            b'"policy_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            b'"principal":"principal","request":{"authority":"registry.npmjs.org",'
+            b'"body_sha256":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",'
+            b'"discard_headers":["accept-encoding","npm-session"],'
+            b'"headers":{"accept":"*/*","content-length":"2","content-type":"application/json",'
+            b'"host":"registry.npmjs.org","npm-command":"publish"},'
+            b'"method":"PUT","path":"/synthetic","query":[],"scheme":"https"},"route_id":"route"}')
+        expected_request = b'{"client_ip":"127.0.0.1",' + expected_operation[1:-1] + b',"v":2}'
+        expected = digest(expected_request), digest(expected_operation)
+        original = deepcopy(row)
+        self.assertEqual(check.canonical_digests(row, scope, "credential"), expected)
+        self.assertEqual(row, original)
+        self.assertNotIn("content-length", row["requestHeaders"])
+        changed = {**row, "requestBodyBytes": 3}
+        changed_expected = tuple(digest(raw.replace(b'"content-length":"2"', b'"content-length":"3"'))
+            for raw in (expected_request, expected_operation))
+        self.assertEqual(check.canonical_digests(changed, scope, "credential"), changed_expected)
+        self.assertTrue(all(left != right for left, right in zip(expected, changed_expected)))
+
+        # Independently framed wire commitments are the audit join oracle.
+        wire = {**row, "scope": scope, "requestDigest": expected[0], "operationDigest": expected[1],
+            "status": 201, "responseBodySha256": body_hash, "responseBodyBytes": 2}
+        instance = SimpleNamespace(wire=[wire], phase_scopes=[], credential_id="credential")
+        rows = self.audit_rows(instance)
+        self.assertTrue(check.joined_attempts(rows, [wire], "credential")[1])
+        bodyless = tuple(digest(raw.replace(b'"content-length":"2",', b""))
+            for raw in (expected_request, expected_operation))
+        for label, wrong in (("old-bodyless", bodyless), ("wrong-length", changed_expected)):
+            wrong_rows = deepcopy(rows)
+            for event in wrong_rows:
+                if event["event_type"] in {check.START, check.RELEASE}:
+                    event["event"].update(request_digest=wrong[0], operation_digest=wrong[1])
+            with self.subTest(commitment=label), self.assertRaises(check.CheckFailure):
+                check.joined_attempts(wrong_rows, [wire], "credential")
+
+    def test_canonical_body_lengths_are_typed_bounded_and_never_taken_from_wire_headers(self):
+        instance, _, _ = self.checker()
+        for method in ("GET", "PUT"):
+            row = next(row for row in instance.wire if row["method"] == method)
+            original = deepcopy(row)
+            initial = check.canonical_digests(row, row["scope"], instance.credential_id)
+            self.assertEqual(row, original)
+            self.assertNotIn("content-length", row["requestHeaders"])
+            bad_lengths = (None, True, False, 0.0, 2.0, "0", "2", -1, 65537)
+            bad_lengths += (1, 2, 65536) if method == "GET" else (0,)
+            for size in bad_lengths:
+                changed = {**deepcopy(row), "requestBodyBytes": size}
+                with self.subTest(method=method, size=size), self.assertRaises(check.CheckFailure):
+                    check.canonical_digests(changed, row["scope"], instance.credential_id)
+            for size in ((0,) if method == "GET" else (1, 65536)):
+                changed = {**deepcopy(row), "requestBodyBytes": size}
+                value = check.canonical_digests(changed, row["scope"], instance.credential_id)
+                self.assertEqual(len(value), 2)
+                if method == "GET":
+                    self.assertEqual(value, initial)
+            for field, value in (("content-length", str(row["requestBodyBytes"])),
+                    ("content-length", str(row["requestBodyBytes"] + 1)), ("content-length", "00"),
+                    ("Content-Length", str(row["requestBodyBytes"])), ("authorization", "Bearer synthetic-private"),
+                    ("transfer-encoding", "chunked")):
+                changed = deepcopy(row)
+                changed["requestHeaders"][field] = value
+                with self.subTest(method=method, header=field, value=value), self.assertRaises(check.CheckFailure):
+                    check.canonical_digests(changed, row["scope"], instance.credential_id)
+        # The independent receiver still refuses mismatched physical framing;
+        # canonical reconstruction does not turn a claimed length into proof.
+        for method, length in (("GET", 0), ("PUT", 20)):
+            fields = headers(method, PACKAGES[0], length)
+            for claimed in (str(length + 1), "0" + str(length), "+" + str(length), "-1", "2.0"):
+                changed = [(key, claimed if key == "content-length" else value) for key, value in fields]
+                with self.subTest(method=method, claimed=claimed), self.assertRaises(ValueError):
+                    registry.validate_headers(changed, method, PACKAGES[0], length)
 
     def test_checker_audit_pairs_refuse_rebinding_duplicates_and_changed_prefix(self):
         instance, _, _ = self.checker(); rows = self.audit_rows(instance)

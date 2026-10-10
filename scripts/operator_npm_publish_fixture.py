@@ -149,7 +149,9 @@ def validate_headers(fields, method, package, body_length):
             and headers.get("cache-control") in {None, "no-cache"})
     else:
         require(method == "PUT" and headers.get("accept") == "*/*" and headers.get("content-type") == FULL)
-    # Framing, transport and replaced credentials are not canonical-v2 headers.
+    # Omit receiver framing, transport and replaced credentials from this
+    # projection. The checker independently reconstructs canonical-v2 PUT
+    # Content-Length from the observed body bytes; empty stock GETs omit it.
     return {key: value for key, value in headers.items()
         if key not in {"authorization", "connection", "content-length", "cache-control"}}
 

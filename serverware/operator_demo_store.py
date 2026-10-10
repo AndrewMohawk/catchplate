@@ -233,8 +233,15 @@ def materialize() -> None:
 
 def get_policy_high_water() -> dict | None:
     db = _require()
-    with db.connect() as conn:
-        row = conn.execute("SELECT * FROM operator_demo_policy WHERE singleton=1").fetchone()
+    conn = db.connect()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT sequence, policy_hash, updated_at "
+                "FROM operator_demo_policy WHERE singleton=1"
+            ).fetchone()
+    finally:
+        conn.close()
     return _state(row) if row else None
 
 

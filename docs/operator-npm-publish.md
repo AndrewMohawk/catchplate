@@ -406,6 +406,26 @@ logs are retained in `serverware-npm-publish-runner.50YMCZ2u`; runtime data is
 preserved in `serverware-npm-publish-private.AmyKEaAg`. Nothing was replayed or
 promoted to the live demo.
 
+The next narrow control-plane correction changes operator high-water reads to
+select only `sequence`, `policy_hash` and `updated_at`, instead of also fetching
+the full signed policy. It also deterministically closes its owned SQLite
+connection: the former connection context committed/rolled back but did not
+close the handle. No authority check, publication check, transaction borrowing,
+deadline or cache lifetime changes. All **6** new real-SQLite test groups pass
+in **3.285 seconds**. Two selected controls against frozen `dbcb36d4` detect the
+old full-policy read and unclosed handle as intended, in 3.216 seconds.
+
+Read-only profiling on a private copy of the stopped 1,335-object database
+measured new-connection WAL/schema initialization at a median 21.636 ms over
+21 opens; the following three-column query's median was 0.062 ms. A separate
+copy-only measurement of the actual 13,701-byte, seven-route synthetic policy
+had a 1.614 ms median with one caller and 9.322 ms with four callers (40 copies
+each). These isolated measurements do not attribute the failed transport or
+prove full-request improvement. The initial diagnostic probes needed the
+schema's REGEXP function and explicit frozen-source import precedence;
+corrected probes changed no product code or live state. The reader correction
+still requires another full stock-client run.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

@@ -70,6 +70,16 @@ wholesale. Unrecognized payload shapes yield metadata-only projections where
 the event type is supported. Notification bookkeeping is excluded from export
 so retries and configuration changes cannot recursively notify themselves.
 
+Proxy-destination and Google-provider setup each support **prepared**,
+**cancelled** and **activated** audit events. These six filters are audit-only:
+preparing configuration is not a request to touch a security key. Their exact
+producer namespace, operation UUID, action, administrator actor type and payload
+operation reference must agree, including at the final pre-delivery check.
+Malformed or unbound setup events are skipped, not exported as metadata-only.
+Client IDs, provider profiles, encrypted custody and destination settings are
+not included in these copies. Other Google account-consent/refresh events are
+not yet in the export allowlist; their local audit records remain separate.
+
 The worker adds a stable `delivery_id`, `slot`, saved `revision` and `review_url`.
 Audit and synthetic-test review URLs use the configured HTTPS console origin
 plus `/#audit`. Native action alerts instead use the fixed native HTTPS origin
@@ -270,9 +280,9 @@ history or implicit loss of uncertain receipts.
 | Check | Source/fixture evidence | Deployment or hardware proof still required |
 | --- | --- | --- |
 | Four slots and secret custody | **9/9** custody checks and **13/13** connected store checks pass; the latest rollout preserves the empty app-only private mount. Notification tables are absent in both retained copies because no destination has been configured | Deployed administrator save/reload and saved-key recovery |
-| Save versus explicit test | **5/5** integration groups and **15/15** intercepted Notifications browser groups pass. Administrator/origin checks, Save without send, exact-revision queueing and read-only acknowledgement receipts are exercised | Exact saved revision queued from deployed UI and retained receipt inspected |
+| Save versus explicit test | **6/6** integration groups pass at the setup-audit checkpoint below; **15/15** intercepted Notifications browser groups remain a separate earlier result. Administrator/origin checks, Save without send, exact-revision queueing and read-only acknowledgement receipts are exercised | Exact saved revision queued from deployed UI and retained receipt inspected |
 | Egress and acknowledgement | **31/31** isolated transport checks pass; the earlier notification-enabled deployment checkpoint verified DNS and TLS 1.3 to Slack without HTTP or a webhook post | Real configured receiver acknowledgement |
-| Integrated audit delivery | Current **23/23** source-event checks pass, including npm token/metadata-permission and proxy destination configuration events projected only into audit notifications. Destination arrays are omitted from the notification payload. The earlier API/TLS checkpoint sends four explicit synthetic slot tests plus two adapter copies of one committed fixture application audit event through actual handlers/store/worker | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
+| Integrated audit delivery | Current **25/25** source-event checks pass. All six proxy-destination/Google-setup event types also pass actual producer-writer → committed source → outbox/worker → verified local TLS acceptance, audit-only without private configuration fields. Four explicit slot tests and two adapter copies of one committed fixture application audit event pass separately within the same integration suite | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
 | Failure and backpressure | Connected fixtures pass default-off, worker lifecycle, unknown-outcome no-replay and final pre-dispatch-disable checks. Simulated ingestion-capacity failure still drains a real retained queue. Store fixtures cover bounded retries and 60-second uncertainty recovery | Real crash/restart, lost acknowledgement, saturation and operational retention in the deployed profile |
 | Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
 | Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. The latest deployed read-only browser checkpoint passes **13 GETs**, with two channels and four disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks are separate retained fixture results | Deployed save/test, actual receiver and operator workflow |
@@ -294,6 +304,34 @@ including the exact Python source manifest, command, test log and successful
 container termination. The container had no external network. This focused
 repeat does not re-establish browser acceptance or prove a live YubiKey event,
 configured external receiver or native-pilot action.
+
+### Setup audit identity correction (October 10, 2026)
+
+Source `42f3ad4dbe90b5fcea7670c41e494aa335258604` passed **25/25** event checks
+in **1.632 seconds** and all **6/6** connected integration groups in **54.583
+seconds**. Review found that previously advertised destination-change events
+used producer-prefixed IDs which the notification reader rejected; the old
+projection fixture used generated UUIDs and did not catch that mismatch.
+The correction admits only the exact three destination-setup and three
+Google-setup ID/type/action pairings, with their administrator and operation
+bindings rechecked before delivery. Existing saved filters are not expanded.
+
+The new connected case calls both actual audit-writer helpers, then exercises
+committed SQLite reading, the real outbox/worker, final source rechecks and six
+verified local HTTPS acknowledgements. It verifies zero action deliveries, no
+exported secret/client/profile/custody/settings contents, an unchanged setup
+authority snapshot and a valid audit chain. Direct synthetic writer calls are
+deliberate: this case proves writer-to-delivery plumbing, not execution of the
+configuration lifecycle or successful provider activation. The separate browser
+configuration checkpoint is documented in
+[operator-owned provider configuration](operator-provider-configuration.md).
+
+Evidence is retained under
+`serverware-operator-workspace-evidence/notification-setup-events.HhSqenQS`,
+including the exact source archive/manifest, bounded network-none command, test
+log, successful termination and removal receipt. No real receiver, live
+destination setting, native source or deployment was changed by this correction.
+These source changes are not included in the deployed checkpoint below.
 
 ### Current deployed read-only checkpoint (October 10, 2026)
 

@@ -26,9 +26,15 @@ TOKEN = "synthetic-catalog-timing-admin-token"
 ACTOR = "synthetic-catalog-timing-actor"
 ORIGIN = "https://synthetic.invalid"
 PATH = "/api/operator-demo/credentials"
+REVOKE_PATH = "/api/operator-demo/applications/revoke"
+REVOKE_ID = "11111111-2222-4333-8444-555555555555"
 SCOPE_KEY = "serverware.operator_catalog_timing"
 BODY = json.dumps({"expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
     "name": CANARY, "auth_type": "bearer", "secret": CANARY}).encode()
+REVOKE_BODY = json.dumps({"expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
+    "id": REVOKE_ID}).encode()
+TERMINAL_SCHEMA = "serverware.operatorCatalogTiming/v1"
+PROGRESS_SCHEMA = "serverware.operatorCatalogProgress/v1"
 OPERATIONS = frozenset({
     "create_credential", "revoke_credential", "create_github_credential",
     "replace_credential_key", "create_npm_credential", "create_application",
@@ -43,6 +49,8 @@ STORAGE_MARKS = ("publication_wait", "publication_acquired", "sqlite_open", "sql
 LABELS = ("api_admitted", "payload_validated", "mutation_queued", "mutation_slot",
     "mutation_worker", *STORAGE_MARKS, "mutation_done", "outbox_queued", "outbox_slot",
     "outbox_worker", "outbox_done", "response_ready", "response_sent")
+PROGRESS_LABELS = ("mutation_queued", "mutation_slot", "mutation_worker", "publication_wait",
+    "publication_acquired", "sqlite_open", "sqlite_begin", "commit_started", "commit_done")
 
 
 class Clock:
@@ -60,9 +68,13 @@ def observations(test):
     test.addCleanup(stack.close)
     with timing._limit_lock:
         old_count, timing._count = timing._count, 0
+    with timing._progress_limit_lock:
+        old_progress_count, timing._progress_count = timing._progress_count, 0
     def restore():
         with timing._limit_lock:
             timing._count = old_count
+        with timing._progress_limit_lock:
+            timing._progress_count = old_progress_count
     stack.callback(restore)
     test.lines = []
     stack.enter_context(patch.object(timing, "_write_record", test.lines.append))
@@ -76,7 +88,7 @@ def record(test, line):
     test.assertTrue(line.endswith("\n"))
     value = json.loads(line)
     test.assertEqual(set(value), {"schema", "ordinal", "operation", "outcome", "elapsed_ms", "marks"})
-    test.assertEqual(value["schema"], "serverware.operatorCatalogTiming/v1")
+    test.assertEqual(value["schema"], TERMINAL_SCHEMA)
     test.assertIn(value["operation"], OPERATIONS)
     test.assertIs(type(value["ordinal"]), int)
     test.assertTrue(1 <= value["ordinal"] <= 64)
@@ -88,6 +100,38 @@ def record(test, line):
     for forbidden in (CANARY, TOKEN, ACTOR, "private.invalid", "Authorization", "expected_revision", "secret"):
         test.assertNotIn(forbidden, line)
     return value
+
+
+def progress_record(test, line):
+    test.assertLessEqual(len(line.encode("ascii")), 512)
+    test.assertEqual(line.count("\n"), 1)
+    test.assertTrue(line.endswith("\n"))
+    value = json.loads(line)
+    test.assertEqual(set(value), {"schema", "ordinal", "operation", "stage", "elapsed_ms"})
+    test.assertEqual(value["schema"], PROGRESS_SCHEMA)
+    test.assertEqual(value["operation"], "revoke_application")
+    test.assertIn(value["stage"], PROGRESS_LABELS)
+    for field in ("ordinal", "elapsed_ms"):
+        test.assertIs(type(value[field]), int)
+    test.assertTrue(1 <= value["ordinal"] <= 64)
+    test.assertTrue(0 <= value["elapsed_ms"] <= (1 << 63) - 1)
+    for forbidden in (CANARY, TOKEN, ACTOR, REVOKE_ID, "private.invalid", "Authorization",
+            "expected_revision", "secret"):
+        test.assertNotIn(forbidden, line)
+    return value
+
+
+def split_records(test):
+    """Validate both closed schemas; unknown output cannot disappear in filtering."""
+    progress, terminal = [], []
+    for line in test.lines:
+        schema = json.loads(line).get("schema")
+        test.assertIn(schema, {PROGRESS_SCHEMA, TERMINAL_SCHEMA})
+        if schema == PROGRESS_SCHEMA:
+            progress.append(progress_record(test, line))
+        else:
+            terminal.append(record(test, line))
+    return progress, terminal
 
 
 class CatalogTimingTests(unittest.TestCase):
@@ -260,6 +304,216 @@ class CatalogTimingTests(unittest.TestCase):
         self.assertEqual(self.lines, [])
 
 
+class CatalogProgressTests(unittest.TestCase):
+    def setUp(self):
+        self.stack = observations(self)
+
+    def tracker(self):
+        tracker = timing.create("revoke_application", operator_development=True)
+        timing.activate(tracker)
+        return tracker
+
+    def test_closed_progress_operation_activation_labels_and_first_mark_only(self):
+        class String(str):
+            pass
+        self.assertEqual(timing._PROGRESS_SCHEMA, PROGRESS_SCHEMA)
+        self.assertEqual(timing._PROGRESS_LABELS, frozenset(PROGRESS_LABELS))
+        self.assertEqual((timing._PROGRESS_LIMIT, timing._PROGRESS_MAX_LINE_BYTES), (64, 512))
+        for gate in (False, None, 1, "true"):
+            self.assertIsNone(timing.create("revoke_application", operator_development=gate))
+        self.assertIsNone(timing.create(String("revoke_application"), operator_development=True))
+        for operation in OPERATIONS - {"revoke_application"}:
+            tracker = timing.create(operation, operator_development=True)
+            timing.activate(tracker)
+            for label in LABELS:
+                timing.mark(tracker, label)
+        tracker = timing.create("revoke_application", operator_development=True)
+        timing.mark(tracker, "mutation_queued")
+        timing.activate(tracker)
+        timing.mark(tracker, "mutation_queued")  # Preactivation first marks are never replayed.
+        for label in (CANARY, None, [], String("commit_started"), "x" * 65):
+            timing.mark(tracker, label)
+        self.assertEqual(self.lines, [])
+        for label in LABELS:
+            timing.mark(tracker, label)
+            timing.mark(tracker, label)
+        progress, terminal = split_records(self)
+        self.assertEqual(terminal, [])
+        self.assertEqual([row["stage"] for row in progress], list(PROGRESS_LABELS[1:]))
+        self.assertEqual([row["ordinal"] for row in progress], list(range(1, 9)))
+        timing.finish(tracker, "complete")
+        progress, terminal = split_records(self)
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(set(terminal[0]["marks"]), set(LABELS))
+        for row in progress:
+            self.assertEqual(row["elapsed_ms"], terminal[0]["marks"][row["stage"]])
+
+    def test_progress_and_terminal_caps_are_independent(self):
+        for _ in range(80):
+            tracker = timing.create("create_rule", operator_development=True)
+            timing.activate(tracker)
+            timing.finish(tracker, "complete")
+        for _ in range(80):
+            tracker = self.tracker()
+            timing.mark(tracker, "mutation_queued")
+        progress, terminal = split_records(self)
+        self.assertEqual((len(progress), len(terminal), timing._count, timing._progress_count), (64, 64, 64, 64))
+        self.assertEqual({row["ordinal"] for row in progress}, set(range(1, 65)))
+        with timing._limit_lock:
+            timing._count = 0
+        self.lines.clear()
+        tracker = self.tracker()
+        timing.mark(tracker, "commit_done")
+        timing.finish(tracker, "complete")
+        progress, terminal = split_records(self)
+        self.assertEqual(progress, [])
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["ordinal"], 1)
+        self.assertIn("commit_done", terminal[0]["marks"])
+
+    def test_progress_process_cap_is_concurrently_bounded(self):
+        barrier, failures = threading.Barrier(8, timeout=3), []
+        def observe():
+            tracker = self.tracker()
+            timing.mark(tracker, "mutation_queued")
+            timing.mark(tracker, "mutation_queued")
+        def worker():
+            try:
+                barrier.wait()
+                for _ in range(32):
+                    observe()
+            except BaseException as error:
+                failures.append(type(error).__name__)
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(4)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(len(self.lines), timing._progress_count)
+        self.assertLessEqual(timing._progress_count, 64)
+        for _ in range(64):
+            observe()
+        progress, terminal = split_records(self)
+        self.assertEqual(terminal, [])
+        self.assertEqual({row["ordinal"] for row in progress}, set(range(1, 65)))
+        self.assertEqual(timing._count, 0)
+
+    def test_progress_bounds_failed_sink_and_budget_lock_never_retry_recorded_marks(self):
+        for now, expected in ((-1, 0), (1 << 100, (1 << 63) - 1)):
+            with patch.object(timing, "_clock_ns", return_value=0):
+                tracker = self.tracker()
+            with patch.object(timing, "_clock_ns", return_value=now):
+                timing.mark(tracker, "commit_done")
+            self.assertEqual(progress_record(self, self.lines[-1])["elapsed_ms"], expected)
+        self.lines.clear()
+        class BrokenLock:
+            def acquire(self, **kwargs):
+                raise OSError(CANARY)
+        for boundary, spent in ((patch.object(timing, "_PROGRESS_MAX_LINE_BYTES", 1), 1),
+                (patch.object(timing, "_write_record", side_effect=OSError(CANARY)), 1),
+                (patch.object(timing, "_progress_limit_lock", BrokenLock()), 0)):
+            tracker, sentinel = self.tracker(), object()
+            before = timing._progress_count
+            def operation():
+                try:
+                    return sentinel
+                finally:
+                    timing.mark(tracker, "commit_started")
+            with boundary:
+                self.assertIs(operation(), sentinel)
+            timing.mark(tracker, "commit_started")
+            self.assertEqual(timing._progress_count, before + spent)
+            timing.finish(tracker, "complete")
+        tracker = self.tracker()
+        with timing._progress_limit_lock:
+            timing.mark(tracker, "sqlite_begin")
+        timing.mark(tracker, "sqlite_begin")
+        timing.finish(tracker, "complete")
+        progress, terminal = split_records(self)
+        self.assertEqual(progress, [])
+        self.assertEqual(len(terminal), 4)
+        self.assertEqual([set(row["marks"]) for row in terminal],
+            [{"commit_started"}] * 3 + [{"sqlite_begin"}])
+
+    def test_progress_clock_and_mark_lock_failure_preserve_original_error(self):
+        class BrokenLock:
+            def acquire(self, **kwargs):
+                raise OSError(CANARY)
+        for mode in ("clock", "lock"):
+            tracker, failure = self.tracker(), RuntimeError(CANARY)
+            original_lock = tracker._lock
+            with ExitStack() as stack:
+                if mode == "clock":
+                    stack.enter_context(patch.object(timing, "_clock_ns", side_effect=OSError(CANARY)))
+                else:
+                    tracker._lock = BrokenLock()
+                with self.assertRaises(RuntimeError) as caught:
+                    try:
+                        raise failure
+                    finally:
+                        timing.mark(tracker, "commit_started")
+                self.assertIs(caught.exception, failure)
+            tracker._lock = original_lock
+            self.assertEqual(tracker._marks, {})
+            # No mark was sampled during this failure: a later genuine mark is not a replay.
+            timing.mark(tracker, "commit_started")
+            timing.finish(tracker, "failed")
+        progress, terminal = split_records(self)
+        self.assertEqual((len(progress), len(terminal)), (2, 2))
+        self.assertTrue(all(row["outcome"] == "failed" for row in terminal))
+
+    def test_terminal_seals_late_progress_even_if_terminal_output_is_dropped(self):
+        for outcome in ("complete", "failed", "cancelled"):
+            tracker = self.tracker()
+            timing.mark(tracker, "mutation_worker")
+            timing.finish(tracker, outcome)
+            before = list(self.lines)
+            for label in PROGRESS_LABELS:
+                timing.mark(tracker, label)
+            timing.activate(tracker)
+            timing.finish(tracker, "complete")
+            self.assertEqual(self.lines, before)
+        for active in (False, True):
+            tracker = timing.create("revoke_application", operator_development=True)
+            if active:
+                timing.activate(tracker)
+            with tracker._lock:
+                timing.finish(tracker, "cancelled")
+            timing.activate(tracker)
+            timing.mark(tracker, "commit_done")
+            timing.finish(tracker, "complete")
+        progress, terminal = split_records(self)
+        self.assertEqual((len(progress), len(terminal)), (3, 3))
+        self.assertEqual([row["outcome"] for row in terminal], ["complete", "failed", "cancelled"])
+
+    def test_progress_sink_runs_without_collection_or_reservation_locks(self):
+        tracker, observed = self.tracker(), []
+        def sink(line):
+            if json.loads(line)["schema"] == PROGRESS_SCHEMA:
+                available = []
+                for lock in (tracker._lock, timing._progress_limit_lock, timing._limit_lock):
+                    acquired = lock.acquire(blocking=False)
+                    available.append(acquired)
+                    if acquired:
+                        lock.release()
+                observed.append(available)
+                timing.finish(tracker, "cancelled")
+            self.lines.append(line)
+        with patch.object(timing, "_write_record", sink):
+            timing.mark(tracker, "commit_started")
+        self.assertEqual(observed, [[True, True, True]])
+        # Already sampled progress may arrive after cancellation; it never reopens the tracker.
+        progress, terminal = split_records(self)
+        self.assertEqual((len(progress), len(terminal)), (1, 1))
+        self.assertEqual(terminal[0]["outcome"], "cancelled")
+        before = list(self.lines)
+        timing.mark(tracker, "commit_done")
+        timing.finish(tracker, "complete")
+        self.assertEqual(self.lines, before)
+
+
 class CatalogTimingWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from serverware import app
@@ -328,6 +582,52 @@ class CatalogTimingWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(record(self, self.lines[0])["marks"]),
             {"mutation_queued", "mutation_slot", "mutation_worker", "mutation_done"})
 
+    async def test_real_revoke_worker_progress_precedes_completion_and_late_marks_are_sealed(self):
+        slots = asyncio.BoundedSemaphore(1)
+        tracker = timing.create("revoke_application", operator_development=True)
+        timing.activate(tracker)
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        def worker():
+            self.assertIs(timing.current(), tracker)
+            timing.mark(timing.current(), "publication_wait")
+            entered.set()
+            try:
+                if not release.wait(3):
+                    raise AssertionError("synthetic revoke worker was not released")
+                timing.mark(timing.current(), "commit_done")
+                return "synthetic-result"
+            finally:
+                finished.set()
+        task = asyncio.create_task(self.app._run_bounded_blocking(slots, worker,
+            _catalog_observation=tracker, _catalog_phase="mutation"))
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            progress, terminal = split_records(self)
+            self.assertEqual(terminal, [])
+            self.assertEqual([row["stage"] for row in progress], list(PROGRESS_LABELS[:4]))
+            self.assertEqual(slots._value, 0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            timing.finish(tracker, "cancelled")
+            before = list(self.lines)
+            self.assertFalse(finished.is_set())
+            self.assertEqual(slots._value, 0)
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            if entered.is_set():
+                self.assertTrue(await asyncio.to_thread(finished.wait, 2))
+                await asyncio.wait_for(slots.acquire(), 2)
+                slots.release()
+        self.assertEqual(self.lines, before)
+        progress, terminal = split_records(self)
+        self.assertEqual((len(progress), len(terminal)), (4, 1))
+        self.assertEqual(terminal[0]["outcome"], "cancelled")
+        self.assertNotIn("commit_done", terminal[0]["marks"])
+        self.assertNotIn("mutation_done", terminal[0]["marks"])
+        self.assertEqual(slots._value, 1)
+
 
 class CatalogTimingASGITests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -359,7 +659,17 @@ class CatalogTimingASGITests(unittest.IsolatedAsyncioTestCase):
         def drain(**kwargs):
             self.drains.append((kwargs, timing.current()))
             return {"claimed": 0, "audited": 0, "failed": 0, "pending": 0}
+        def revoke(payload, actor):
+            self.assertIs(type(payload), inputs.TargetInput)
+            self.assertEqual((payload.id, actor), (REVOKE_ID, ACTOR))
+            tracker = timing.current()
+            self.trackers.append(tracker)
+            self.stored.append((payload, actor))
+            for label in STORAGE_MARKS:
+                timing.mark(tracker, label)
+            return dict(self.receipt)
         self.stack.enter_context(patch.object(mutations, "create_credential", store))
+        self.stack.enter_context(patch.object(mutations, "revoke_application", revoke))
         self.stack.enter_context(patch.object(mutations, "catalog_status", return_value={"syntheticCatalog": True}))
         self.stack.enter_context(patch.object(app.db, "drain_metadata_audit_outbox", drain))
 
@@ -400,7 +710,39 @@ class CatalogTimingASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers[b"cache-control"], b"no-store")
         body = b"".join(item.get("body", b"") for item in messages if item["type"] == "http.response.body")
         self.assertNotIn(b"operatorCatalogTiming", body)
+        self.assertNotIn(b"operatorCatalogProgress", body)
         return starts[0]["status"], json.loads(body)
+
+    async def test_actual_revoke_route_progress_requires_admitted_valid_input_and_preserves_response(self):
+        for kwargs, expected in (({"token": "wrong"}, 401), ({"origin": "https://wrong.invalid"}, 403),
+                ({"query": b"unexpected=1"}, 422), ({"body": b"{}"}, 422),
+                ({"body": b"{"}, 422), ({"content_type": "text/plain"}, 415)):
+            request = {"path": REVOKE_PATH, "body": REVOKE_BODY, **kwargs}
+            self.assertEqual(self.response(await self.request(**request))[0], expected)
+        with patch.object(self.auth, "ADMIN_ROLES", ("viewer",)):
+            self.assertEqual(self.response(await self.request(path=REVOKE_PATH, body=REVOKE_BODY))[0], 403)
+        with patch.object(self.owner, "active", return_value=False), \
+                patch.object(timing, "create", side_effect=AssertionError("excluded revoke tracker")):
+            self.assertEqual(self.response(await self.request(path=REVOKE_PATH, body=REVOKE_BODY))[0], 404)
+        self.assertEqual((self.lines, self.stored, timing._count, timing._progress_count), ([], [], 0, 0))
+        traced = await self.request(path=REVOKE_PATH, body=REVOKE_BODY)
+        self.assertEqual(self.response(traced), (200, self.receipt))
+        progress, terminal = split_records(self)
+        self.assertEqual([row["stage"] for row in progress], list(PROGRESS_LABELS))
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["outcome"], "complete")
+        self.assertEqual(terminal[0]["operation"], "revoke_application")
+        self.assertEqual(set(terminal[0]["marks"]), set(LABELS))
+        for row in progress:
+            self.assertEqual(row["elapsed_ms"], terminal[0]["marks"][row["stage"]])
+        before = list(self.lines)
+        with patch.object(timing, "create", return_value=None):
+            self.assertEqual(await self.request(path=REVOKE_PATH, body=REVOKE_BODY), traced)
+        with patch.object(timing, "_write_record", side_effect=OSError(CANARY)):
+            self.assertEqual(await self.request(path=REVOKE_PATH, body=REVOKE_BODY), traced)
+        with patch.object(timing, "_clock_ns", side_effect=OSError(CANARY)):
+            self.assertEqual(await self.request(path=REVOKE_PATH, body=REVOKE_BODY), traced)
+        self.assertEqual(self.lines, before)
 
     async def test_actual_api_middleware_sender_exact_response_context_and_marks(self):
         traced = await self.request()

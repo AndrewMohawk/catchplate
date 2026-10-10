@@ -1028,3 +1028,32 @@ Checker-result SHA-256:
 `960fa4414339f8f41161a92f423205a80aac93817547a5a3402d8e21c7585536`.
 The complete stock-client flow still has not passed. No live rollout, real
 provider request, notification delivery or native-pilot action was performed.
+
+### Revocation progress diagnostics
+
+Already admitted, input-validated `revoke_application` requests now emit a
+separate `serverware.operatorCatalogProgress/v1` record at nine existing marks:
+worker queue, slot and entry; publication wait and acquisition; SQLite open and
+BEGIN; and commit start and completion. Each closed record contains only the
+fixed operation/stage, elapsed milliseconds and a process-local ordinal.
+Only the first mark is eligible; pre-activation marks are not replayed.
+
+Progress has its own process cap of 64 attempted records and a 512-byte ASCII
+line limit, leaving the terminal timing schema and its original budget intact.
+Collection and reservation use nonblocking locks; failures drop observations.
+The stderr sink remains synchronous, including marks taken while publication
+or SQLite ownership is held. These limits bound output size, not sink latency.
+No transaction ordering, admission, worker ownership or deadline changed.
+
+A sampled mark can race terminal output. Output order is therefore not a
+completion or acknowledgement guarantee, and a missing mark does not prove
+that a stage was not reached. A positive `publication_acquired`, `sqlite_open`,
+`sqlite_begin` or `commit_done` observation narrows the next investigation to
+work after that boundary; retained database and client evidence remain required.
+
+The timing suite passed **21 groups in 6.535 seconds** in the pinned backend
+image with no network, read-only source, private temporary storage and bounded
+CPU/memory/process resources. It retains all twelve terminal controls and adds
+nine progress controls, including the actual bounded worker's cancellation and
+the real revoke API's admission/response path. Storage callbacks in this suite
+are explicitly synthetic; this is not a revocation commit or stock-client pass.

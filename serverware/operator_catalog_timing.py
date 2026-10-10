@@ -10,6 +10,11 @@ commit proof, client acknowledgement or provider success. Missing marks are
 absent, not inferred work. Contention, the process cap and diagnostic failures
 drop observations. The bounded stderr write is synchronous, not a nonblocking
 transport, and absence of a record proves nothing about completion or latency.
+
+Already admitted application revocations also emit a separately capped subset
+of first marks. These are progress observations, never completion claims. A
+mark sampled before terminal sealing can race terminal output; record order is
+not an authority or acknowledgement ordering guarantee.
 """
 
 from contextlib import contextmanager
@@ -21,6 +26,12 @@ import time
 
 
 _SCHEMA = "serverware.operatorCatalogTiming/v1"
+_PROGRESS_SCHEMA = "serverware.operatorCatalogProgress/v1"
+_PROGRESS_LABELS = frozenset({
+    "mutation_queued", "mutation_slot", "mutation_worker",
+    "publication_wait", "publication_acquired", "sqlite_open", "sqlite_begin",
+    "commit_started", "commit_done",
+})
 _OPERATIONS = frozenset({
     "create_credential", "revoke_credential", "create_github_credential",
     "replace_credential_key", "create_npm_credential", "create_application",
@@ -41,10 +52,14 @@ _LABELS = frozenset({
 })
 _OUTCOMES = frozenset({"complete", "failed", "cancelled"})
 _LIMIT = 64
+_PROGRESS_LIMIT = 64
 _MAX_LINE_BYTES = 4096
+_PROGRESS_MAX_LINE_BYTES = 512
 _MAX_MS = (1 << 63) - 1
 _limit_lock = threading.Lock()
 _count = 0
+_progress_limit_lock = threading.Lock()
+_progress_count = 0
 _clock_ns = time.monotonic_ns
 _current = ContextVar("serverware.operator_catalog_timing", default=None)
 
@@ -64,6 +79,19 @@ def _reserve() -> int | None:
         return _count
     finally:
         _limit_lock.release()
+
+
+def _reserve_progress() -> int | None:
+    global _progress_count
+    if not _progress_limit_lock.acquire(blocking=False):
+        return None
+    try:
+        if _progress_count >= _PROGRESS_LIMIT:
+            return None
+        _progress_count += 1
+        return _progress_count
+    finally:
+        _progress_limit_lock.release()
 
 
 class CatalogTiming:
@@ -91,13 +119,34 @@ class CatalogTiming:
         try:
             if type(label) is not str or len(label) > 64 or label not in _LABELS:
                 return
+            progress = None
             if not self._lock.acquire(blocking=False):
                 return
             try:
                 if not self._terminal.locked() and label not in self._marks:
-                    self._marks[label] = self._elapsed()
+                    elapsed = self._elapsed()
+                    self._marks[label] = elapsed
+                    if (self._active and self._operation == "revoke_application"
+                            and label in _PROGRESS_LABELS):
+                        progress = {
+                            "schema": _PROGRESS_SCHEMA,
+                            "operation": "revoke_application",
+                            "stage": label,
+                            "elapsed_ms": elapsed,
+                        }
             finally:
                 self._lock.release()
+            # Never hold collection or reservation locks across the sink. A
+            # concurrent finish can still seal after this best-effort recheck;
+            # no additional synchronization may delay or reopen cancellation.
+            if progress is not None and not self._terminal.locked():
+                ordinal = _reserve_progress()
+                if ordinal is not None:
+                    progress["ordinal"] = ordinal
+                    line = json.dumps(progress, ensure_ascii=True, sort_keys=True,
+                                      separators=(",", ":")) + "\n"
+                    if len(line) <= _PROGRESS_MAX_LINE_BYTES:
+                        _write_record(line)
         except Exception:
             pass
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Synthetic SQLite/tempfile observer tests; never reads runtime data."""
 from copy import deepcopy
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -528,7 +530,7 @@ class ManagedTransitionTests(unittest.TestCase):
             self.receipt()
         self.assertEqual(raised.exception.code, 'private_copies_required')
 
-    def test_cli_requires_private_copy_acknowledgement_before_inventory(self):
+    def test_cli_requires_source_acknowledgement_before_managed_inventory(self):
         argv = ['operator_rollout_snapshot.py', 'inventory', '--managed-unconfigured',
             '--persistent-root', str(self.persistent), '--custody-root', str(self.custody),
             '--provider-custody-root', str(self.provider)]
@@ -537,6 +539,53 @@ class ManagedTransitionTests(unittest.TestCase):
             with self.assertRaises(observer.SnapshotError) as raised:
                 observer.main()
         self.assertEqual(raised.exception.code, 'private_copies_required')
+
+    def test_cli_inventory_acknowledgements_are_mutually_exclusive(self):
+        argv = ['operator_rollout_snapshot.py', 'inventory', '--managed-unconfigured',
+            '--persistent-root', str(self.persistent), '--custody-root', str(self.custody),
+            '--provider-custody-root', str(self.provider), '--private-copies-acknowledged',
+            '--stopped-files-acknowledged']
+        with patch.object(observer.sys, 'argv', argv), redirect_stderr(io.StringIO()), \
+                patch.object(observer, 'inventory', side_effect=AssertionError('no capture')), \
+                patch.object(observer.sqlite3, 'connect', side_effect=AssertionError('no SQLite open')):
+            with self.assertRaises(SystemExit) as raised:
+                observer.main()
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_cli_acknowledged_inventory_preserves_original_identities_without_sqlite_open(self):
+        expected = self.receipt()
+        argv = ['operator_rollout_snapshot.py', 'inventory', '--managed-unconfigured',
+            '--persistent-root', str(self.persistent), '--custody-root', str(self.custody),
+            '--provider-custody-root', str(self.provider)]
+        for acknowledgement in ('--private-copies-acknowledged', '--stopped-files-acknowledged'):
+            output = io.StringIO()
+            with self.subTest(acknowledgement=acknowledgement), \
+                    patch.object(observer.sys, 'argv', argv + [acknowledgement]), \
+                    patch.object(observer.signal, 'alarm'), patch.object(observer.os, 'umask'), \
+                    patch.object(observer.sqlite3, 'connect', side_effect=AssertionError('no SQLite open')), \
+                    redirect_stdout(output):
+                observer.main()
+            actual = json.loads(output.getvalue())
+            self.assertEqual(actual, expected)
+            self.assertEqual(actual['persistent'][observer.DB_MAIN]['ino'], self.database.stat().st_ino)
+            self.assertEqual(actual['provider_custody']['.']['ino'], self.provider.stat().st_ino)
+            self.assertFalse(actual['live_sqlite_opened'])
+            self.assertNotIn('services_stopped_verified', actual)
+
+    def test_cli_stopped_files_acknowledgement_never_authorizes_comparison(self):
+        argv = ['operator_rollout_snapshot.py', 'compare']
+        for name in ('before-root', 'after-root', 'before-custody', 'after-custody',
+                'before-inventory', 'after-inventory'):
+            argv += ['--' + name, str(self.root / name)]
+        for acknowledgements in (['--stopped-files-acknowledged'],
+                ['--private-copies-acknowledged', '--stopped-files-acknowledged']):
+            with self.subTest(acknowledgements=acknowledgements), \
+                    patch.object(observer.sys, 'argv', argv + acknowledgements), redirect_stderr(io.StringIO()), \
+                    patch.object(observer, 'compare', side_effect=AssertionError('no comparison')), \
+                    patch.object(observer.sqlite3, 'connect', side_effect=AssertionError('no SQLite open')):
+                with self.assertRaises(SystemExit) as raised:
+                    observer.main()
+            self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == '__main__':

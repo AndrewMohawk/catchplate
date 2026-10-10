@@ -8,7 +8,11 @@ metadata/counts/digests only. No output or archive files are created here.
 
 The explicit managed-unconfigured mode adds only a closed derived gate tree;
 it never authorizes setup, custody creation, settings changes or schema repair.
-Its CLI requires private-copy acknowledgement even for inventory capture.
+Inventory requires an explicit private-copy or stopped-files acknowledgement.
+The latter records the caller's prerequisite, not proof from this tool: root
+must separately verify that the relevant services are stopped before capturing
+original file identities. Inventory never opens SQLite; comparison still accepts
+only acknowledged private copies and opens further disposable copies.
 """
 from collections import Counter
 from contextlib import ExitStack
@@ -426,7 +430,12 @@ def main():
     capture.add_argument("--custody-root", required=True)
     capture.add_argument("--managed-unconfigured", action="store_true")
     capture.add_argument("--provider-custody-root")
-    capture.add_argument("--private-copies-acknowledged", action="store_true")
+    capture_source = capture.add_mutually_exclusive_group()
+    capture_source.add_argument("--private-copies-acknowledged", action="store_true",
+        help="Inventory private copies; files are read without opening SQLite.")
+    capture_source.add_argument("--stopped-files-acknowledged", action="store_true",
+        help="Inventory original files after root separately confirms services stopped; "
+            "this tool does not prove termination and never opens SQLite during inventory.")
     comparison = commands.add_parser("compare")
     for name in ("before-root", "after-root", "before-custody", "after-custody", "before-inventory", "after-inventory"):
         comparison.add_argument("--" + name, required=True)
@@ -439,7 +448,8 @@ def main():
     signal.alarm(120)
     os.umask(0o077)
     if args.command == "inventory":
-        require(not args.managed_unconfigured or args.private_copies_acknowledged, "private_copies_required")
+        require(not args.managed_unconfigured or args.private_copies_acknowledged
+            or args.stopped_files_acknowledged, "private_copies_required")
         result = inventory(args.persistent_root, args.custody_root, managed_unconfigured=args.managed_unconfigured,
             provider_custody_root=args.provider_custody_root)
     else:

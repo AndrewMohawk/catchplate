@@ -545,6 +545,8 @@ pub(crate) fn validate_request(
             ![
                 "application/vnd.github.v3+json",
                 "application/vnd.github+json",
+                // Exact go-github v74 reactions preview, without a +json suffix.
+                "application/vnd.github.squirrel-girl-preview",
                 "application/json",
                 "*/*",
             ]

@@ -65,9 +65,9 @@ class GithubIssuesTests(unittest.TestCase):
         self.credential = self.snapshot.credentials[self.route.credential_ref]
         self.adapter = adapters.get_adapter("generic.rest")
 
-    def prepare(self, url=LIST, *, route=None, method="GET", body=b""):
+    def prepare(self, url=LIST, *, route=None, method="GET", body=b"", headers=None):
         route = self.route if route is None else route
-        headers = list(HEADERS)
+        headers = list(HEADERS if headers is None else headers)
         if body:
             headers.append((b"Content-Type", b"application/json"))
         value = flow(url, method=method, body=body, headers=headers)
@@ -191,6 +191,41 @@ class GithubIssuesTests(unittest.TestCase):
             self.assertFalse(self.adapter.validate_request(flow(url, method="POST", body=body,
                 headers=[(b"Content-Type", b"application/json")]), write, {}).allowed)
         self.assertFalse(self.adapter.validate_request(flow(method="GET", body=b"{}", headers=[]), self.route, {}).allowed)
+
+    def test_go_github_reactions_accept_is_exact_and_scoped(self):
+        # Official v74.0.0 github.go mediaTypeReactionsPreview; issues.go uses
+        # it directly. The guessed +json suffix is deliberately NOT admitted.
+        preview = b"application/vnd.github.squirrel-girl-preview"
+        headers = [(b"Accept", preview), *HEADERS[1:]]
+        for route, operation in ((self.route, "github.issues.read"),
+                (self.write_snapshot.routes[0], "github.issues.write")):
+            value, canonical = self.prepare(headers=headers, route=route)
+            self.assertEqual(canonical["request"]["headers"]["accept"], preview.decode())
+            self.assertEqual(canonical["operation"], {"operation": operation})
+            self.assertTrue(engine._provider_request_matches_canonical(value, canonical, self.credential, route=route))
+            self.assertEqual(route.credential_header, gh.REPLACEMENT)
+            self.assertEqual(route.adapter_config["githubRepository"], REPOSITORY)
+            self.assertEqual(route.adapter_config["request"]["valueRules"], [])
+            # An alternative still-admitted value cannot reuse this commitment.
+            value.request.headers["Accept"] = "application/vnd.github.v3+json"
+            self.assertFalse(engine._provider_request_matches_canonical(value, canonical, self.credential, route=route))
+        for accept in (preview + b"+json", b"application/vnd.github.mockingbird-preview+json",
+                b"application/vnd.other.squirrel-girl-preview", preview + b", application/json",
+                preview + b";q=1", b" " + preview, preview + b" ", preview.upper()):
+            self.assertFalse(self.adapter.validate_request(flow(headers=[(b"Accept", accept)]), self.route, {}).allowed)
+        for second_name in (b"Accept", b"accept"):
+            self.assertFalse(self.adapter.validate_request(flow(headers=[(b"Accept", preview),
+                (second_name, preview)]), self.route, {}).allowed)
+        for url in (LIST.replace("fixture-repo", "other"), LIST.replace("api.github.com", "other.example"),
+                    LIST.replace("https://", "http://")):
+            self.assertFalse(self.adapter.validate_request(flow(url, headers=[(b"Accept", preview)]), self.route, {}).allowed)
+        self.assertFalse(self.adapter.validate_request(flow(method="POST", body=b'{"title":"not granted"}',
+            headers=[(b"Accept", preview), (b"Content-Type", b"application/json")]), self.route, {}).allowed)
+        legacy = pb.compile_policy_bundle(buffered.bundle()).routes[0]
+        self.assertFalse(self.adapter.validate_request(flow("https://api.example.com/fixture",
+            headers=[(b"Accept", preview)]), legacy, {}).allowed)
+        self.assertEqual(pb.compile_policy_bundle(document()).hash, self.snapshot.hash)
+        self.assertEqual(pb.compile_policy_bundle(document(gh.WRITE)).hash, self.write_snapshot.hash)
 
     def test_v3_final_binding_and_unsupported_consumers_fail_closed(self):
         value, canonical = self.prepare(LIST + "?labels=good+issue&page=2")

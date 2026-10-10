@@ -289,6 +289,71 @@ fn github_stock_headers_and_all_issue_comment_operations_preserve_bytes() {
 }
 
 #[test]
+fn github_go_sdk_reactions_accept_is_exact_and_scoped() {
+    // Official go-github v74.0.0 constant, deliberately without +json.
+    const PREVIEW: &str = "application/vnd.github.squirrel-girl-preview";
+    for bundle in [READ, WRITE] {
+        let snapshot = snapshot(bundle);
+        let route = &snapshot.routes[0];
+        validate_policy_capabilities(&policy(bundle)).unwrap();
+        let (mut req, url, old_canonical, _) = material(&snapshot, "GET", BASE, "");
+        req.headers.insert("accept".into(), PREVIEW.into());
+        let headers = canonical_forwarded_request_headers(
+            &req.headers, &url, decision_request_body_length(&req).unwrap(),
+            &snapshot.credentials[CREDENTIAL].injection,
+        ).unwrap();
+        let matched = RouteMatch { route, params: BTreeMap::new() };
+        let (operation, _) = validate_adapter(&req, &headers, &url, &matched).unwrap();
+        assert_eq!(operation, old_canonical["operation"]);
+        let canonical = canonical_request(&req, &headers, &url, &snapshot.principals[0],
+            route, 7, &snapshot.hash, &operation);
+        assert_eq!(canonical["request"]["headers"]["accept"], PREVIEW);
+        assert_ne!(canonical_request_digest_profile(&canonical, ReleaseProfile::Legacy),
+            canonical_request_digest_profile(&old_canonical, ReleaseProfile::Legacy));
+        assert_eq!(route.adapter_config["request"]["valueRules"], json!([]));
+        assert_eq!(route.credential_ref.as_deref(), Some(CREDENTIAL));
+        for accept in [
+            "application/vnd.github.squirrel-girl-preview+json",
+            "application/vnd.github.mockingbird-preview+json",
+            "application/vnd.other.squirrel-girl-preview",
+            "application/vnd.github.squirrel-girl-preview, application/json",
+            "application/vnd.github.squirrel-girl-preview;q=1",
+            " application/vnd.github.squirrel-girl-preview",
+            "application/vnd.github.squirrel-girl-preview ",
+            "APPLICATION/VND.GITHUB.SQUIRREL-GIRL-PREVIEW",
+        ] {
+            let mut changed = headers.clone();
+            changed.insert("accept".into(), accept.into());
+            assert!(validate_adapter(&req, &changed, &url, &matched).is_err(), "{accept}");
+        }
+        let mut duplicate = req.headers.clone();
+        duplicate.insert("Accept".into(), PREVIEW.into());
+        assert_eq!(canonical_forwarded_request_headers(&duplicate, &url, Some(0),
+            &snapshot.credentials[CREDENTIAL].injection).unwrap_err(), "request_header_ambiguous");
+        for target in [BASE.replace("fixture-repo", "other"), BASE.replace("api.github.com", "other.example"),
+                       BASE.replace("https://", "http://")] {
+            let mut changed = req.clone();
+            changed.url = target.clone();
+            assert!(validate_adapter(&changed, &headers, &Url::parse(&target).unwrap(), &matched).is_err());
+        }
+        if bundle == READ {
+            let mut changed = req.clone();
+            changed.method = "POST".into();
+            changed.body = r#"{"title":"not granted"}"#.into();
+            assert!(validate_adapter(&changed, &headers, &url, &matched).is_err());
+        }
+    }
+    // Generic non-GitHub routes do not inherit a new allowed header or profile.
+    let legacy = test_snapshot(1);
+    let route = &legacy.routes[0];
+    let req = request("GET", "https://example.test/resource", "");
+    let headers = BTreeMap::from([("accept".into(), PREVIEW.into())]);
+    let denied = validate_adapter(&req, &headers, &Url::parse(&req.url).unwrap(),
+        &RouteMatch { route, params: BTreeMap::new() }).unwrap_err();
+    assert_eq!(denied["error"], "generic_header_not_allowed");
+}
+
+#[test]
 fn github_request_scope_values_and_body_refuse_without_broadening_generic() {
     let snapshot = snapshot(WRITE);
     let route = &snapshot.routes[0];
@@ -395,6 +460,7 @@ fn github_physical_replacement_and_header_ambiguity_stay_fail_closed() {
     let route = &snapshot.routes[0];
     for variant in 0..4 {
         let mut req = request("GET", BASE, "");
+        req.headers.insert("accept".into(), "application/vnd.github.squirrel-girl-preview".into());
         match variant {
             0 => {
                 req.headers.remove("authorization");

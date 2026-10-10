@@ -217,7 +217,10 @@ def validate_request(url, method, config, headers, body, parsed_body=None):
         _require(isinstance(parsed_body, dict) and isinstance(parsed_body.get(field), str)
             and 1 <= len(parsed_body[field].encode("utf-8")) <= (1024 if field == "title" else 65536))
     if "accept" in headers:
-        _require(headers["accept"] in {"application/vnd.github.v3+json", "application/vnd.github+json", "application/json", "*/*"})
+        # go-github v74 Issues.ListByRepo uses this exact reactions preview;
+        # it is not a wildcard allowance for other GitHub preview media types.
+        _require(headers["accept"] in {"application/vnd.github.v3+json", "application/vnd.github+json",
+            "application/vnd.github.squirrel-girl-preview", "application/json", "*/*"})
     for name, expected in (("accept-language", "*"), ("sec-fetch-mode", "cors")):
         _require(name not in headers or headers[name] == expected)
     if "x-github-api-version" in headers:

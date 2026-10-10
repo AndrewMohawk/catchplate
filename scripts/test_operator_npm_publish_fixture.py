@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""Pure independent publish-fixture controls, never runtime acceptance.
+
+Receiver handlers use in-memory requests and an explicitly simulated file sink;
+no HTTP parser, socket, container, provider, executable or durable write runs.
+"""
+import ast
+import base64
+from contextlib import ExitStack
+from copy import deepcopy
+from datetime import datetime, timezone
+from email.message import Message
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import tarfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from scripts import operator_npm_publish_fixture as registry
+from scripts import operator_npm_metadata_fixture_network as network
+from scripts import prepare_operator_npm_publish_fixture as recipe
+from scripts import check_operator_npm_publish as check
+
+SOURCE, BINARY, INITIALIZER, NODE, NPM = map(Path,
+    ("/synthetic/source", "/synthetic/gate", "/synthetic/init.py", "/synthetic/node", "/synthetic/npm"))
+ROOT = recipe.base.SCRATCH / "serverware-npm-publish-private.Source01"
+SHA = "a" * 64
+PACKAGES = ("serverware-fixture-publish", "@serverware-fixture/publish")
+TAG = "fixture"
+ARRIVALS = (("prerequisite", "GET"), ("unscoped", "GET"), ("unscoped", "PUT"),
+    ("scoped", "GET"), ("scoped", "PUT"), ("outside_window", "GET"))
+
+
+def encoded(value):
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+
+
+def digest(raw):
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def build():
+    return recipe.build(SOURCE, BINARY, INITIALIZER, ROOT, NODE, NPM, expected_binary_sha256=SHA)
+
+
+def publish_document(spec):
+    # Independent stock-shaped document, not production npm_publish helpers.
+    package, version = spec["package"], spec["version"]
+    blob = registry.tarball(spec)
+    name = package + "-" + version + ".tgz"
+    manifest = {"name": package, "version": version, "_id": package + "@" + version,
+        "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js",
+        "_nodeVersion": "25.5.0", "_npmVersion": "11.8.0", "dist": {
+            "integrity": "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode(),
+            "shasum": hashlib.sha1(blob, usedforsecurity=False).hexdigest(),
+            "tarball": "http://registry.npmjs.org/" + package + "/-/" + name}}
+    return {"_id": package, "name": package, "description": "Synthetic publication fixture",
+        "dist-tags": {TAG: version}, "versions": {version: manifest}, "access": "public",
+        "_attachments": {name: {"content_type": "application/octet-stream",
+            "data": base64.b64encode(blob).decode(), "length": len(blob)}}}
+
+
+def headers(method, package, length):
+    result = [("host", "registry.npmjs.org"), ("authorization", "Bearer " + registry.TOKEN),
+        ("accept", "*/*" if method == "PUT" else
+            "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"),
+        ("npm-command", "publish"), ("npm-auth-type", "web"),
+        ("user-agent", "npm/11.8.0 node/v25.5.0 linux x64 workspaces/false"),
+        ("connection", "close"), ("content-length", str(length))]
+    if method == "PUT":
+        result.append(("content-type", "application/json"))
+    else:
+        result.extend((("pacote-version", "21.0.4"), ("pacote-req-type", "packument"),
+            ("pacote-pkg-id", "registry:" + package)))
+    return result
+
+
+def receiver(server, method, package, body=b"", *, fields=None, path=None):
+    handler = object.__new__(registry.Handler)
+    handler.server, handler.command = server, method
+    handler.path = "/" + package.replace("/", "%2f") if path is None else path
+    handler.headers = Message()
+    for name, value in headers(method, package, len(body)) if fields is None else fields:
+        handler.headers[name] = value
+    handler.rfile = io.BytesIO(body)
+    responses = []
+    handler.send = lambda status, value, content_type="application/json": responses.append((status, value, content_type))
+    registry.Handler.resource(handler)
+    assert len(responses) == 1
+    return responses[0]
+
+
+class NpmPublishFixtureTests(unittest.TestCase):
+    def setUp(self):
+        guard = ExitStack(); self.addCleanup(guard.close)
+        for target in ("socket.socket", "socket.create_connection", "socket.getaddrinfo", "subprocess.Popen",
+                "subprocess.run", "os.open", "os.mkdir", "os.makedirs", "os.fsync"):
+            guard.enter_context(patch(target, side_effect=AssertionError("pure publish fixture test attempted runtime I/O")))
+
+    def test_exact_network_none_recipe_and_private_mounts(self):
+        config = build(); services = config["services"]
+        shared = {"serverware", "decision-gate-rs", "npm-registry", "edge", "check"}
+        self.assertEqual(set(config), {"name", "services"})
+        self.assertEqual(set(services), shared | {"initialize", "npm-pki", "basic-pki", "network"})
+        recipe.validate(config, SOURCE, BINARY, INITIALIZER, ROOT, NODE, NPM, expected_binary_sha256=SHA)
+        for name, service in services.items():
+            self.assertEqual(service["network_mode"], "service:network" if name in shared else "none")
+            self.assertEqual(service["pull_policy"], "never")
+            self.assertEqual(service["restart"], "no")
+            self.assertIs(service["read_only"], True)
+            self.assertEqual(service["cap_drop"], ["ALL"])
+            self.assertIn("no-new-privileges:true", service["security_opt"])
+            self.assertEqual(service["mem_limit"], service["memswap_limit"])
+            self.assertLessEqual(service["pids_limit"], 128)
+            for field in ("ports", "expose", "networks", "privileged", "devices", "pid", "ipc", "env_file", "dns"):
+                self.assertNotIn(field, service)
+            self.assertEqual(len(service["volumes"]), len({row["target"] for row in service["volumes"]}))
+            for row in service["volumes"]:
+                self.assertEqual(row["bind"], {"create_host_path": False})
+                self.assertNotIn("serverware-npm-metadata-private.", row["source"])
+        check = {row["target"]: row for row in services["check"]["volumes"]}
+        self.assertEqual({target for target, row in check.items() if not row["read_only"]}, {"/client-work"})
+        self.assertEqual(check["/client-packages"]["source"], str(ROOT / "runtime/upstream-data/npm/packages"))
+        for forbidden in ("/data", "/npm-state", "/run/secrets/serverware", "/var/run/docker.sock"):
+            self.assertNotIn(forbidden, check)
+        mounts = {row["target"]: row for row in services["npm-registry"]["volumes"]}
+        self.assertEqual({target for target, row in mounts.items() if not row["read_only"]}, {"/npm-state"})
+        self.assertEqual(mounts["/npm-state"]["source"], str(ROOT / "runtime/upstream-data/npm-publish-state"))
+        for name in ("serverware", "decision-gate-rs"):
+            env = services[name]["environment"]
+            self.assertEqual(json.loads(env["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]), ["https://registry.npmjs.org"])
+            self.assertNotIn("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", env)
+        self.assertEqual(services["network"]["cap_add"], ["NET_ADMIN", "SETUID", "SETGID"])
+        self.assertEqual(services["network"]["user"], "0:0")
+        self.assertEqual(services["check"]["command"][-2:], ["--timeout-seconds", "180"])
+
+    def test_recipe_refuses_arbitrary_network_mount_command_and_bound_changes(self):
+        changes = [lambda s: s["check"].update(network_mode="host"),
+            lambda s: s["npm-registry"].update(ports=["443:443"]),
+            lambda s: s["check"].update(privileged=True),
+            lambda s: s["serverware"]["environment"].update(SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://real.invalid"]'),
+            lambda s: s["check"]["volumes"].append(recipe.bind(Path("/private"), "/data")),
+            lambda s: s["npm-registry"]["volumes"][-1].update(read_only=True),
+            lambda s: s["check"].update(command=["npm", "publish"]),
+            lambda s: s["network"].update(cap_add=["ALL"]),
+            lambda s: s["check"].update(memswap_limit="2g"),
+            lambda s: s["check"].update(pids_limit=1024)]
+        for index, change in enumerate(changes):
+            value = build(); change(value["services"])
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                recipe.validate(value, SOURCE, BINARY, INITIALIZER, ROOT, NODE, NPM, expected_binary_sha256=SHA)
+        for root in (Path("/tmp/serverware-npm-publish-private.Source01"), ROOT.parent,
+                ROOT.with_name("serverware-npm-metadata-private.Source01"), ROOT.with_name("serverware-npm-publish-private.short")):
+            with self.assertRaises(ValueError):
+                recipe.build(SOURCE, BINARY, INITIALIZER, root, NODE, NPM, expected_binary_sha256=SHA)
+
+    def test_fixed_finite_cases_inert_tarballs_and_independent_receiver_projection(self):
+        self.assertEqual(registry.PACKAGES, PACKAGES)
+        self.assertEqual(registry.TAG, TAG)
+        self.assertEqual(registry.ARRIVALS, ARRIVALS)
+        self.assertEqual((registry.MAX_BODY, registry.MAX_ATTEMPTS), (65536, 16))
+        self.assertEqual([row["case"] for row in registry.SPECS],
+            ["prerequisite", "unscoped", "scoped", "wrong_package", "outside_window", "wrong_placeholder", "revoked_app"])
+        self.assertEqual([row["case"] for row in registry.SPECS if row["success"]], ["unscoped", "scoped"])
+        for spec in registry.SPECS:
+            blob = registry.tarball(spec)
+            self.assertEqual(blob, registry.tarball(spec))
+            self.assertLess(len(blob), 32768)
+            with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+                self.assertEqual(archive.getnames(), ["package/package.json", "package/index.js"])
+                self.assertTrue(all(item.isfile() and item.mode == 0o644 and item.mtime == 0 for item in archive.getmembers()))
+                manifest = json.load(archive.extractfile("package/package.json"))
+                self.assertEqual(manifest, {"name": spec["package"], "version": spec["version"],
+                    "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js"})
+            value = publish_document(spec)
+            stored, manifest, actual = registry.validate_publish(encoded(value), spec)
+            name = spec["package"] + "-" + spec["version"] + ".tgz"
+            self.assertEqual(stored, {"package": spec["package"], "version": spec["version"], "tag": TAG,
+                "attachmentName": name, "attachmentBytes": len(blob), "tarballSha256": digest(blob),
+                "tarballIntegrity": "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode(),
+                "tarballShasum": hashlib.sha1(blob, usedforsecurity=False).hexdigest()})
+            self.assertEqual(actual, blob)
+            self.assertEqual(manifest, value["versions"][spec["version"]])
+
+    def test_receiver_rejects_identity_tag_extra_attachment_and_digest_drift(self):
+        spec = registry.spec_for("scoped"); version = spec["version"]
+        name = spec["package"] + "-" + version + ".tgz"
+        changes = [lambda v: v.update(name="other"), lambda v: v.update(_id="other"),
+            lambda v: v.update(access=None), lambda v: v.update(extra=True),
+            lambda v: v.update({"dist-tags": {"latest": version}}),
+            lambda v: v["dist-tags"].update(other=version),
+            lambda v: v["versions"].update({"8.0.0": deepcopy(v["versions"][version])}),
+            lambda v: v["versions"][version].update(_id="wrong@" + version),
+            lambda v: v["versions"][version].update(_npmVersion="11.7.0"),
+            lambda v: v["versions"][version].update(scripts={"prepare": "never execute"}),
+            lambda v: v["versions"][version]["dist"].update(integrity="sha512-AAAA"),
+            lambda v: v["versions"][version]["dist"].update(shasum="0" * 40),
+            lambda v: v["versions"][version]["dist"].update(tarball="http://other.invalid/archive.tgz"),
+            lambda v: v["versions"][version]["dist"].update(extra=True),
+            lambda v: v["_attachments"].update({"extra.sigstore": {"data": "synthetic"}}),
+            lambda v: v["_attachments"][name].update(length=True),
+            lambda v: v["_attachments"][name].update(length=1),
+            lambda v: v["_attachments"][name].update(content_type="application/gzip"),
+            lambda v: v["_attachments"][name].update(data="YQ=="),
+            lambda v: v["_attachments"][name].update(data=v["_attachments"][name]["data"] + "\n")]
+        for index, change in enumerate(changes):
+            value = publish_document(spec); change(value)
+            with self.subTest(index=index), self.assertRaises(ValueError): registry.validate_publish(encoded(value), spec)
+        raw = encoded(publish_document(spec))
+        for body in (b"", b"[]", b"{}", raw[:-1] + b',"name":"duplicate"}',
+                raw.replace(b'"license":"MIT"', b'"license":NaN'),
+                raw.replace(b'"license":"MIT"', b'"license":1e999'), raw + b" " * 65536):
+            with self.assertRaises(ValueError): registry.validate_publish(body, spec)
+
+    def test_physical_header_oracle_has_no_placeholder_or_secret_in_observations(self):
+        for method in ("GET", "PUT"):
+            length = 50 if method == "PUT" else 0
+            fields = headers(method, PACKAGES[0], length)
+            public = registry.validate_headers(fields, method, PACKAGES[0], length)
+            for private in ("authorization", "connection", "content-length", "cache-control"):
+                self.assertNotIn(private, public)
+            self.assertNotIn(registry.TOKEN, json.dumps(public))
+            for extra in (("authorization", "Bearer wrong"), ("accept-encoding", "gzip"),
+                    ("npm-session", "unreviewed"), ("x-extra", "unreviewed"), ("host", "other.invalid")):
+                with self.subTest(method=method, extra=extra[0]), self.assertRaises(ValueError):
+                    registry.validate_headers(fields + [extra], method, PACKAGES[0], length)
+            for name, bad in (("authorization", "Bearer " + registry.PLACEHOLDER), ("npm-command", "view"),
+                    ("host", "other.invalid"), ("content-length", str(length + 1))):
+                changed = [(key, bad if key == name else value) for key, value in fields]
+                with self.assertRaises(ValueError): registry.validate_headers(changed, method, PACKAGES[0], length)
+
+    def sequence(self):
+        server = SimpleNamespace(total=0, attempts=[], stored=[])
+        saved = {}
+        def save(path, raw):
+            self.assertEqual(path.parent, Path("/npm-state"))
+            if str(path) in saved: raise FileExistsError("synthetic immutable duplicate")
+            saved[str(path)] = raw
+        def directory(path, flags):
+            self.assertEqual((path, flags), ("/npm-state", os.O_RDONLY | os.O_DIRECTORY))
+            return 314
+        with patch.object(registry, "save_new", side_effect=save), \
+                patch.object(registry.os, "open", side_effect=directory), \
+                patch.object(registry.os, "fsync", side_effect=lambda fd: self.assertEqual(fd, 314)), \
+                patch.object(registry.os, "close", side_effect=lambda fd: self.assertEqual(fd, 314)):
+            for case, method in ARRIVALS:
+                spec = registry.spec_for(case)
+                body = encoded(publish_document(spec)) if method == "PUT" else b""
+                status, response, media = receiver(server, method, spec["package"], body)
+                self.assertEqual(status, 201 if method == "PUT" else 200)
+                self.assertEqual(media, "application/json" if method == "PUT" else "application/vnd.npm.install-v1+json")
+                row = server.attempts[-1]
+                self.assertEqual((row["case"], row["method"], row["requestBodySha256"], row["responseBodySha256"]),
+                    (case, method, digest(body), digest(response)))
+                self.assertTrue(row["accepted"])
+                self.assertEqual(row["operation"]["operation"], "npm.publish" if method == "PUT" else "npm.metadata.read")
+        return server, saved
+
+    def test_real_handler_finite_sequence_joins_two_immutable_in_memory_versions(self):
+        server, saved = self.sequence()
+        self.assertEqual(server.total, 6)
+        self.assertEqual([(row["package"], row["version"], row["tag"]) for row in server.stored],
+            [(PACKAGES[0], "2.0.0", TAG), (PACKAGES[1], "3.0.0", TAG)])
+        self.assertEqual(set(saved), {"/npm-state/unscoped.tgz", "/npm-state/unscoped.json",
+            "/npm-state/scoped.tgz", "/npm-state/scoped.json"})
+        for row in server.stored:
+            self.assertEqual(digest(saved["/npm-state/" + row["case"] + ".tgz"]), row["tarballSha256"])
+            self.assertEqual(json.loads(saved["/npm-state/" + row["case"] + ".json"]), row)
+        self.assertNotIn(registry.TOKEN, json.dumps(server.attempts))
+        packument = registry.packument(PACKAGES[0], server.stored)
+        self.assertEqual(packument["dist-tags"], {TAG: "2.0.0"})
+        self.assertEqual(set(packument["versions"]), {"2.0.0"})
+
+    def checker(self):
+        server, saved = self.sequence()
+        observed = {"schema": "serverware.privateNpmPublishObservations/v1", "syntheticOnly": True,
+            "total": server.total, "attempts": deepcopy(server.attempts), "stored": deepcopy(server.stored)}
+        instance = object.__new__(check.NpmPublishCheck)
+        instance.credential_id = "synthetic-credential"
+        instance.completed = ["prerequisite", "unscoped", "scoped", "outside_window"]
+        instance.phase_scopes = []
+        for phase in instance.completed:
+            base = ("principal-" + phase, "route-" + phase, "sha256:" + SHA)
+            routes = {"GET": base if phase == "prerequisite" else (base[0], base[1] + ".metadata", base[2])}
+            if phase != "prerequisite": routes["PUT"] = base
+            instance.phase_scopes.append({"phase": phase, "principal": base[0], "policy": base[2], "routes": routes})
+        instance.expected_denial_rows, instance.cutoff, instance.baseline = [], {}, {}
+        instance.revocation = None
+        instance.args = SimpleNamespace(expected_binary_sha256="sha256:" + SHA)
+        self.assertEqual(instance.accept_observation(observed), server.stored)
+        return instance, observed, saved
+
+    def audit_rows(self, instance):
+        rows = []
+        def append(kind, event):
+            identifier = "synthetic-audit-" + str(len(rows))
+            rows.append({"id": identifier, "event_hash": digest(identifier.encode()), "event_type": kind, "event": event})
+        for index, item in enumerate(instance.wire):
+            attempt = digest(("attempt-" + str(index)).encode())
+            common = {"attempt_id": attempt, "flow_id": attempt, "principal_id": item["scope"][0],
+                "route_id": item["scope"][1], "policy_hash": item["scope"][2],
+                "credential_ref": instance.credential_id, "credential_version": 1, "method": item["method"],
+                "body_sha256": item["requestBodySha256"], "request_digest": item["requestDigest"],
+                "operation_digest": item["operationDigest"]}
+            append(check.START, {**common, "outcome": "release_started"})
+            adapter, mode = ("npm.metadata.v1", "npmMetadataJsonV1") if item["method"] == "GET" else ("npm.publish.v1", "npmPublishJsonV1")
+            append(check.RELEASE, {**common, "outcome": "released", "upstream_status": item["status"],
+                "response_body_sha256": item["responseBodySha256"], "response_body_bytes": item["responseBodyBytes"],
+                "response_validation": {"ok": True, "mode": mode, "adapter": adapter,
+                    "body_bytes_preserved": True, "allowed_fields_redacted": False}})
+        for phase in instance.phase_scopes:
+            append(check.CONNECT, {"principal_id": phase["principal"], "policy_hash": phase["policy"],
+                "target": "registry.npmjs.org:443", "method": "CONNECT", "outcome": "established"})
+        scope = instance.wire[0]["scope"]
+        append(check.LEASE, {"principal_id": scope[0], "route_id": scope[1], "policy_hash": scope[2],
+            "credential_id": instance.credential_id, "status_code": 200, "outcome": "issued",
+            "data_plane_binary_digest": "sha256:" + SHA, "purpose": "dispatchSecret", "expected_credential_version": 1})
+        return rows
+
+    def test_checker_joins_exact_receiver_inventory_and_independent_canonical_commitments(self):
+        instance, observed, _ = self.checker()
+        self.assertEqual(len(instance.wire), 6)
+        self.assertEqual(len({(row["requestDigest"], row["operationDigest"]) for row in instance.wire}), 6)
+        for row in instance.wire:
+            canonical = {"v": 2, "principal": row["scope"][0], "client_ip": "127.0.0.1",
+                "route_id": row["scope"][1], "credential_ref": "synthetic-credential", "credential_version": "1",
+                "policy_hash": row["scope"][2], "request": {"method": row["method"], "scheme": "https",
+                    "authority": "registry.npmjs.org", "path": row["rawTarget"], "query": [],
+                    "headers": row["requestHeaders"], "body_sha256": row["requestBodySha256"],
+                    "discard_headers": ["accept-encoding", "npm-session"]}, "operation": row["operation"]}
+            encode = lambda value: json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+            self.assertEqual(row["requestDigest"], digest(encode(canonical)))
+            self.assertEqual(row["operationDigest"], digest(encode({k: v for k, v in canonical.items() if k not in {"v", "client_ip"}})))
+            for header, value in (("authorization", "Bearer synthetic-private"), ("npm-session", "discarded"),
+                    ("accept-encoding", "gzip"), ("x-unreviewed", "unknown"), ("host", "other.invalid")):
+                changed = deepcopy(row); changed["requestHeaders"][header] = value
+                with self.subTest(method=row["method"], header=header), self.assertRaises(check.CheckFailure):
+                    check.canonical_digests(changed, row["scope"], instance.credential_id)
+        for change in ("extra-arrival", "wrong-path", "wrong-method", "wrong-tag", "response-hash", "stored-version", "stored-digest"):
+            value = deepcopy(observed)
+            if change == "extra-arrival": value["total"] += 1; value["attempts"].append(deepcopy(value["attempts"][-1]))
+            elif change == "wrong-path": value["attempts"][0]["rawTarget"] += "?unreviewed=1"
+            elif change == "wrong-method": value["attempts"][0]["method"] = "PUT"
+            elif change == "wrong-tag": value["attempts"][2]["operation"]["tag"] = "latest"
+            elif change == "response-hash": value["attempts"][2]["responseBodySha256"] = "sha256:" + "f" * 64
+            elif change == "stored-version": value["stored"][0]["version"] = "9.9.9"
+            else: value["stored"][0]["tarballSha256"] = "sha256:" + "f" * 64
+            with self.subTest(change=change), self.assertRaises(check.CheckFailure): instance.accept_observation(value)
+
+    def test_checker_audit_pairs_refuse_rebinding_duplicates_and_changed_prefix(self):
+        instance, _, _ = self.checker(); rows = self.audit_rows(instance)
+        pairs, complete = check.joined_attempts(list(reversed(rows)), instance.wire, instance.credential_id)
+        self.assertTrue(complete); self.assertEqual(len(pairs), 6)
+        self.assertFalse(check.joined_attempts(rows[1:], instance.wire, instance.credential_id)[1])
+        for change in ("duplicate", "attempt", "credential", "body", "policy", "route", "response", "mode", "blocked", "generation"):
+            candidate = deepcopy(rows)
+            if change == "duplicate": candidate.append(deepcopy(candidate[1]))
+            elif change == "attempt": candidate[3]["event"]["attempt_id"] = candidate[1]["event"]["attempt_id"]
+            elif change == "credential": candidate[0]["event"]["credential_ref"] = "other"
+            elif change == "body": candidate[0]["event"]["body_sha256"] = "sha256:" + "f" * 64
+            elif change == "policy": candidate[0]["event"]["policy_hash"] = "sha256:" + "f" * 64
+            elif change == "route": candidate[0]["event"]["route_id"] += ".metadata"
+            elif change == "response": candidate[1]["event"]["response_body_bytes"] += 1
+            elif change == "mode": candidate[1]["event"]["response_validation"]["mode"] = "npmPublishJsonV1"
+            elif change == "blocked": candidate[1]["event_type"] = check.BLOCK
+            else: candidate[0]["event"]["credential_version"] = True
+            with self.subTest(change=change), self.assertRaises(check.CheckFailure):
+                check.joined_attempts(candidate, instance.wire, instance.credential_id)
+        complete, evidence = instance.validate_audits(rows)
+        self.assertTrue(complete)
+        self.assertEqual(len(evidence["auditAttemptIds"]), 6)
+        for candidate in (rows[1:], [{**rows[0], "event_hash": "sha256:" + "f" * 64}, *rows[1:]]):
+            with self.assertRaises(check.CheckFailure): instance.validate_audits(candidate)
+        for key, bad in (("expected_credential_version", True), ("route_id", "never-forwarded"),
+                ("data_plane_binary_digest", "sha256:" + "f" * 64), ("purpose", "unknown")):
+            candidate = deepcopy(rows); candidate[-1]["event"][key] = bad
+            with self.subTest(lease_field=key), self.assertRaises(check.CheckFailure): instance.validate_audits(candidate)
+
+    def test_denial_signatures_window_choice_and_fixed_failure_codec(self):
+        rule = {"route_id": "route-fixture"}
+        for phase in ("prerequisite", "wrong_package", "outside_window", "wrong_placeholder"):
+            expected = check.expected_denials(phase, {}, rule)
+            self.assertTrue(expected)
+            for item in expected:
+                method, error, route, adapter, package = item
+                target = "/" + package.replace("/", "%2f")
+                event = {"method": method, "error": error, "route_id": route, "adapter": adapter,
+                    "outcome": "denied", "status_code": 403, "url": {
+                        "origin_sha256": digest(b"https://registry.npmjs.org"), "origin_bytes": 26,
+                        "path_sha256": digest(target.encode()), "path_bytes": len(target), "query_keys": []}}
+                self.assertEqual(check.validate_denial(event, expected), item)
+                for key, value in (("error", "unrelated403"), ("route_id", "wrong"), ("status_code", 502), ("url", {})):
+                    with self.assertRaises(check.CheckFailure): check.validate_denial({**event, key: value}, expected)
+        for hour in range(24):
+            window = check.closed_window(datetime(2026, 10, 10, hour, 59, 59, tzinfo=timezone.utc))
+            self.assertEqual(window, {"start": "18:00", "end": "19:00"} if hour < 12 else {"start": "06:00", "end": "07:00"})
+        with self.assertRaises(check.CheckFailure): check.closed_window(datetime(2026, 10, 10))
+        failure = {"schema": "serverware.privateNpmPublishClient/v1", "phase": "unscoped", "npmVersion": "11.8.0",
+            "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1", "strictSSL": True,
+            "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
+            "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
+            "error": "stock npm publish operation failed", "stage": "npm_process", "errorCode": "E403",
+            "processExitCode": 1, "stdoutBytes": 0, "stderrBytes": 40}
+        self.assertEqual(set(check.client_failure_observation(failure, "unscoped")),
+            {"phase", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes"})
+        for key, value in (("raw", "synthetic-secret"), ("error", "synthetic-secret"), ("stage", "synthetic-secret"),
+                ("errorCode", "synthetic-secret"), ("processExitCode", True), ("stdoutBytes", 262145),
+                ("stderrBytes", -1), ("configuredRetries", False), ("configuredRetries", 0.0),
+                ("phase", "scoped"), ("force", True), ("provenance", True)):
+            self.assertIsNone(check.client_failure_observation({**failure, key: value}, "unscoped"))
+        for value in (None, [], {}, False): self.assertIsNone(check.client_failure_observation(failure, value))
+        self.assertNotIn("E403", str(check.ClientFailure("unscoped", failure)))
+
+    def test_handler_replay_unknown_routes_and_overflow_are_counted_before_refusal(self):
+        spec = registry.spec_for("unscoped")
+        stored, _, _ = registry.validate_publish(encoded(publish_document(spec)), spec)
+        server = SimpleNamespace(total=2, attempts=[], stored=[stored])
+        with patch.object(registry, "save_new", side_effect=AssertionError("duplicate version reached storage")):
+            self.assertEqual(receiver(server, "PUT", spec["package"], encoded(publish_document(spec)))[0], 400)
+        self.assertEqual(server.total, 3)
+        self.assertEqual(server.stored, [stored])
+        self.assertIs(server.attempts[-1]["accepted"], False)
+        for method, path in (("POST", "/-/npm/v1/security/audits"), ("PUT", "/other"),
+                ("GET", "/@serverware-fixture/publish"), ("GET", "/serverware-fixture-publish?x=1")):
+            fresh = SimpleNamespace(total=0, attempts=[], stored=[])
+            self.assertEqual(receiver(fresh, method, spec["package"], path=path)[0], 400)
+            self.assertEqual((fresh.total, fresh.attempts), (1, [{"ordinal": 1, "accepted": False}]))
+        fresh = SimpleNamespace(total=0, attempts=[], stored=[])
+        for _ in range(40): self.assertEqual(receiver(fresh, "POST", spec["package"])[0], 400)
+        self.assertEqual(fresh.total, 40)
+        self.assertEqual(len(fresh.attempts), 16)
+        self.assertEqual(fresh.stored, [])
+        fresh = SimpleNamespace(total=0, attempts=[], stored=[])
+        duplicate = headers("GET", spec["package"], 0) + [("Authorization", "Bearer " + registry.TOKEN)]
+        self.assertEqual(receiver(fresh, "GET", spec["package"], fields=duplicate)[0], 400)
+
+    def test_job_and_receiver_keep_stock_transport_and_no_runtime_authority_import(self):
+        job = (Path(__file__).parent / "operator_npm_publish_job.mjs").read_text()
+        for expected in ("spawnSync('/node', ['/npm/bin/npm-cli.js'", "'publish', tarballPath",
+                "'--access=public'", "'--tag=fixture'", "'--ignore-scripts=true'", "'--provenance=false'",
+                "'--force=false'", "'--dry-run=false'", "'--workspaces=false'", "'--globalconfig', '/dev/null'",
+                "'strict-ssl=true'", "'fetch-retries=0'", "timeout: 15000", "maxBuffer: 262144",
+                "NODE_EXTRA_CA_CERTS: extraCa", "HOME: clientHome", "SERVERWARE_PROXY_TOKEN: input.token",
+                "requestRewrite: false", "configuredRetries: 0"):
+            self.assertIn(expected, job)
+        self.assertEqual(job.count("spawnSync('/node'"), 1)
+        for bypass in ("NODE_TLS_REJECT_UNAUTHORIZED", "rejectUnauthorized", "fetch:", "agent:", "cafile=", "ca: ",
+                "error.stack", "error.message", "process.env.HOME ="):
+            self.assertNotIn(bypass, job)
+        tree = ast.parse((Path(__file__).parent / "operator_npm_publish_fixture.py").read_text())
+        imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+        self.assertFalse(any(name and name.startswith("serverware") for name in imports))
+        self.assertIn(b"93.184.216.34 registry.npmjs.org\n", network.HOSTS)
+        self.assertEqual(network.RESOLV, b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

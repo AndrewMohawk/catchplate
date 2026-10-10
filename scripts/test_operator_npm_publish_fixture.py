@@ -294,7 +294,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertEqual(instance.accept_observation(observed), server.stored)
         return instance, observed, saved
 
-    def audit_rows(self, instance):
+    def audit_rows(self, instance, *, pooled=False):
         rows = []
         def append(kind, event):
             identifier = "synthetic-audit-" + str(len(rows))
@@ -313,13 +313,59 @@ class NpmPublishFixtureTests(unittest.TestCase):
                 "response_validation": {"ok": True, "mode": mode, "adapter": adapter,
                     "body_bytes_preserved": True, "allowed_fields_redacted": False}})
         for phase in instance.phase_scopes:
-            append(check.CONNECT, {"principal_id": phase["principal"], "policy_hash": phase["policy"],
-                "target": "registry.npmjs.org:443", "method": "CONNECT", "outcome": "established"})
+            if phase["phase"] == "revoked_app":
+                continue
+            connection = {"principal_id": phase["principal"], "policy_hash": phase["policy"],
+                "target": "registry.npmjs.org:443", "method": "CONNECT", "outcome": "established",
+                "status_code": 200, "client_ip": "127.0.0.1",
+                "route_ids": sorted({scope[1] for scope in phase["routes"].values()})}
+            append(check.CONNECT, connection)
+            append(check.KEEP_ALIVE if pooled else check.CONNECT,
+                {**connection, "outcome": "keep_alive", "intercepted_request_count": 2} if pooled else deepcopy(connection))
         scope = instance.wire[0]["scope"]
         append(check.LEASE, {"principal_id": scope[0], "route_id": scope[1], "policy_hash": scope[2],
             "credential_id": instance.credential_id, "status_code": 200, "outcome": "issued",
             "data_plane_binary_digest": "sha256:" + SHA, "purpose": "dispatchSecret", "expected_credential_version": 1})
         return rows
+
+    def complete_audit_fixture(self, *, pooled=False):
+        """All seven stock-invocation scopes; no client or authority executes."""
+        instance, observed, _ = self.checker()
+        scopes = {row["phase"]: row for row in instance.phase_scopes}
+        for phase in ("wrong_package", "wrong_placeholder"):
+            # The real checker deliberately reuses the unscoped application
+            # across these phases; bounds must count invocations, not just IDs.
+            scopes[phase] = {**deepcopy(scopes["unscoped"]), "phase": phase}
+        revoked = {**deepcopy(scopes["scoped"]), "phase": "revoked_app", "policy": "sha256:" + "b" * 64}
+        revoked["routes"] = {method: (*scope[:2], revoked["policy"]) for method, scope in revoked["routes"].items()}
+        scopes["revoked_app"] = revoked
+        instance.completed = list(check.PHASES)
+        instance.phase_scopes = [scopes[phase] for phase in instance.completed]
+        instance.expected_denial_rows = []
+        for phase in instance.phase_scopes:
+            route = phase["routes"].get("PUT", phase["routes"]["GET"])[1]
+            instance.expected_denial_rows.extend(check.expected_denials(phase["phase"], {}, {"route_id": route}))
+        instance.before_revoke_policy = "sha256:" + SHA
+        instance.revocation = ("operator_catalog.application.revoked", "synthetic-scoped-application", revoked["policy"])
+        instance.snapshot = {"policy": {"sequence": 2}}
+        instance.accept_observation(observed)
+        rows = self.audit_rows(instance, pooled=pooled)
+        def append(kind, event):
+            identifier = "synthetic-audit-" + str(len(rows))
+            rows.append({"id": identifier, "event_hash": digest(identifier.encode()), "event_type": kind, "event": event})
+        for method, error, route, adapter, package in instance.expected_denial_rows:
+            target = "/" + package.replace("/", "%2f")
+            append(check.DENIED, {"method": method, "error": error, "route_id": route, "adapter": adapter,
+                "outcome": "denied", "status_code": 403, "url": {
+                    "origin_sha256": digest(b"https://registry.npmjs.org"), "origin_bytes": 26,
+                    "path_sha256": digest(target.encode()), "path_bytes": len(target), "query_keys": []}})
+        for _ in range(2):
+            append(check.CONNECT_DENIED, {"principal_id": None, "target": "registry.npmjs.org:443", "method": "CONNECT",
+                "outcome": "denied", "payload": {"error": "client_principal_denied"}})
+        append(check.RELOAD, {"previous_policy_hash": instance.before_revoke_policy,
+            "policy_hash": revoked["policy"], "policy_sequence": 2, "routes": 5})
+        append(instance.revocation[0], {"resource_id": instance.revocation[1], "policy_hash": revoked["policy"]})
+        return instance, observed, rows
 
     def test_checker_joins_exact_receiver_inventory_and_independent_canonical_commitments(self):
         instance, observed, _ = self.checker()
@@ -379,6 +425,122 @@ class NpmPublishFixtureTests(unittest.TestCase):
                 ("data_plane_binary_digest", "sha256:" + "f" * 64), ("purpose", "unknown")):
             candidate = deepcopy(rows); candidate[-1]["event"][key] = bad
             with self.subTest(lease_field=key), self.assertRaises(check.CheckFailure): instance.validate_audits(candidate)
+
+    def test_checker_accepts_separate_or_reused_tunnels_without_changing_publication_inventory(self):
+        for mode in ("separate", "reused", "mixed"):
+            instance, observed, rows = self.complete_audit_fixture(pooled=mode != "separate")
+            if mode == "mixed":
+                # One of three invocations sharing the unscoped authority uses
+                # separate tunnels; the other two reuse their own tunnel.
+                row = next(row for row in rows if row["event_type"] == check.KEEP_ALIVE
+                    and row["event"]["principal_id"] == "principal-unscoped")
+                row["event_type"] = check.CONNECT
+                row["event"]["outcome"] = "established"
+                row["event"].pop("intercepted_request_count")
+            complete, evidence = instance.validate_audits(list(reversed(rows)))
+            with self.subTest(mode=mode):
+                self.assertTrue(complete)
+                self.assertEqual(len(evidence["auditAttemptIds"]), 6)
+                counts = evidence["namedAuditInventory"]
+                self.assertEqual(counts[check.CONNECT], {"separate": 12, "reused": 6, "mixed": 7}[mode])
+                self.assertEqual(counts.get(check.KEEP_ALIVE, 0), {"separate": 0, "reused": 6, "mixed": 5}[mode])
+                self.assertEqual((counts[check.START], counts[check.RELEASE], counts[check.DENIED], counts[check.CONNECT_DENIED]),
+                    (6, 6, 6, 2))
+                self.assertEqual(observed["total"], 6)
+                self.assertEqual([(row["case"], row["method"]) for row in instance.wire], list(ARRIVALS))
+                self.assertEqual([row["case"] for row in instance.wire if row["method"] == "PUT"], ["unscoped", "scoped"])
+                self.assertEqual([row["case"] for row in observed["stored"]], ["unscoped", "scoped"])
+
+    def test_checker_first_prerequisite_get_then_denied_put_accepts_one_reused_tunnel(self):
+        instance, observed, rows = self.complete_audit_fixture(pooled=True)
+        scope = instance.phase_scopes[0]
+        instance.completed, instance.phase_scopes = ["prerequisite"], [scope]
+        instance.expected_denial_rows = check.expected_denials("prerequisite", {}, {"route_id": scope["routes"]["GET"][1]})
+        instance.revocation = None
+        first = {**observed, "total": 1, "attempts": [observed["attempts"][0]], "stored": []}
+        instance.accept_observation(first)
+        rows = [row for row in rows if row["event_type"] not in {check.DENIED, check.CONNECT_DENIED,
+            check.RELOAD, "operator_catalog.application.revoked"} and row["event"].get("principal_id") == scope["principal"]]
+        denial = instance.expected_denial_rows[0]
+        target = "/" + denial[4].replace("/", "%2f")
+        rows.append({"id": "synthetic-first-denial", "event_hash": digest(b"first-denial"), "event_type": check.DENIED,
+            "event": {"method": denial[0], "error": denial[1], "route_id": None, "adapter": None,
+                "outcome": "denied", "status_code": 403, "url": {
+                    "origin_sha256": digest(b"https://registry.npmjs.org"), "origin_bytes": 26,
+                    "path_sha256": digest(target.encode()), "path_bytes": len(target), "query_keys": []}}})
+        complete, evidence = instance.validate_audits(rows)
+        self.assertTrue(complete)
+        self.assertEqual(evidence["namedAuditInventory"], {check.START: 1, check.RELEASE: 1, check.LEASE: 1,
+            check.CONNECT: 1, check.KEEP_ALIVE: 1, check.DENIED: 1})
+        self.assertEqual(len(instance.wire), 1)
+        self.assertEqual(instance.wire[0]["method"], "GET")
+        self.assertEqual(first["stored"], [])
+
+    def test_checker_reused_tunnel_scope_types_fingerprint_and_event_bounds_are_strict(self):
+        changes = [("principal_id", "not-a-completed-application"), ("policy_hash", "sha256:" + "f" * 64),
+            ("target", "other.invalid:443"), ("method", "GET"), ("outcome", "established"),
+            ("status_code", 403), ("status_code", 200.0), ("status_code", True),
+            ("client_ip", "127.0.0.2"), ("client_ip", None), ("route_ids", ["misbound-route"])]
+        changes.extend(("intercepted_request_count", value) for value in (None, True, 2.0, "2", 0, 1, 3, 100))
+        for field, value in changes:
+            instance, _, rows = self.complete_audit_fixture(pooled=True)
+            candidate = next(row for row in rows if row["event_type"] == check.KEEP_ALIVE)
+            candidate["event"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(check.CheckFailure):
+                instance.validate_audits(rows)
+        for change in ("unknown-event", "missing-count", "extra-public-field", "established-count", "duplicate-keepalive",
+                "duplicate-established", "keepalive-without-established", "scope-not-completed"):
+            instance, _, rows = self.complete_audit_fixture(pooled=True)
+            kept = next(row for row in rows if row["event_type"] == check.KEEP_ALIVE)
+            established = next(row for row in rows if row["event_type"] == check.CONNECT)
+            if change == "unknown-event": kept["event_type"] += ".unknown"
+            elif change == "missing-count": kept["event"].pop("intercepted_request_count")
+            elif change == "extra-public-field": kept["event"]["unmatched_authority"] = "synthetic"
+            elif change == "established-count": established["event"]["intercepted_request_count"] = 2
+            elif change == "keepalive-without-established": rows.remove(established)
+            elif change == "scope-not-completed": instance.completed.remove("prerequisite")
+            else:
+                extra = deepcopy(kept if change == "duplicate-keepalive" else established)
+                extra.update(id="synthetic-excess", event_hash=digest(b"excess"))
+                rows.append(extra)
+            with self.subTest(change=change), self.assertRaises(check.CheckFailure):
+                instance.validate_audits(rows)
+
+    def test_checker_reused_tunnels_do_not_hide_denials_replays_or_unauthorized_puts(self):
+        for change in ("missing-denial", "extra-denial", "unauthorized-dispatch", "unauthorized-put-arrival"):
+            instance, observed, rows = self.complete_audit_fixture(pooled=True)
+            if change == "missing-denial":
+                rows.remove(next(row for row in rows if row["event_type"] == check.DENIED))
+                self.assertFalse(instance.validate_audits(rows)[0])
+                continue
+            if change == "extra-denial":
+                extra = deepcopy(next(row for row in rows if row["event_type"] == check.DENIED))
+                extra.update(id="synthetic-extra-denial", event_hash=digest(b"extra-denial"))
+                rows.append(extra)
+            elif change == "unauthorized-dispatch":
+                extra = deepcopy(next(row for row in rows if row["event_type"] == check.START))
+                extra.update(id="synthetic-unauthorized-put", event_hash=digest(b"unauthorized-put"))
+                extra["event"].update(method="PUT", attempt_id=digest(b"new-attempt"), flow_id=digest(b"new-attempt"))
+                rows.append(extra)
+            else:
+                observed["total"] += 1
+                row = deepcopy(observed["attempts"][2])
+                row.update(ordinal=7, case="prerequisite")
+                observed["attempts"].append(row)
+                with self.assertRaises(check.CheckFailure): instance.accept_observation(observed)
+                continue
+            with self.subTest(change=change), self.assertRaises(check.CheckFailure):
+                instance.validate_audits(rows)
+
+    def test_checker_late_keepalive_receipts_are_required_and_cannot_change_retained_audit_prefix(self):
+        instance, _, rows = self.complete_audit_fixture(pooled=True)
+        incomplete = [row for row in rows if row["event_type"] != check.KEEP_ALIVE]
+        self.assertFalse(instance.validate_audits(incomplete)[0])
+        self.assertTrue(instance.validate_audits(rows)[0])
+        with self.assertRaises(check.CheckFailure): instance.validate_audits(incomplete)
+        changed = deepcopy(rows)
+        next(row for row in changed if row["event_type"] == check.KEEP_ALIVE)["event_hash"] = "sha256:" + "f" * 64
+        with self.assertRaises(check.CheckFailure): instance.validate_audits(changed)
 
     def test_denial_signatures_window_choice_and_fixed_failure_codec(self):
         rule = {"route_id": "route-fixture"}

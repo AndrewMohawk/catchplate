@@ -30,6 +30,7 @@ from scripts.check_operator_demo import SHA256, CheckFailure, require, token_fil
 from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, LEASE, RELEASE, RELOAD, START, digest
 
 CONNECT_DENIED = metadata.CONNECT_DENIED
+KEEP_ALIVE = "data_plane.connect.keep_alive"
 PHASES = tuple(spec["case"] for spec in fixture.SPECS)
 CLIENT_STAGES = {"input", "identity", "trust", "package", "workspace", "npm_spawn", "npm_process", "npm_json", "npm_denial", "npm_receipt"}
 CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E409"}
@@ -255,12 +256,16 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
         require(all(cutoff.get(key) == value for key, value in self.cutoff.items()), "publish audit history changed")
         self.cutoff = cutoff
         rows = [row for row in events if row["id"] not in self.baseline]
-        allowed = {START, RELEASE, LEASE, CONNECT, CONNECT_DENIED, DENIED}
+        allowed = {START, RELEASE, LEASE, CONNECT, KEEP_ALIVE, CONNECT_DENIED, DENIED}
         if self.revocation is not None:
             allowed |= {RELOAD, "operator_catalog.application.revoked"}
         require(all(row["event_type"] in allowed for row in rows), "unaccounted publish audit event")
         pairs, complete = joined_attempts(rows, self.wire, self.credential_id)
-        counts, denials, connects, revoked = Counter(), Counter(), Counter(), 0
+        counts, denials, connects, kept, revoked = Counter(), Counter(), Counter(), Counter(), 0
+        established_authorities, kept_authorities = Counter(), Counter()
+        completed_phases = [item for item in self.phase_scopes
+            if item["phase"] in self.completed and item["phase"] != "revoked_app"]
+        connection_invocations = Counter((item["principal"], item["policy"]) for item in completed_phases)
         dispatch_seen = False
         known_scopes = {scope for phase in self.phase_scopes if phase["phase"] != "revoked_app"
             for scope in phase["routes"].values()}
@@ -283,14 +288,31 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
                     dispatch_seen = True
                 else:
                     require(event.get("expected_credential_version") is None, "publish generation lease pins a version")
-            elif kind == CONNECT:
+            elif kind in {CONNECT, KEEP_ALIVE}:
                 key = (event.get("principal_id"), event.get("policy_hash"))
-                matching = [item for item in self.phase_scopes if item["phase"] != "revoked_app"
-                    and key == (item["principal"], item["policy"])]
-                require(matching and event.get("target") == "registry.npmjs.org:443"
-                    and event.get("method") == "CONNECT" and event.get("outcome") == "established", "publish CONNECT authority differs")
-                connects[key] += 1
-                require(connects[key] <= 2 * len(matching), "extra publish CONNECT or retry")
+                require(key in connection_invocations and event.get("target") == "registry.npmjs.org:443"
+                    and event.get("method") == "CONNECT"
+                    and event.get("outcome") == ("established" if kind == CONNECT else "keep_alive")
+                    and type(event.get("status_code")) is int and event["status_code"] == 200
+                    and event.get("client_ip") == "127.0.0.1", "publish CONNECT authority differs")
+                authority = dict(event)
+                authority.pop("outcome")
+                if kind == KEEP_ALIVE:
+                    # The gate emits this once on tunnel close, only for more
+                    # than one intercepted request. Each fresh npm invocation
+                    # performs exactly one metadata GET and one publish PUT.
+                    require(type(event.get("intercepted_request_count")) is int
+                        and event["intercepted_request_count"] == 2,
+                        "publish reused CONNECT request count differs")
+                    authority.pop("intercepted_request_count")
+                    kept[key] += 1
+                    require(kept[key] <= connection_invocations[key], "extra publish reused CONNECT or retry")
+                    kept_authorities[json.dumps(authority, sort_keys=True, separators=(",", ":"))] += 1
+                else:
+                    require("intercepted_request_count" not in event, "publish established CONNECT count differs")
+                    connects[key] += 1
+                    established_authorities[json.dumps(authority, sort_keys=True, separators=(",", ":"))] += 1
+                require(connects[key] + kept[key] <= 2 * connection_invocations[key], "extra publish CONNECT or retry")
             elif kind == CONNECT_DENIED:
                 require("revoked_app" in self.completed and event.get("principal_id") is None
                     and event.get("target") == "registry.npmjs.org:443" and event.get("method") == "CONNECT"
@@ -305,9 +327,14 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
             elif kind == "operator_catalog.application.revoked":
                 require((kind, event.get("resource_id"), event.get("policy_hash")) == self.revocation
                     and counts[kind] <= 1, "publish application revocation audit differs")
-        connection_minimums = Counter((item["principal"], item["policy"]) for item in self.phase_scopes if item["phase"] != "revoked_app")
+        # A reused-tunnel receipt must join an established receipt with the
+        # exact same public CONNECT authority. There is no per-tunnel ID in
+        # these audit events, so validate multiplicities, not invented pairs.
+        require(all(number <= established_authorities[authority]
+            for authority, number in kept_authorities.items()), "publish reused CONNECT has no matching established authority")
         complete = (complete and dispatch_seen and denials == Counter(self.expected_denial_rows)
-            and all(connects[key] >= minimum for key, minimum in connection_minimums.items())
+            and all(connects[key] + kept[key] == 2 * number
+                for key, number in connection_invocations.items())
             and revoked == (2 if "revoked_app" in self.completed else 0))
         if self.revocation is not None:
             complete = complete and counts[RELOAD] == counts["operator_catalog.application.revoked"] == 1

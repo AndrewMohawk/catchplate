@@ -172,9 +172,13 @@ class SecretMaterial:
     secret: str = field(repr=False)
 
     def public_view(self) -> dict:
-        return {"schema": SCHEMA, "owner_id": self.binding.owner_id,
-            "config_version": self.binding.config_version,
-            "public_profile": json.loads(self.binding.profile_json), "secret_present": True}
+        return _public_view(self.binding)
+
+
+def _public_view(binding: Binding) -> dict:
+    return {"schema": SCHEMA, "owner_id": binding.owner_id,
+        "config_version": binding.config_version,
+        "public_profile": json.loads(binding.profile_json), "secret_present": True}
 
 
 def seal(owner: DevelopmentOwner, binding: Binding, *, key: bytes, secret: str) -> PrivateEnvelope:
@@ -295,18 +299,35 @@ def insert_secret(conn: sqlite3.Connection, owner: DevelopmentOwner, binding: Bi
         raise CustodyError(_ERROR) from None
 
 
-def read_secret(conn: sqlite3.Connection, owner: DevelopmentOwner, binding: Binding,
-        *, key: bytes) -> SecretMaterial:
-    """Read exact retained binding in the caller's snapshot; no latest fallback."""
+def _matching_envelope(conn: sqlite3.Connection, owner: DevelopmentOwner,
+        binding: Binding) -> PrivateEnvelope:
     _transaction(conn, owner)
     _binding(owner, binding)
     try:
         records = _records(conn, owner)
         matches = [item for item in records if item.binding == binding]
         _require(len(matches) == 1)
-        return open_secret(owner, matches[0], key=key)
+        return matches[0]
     except sqlite3.Error:
         raise CustodyError(_ERROR) from None
+
+
+def inspect_public_binding(conn: sqlite3.Connection, owner: DevelopmentOwner,
+        binding: Binding) -> dict:
+    """Inspect one exact binding in the caller's snapshot without reading a key.
+
+    Validates the complete retained schema, owner, public profiles, and bounded
+    envelope structure; never initializes storage, decrypts, or selects latest.
+    ``secret_present`` means structurally present only: this inspection does not
+    authenticate ciphertext or prove decryptability, activation, or readiness.
+    """
+    return _public_view(_matching_envelope(conn, owner, binding).binding)
+
+
+def read_secret(conn: sqlite3.Connection, owner: DevelopmentOwner, binding: Binding,
+        *, key: bytes) -> SecretMaterial:
+    """Read exact retained binding in the caller's snapshot; no latest fallback."""
+    return open_secret(owner, _matching_envelope(conn, owner, binding), key=key)
 
 
 def _identity(info: os.stat_result) -> tuple[int, ...]:

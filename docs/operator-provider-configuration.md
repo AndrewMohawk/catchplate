@@ -18,7 +18,7 @@ Do not add a working-looking Save button, writable API scaffold or success
 message until durable custody and the actual startup consumer are implemented
 and verified together. This document adds none of them.
 
-### Internal storage checkpoint
+### Internal preparation and cold-read checkpoint
 
 The import-independent primitives in
 [`operator_provider_custody.py`](../serverware/operator_provider_custody.py)
@@ -27,17 +27,54 @@ profile binding, publication-guarded transactional writes, and an existing-key-o
 reader. They neither create a missing master key nor select a configuration
 version. Public projections contain no secret or encrypted envelope.
 
-The 22 synthetic checks in
-[`test_operator_provider_custody.py`](../scripts/test_operator_provider_custody.py)
-pass, covering tampering, rollback, malformed retained state, filesystem guards
-and reads that cannot import configuration or key-initialization modules. Writer
-tests substitute only the publication-ownership assertion; they do not prove the
-real setup transaction, audit or activation flow.
+The internal `prepare_managed` operation in
+[`operator_google_setup.py`](../serverware/operator_google_setup.py) now stores
+encrypted custody, its exact version reference, the pending setup record,
+catalog revision and audit record in one real publication-locked transaction.
+It uses the existing setup lifecycle with a separate closed managed grammar;
+the legacy API still rejects secrets. Preparation is inactive, and cancellation
+does not select or enable a provider configuration.
 
-These primitives are deliberately not connected to the API, settings UI or
-startup yet. The caller still owns full development-profile admission, WAL-aware
-database opening, lifecycle/audit validation and activation. This is a storage
-foundation, not a completed operator-configuration feature or live deployment.
+[`operator_publication.py`](../serverware/operator_publication.py) also supplies
+an import-independent, bounded shared-lock reader over an existing SQLite
+snapshot, including committed WAL data. It creates no schema, lock or master
+key. SQLite may coordinate existing WAL state through sidecars; this is not a
+zero-filesystem-write promise. The retained-state decoder and public custody
+inspection do not import runtime configuration or decrypt a secret.
+`secret_present` reports structural presence, not authenticated ciphertext or
+provider readiness. A private consumer must validate and decrypt the exact
+operation's owner/version/profile binding separately.
+
+This slice requires a retained store with an existing master key. A genuinely
+empty store and a retained store with a missing key both refuse without creating
+a key, setup record, custody schema or preparation audit. A separately admitted
+first-key initialization boundary is still required; adding a dummy credential
+is not a product workaround.
+
+These operations are deliberately not connected to the writable API, settings
+UI, managed activation or startup consumer yet. Gate/application isolation and
+the paired cold-configuration consumer below also remain required. This is an
+internal preparation foundation, not self-service configuration or a deployment.
+
+Focused verification on 2026-10-10 covered 58 pure custody/bootstrap/decoder
+tests and 46 connected preparation/cold-read/legacy regression groups against
+the same production source. The final connected run passed all 46 in 463.768
+seconds, with no skips, in the cached backend image with networking disabled,
+read-only source/root and a dedicated private synthetic scratch directory.
+Earlier fixture failures are retained: the test worker needed a private umask,
+the scratch directory needed mode 0700, and successful managed tests needed an
+explicit existing-key baseline. Those corrections did not relax production
+guards; separate empty/missing-key negatives still pass.
+
+The connected tests exercise the actual publication lock, SQLite transaction,
+encrypted preparation and audit rollback; fresh processes validate exact
+cold reads without importing runtime configuration/database/key-initialization
+modules. The existing public setup, publication and Google profile regressions
+also pass. Evidence is retained under
+`serverware-operator-workspace-evidence/google-managed-preparation.PFpa4l7D`;
+temporary test containers were removed, not evidence or live services.
+No managed activation, writable settings API, real Google request, live upgrade
+or native-pilot acceptance was exercised by these tests.
 
 ## Keep the objects distinct
 

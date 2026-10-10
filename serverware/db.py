@@ -195,7 +195,7 @@ from serverware.crypto import (
     load_bound_secret_keyring,
     load_master_key,
 )
-from serverware.db_common import dumps, iso_now, loads, utcnow
+from serverware.db_common import audit_hash as _common_audit_hash, dumps, iso_now, loads, utcnow
 from serverware.rbac import RBACRoleValidationError, normalize_rbac_roles
 
 _AUDIT_EVENT_JSON_WRITE_MAX_BYTES = 2 * 1024 * 1024
@@ -618,18 +618,11 @@ def _audit_hash(
     prev_event_hash: str | None,
     created_at: str,
 ) -> str:
-    payload = dumps(
-        {
-            "id": event_id,
-            "event_type": event_type,
-            "actor_type": actor_type,
-            "actor_id": actor_id,
-            "event_json": event_json,
-            "prev_event_hash": prev_event_hash,
-            "created_at": created_at,
-        }
+    return _common_audit_hash(
+        event_id=event_id, event_type=event_type, actor_type=actor_type,
+        actor_id=actor_id, event_json=event_json, prev_event_hash=prev_event_hash,
+        created_at=created_at,
     )
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _validate_audit_event_json(event_json: str) -> None:

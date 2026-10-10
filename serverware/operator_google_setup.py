@@ -1,19 +1,29 @@
-"""Reviewed, public-only first Google enablement on a retained operator store.
+"""Reviewed first Google preparation on a retained operator store.
 
-Preparation never edits settings, loads a client secret, or contacts a provider.
+Legacy preparation stays public-only. Internal managed preparation also retains
+an encrypted application secret in the same setup/audit transaction; it neither
+edits effective settings nor contacts a provider. There is no managed API or
+activation path yet.
 Cold activation consumes the exact pending review in the caller's publication
 transaction; it preserves resource rows and signed policy, not stale reviews.
+Import and retained-row decoding are configuration-independent. API/runtime
+functions import configured database access only when called; this module does
+not itself implement managed cold configuration or early-startup admission.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import uuid
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
-from serverware import db, operator_catalog_schema as catalog
+from serverware import operator_catalog_schema as catalog
 from serverware import operator_catalog_oauth_profile as profiles
+from serverware import operator_provider_custody as custody
+from serverware.db_common import audit_hash
 from serverware.operator_catalog_inputs import RevisionInput, _identifier
 from serverware.operator_publication import exclusive, assert_held
 
@@ -23,6 +33,9 @@ _PREFIX = "operator_catalog.google_setup."
 _KEYS = {"operation_id", "actor_id", "client_id", "old_settings", "target_settings",
     "expected_settings_digest", "public_url", "redirect_uri", "profile_binding", "profile_binding_digest",
     "reviewed_revision", "staged_revision", "policy_hash", "created_at"}
+MANAGED_BINDING = "serverware.operatorGoogleManagedSetupBinding/v1"
+MANAGED_PUBLIC = "serverware.operatorGoogleManagedSetup/v1"
+_MANAGED_KEYS = _KEYS | {"setup_contract", "custody_ref"}
 _SQL = """CREATE TABLE operator_google_setups (
     operation_id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, status TEXT NOT NULL,
     binding_json TEXT NOT NULL, terminal_revision INTEGER, terminal_policy_hash TEXT, completed_at TEXT) WITHOUT ROWID"""
@@ -68,6 +81,21 @@ class SetupInput(RevisionInput):
 class CancelInput(RevisionInput):
     operation_id: str = Field(min_length=36, max_length=36)
     _uuid = field_validator("operation_id")(_identifier)
+
+
+class ManagedSetupInput(SetupInput):
+    """Internal write-only input; no endpoint accepts this contract yet."""
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    client_secret: str = Field(min_length=1, max_length=custody.MAX_SECRET_BYTES, repr=False, exclude=True)
+
+    @field_validator("client_secret")
+    @classmethod
+    def application_secret(cls, value):
+        try:
+            custody._secret(value)
+        except custody.CustodyError:
+            raise ValueError("operator Google application secret refused") from None
+        return value
 
 
 def _require(value):
@@ -120,7 +148,7 @@ def _audit(conn, operation_id, action, expected):
     row = conn.execute("SELECT * FROM audit_events WHERE id=?", ("operator-google-setup:" + operation_id + ":" + action,)).fetchone()
     _require(row is not None and row["event_type"] == _PREFIX + action and row["actor_type"] == "admin"
         and row["actor_id"] == expected["actor_id"] and json.loads(row["event_json"]) == expected
-        and row["event_hash"] == db._audit_hash(event_id=row["id"], event_type=row["event_type"],
+        and row["event_hash"] == audit_hash(event_id=row["id"], event_type=row["event_type"],
             actor_type=row["actor_type"], actor_id=row["actor_id"], event_json=row["event_json"],
             prev_event_hash=row["prev_event_hash"], created_at=row["created_at"]))
 
@@ -131,7 +159,74 @@ def _terminal(item):
         "profile_binding_digest": item["binding"]["profile_binding_digest"], "completed_at": item["completed_at"]}
 
 
+def _managed(item):
+    return item["binding"].get("setup_contract") == MANAGED_BINDING
+
+
+def _custody_present(conn):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE lower(name) GLOB 'operator_provider_custody*' "
+        "OR lower(tbl_name) GLOB 'operator_provider_custody*' LIMIT 1").fetchone() is not None
+
+
+def _structural_owner_reference(owner_id):
+    # This is only a local, process-bound reference for public schema inspection,
+    # NOT development-profile admission or readiness. The internal custody type
+    # is not an unforgeable capability. No key read/decrypt is reachable here.
+    # Writers and cold secret consumers must separately admit actual ownership.
+    return custody.DevelopmentOwner(owner_id, os.geteuid(), os.getpid())
+
+
+def _inspect_custody(conn, items):
+    managed = [item for item in items if _managed(item)]
+    if not managed:
+        _require(not _custody_present(conn))
+        return
+    _require(len(managed) <= custody.MAX_VERSIONS)
+    references = [item["binding"]["custody_ref"] for item in managed]
+    owner_id = references[0]["owner_id"]
+    _require(all(ref["owner_id"] == owner_id for ref in references)
+        and {ref["config_version"] for ref in references} == set(range(1, len(managed) + 1)))
+    owner = _structural_owner_reference(owner_id)
+    for item in managed:
+        binding = item["binding"]
+        exact = custody.bind_google(owner, config_version=binding["custody_ref"]["config_version"],
+            public_profile=binding["profile_binding"])
+        custody.inspect_public_binding(conn, owner, exact)
+    # Inspection above validates the full custody grammar and bounded envelopes.
+    # Require a bijection: no retained row is an orphan or an implicit candidate.
+    versions = conn.execute("SELECT config_version FROM " + custody.TABLE + " ORDER BY config_version LIMIT ?",
+        (custody.MAX_VERSIONS + 1,)).fetchall()
+    _require([row[0] for row in versions] == list(range(1, len(managed) + 1)))
+
+
+def _managed_binding(binding, status):
+    reference = binding["custody_ref"]
+    _require(binding["setup_contract"] == MANAGED_BINDING and status in {"pending", "cancelled"}
+        and type(reference) is dict and set(reference) == {"owner_id", "config_version"}
+        and _identifier(reference["owner_id"]) == reference["owner_id"]
+        and type(reference["config_version"]) is int and 1 <= reference["config_version"] <= custody.MAX_VERSIONS)
+    # The managed contract is separately versioned and closed. It uses the
+    # existing settings/profile grammars, not a second configuration authority.
+    _settings(json.dumps(binding["old_settings"], sort_keys=True))
+    _settings(json.dumps(binding["target_settings"], sort_keys=True))
+    from serverware.operator_demo import origin
+    _require(origin(binding["public_url"])[0] == binding["public_url"]
+        and binding["redirect_uri"] == binding["public_url"] + profiles.CALLBACK_PATH
+        and type(binding["staged_revision"]) is int
+        and type(binding["policy_hash"]) is str and catalog._SHA.fullmatch(binding["policy_hash"])
+        and type(binding["created_at"]) is str and 1 <= len(binding["created_at"]) <= 128)
+    _actor(binding["actor_id"])
+
+
 def _rows(conn):
+    """Decode retained state and structural custody joins, never load a secret."""
+    try:
+        return _decode_rows(conn)
+    except (sqlite3.Error, custody.CustodyError, ValueError, TypeError, KeyError, IndexError, AttributeError, RecursionError):
+        raise SetupUnavailable("operator Google setup unavailable") from None
+
+
+def _decode_rows(conn):
     objects = {row["name"]: row for row in conn.execute("SELECT name,type,tbl_name,sql FROM sqlite_master "
         "WHERE name IN (" + ",".join("?" for _ in _DEFINITIONS) + ") OR (type='trigger' AND tbl_name=?)",
         (*[item[0] for item in _DEFINITIONS], TABLE))}
@@ -139,7 +234,7 @@ def _rows(conn):
         (*[_PREFIX + action for action in ("prepared", "cancelled", "activated")], 2 * MAX_OPERATIONS + 1)).fetchall()
     _require(len(audits) <= 2 * MAX_OPERATIONS)
     if not objects:
-        _require(not audits)
+        _require(not audits and not _custody_present(conn))
         return []
     _require(set(objects) == {item[0] for item in _DEFINITIONS})
     for name, kind, sql in _DEFINITIONS:
@@ -153,7 +248,8 @@ def _rows(conn):
     for row in records:
         _require(isinstance(row["binding_json"], str) and len(row["binding_json"].encode("utf-8")) <= 32768)
         binding = json.loads(row["binding_json"])
-        _require(isinstance(binding, dict) and set(binding) == _KEYS and row["binding_json"] == _canonical(binding)
+        _require(isinstance(binding, dict) and set(binding) in (_KEYS, _MANAGED_KEYS)
+            and row["binding_json"] == _canonical(binding)
             and _identifier(row["operation_id"]) == binding["operation_id"] and row["actor_id"] == binding["actor_id"]
             and row["status"] in {"pending", "cancelled", "activated"}
             and profiles._CLIENT_ID.fullmatch(binding["client_id"]) is not None
@@ -168,12 +264,15 @@ def _rows(conn):
                 or (row["status"] != "pending" and type(row["terminal_revision"]) is int
                     and row["terminal_revision"] > binding["staged_revision"] and isinstance(row["completed_at"], str)
                     and isinstance(row["terminal_policy_hash"], str) and catalog._SHA.fullmatch(row["terminal_policy_hash"]))))
+        if set(binding) == _MANAGED_KEYS:
+            _managed_binding(binding, row["status"])
         item = {**dict(row), "binding": binding}
         _audit(conn, row["operation_id"], "prepared", binding)
         if row["status"] != "pending":
             _audit(conn, row["operation_id"], row["status"], _terminal(item))
         result.append(item)
     _require(sum(item["status"] == "pending" for item in result) <= 1)
+    _inspect_custody(conn, result)
     return result
 
 
@@ -185,9 +284,29 @@ def _public(item):
             "activated_revision": item["terminal_revision"], "policy_hash": binding["policy_hash"],
             "profile_binding_digest": binding["profile_binding_digest"],
             "settings_digest": _digest(binding["target_settings"]), "activated_at": item["completed_at"]}
-    return {"schema": "serverware.operatorGoogleSetup/v1", **{key: value for key, value in binding.items() if key != "actor_id"},
+    return {"schema": MANAGED_PUBLIC if _managed(item) else "serverware.operatorGoogleSetup/v1",
+        **{key: value for key, value in binding.items() if key != "actor_id"},
+        **({"secret_present": True} if _managed(item) else {}),
         "status": item["status"], "revision": item["terminal_revision"] or binding["staged_revision"],
         "completed_at": item["completed_at"], "activation_receipt": receipt}
+
+
+def read_managed_pending(conn, operation_id):
+    """Inspect only the exact pending managed operation in an existing snapshot.
+
+    Internal cold-reader primitive, not HTTP lookup or activation authority. The
+    caller must already admit the complete development profile and publication
+    read snapshot. Returned secret_present is structural only; it never reads a
+    key, authenticates ciphertext, chooses latest, or establishes readiness.
+    """
+    try:
+        _identifier(operation_id)
+        _require(isinstance(conn, sqlite3.Connection) and conn.in_transaction)
+        matches = [item for item in _rows(conn) if item["operation_id"] == operation_id]
+        _require(len(matches) == 1 and _managed(matches[0]) and matches[0]["status"] == "pending")
+        return _public(matches[0])
+    except (sqlite3.Error, ValueError, TypeError, AttributeError):
+        raise SetupUnavailable("operator Google setup unavailable") from None
 
 
 def _snapshot(conn, *, disabled):
@@ -211,7 +330,7 @@ def _snapshot(conn, *, disabled):
 
 
 def review(actor_id):
-    from serverware import operator_demo_store
+    from serverware import db, operator_demo_store
     operator_demo_store._require()
     _actor(actor_id)
     with db.connect() as conn:
@@ -223,7 +342,8 @@ def review(actor_id):
             "expected_policy_hash": policy["policy_hash"], "expected_settings_digest": _digest(old),
             "old_settings": old, "target_settings": _target(old), "public_url": origin, "redirect_uri": redirect,
             "provider_id": "google", "permission_preset": profiles.PERMISSION_PRESET, "scopes": list(profiles.SCOPES),
-            "eligible": not any(row["status"] == "pending" for row in rows) and len(rows) < MAX_OPERATIONS}
+            "eligible": not any(row["status"] == "pending" or _managed(row) for row in rows)
+                and len(rows) < MAX_OPERATIONS}
 
 
 def _get(conn, operation_id, actor_id):
@@ -236,7 +356,7 @@ def _get(conn, operation_id, actor_id):
 
 
 def status(operation_id, actor_id):
-    from serverware import operator_demo_store
+    from serverware import db, operator_demo_store
     operator_demo_store._require()
     with db.connect() as conn:
         conn.execute("BEGIN")
@@ -244,14 +364,43 @@ def status(operation_id, actor_id):
 
 
 def _append(conn, identifier, actor_id, action, event):
+    from serverware import db
     db.append_audit_event(conn, event_type=_PREFIX + action, actor_type="admin", actor_id=actor_id,
         event=event, idempotency_key="operator-google-setup:" + identifier + ":" + action)
 
 
 def prepare(payload, actor_id):
-    from serverware import operator_demo_store
-    operator_demo_store._require()
+    _require(not isinstance(payload, ManagedSetupInput))
     payload = SetupInput.model_validate(payload.model_dump() if isinstance(payload, SetupInput) else payload)
+    return _prepare(payload, actor_id, managed=False)
+
+
+def prepare_managed(payload, actor_id):
+    """Internal atomic encrypted preparation, not activation or a public API."""
+    try:
+        if isinstance(payload, ManagedSetupInput):
+            payload = {**payload.model_dump(), "client_secret": payload.client_secret}
+        return _prepare(ManagedSetupInput.model_validate(payload), actor_id, managed=True)
+    except (sqlite3.Error, ValueError, TypeError, RuntimeError):
+        # Never echo validation input, filesystem failures, SQL or crypto detail.
+        raise SetupUnavailable("operator Google setup unavailable") from None
+
+
+def _admit_managed_owner(owner_id):
+    from serverware import config, operator_demo, oauth_application_owner
+    _require(not profiles.selected() and not config.GOOGLE_OAUTH_CLIENT_ID
+        and not config.GOOGLE_OAUTH_CLIENT_SECRET and config.GOOGLE_OAUTH_CLIENT_SECRET_FILE is None
+        and config.GOOGLE_OAUTH_REDIRECT_URI == config.PUBLIC_URL + profiles.CALLBACK_PATH)
+    return custody.admit_development_owner(owner_id, operator_development=operator_demo.active(),
+        release_channel=config.RELEASE_CHANNEL, production_image=config.PRODUCTION_IMAGE,
+        native_or_enrolled=(config.TEE_PLATFORM != "none-dev" or config.TEE_QUOTE_PROVIDER != "dev-signed-quote"
+            or config.ATOMIC_RELEASE_AUTHORIZATION_ENABLED or config.KEY_RELEASE_REQUIRED
+            or oauth_application_owner.require_started() is not None))
+
+
+def _prepare(payload, actor_id, *, managed):
+    from serverware import db, operator_demo_store
+    operator_demo_store._require()
     _actor(actor_id)
     with exclusive(), db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -262,17 +411,38 @@ def prepare(payload, actor_id):
         rows = _rows(conn)
         if len(rows) >= MAX_OPERATIONS or any(item["status"] == "pending" or item["operation_id"] == payload.operation_id for item in rows):
             raise catalog.CatalogConflict()
+        retained_managed = [item for item in rows if _managed(item)]
+        if not managed:
+            _require(not retained_managed)
+        elif len(retained_managed) >= custody.MAX_VERSIONS:
+            raise catalog.CatalogConflict()
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (TABLE,)).fetchone() is None:
             for _, _, sql in _DEFINITIONS:
                 conn.execute(sql)
         origin, redirect = _public_origin()
         public_binding = profiles._record(payload.client_id, redirect)
+        reference = None
+        if managed:
+            from serverware import config
+            # _rows proved exact custody/setup joins, including one stable owner
+            # and all retained versions. Allocation is not activation selection.
+            owner_id = (retained_managed[0]["binding"]["custody_ref"]["owner_id"]
+                if retained_managed else str(uuid.uuid4()))
+            owner = _admit_managed_owner(owner_id)
+            key = custody.read_existing_master_key(config.DATA_DIR, owner)
+            exact = custody.bind_google(owner, config_version=len(retained_managed) + 1, public_profile=public_binding)
+            if not retained_managed:
+                custody.install_empty_store(conn, owner)
+            custody.insert_secret(conn, owner, exact, key=key, secret=payload.client_secret)
+            reference = {"owner_id": owner_id, "config_version": exact.config_version}
         staged = catalog.advance_revision(conn, payload.expected_revision)
         binding = {"operation_id": payload.operation_id, "actor_id": actor_id, "client_id": payload.client_id,
             "old_settings": old, "target_settings": _target(old), "expected_settings_digest": _digest(old),
             "public_url": origin, "redirect_uri": redirect, "profile_binding": public_binding,
             "profile_binding_digest": _digest(public_binding), "reviewed_revision": payload.expected_revision,
             "staged_revision": staged, "policy_hash": policy["policy_hash"], "created_at": db.iso_now()}
+        if managed:
+            binding.update(setup_contract=MANAGED_BINDING, custody_ref=reference)
         conn.execute("INSERT INTO " + TABLE + " VALUES (?,?,'pending',?,NULL,NULL,NULL)",
             (payload.operation_id, actor_id, _canonical(binding)))
         _append(conn, payload.operation_id, actor_id, "prepared", binding)
@@ -282,7 +452,7 @@ def prepare(payload, actor_id):
 
 
 def cancel(payload, actor_id):
-    from serverware import operator_demo_store
+    from serverware import db, operator_demo_store
     operator_demo_store._require()
     payload = CancelInput.model_validate(payload.model_dump() if isinstance(payload, CancelInput) else payload)
     with exclusive(), db.connect() as conn:
@@ -306,6 +476,10 @@ def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retain
     """Pure reads; preflight and the activation transaction use the same gates."""
     if not profiles.selected():
         return None
+    # External env/file ownership cannot claim a managed application namespace,
+    # including after all managed preparations have been cancelled. Disabled
+    # startup remains usable; managed activation is deliberately not wired yet.
+    _require(not _custody_present(conn))
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='operator_catalog_oauth_profile'").fetchone():
         return None
     if not catalog.active(conn):
@@ -321,6 +495,7 @@ def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retain
     _require(len(rows) == 1)
     item, = rows
     binding = item["binding"]
+    _require(not _managed(item))
     from serverware import config
     profile = profiles.validate_imported_configuration(config)
     origin, redirect = _public_origin()
@@ -335,6 +510,7 @@ def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retain
 
 
 def startup(conn, previous_settings_raw, target_settings_raw, *, retained_authority=None):
+    from serverware import db
     assert_held()
     _require(isinstance(conn, sqlite3.Connection) and conn.in_transaction)
     item = validate_startup(conn, previous_settings_raw, target_settings_raw, retained_authority=retained_authority)

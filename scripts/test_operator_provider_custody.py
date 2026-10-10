@@ -236,6 +236,134 @@ class CustodyTests(unittest.TestCase):
         self.conn.execute(f"INSERT INTO {custody.TABLE} VALUES(?,?,?,?)", (1, duplicate, b"n" * 12, b"x" * 32))
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
 
+    def test_public_inspection_is_exact_read_only_and_never_uses_secret_paths(self):
+        self.install()
+        self.insert()
+        expected = custody.read_secret(self.conn, self.owner, self.binding, key=KEY).public_view()
+        before = tuple(self.conn.iterdump())
+        self.conn.commit()
+        self.conn.execute("PRAGMA query_only=ON")
+        self.conn.execute("BEGIN")
+        with patch.object(custody, "read_existing_master_key", side_effect=AssertionError("key read")), \
+                patch.object(custody, "_key", side_effect=AssertionError("key validation")), \
+                patch.object(custody, "open_secret", side_effect=AssertionError("secret open")), \
+                patch.object(custody, "AESGCM", side_effect=AssertionError("cipher use")), \
+                patch("serverware.operator_publication.assert_held", side_effect=AssertionError("writer guard")):
+            public = custody.inspect_public_binding(self.conn, self.owner, self.binding)
+        self.assertEqual(public, expected)
+        self.assertNotIn(SECRET, json.dumps(public))
+        self.assertEqual(tuple(self.conn.iterdump()), before)
+        public["public_profile"]["scopes"].clear()
+        self.assertEqual(custody.inspect_public_binding(self.conn, self.owner, self.binding), expected)
+
+    def test_public_inspection_refuses_owner_version_and_profile_mismatch(self):
+        self.install()
+        selected = binding(self.owner, 2)
+        self.insert(selected)
+        other = owner()
+        mismatches = ((self.owner, self.binding), (other, binding(other, 2)),
+            (self.owner, binding(self.owner, 2, client="999-other.apps.googleusercontent.com")),
+            (self.owner, binding(self.owner, 2,
+                callback="https://another.example.com/api/oauth/callback/google")))
+        for admitted, candidate in mismatches:
+            with self.subTest(binding=candidate):
+                self.refused(custody.inspect_public_binding, self.conn, admitted, candidate)
+        public = custody.inspect_public_binding(self.conn, self.owner, selected)
+        self.assertEqual(public["config_version"], 2)
+        self.assertEqual(public["owner_id"], self.owner.owner_id)
+
+    def test_public_inspection_absence_malformed_schema_and_missing_row_never_initialize(self):
+        before = tuple(self.conn.iterdump())
+        self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding, absent=True)
+        self.assertEqual(tuple(self.conn.iterdump()), before)
+        self.install()
+        self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
+        self.insert()
+        self.conn.execute(f"DROP TRIGGER {custody.TABLE}_retained")
+        before = tuple(self.conn.iterdump())
+        self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
+        self.assertEqual(tuple(self.conn.iterdump()), before)
+
+    def test_public_inspection_refuses_structural_corruption_in_unselected_rows(self):
+        self.install()
+        self.insert()
+        duplicate = self.binding.profile_json[:-1] + ',"client_id":"' + CLIENT + '"}'
+        cases = ((self.binding.profile_json, b"n" * 11, b"x" * 32),
+            (self.binding.profile_json, "n" * 12, b"x" * 32),
+            (self.binding.profile_json, b"n" * 12, b"x" * 16),
+            (self.binding.profile_json, b"n" * 12, b"x" * (custody.MAX_SECRET_BYTES + 17)),
+            (self.binding.profile_json, b"n" * 12, "x" * 32),
+            ("{}", b"n" * 12, b"x" * 32),
+            ("x" * (custody.MAX_PROFILE_BYTES + 1), b"n" * 12, b"x" * 32),
+            (duplicate, b"n" * 12, b"x" * 32))
+        for index, (profile, nonce, ciphertext) in enumerate(cases):
+            with self.subTest(case=index):
+                self.conn.execute("SAVEPOINT corrupt_row")
+                self.conn.execute(f"INSERT INTO {custody.TABLE} VALUES(?,?,?,?)", (2, profile, nonce, ciphertext))
+                self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
+                self.conn.execute("ROLLBACK TO corrupt_row")
+                self.conn.execute("RELEASE corrupt_row")
+        self.assertTrue(custody.inspect_public_binding(self.conn, self.owner, self.binding)["secret_present"])
+
+    def test_public_inspection_requires_valid_caller_snapshot(self):
+        self.conn.rollback()
+        self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
+        self.refused(custody.inspect_public_binding, object(), self.owner, self.binding)
+        self.conn.execute("BEGIN")
+        self.refused(custody.inspect_public_binding, self.conn,
+            replace(self.owner, pid=self.owner.pid + 1), self.binding)
+        self.refused(custody.inspect_public_binding, self.conn, self.owner,
+            replace(self.binding, config_version=True))
+        self.conn.close()
+        self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
+
+    def test_public_inspection_structural_presence_does_not_authenticate_ciphertext(self):
+        self.install()
+        envelope = custody.seal(self.owner, self.binding, key=KEY, secret=SECRET)
+        changed = envelope.ciphertext[:-1] + bytes([envelope.ciphertext[-1] ^ 1])
+        self.conn.execute(f"INSERT INTO {custody.TABLE} VALUES(?,?,?,?)",
+            (1, self.binding.profile_json, envelope.nonce, changed))
+        self.assertTrue(custody.inspect_public_binding(self.conn, self.owner, self.binding)["secret_present"])
+        self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
+
+    def test_public_inspection_import_independent_without_a_key_or_decryption(self):
+        program = '''
+import importlib.abc, sqlite3, sys
+forbidden = {"serverware.config", "serverware.crypto", "serverware.db", "serverware.operator_publication"}
+class Forbidden(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in forbidden:
+            raise AssertionError("forbidden import")
+sys.meta_path.insert(0, Forbidden())
+sys.path.insert(0, sys.argv[1])
+from serverware import operator_provider_custody as c
+o = c.admit_development_owner(sys.argv[2], operator_development=True,
+    release_channel="dev", production_image=False, native_or_enrolled=False)
+b = c.bind_google(o, config_version=1, public_profile=c.google._record(
+    "123-synthetic.apps.googleusercontent.com", "https://console.example.com/api/oauth/callback/google"))
+conn = sqlite3.connect(":memory:")
+for _, _, _, sql in c._DEFINITIONS:
+    conn.execute(sql)
+conn.execute(f"INSERT INTO {c.META} VALUES(1,?,?)", (c.SCHEMA, o.owner_id))
+conn.execute(f"INSERT INTO {c.TABLE} VALUES(?,?,?,?)", (1, b.profile_json, b"n" * 12, b"x" * 17))
+conn.commit()
+conn.execute("PRAGMA query_only=ON")
+conn.execute("BEGIN")
+def denied(*args, **kwargs):
+    raise AssertionError("secret operation")
+c.AESGCM = c._key = c._read_file = c.read_existing_master_key = c.open_secret = c.read_secret = denied
+public = c.inspect_public_binding(conn, o, b)
+assert public == {"schema": c.SCHEMA, "owner_id": o.owner_id, "config_version": 1,
+    "public_profile": c.google._record("123-synthetic.apps.googleusercontent.com",
+        "https://console.example.com/api/oauth/callback/google"), "secret_present": True}
+assert not forbidden.intersection(sys.modules)
+conn.close()
+'''
+        result = subprocess.run([sys.executable, "-B", "-c", program, str(ROOT), self.owner.owner_id],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
+        self.assertEqual(result.stdout, b"")
+
 
 class ExistingKeyTests(unittest.TestCase):
     def setUp(self):

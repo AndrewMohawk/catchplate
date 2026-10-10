@@ -164,6 +164,41 @@ internal configuration/proxy proof only: no real Google consent or provider
 request, new writable API/UI acceptance, native-pilot acceptance, live deployment
 change or production-readiness claim follows.
 
+### New-consent readiness boundary
+
+Managed initial consent and reauthorization now capture the exact configured
+app/gate readiness observation before taking publication or SQLite ownership.
+Within their existing reviewed-revision transaction, they recheck the same
+activated operation, committed process profile, current destination settings
+and policy before any consent write. A matching unconfigured pair is not
+eligible. The transaction recheck is local-only; it never makes a gate request.
+
+An unavailable gate, configuration mismatch or changed review refuses the new
+start through the existing fixed 409 response. This does not add a readiness
+requirement to callbacks, actor-owned status recovery, disconnect, token refresh
+or credential leases. In particular, a gate outage after issuing a consent URL
+must not strand that already-started operation. Flag-off external profiles keep
+their existing start behavior without a new health-request dependency.
+
+These are point-in-time admission observations, not leases, Google health checks
+or a promise that the proxy will remain available for the whole browser flow.
+The existing callback, state, identity and credential-authority checks still own
+those later transitions.
+
+At source `d06fc6d7629787244e954ea3dd159e23880be939`, all **31** focused checks
+passed: 21 inert helper/observer checks, six connected managed-consent groups
+and four existing external-profile consent/reauthorization regression groups.
+The managed groups completed in 198.186 seconds. They exercise actual ASGI
+admission, cookies/PKCE, SQLite and publication ownership, including unchanged
+state on refusal, current-CAS rejection of old observations, and both callbacks
+plus actor-owned recovery while gate health is unavailable. Health and provider
+transports are synthetic; managed refresh, disconnect and leases were not
+executed by this batch. Evidence is retained in
+`serverware-operator-workspace-evidence/google-managed-consent.vm77HTMZ`, with
+the exact source archive/manifest, command, log and successful network-none
+container termination. This is not browser, live gate/provider, deployment or
+native-pilot acceptance.
+
 ## Keep the objects distinct
 
 | Object | Operator action | What it does not imply |
@@ -235,6 +270,20 @@ bytes), with a single nonempty secret of at most 4096 UTF-8 bytes, a canonical
 client ID and no unknown keys. Retain current admin, exact Origin, strict JSON,
 no-store and operation-ownership guards. Reject paths, commands, arbitrary
 endpoints/scopes, environment assignments and deployment control inputs.
+
+The managed API must distinguish pre-lifecycle input rejection (422), reviewed
+state conflict (409), absent actor-owned receipt (404), and uncertain storage,
+commit, publication or response outcomes (503). Do not reuse the legacy setup
+wrapper's blanket `SetupUnavailable` to 409 mapping: managed preparation can
+raise that exception after commit. A missing receipt never proves rollback or
+authorizes replay. Settings discovery must still work after activation rather
+than calling the unconfigured-only review operation unconditionally.
+
+The UI must retain only an exact operation reference before sending, clear the
+write-only client secret from both the form and transient payload, and recover
+uncertain results through GET only. The generic catalog mutation controller does
+not supply this contract. Saving provider configuration must not automatically
+start account consent or restart either service.
 
 Public results contain the public binding, operation/version, timestamps,
 status and `secret_present` only. Never return the secret, encrypted envelope,
@@ -329,8 +378,7 @@ rewrite existing profiles or disconnect accounts to force adoption.
 
 The internal configuration/custody modules, config-independent reader, startup
 integration and public gate consumer now have the isolated acceptance above.
-The next implementation boundary is the authenticated writable API/UI and
-start-only readiness admission for new consent/reauthorization. Preserve
+The next implementation boundary is the authenticated writable API/UI. Preserve
 production, enrolled/native ownership, existing-account recovery and all
 provider-selection guards. Do not duplicate their authority in the UI.
 

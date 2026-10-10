@@ -6,10 +6,10 @@ permission also includes metadata GETs for that same package. This is separate
 from the metadata-only preset and the legacy `npm.registry` approval workflow;
 neither existing permission is automatically upgraded.
 
-**Verification status: focused Python, UI and fixture checks have passed;
-compiled acceptance and stock-client runtime acceptance remain pending.**
-This document describes the authored contract and client recipe, not a successful
-publish, a live deployment, or public npm registry acceptance.
+**Verification status: focused Python, UI, fixture and genuine Rust checks have
+passed; isolated stock-client runtime acceptance remains pending.**
+This document describes the implemented contract and client recipe, not completed
+end-to-end publishing acceptance, a live deployment, or public npm registry acceptance.
 
 ## Operator workflow
 
@@ -146,11 +146,31 @@ The current bounded checks passed:
   and events at `37a3b36d`.
 - UI source and pure checks, plus six of six rendered-browser groups, at
   `e841f843`. These do not execute a real registry publish.
-- 11 of 11 stock-fixture pure tests at `bb3988d7`.
+- 23 of 23 stock-fixture pure tests at `477efa5a`. These inspect the fixture/checker contract,
+  not a running stock client.
+- 33 of 33 genuine Rust tests at source commit `58b10689`: 11 publishing,
+  15 metadata and seven shared send-deadline/revocation regressions. A separate
+  normal gate binary was then built, SHA-256
+  `09b9551d63b77353b50cd52aa0beb2e746314ff4f2e16a469b7017555f13abff`.
 
-The first genuine Rust run passed nine of 11 tests; two test-setup failures are
-being corrected. Rust acceptance, a genuinely compiled matching gate's isolated
-stock-client runtime acceptance, and live deployment remain pending.
+The earlier failed Rust run and first two bounded stock-checker failures remain
+retained. A third isolated stock run passed the exact prerequisite-read and
+unscoped-publish checkpoints, including the corrected framing and keep-alive
+checks. It then stopped: the scoped npm client exited with status 1 after the
+synthetic registry returned HTTP 400, and only the unscoped version was stored.
+The third failure is retained. A fourth diagnostic run completed the
+prerequisite-read, unscoped-publish, scoped-publish and wrong-package checkpoints,
+storing two fixture publications. The scoped HTTP 400 did not recur. This run
+then stopped at the outside-window control: stopped-state evidence shows both
+GET and PUT denied with proxy credential-generation-unavailable HTTP 503
+(`credential_generation_missing`) before the intended time-window guard.
+This is not proof of the expected HTTP 403 time-window denial. The client exited
+with status 1; its exact npm error code was not established. Five earlier
+upstream releases completed, and both scoped and unscoped versions were stored.
+The gate logged lease-renewal failures; their underlying cause remains under
+diagnosis. No fresh end-to-end run has followed this diagnosis, and no expiry
+extension, retry workaround or live-deployment change has been made. The
+complete stock-client flow has not passed; no production defect is inferred.
 
 The isolated fixture must prove metadata GETs independently: npm can suppress
 preflight GET errors, so a

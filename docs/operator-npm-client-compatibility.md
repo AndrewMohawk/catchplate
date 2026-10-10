@@ -2,13 +2,28 @@
 
 Status: **full install/publish specification; not verified end to end**. The
 additive [package metadata profile](operator-npm-metadata.md) passed private
-synthetic acceptance with stock npm/pacote on 2026-10-10. It is metadata-only,
-not yet deployed, and does not implement tarball reads, default auditing or
-publication. The remaining gap table below describes the
+synthetic acceptance with stock npm/pacote on 2026-10-10. It is metadata-only:
+that result does not establish live-deployment acceptance or implement tarball
+reads, default auditing or publication. The remaining gap table below describes the
 legacy `npm.registry` path, not the new metadata-only profile. The original
 2026-10-09 source review did not execute npm, build the gate, start a fixture, or
 contact a registry. Existing example/compiler tests are not an npm install or
 publish acceptance result.
+
+The separate [package-publishing permission](operator-npm-publish.md) is now
+implemented with one exact package/tag, prerequisite metadata reads and optional
+UTC publishing hours. Its 33 genuine Rust tests passed and a normal gate binary
+was built. The third isolated stock run stopped on a synthetic-registry HTTP 400
+for scoped publication. That condition did not recur in the fourth diagnostic
+run, which completed prerequisite reads, both unscoped and scoped publications,
+and the wrong-package check. Stopped-state evidence shows the outside-window
+GET and PUT then received proxy credential-generation-unavailable HTTP 503
+before the time-window guard, not the expected HTTP 403. The underlying
+lease-renewal failure remains under diagnosis; the exact npm error code was not
+established. No fresh end-to-end run, expiry extension, retry workaround or live
+change has followed. The failures remain retained and full stock-publishing
+acceptance is still pending, with no production defect inferred. This does not
+implement or prove installation, tarball reads or default auditing.
 
 ## User workflow and defaults
 
@@ -44,7 +59,12 @@ direct-publish implementation must state this provider boundary. Stage/promote,
 trusted publishing, and interactive provider 2FA are separate workflows, not
 capabilities conferred by Serverware's credential replacement or approval.
 
-## Source-backed protocol gaps
+## Historical legacy review and remaining install gaps
+
+The following table records the original `npm.registry` review. Its catalog,
+metadata and publication gaps are not claims that the additive profiles linked
+above are still unimplemented; those profiles have their own bounded contracts
+and verification results.
 
 | Area | Current source and required change |
 | --- | --- |
@@ -79,10 +99,11 @@ Upstream evidence: [registry-scoped npmrc authentication](https://docs.npmjs.com
 [default compression offer](https://raw.githubusercontent.com/npm/cli/v11.8.0/node_modules/minipass-fetch/lib/request.js),
 and [npm's compressed audit request](https://raw.githubusercontent.com/npm/cli/v11.8.0/workspaces/arborist/lib/audit-report.js).
 
-## Minimal implementation slice
+## Remaining installation work
 
-Use an additive versioned typed bundle; its final signed/API names require a
-contract review before implementation. Leave `npm.registry` behavior unchanged.
+Use an additive versioned typed installation bundle; its final signed/API names
+require a contract review before implementation. Leave `npm.registry` and the
+separate implemented metadata/publishing profiles unchanged.
 
 - One stored credential may back multiple application grants. Define install
   and publish authority independently, including necessary prerequisite reads,
@@ -93,14 +114,16 @@ contract review before implementation. Leave `npm.registry` behavior unchanged.
 - Internally choose the request/response profiles needed by the operation.
   Support ordinary client metadata and gzip audit behavior without global
   parser relaxation. Do not conceal an unsupported operation behind exit zero.
-- Ship basic install/publish and time-window acceptance as one complete slice.
+- Prove basic install/ci, default auditing and consuming a published version as
+  a complete installation slice; the narrower publishing profile does not prove them.
   Keep approval, staging, provenance and streaming visibly unavailable until
   each has its own complete authority/protocol verification.
 
-## Bounded private acceptance plan
+## Remaining full-install/private acceptance plan
 
 This is a future authorized run, not an executable runbook. Do not run the
 current private ordinary-client checker against a retained/live catalog.
+It is broader than the separate publish-only fixture and its current checks.
 
 ### Fixture and isolation
 

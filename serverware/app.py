@@ -56,6 +56,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from serverware import __version__
+from serverware import operator_audit_timing as _audit_timing
 from serverware import release_authorization_profiles as release_profiles
 from serverware import credential_lease_profiles as lease_profiles
 from serverware.portal_workload_identity import (
@@ -433,12 +434,29 @@ async def _run_bounded_blocking(
     function: Callable[..., Any],
     /,
     *args: Any,
+    _audit_observation: _audit_timing.AuditTiming | None = None,
+    _audit_phase: str | None = None,
     **kwargs: Any,
 ) -> Any:
+    observed = _audit_observation if _audit_phase in {"audit", "outbox", "sign"} else None
+    if observed is not None:
+        _audit_timing.mark(observed, _audit_phase + "_queued")
     await slots.acquire()
+    if observed is not None:
+        _audit_timing.mark(observed, _audit_phase + "_slot")
+
+    def observed_call() -> Any:
+        _audit_timing.mark(observed, _audit_phase + "_worker")
+        try:
+            return function(*args, **kwargs)
+        finally:
+            if _audit_phase == "outbox":
+                _audit_timing.mark(observed, "outbox_done")
+
     try:
         worker = asyncio.create_task(
-            asyncio.to_thread(function, *args, **kwargs)
+            asyncio.to_thread(observed_call) if observed is not None
+            else asyncio.to_thread(function, *args, **kwargs)
         )
     except BaseException:
         slots.release()
@@ -501,6 +519,8 @@ async def csrf_middleware(request: Request, call_next):
             await _run_bounded_blocking(
                 _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS,
                 db.drain_metadata_audit_outbox,
+                _audit_observation=request.scope.get("serverware.operator_audit_timing"),
+                _audit_phase="outbox",
                 limit=100,
             )
         except Exception:
@@ -1166,6 +1186,7 @@ class _SignedControlPlaneASGI:
             invalid_request_nonce,
         ) = _request_signature_inputs(scope)
         acquired_buffer_slot = False
+        audit_outcome = "failed"
         try:
             try:
                 await asyncio.wait_for(
@@ -1258,9 +1279,12 @@ class _SignedControlPlaneASGI:
             )
             proof_headers: dict[str, str] = {}
             if request_nonce is not None:
+                observation = scope.get("serverware.operator_audit_timing")
                 proof_headers = await _run_bounded_blocking(
                     _SIGNED_RESPONSE_WORKER_SLOTS,
                     _signed_control_plane_response_headers,
+                    _audit_observation=observation,
+                    _audit_phase="sign",
                     request_method=request_method,
                     request_path=request_path,
                     request_query=request_query,
@@ -1269,6 +1293,7 @@ class _SignedControlPlaneASGI:
                     response_headers=unsigned_headers,
                     body=wire_body,
                     representation_body=body,
+                    **({"audit_timing": observation} if observation is not None else {}),
                 )
             response = Response(
                 content=wire_body,
@@ -1288,11 +1313,17 @@ class _SignedControlPlaneASGI:
                 else completion_delivery if scope.get("path") in completion_delivery.POST_PATHS
                 else recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
                 else activation_delivery)
+            _audit_timing.mark(scope.get("serverware.operator_audit_timing"), "response_ready")
             await delivery._send_response(scope, receive, send, response,
                 before_dispatch=invalid_request_nonce,
                 downstream_failed=downstream_error is not None or buffered.too_large or not buffered.complete)
+            _audit_timing.mark(scope.get("serverware.operator_audit_timing"), "response_sent")
             if downstream_error is not None:
                 raise downstream_error
+            audit_outcome = "complete"
+        except asyncio.CancelledError:
+            audit_outcome = "cancelled"
+            raise
         finally:
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
@@ -1305,6 +1336,9 @@ class _SignedControlPlaneASGI:
             completion_delivery._discard_scope(scope)
             if acquired_buffer_slot:
                 _SIGNED_RESPONSE_BUFFER_SLOTS.release()
+            # Observation follows the original send/cleanup; it is not an ACK,
+            # admission decision, retry trigger or condition of response success.
+            _audit_timing.finish(scope.pop("serverware.operator_audit_timing", None), audit_outcome)
 
 
 def _signed_control_plane_response_headers(
@@ -1317,6 +1351,7 @@ def _signed_control_plane_response_headers(
     response_headers: list[tuple[bytes, bytes]],
     body: bytes,
     representation_body: bytes | None = None,
+    audit_timing: _audit_timing.AuditTiming | None = None,
 ) -> dict[str, str]:
     context_fields = (
         "runtime_manifest_digest",
@@ -1343,10 +1378,15 @@ def _signed_control_plane_response_headers(
         context = {field: attestation[field] for field in context_fields}
     else:
         snapshot = get_policy_snapshot()
+        _audit_timing.mark(audit_timing, "sign_policy_done")
+        manifest_digest = runtime_manifest_digest()
+        _audit_timing.mark(audit_timing, "sign_manifest_done")
+        artifact_digests = attestation_artifact_digests()
+        _audit_timing.mark(audit_timing, "sign_artifacts_done")
         context = {
-            "runtime_manifest_digest": runtime_manifest_digest(),
+            "runtime_manifest_digest": manifest_digest,
             "policy_bundle_digest": snapshot.hash if snapshot else None,
-            **attestation_artifact_digests(),
+            **artifact_digests,
         }
     statement = response_statement(
         method=request_method,
@@ -1358,7 +1398,10 @@ def _signed_control_plane_response_headers(
         nonce=request_nonce,
         context=context,
     )
-    return response_signature_headers(statement)
+    _audit_timing.mark(audit_timing, "sign_statement_done")
+    headers = response_signature_headers(statement)
+    _audit_timing.mark(audit_timing, "sign_crypto_done")
+    return headers
 
 
 class CredentialCreate(BaseModel):
@@ -20820,12 +20863,16 @@ def _validate_data_plane_audit_batch(batch: DataPlaneAuditBatch) -> None:
 def _ingest_data_plane_audit(
     batch: DataPlaneAuditBatch,
     x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
+    *,
+    audit_timing: _audit_timing.AuditTiming | None = None,
 ) -> dict[str, Any]:
     from serverware import control_plane_data_plane_audit as measured
     if measured.selected():
         raise HTTPException(status_code=403, detail="measured audit never accepts bearer-only authorship")
     _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN)
     _validate_data_plane_audit_batch(batch)
+    _audit_timing.activate(audit_timing)
+    _audit_timing.mark(audit_timing, "audit_admitted")
     try:
         recorded = db.record_audit_event_batch(
             [(item.event_type, item.event) for item in batch.events],
@@ -20844,6 +20891,7 @@ def _ingest_data_plane_audit(
             status_code=503,
             detail="data-plane audit storage is unavailable",
         ) from exc
+    _audit_timing.mark(audit_timing, "audit_done")
     return {"ok": True, "accepted": len(recorded)}
 
 
@@ -20865,6 +20913,14 @@ async def data_plane_audit(
         batch = DataPlaneAuditBatch.model_validate_json(request_body)
     except Exception as exc:
         raise HTTPException(status_code=422, detail="invalid data-plane audit batch") from exc
+    batch_digest = "sha256:" + hashlib.sha256(request_body).hexdigest()
+    from serverware import operator_demo
+    observation = None
+    if (operator_demo.active() and request.method == "POST"
+            and request.scope.get("path") == "/api/data-plane/audit"):
+        observation = _audit_timing.create(len(batch.events), batch_digest)
+        if observation is not None:
+            request.scope["serverware.operator_audit_timing"] = observation
     # Legacy SQLite/PostgreSQL transactions can wait on durable writes. Keep
     # those waits off the ASGI receive loop without unbounding worker creation.
     # The independently selected measured intake above retains its own owner.
@@ -20873,11 +20929,14 @@ async def data_plane_audit(
         _ingest_data_plane_audit,
         batch,
         x_serverware_data_plane_token,
+        _audit_observation=observation,
+        _audit_phase="audit",
+        **({"audit_timing": observation} if observation is not None else {}),
     )
     return {
         "apiVersion": "serverware.dataPlaneAuditAck/v1",
         **result,
-        "batchDigest": "sha256:" + hashlib.sha256(request_body).hexdigest(),
+        "batchDigest": batch_digest,
         "instanceId": DATA_PLANE_INSTANCE_ID,
     }
 

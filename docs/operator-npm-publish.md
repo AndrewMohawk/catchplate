@@ -155,6 +155,12 @@ The current bounded checks passed:
   The four accepted denial codes and positive receipt checks are unchanged;
   HTTP 503 and fetch timeouts remain failures. These tests are not stock-client
   runtime acceptance.
+- Seven audit-timing tests and five existing legacy scheduling tests pass with
+  the timing hooks. The new checks exercise the registered ASGI route/middleware
+  and real Ed25519 signing with synthetic storage/context/key inputs: traced,
+  disabled and failed-diagnostic responses are byte-identical, rejected requests
+  emit no observation, and cancellation retains the shielded worker slot until
+  completion. No database, service startup or deployment acceptance follows.
 - 33 of 33 genuine Rust tests at source commit `58b10689`: 11 publishing,
   15 metadata and seven shared send-deadline/revocation regressions. A separate
   normal gate binary was then built, SHA-256
@@ -230,6 +236,19 @@ private evidence retained, and both complete source/npm inventories remained
 unchanged. App-side audit admission, commit and response timing still need to
 be distinguished; unrelated HTTP 200 access-log entries cannot identify the
 failed batch's acknowledgement.
+
+An operator-development-only audit timing observation now separates worker
+admission/executor wait, ingestion, post-request outbox draining and response
+signing milestones. It activates only after the existing token and batch
+validation. At most 64 terminal records per process contain a public batch
+digest, event count, fixed outcome and monotonic millisecond marks; no body,
+token, nonce, URL or exception text is exported. The clock starts after parsing,
+so it is not total HTTP latency. Missing/capped observations prove nothing,
+and `complete` means the original ASGI send returned, not that the gate accepted
+an ACK. Diagnostic locks never wait; the stderr sink is synchronous after send
+and is not claimed to be immune to backpressure. Worker bounds, shielding,
+database operations, signed response contents and deadlines remain unchanged.
+This source diagnostic is not a live deployment or a latency fix.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

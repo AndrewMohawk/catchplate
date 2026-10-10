@@ -26561,6 +26561,20 @@ def drain_metadata_audit_outbox(limit: int = 100) -> dict[str, int]:
             )
         audited = 0
         with connect() as conn:
+            if isinstance(conn, sqlite3.Connection) and not conn.in_transaction:
+                # This is only an empty observation, not a delivery receipt for
+                # a concurrent later enqueue. Finish the read before acquiring
+                # a writer; nonempty queues are reread under the existing lock.
+                probe = conn.execute(
+                    "SELECT 1 FROM metadata_audit_outbox "
+                    "WHERE status IN ('pending', 'claimed') LIMIT 1"
+                )
+                try:
+                    empty = not probe.fetchall()
+                finally:
+                    probe.close()
+                if empty:
+                    return {"claimed": 0, "audited": 0, "failed": 0, "pending": 0}
             _lock_metadata_audit_outbox(conn)
             rows = conn.execute(
                 "SELECT id, event_type, actor_type, actor_id, event_json, "

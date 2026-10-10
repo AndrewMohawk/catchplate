@@ -564,6 +564,23 @@ No run was restarted and nothing was promoted. The next diagnostic boundary
 is the application's actual execution state during the transport stall; these
 results do not justify pooling, caching or a deadline increase by themselves.
 
+The next private diagnostic uses `scripts/operator_private_stack_diagnostic.py`
+as a separately pinned, launch-only wrapper around the unchanged application
+entrypoint. It first requires the real custody initializer's unconfigured
+development result, the exact synthetic fixture marker and loopback-only
+namespace. One 50-second watchdog writes thread frames, without local variables
+or source lines, to a fresh mode-0600 file on a dedicated app-only 2 MiB tmpfs.
+The original source, gate binary, client phases, deadlines and verdict remain
+unchanged. Collection must happen before stopping the app because stopping
+destroys its tmpfs. A missing, truncated or mistimed snapshot is inconclusive.
+This instrumented run is diagnostic-only, not an equivalent acceptance run or
+a production entrypoint; it does not authorize a retry of a terminal fixture.
+All seven focused wrapper controls pass in the network-none pinned app image
+in **0.946 seconds**, including one finite child using real `faulthandler` and
+checks that local-value canaries are absent. Configuration, custody ordering
+and mount-admission controls use explicit synthetic seams; they are not proof
+of a running application or an actual captured stall.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

@@ -3,24 +3,101 @@
 ## Status and user outcome
 
 Internal custody, app startup and public gate publication are implemented and
-tested, including an isolated paired managed app/gate fixture. The writable
-settings API/UI remain unfinished. This is not authorization to change a running
-deployment or proof of real Google access.
+tested, including an isolated paired managed app/gate fixture. The managed
+configuration API and operator screen also have isolated browser-to-ASGI and
+encrypted-storage acceptance. They are not deployed to the running demo. This is not authorization to
+change a running deployment or proof of real Google access.
 
 The proxy operator should
 be able to configure a provider application in the product, review its effects,
 and activate it without supplying a host secret-file path or asking another
 person to edit environment files. Account consent remains a separate action.
 
-The existing [Google setup transition](operator-google-setup.md) prepares public
+The legacy [Google setup transition](operator-google-setup.md) prepares public
 configuration and validates a controlled cold restart. It does **not** accept or
 store the Google application secret. Its deployment procedure still requires
 an externally provisioned private file. That is an administration mechanism,
 not completion of self-service configuration.
 
-Do not add a working-looking Save button, writable API scaffold or success
-message until durable custody and the actual startup consumer are implemented
-and verified together. This document adds none of them.
+The managed v2 flow below uses encrypted application custody instead of that
+external-file procedure. Its account-consent action is still separate.
+
+### Operator configuration workflow
+
+Under **Proxy setup**, Google application configuration is separate from saved
+accounts and application credentials. The operator reviews the fixed Gmail
+read-only preset, exact callback URL and added upstream destination before
+submitting a client ID and write-only client secret.
+
+The authenticated `/api/operator-demo/oauth/google/configuration/v2` API uses
+the existing durable prepare/cancel lifecycle. Prepare saves inactive encrypted
+configuration. It does not restart a process, contact Google, launch consent or
+change the proxy's current destinations. Pending configuration requires a
+separately controlled cold restart; activated configuration is distinguished
+from observing the matching app/gate pair ready for new consent.
+
+Before dispatch, the screen retains only an operation UUID and action kind in
+session storage. It clears the secret field and never retains the request body.
+An uncertain response is recovered by reading that exact operation, not by
+repeating Prepare. A missing receipt is not evidence that a save rolled back.
+Discovery only exposes the selected receipt to its owning administrator; it
+does not pick the newest historical operation or disclose another actor's ID.
+
+GET uses existing read-only database snapshots. It does not initialize keys or
+schemas, decrypt custody, or load a new secret. Activated discovery retains the
+existing checks of already-pinned key material; this is not a claim of zero
+key-byte reads or zero SQLite sidecar activity. Readiness observation happens
+outside database transactions and publication locks, followed by a fresh local
+snapshot; changed state suppresses readiness.
+
+Feature-disabled and externally managed deployments retain their existing
+account-consent flow. This first-configuration screen is not a migration or
+secret-rotation mechanism. Independent action-required notifications and audit
+delivery remain configured in **Notifications**, not this provider form.
+
+### Managed configuration API and screen checkpoint
+
+On 2026-10-10, source `0df38fa852ac6548e074986ef920a20c016cb7c3` passed eight
+connected configuration-API groups and ten existing readiness checks in the
+network-disabled backend fixture. These exercise actual full ASGI startup,
+administrator/Origin admission, encrypted SQLite custody, actor-owned recovery,
+cancel/reprepare, cold activation, real audit rollback and a lost acknowledgement
+after an actual commit. Gate-health transport is synthetic; these are not
+real-provider or live-gate checks.
+
+The screen at `fecb2852f86278d552d73f3e1c998a2350adb5b3` passed all 16 rendered
+browser groups across targeted runs with unchanged application code. This
+includes desktop/mobile review, secret clearing, strict DTOs, uncertain-result
+recovery without replay, fresh cancellation review and separate pending,
+activated and consent-ready states. Responses in those 16 groups are synthetic.
+Earlier failures remain in the evidence: the first compatibility failure has no
+confirmed cause; later test corrections wait for controller completion rather
+than an already-satisfied network-idle milestone and check a disabled fieldset's
+actual Save control. The successful groups were not reclassified as a single
+uninterrupted suite run.
+
+At source `4d7d4cfc818ce7b31fe6891916a9d174721e56c5`, one further browser story
+passed against the actual full ASGI app using a byte-preserving stdin bridge:
+Review → one Prepare → encrypted-storage inspection → reload → exact GET
+recovery → fresh reviewed Cancel → retained-custody inspection. It observed
+exactly two mutations, one recovery read, a valid audit chain, unchanged policy,
+credentials/applications and CA authority, and zero provider/network calls.
+Successful API responses were not stubbed. The earlier connected attempt stopped
+before Prepare because its test inspected a collapsed details panel; the final
+test explicitly opens that panel and checks its visible scopes and destination.
+No application change was needed for these browser-harness corrections.
+
+Evidence is retained in
+`serverware-operator-workspace-evidence/google-configuration.4iQIGjJt` and
+`serverware-operator-workspace-evidence/google-configuration-connected.uWVeJ1Yl`.
+The latter includes `google-configuration-connected-9D6Tw8/acceptance.json`,
+source/archive pins, the container command, terminal state and removal receipt.
+Private test containers were removed; source and results were retained.
+The stdin bridge does not prove deployed TCP ingress or real SSO. Neither browser
+batch restarted a service, activated this new UI's configuration, contacted
+Google, connected a real account or exercised a native hardware action. The
+earlier separate app/gate checkpoint below is not a continuous acceptance of
+this UI through provider consent and a supported client request.
 
 ### Historical v1 preparation and cold-read checkpoint
 
@@ -378,9 +455,11 @@ rewrite existing profiles or disconnect accounts to force adoption.
 
 The internal configuration/custody modules, config-independent reader, startup
 integration and public gate consumer now have the isolated acceptance above.
-The next implementation boundary is the authenticated writable API/UI. Preserve
-production, enrolled/native ownership, existing-account recovery and all
-provider-selection guards. Do not duplicate their authority in the UI.
+The authenticated writable API/UI now has the separate isolated checkpoint above.
+Remaining acceptance includes a reviewed deployment transition and a continuous
+configured app/gate, account-consent and ordinary supported client workflow.
+Preserve production, enrolled/native ownership, existing-account recovery and
+all provider-selection guards. Do not duplicate their authority in the UI.
 
 Acceptance must prove real encrypted storage and write-only responses;
 authenticated strict input; exact UUID/CAS and lost-response recovery;

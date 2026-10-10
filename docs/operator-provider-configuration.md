@@ -18,6 +18,27 @@ Do not add a working-looking Save button, writable API scaffold or success
 message until durable custody and the actual startup consumer are implemented
 and verified together. This document adds none of them.
 
+### Internal storage checkpoint
+
+The import-independent primitives in
+[`operator_provider_custody.py`](../serverware/operator_provider_custody.py)
+now provide encrypted provider-application storage, exact owner/version/public
+profile binding, publication-guarded transactional writes, and an existing-key-only
+reader. They neither create a missing master key nor select a configuration
+version. Public projections contain no secret or encrypted envelope.
+
+The 22 synthetic checks in
+[`test_operator_provider_custody.py`](../scripts/test_operator_provider_custody.py)
+pass, covering tampering, rollback, malformed retained state, filesystem guards
+and reads that cannot import configuration or key-initialization modules. Writer
+tests substitute only the publication-ownership assertion; they do not prove the
+real setup transaction, audit or activation flow.
+
+These primitives are deliberately not connected to the API, settings UI or
+startup yet. The caller still owns full development-profile admission, WAL-aware
+database opening, lifecycle/audit validation and activation. This is a storage
+foundation, not a completed operator-configuration feature or live deployment.
+
 ## Keep the objects distinct
 
 | Object | Operator action | What it does not imply |

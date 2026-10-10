@@ -131,6 +131,12 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if adapter_type == crate::npm_publish::ADAPTER {
+        return crate::npm_publish::validate_envelope(mode, constraints);
+    }
+    if mode == Some(crate::npm_publish::MODE) {
+        return Err("npmPublishJsonV1 requires its explicit npm publish adapter".into());
+    }
     if adapter_type == crate::npm_metadata::ADAPTER {
         return crate::npm_metadata::validate_envelope(mode, constraints);
     }

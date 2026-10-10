@@ -14,6 +14,7 @@ mod response_metadata;
 mod gmail_read;
 mod github_issues;
 mod npm_metadata;
+mod npm_publish;
 mod provider_query;
 mod request_query_compat;
 mod proxy_basic_transport;
@@ -455,7 +456,7 @@ const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
 const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
-const SUPPORTED_ADAPTER_TYPES: [&str; 6] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1"];
+const SUPPORTED_ADAPTER_TYPES: [&str; 7] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
 const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
 const NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS: [&str; 2] = ["ok", "published"];
@@ -8718,7 +8719,7 @@ fn validate_provider_request_admission(
 ) -> Result<(), Value> {
     if !matches!(
         route.adapter_type.as_str(),
-        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1"
+        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1"
     ) {
         return Ok(());
     }
@@ -8744,6 +8745,9 @@ fn validate_provider_request_admission(
     }
     if route.adapter_type == npm_metadata::ADAPTER {
         npm_metadata::validate_request(req, url, route)?;
+    }
+    if route.adapter_type == npm_publish::ADAPTER {
+        npm_publish::validate_request(req, url, route)?;
     }
 
     let allowed_headers = profile
@@ -9018,6 +9022,8 @@ fn operation_field_catalog(
     let fields_for = |operation: &str| -> Option<HashSet<String>> {
         let fields: &[&str] = match (adapter_type, operation) {
             (npm_metadata::ADAPTER, "npm.metadata.read") => &["operation", "package"],
+            (npm_publish::ADAPTER, "npm.publish") => &["operation", "packageName", "packageVersion",
+                "tag", "tarballIntegrity", "tarballShasum", "attachmentName", "attachmentBytes"],
             ("gmail.v1" | "gmail.read.v1", "gmail.messages.list") => &["operation", "gmailUser"],
             ("gmail.v1" | "gmail.read.v1", "gmail.message.get") => &["operation", "gmailUser", "messageId"],
             (
@@ -10596,6 +10602,7 @@ fn provider_request_profile(
 ) -> Result<Option<ProviderRequestProfile>, String> {
     let profile = match adapter_type {
         npm_metadata::ADAPTER => npm_metadata::request_profile(),
+        npm_publish::ADAPTER => npm_publish::request_profile(),
         gmail_read::ADAPTER => gmail_read::request_profile(false),
         "gmail.v1" => ProviderRequestProfile {
             allowed_headers: GMAIL_V1_REQUEST_HEADERS,
@@ -11175,6 +11182,12 @@ fn declared_policy_operations(
     paths: &[Value],
 ) -> Result<HashSet<String>, String> {
     let operations = match adapter_type {
+        npm_publish::ADAPTER => {
+            if paths != [json!(npm_publish::PATH)] {
+                return Err("npm publish requires its exact package capture".into());
+            }
+            HashSet::from(["npm.publish".to_string()])
+        }
         npm_metadata::ADAPTER => {
             if paths != [json!(npm_metadata::PATH)] {
                 return Err("npm metadata requires its exact package capture".into());
@@ -11423,13 +11436,13 @@ fn validate_route_credential_binding(
     {
         return Err("gmail.read.v1 requires verified Google OAuth bearer access-token injection".into());
     }
-    if adapter_type == npm_metadata::ADAPTER
+    if matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER)
         && (credential.kind() != "static" || credential.provider != "operator-demo"
             || credential.injection.get("type").and_then(Value::as_str) != Some("bearer")
             || credential.injection.get("header").and_then(Value::as_str) != Some("Authorization")
             || credential.injection.get("field").is_some() || credential.injection.get("prefix").is_some())
     {
-        return Err("npm.metadata.v1 requires fixed static operator Authorization bearer injection".into());
+        return Err("typed npm requires fixed static operator Authorization bearer injection".into());
     }
     let expected_fields: &[&str] = if credential.kind() == "oauth2" {
         &[
@@ -11911,7 +11924,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
-        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1") {
+        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1") {
             validate_provider_request_profile_config(route_id, adapter_type, adapter_config)?;
         }
         let request_config = adapter_config
@@ -11990,11 +12003,14 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         let constraints = combined_constraints.as_slice();
         if constraints.iter().any(|constraint| constraint.get("contentTypePolicy").is_some())
             && !github_issues::marked(&Value::Object(adapter_config.clone()))
-            && adapter_type != npm_metadata::ADAPTER {
+            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER) {
             return Err("contentTypePolicy requires a closed provider profile".into());
         }
         if adapter_type == npm_metadata::ADAPTER {
             npm_metadata::validate_policy(route)?;
+        }
+        if adapter_type == npm_publish::ADAPTER {
+            npm_publish::validate_policy(route)?;
         }
         if github_issues::marked(&Value::Object(adapter_config.clone())) {
             if adapter_type != "generic.rest" {
@@ -12110,6 +12126,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let mode_supported = BUFFERED_RESPONSE_MODES.contains(&response_mode)
                 || (adapter_type == gmail_read::ADAPTER && response_mode == gmail_read::MODE)
                 || (adapter_type == npm_metadata::ADAPTER && response_mode == npm_metadata::MODE)
+                || (adapter_type == npm_publish::ADAPTER && response_mode == npm_publish::MODE)
                 || (adapter_type == "generic.rest"
                     && (STREAMING_RESPONSE_MODES.contains(&response_mode)
                         || buffered_response::supported_mode(response_mode)))
@@ -12131,7 +12148,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER) {
+            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER) {
                 // The closed typed contract above owns whole-JSON release;
                 // it is not admitted through generic REST's profile guard.
             } else if buffered_response::supported_mode(response_mode) {
@@ -14471,6 +14488,9 @@ fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static st
         "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json" => {
             Some(("adapter_npm_metadata_v1", include_str!("../../../schemas/adapters/npm.metadata.v1.schema.json")))
         }
+        "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json" => {
+            Some(("adapter_npm_publish_v1", include_str!("../../../schemas/adapters/npm.publish.v1.schema.json")))
+        }
         "https://serverware.local/schemas/adapters/x.v2.schema.json" => {
             Some(("adapter_x_v2", include_str!("../../../schemas/adapters/x.v2.schema.json")))
         }
@@ -14535,6 +14555,7 @@ fn closed_embedded_policy_schema() -> Result<Value, String> {
         "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json",
         "https://serverware.local/schemas/adapters/npm.registry.schema.json",
         "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json",
+        "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
         "https://serverware.local/schemas/adapters/x.v2.schema.json",
     ];
     for adapter_id in adapters {
@@ -23710,6 +23731,13 @@ where
             permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
                 .map_err(UpstreamSendError::DispatchBarrier)?;
         }
+        // Validation and dispatch barriers can consume the original absolute
+        // policy/authorization window. Never rearm it with an earlier timeout.
+        if let Some(remaining) = upstream_send_deadline_timeout(deadlines)
+            .map_err(UpstreamSendError::CredentialAuthority)? {
+            *request.timeout_mut() = Some(request.timeout().copied()
+                .map_or(remaining, |selected| selected.min(remaining)));
+        }
         let result = client.execute(request);
         let (effect_state, effect_result_sha256) = match result.as_ref() {
             Ok(response) => (
@@ -24393,6 +24421,18 @@ fn prepare_upstream_for_forward(
     target_url: &Url,
     authenticated_principal_id: Option<&str>,
 ) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
+    prepare_upstream_for_forward_body(state, snapshot, request, target_url,
+        authenticated_principal_id, None)
+}
+
+fn prepare_upstream_for_forward_body(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    request: &RequestHead,
+    target_url: &Url,
+    authenticated_principal_id: Option<&str>,
+    buffered_body: Option<&[u8]>,
+) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
     if validate_canonical_http_method(&request.method).is_err()
         || !provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
             request.client_ip.as_deref(), &request.headers, authenticated_principal_id)
@@ -24453,12 +24493,20 @@ fn prepare_upstream_for_forward(
     let Ok(forwarded_body_length) = u64::try_from(request.content_length) else {
         return Ok(None);
     };
+    // This typed write validates the actual bounded body before resolution and
+    // credential preparation. Header-only/streaming paths cannot invent it.
+    let body = if route.adapter_type == npm_publish::ADAPTER {
+        let Some(bytes) = buffered_body.filter(|bytes| bytes.len() == request.content_length
+            && bytes.len() as u64 <= npm_publish::REQUEST_BYTES) else { return Ok(None); };
+        let Ok(text) = std::str::from_utf8(bytes) else { return Ok(None); };
+        text.to_owned()
+    } else { String::new() };
     let admission_request = DecisionRequest {
         client_ip: request.client_ip.clone(),
         method: request.method.clone(),
         url: target_url.to_string(),
         headers: retained_headers,
-        body: String::new(),
+        body,
         body_sha256: None,
         forwarded_body_length: Some(forwarded_body_length),
         forwarded_body_utf8_valid: None,
@@ -24479,7 +24527,7 @@ fn prepare_upstream_for_buffered_forward(
     target_url: &Url,
     authenticated_principal_id: Option<&str>,
 ) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
-    prepare_upstream_for_forward(
+    prepare_upstream_for_forward_body(
         state,
         snapshot,
         &RequestHead {
@@ -24496,6 +24544,7 @@ fn prepare_upstream_for_buffered_forward(
         },
         target_url,
         authenticated_principal_id,
+        Some(&request.body),
     )
 }
 
@@ -31191,6 +31240,7 @@ fn validate_adapter_with_gmail_proof_mode(
     let config = &route.adapter_config;
     match route.adapter_type.as_str() {
         npm_metadata::ADAPTER => npm_metadata::normalize_request(req, url, route_match),
+        npm_publish::ADAPTER => npm_publish::normalize_request(req, url, route_match),
         gmail_read::ADAPTER => gmail_read::normalize_request(req, forwarded_headers, url, route),
         "generic.rest" => {
             provider_query::validate_github_request(req, forwarded_headers, url, route)?;
@@ -34967,6 +35017,8 @@ fn validate_response_envelopes(
 ) -> Result<(), Value> {
     let media_policy = if route.adapter_type == npm_metadata::ADAPTER {
         npm_metadata::validate_route(route).map(|()| Some(npm_metadata::CONTENT_TYPE_POLICY))
+    } else if route.adapter_type == npm_publish::ADAPTER {
+        npm_publish::validate_route(route).map(|()| Some(npm_publish::CONTENT_TYPE_POLICY))
     } else {
         github_issues::media_policy_for_route(route)
             .map(|selected| selected.then_some(github_issues::CONTENT_TYPE_POLICY))
@@ -35544,7 +35596,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         discarded_request_header_evidence(&req.headers, &route.discard_headers);
     replace_string_map(&mut req.headers, retained_headers);
     let headers = lower_headers(&req.headers);
-    if path_validation.has_encoded_slash && !matches!(route.adapter_type.as_str(), "npm.registry" | npm_metadata::ADAPTER) {
+    if path_validation.has_encoded_slash && !matches!(route.adapter_type.as_str(), "npm.registry" | npm_metadata::ADAPTER | npm_publish::ADAPTER) {
         return deny(
             400,
             "encoded path separator is not allowed for this adapter",
@@ -42950,6 +43002,9 @@ fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
     if route.adapter_type == npm_metadata::ADAPTER {
         return npm_metadata::validate_route(route);
     }
+    if route.adapter_type == npm_publish::ADAPTER {
+        return npm_publish::validate_route(route);
+    }
     github_issues::media_policy_for_route(route)?;
     if github_issues::selected(route) {
         github_issues::validate_route(route)?;
@@ -43224,7 +43279,7 @@ fn validate_selected_json_response_content_type(
     adapter_type: &str,
 ) -> Result<(), Value> {
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
-        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1")) {
+        Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1" | "npmPublishJsonV1")) {
         return Ok(());
     }
     let mut values = upstream_headers.get_all("content-type").iter();
@@ -43248,6 +43303,10 @@ fn validate_selected_json_response_content_type(
     })?;
     if adapter_type == npm_metadata::ADAPTER {
         return if npm_metadata::is_json_content_type(value) { Ok(()) }
+            else { Err(json!({"error":"response_json_content_type_mismatch","adapter":adapter_type})) };
+    }
+    if adapter_type == npm_publish::ADAPTER {
+        return if npm_publish::is_json_content_type(value) { Ok(()) }
             else { Err(json!({"error":"response_json_content_type_mismatch","adapter":adapter_type})) };
     }
     let Some(media_type) = normalized_media_type(value) else {
@@ -44555,6 +44614,17 @@ fn validate_policy_json_response(
     binding_validation: &Value,
     response_secret_guard: &ResponseSecretGuard,
 ) -> SensitiveResponseBytes {
+    if adapter_type == npm_publish::ADAPTER {
+        return match npm_publish::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
+            Ok(bytes) => release_forward_response(
+                state, snapshot, decision, method, url, status, Some("application/json"),
+                released_headers, bytes, response_secret_guard,
+                json!({"ok":true,"mode":npm_publish::MODE,"body_bytes_preserved":true,
+                    "allowed_fields_redacted":false,"adapter":npm_publish::ADAPTER}),
+            ),
+            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+        };
+    }
     if adapter_type == npm_metadata::ADAPTER {
         return match npm_metadata::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
             Ok(bytes) => release_forward_response(
@@ -53267,7 +53337,7 @@ mod tests {
         }
     }
 
-    fn test_upstream_client() -> Client {
+    pub(super) fn test_upstream_client() -> Client {
         Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -53343,7 +53413,7 @@ mod tests {
         sha256_prefixed(&spki_der)
     }
 
-    fn test_custody_response_proof_signer(
+    pub(super) fn test_custody_response_proof_signer(
         control_plane_response_signing_key_id: String,
     ) -> ResponseProofSigner {
         let (signing_key, public_key_pem, key_id) =

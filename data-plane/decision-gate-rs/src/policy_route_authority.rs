@@ -67,6 +67,7 @@ fn builtin(kind: &str, name: &str) -> Result<&'static str, String> {
         ("x.v2", operation) if X_V2_READ_OPERATION_PATHS.iter().any(|(name, _)| *name == operation) => "read",
         ("npm.registry", "npm.read") => "read", ("npm.registry", "npm.publish") => "publish",
         ("npm.metadata.v1", "npm.metadata.read") => "read",
+        ("npm.publish.v1", "npm.publish") => "publish",
         ("npm.registry", "npm.unpublish") => "delete", ("npm.registry", "npm.tokenWrite") => "administrative",
         ("npm.registry", "npm.distTagWrite" | "npm.metadataWrite") => "write",
         _ => return Err("built-in operation lacks a source-fixed authority classifier".into()),

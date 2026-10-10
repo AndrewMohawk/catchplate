@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from serverware import authority_contract, authority_primary_contract, grants
 from serverware import operator_google_cleanup_store as _operator_google_cleanup
+from serverware import sqlite_connection_setup as _sqlite_connection_setup
 from serverware.policy_shadow_assignment_fields import LEGACY_FIELDS as _POLICY_SHADOW_ASSIGNMENT_LEGACY_FIELDS
 from serverware import release_authorization_profiles as release_profiles
 from serverware import credential_lease_profiles as lease_profiles
@@ -26225,13 +26226,7 @@ def connect() -> Any:
         return PostgresMetadataConnection(
             _metadata_pg_connect_raw()
         )
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    _metadata_schema.configure_sqlite_metadata_connection(conn)
-    _operator_google_cleanup.configure_connection(conn)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    return _sqlite_connection_setup.open_metadata_connection(DB_PATH)
 
 
 @contextlib.contextmanager

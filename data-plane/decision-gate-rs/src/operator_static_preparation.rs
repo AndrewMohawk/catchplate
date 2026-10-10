@@ -1,6 +1,7 @@
 //! Freshness preparation before an ordinary operator-static decision is fixed.
 //! This is not send authority, a lease extension, or a provider-request retry.
 use super::*;
+use super::operator_static_preparation_diagnostics::{Attempt, Stage};
 
 fn refused() -> String {
     "operator static credential preparation unavailable".to_owned()
@@ -202,23 +203,25 @@ pub(super) fn prepare_on_deadline(
     if !admitted(state, snapshot, scope, None, None)? {
         return Err(refused());
     }
+    let diagnostic = Attempt::after_admission(state, snapshot, scope);
     // The ordinary app identity is finite too; neither the shared fifteen-second
     // budget nor a broker response can extend its remaining lifetime.
-    let app_remaining = principal_expiry(snapshot, scope)?
+    let app_remaining = diagnostic.observe(Stage::AdmissionDeadline, principal_expiry(snapshot, scope))?
         .checked_sub(now_epoch_ms())
         .and_then(|remaining| u64::try_from(remaining).ok())
-        .ok_or_else(refused)?;
-    let deadline = deadline.min(
+        .ok_or_else(refused);
+    let app_remaining = diagnostic.observe(Stage::AdmissionDeadline, app_remaining)?;
+    let deadline = deadline.min(diagnostic.observe(Stage::AdmissionDeadline,
         Instant::now()
             .checked_add(Duration::from_millis(app_remaining))
-            .ok_or_else(refused)?,
+            .ok_or_else(refused))?,
     );
-    check_credential_operation_deadline(Some(deadline))?;
+    diagnostic.observe(Stage::AdmissionDeadline, check_credential_operation_deadline(Some(deadline)))?;
     mark_credential_lease_activity(state, scope);
-    let pin = match generation_with_margin(state, snapshot, scope)? {
+    let pin = match diagnostic.observe(Stage::GenerationLookup, generation_with_margin(state, snapshot, scope))? {
         Some(generation) => generation,
         None => {
-            refresh_scoped_credential_material_singleflight_on_deadline(
+            diagnostic.observe(Stage::GenerationRefresh, refresh_scoped_credential_material_singleflight_on_deadline(
                 state,
                 snapshot,
                 scope,
@@ -226,14 +229,15 @@ pub(super) fn prepare_on_deadline(
                 None,
                 None,
                 Some(deadline),
-            )?;
-            generation_with_margin(state, snapshot, scope)?.ok_or_else(refused)?
+            ))?;
+            let generation = diagnostic.observe(Stage::GenerationMargin, generation_with_margin(state, snapshot, scope))?;
+            diagnostic.observe(Stage::GenerationMargin, generation.ok_or_else(refused))?
         }
     };
-    validate_runtime_credential_binding(snapshot, scope, &pin.metadata)?;
-    check_credential_operation_deadline(Some(deadline))?;
-    if pair_with_margin(state, snapshot, scope, &pin)?.is_none() {
-        refresh_scoped_credential_material_singleflight_on_deadline(
+    diagnostic.observe(Stage::Binding, validate_runtime_credential_binding(snapshot, scope, &pin.metadata))?;
+    diagnostic.observe(Stage::Binding, check_credential_operation_deadline(Some(deadline)))?;
+    if diagnostic.observe(Stage::PairBeforeSecret, pair_with_margin(state, snapshot, scope, &pin))?.is_none() {
+        diagnostic.observe(Stage::SecretRefresh, refresh_scoped_credential_material_singleflight_on_deadline(
             state,
             snapshot,
             scope,
@@ -241,13 +245,14 @@ pub(super) fn prepare_on_deadline(
             None,
             None,
             Some(deadline),
-        )?;
+        ))?;
     }
     // No further acquisition, even if either renewed value is already short.
-    if !admitted(state, snapshot, scope, None, None)? {
-        return Err(refused());
+    if !diagnostic.observe(Stage::FinalAdmission, admitted(state, snapshot, scope, None, None))? {
+        return diagnostic.observe(Stage::FinalAdmission, Err(refused()));
     }
-    let info = pair_with_margin(state, snapshot, scope, &pin)?.ok_or_else(refused)?;
-    check_credential_operation_deadline(Some(deadline))?;
+    let info = diagnostic.observe(Stage::FinalPair, pair_with_margin(state, snapshot, scope, &pin))?;
+    let info = diagnostic.observe(Stage::FinalPair, info.ok_or_else(refused))?;
+    diagnostic.observe(Stage::FinalDeadline, check_credential_operation_deadline(Some(deadline)))?;
     Ok(info)
 }

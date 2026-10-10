@@ -31,6 +31,7 @@ mod operator_google_profile;
 mod operator_google_managed;
 mod operator_google_reconciliation;
 mod operator_static_preparation;
+mod operator_static_preparation_diagnostics;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;

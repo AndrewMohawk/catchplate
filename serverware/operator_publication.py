@@ -354,6 +354,16 @@ def assert_held() -> None:
     _pinned.check()
 
 
+def assert_not_held() -> None:
+    """Network observers must not inherit this thread's publication ownership.
+
+    A nested exclusive scope does not release an outer EX. This check neither
+    acquires ownership nor claims that other processes/threads hold no lock.
+    """
+    if getattr(_state, "depth", 0) or getattr(_state, "bootstrap", False):
+        raise PublicationError("operator publication ownership forbids network observation")
+
+
 @contextmanager
 def exclusive(*, startup: bool = False):
     if getattr(_state, "bootstrap", False):

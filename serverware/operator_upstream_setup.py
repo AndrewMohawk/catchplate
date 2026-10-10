@@ -214,12 +214,21 @@ def _google_pending(conn):
     return any(item["status"] == "pending" for item in operator_google_setup._rows(conn))
 
 
-def _snapshot(conn, *, effective):
+def _snapshot(conn, *, effective, metadata_profile=None):
     from serverware import config, operator_demo, operator_catalog_google, operator_catalog_policy as policy
+    if metadata_profile is not None:
+        from serverware import operator_google_managed_config, operator_catalog_oauth_profile
+        # This alternate input is public metadata confined to the real cold
+        # read snapshot. It never makes require_profile available to requests.
+        _require(effective is False and isinstance(conn, sqlite3.Connection) and conn.in_transaction
+            and conn.execute("PRAGMA query_only").fetchone()[0] == 1)
+        operation = operator_google_managed_config.validate_selection(conn)
+        _require(operation is not None and operation["status"] == "activated"
+            and metadata_profile == operator_catalog_oauth_profile.validate_imported_configuration(config))
     _require(catalog.active(conn))
     value = catalog.read_catalog(conn)
-    catalog.validate_bindings(conn, value)
-    policy.verify_retained_policy(conn, value)
+    catalog.validate_bindings(conn, value, metadata_profile=metadata_profile)
+    policy.verify_retained_policy(conn, value, metadata_profile=metadata_profile)
     retained, signed = policy._retained(conn)
     row = conn.execute("SELECT settings_json FROM operator_demo_settings WHERE singleton=1").fetchone()
     _require(row is not None)
@@ -227,7 +236,7 @@ def _snapshot(conn, *, effective):
     actual = operator_demo.settings()
     if effective:
         _require(old == {key: actual[key] for key in old})
-    profile = operator_catalog_google.validate_profile_binding(conn)
+    profile = operator_catalog_google.validate_profile_binding(conn, metadata_profile=metadata_profile)
     return {"catalog": value, "policy": dict(retained), "signed": signed, "raw": row[0], "old": old,
         "profile_binding_digest": profile.binding_digest if profile else None,
         "public_url": config.PUBLIC_URL, "proxy_url": actual["proxy_url"]}
@@ -421,7 +430,7 @@ def _complete(conn, item):
 
 
 @_storage
-def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retained_authority=None):
+def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retained_authority=None, metadata_profile=None):
     """Read-only exact gate, repeated under the cold writer before consume."""
     rows = _rows(conn)
     if previous_settings_raw is None:
@@ -441,7 +450,7 @@ def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retain
     _require(len(current) == 1 and not _google_pending(conn))
     item = current[0]
     binding = item["binding"]
-    snapshot = _snapshot(conn, effective=False)
+    snapshot = _snapshot(conn, effective=False, metadata_profile=metadata_profile)
     _require(snapshot["raw"] == previous_settings_raw and old == binding["old_settings"]
         and target == binding["target_settings"] and target == _target(snapshot, target["allowed_upstreams"])
         and snapshot["catalog"]["revision"] == binding["staged_revision"]

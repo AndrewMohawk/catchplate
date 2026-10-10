@@ -61,18 +61,26 @@ def initialize_profile(conn) -> None:
     operator_catalog_oauth.initialize(conn, fresh_profile=exists is None)
 
 
-def validate_profile_binding(conn):
+def validate_profile_binding(conn, *, metadata_profile=None):
     """Recheck retained configuration without DDL or acquiring a write lock."""
     from serverware import operator_catalog_oauth_profile as profiles
     exists = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (_TABLE,)
     ).fetchone()
     if not profiles.selected():
-        _require(exists is None)
+        _require(exists is None and metadata_profile is None)
         return None
-    profile = profiles.require_profile()
+    if metadata_profile is None:
+        profile = profiles.require_profile()
+    else:
+        # An explicit cold, read-only caller may validate public metadata, not
+        # obtain a serving capability. Normal callers still use require_profile.
+        from serverware import config
+        _require(type(metadata_profile) is profiles.Profile
+            and metadata_profile == profiles.validate_imported_configuration(config))
+        profile = metadata_profile
     _require(exists is not None)
-    expected = json.dumps(profiles.binding_record(), sort_keys=True,
+    expected = json.dumps(profiles._record(profile.client_id, profile.redirect_uri), sort_keys=True,
         separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     rows = conn.execute("SELECT singleton,binding_json,binding_digest FROM " + _TABLE).fetchall()
     _require(len(rows) == 1 and rows[0]["singleton"] == 1

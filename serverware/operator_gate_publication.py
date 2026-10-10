@@ -20,6 +20,7 @@ from serverware import operator_publication
 FLAG = "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED"
 DIRECTORY = "gate-runtime"
 POLICY = "policy-bundle.json"
+GOOGLE_CONFIGURATION = "operator-google-configuration.json"
 _LEAVES = (operator_publication.LOCK_NAME, ".serverware-operator-demo.json")
 _CA_LEAVES = ("mitmproxy-ca-cert.pem", "mitmproxy-ca.pem")
 _TEMPORARY = re.compile(r"\.operator-policy-[0-9a-f]{32}\Z")
@@ -86,7 +87,7 @@ def _open_child(parent_fd: int, name: str) -> int:
 
 
 @contextmanager
-def _export_directory(data: Path):
+def _export_directory(data: Path, *, managed_google: bool):
     global _pinned
     from serverware.development_sandbox import _open_directory
     operator_publication.assert_held()
@@ -109,7 +110,7 @@ def _export_directory(data: Path):
             # owned writer temporaries are recoverable after a process crash.
             stale = []
             for name in os.listdir(descriptor):
-                if name in {POLICY, "mitmproxy", *_LEAVES}:
+                if name in {POLICY, "mitmproxy", *_LEAVES} or managed_google and name == GOOGLE_CONFIGURATION:
                     continue
                 _require(_TEMPORARY.fullmatch(name) is not None)
                 _regular(os.stat(name, dir_fd=descriptor, follow_symlinks=False), 0o600)
@@ -129,8 +130,10 @@ def _export_directory(data: Path):
             check()
 
 
-def _replace_policy(path: Path, raw: bytes, *, directory_fd: int | None = None) -> None:
+def _replace_publication(path: Path, raw: bytes, *, directory_fd: int | None = None) -> None:
     """One durable writer; legacy canonical paths retain their existing behavior."""
+    filename = path.name
+    _require(filename == POLICY or directory_fd is not None and filename == GOOGLE_CONFIGURATION)
     if directory_fd is None:
         if path.is_symlink():
             raise RuntimeError("operator demo policy file cannot be a symlink")
@@ -140,7 +143,7 @@ def _replace_policy(path: Path, raw: bytes, *, directory_fd: int | None = None) 
         destination, replace_options = path, {}
     else:
         try:
-            existing = os.open(POLICY, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            existing = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                 dir_fd=directory_fd)
         except FileNotFoundError:
             pass
@@ -149,7 +152,7 @@ def _replace_policy(path: Path, raw: bytes, *, directory_fd: int | None = None) 
                 before = os.fstat(existing)
                 _regular(before, 0o600)
                 same = before.st_size == len(raw) and os.pread(existing, len(raw) + 1, 0) == raw
-                current = os.stat(POLICY, dir_fd=directory_fd, follow_symlinks=False)
+                current = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
                 _regular(current, 0o600)
                 _require((before.st_dev, before.st_ino) == (current.st_dev, current.st_ino))
                 if same:
@@ -160,7 +163,7 @@ def _replace_policy(path: Path, raw: bytes, *, directory_fd: int | None = None) 
         temporary = ".operator-policy-" + secrets.token_hex(16)
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
             | os.O_CLOEXEC, 0o600, dir_fd=directory_fd)
-        destination = POLICY
+        destination = filename
         replace_options = {"src_dir_fd": directory_fd, "dst_dir_fd": directory_fd}
     try:
         with os.fdopen(descriptor, "wb") as stream:
@@ -180,7 +183,7 @@ def _replace_policy(path: Path, raw: bytes, *, directory_fd: int | None = None) 
             pass
 
 
-def materialize(raw: bytes) -> None:
+def materialize(raw: bytes, *, google_configuration: bytes | None = None) -> None:
     """Publish DB-supplied signed bytes under the ORIGINAL EX owner; never sign.
 
 Postcommit failures propagate to existing pending-activation handling. Startup
@@ -191,9 +194,14 @@ repairs both copies independently; a current canonical file is not an early exit
     selected = enabled()
     _require(type(raw) is bytes and bool(raw)
         and config.POLICY_BUNDLE_PATH == config.DATA_DIR / POLICY)
+    if google_configuration is not None:
+        _require(selected and type(google_configuration) is bytes and 0 < len(google_configuration) <= 32768)
     if not selected:
-        _replace_policy(config.POLICY_BUNDLE_PATH, raw)
+        _replace_publication(config.POLICY_BUNDLE_PATH, raw)
         return
-    with _export_directory(config.DATA_DIR) as directory_fd:
-        _replace_policy(config.POLICY_BUNDLE_PATH, raw)
-        _replace_policy(config.DATA_DIR / DIRECTORY / POLICY, raw, directory_fd=directory_fd)
+    with _export_directory(config.DATA_DIR, managed_google=google_configuration is not None) as directory_fd:
+        _replace_publication(config.POLICY_BUNDLE_PATH, raw)
+        _replace_publication(config.DATA_DIR / DIRECTORY / POLICY, raw, directory_fd=directory_fd)
+        if google_configuration is not None:
+            _replace_publication(config.DATA_DIR / DIRECTORY / GOOGLE_CONFIGURATION,
+                google_configuration, directory_fd=directory_fd)

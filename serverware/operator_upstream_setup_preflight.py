@@ -60,4 +60,11 @@ def _validate():
         from serverware import operator_upstream_setup
         settings = operator_demo.settings()
         target = json.dumps({key: settings[key] for key in ("allowed_upstreams", "fixture_cidrs")}, sort_keys=True)
-        operator_upstream_setup.validate_startup(conn, rows[0]["settings_json"], target, retained_authority=True)
+        metadata_profile = None
+        from serverware import operator_google_managed_config, operator_catalog_oauth_profile
+        if operator_google_managed_config.enabled() and operator_catalog_oauth_profile.selected():
+            operation = operator_google_managed_config.validate_selection(conn)
+            if operation is not None and operation["status"] == "activated":
+                metadata_profile = operator_catalog_oauth_profile.validate_imported_configuration(config)
+        operator_upstream_setup.validate_startup(conn, rows[0]["settings_json"], target,
+            retained_authority=True, metadata_profile=metadata_profile)

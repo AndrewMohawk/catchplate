@@ -2,8 +2,10 @@
 
 ## Status and user outcome
 
-This is the next implementation contract, not an implemented writable settings
-API or authorization to change a running deployment. The proxy operator should
+Internal custody, app startup and public gate publication are implemented and
+tested; the writable settings API/UI and paired managed app/gate acceptance
+remain unfinished. This is not authorization to change a running deployment.
+The proxy operator should
 be able to configure a provider application in the product, review its effects,
 and activate it without supplying a host secret-file path or asking another
 person to edit environment files. Account consent remains a separate action.
@@ -18,7 +20,7 @@ Do not add a working-looking Save button, writable API scaffold or success
 message until durable custody and the actual startup consumer are implemented
 and verified together. This document adds none of them.
 
-### Internal preparation and cold-read checkpoint
+### Historical v1 preparation and cold-read checkpoint
 
 The import-independent primitives in
 [`operator_provider_custody.py`](../serverware/operator_provider_custody.py)
@@ -97,6 +99,33 @@ This checkpoint is the app-side internal consumer only: paired public gate
 configuration, later upstream transitions, observed runtime readiness and the
 writable API/UI still need their own connected acceptance. No live Google
 configuration, real provider contact or native action was performed.
+
+### Public projection, destination changes and readiness checkpoint
+
+The subsequent backend integration publishes only the committed operation,
+public profile and current destination settings into the curated gate directory.
+It contains neither the client secret nor provider-key paths or ciphertext.
+Fresh, pending and cancelled configurations have an explicit null profile;
+missing or inconsistent retained authority does not become an empty default.
+Publication failure remains a failure after commit, with repair on the next
+genuine startup rather than a claim that the transaction rolled back.
+
+Later reviewed destination changes preserve the active Google configuration and
+the retained credentials, applications and policy across two cold restarts.
+Readiness joins the exact operation, profile/settings digests, signed policy and
+expected gate executable. Two local read snapshots surround the health request;
+an inherited publication lock prevents that request entirely. Matching an
+unconfigured pair proves static-policy readiness, not eligibility for consent.
+
+On 2026-10-10, the frozen backend batch passed 10 focused observer tests and 18
+connected groups: three destination-change, nine public-projection, three
+readiness and three affected legacy-publication checks. The readiness group uses
+real SQLite, publication locks and catalog changes with synthetic health
+transport; it is not an actual managed Rust-gate observation. Evidence is in
+`serverware-operator-workspace-evidence/google-managed-public.Ve6JtMhG`.
+The Rust consumer is implemented but has its own compile/runtime acceptance.
+Writable settings, real Google consent, live migration and native acceptance
+are not established by this checkpoint.
 
 ## Keep the objects distinct
 
@@ -239,9 +268,19 @@ container: real policy changes, disabled-mode compatibility, stale/missing copy
 repair, postcommit failure followed by fresh startup, unsafe paths and actual
 shared-lock exclusion. Evidence is retained in
 `serverware-operator-workspace-evidence/curated-boundary.IFPloRyU`.
-The separate curated fixture reuses the stock Basic/Bearer client check and
-observes actual mounts before and after policy reloads. Its execution and any
-live migration remain unverified at this checkpoint. No live mount changed.
+The separate internal-network fixture at source `6773f2d7` also passed its
+one-shot stock Requests/curl Basic/Bearer client check: four upstream forwards,
+eight authentication denials and two policy reloads. Before/after mount and
+filesystem observations joined the same app/gate processes, original lock and
+marker, retained binary `2bfe5e38`, and policy sequence 1 through 3. The app's
+new credential master key and database remained unreadable in the gate. The
+fixture had no host ports or external egress and was stopped after verification.
+The earlier fixture's client check passed, but its baseline observer incorrectly
+required a master key before any credential existed; that run is not presented
+as a complete before/after proof. Both records are retained in the evidence
+directory above. This is synthetic proxy/isolation proof, not managed Google,
+real-provider or native-pilot acceptance. Live migration remains unverified;
+no live mount changed.
 
 ## Compatibility, ownership and acceptance
 

@@ -215,13 +215,20 @@ def initialize() -> None:
 def materialize() -> None:
     """DB is authoritative after commit; durable atomic replace is recoverable on startup."""
     db = _require()
-    from serverware import operator_gate_publication
+    from serverware import operator_gate_publication, operator_google_managed_config
     with operator_publication.exclusive(), db.connect() as conn:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
         row = conn.execute("SELECT signed_bundle_json FROM operator_demo_policy WHERE singleton=1").fetchone()
         if row is None:
             raise RuntimeError("operator demo committed policy unavailable")
         raw = row[0].encode("utf-8")
-        operator_gate_publication.materialize(raw)
+        google_configuration = None
+        if operator_google_managed_config.enabled():
+            from serverware import operator_google_gate_configuration
+            google_configuration = json.dumps(operator_google_gate_configuration.record(conn),
+                sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
+        operator_gate_publication.materialize(raw, google_configuration=google_configuration)
 
 
 def get_policy_high_water() -> dict | None:
@@ -390,13 +397,24 @@ def revoke_connection(payload: RevocationInput, actor_id: str) -> dict:
     return receipt
 
 
-def loaded_policy_hash() -> str | None:
+def _health_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate gate health field")
+        value[key] = item
+    return value
+
+
+def loaded_gate_status() -> dict | None:
+    """One bounded health observation, never while owning publication locks."""
     _require()
     from serverware.config import DECISION_GATE_BASE
     if not DECISION_GATE_BASE:
         return None
     client = None
     try:
+        operator_publication.assert_not_held()
         parsed = urlsplit(DECISION_GATE_BASE)
         if (parsed.scheme != "http" or parsed.username is not None or parsed.password is not None
                 or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
@@ -408,18 +426,33 @@ def loaded_policy_hash() -> str | None:
         body = response.read(131073)
         if response.status != 200 or len(body) > 131072:
             return None
-        value = json.loads(body)
+        value = json.loads(body, object_pairs_hook=_health_object)
         if not isinstance(value, dict):
             return None
         digest = value.get("policy_hash")
         if value.get("ok") is True and isinstance(digest, str) and _SHA.fullmatch(digest):
-            return digest
-    except (OSError, ValueError, http.client.HTTPException):
+            return value
+    except (OSError, ValueError, RuntimeError, RecursionError, http.client.HTTPException):
         return None
     finally:
         if client is not None:
             client.close()
     return None
+
+
+def loaded_policy_hash() -> str | None:
+    """Legacy hash observation, or the exact managed app/gate readiness join."""
+    _require()
+    from serverware import operator_google_managed_config as managed
+    try:
+        if managed.enabled():
+            from serverware import operator_google_managed_readiness
+            observed = operator_google_managed_readiness.observe()
+            return observed["loaded_policy_hash"] if observed["ready"] else None
+    except Exception:
+        return None
+    observed = loaded_gate_status()
+    return observed["policy_hash"] if observed is not None else None
 
 
 def _revocation_observation(receipt: dict, committed: str | None, loaded: str | None,

@@ -287,9 +287,9 @@ def application_proxy_authentication(application: dict) -> str:
     return mode
 
 
-def validate_bindings(conn, catalog: dict | None = None) -> None:
+def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=None) -> None:
     from serverware import operator_catalog_google
-    operator_catalog_google.validate_profile_binding(conn)
+    operator_catalog_google.validate_profile_binding(conn, metadata_profile=metadata_profile)
     catalog = read_catalog(conn) if catalog is None else catalog
     credentials = {row['id']: row for row in catalog['credentials']}
     applications = {row['id']: row for row in catalog['applications']}
@@ -325,9 +325,9 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
         if row.get('auth_type') == 'google_oauth':
             from serverware import operator_catalog_google
             if row['status'] == 'quarantined':
-                operator_catalog_google.validate_quarantined_record(row, core)
+                operator_catalog_google.validate_quarantined_record(row, core, profile=metadata_profile)
             else:
-                operator_catalog_google.validate_record(row, core)
+                operator_catalog_google.validate_record(row, core, profile=metadata_profile)
             continue
         bearer = row.get('auth_type') == 'bearer'
         try:
@@ -359,7 +359,7 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
         rule_request_body_mode(row, credential)
         if row['status'] == 'active' and credential.get('auth_type') == 'google_oauth':
             from serverware import operator_catalog_google
-            operator_catalog_google.validate_rule(row, credential)
+            operator_catalog_google.validate_rule(row, credential, profile=metadata_profile)
         if row['status'] == 'active' and (app['status'] != 'active' or credential['status'] != 'active'):
             raise CatalogIntegrityError('active rule has an inactive parent')
     from serverware import operator_catalog_npm

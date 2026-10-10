@@ -52,7 +52,7 @@ def _request_profile(rule: dict, credential: dict, route: dict) -> None:
         allowedMediaTypes=['application/json'], maxBodyBytes=65536)
 
 
-def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
+def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=None) -> dict:
     from serverware import operator_demo_store as legacy
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm
     for rule in catalog['access_rules']:
@@ -96,7 +96,7 @@ def render(catalog: dict, sequence: int, initial_hash: str) -> dict:
         route['adapter']['config']['credentialBinding']['subjects'] = [credential['provider_subject']]
         if google:
             from serverware import operator_catalog_google
-            operator_catalog_google.validate_rule(rule, credential)
+            operator_catalog_google.validate_rule(rule, credential, profile=metadata_profile)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
         if operator_catalog_npm.selected(rule):
@@ -140,10 +140,10 @@ def _retained(conn):
     return row, raw
 
 
-def verify_retained_policy(conn, catalog: dict) -> None:
+def verify_retained_policy(conn, catalog: dict, *, metadata_profile=None) -> None:
     """Migration refuses drift without touching signed bytes or policy state."""
     row, signed = _retained(conn)
-    if unsigned(signed) != render(catalog, row['sequence'], row['initial_hash']):
+    if unsigned(signed) != render(catalog, row['sequence'], row['initial_hash'], metadata_profile=metadata_profile):
         raise schema.CatalogIntegrityError('legacy policy differs from imported catalog')
 
 

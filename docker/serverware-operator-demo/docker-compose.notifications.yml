@@ -1,4 +1,4 @@
-# Optional operator-development notifications, not part of the deployed pair.
+# Optional operator-development notifications; the current demo enables this layer.
 # Combine with base + exactly one reviewed notification-capable source override.
 # Requires a separately prepared app-only custody directory and Compose !reset.
 # Merely including this layer adds app egress, even while the feature flag is 0.

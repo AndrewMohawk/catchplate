@@ -2,13 +2,15 @@
 
 # Operator notifications: action alerts and audit delivery
 
-An optional **operator-development source implementation** now includes four
+The **operator-development notification feature** includes four
 destination settings, notification-only encrypted custody, a persistent outbox,
 safe audit projections, Slack/generic HTTPS transport, administrator API routes
 and a Notifications panel. A separately admitted, read-only native observation
-bridge is now implemented in source. The feature is **default-off and not
-deployed**; source/fixture acceptance does not establish delivery from the running
-demo, an actual pilot owner or a real Slack workspace.
+bridge is implemented in source. The feature remains default-off for new
+deployments; the running demo now enables it with all destinations unconfigured.
+The deployed UI, private app-only custody, retained data and outbound TLS were
+verified on October 10. No real receiver or native hardware source is configured.
+See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment).
 
 The mental model is simple: **action alerts mean "someone needs to do something";
 audit alerts mean "this happened."** Configure either, both or neither. An action
@@ -254,10 +256,10 @@ history or implicit loss of uncertain receipts.
 
 | Owner | Implemented source slice | Still required |
 | --- | --- | --- |
-| `operator_notification_custody` / `operator_notification_store` | Independent encrypted settings, explicit initialization, durable operations/cursor/outbox and fixed public status | Deployed custody-mount isolation and operational retention path |
+| `operator_notification_custody` / `operator_notification_store` | Independent encrypted settings, explicit initialization, durable operations/cursor/outbox and fixed public status; app-only mount verified in the demo | Saved-key backup/recovery and operational retention path |
 | `operator_notification_events` | Committed operator-SQLite reader, bounded safe projections, native observation event/filter mapping and exact source comparisons | PostgreSQL/measured source owners and legacy action producers |
-| `operator_notification_transport` | Slack/generic acknowledgement, pinned egress, TLS/deadlines, final pre-dispatch check | Real receiver acceptance after explicit authorized rollout |
-| `operator_notifications` / `operator_notification_api` / Notifications UI | Optional worker, administrator settings/test/receipt routes and separate channel panels; connected browser-to-full-application-to-local-TLS acceptance | Running-console-to-API-to-receiver proof after reviewed rollout |
+| `operator_notification_transport` | Slack/generic acknowledgement, pinned egress, TLS/deadlines, final pre-dispatch check; deployed DNS/TLS verified without sending | Real configured receiver acknowledgement |
+| `operator_notifications` / `operator_notification_api` / Notifications UI | Worker, administrator settings/test/receipt routes and separate channel panels; isolated full workflow and deployed read-only browser acceptance | Deployed administrator save/test and real receiver proof |
 | Native pilot browser owner / COMMON relay / `operator_notification_pilot_source` | Guarded phase observer, separately selected GET-only Unix relay and strict client; immutable source identity, original expiry and final current-source recheck | Reviewed relay/mount provisioning, actual guarded-owner timing and end-to-end delivery/review during a separately authorized native attempt |
 | Existing audit-anchor worker | Remains separate and unchanged | Do not substitute head/count exports for notification event delivery |
 
@@ -265,13 +267,13 @@ history or implicit loss of uncertain receipts.
 
 | Check | Source/fixture evidence | Deployment or hardware proof still required |
 | --- | --- | --- |
-| Four slots and secret custody | **9/9** custody checks; current **13/13** connected store checks pass, extending the earlier 10-check checkpoint with native observations | Real app-only custody mount, restart and administrator save/reload |
+| Four slots and secret custody | **9/9** custody checks; current **13/13** connected store checks pass; deployed app-only private empty mount survives restart | Deployed administrator save/reload and saved-key recovery |
 | Save versus explicit test | **5/5** integration groups and **15/15** intercepted Notifications browser groups pass. Administrator/origin checks, Save without send, exact-revision queueing and read-only acknowledgement receipts are exercised | Exact saved revision queued from deployed UI and retained receipt inspected |
-| Egress and acknowledgement | **31/31** isolated transport checks pass, including the final pre-dispatch hook: 20 pure and 11 loopback-TLS/process checks, no live webhook | Real configured receiver and actual deployment trust/egress configuration |
+| Egress and acknowledgement | **31/31** isolated transport checks pass; actual deployment DNS and verified TLS 1.3 to Slack pass without HTTP or a webhook post | Real configured receiver acknowledgement |
 | Integrated audit delivery | Current **21/21** source-event checks pass. The earlier API/TLS checkpoint sends four explicit synthetic slot tests plus two adapter copies of one committed fixture application audit event through actual handlers/store/worker | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
 | Failure and backpressure | Connected fixtures pass default-off, worker lifecycle, unknown-outcome no-replay and final pre-dispatch-disable checks. Simulated ingestion-capacity failure still drains a real retained queue. Store fixtures cover bounded retries and 60-second uncertainty recovery | Real crash/restart, lost acknowledgement, saturation and operational retention in the deployed profile |
 | Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
-| Connected browser workflow | Full browser-to-API-to-worker-to-local-TLS story passes: four independent saves, reload/recovery, explicit saved-revision test and independently selected audit delivery. Current **15/15** intercepted Notifications groups, **11/11** native UI checks and **10/10** asset checks also pass | Running deployed console, actual receiver and operator workflow |
+| Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. Deployed read-only browser passes eight GETs and four independently disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks also pass | Deployed save/test, actual receiver and operator workflow |
 
 ### Retained isolated verification checkpoints
 

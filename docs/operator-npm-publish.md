@@ -250,6 +250,25 @@ and is not claimed to be immune to backpressure. Worker bounds, shielding,
 database operations, signed response contents and deadlines remain unchanged.
 This source diagnostic is not a live deployment or a latency fix.
 
+An eighth isolated run at `7989eee9` used the same verified normal Rust binary
+and unchanged limits. It completed prerequisite reads, both publications and
+the wrong-package checkpoint, then stopped on the outside-window npm command:
+exit 1, `npm_denial` stage, recognized `E503`, with closed `npm_error` and
+`http_error` labels. No gate audit-post failure was recorded in this run. All
+24 emitted application timing records report `complete`; their maximum
+post-parse duration is 1,564 ms. The largest measured signing-policy lookup
+interval is 1,136 ms, combining global-lock wait, loading/validation and snapshot
+copying. It does not yet identify which of those operations caused the delay,
+explain earlier audit transport failures or prove the cause of this npm 503.
+
+The stopped database passed `quick_check` and contains 62 lease-issued events,
+zero lease-rejected events, six response releases and only the three earlier
+403 denials. It contains no outside-window denial, so the precise proxy error
+and intended time-window 403 remain unproved. Nineteen background lease-renewal
+warnings were retained. All eighth-run containers were removed, no project
+network remained, private evidence was retained, and the complete 4,935-file
+source and 1,782-file npm inventories remained unchanged after teardown.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

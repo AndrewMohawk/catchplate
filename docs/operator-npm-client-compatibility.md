@@ -36,9 +36,16 @@ The seventh isolated run completed the same four commands, then failed the
 wrong-package audit checkpoint before attempting the outside-window command.
 Its four-event audit POST had an unknown transport outcome after 3,112 ms total
 attempt time, including pre-HTTP work. It does not resolve the sixth npm failure.
-Audit timing and lease renewal remain under investigation. No expiry extension,
-retry workaround or live change has been made. The failures remain retained and
-full stock-publishing acceptance is still pending, with no production defect
+The eighth isolated run at `7989eee9` completed those four checkpoints without
+a logged audit-post failure, then failed the outside-window npm command with
+recognized `E503`. Its 24 complete app timing observations locate the largest
+delay within/awaiting policy lookup (up to 1,136 ms), without distinguishing lock
+wait from validation or copying. The stopped audit store contains no denial for
+the failed command, so neither its precise proxy error nor the expected
+time-window 403 is established. Audit timing and lease renewal remain under
+investigation. No expiry extension, retry workaround or live change has been
+made. The failures remain retained and full stock-publishing acceptance is
+still pending, with no production defect
 inferred. This does not implement or prove installation, tarball reads or default
 auditing.
 

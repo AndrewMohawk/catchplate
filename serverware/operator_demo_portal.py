@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 
 SCRIPT_FILES = ("workspace_core.js", "workspace_github.js", "workspace_npm.js", "workspace_google.js", "workspace_google_reauthorization.js", "workspace_resources.js", "workspace_applications.js",
-                "workspace_proxy_audit.js", "workspace_connect.js", "workspace_notifications.js", "app.js")
+                "workspace_proxy_audit.js", "workspace_connect.js", "workspace_notifications.js", "workspace_upstreams.js", "app.js")
 
 
 @lru_cache(maxsize=1)

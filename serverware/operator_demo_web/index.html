@@ -200,6 +200,31 @@ user-agent</textarea><p class="small muted">Do not list Content-Type: the reques
     </section>
     <section id="proxy" class="page" aria-labelledby="proxy-title" hidden>
       <h1 id="proxy-title">Proxy setup</h1><p class="intro">Connect your existing HTTP client through Serverware using the proxy address, public CA and an application token. The console URL is not the forward proxy.</p>
+<article id="proxy-upstreams" class="card">
+  <h2>Proxy destinations</h2><p>Apps still need permission. Changes require a controlled restart.</p>
+  <h3>Effective destinations</h3><pre id="upstreams-effective">Loading workspace settings...</pre>
+  <button id="upstreams-review" type="button" class="secondary" disabled>Review destination settings</button>
+  <p id="upstreams-status" role="status" aria-live="polite"></p>
+  <form id="upstreams-form" autocomplete="off" hidden>
+    <fieldset id="upstreams-fields" disabled>
+      <label for="upstreams-proposed">Proposed destinations</label><textarea id="upstreams-proposed" rows="4" maxlength="32784" spellcheck="false" autocomplete="off" required></textarea>
+      <p class="small muted">One HTTPS origin per line. Keep required destinations and their order.</p>
+      <p id="upstreams-input-status" class="small muted" role="status" aria-live="polite"></p>
+      <div class="two-column"><div><h3>Additions</h3><pre id="upstreams-added">None</pre></div><div><h3>Removals</h3><pre id="upstreams-removed">None</pre></div></div>
+      <p class="notice">Prepare records a pending change. A deployment operator must separately review and perform the cold restart before it takes effect.</p>
+      <button id="upstreams-prepare" type="submit" disabled>Prepare change</button>
+    </fieldset>
+    <p id="upstreams-review-state" role="status"></p>
+    <details><summary>Format and protected destinations</summary><p class="small muted">Use 1–16 unique canonical HTTPS origins: lowercase hostname, no path, trailing slash, explicit port, wildcard, IP address or login credentials. The existing demo fixture is a retained exception, not a way to add private destinations.</p><pre id="upstreams-protected"></pre><p class="small muted">Existing fixture network exceptions are preserved exactly and cannot be edited here. Destinations required by permissions, retained policy or Google configuration cannot be removed. This page does not edit deployment files, restart services, change keys or tokens, or apply running settings.</p></details>
+  </form>
+  <div id="upstreams-operation" hidden>
+    <p id="upstreams-operation-status" role="status" aria-live="polite"></p>
+    <p id="upstreams-pending-note" class="small muted" hidden>Changing apps, keys or permissions after Prepare can invalidate this change. Cancel it and review again if needed.</p>
+    <div id="upstreams-prepared" hidden><h3>Recorded target destinations</h3><pre id="upstreams-prepared-list"></pre></div>
+    <div class="actions"><button id="upstreams-check" type="button" class="secondary" disabled>Check operation result (read only)</button><button id="upstreams-cancel" type="button" class="secondary" disabled>Cancel prepared change</button><button id="upstreams-copy" type="button" class="secondary" disabled>Copy prepared destination list</button></div>
+    <details id="upstreams-operation-details" hidden><summary>Operation reference and recovery</summary><code id="upstreams-operation-reference"></code><p class="small muted">Only this public reference is retained in the browser tab. Lost replies are checked with read-only requests, never automatically resubmitted. A missing receipt does not prove failure. Copy includes only the public JSON list, not secrets or restart commands. A cold-start receipt is separate from proxy policy readiness.</p></details>
+  </div>
+</article>
 <article id="client-existing-settings" class="card"><h2>Use your existing client's proxy settings</h2><p>Keep your client's API URL, method and request data. Configure its HTTPS proxy endpoint below, send the application token as proxy authentication, and trust the downloaded CA for the destination inside the tunnel. Your client must support these proxy and TLS settings.</p><p>Every request must still match an active access rule. Follow that rule's credential-input choice: send no provider credential header for automatic insertion, or exactly the configured dummy value for replacement.</p></article>
 <div class="two-column"><article class="card"><h2>Proxy endpoint</h2><code id="proxy-url">Loading...</code><p class="small muted">Deployment-managed. Outer TLS uses system trust; the downloaded CA verifies the destination inside the tunnel.</p><p id="activation-status" role="status" aria-live="polite"></p><button id="proxy-refresh" class="secondary">Refresh activation</button></article><article class="card"><h2>Certificate authority</h2><p>Trust this public development CA only in your test client.</p><a id="ca-download" class="button" href="/ca.pem" download="serverware-ca.pem">Download CA certificate</a><p class="small muted">Do not install it system-wide or disable TLS verification. The private signing key is never downloaded.</p></article></div>
 <article id="client-proxy-login" class="card" hidden><h2>Proxy login for this application</h2><p id="client-proxy-auth-mode"></p><dl class="metadata"><dt>Proxy host</dt><dd><code id="client-proxy-host"></code></dd><dt>Port</dt><dd><code id="client-proxy-port"></code></dd><dt>Username</dt><dd><code id="client-proxy-username"></code></dd><dt>Password / token</dt><dd id="client-proxy-password-note"></dd></dl><p id="client-proxy-login-status" class="small muted" role="status" aria-live="polite"></p><p class="small muted">Login choices describe the control-plane source capability and require its paired proxy version. A loaded policy is not proof that a client request succeeded. Keep tokens out of proxy URLs.</p></article>

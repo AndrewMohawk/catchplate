@@ -25,6 +25,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
+    "/proxy/upstreams", "/proxy/upstreams/cancel",
     "/notifications/settings", "/notifications/test",
 ))
 router = APIRouter(prefix=PREFIX)
@@ -470,3 +471,75 @@ async def cancel_google_setup(request: Request,
     payload = await _payload(request, setup.CancelInput, 2048)
     result = await _google_setup_result(setup.cancel, payload, identity.user_id)
     return JSONResponse(result, headers=_HEADERS)
+
+
+async def _upstream_setup_result(function, *args, created: bool = False) -> JSONResponse:
+    """A missing response never authorizes replay or applies pending settings."""
+    from serverware import operator_upstream_setup as setup
+    from serverware.operator_catalog_schema import CatalogConflict
+
+    try:
+        result = await _blocking(function, *args)
+    except setup.SetupNotFound:
+        _reject(404, "upstream setup operation not found")
+    except CatalogConflict:
+        _reject(409, "upstream setup review changed; inspect saved status before preparing again")
+    except setup.SetupUnavailable:
+        _reject(503, "upstream setup status unavailable; inspect the operation without repeating the action")
+    except ValueError:
+        _reject(422, "invalid upstream setup input")
+    except Exception:
+        _reject(503, "upstream setup outcome unavailable; inspect the operation without repeating the action")
+    try:
+        return JSONResponse(result, status_code=201 if created else 200, headers=_HEADERS)
+    except Exception:
+        _reject(503, "upstream setup result unavailable; inspect the operation without repeating the action")
+
+
+def _upstream_setup_read_admission(request: Request) -> None:
+    _admit(request, mutation=False)
+    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+        _reject(400, "upstream setup status accepts no body")
+
+
+@router.get("/proxy/upstreams")
+async def upstream_setup_review(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_upstream_setup as setup
+
+    _upstream_setup_read_admission(request)
+    return await _upstream_setup_result(setup.review, identity.user_id)
+
+
+@router.post("/proxy/upstreams")
+async def prepare_upstream_setup(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_upstream_setup as setup
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, setup.PrepareInput, 8192)
+    return await _upstream_setup_result(setup.prepare, payload, identity.user_id, created=True)
+
+
+@router.get("/proxy/upstreams/{operation_id}")
+async def upstream_setup_status(operation_id: str, request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_upstream_setup as setup
+    from serverware.operator_catalog_inputs import _identifier
+
+    _upstream_setup_read_admission(request)
+    try:
+        _identifier(operation_id)
+    except (ValueError, TypeError, AttributeError):
+        _reject(422, "invalid upstream setup operation identifier")
+    return await _upstream_setup_result(setup.status, operation_id, identity.user_id)
+
+
+@router.post("/proxy/upstreams/cancel")
+async def cancel_upstream_setup(request: Request,
+        identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    from serverware import operator_upstream_setup as setup
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, setup.CancelInput, 2048)
+    return await _upstream_setup_result(setup.cancel, payload, identity.user_id)

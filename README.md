@@ -44,7 +44,9 @@ Follow the [operator demo walkthrough](docs/operator-demo.md). Its latest
 retained deployment verification covers the synthetic upstream and LAN proxy,
 not real-provider access or an Internet-reachable proxy. The console and forward
 proxy are different endpoints; listener settings and approved destinations are
-deployment-managed. See [verification and current limits](docs/ordinary-client-verification.md)
+deployment-managed. The new [destination review workflow](docs/operator-proxy-destinations.md)
+prepares retained configuration for a controlled restart; it does not apply live
+settings or grant application access. See [verification and current limits](docs/ordinary-client-verification.md)
 and the [operator workflow requirements](docs/operator-workspace-requirements.md).
 The older [fixed sandbox](https://serverware-sandbox.example.com/) remains
 separate and is not the credential-management demo.

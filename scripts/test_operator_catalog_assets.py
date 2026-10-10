@@ -61,6 +61,8 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertLess(reads.index('workspace_npm.js'), reads.index('workspace_connect.js'))
         self.assertLess(reads.index('workspace_npm.js'), reads.index('app.js'))
         self.assertEqual(reads.count('workspace_notifications.js'), 1)
+        self.assertEqual(reads.count('workspace_upstreams.js'), 1)
+        self.assertLess(reads.index('workspace_upstreams.js'), reads.index('app.js'))
         self.assertNotIn('__OPERATOR_DEMO_', document)
         self.assertNotIn('serverware.app', sys.modules)
         self.assertNotIn('serverware.config', sys.modules)
@@ -121,6 +123,21 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertNotIn('/api/operator-demo/notifications', npm)
         self.assertNotIn('workspace_notifications', npm)
 
+    def test_upstreams_are_explicit_prepare_not_hot_apply_or_credential_settings(self):
+        index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in self.elements() if 'id' in attrs}
+        self.assertEqual(index['proxy-upstreams'][0], 'article')
+        self.assertIn('hidden', index['upstreams-form'][1])
+        self.assertIn('hidden', index['upstreams-operation'][1])
+        self.assertEqual(index['upstreams-proposed'][2], 'upstreams-form')
+        self.assertIn('disabled', index['upstreams-fields'][1])
+        self.assertIsNone(index['upstreams-review'][2])
+        upstreams = (ASSETS / 'workspace_upstreams.js').read_text()
+        self.assertNotIn('/api/operator-demo/credentials', upstreams)
+        self.assertNotIn('/api/operator-demo/notifications', upstreams)
+        self.assertNotIn('applications/rotate-token', upstreams)
+        self.assertIn("home.insertBefore(panel, element('proxy-setup-content'))", upstreams)
+        self.assertIn('JSON.stringify(receipt.target_settings.allowed_upstreams)', upstreams)
+
     def test_rules_reference_both_resources_and_keep_projection_out_of_credentials(self):
         items = self.elements()
         index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in items if 'id' in attrs}
@@ -146,7 +163,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_google_reauthorization.js', 'workspace_notifications.js'}:
+            if name not in {'workspace_google_reauthorization.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
@@ -170,6 +187,12 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertNotIn('url', reference.group(1))
         self.assertLess(notifications.index('sessionStorage.setItem(notificationOperationKey'),
                         notifications.index("const response = request(prefix +"))
+        upstreams = scripts['workspace_upstreams.js']
+        self.assertIn("upstreamOperationKey = 'serverware.operator.upstreams.operation.v1'", upstreams)
+        self.assertIn("upstreamObject(value, ['operation_id', 'kind'])", upstreams)
+        self.assertIn("if (!retain({operation_id: body.operation_id, kind}))", upstreams)
+        self.assertIn("request(upstreamSetupPath + '/' + reference.operation_id)", upstreams)
+        self.assertNotIn('localStorage', upstreams)
         self.assertIn('BroadcastChannel', script)
         self.assertIn('/api/operator-demo/catalog', script)
         self.assertNotIn('/api/operator-demo/connections', script)

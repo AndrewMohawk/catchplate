@@ -61,6 +61,7 @@ else {
   const applications = createApplicationsView(workspace);
   reauthorization = createGoogleReauthorizationView(workspace, applications);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
+  const upstreams = createUpstreamsView(workspace);
   const connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
   createGoogleView(workspace, applications, connect);
@@ -76,6 +77,7 @@ else {
     element('page-label').textContent = operatorViews[view]; document.title = operatorViews[view] + ' - Serverware operator workspace';
     connect.show(view === 'connect');
     notifications.show(view === 'notifications');
+    upstreams.show(view === 'proxy');
     if (view === 'audit') audit.open();
   }
   element('overview-try-demo').addEventListener('click', () => {

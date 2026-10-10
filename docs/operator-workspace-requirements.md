@@ -73,6 +73,11 @@ keys**, **Applications and access**, and **Audit log**. Provider application
 configuration belongs in administrator settings. Approvals need their own
 pending-action workflow when implemented; do not offer an inert approval option.
 
+The [proxy destination workflow](operator-proxy-destinations.md) keeps operator
+configuration separate from application permissions: review a proposed list,
+prepare it, then activate it through an exact controlled cold restart without
+discarding saved resources. Preparation is not activation or provider readiness.
+
 Acceptance is two ordinary jobs, including their subsequent use: authentication
 replacement with zero response-configuration interactions, and an inbox worker
 that lists, paginates, reads messages and continues after provider-token expiry.

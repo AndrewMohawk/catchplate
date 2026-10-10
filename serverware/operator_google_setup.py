@@ -330,7 +330,7 @@ def _snapshot(conn, *, disabled):
 
 
 def review(actor_id):
-    from serverware import db, operator_demo_store
+    from serverware import db, operator_demo_store, operator_upstream_setup
     operator_demo_store._require()
     _actor(actor_id)
     with db.connect() as conn:
@@ -343,7 +343,7 @@ def review(actor_id):
             "old_settings": old, "target_settings": _target(old), "public_url": origin, "redirect_uri": redirect,
             "provider_id": "google", "permission_preset": profiles.PERMISSION_PRESET, "scopes": list(profiles.SCOPES),
             "eligible": not any(row["status"] == "pending" or _managed(row) for row in rows)
-                and len(rows) < MAX_OPERATIONS}
+                and len(rows) < MAX_OPERATIONS and not operator_upstream_setup.pending(conn)}
 
 
 def _get(conn, operation_id, actor_id):
@@ -399,7 +399,7 @@ def _admit_managed_owner(owner_id):
 
 
 def _prepare(payload, actor_id, *, managed):
-    from serverware import db, operator_demo_store
+    from serverware import db, operator_demo_store, operator_upstream_setup
     operator_demo_store._require()
     _actor(actor_id)
     with exclusive(), db.connect() as conn:
@@ -409,7 +409,8 @@ def _prepare(payload, actor_id, *, managed):
                 or _digest(old) != payload.expected_settings_digest):
             raise catalog.CatalogConflict()
         rows = _rows(conn)
-        if len(rows) >= MAX_OPERATIONS or any(item["status"] == "pending" or item["operation_id"] == payload.operation_id for item in rows):
+        if (len(rows) >= MAX_OPERATIONS or any(item["status"] == "pending" or item["operation_id"] == payload.operation_id for item in rows)
+                or operator_upstream_setup.pending(conn)):
             raise catalog.CatalogConflict()
         retained_managed = [item for item in rows if _managed(item)]
         if not managed:
@@ -482,10 +483,13 @@ def validate_startup(conn, previous_settings_raw, target_settings_raw, *, retain
     _require(not _custody_present(conn))
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='operator_catalog_oauth_profile'").fetchone():
         return None
+    from serverware import operator_upstream_setup
+    _require(not operator_upstream_setup.pending(conn))
     if not catalog.active(conn):
         if retained_authority is None:
             retained_authority = conn.execute("SELECT 1 FROM sqlite_master WHERE lower(name) GLOB 'operator_demo_*' "
-                "OR lower(name) GLOB 'operator_catalog_*' OR lower(name) GLOB 'operator_google_*' LIMIT 1").fetchone() is not None
+                "OR lower(name) GLOB 'operator_catalog_*' OR lower(name) GLOB 'operator_google_*' "
+                "OR lower(name) GLOB 'operator_upstream_*' LIMIT 1").fetchone() is not None
         _require(retained_authority is False and previous_settings_raw is None)
         return None
     _require(isinstance(conn, sqlite3.Connection) and previous_settings_raw is not None)

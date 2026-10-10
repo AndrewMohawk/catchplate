@@ -70,6 +70,9 @@ _CATALOG = {
     "access_rule.github_created": "GitHub application permission saved",
     "access_rule.npm_metadata_created": "npm package metadata permission saved",
     "access_rule.revoked": "Application permission revoked",
+    "upstream_setup.prepared": "Proxy destination change prepared; restart required",
+    "upstream_setup.cancelled": "Prepared proxy destination change cancelled",
+    "upstream_setup.activated": "Proxy destination configuration activated",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
 ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", *NATIVE_EVENT_TYPES)))
@@ -249,7 +252,7 @@ def _details(row, event):
     if event is None:
         return result
     for key in ("resource_id", "application_id", "credential_id", "credential_ref",
-                "connection_id", "approval_id", "approval_request_id", "route_id", "principal_id"):
+                "connection_id", "approval_id", "approval_request_id", "route_id", "principal_id", "operation_id"):
         if _identifier(event.get(key)):
             result[key] = event[key]
     for key in ("policy_hash", "request_digest", "operation_digest", "payload_digest"):

@@ -170,7 +170,7 @@ def initialize() -> None:
     db = _require()
     from serverware import operator_demo
     with operator_publication.exclusive(startup=True), db.connect() as conn:
-        retained_authority = any(row[0].lower().startswith(("operator_demo_", "operator_catalog_", "operator_google_"))
+        retained_authority = any(row[0].lower().startswith(("operator_demo_", "operator_catalog_", "operator_google_", "operator_upstream_"))
             for row in conn.execute("SELECT name FROM sqlite_master"))
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS operator_demo_settings (
@@ -191,8 +191,10 @@ def initialize() -> None:
         settings = operator_demo.settings()
         pinned = json.dumps({key: settings[key] for key in ("allowed_upstreams", "fixture_cidrs")}, sort_keys=True)
         previous = conn.execute("SELECT settings_json FROM operator_demo_settings WHERE singleton=1").fetchone()
-        from serverware import operator_google_setup
-        setup_applied = operator_google_setup.startup(conn, previous[0] if previous else None, pinned,
+        from serverware import operator_google_setup, operator_upstream_setup
+        upstream_applied = operator_upstream_setup.startup(conn, previous[0] if previous else None, pinned,
+            retained_authority=retained_authority)
+        setup_applied = upstream_applied or operator_google_setup.startup(conn, previous[0] if previous else None, pinned,
             retained_authority=retained_authority)
         if previous is None:
             conn.execute("INSERT INTO operator_demo_settings VALUES(1,?)", (pinned,))

@@ -130,8 +130,9 @@ opening sockets.
 
 These are offline source/serialization tests, **not** a successful Gmail consent,
 proxy dispatch, token refresh, live Google request or deployed HTTPS acceptance
-claim. Test execution is still pending for this new example; no network test has
-been run. Python's generated Gmail client was not substituted: its reviewed
+claim. On 2026-10-10, all eight test groups passed with Go 1.23.12 and the pinned
+dependencies (`GOPROXY=off go test -p 2 -count=1 -v ./...`); no live network test
+has been run. Python's generated Gmail client was not substituted: its reviewed
 default `httplib2` transport does
 not provide the required TLS-to-HTTPS-proxy hop, so this example deliberately uses
 the official Go SDK instead.

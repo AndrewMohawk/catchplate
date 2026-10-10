@@ -315,4 +315,5 @@ async function main() {
     finally { const after = await hashes(); console.log(JSON.stringify({phase: 'source-after', hashes: after})); assert.deepEqual(after, before); }
   }
 }
+module.exports = {fixture, options, bundleRule};
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });

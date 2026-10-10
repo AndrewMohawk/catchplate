@@ -241,5 +241,5 @@ async function main() {
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
   try { await runSuite(browser); } finally { await browser.close(); }
 }
-module.exports = {run};
+module.exports = {run, fixture, npmRule};
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });

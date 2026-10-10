@@ -39,9 +39,9 @@ function github(bundle = 'github_issues_read_v1') {
     query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true};
   return value;
 }
-function gmail() {
+function gmail(changes = {}) {
   const fields = clone(f.run('gmailRuleFields()'));
-  const value = rawCatalog({credentials: [google()], rules: [rule({...fields, credential_input: 'insert'})],
+  const value = rawCatalog({credentials: [google()], rules: [rule({...fields, credential_input: 'insert', ...changes})],
     allowed: ['https://gmail.googleapis.com']});
   // Public, already-projected capability input: this suite tests discovery,
   // not OAuth admission. The existing Google suites own that closed contract.
@@ -70,14 +70,48 @@ const tests = [
       assert(found.every(item => item.kind === 'project'));
     }
   }],
-  ['npm and Gmail link existing verification guides rather than nonexistent projects', () => {
+  ['validated npm read and publish link the existing project alongside their own guides', () => {
     for (const [value, filename] of [[rawCatalog({rules: [npmRule()]}), 'operator-npm-metadata.md'],
-      [publishing(), 'operator-npm-publish.md'], [gmail(), 'operator-gmail-job-verification.md']]) {
-      const found = links(value); assert.equal(found.length, 1); assert.equal(found[0].kind, 'guide');
-      assert.equal(found[0].href, BASE + 'blob/' + BRANCH + 'docs/' + filename);
+      [publishing(), 'operator-npm-publish.md']]) {
+      const found = links(value);
+      assert.deepEqual(found.map(item => item.kind), ['project', 'guide']);
+      assert.equal(found[0].label, 'npm registry project');
+      assert.equal(found[0].href, BASE + 'tree/' + BRANCH + 'examples/npm-registry');
+      assert.equal(found[1].href, BASE + 'blob/' + BRANCH + 'docs/' + filename);
       assert(statSync(resolve(ROOT, 'docs', filename)).isFile());
-      render(value); assert.match(node('client-example-note').textContent, /not a runnable example project/);
+      render(value); assert.match(node('client-example-note').textContent, /README.*verification status/);
+      assert(!node('client-example-note').textContent.includes('guide only'));
     }
+  }],
+  ['validated exact Gmail replacement links the Go project and preserves the guide', () => {
+    const value = gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'});
+    assert.deepEqual(links(value), [
+      {label: 'Go + Gmail SDK', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-go'},
+      {label: 'Google / Gmail guide', kind: 'guide', href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
+    render(value);
+    assert.equal(node('client-example-links').children.length, 2);
+    assert.match(node('client-example-note').textContent, /separate from your private client config/);
+    assert.match(node('client-example-note').textContent, /opening an example does not run it or verify access/);
+  }],
+  ['Gmail insertion and other valid dummy values retain guide-only discovery', () => {
+    for (const changes of [{}, ...['Bearer another-public-dummy', 'bearer serverware-gmail-placeholder-v1',
+      'Bearer  serverware-gmail-placeholder-v1', 'Bearer serverware-gmail-placeholder-v1-extra',
+      'Bearer PRIVATE_DUMMY_CANARY'].map(placeholder => ({credential_input: 'replace_exact', placeholder}))]) {
+      const value = gmail(changes);
+      assert.equal(f.run('operatorRuleSupported(input.access_rules[0], input)', value), true);
+      assert.deepEqual(links(value), [{label: 'Google / Gmail guide', kind: 'guide',
+        href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
+      render(value); const note = node('client-example-note').textContent;
+      assert.match(note, /guide only/); assert.match(note, /exact Gmail dummy-header replacement/);
+      assert.match(note, /contains no private client config and does not verify your access/);
+      assert(!note.includes('not a runnable example project')); assert(!note.includes('PRIVATE_DUMMY_CANARY'));
+    }
+    for (const changes of [
+      {credential_input: 'insert', placeholder: 'Bearer serverware-gmail-placeholder-v1'},
+      {credential_input: 'replace_exact'}, {credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1 '},
+      {credential_input: 'replace_exact', placeholder: null},
+      {credential_input: 'unsupported', placeholder: 'Bearer serverware-gmail-placeholder-v1'}])
+      assert.deepEqual(links(gmail(changes)), []);
   }],
   ['a bundle label alone, revoked resources, or absent source capability never selects examples', () => {
     for (const change of [value => { value.capabilities.github = null; },
@@ -91,6 +125,14 @@ const tests = [
     }
     const manual = rawCatalog({credentials: [credential()], rules: [rule()]});
     assert.deepEqual(links(manual), []);
+    for (const original of [rawCatalog({rules: [npmRule()]}), publishing(),
+      gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'})]) {
+      for (const change of [value => { value.access_rules[0].status = 'revoked'; },
+        value => { value.credentials[0].status = 'revoked'; }, value => { value.applications[0].status = 'revoked'; },
+        value => { value.access_rules[0].methods = ['DELETE']; }]) {
+        const value = clone(original); change(value); assert.deepEqual(links(value), []);
+      }
+    }
   }],
   ['public links remain readable with an expired app token, without weakening recipe guards', () => {
     const value = github(); const expected = links(value);
@@ -102,16 +144,19 @@ const tests = [
     assert.match(PROXY, /element\('download-config'\)\.disabled = !ready \|\| !applications\.tokenFor\(application\.id\)/);
   }],
   ['links never interpolate IDs, private tokens, custom URLs, query strings or fragments', () => {
-    const value = github(); const expected = links(value);
-    value.proxy_url = 'https://PRIVATE_TOKEN@private.example.test/?PRIVATE_QUERY';
-    value.credentials[0].secret = 'PROVIDER_SECRET_CANARY'; value.applications[0].token = 'APP_SECRET_CANARY';
-    value.access_rules[0].example_url = 'https://untrusted.example.test';
-    assert.deepEqual(links(value), expected);
-    for (const link of links(value)) {
-      const url = new URL(link.href); assert.equal(url.origin, 'https://github.com');
-      assert.equal(url.username + url.password + url.search + url.hash, '');
-      for (const forbidden of [IDS.application, IDS.credential, IDS.rule, 'PRIVATE_', 'SECRET_CANARY', 'untrusted.example.test'])
-        assert(!link.href.includes(forbidden));
+    for (const value of [github(), rawCatalog({rules: [npmRule()]}), publishing(), gmail(),
+      gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'})]) {
+      const expected = links(value);
+      value.proxy_url = 'https://PRIVATE_TOKEN@private.example.test/?PRIVATE_QUERY';
+      value.credentials[0].secret = 'PROVIDER_SECRET_CANARY'; value.applications[0].token = 'APP_SECRET_CANARY';
+      value.access_rules[0].example_url = 'https://untrusted.example.test';
+      assert.deepEqual(links(value), expected);
+      for (const link of links(value)) {
+        const url = new URL(link.href); assert.equal(url.origin, 'https://github.com');
+        assert.equal(url.username + url.password + url.search + url.hash, '');
+        for (const forbidden of [IDS.application, IDS.credential, IDS.rule, 'PRIVATE_', 'SECRET_CANARY', 'untrusted.example.test'])
+          assert(!JSON.stringify(link).includes(forbidden));
+      }
     }
   }],
   ['rendered inert anchors are explicit public navigation and stale links are removed', () => {
@@ -129,8 +174,9 @@ const tests = [
     assert.equal(networkCalls, 0);
   }],
   ['all advertised project directories contain a README in the source snapshot', () => {
-    for (const language of ['node', 'python', 'go'])
-      assert(statSync(resolve(ROOT, 'examples', 'github-issues-' + language, 'README.md')).isFile());
+    for (const directory of ['github-issues-node', 'github-issues-python', 'github-issues-go', 'npm-registry', 'google-gmail-go'])
+      assert(statSync(resolve(ROOT, 'examples', directory, 'README.md')).isFile());
+    assert(statSync(resolve(ROOT, 'docs/operator-gmail-job-verification.md')).isFile());
   }],
 ];
 function main() {

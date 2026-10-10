@@ -5,6 +5,8 @@ const {mkdtemp} = require('node:fs/promises');
 const {join} = require('node:path');
 const {fixture, githubRule} = require('./test_operator_github_browser.cjs');
 const {ready, view} = require('./test_operator_catalog_browser.cjs');
+const npm = require('./test_operator_npm_browser.cjs');
+const gmail = require('./test_operator_gmail_bundle_browser.cjs');
 
 async function main() {
   assert.equal(process.argv.length, 2, 'No live target arguments accepted');
@@ -41,6 +43,40 @@ async function main() {
       assert.deepEqual(state.errors, []);
       results.push({manualChoiceOpensForm: true, mutations: 0});
     });
+    const source = 'https://github.com/AndrewMohawk/serverware/';
+    const branch = 'serverware/operator-workspace/';
+    async function checkLinks(page, name, expected) {
+      await ready(page); await view(page, 'proxy');
+      await page.locator('#client-examples').waitFor({state: 'visible'});
+      assert.equal(new URL(page.url()).origin, 'https://operator-catalog.example.test');
+      assert.deepEqual(await page.locator('#client-example-links a').evaluateAll(nodes =>
+        nodes.map(node => node.href)), expected.map(path => source + path));
+      for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}]) {
+        await page.setViewportSize(viewport);
+        await page.locator('#client-examples').scrollIntoViewIfNeeded();
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        const screenshot = join(directory, name + '-' + viewport.width + '.png');
+        await page.screenshot({path: screenshot, fullPage: false});
+        results.push({name, viewport, screenshot, links: expected});
+      }
+    }
+    await npm.fixture(browser, {rules: [npm.npmRule()]}, async (page, state, observed) => {
+      await checkLinks(page, 'npm', ['tree/' + branch + 'examples/npm-registry',
+        'blob/' + branch + 'docs/operator-npm-metadata.md']);
+      assert.equal(observed.creates.length + observed.grants.length, 0);
+      assert.deepEqual(state.errors, []);
+    });
+    for (const replace of [false, true]) {
+      const rule = gmail.bundleRule(replace ? {credential_input: 'replace_exact',
+        placeholder: 'Bearer serverware-gmail-placeholder-v1'} : {});
+      await gmail.fixture(browser, gmail.options({rules: [rule]}), async (page, state, observed) => {
+        const paths = ['blob/' + branch + 'docs/operator-gmail-job-verification.md'];
+        if (replace) paths.unshift('tree/' + branch + 'examples/google-gmail-go');
+        await checkLinks(page, replace ? 'gmail-project' : 'gmail-guide', paths);
+        assert.equal(observed.posts.length, 0); assert.deepEqual(state.posts, []);
+        assert.deepEqual(state.errors, []);
+      });
+    }
     console.log(JSON.stringify({ok: true, scope: 'synthetic rendered UI', results,
       externalNavigation: false, providerRequests: 0, sdkExecuted: false}));
   } finally { await browser.close(); }

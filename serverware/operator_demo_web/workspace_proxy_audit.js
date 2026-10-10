@@ -11,9 +11,14 @@ function operatorExampleProjects(rule, catalog) {
     case 'github_issues_write_v1':
       return [project('Node.js + GitHub Actions', 'github-issues-node'),
         project('Python', 'github-issues-python'), project('Go', 'github-issues-go')];
-    case 'npm_metadata_read_v1': return [guide('npm metadata guide', 'operator-npm-metadata.md')];
-    case 'npm_publish_v1': return [guide('npm publishing guide', 'operator-npm-publish.md')];
-    case 'gmail_read_v1': return [guide('Google / Gmail guide', 'operator-gmail-job-verification.md')];
+    case 'npm_metadata_read_v1': return [project('npm registry project', 'npm-registry'),
+      guide('npm metadata guide', 'operator-npm-metadata.md')];
+    case 'npm_publish_v1': return [project('npm registry project', 'npm-registry'),
+      guide('npm publishing guide', 'operator-npm-publish.md')];
+    case 'gmail_read_v1': return [
+      ...(rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' ?
+        [project('Go + Gmail SDK', 'google-gmail-go')] : []),
+      guide('Google / Gmail guide', 'operator-gmail-job-verification.md')];
     default: return [];
   }
 }
@@ -23,7 +28,7 @@ function renderOperatorExampleProjects(rule, catalog) {
   links.replaceChildren(); panel.hidden = projects.length === 0;
   element('client-example-note').textContent = !projects.length ? '' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
-    'This permission currently has a setup and verification guide, not a runnable example project. The public guide contains no private client config and does not verify your access.';
+    'This saved permission links to its setup and verification guide only. The Go SDK project requires the documented exact Gmail dummy-header replacement. The public guide contains no private client config and does not verify your access.';
   for (const project of projects) {
     const link = textNode('a', project.label, 'button secondary');
     link.href = project.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';

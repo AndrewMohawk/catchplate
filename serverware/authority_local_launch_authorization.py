@@ -29,6 +29,7 @@ from scripts.authority import atomic_provisioner_contract as provision
 from scripts.authority import native_pilot_authority_io as io
 from serverware import authority_artifact_spec as spec
 from serverware import authority_launcher as launch
+from serverware import authority_local_artifact_measure as measure
 from serverware import authority_stage_zero_contract as stage
 from serverware.authority_local_configuration import document
 from serverware.authority_local_install import _generation, _frozen, _owning
@@ -515,7 +516,8 @@ class LocalLaunchAuthorizationIssuer:
         require(algorithm == 1 and length == 32)
         return "sha256:" + digest[:32].hex()
 
-    def _row(self, row, *, regular, native_measurements=None):
+    def _row(self, row, *, regular, native_measurements=None, reuse_content=False):
+        require(type(reuse_content) is bool and (not reuse_content or regular))
         fd = self._child_fd(row["fd"])
         info = os.fstat(fd)
         actual = dict(device=info.st_dev, inode=info.st_ino, mode=stat.S_IMODE(info.st_mode), uid=info.st_uid, gid=info.st_gid)
@@ -525,8 +527,26 @@ class LocalLaunchAuthorizationIssuer:
             require(_generation(fd) == row["generation"])
             _frozen(fd)
         if regular:
-            raw = self._read(fd, launch.MAX_CLOSURE_FILE_BYTES)
-            require(len(raw) == row["size"] and sha(raw) == row["sha256"])
+            if reuse_content and "generation" in row and row.get("fsVerityDigest") is not None:
+                # Borrowers of _row already own these custody primitives. Do
+                # not require a new instance method or a full-roster sweep.
+                def check_retained():
+                    self._check_live()
+                    require(fd in self.owned and fd in self.link_by_fd and fd not in self.mapping_fds
+                        and self.child_handles.get(row["fd"]) == fd
+                        and self._owned_identity(fd) == self.owned[fd])
+                    self._check_link(fd)
+                    require(io._identity(os.fstat(fd)) == io._identity(info)
+                        and info.st_size == row["size"]
+                        and _generation(fd) == row["generation"])
+                    _frozen(fd)
+                    require(LocalLaunchAuthorizationIssuer._measured_verity(fd) == row["fsVerityDigest"])
+                digest = measure._digest_owned_file(fd, maximum=launch.MAX_CLOSURE_FILE_BYTES,
+                    read=lambda: self._read(fd, launch.MAX_CLOSURE_FILE_BYTES), check=check_retained)
+                require(digest == row["sha256"])
+            else:
+                raw = self._read(fd, launch.MAX_CLOSURE_FILE_BYTES)
+                require(len(raw) == row["size"] and sha(raw) == row["sha256"])
             verity = None
             if row.get("fsVerityDigest") is not None:
                 verity = LocalLaunchAuthorizationIssuer._measured_verity(fd)
@@ -544,8 +564,8 @@ class LocalLaunchAuthorizationIssuer:
         return fd
 
     def _retained_mapping_digest(self, fd, measured):
-        # Only the fully read, verity-measured original from this verify_live
-        # call is reusable; neither the record nor its FD gains new ownership.
+        # Only this call's live-checked, verity-bound retained original is
+        # reusable; neither the record nor its FD gains new ownership.
         held, number, identity, generation, verity, digest = measured
         def check():
             self._check_live()
@@ -626,7 +646,7 @@ class LocalLaunchAuthorizationIssuer:
         environment = _effective_environment(environment, request, observed["environment"])
         native_measurements = {}
         for row in request["retainedFiles"]:
-            self._row(row, regular=True, native_measurements=(native_measurements
+            self._row(row, regular=True, reuse_content=True, native_measurements=(native_measurements
                 if row["runtimePath"] in payload["nativeExecutableMappings"] else None))
         for row in request["retainedDirectories"]:
             self._row(row, regular=False)

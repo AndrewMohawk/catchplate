@@ -187,8 +187,34 @@ class NpmMetadataFixtureTests(unittest.TestCase):
         self.assertIn("'fetch-retries=0'", job)
         self.assertIn("'--globalconfig', '/dev/null', 'view'", job)
         self.assertIn("await pacote.manifest", job)
+        self.assertIn("HOME: clientHome", job)
+        self.assertLess(job.index("process.env.HOME = clientHome"), job.index("load('/npm/node_modules/pacote/lib/index.js')"))
         for bypass in ("NODE_TLS_REJECT_UNAUTHORIZED", "rejectUnauthorized", "fetch:", "agent:", "cafile=", "ca: "):
             self.assertNotIn(bypass, job)
+
+    def test_failure_diagnostics_are_closed_fixed_fields_not_raw_errors(self):
+        failure = {"schema": "serverware.privateNpmMetadataClient/v1", "phase": "wrong_app", "client": "npm",
+            "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
+            "strictSSL": True, "extraCaPreservesDefaultRoots": True, "configuredRetries": 0,
+            "isolatedCache": True, "requestRewrite": False, "ok": False,
+            "error": "stock npm metadata operation failed", "stage": "npm_json", "errorCode": "ERR_SYSTEM_ERROR",
+            "processExitCode": 1, "stdoutBytes": 0, "stderrBytes": 80}
+        result = check.client_failure_observation(failure, "wrong_app")
+        self.assertEqual(set(result), {"phase", "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes"})
+        self.assertEqual(result["errorCode"], "ERR_SYSTEM_ERROR")
+        for key, value in (("raw", "canary-secret"), ("errorCode", "canary-secret"), ("stage", "canary-secret"),
+                ("stderrBytes", -1), ("stdoutBytes", 1048577), ("processExitCode", True),
+                ("phase", "npm_scoped"), ("phase", []), ("phase", {}), ("client", []), ("client", {}),
+                ("configuredRetries", False), ("configuredRetries", 0.0), ("configuredRetries", []),
+                ("error", "canary-secret")):
+            with self.subTest(key=key):
+                self.assertIsNone(check.client_failure_observation({**failure, key: value}, "wrong_app"))
+        self.assertIsNone(check.client_failure_observation(None, "wrong_app"))
+        for expected_phase in ([], {}, None, False):
+            with self.subTest(expected_phase=expected_phase):
+                self.assertIsNone(check.client_failure_observation(failure, expected_phase))
+        self.assertEqual(check.ClientFailure("wrong_app", failure).observation, result)
+        self.assertNotIn("ERR_SYSTEM_ERROR", str(check.ClientFailure("wrong_app", failure)))
 
 
 if __name__ == "__main__":

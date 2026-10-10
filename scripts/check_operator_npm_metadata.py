@@ -37,6 +37,46 @@ PHASES = frozenset((*NEGATIVES, *(row["case"] for row in fixture.SPECS)))
 BLOCK_ERRORS = {"wrong_package": "npm_metadata_response_package_mismatch", "reflection": "response_credential_reflection"}
 DENIAL_PATHS = {"npm_metadata_package_denied": "/serverware-fixture-denied",
     "credential_existing_header_mismatch": fixture.path(fixture.PACKAGES[0])}
+CLIENT_STAGES = frozenset(("input", "identity", "trust", "workspace", "npm_config", "npm_spawn", "npm_process",
+    "npm_json", "npm_denial", "npm_metadata", "pacote_request", "pacote_metadata"))
+CLIENT_ERRORS = frozenset(("unrecognized", "E403", "E404", "E407", "E502", "ECONNRESET", "ECONNREFUSED",
+    "EPROXY", "EACCES", "ENOENT", "EINVAL", "ENOTFOUND", "ETIMEDOUT", "ERR_SYSTEM_ERROR",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN", "ERR_TLS_CERT_ALTNAME_INVALID"))
+
+
+def client_failure_observation(document, expected_phase):
+    """Closed fixed diagnostic fields only; never retain raw npm output."""
+    keys = {"schema", "phase", "client", "npmVersion", "pacoteVersion", "registryFetchVersion", "strictSSL",
+        "extraCaPreservesDefaultRoots", "configuredRetries", "isolatedCache", "requestRewrite", "ok", "error",
+        "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes"}
+    if (not isinstance(expected_phase, str) or expected_phase not in PHASES
+            or not isinstance(document, dict) or set(document) != keys
+            or document.get("schema") != "serverware.privateNpmMetadataClient/v1" or document.get("ok") is not False
+            or not isinstance(document.get("phase"), str) or document["phase"] not in {expected_phase, "unknown"}
+            or not isinstance(document.get("client"), str) or document["client"] not in {"npm", "pacote", "unknown"}
+            or document.get("npmVersion") != "11.8.0" or document.get("pacoteVersion") != "21.0.4"
+            or document.get("registryFetchVersion") != "19.1.1"
+            or any(document.get(key) is not True for key in ("strictSSL", "extraCaPreservesDefaultRoots", "isolatedCache"))
+            or type(document.get("configuredRetries")) is not int or document["configuredRetries"] != 0
+            or document.get("requestRewrite") is not False
+            or document.get("error") != "stock npm metadata operation failed"
+            or not isinstance(document.get("stage"), str) or document["stage"] not in CLIENT_STAGES
+            or not isinstance(document.get("errorCode"), str) or document["errorCode"] not in CLIENT_ERRORS
+            or not (document.get("processExitCode") is None or type(document["processExitCode"]) is int
+                and 0 <= document["processExitCode"] <= 255)
+            or any(type(document.get(key)) is not int or not 0 <= document[key] <= 1048576
+                for key in ("stdoutBytes", "stderrBytes"))):
+        return None
+    return {"phase": expected_phase, **{key: document[key]
+        for key in ("stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes")}}
+
+
+class ClientFailure(CheckFailure):
+    def __init__(self, phase, document):
+        self.observation = client_failure_observation(document, phase)
+        stage = self.observation["stage"] if self.observation else "unknown"
+        super().__init__("stock npm client failed in " + phase + "/" + stage + "; raw output suppressed")
 
 
 def validate_denial(event, route_id):
@@ -75,7 +115,13 @@ def run_client(phase, application, token, run_id, seconds):
                         output[key.data].extend(chunk)
                         require(len(output[key.data]) <= (16384 if key.data == "out" else 8192), "npm client output bound exceeded")
         code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
-        require(code == 0 and not output["err"], "stock npm client failed in " + phase + "; raw output suppressed")
+        if code != 0 or output["err"]:
+            document = None
+            try:
+                document = json.loads(output["out"])
+            except (ValueError, TypeError, RecursionError):
+                pass
+            raise ClientFailure(phase, document)
         return bytes(output["out"])
     finally:
         if process.poll() is None:
@@ -370,6 +416,8 @@ def main():
                 safe = {"safeEvidenceUnavailable": True}
         result = {"ok": False, "syntheticOnly": True, "productionReady": False,
             "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__, **safe}
+        if isinstance(error, ClientFailure) and error.observation is not None:
+            result["failedClient"] = error.observation
     finally:
         signal.alarm(0)
     print(json.dumps(result, sort_keys=True))

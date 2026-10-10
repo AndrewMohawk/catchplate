@@ -1,0 +1,45 @@
+# Dormant managed, unconfigured candidate; not the accepted/deployed source layer.
+# Combine in this order: base + this SINGLE source-selection layer + curated-gate
+# + notifications. Never combine with another source override or legacy google.
+# Root must verify the immutable OPERATOR_MANAGED_SOURCE manifest and literal
+# binary below, then resolve/review the complete Compose model before execution.
+# Provider custody must be an existing EMPTY app-owned 0700 directory, distinct
+# from app-data, gate-runtime and notification custody (including bind aliases).
+# Start the app before creating the gate so curated public state exists. No key,
+# client profile, credential, consent or Prepare operation is supplied here.
+services:
+  serverware:
+    environment:
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0
+      SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
+      SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR: /provider-custody
+      SERVERWARE_PROCESS_MODE: serverware-control-plane
+      SERVERWARE_METADATA_STORE_BACKEND: sqlite
+      SERVERWARE_AUDIT_STORE_BACKEND: sqlite
+      SERVERWARE_GRANT_STORE_BACKEND: sqlite
+      SERVERWARE_RELEASE_CHANNEL: dev
+      SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "0"
+      SERVERWARE_KEY_RELEASE_REQUIRED: "0"
+      SERVERWARE_DEV_AUTHENTICATOR: "0"
+      SERVERWARE_DEV_DEMO_SEED: "0"
+    volumes:
+      - type: bind
+        source: ${OPERATOR_MANAGED_SOURCE:?Set the reviewed immutable managed source directory}
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR:?Set the reviewed empty app-only provider custody directory}
+        target: /provider-custody
+        read_only: false
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    environment:
+      SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0/serverware-decision-gate
+        target: /usr/local/bin/serverware-decision-gate
+        read_only: true
+        bind: {create_host_path: false}

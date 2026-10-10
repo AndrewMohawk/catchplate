@@ -279,34 +279,62 @@ def certificate_payload(request, public, kwargs):
     return result
 
 
-def publish_late_original(directory, name, raw, *, hold, check, linked):
+def publish_late_original(directory, name, raw, *, hold, check, linked, check_io=None):
     """Fixed late names only; anonymous complete bytes, no replace or retry.
 
     ``linked`` records the irreversible release before cancellation is unmasked.
     Subsequent checks must retain sources/clocks, not demand a released child
     still occupy its parked boundary. The caller retains every acquired FD.
+    Explicit ``check_io`` owners retain live guards during bounded I/O, while
+    full ``check`` sweeps remain at entry, immediately before link, and exit.
+    Other callers retain the original per-chunk full checks unchanged.
     """
     require(name in LATE_LIMITS and type(raw) is bytes and 0 < len(raw) <= LATE_LIMITS[name])
+    require(check_io is None or callable(check_io))
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     def acquire(path, open_flags, *, parent=None, mode=0o600):
         fd = os.open(path, open_flags, mode, dir_fd=parent)
         hold(fd)
         return fd
+    def check_output(expected_size):
+        if check_io is None:
+            check()
+            return
+        check_io()
+        current = os.fstat(fd)
+        require((current.st_dev, current.st_ino, stat.S_IFMT(current.st_mode), current.st_uid, current.st_gid)
+            == output_identity and stat.S_IMODE(current.st_mode) == output_mode
+            and current.st_size == expected_size and current.st_nlink == output_links
+            and fcntl.fcntl(fd, fcntl.F_GETFL) & (os.O_ACCMODE | os.O_PATH) == os.O_RDWR)
     def readback(fd):
         parts = []
         for offset in range(0, len(raw), 65536):
-            check()
+            check_output(len(raw))
             parts.append(os.pread(fd, min(65536, len(raw) - offset), offset))
+            if check_io is not None:
+                check_output(len(raw))
         require(b"".join(parts) == raw and not os.pread(fd, 1, len(raw)))
+        if check_io is not None:
+            check_output(len(raw))
     with _owning():
         check()
         fd = acquire(".", os.O_TMPFILE | os.O_RDWR | os.O_CLOEXEC, parent=directory)
+        if check_io is not None:
+            original = os.fstat(fd)
+            require(stat.S_ISREG(original.st_mode) and original.st_size == original.st_nlink == 0)
+            output_identity = (original.st_dev, original.st_ino, stat.S_IFMT(original.st_mode),
+                original.st_uid, original.st_gid)
+            output_mode, output_links = stat.S_IMODE(original.st_mode), 0
         offset = 0
         while offset < len(raw):
-            check()
+            check_output(offset)
             count = os.write(fd, memoryview(raw)[offset:offset + 65536])
             require(count > 0); offset += count
-        os.fchmod(fd, 0o400); os.fsync(fd); readback(fd)
+            if check_io is not None:
+                check_output(offset)
+        os.fchmod(fd, 0o400)
+        output_mode = 0o400
+        os.fsync(fd); readback(fd)
         libc = ctypes.CDLL(None, use_errno=True)
         proc = acquire("/proc", flags)
         buffer = ctypes.create_string_buffer(256)
@@ -318,12 +346,17 @@ def publish_late_original(directory, name, raw, *, hold, check, linked):
         source = str(fd).encode("ascii")
         require(io._identity(os.stat(source, dir_fd=descriptors, follow_symlinks=True)) == io._identity(os.fstat(fd)))
         check()
+        if check_io is not None:
+            check_output(len(raw))
         require(libc.linkat(descriptors, ctypes.c_char_p(source), directory,
             ctypes.c_char_p(name.encode("ascii")), 0x400) == 0)
+        output_links = 1
         linked()
         os.fsync(directory)
         require(io._identity(os.stat(name, dir_fd=directory, follow_symlinks=False)) == io._identity(os.fstat(fd)))
         readback(fd); check()
+        if check_io is not None:
+            check_output(len(raw))
         return fd
 
 
@@ -771,12 +804,14 @@ class LocalLaunchAuthorizationIssuer:
             released = False
             def check():
                 self.check_sources() if released else self.check()
+            def check_io():
+                self.check_sources() if released else self._check_live()
             def linked_last():
                 nonlocal released
                 released = True
             for name, raw in zip(OUTPUT_NAMES, originals):
                 publish_late_original(self.directory, name, raw, hold=self._hold, check=check,
-                    linked=linked_last if name == OUTPUT_NAMES[-1] else lambda: None)
+                    linked=linked_last if name == OUTPUT_NAMES[-1] else lambda: None, check_io=check_io)
             # The parent may immediately deliver/replace reservations after the
             # last publication. Do not incorrectly require the parked phase now.
             return {name: sha(raw) for name, raw in zip(OUTPUT_NAMES, originals)}

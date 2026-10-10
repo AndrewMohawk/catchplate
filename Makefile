@@ -633,6 +633,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_startup_failure_diagnostics.py \
 	scripts/test_authority_local_startup_content_cache.py \
 	scripts/test_authority_package_signature_digest_reuse.py \
+	scripts/test_authority_package_verification_reuse.py \
+	scripts/test_authority_launch_publication_scaling.py \
 	scripts/test_authority_local_artifacts.py \
 	scripts/test_authority_local_artifact_measure_cache.py \
 	scripts/test_authority_local_content_catalog.py \

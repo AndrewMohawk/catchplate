@@ -443,11 +443,22 @@ def package_signature_message(
         generation,
         expected_bundle_digest=validated_bundle_digest,
     )
+    return _package_signature_message_from_digests(
+        purpose, validated_bundle_digest, generation_statement_digest(generation)
+    )
+
+
+def _package_signature_message_from_digests(
+    purpose: str,
+    bundle_digest: str,
+    generation_digest: str,
+) -> bytes:
+    """Format only digests derived by the caller's current validation."""
     bound = {
         "schema": SIGNED_PACKAGE_SCHEMA,
         "purpose": purpose,
-        "artifactBundleDigest": validated_bundle_digest,
-        "generationDigest": generation_statement_digest(generation),
+        "artifactBundleDigest": bundle_digest,
+        "generationDigest": generation_digest,
     }
     return domain_digest(
         PACKAGE_SIGNATURE_DOMAIN,
@@ -3464,6 +3475,11 @@ def validate_generation_statement(
 
 
 def validate_signed_artifact_package(package: Mapping[str, Any]) -> None:
+    _validated_signed_package_bundle_digest(package)
+
+
+def _validated_signed_package_bundle_digest(package: Mapping[str, Any]) -> str:
+    """Validate the complete package, retaining this call's bundle digest."""
     value = _require_mapping(
         package,
         name="signed artifact package",
@@ -3517,6 +3533,38 @@ def validate_signed_artifact_package(package: Mapping[str, Any]) -> None:
         raise ArtifactContractError(
             "signed package signatures are not in canonical order"
         )
+    return validated_bundle_digest
+
+
+def _plain_package_json(value: object) -> bool:
+    """Bounded optimization eligibility, never package admission.
+
+    Do not invoke unknown Mapping/sequence methods. Subclasses, shared/cyclic
+    containers, deeper or larger inputs retain the original validation path.
+    """
+    pending = [(value, 0)]
+    seen: set[int] = set()
+    remaining = 1_000_000
+    while pending:
+        current, depth = pending.pop()
+        remaining -= 1
+        if remaining < 0 or depth > 64:
+            return False
+        kind = type(current)
+        if current is None or kind is str or kind is int or kind is bool:
+            continue
+        if (kind is not dict and kind is not list) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if len(current) > remaining - len(pending):
+            return False
+        if kind is dict:
+            if any(type(key) is not str for key in current):
+                return False
+            pending.extend((item, depth + 1) for item in current.values())
+        else:
+            pending.extend((item, depth + 1) for item in current)
+    return True
 
 
 def verify_signed_artifact_package(
@@ -3525,13 +3573,26 @@ def verify_signed_artifact_package(
     trust_state: Mapping[str, Any],
     validation_time: str,
 ) -> VerifiedArtifactPackage:
-    validate_signed_artifact_package(package)
+    # Reuse is private to one invocation over plain JSON. Unknown objects keep
+    # the original revalidation path, including its reentrant Mapping checks.
+    # Neither path is an atomic concurrent-mutation API.
+    reuse_digests = _plain_package_json(package) and _plain_package_json(trust_state)
+    if reuse_digests:
+        validated_bundle_digest = _validated_signed_package_bundle_digest(package)
+        # Only encode after bounded validation, but before consulting other
+        # caller-owned inputs that may invoke Mapping methods.
+        package_bytes = canonical_json_bytes(package)
+    else:
+        validate_signed_artifact_package(package)
     state = validate_trust_state(trust_state)
     _require_timestamp(validation_time, name="package validation time")
     bundle = package["bundle"]
     generation = package["generation"]
     generation_digest = generation_statement_digest(generation)
-    package_digest = signed_artifact_package_digest(package)
+    package_digest = (
+        domain_digest(SIGNED_PACKAGE_DIGEST_DOMAIN, package_bytes)
+        if reuse_digests else signed_artifact_package_digest(package)
+    )
     sequence = generation["sequence"]
     current_sequence = state["currentSequence"]
     if sequence == current_sequence:
@@ -3606,7 +3667,13 @@ def verify_signed_artifact_package(
         verify_ed25519_signature(
             key.public_key,
             signature["signatureBase64Url"],
-            package_signature_message(purpose, bundle, generation),
+            (
+                _package_signature_message_from_digests(
+                    purpose, validated_bundle_digest, generation_digest
+                )
+                if reuse_digests
+                else package_signature_message(purpose, bundle, generation)
+            ),
             name=f"{purpose} package",
         )
 
@@ -3789,9 +3856,15 @@ def verify_signed_artifact_package(
     )
     if generation["roleSetDigest"] != role_set_digest:
         raise ArtifactContractError("generation role set changed")
+    # Detect persistent mutation during fresh trust/signature/evidence checks;
+    # no verified digest may be returned alongside changed package bytes.
+    if reuse_digests and canonical_json_bytes(package) != package_bytes:
+        raise ArtifactContractError("signed package changed during verification")
     return VerifiedArtifactPackage(
         package_digest=package_digest,
-        artifact_bundle_digest=artifact_bundle_digest(bundle),
+        artifact_bundle_digest=(
+            validated_bundle_digest if reuse_digests else artifact_bundle_digest(bundle)
+        ),
         generation_digest=generation_digest,
         generation_sequence=sequence,
         predecessor_digest=generation["predecessorDigest"],

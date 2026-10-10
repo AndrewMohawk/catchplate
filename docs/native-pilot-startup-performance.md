@@ -296,6 +296,77 @@ matched the old lookup semantics for all 123 targets in its actual 16,174-byte
 kernel mount table, with an identical fresh reread. Neither test executes native
 pilot mount setup or measures native startup latency. Frozen R97 is unchanged.
 
+## Launch publication: bounded I/O checks, full publication checks
+
+The launch issuer previously swept every retained file's held and named
+metadata before each 64 KiB write and readback chunk of a late original. Large
+manifests themselves contain the retained roster, so the number of metadata
+operations grew with both the roster and output size. Content-hash caching did
+not remove this work.
+
+The issuer now opts into constant-size live/source/deadline checks and exact
+output-descriptor checks around each chunk. Full retained-roster checks remain
+at entry, immediately before the irreversible link, and completion. Both full
+live measurements around signing remain unchanged. After the final manifest
+link, checks retain sources and original clocks without requiring the released
+child to remain parked. Other callers keep the original per-chunk behavior.
+
+All eight new publication groups and 23 existing launch-authorization groups
+passed in the cached offline runtime. These use real anonymous temporary files,
+`linkat`, descriptor metadata, readback and no-replace behavior, with explicitly
+synthetic owner guards. They cover partial writes, write errors, cancellation,
+changed retained paths, output descriptor substitution and post-release failure.
+
+A separate component comparison used the actual helper and issuer roster-check
+method over 4,000 real synthetic public files and a 1 MiB output. The original
+default made 51 full sweeps (408,000 roster stat calls), taking 1.429 seconds;
+the opt-in path made three sweeps (24,000 calls), taking 0.077 seconds. Live-owner
+checks were synthetic counters, so these are neither native startup timings
+nor a predicted end-to-end speedup. No signature, authority or session result
+was cached.
+
+Evidence is retained in
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/startup-work-scaling.VTN018zQ`.
+Two initial benchmark invocations could not read the private evidence-directory
+mount. Binding only the public benchmark script read-only resolved that harness
+permission issue without changing host permissions. The successful fixture
+containers and their temporary synthetic files were removed; logs remain.
+No retained pilot was started or modified.
+
+## Package verification: reuse one invocation's bundle digest
+
+One successful `verify_signed_artifact_package()` call previously validated and
+hashed the same bundle five times through nested digest and signature helpers.
+For the independently decoded plain JSON used by launch input parsing, it now
+retains that invocation's validated digest and constructs the same signature
+messages from it. Public validators and digest helpers still validate their
+own inputs. Every call still checks actual signatures, trust, time, revocation,
+evidence and witness high-water, and compares final package bytes before
+returning. Nothing survives the invocation as a cached authorization result.
+
+A bounded exact-type eligibility check avoids invoking unknown Python methods.
+Subclasses, shared/cyclic containers and inputs beyond that optimization's
+traversal limits retain the original verification path. This matters: a custom
+mapping can mutate a bundle after its initial validation. Source review found
+two such refusal regressions in an early draft; both are covered by the final
+tests and keep their original rejection. This is not a concurrent-mutation API.
+
+Ten new groups plus seven signature-helper and ten prepared-contract regression
+groups passed, using real signatures over synthetic package descriptions. They
+prove one bundle-validation/hash pass per successor or retry call for decoded
+JSON, five on the conservative fallback, unchanged digest/signature bytes,
+fresh later-call refusals and mutation detection. The fixture builder itself
+shares containers, so its un-decoded before/after microbenchmarks correctly
+remain on the five-pass path; those logs are not evidence of a speedup.
+A separate comparison of decoded JSON against the unchanged fallback verified
+the identical package digest with one versus five bundle passes. Its 28-file
+synthetic-package timings are not a native startup estimate.
+
+Together with publication, 58 focused tests passed across the two runs. Both
+new suites are in the isolated-test inventory, verified by parsing Make without
+starting a controller workflow. Evidence shares the directory above; full
+native startup latency remains unmeasured and R97 is unchanged.
+
 ## Local verification
 
 Nine cache test groups pass with real temporary files and synthetic kernel

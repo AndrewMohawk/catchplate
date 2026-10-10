@@ -319,6 +319,28 @@ getter/loader with synthetic external policy I/O; the publication-owner checks
 are source checks, not publication-transaction acceptance. This result does
 not establish runtime latency improvement or resolution of the stock npm 503.
 
+A tenth isolated run at `5a6519ef` retained the same normal Rust binary and
+unchanged limits. It completed the prerequisite command, then the unscoped
+publication failed with npm `E503` (`npm_process`, exit 1, 213 stdout bytes,
+zero stderr bytes). This earlier failure is not a repaired end-to-end flow.
+All 11 admitted audit observations completed; initial policy-lock waiting was
+zero milliseconds in all 11, but validation/copying/final-merge time still
+reached 1,105 ms and the complete observed audit path reached 1,456 ms. The
+observed initial-lock contention is absent in this run, not proof that total
+latency or publication reliability improved. Ingestion reached 342 ms, outbox
+work 379 ms, and the pre-sign scheduling gap 1 ms (different-record maxima).
+One renewal warning and no audit-post or static-preparation failure record were
+logged. A complete ASGI observation still does not prove receiver acceptance.
+
+The stopped tenth-run database passed `quick_check`: two response releases
+were prerequisite and unscoped metadata GETs, with one earlier request denial,
+two established CONNECTs, one keep-alive event and 14 issued leases. Unscoped
+primary-route generation and dispatch leases were issued, but issuance does
+not prove receipt or admission. No CONNECT or upstream-resolution denial was
+stored. As above, immediate failure teardown can precede optional audit
+delivery; these absent rows do not identify the terminal 503 cause. Cleanup
+completed and all 4,936 source and 1,782 npm files remained unchanged.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

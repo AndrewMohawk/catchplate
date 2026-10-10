@@ -215,7 +215,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
-    from serverware import operator_catalog_github, operator_catalog_gmail
+    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm
+    if operator_catalog_npm.selected(rule):
+        operator_catalog_npm.validate_shape(rule)
+        return None, operator_catalog_npm.RESPONSE_MODE
     if operator_catalog_github.selected(rule):
         operator_catalog_github.validate_shape(rule)
         return 'preserve_json_v1', operator_catalog_github.RESPONSE_MODE
@@ -242,17 +245,28 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
     request_mode, _ = rule_content_modes(rule)
-    from serverware import operator_catalog_github
+    from serverware import operator_catalog_github, operator_catalog_npm
+    if operator_catalog_npm.selected(rule):
+        operator_catalog_npm.validate_rule(rule, credential)
+        return None
     if operator_catalog_github.selected(rule):
         operator_catalog_github.validate_rule(rule, credential)
         return request_mode
-    if operator_catalog_github.validate_credential(credential):
-        raise CatalogIntegrityError('GitHub token connections require a GitHub preset')
+    if validate_static_connection(credential):
+        raise CatalogIntegrityError('provider token connections require their explicit preset')
     if 'operation_bundle' in rule and credential.get('auth_type') != 'google_oauth':
         raise CatalogIntegrityError('Gmail bundle requires a connected Google account')
     if request_mode is not None and credential.get('auth_type') == 'google_oauth':
         raise CatalogIntegrityError('Google account request preservation is unsupported')
     return request_mode
+
+
+def validate_static_connection(record: dict, metadata: dict | None = None) -> bool:
+    """Closed dispatch keeps generic credentials unmarked and retained unchanged."""
+    from serverware import operator_catalog_github, operator_catalog_npm
+    if record.get('connection_type') == operator_catalog_npm.CONNECTION:
+        return operator_catalog_npm.validate_credential(record, metadata)
+    return operator_catalog_github.validate_credential(record, metadata)
 
 
 def application_proxy_authentication(application: dict) -> str:
@@ -292,8 +306,7 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                     or type(row.get('version')) is not int or row['version'] < 1):
                 raise CatalogIntegrityError('catalog resource state refused')
     for identifier, row in credentials.items():
-        from serverware import operator_catalog_github
-        operator_catalog_github.validate_credential(row)
+        validate_static_connection(row)
         core = conn.execute('SELECT id,name,kind,metadata,lifecycle_status FROM credentials WHERE id=?', (identifier,)).fetchone()
         if 'key_replaced_at' in row:
             try:
@@ -330,7 +343,7 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
                 or metadata.get('secret_class') != ('bearerToken' if bearer else 'customHeader')
                 or metadata.get('oauth') is True):
             raise CatalogIntegrityError('active catalog credential binding refused')
-        operator_catalog_github.validate_credential(row, metadata)
+        validate_static_connection(row, metadata)
     for identifier, row in applications.items():
         application_proxy_authentication(row)
         if (row.get('principal_id') != 'agent:operator-demo:' + identifier
@@ -349,6 +362,8 @@ def validate_bindings(conn, catalog: dict | None = None) -> None:
             operator_catalog_google.validate_rule(row, credential)
         if row['status'] == 'active' and (app['status'] != 'active' or credential['status'] != 'active'):
             raise CatalogIntegrityError('active rule has an inactive parent')
+    from serverware import operator_catalog_npm
+    operator_catalog_npm.validate_route_coexistence(catalog['access_rules'])
 
 
 def initialize(conn) -> None:

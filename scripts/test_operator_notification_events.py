@@ -162,6 +162,28 @@ class EventTests(unittest.TestCase):
             with self.reader() as conn:
                 self.assertTrue(events.native_action_matches_source(conn, source.action_payload, now_unix_nanos=NOW_MS * 1_000_000))
 
+    def test_npm_catalog_events_are_audit_only_and_project_safe_details(self):
+        resource = str(uuid.uuid4())
+        kinds = ("operator_catalog.credential.npm_token_created",
+            "operator_catalog.access_rule.npm_metadata_created")
+        for kind in kinds:
+            self.assertIn(kind, events.AUDIT_EVENT_TYPES)
+            self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
+            self.append(kind, {"resource_id": resource, "revision": 2,
+                "policy_hash": DIGEST, "secret": CANARY,
+                "packages": [CANARY], "destination_url": "https://example.invalid/" + CANARY})
+        batch, cursor = self.read()
+        self.assertEqual(cursor.rowid, 2)
+        self.assertEqual(tuple(item.event_type for item in batch), kinds)
+        for item in batch:
+            self.assertIsNone(item.action_payload)
+            self.assertEqual(item.audit_payload["channel"], "audit_log")
+            self.assertEqual(item.audit_payload["details"], {"actor_type": "data-plane",
+                "resource_id": resource, "revision": 2, "policy_hash": DIGEST})
+            self.assertNotIn(CANARY, json.dumps(item.audit_payload))
+            with self.reader() as conn:
+                self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+
     def test_native_exact_nanosecond_expiry_and_historical_audit(self):
         expires = NOW_MS * 1_000_000 + 1
         record = native_record(expires_nanos=expires)

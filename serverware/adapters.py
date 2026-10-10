@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
-from serverware import db, github_issues, http_client, runtime
+from serverware import db, github_issues, http_client, npm_metadata, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
@@ -97,6 +97,7 @@ _SAFE_RESPONSE_HEADERS = {
 _RESPONSE_CONTENT_TYPES = {
     "json": "application/json",
     GMAIL_READ_RESPONSE_MODE: "application/json",
+    npm_metadata.MODE: "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE: "application/json",
@@ -170,10 +171,10 @@ def _strict_buffered_json(raw: bytes) -> Any:
     return payload
 
 
-def gmail_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+def _bounded_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
     """Bounded decoded inspection only; these bytes must never replace the body."""
     if not isinstance(raw, bytes) or not 1 <= len(raw) <= maximum:
-        raise ValueError("Gmail response body bound")
+        raise ValueError("JSON response body bound")
     payload = _strict_buffered_json(raw)
     inspection = bytearray()
     try:
@@ -181,12 +182,20 @@ def gmail_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray
         for piece in encoder.iterencode(payload):
             encoded = piece.encode("utf-8")
             if len(encoded) > maximum - len(inspection):
-                raise ValueError("Gmail response inspection bound")
+                raise ValueError("JSON response inspection bound")
             inspection.extend(encoded)
         return payload, inspection
     except Exception:
         inspection[:] = b"\x00" * len(inspection)
         raise
+
+
+def gmail_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+    return _bounded_json_inspection(raw, maximum)
+
+
+def npm_metadata_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+    return _bounded_json_inspection(raw, maximum)
 
 
 def _parse_content_type(value: str) -> str | None:
@@ -1327,7 +1336,7 @@ class ApiAdapter:
     @staticmethod
     def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
         if (route.adapter_config.get("response") or {}).get("mode") not in {
-            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE
         }:
             return None
         try:
@@ -3288,6 +3297,87 @@ class XV2Adapter(ApiAdapter):
         return fields
 
 
+class NpmMetadataAdapter(ApiAdapter):
+    """Exact allowlisted metadata GETs; no implicit install or write authority."""
+    id = npm_metadata.ADAPTER
+
+    @staticmethod
+    def _denied(error: str, status: int = 403) -> PolicyDecision:
+        return PolicyDecision(False, "npm metadata contract refused", status, {"error": error})
+
+    def _package(self, flow: Any, route: Any, params: dict[str, str]) -> str:
+        npm_metadata.validate_route(route)
+        package = npm_metadata.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, packages=route.adapter_config["packages"])
+        if params != {"package": npm_metadata.target_parts(flow.request.pretty_url).path[1:]}:
+            raise ValueError("npm metadata capture refused")
+        return package
+
+    def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        try:
+            self._package(flow, route, params)
+            for name in npm_metadata.REQUEST_HEADERS:
+                if len(self._response_header_values(flow.request.headers, name)) > 1:
+                    raise ValueError("npm metadata duplicate header refused")
+            return self._validate_provider_request_profile(flow, route)
+        except (TypeError, ValueError, UnicodeError):
+            return self._denied("npm_metadata_request_denied")
+
+    def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        return {"operation": npm_metadata.OPERATION, "package": self._package(flow, route, params)}
+
+    def _response_contract(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if not flow.response:
+            return self._denied("npm_metadata_response_missing", 502)
+        try:
+            self._package(flow, route, params)
+        except (TypeError, ValueError, UnicodeError):
+            return self._denied("npm_metadata_response_policy_invalid", 502)
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
+        if flow.response.status_code not in npm_metadata.STATUSES:
+            return self._denied("npm_metadata_response_status_denied", 502)
+        content_types = self._response_header_values(flow.response.headers, "content-type")
+        if len(content_types) != 1 or not npm_metadata.is_json_content_type(content_types[0]):
+            return self._denied("npm_metadata_response_content_type_denied", 502)
+        maximum = 1048576 if flow.response.status_code == 200 else 65536
+        body = flow.response.raw_content
+        if not isinstance(body, bytes) or not 1 <= len(body) <= maximum:
+            return self._denied("npm_metadata_response_body_denied", 502)
+        return PolicyDecision(allowed=True)
+
+    def prepare_response(self, flow: Any, route: Any, params: dict[str, str], *,
+            authorization_factory: Callable[[], tuple[str, float]] | None = None) -> PolicyDecision:
+        return self._response_contract(flow, route, params)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        decision = self._response_contract(flow, route, params)
+        if not decision.allowed:
+            return decision
+        inspection = bytearray()
+        try:
+            payload, inspection = npm_metadata_json_inspection(flow.response.raw_content,
+                1048576 if flow.response.status_code == 200 else 65536)
+            if (not isinstance(payload, dict) or flow.response.status_code == 200
+                    and payload.get("name") != self._package(flow, route, params)):
+                raise ValueError("npm metadata package identity refused")
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_metadata_response_invalid", 502)
+        finally:
+            inspection[:] = b"\x00" * len(inspection)
+        profile = route.adapter_config["response"]
+        if flow.response.status_code != 200:
+            profile = profile["error"]
+        media_type = self._response_header_values(flow.response.headers, "content-type")[0].split(";", 1)[0].lower()
+        self._normalize_response_headers(flow, profile, npm_metadata.MODE)
+        flow.response.headers["Content-Type"] = media_type
+        return PolicyDecision(allowed=True)
+
+
 class NpmRegistryAdapter(ApiAdapter):
     id = "npm.registry"
 
@@ -4037,6 +4127,7 @@ ADAPTERS: dict[str, ApiAdapter] = {
     GMAIL_READ_ADAPTER: GmailReadV1Adapter(),
     "x.v2": XV2Adapter(),
     "npm.registry": NpmRegistryAdapter(),
+    npm_metadata.ADAPTER: NpmMetadataAdapter(),
 }
 
 

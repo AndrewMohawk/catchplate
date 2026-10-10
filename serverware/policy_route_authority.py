@@ -73,6 +73,8 @@ def _declared(route):
         names = {"tweets.write"} if config.get("mode") == "controlledWrite" else set(config["allowedReadOperations"])
     elif kind == "npm.registry":
         names = {"npm." + name for name in config["operations"]}
+    elif kind == "npm.metadata.v1":
+        names = {"npm.metadata.read"}
     else:
         require(kind == "generic.rest")
         names = {config["request"]["operation"]["name"]}
@@ -90,6 +92,8 @@ def _builtin(kind, name):
     if kind == "npm.registry":
         return {"npm.read": "read", "npm.publish": "publish", "npm.unpublish": "delete",
             "npm.distTagWrite": "write", "npm.metadataWrite": "write", "npm.tokenWrite": "administrative"}.get(name)
+    if kind == "npm.metadata.v1":
+        return "read" if name == "npm.metadata.read" else None
     return None
 
 

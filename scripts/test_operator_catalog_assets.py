@@ -57,6 +57,10 @@ class OperatorCatalogAssets(unittest.TestCase):
             self.assertEqual(document, operator_demo_portal.render())
         self.assertIn('index.html', reads)
         self.assertIn('style.css', reads)
+        self.assertEqual(reads.count('workspace_npm.js'), 1)
+        self.assertLess(reads.index('workspace_npm.js'), reads.index('workspace_connect.js'))
+        self.assertLess(reads.index('workspace_npm.js'), reads.index('app.js'))
+        self.assertEqual(reads.count('workspace_notifications.js'), 1)
         self.assertNotIn('__OPERATOR_DEMO_', document)
         self.assertNotIn('serverware.app', sys.modules)
         self.assertNotIn('serverware.config', sys.modules)
@@ -99,6 +103,23 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertIn('disabled', index['client-token'][1])
         self.assertNotIn('value', index['client-token'][1])
         self.assertIn('hidden', index['one-time-access'][1])
+
+    def test_npm_is_explicit_metadata_only_and_keeps_notifications_separate(self):
+        index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in self.elements() if 'id' in attrs}
+        self.assertEqual(index['connect-use-npm'][0], 'button')
+        self.assertIsNone(index['connect-use-npm'][2])
+        self.assertIn('disabled', index['connect-use-npm'][1])
+        self.assertIn('hidden', index['connect-npm-packages-group'][1])
+        self.assertEqual(index['connect-npm-packages'][2], 'connect-access-form')
+        self.assertIn('disabled', index['connect-npm-packages'][1])
+        self.assertNotIn('value', index['connect-credential-secret'][1])
+        self.assertIn('hidden', index['npm-client-controls'][1])
+        self.assertEqual(index['notifications'][0], 'section')
+        npm = (ASSETS / 'workspace_npm.js').read_text()
+        self.assertIn('Read package metadata', npm)
+        self.assertIn('No install, publish, tarball', npm)
+        self.assertNotIn('/api/operator-demo/notifications', npm)
+        self.assertNotIn('workspace_notifications', npm)
 
     def test_rules_reference_both_resources_and_keep_projection_out_of_credentials(self):
         items = self.elements()

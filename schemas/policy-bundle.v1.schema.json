@@ -735,7 +735,7 @@
         },
         "bodyPresence": {"enum": ["required", "forbidden", "jsonOrEmpty204V1"]},
         "unlistedHeaderPolicy": {"const": "discardUnselectedV1"},
-        "contentTypePolicy": {"const": "githubJsonUtf8V1"},
+        "contentTypePolicy": {"enum": ["githubJsonUtf8V1", "npmJsonUtf8V1"]},
         "allowedResponseHeaderNames": {
           "type": "array",
           "maxItems": 32,
@@ -1483,6 +1483,13 @@
                 }
               },
               {
+                "type": "object", "required": ["type", "config"], "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "npm.metadata.v1"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json"}
+                }
+              },
+              {
                 "type": "object",
                 "required": ["type", "config"],
                 "additionalProperties": false,
@@ -1708,12 +1715,12 @@
               "properties": {"adapter": {
                 "required": ["type", "config"],
                 "properties": {
-                  "type": {"enum": ["generic.rest", "gmail.read.v1"]},
+                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1"]},
                   "config": {
                     "required": ["response"],
                     "properties": {"response": {
                       "required": ["mode"],
-                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1"]}}
+                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1"]}}
                     }}
                   }
                 }
@@ -1765,16 +1772,26 @@
                 }
               }}
             },
-            "else": {"properties": {"constraints": {"items": {
-              "not": {"required": ["contentTypePolicy"]}
-            }}}}
+            "else": {
+              "if": {"properties": {"adapter": {"properties": {
+                "type": {"const": "npm.metadata.v1"}
+              }, "required": ["type"]}}, "required": ["adapter"]},
+              "then": {"properties": {"constraints": {"minItems": 1, "maxItems": 1,
+                "items": {"required": ["type", "contentTypePolicy"], "properties": {
+                  "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmJsonUtf8V1"}
+                }}
+              }}},
+              "else": {"properties": {"constraints": {"items": {
+                "not": {"required": ["contentTypePolicy"]}
+              }}}}
+            }
           },
           {
             "if": {
               "properties": {
                 "adapter": {
                   "required": ["type"],
-                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry"]}}
+                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1"]}}
                 }
               },
               "required": ["adapter"]

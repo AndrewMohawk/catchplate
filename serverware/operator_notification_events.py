@@ -59,6 +59,7 @@ _SUMMARIES = {
 _CATALOG = {
     "credential.created": "Provider key saved",
     "credential.github_token_created": "GitHub token saved",
+    "credential.npm_token_created": "npm token saved",
     "credential.key_replaced": "Provider key replaced",
     "credential.revoked": "Provider key revoked locally",
     "application.created": "Application identity created",
@@ -67,6 +68,7 @@ _CATALOG = {
     "application.proxy_authentication_changed": "Application proxy login changed",
     "access_rule.created": "Application permission saved",
     "access_rule.github_created": "GitHub application permission saved",
+    "access_rule.npm_metadata_created": "npm package metadata permission saved",
     "access_rule.revoked": "Application permission revoked",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})

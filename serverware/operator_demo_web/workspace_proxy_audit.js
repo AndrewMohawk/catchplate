@@ -9,6 +9,7 @@ function createProxyView(workspace, applications) {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     element('gmail-client-controls').hidden = true;
     element('github-client-controls').hidden = true;
+    element('npm-client-controls').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -20,19 +21,23 @@ function createProxyView(workspace, applications) {
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
     const gmail = isGmailRule(rule);
     const github = isGithubRule(rule);
+    const npm = isNpmRule(rule);
+    element('npm-client-controls').hidden = !npm;
+    if (npm) chooseOptions('npm-client-package', rule.packages.map(name => ({id: name, name})), 'Choose an allowed package');
     const githubSelection = github ? application?.id + ':' + rule.id : '';
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github; element('proxy-method').disabled = github;
-    document.querySelector('label[for="proxy-method"]').hidden = github;
+    element('proxy-method').hidden = github || npm; element('proxy-method').disabled = github || npm;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail;
     const messageRead = gmail && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = github ?
+    element('client-template-title').textContent = npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = npm ?
+      'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
       'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmail ?
       'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
       'This template includes no request body or query parameter values. It is not a complete API operation or a successful request test. Supply endpoint-specific data in your existing client, using only what the selected rule permits.';
@@ -51,6 +56,11 @@ function createProxyView(workspace, applications) {
     }
     let dummyHeader; let proxy;
     const proxyAuthentication = applicationProxyAuthentication(application);
+    if (npm && proxyAuthentication !== 'basic_and_bearer_v1') {
+      element('client-command').textContent = 'The stock npm client needs standard username/password proxy login.';
+      element('client-guidance').textContent = 'Use Applications to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
+      return;
+    }
     const messageId = element('gmail-message-id').value;
     if (messageRead && !/^[A-Za-z0-9_-]{1,512}$/.test(messageId)) {
       element('client-command').textContent = 'Enter a valid message ID returned by this account’s message list.';
@@ -60,7 +70,8 @@ function createProxyView(workspace, applications) {
       proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = github ? buildGithubClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+      command = npm ? buildNpmClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+        packages: rule.packages, packageName: element('npm-client-package').value, caPath: element('ca-path').value}) : github ? buildGithubClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         repository: rule.repository, bundle: rule.operation_bundle, operation: element('github-client-operation').value,
         caPath: element('ca-path').value, proxyCaPath: element('github-proxy-ca-path').value}) :
         buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
@@ -84,6 +95,14 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (npm) {
+      element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No npm lookup was tested here. ' :
+        'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') +
+        'Read package metadata for the explicit package list only. npm view and pacote.manifest; no install, publish, tarballs or npm audit. ' +
+        'The npmrc dummy token is public, not your npm account token. Configure the Serverware app token only in the local environment. ' +
+        'NODE_EXTRA_CA_CERTS adds the downloaded CA to Node default roots before startup; for a private outer proxy CA, use a deliberate additional-CA file containing both required roots. Keep strict-ssl enabled and do not override cafile. See Compatibility limits.';
+      return;
+    }
     if (github) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No GitHub request was tested here. ' :
         'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') +
@@ -117,7 +136,7 @@ function createProxyView(workspace, applications) {
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
-  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation']) element(id).addEventListener('change', render);
+  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package']) element(id).addEventListener('change', render);
   element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
   element('github-proxy-ca-path').addEventListener('input', render);
@@ -125,7 +144,8 @@ function createProxyView(workspace, applications) {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = !element('github-client-controls').hidden ?
+      element('client-copy-status').textContent = !element('npm-client-controls').hidden ?
+        'Copied npmrc settings and the separate metadata command. Set the app token and a fresh private cache locally; no lookup was executed by this page.' : !element('github-client-controls').hidden ?
         'Copied the GitHub client recipe. Set the application token and any creation content locally. No request was executed by this page.' :
         'Copied. This connection template has no request body or query values. Set the application token in your client environment.';
     }
@@ -160,6 +180,13 @@ function createProxyView(workspace, applications) {
         sdk_auth_token: operatorGithub.token, proxy_ca_file: element('github-proxy-ca-path').value || null,
         destination_ca_file: config.ca_file};
       config.note += ' The public SDK dummy is not the provider token. Outer proxy TLS and destination TLS use separate trust. No automatic retry after uncertain creation.';
+    }
+    if (isNpmRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.packages = [...rule.packages];
+      config.client_recipe = {npm_version: '11.8.0', pacote_version: '21.0.4', node_version: '25.5.0',
+        package: element('npm-client-package').value, sdk_auth_token: operatorNpm.token, strict_ssl: true,
+        extra_ca_file: config.ca_file, fresh_cache_required: true, automatic_retries: 0, metadata_only: true};
+      config.note += ' npm view/pacote.manifest metadata only; no install, publish, tarballs or npm audit. Use NODE_EXTRA_CA_CERTS before Node startup; retain default roots and TLS verification. The public npm dummy is not the provider token.';
     }
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2) + '\n'], {type: 'application/json'}));
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();

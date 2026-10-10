@@ -67488,8 +67488,7 @@ def replace_operator_static_credential_secret_if_version(
             raise ValueError("static binding refused")
         metadata_fields = {"provider_id", "provider_subject", "secret_class"}
         if "connection_type" in metadata or "connection_type" in catalog:
-            from serverware import operator_catalog_github
-            if not operator_catalog_github.validate_credential(catalog, metadata):
+            if not operator_catalog_schema.validate_static_connection(catalog, metadata):
                 raise ValueError("static connection binding refused")
             metadata_fields.add("connection_type")
         bearer = current["kind"] == "bearer"

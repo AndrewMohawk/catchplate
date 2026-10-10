@@ -41,6 +41,7 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isNpmRule(rule)) { renderNpmCompatibility(id); return; }
   if (isGithubRule(rule)) { renderGithubCompatibility(id, rule); return; }
   if (isGmailRule(rule)) {
     element(id).replaceChildren(...[
@@ -87,6 +88,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isNpmRule(rule)) return npmRuleRestrictions(rule);
   if (isGithubRule(rule)) return githubRuleRestrictions(rule);
   if (isGmailRule(rule)) return [
     ['Permission', 'Read Gmail · this connected account'],
@@ -354,11 +356,13 @@ function createCredentialsView(workspace, actions = {}) {
       if (!google) {
         if (isGithubCredential(credential)) card.append(textNode('p',
           'GitHub issue presets only. Stored token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
+        if (isNpmCredential(credential)) card.append(textNode('p',
+          'npm metadata lookup only. Stored token; package access and token validity are not tested here. No install, publish, tarballs or npm audit. Serverware does not renew this token.', 'small muted'));
         card.append(textNode('p', 'Saved assignments are configuration, not proof of a valid app token, provider key, or loaded proxy policy.', 'small muted'));
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');
         for (const [label, value] of [['Credential ID', credential.id],
-          ['Authentication', isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
+          ['Authentication', isNpmCredential(credential) ? 'npm token' : isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
           ['Header name', credential.header_name], ['Active rules', String(credential.active_rule_count)],
           ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
         details.append(identity);
@@ -512,13 +516,13 @@ function createAccessRulesView(workspace) {
     const catalog = workspace.state.catalog;
     const responseModes = availableResponseModes(catalog);
     const credentialInputModes = availableCredentialInputModes(catalog);
-    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active' && !isGithubCredential(item)) ||
+    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item)) ||
       !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
     if (!catalog) { renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isGithubCredential(item)), 'Use Connect an app for GitHub presets');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item)), 'Use Connect an app for GitHub or npm presets');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

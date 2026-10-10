@@ -131,6 +131,12 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if adapter_type == crate::npm_metadata::ADAPTER {
+        return crate::npm_metadata::validate_envelope(mode, constraints);
+    }
+    if mode == Some(crate::npm_metadata::MODE) {
+        return Err("npmMetadataJsonV1 requires its explicit npm metadata adapter".into());
+    }
     if adapter_type == crate::gmail_read::ADAPTER {
         return crate::gmail_read::validate_envelope(mode, constraints);
     }

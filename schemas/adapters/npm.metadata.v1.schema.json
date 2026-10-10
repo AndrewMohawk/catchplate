@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json",
+  "title": "Serverware closed npm package metadata lookup v1",
+  "$comment": "Metadata only; no installation, tarballs, query, audit or writes. Compiler also enforces strictly sorted packages and exact bound GET authority.",
+  "type": "object", "additionalProperties": false,
+  "required": ["credentialBinding", "packages", "request", "response"],
+  "properties": {
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "properties": {
+        "credentialType": {"const": "static"},
+        "provider": {"const": "operator-demo"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "secretClass": {"const": "bearerToken"}
+      }
+    },
+    "packages": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 214,
+        "pattern": "^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$"}},
+    "request": {"const": {
+      "allowedHeaders": ["accept", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope", "pacote-pkg-id", "pacote-req-type", "pacote-version", "user-agent"],
+      "discardHeaders": ["accept-encoding", "npm-session"],
+      "allowedQueryKeys": [], "allowedMediaTypes": [], "maxBodyBytes": 0, "valueRules": []
+    }},
+    "response": {"const": {
+      "mode": "npmMetadataJsonV1", "maxBodyBytes": 1048576,
+      "contentTypes": ["application/json", "application/vnd.npm.install-v1+json"], "allowedHeaders": [],
+      "error": {"mode": "npmMetadataJsonV1", "maxBodyBytes": 65536,
+        "contentTypes": ["application/json", "application/vnd.npm.install-v1+json"], "allowedHeaders": [], "onInvalid": "block"}
+    }}
+  }
+}

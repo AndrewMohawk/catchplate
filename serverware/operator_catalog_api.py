@@ -20,9 +20,9 @@ from serverware.setup_receipts import JsonLimits, parse_strict_json_object
 PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
-    "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/applications", "/applications/revoke",
+    "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/credentials/npm-token", "/applications", "/applications/revoke",
     "/applications/rotate-token", "/applications/proxy-authentication",
-    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github",
+    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
     "/notifications/settings", "/notifications/test",
@@ -208,6 +208,11 @@ async def replace_credential_key(request: Request, identity: auth.AdminIdentity 
     return await _mutate(request, identity, "ReplaceCredentialKeyInput", "replace_credential_key", 16384)
 
 
+@router.post("/credentials/npm-token")
+async def create_npm_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "NpmTokenInput", "create_npm_credential", 16384, created=True)
+
+
 @router.post("/applications")
 async def create_application(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "ApplicationInput", "create_application", 2048, created=True)
@@ -246,6 +251,11 @@ async def create_gmail_rule(request: Request, identity: auth.AdminIdentity = Dep
 @router.post("/access-rules/github")
 async def create_github_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "GithubRuleInput", "create_github_rule", 4096, created=True)
+
+
+@router.post("/access-rules/npm-metadata")
+async def create_npm_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "NpmMetadataRuleInput", "create_npm_rule", 16384, created=True)
 
 
 async def _google_disconnect_result(function, *args, accepted: bool = False) -> JSONResponse:

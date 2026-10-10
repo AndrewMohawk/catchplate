@@ -62,6 +62,7 @@ else {
   reauthorization = createGoogleReauthorizationView(workspace, applications);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
   const upstreams = createUpstreamsView(workspace);
+  const googleConfiguration = createGoogleConfigurationView(workspace);
   const connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
   createGoogleView(workspace, applications, connect);
@@ -78,6 +79,7 @@ else {
     connect.show(view === 'connect');
     notifications.show(view === 'notifications');
     upstreams.show(view === 'proxy');
+    googleConfiguration.show(view === 'proxy');
     if (view === 'audit') audit.open();
   }
   element('overview-try-demo').addEventListener('click', () => {

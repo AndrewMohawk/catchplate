@@ -3,13 +3,16 @@
 
 Run this harness separately from immutable, read-only source archives:
 1deb896c35d660eb665ac57ad35789c22280edf9 at /previous-app and
-8a8d4b06678193d51e2b875a471cbeb7cb1b5ddf at /candidate-app. The bounded
-network-none runner must verify both full archive manifests before execution.
+a root-selected candidate at /candidate-app (the runner defaults to exact
+8a8d4b06678193d51e2b875a471cbeb7cb1b5ddf). The bounded network-none runner
+must verify both full archive manifests before execution and after the test.
 Only fresh synthetic data is created. One normal old-source application create
 uses a module-local fixture clock to seed an already-expired active application;
 all subsequent checks use the real clock. This is not natural-expiry proof.
-No admission, startup, schema, signing or encryption guard is replaced. This is
-not a live upgrade, proxy/gate test, provider test, or feature enablement test.
+No admission, startup, schema, signing or encryption guard is replaced. The
+runner may request candidate-only cold notification enablement with fresh empty
+sibling custody; the old seed stays OFF and no destination is saved. This is
+not a live upgrade, proxy/gate test, provider test, or delivery acceptance.
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ ROOT = Path("/candidate-app")
 PREVIOUS = Path("/previous-app")
 PREVIOUS_COMMIT = "1deb896c35d660eb665ac57ad35789c22280edf9"
 CANDIDATE_COMMIT = "8a8d4b06678193d51e2b875a471cbeb7cb1b5ddf"
+NOTIFICATION_INTENT = "OPERATOR_RETAINED_TEST_ENABLE_NOTIFICATIONS"
 EXPIRED_APPLICATION = "Retained fixture-aged active application"
 TABLES = ("credentials", "credential_generations", "operator_demo_connections",
     "operator_demo_revocations", "operator_demo_nonces", "operator_demo_settings",
@@ -136,10 +140,10 @@ def seed_saved_authority(workspace, config, db, store, schema, inputs, mutations
         assert secret not in persisted, "plaintext synthetic credential or client token persisted"
 
 
-def retained_snapshot(workspace, config, db, store, schema, profiles, mutations):
+def retained_snapshot(workspace, config, db, store, schema, profiles, mutations, *, notifications_enabled=False):
     assert profiles.selected() is False
-    assert os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == "0"
-    assert "SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR" not in os.environ
+    assert os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == ("1" if notifications_enabled else "0")
+    assert ("SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR" in os.environ) is notifications_enabled
     with closing(db.connect()) as conn:
         schema.validate_bindings(conn)
         catalog = schema.read_catalog(conn)
@@ -148,7 +152,7 @@ def retained_snapshot(workspace, config, db, store, schema, profiles, mutations)
         disabled_objects = conn.execute("SELECT name FROM sqlite_master WHERE "
             "lower(name) GLOB 'operator_google_*' OR lower(name) GLOB 'operator_catalog_oauth_*' "
             "OR lower(name) GLOB 'operator_provider_custody*' OR lower(name) GLOB '*notification*'").fetchall()
-        assert disabled_objects == [], "disabled-feature upgrade created Google, custody or notification schema"
+        assert disabled_objects == [], "retained upgrade created Google, custody or unconfigured notification schema"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert [row[0] for row in conn.execute("PRAGMA integrity_check")] == ["ok"]
     assert [len(catalog[key]) for key in ("credentials", "applications", "access_rules")] == [2, 3, 4]
@@ -181,10 +185,59 @@ def retained_snapshot(workspace, config, db, store, schema, profiles, mutations)
     return {"catalog": catalog, "rows": rows, "files": files, "high_water": store.get_policy_high_water()}
 
 
+def cold_notification_cycle(config):
+    """Exercise the real post-startup worker without configuring any delivery."""
+    from serverware import operator_notifications as notifications
+    from serverware import operator_notification_transport as transport
+    directory = Path(os.environ["SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
+    assert directory.resolve() == directory and directory.parent == config.DATA_DIR.parent
+    assert not directory.is_relative_to(config.DATA_DIR) and not config.DATA_DIR.is_relative_to(directory)
+    before = directory.lstat()
+    assert stat.S_ISDIR(before.st_mode) and stat.S_IMODE(before.st_mode) == 0o700
+    assert before.st_uid == os.geteuid() and list(directory.iterdir()) == []
+    assert "SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ
+    assert "SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON" not in os.environ
+    assert notifications._THREAD is None and notifications._LAST_CYCLE is None
+    deadline = time.monotonic() + 5
+    with patch.object(transport, "deliver", side_effect=AssertionError("unconfigured worker attempted delivery")) as delivery:
+        try:
+            assert notifications.start_worker() is True
+            while True:
+                value = notifications.status()
+                if value["worker"]["last_cycle_at_epoch_ms"] is not None:
+                    break
+                assert time.monotonic() < deadline, "cold notification worker cycle timed out"
+                time.sleep(0.02)
+            assert value["available"] is True and value["worker"]["state"] == "running"
+            assert value["worker"]["last_code"] == "ready"
+            assert len(value["slots"]) == 4 and {slot["slot"] for slot in value["slots"]} == {
+                "action_required.slack", "action_required.webhook", "audit_log.slack", "audit_log.webhook"}
+            assert all(slot["revision"] == 0 and slot["enabled"] is False and slot["secret_present"] is False
+                and slot["last_delivery"] is None and slot["event_types"] == [] for slot in value["slots"])
+            assert value["cursor"] is None and all(count == 0 for count in value["queue"].values())
+            native = value["capabilities"]["native_hardware"]
+            assert native["configured"] is False and native["source_available"] is False
+            assert native["last_observation"]["state"] == "not_configured"
+            assert native["last_observation"]["action_available"] is False
+        finally:
+            notifications.stop_worker()
+        delivery.assert_not_called()
+    assert notifications._THREAD is not None and not notifications._THREAD.is_alive()
+    after = directory.lstat()
+    assert (after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid) == (
+        before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid)
+    assert list(directory.iterdir()) == []
+    return {"enabled": True, "actual_worker_cycle": True, "empty_custody": True, "destinations": 0}
+
+
 def worker(operation):
     source = PREVIOUS if operation == "seed-old" else ROOT
     assert operation in {"seed-old", "upgrade", "reopen"}
     assert PREVIOUS.resolve() != ROOT.resolve()
+    intent = os.environ.get(NOTIFICATION_INTENT, "0")
+    assert intent in {"0", "1"}
+    notifications_enabled = intent == "1" and operation != "seed-old"
+    assert os.environ["SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED"] == ("1" if notifications_enabled else "0")
     select_source(source)
     import test_operator_workspace_store as workspace
     from serverware import operator_demo
@@ -203,12 +256,42 @@ def worker(operation):
         validate_control_plane_startup()
         if operation == "seed-old":
             seed_saved_authority(workspace, config, db, store, schema, inputs, mutations)
+        notification_observation = cold_notification_cycle(config) if notifications_enabled else {
+            "enabled": False, "actual_worker_cycle": False, "empty_custody": True, "destinations": 0}
         workspace.verify_signed(config, db, store, bundles)
-        result = retained_snapshot(workspace, config, db, store, schema, profiles, mutations)
+        result = retained_snapshot(workspace, config, db, store, schema, profiles, mutations,
+            notifications_enabled=notifications_enabled)
         assert contacts == [], "provider boundary was reached"
     verify_imports(source)
     return {"source": str(source.resolve()), "snapshot": result, "provider_contacts": 0,
-        "fixture_aged_expiry": True, "natural_expiry_verified": False}
+        "fixture_aged_expiry": True, "natural_expiry_verified": False,
+        "notifications": notification_observation}
+
+
+class CandidatePinTests(unittest.TestCase):
+    """Pure runner-argument guards, separate from the one connected test."""
+    def pins(self, commit=None, manifest=None, count=None):
+        from run_operator_retained_upgrade import candidate_pins
+        return candidate_pins(SimpleNamespace(candidate_commit=commit,
+            candidate_manifest_sha256=manifest, candidate_file_count=count))
+
+    def test_default_remains_exact_historical_candidate(self):
+        self.assertEqual(self.pins(), {"commit": CANDIDATE_COMMIT,
+            "expected_digest": "b3ac8f02465089754e1b6ac5260af104a0a1303f11751fd7998ce1d24fb1bbd0",
+            "file_count": 4811})
+
+    def test_explicit_candidate_requires_all_three_valid_pins(self):
+        values = ("b" * 40, "c" * 64, 5000)
+        self.assertEqual(self.pins(*values), {"commit": values[0], "expected_digest": values[1], "file_count": 5000})
+        for mask in range(1, 7):
+            with self.subTest(mask=mask), self.assertRaises(ValueError):
+                self.pins(*(value if mask & (1 << index) else None for index, value in enumerate(values)))
+        for index, bad in ((0, "b897d1aa"), (0, "B" * 40), (1, "bad"),
+                (2, True), (2, 0), (2, -1), (2, 16385)):
+            changed = list(values)
+            changed[index] = bad
+            with self.subTest(index=index, bad=bad), self.assertRaises(ValueError):
+                self.pins(*changed)
 
 
 class OperatorRetainedUpgradeTests(unittest.TestCase):
@@ -222,20 +305,33 @@ class OperatorRetainedUpgradeTests(unittest.TestCase):
             SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://demo-upstream:8443"]',
             SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS='["127.0.0.1/32"]',
             SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED="0")
+        intent = self.environment.get(NOTIFICATION_INTENT, "0")
+        self.assertIn(intent, {"0", "1"})
+        self.enable_notifications = intent == "1"
+        self.notification_custody = Path(self.scratch.name) / "notification-custody"
+        if self.enable_notifications:
+            self.notification_custody.mkdir(mode=0o700)
         self.deadline = time.monotonic() + 180
 
     def child(self, operation):
         remaining = self.deadline - time.monotonic()
         self.assertGreater(remaining, 0, "retained upgrade deadline expired")
         source = PREVIOUS if operation == "seed-old" else ROOT
+        environment = dict(self.environment)
+        enabled = self.enable_notifications and operation != "seed-old"
+        if enabled:
+            environment.update(SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED="1",
+                SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(self.notification_custody))
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
-            cwd=source, env=self.environment, capture_output=True, text=True, timeout=min(60, remaining))
+            cwd=source, env=environment, capture_output=True, text=True, timeout=min(60, remaining))
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-40:]))
         data = json.loads(result.stdout)
         self.assertEqual(data["source"], str(source.resolve()))
         self.assertEqual(data["provider_contacts"], 0)
         self.assertIs(data["fixture_aged_expiry"], True)
         self.assertIs(data["natural_expiry_verified"], False)
+        self.assertEqual(data["notifications"], {"enabled": enabled, "actual_worker_cycle": enabled,
+            "empty_custody": True, "destinations": 0})
         return data["snapshot"]
 
     def test_old_source_saved_authority_survives_current_google_off_upgrade_and_reopen(self):

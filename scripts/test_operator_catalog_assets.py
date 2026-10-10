@@ -60,6 +60,11 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertEqual(reads.count('workspace_npm.js'), 1)
         self.assertLess(reads.index('workspace_npm.js'), reads.index('workspace_connect.js'))
         self.assertLess(reads.index('workspace_npm.js'), reads.index('app.js'))
+        self.assertEqual(reads.count('workspace_npm_publish.js'), 1)
+        self.assertLess(reads.index('workspace_npm.js'), reads.index('workspace_npm_publish.js'))
+        self.assertLess(reads.index('workspace_npm_publish.js'), reads.index('workspace_resources.js'))
+        self.assertLess(reads.index('workspace_npm_publish.js'), reads.index('workspace_proxy_audit.js'))
+        self.assertLess(reads.index('workspace_npm_publish.js'), reads.index('workspace_connect.js'))
         self.assertEqual(reads.count('workspace_notifications.js'), 1)
         self.assertEqual(reads.count('workspace_upstreams.js'), 1)
         self.assertLess(reads.index('workspace_upstreams.js'), reads.index('app.js'))
@@ -138,6 +143,23 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertIn("home.insertBefore(panel, element('proxy-setup-content'))", upstreams)
         self.assertIn('JSON.stringify(receipt.target_settings.allowed_upstreams)', upstreams)
 
+    def test_npm_publishing_is_a_separate_explicit_form_without_response_or_approval_fields(self):
+        index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in self.elements() if 'id' in attrs}
+        self.assertIn('hidden', index['connect-npm-publish-group'][1])
+        self.assertIn('hidden', index['npm-publish-client-controls'][1])
+        for name in ('package', 'tag', 'hours', 'start', 'end'):
+            item = index['connect-npm-publish-' + name]
+            self.assertEqual(item[2], 'connect-access-form')
+            self.assertIn('disabled', item[1])
+        self.assertEqual(index['connect-npm-publish-tag'][1]['value'], 'latest')
+        self.assertFalse(any(name.startswith('connect-npm-publish-') and
+            attrs.get('type') == 'checkbox' for name, (_, attrs, _) in index.items()))
+        source = (ASSETS / 'workspace_npm_publish.js').read_text()
+        self.assertIn('serverware.operatorNpmPublish/v1', source)
+        self.assertIn('metadata at any time', source)
+        for forbidden in ('fetch(', 'sessionStorage', 'localStorage', '/api/operator-demo/notifications'):
+            self.assertNotIn(forbidden, source)
+
     def test_rules_reference_both_resources_and_keep_projection_out_of_credentials(self):
         items = self.elements()
         index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in items if 'id' in attrs}
@@ -163,7 +185,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_google_reauthorization.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
+            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
@@ -171,6 +193,15 @@ class OperatorCatalogAssets(unittest.TestCase):
         recovery = scripts['workspace_google_reauthorization.js']
         self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', recovery), ['storageKey, id'])
         self.assertIn('reauthorizationUuid(id)', recovery)
+        configuration = scripts['workspace_google_configuration.js']
+        self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', configuration),
+                         ['googleConfigurationKey, JSON.stringify(next', 'googleConfigurationKey, JSON.stringify(priorReference'])
+        self.assertIn("googleConfigurationKey = 'serverware.operator.google.configuration.operation.v2'", configuration)
+        self.assertIn("upstreamObject(value, ['operation_id', 'kind']) && upstreamUUID(value.operation_id)", configuration)
+        self.assertIn("['prepare', 'cancel'].includes(value.kind)", configuration)
+        self.assertIn('if (!retain({operation_id: payload.operation_id, kind}))', configuration)
+        self.assertLess(configuration.index('if (!retain({operation_id: payload.operation_id, kind}))'),
+                        configuration.index("const pending = request(googleConfigurationPath +"))
         # Notifications stores a different closed public recovery reference
         # before its one POST. Real browser fixtures check the exact stored
         # fields, secret clearing, uncertainty, 404 retention and no replay.

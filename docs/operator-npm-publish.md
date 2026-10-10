@@ -1,0 +1,145 @@
+# npm package publishing
+
+The `npm.publish.v1` adapter and `npm_publish_v1` operator permission authorize
+publishing new versions of **one exact package with one configured tag**. The
+permission also includes metadata GETs for that same package. This is separate
+from the metadata-only preset and the legacy `npm.registry` approval workflow;
+neither existing permission is automatically upgraded.
+
+**Verification status: source verification and isolated acceptance are pending.**
+This document describes the authored contract and client recipe, not a successful
+publish, a live deployment, or public npm registry acceptance.
+
+## Operator workflow
+
+1. Select an existing named npm-token connection (`npm_token_v1`), or save one.
+   The real npm token remains in Serverware. Saving it does not verify the npm
+   account, package rights, expiration or provider policy, and does not renew it.
+2. Choose the application and **Publish package**. This option requires the
+   matching app/gate capability and an operator-approved
+   `https://registry.npmjs.org` destination. Saving a token alone does not approve
+   that destination or give the application publishing authority.
+3. Enter one exact lowercase package name, including its scope if applicable,
+   and the tag. The default tag is `latest`; tags must match
+   `[a-z][a-z0-9._-]{0,63}`. No wildcard, dependency expansion or arbitrary URL is
+   accepted. The grant permits new versions of this package, not only a single
+   version selected when the permission is created.
+4. Optionally select daily publishing hours in UTC. The start is inclusive and
+   the end exclusive: `09:00`–`17:00` allows publishing from 09:00 until just
+   before 17:00 UTC. Both use `HH:MM`, with start before end; overnight windows,
+   equal endpoints and `24:00` are not supported. No window means any time.
+5. Review and explicitly save the permission. Use its copied client recipe only
+   after reviewing the local package, version and intended publication.
+
+Publishing hours constrain the PUT, including its check before forwarding. They
+do not schedule a future publish or create an approval request. The companion
+bodyless metadata GET remains permitted outside these hours, subject to the
+application's token, policy and provider rights. Both routes belong to one saved
+permission, so revoking it removes both grants.
+
+Only one active npm metadata **or** publishing permission is supported per
+application. Conflicting single-segment registry GET/PUT rules are refused. Reuse
+an appropriate existing permission or explicitly revoke the conflict before
+creating a replacement; the UI does not merge, broaden or revoke grants for you.
+
+## Stock npm client recipe
+
+The recipe targets ordinary npm **11.8.0** on Node.js **25.5.0**, without replacing
+its transport. These versions and this publishing flow still require isolated
+acceptance. Use the exact application ID, HTTPS proxy authority and CA material
+shown by your deployment; the placeholders below are not a working endpoint.
+
+Save a dedicated `serverware-npm.npmrc`. Keep the `${...}` references literal in
+the file. `SERVERWARE_PROXY_TOKEN` is the **application's Serverware token**, not
+the provider's npm token. The registry value below is intentionally public dummy
+data, which Serverware matches before injecting its saved credential.
+
+```ini
+registry=https://registry.npmjs.org/
+https-proxy=https://<application-id>:${SERVERWARE_PROXY_TOKEN}@<proxy-host>:<proxy-port>
+//registry.npmjs.org/:_authToken=serverware-npm-placeholder-v1
+strict-ssl=true
+noproxy=
+fetch-retries=0
+update-notifier=false
+cache=${SERVERWARE_NPM_CACHE}
+```
+
+Use a clean client environment and a fresh private cache directory named by
+`SERVERWARE_NPM_CACHE`. Remove conflicting inherited npm, proxy and TLS settings.
+Load the extra CA before Node starts. `NODE_EXTRA_CA_CERTS` adds trust while
+retaining Node's default roots; if the outer HTTPS proxy uses a private CA, the
+scoped extra-CA file must contain both that CA and the interception CA. Keep TLS
+verification enabled; do not add a `cafile` override or disable `strict-ssl`.
+
+The following is an explicit **public-publishing** example. `./package.tgz` must
+already be a reviewed local tarball whose manifest name matches the saved
+package. Replace `latest` with the permission's exact tag when different. Review
+any package-specific publishing configuration too; it cannot broaden the grant.
+This command changes the registry and is never run by the setup page:
+
+```sh
+NODE_EXTRA_CA_CERTS="$(realpath ./serverware-ca.pem)" npm \
+  --userconfig ./serverware-npm.npmrc --globalconfig /dev/null \
+  publish ./package.tgz --access=public --tag=latest \
+  --ignore-scripts=true --provenance=false --force=false \
+  --dry-run=false --workspaces=false --json
+```
+
+The saved npm token must permit noninteractive publishing under the provider's
+own policy. The proxy's app-token validity and publishing permission cannot
+override a provider rejection. This recipe does not establish compatibility with
+other npm versions or the client's default retry settings.
+
+## Request and response limits
+
+Publishing is an HTTPS PUT to the selected package at `registry.npmjs.org`, with
+no query string or redirect authority. The JSON request must contain one version,
+one configured dist-tag and one attachment. Package/version identities and the
+attachment's declared length, canonical base64, SHA-512 integrity and SHA-1
+shasum must agree. Scoped names use the canonical encoded package path.
+
+The full request is limited to 16 MiB and the decoded tarball to 8 MiB. Its sole
+manifest has a conservative budget of 65,536: JSON punctuation, escaped UTF-8
+strings and literals use their compact byte counts, while every finite numeric
+node costs 320. This is not an exact serialized-length allowance. Dynamic
+manifest fields remain bounded; the closed `dist` object admits only integrity,
+shasum and tarball metadata. Additional `dist` fields or extra provenance
+attachments are refused, not removed.
+Validation preserves the accepted request bytes. It does not extract or scan the
+archive, verify its contents are safe, or fetch a tarball. Stock npm's HTTP-valued
+`dist.tarball` is inert metadata; the actual publish transport remains HTTPS.
+
+Publish success and selected error responses must be nonempty strict JSON
+objects with `application/json` (optionally UTF-8 charset), at most 64 KiB.
+Admitted statuses are 200, 201, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503
+and 504. Credential-reflection checks precede release; bounded unselected HTTP
+metadata is checked and discarded. Compression offers are discarded and encoded
+upstream responses are unsupported. There is no response-field setup or
+unchecked pass-through mode. The companion GET retains the separate
+[metadata response contract](operator-npm-metadata.md#authority-and-response-limits),
+including its 1 MiB success and 64 KiB error limits.
+
+## Uncertain publication and unsupported operations
+
+A timeout, lost reply or blocked response can occur **after** the registry has
+received the PUT. Treat the write outcome as unknown, not as proof that nothing
+was published. There is no automatic retry or exactly-once guarantee. Inspect
+the package's registry metadata and Serverware audit evidence before deciding
+what to do; a single missing version observation is not proof an in-flight write
+cannot still finish. Do not automatically repeat `npm publish` or add a generic
+retry loop. Likewise, a lost permission-save reply requires inspection of saved
+state, not an automatic second grant request.
+
+This profile does not authorize installation, tarball downloads, unpublish,
+standalone tag administration, staged publishing, npm audit, provenance,
+provider 2FA, trusted publishing, token renewal or a JIT approval ceremony.
+It does not modify the legacy adapter's approval requirements. The broader
+requirements remain in [ordinary npm client compatibility](operator-npm-client-compatibility.md).
+
+Source checks, a genuinely compiled matching gate, and the isolated stock-client
+fixture must pass before this document can claim acceptance. The fixture must
+prove metadata GETs independently: npm can suppress preflight GET errors, so a
+successful publish command alone is insufficient. No real provider token,
+public registry mutation, live operator rollout or native hardware acceptance
+is claimed here. Existing metadata-only acceptance does not prove publishing.

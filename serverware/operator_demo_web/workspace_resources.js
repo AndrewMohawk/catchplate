@@ -41,6 +41,7 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isNpmPublishRule(rule)) { renderNpmPublishCompatibility(id); return; }
   if (isNpmRule(rule)) { renderNpmCompatibility(id); return; }
   if (isGithubRule(rule)) { renderGithubCompatibility(id, rule); return; }
   if (isGmailRule(rule)) {
@@ -88,6 +89,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isNpmPublishRule(rule)) return npmPublishRuleRestrictions(rule);
   if (isNpmRule(rule)) return npmRuleRestrictions(rule);
   if (isGithubRule(rule)) return githubRuleRestrictions(rule);
   if (isGmailRule(rule)) return [
@@ -357,7 +359,9 @@ function createCredentialsView(workspace, actions = {}) {
         if (isGithubCredential(credential)) card.append(textNode('p',
           'GitHub issue presets only. Stored token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
         if (isNpmCredential(credential)) card.append(textNode('p',
-          'npm metadata lookup only. Stored token; package access and token validity are not tested here. No install, publish, tarballs or npm audit. Serverware does not renew this token.', 'small muted'));
+          catalog.capabilities.npm_publish ?
+            'Saved npm token. Each app needs a separate metadata or publishing permission. Package access and token validity are not tested here; Serverware does not renew this token.' :
+            'npm metadata lookup only. Stored token; package access and token validity are not tested here. No install, publish, tarballs or npm audit. Serverware does not renew this token.', 'small muted'));
         card.append(textNode('p', 'Saved assignments are configuration, not proof of a valid app token, provider key, or loaded proxy policy.', 'small muted'));
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');

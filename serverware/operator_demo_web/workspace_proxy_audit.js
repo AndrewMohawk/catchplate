@@ -10,6 +10,7 @@ function createProxyView(workspace, applications) {
     element('gmail-client-controls').hidden = true;
     element('github-client-controls').hidden = true;
     element('npm-client-controls').hidden = true;
+    element('npm-publish-client-controls').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -22,21 +23,25 @@ function createProxyView(workspace, applications) {
     const gmail = isGmailRule(rule);
     const github = isGithubRule(rule);
     const npm = isNpmRule(rule);
+    const npmPublish = isNpmPublishRule(rule);
+    element('npm-publish-client-controls').hidden = !npmPublish;
+    element('npm-publish-client-summary').textContent = npmPublish ? npmPublishReview(rule) : '';
     element('npm-client-controls').hidden = !npm;
     if (npm) chooseOptions('npm-client-package', rule.packages.map(name => ({id: name, name})), 'Choose an allowed package');
     const githubSelection = github ? application?.id + ':' + rule.id : '';
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github || npm; element('proxy-method').disabled = github || npm;
-    document.querySelector('label[for="proxy-method"]').hidden = github || npm;
+    element('proxy-method').hidden = github || npm || npmPublish; element('proxy-method').disabled = github || npm || npmPublish;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail;
     const messageRead = gmail && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = npm ?
+    element('client-template-title').textContent = npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = npmPublish ?
+      'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
       'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmail ?
       'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
@@ -56,7 +61,7 @@ function createProxyView(workspace, applications) {
     }
     let dummyHeader; let proxy;
     const proxyAuthentication = applicationProxyAuthentication(application);
-    if (npm && proxyAuthentication !== 'basic_and_bearer_v1') {
+    if ((npm || npmPublish) && proxyAuthentication !== 'basic_and_bearer_v1') {
       element('client-command').textContent = 'The stock npm client needs standard username/password proxy login.';
       element('client-guidance').textContent = 'Use Applications to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
       return;
@@ -70,7 +75,9 @@ function createProxyView(workspace, applications) {
       proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = npm ? buildNpmClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+      command = npmPublish ? buildNpmPublishClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+        packageName: rule.package, tag: rule.tag, publishingWindow: rule.publishing_window, caPath: element('ca-path').value}) :
+        npm ? buildNpmClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         packages: rule.packages, packageName: element('npm-client-package').value, caPath: element('ca-path').value}) : github ? buildGithubClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         repository: rule.repository, bundle: rule.operation_bundle, operation: element('github-client-operation').value,
         caPath: element('ca-path').value, proxyCaPath: element('github-proxy-ca-path').value}) :
@@ -95,6 +102,13 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (npmPublish) {
+      element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No npm publication was tested here. ' :
+        'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') + npmPublishReview(rule) +
+        ' Publishing hours do not renew the app token or provider token. The public npm dummy is not a real credential; set only the Serverware app token in your local environment. ' +
+        'Keep strict-ssl enabled and load the downloaded CA with NODE_EXTRA_CA_CERTS before npm starts; retain default roots. See Compatibility limits.';
+      return;
+    }
     if (npm) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No npm lookup was tested here. ' :
         'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') +
@@ -144,7 +158,8 @@ function createProxyView(workspace, applications) {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = !element('npm-client-controls').hidden ?
+      element('client-copy-status').textContent = !element('npm-publish-client-controls').hidden ?
+        'Copied npmrc settings and the separate publishing command. Review the local package before running it; this page sent no publish request.' : !element('npm-client-controls').hidden ?
         'Copied npmrc settings and the separate metadata command. Set the app token and a fresh private cache locally; no lookup was executed by this page.' : !element('github-client-controls').hidden ?
         'Copied the GitHub client recipe. Set the application token and any creation content locally. No request was executed by this page.' :
         'Copied. This connection template has no request body or query values. Set the application token in your client environment.';
@@ -187,6 +202,14 @@ function createProxyView(workspace, applications) {
         package: element('npm-client-package').value, sdk_auth_token: operatorNpm.token, strict_ssl: true,
         extra_ca_file: config.ca_file, fresh_cache_required: true, automatic_retries: 0, metadata_only: true};
       config.note += ' npm view/pacote.manifest metadata only; no install, publish, tarballs or npm audit. Use NODE_EXTRA_CA_CERTS before Node startup; retain default roots and TLS verification. The public npm dummy is not the provider token.';
+    }
+    if (isNpmPublishRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.package = rule.package; config.tag = rule.tag;
+      config.publishing_window = rule.publishing_window === null ? null : {...rule.publishing_window};
+      config.publishing_window_timezone = 'UTC'; config.read_metadata_included = true;
+      config.client_recipe = {npm_version: '11.8.0', node_version: '25.5.0', sdk_auth_token: operatorNpm.token,
+        strict_ssl: true, extra_ca_file: config.ca_file, fresh_cache_required: true, automatic_retries: 0};
+      config.note += ' Publishing changes the registry; this page has not run it. Metadata reads remain allowed outside publishing hours. No automatic retry after an uncertain publish. Keep TLS verification and Node default roots enabled.';
     }
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2) + '\n'], {type: 'application/json'}));
     const anchor = textNode('a'); anchor.href = url; anchor.download = 'serverware-client.private.json'; document.body.append(anchor); anchor.click(); anchor.remove();

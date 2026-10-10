@@ -36,6 +36,8 @@ function createConnectView(workspace, applications, proxy) {
   const application = () => catalog()?.applications.find(item => item.id === selectedApplication && item.status === 'active');
   const validApp = item => item?.token_status === 'valid' && Number.isSafeInteger(item.token_expires_at_epoch_ms) && item.token_expires_at_epoch_ms > Date.now();
   const matchingRules = () => catalog()?.access_rules.filter(item => item.status === 'active' && item.application_id === selectedApplication && item.credential_id === selectedCredential) || [];
+  const metadataGrantAvailable = () => npmNewRuleAvailable(catalog(), selectedApplication) &&
+    !catalog()?.access_rules.some(item => item.status === 'active' && item.application_id === selectedApplication && isNpmPublishRule(item));
   const message = text => { element('connect-status').textContent = text; };
   renderOperatorCompatibility('connect-compatibility-content');
   const accountSummary = textNode('div'); accountSummary.id = 'connect-google-account-summary';
@@ -106,6 +108,10 @@ function createConnectView(workspace, applications, proxy) {
           !operatorExact(npmRulePayload(item), npmRulePayload(review.rule)))) {
         message('The saved npm permission does not match the reviewed packages. Refresh; no repeat request was sent.'); return;
       }
+      if (isNpmPublishRule(review?.rule) && (!npmPublishRuleValid(item, credential()) ||
+          !operatorExact(npmPublishRulePayload(item), npmPublishRulePayload(review.rule)))) {
+        message('The saved publishing permission does not match the reviewed package, tag and UTC hours. Refresh; no repeat request was sent.'); return;
+      }
       selectedRule = item.id; step = 4;
     }
     checkpoint = null; message('Saved resource confirmed in the refreshed catalog.');
@@ -132,10 +138,12 @@ function createConnectView(workspace, applications, proxy) {
       const bundle = gmailAvailable(value, credential());
       const github = isGithubCredential(credential());
       const npm = isNpmCredential(credential());
-      choices('connect-operation', npm ? npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : [] : github ? githubAvailable(value, credential()) ?
+      const npmChoices = npm ? [...(npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : []),
+        ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
+      choices('connect-operation', npm ? npmChoices : github ? githubAvailable(value, credential()) ?
         [operatorGithub.read, operatorGithub.write].map(id => ({id, name: githubPermissionName(id)})) : [] :
         [...(bundle ? [{id: operatorGmail.bundle, name: 'Read Gmail'}] : []),
-          {id: 'exact', name: 'Advanced: one exact endpoint'}], npm ? operatorNpm.bundle : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
+          {id: 'exact', name: 'Advanced: one exact endpoint'}], npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
     }
   }
   function renderForms() {
@@ -145,12 +153,16 @@ function createConnectView(workspace, applications, proxy) {
     const gmail = newRule && element('connect-operation').value === operatorGmail.bundle;
     const github = newRule && (isGithubCredential(credential()) || isGithubRule({operation_bundle: element('connect-operation').value}));
     const npm = newRule && (isNpmCredential(credential()) || isNpmRule({operation_bundle: element('connect-operation').value}));
+    const npmPublish = npm && isNpmPublishRule({operation_bundle: element('connect-operation').value});
     const providerPreset = github || npm;
     fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential);
     fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
     fields('connect-credential-auth-group', connectionMethod === 'key');
     element('connect-github-token-note').hidden = connectionMethod !== 'github';
     element('connect-npm-token-note').hidden = connectionMethod !== 'npm';
+    element('connect-npm-token-note').textContent = catalog()?.capabilities.npm_publish ?
+      'Use a least-privilege npm token for the intended packages and operations. Publishing needs provider publishing rights without an interactive 2FA flow. The token stays in Serverware, never in the client recipe; it is not renewed or tested here.' :
+      'Use a least-privilege npm token for reading the intended packages at registry.npmjs.org. It is saved only in Serverware, never put in the client recipe. Serverware does not renew or test this token.';
     if (connectionMethod === 'github') {
       element('connect-credential-secret').setAttribute('pattern', '[A-Za-z0-9_]{1,8192}');
       element('connect-credential-secret').title = 'Use a GitHub token, not an App JWT or private key.';
@@ -184,11 +196,18 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-credential-input-group').hidden = !newRule || providerPreset;
     if (!newRule || providerPreset) for (const input of element('connect-credential-input-group').querySelectorAll('input,select,textarea')) input.disabled = true;
     fields('connect-github-repository', github);
-    fields('connect-npm-packages-group', npm);
+    fields('connect-npm-packages-group', npm && !npmPublish);
+    fields('connect-npm-publish-group', npmPublish);
+    fields('connect-npm-publish-window', npmPublish && element('connect-npm-publish-hours').value === 'window');
+    element('connect-npm-publish-summary').textContent = !npmPublish ? '' : !npmPublishAvailable(catalog(), credential()) ?
+      'Publishing is not advertised or registry.npmjs.org is not approved. No fallback permission is sent.' :
+      !npmPublishNewRuleAvailable(catalog(), selectedApplication) ?
+        'This app already has an npm permission or overlapping registry GET/PUT rule. Reuse it or explicitly revoke the conflict before granting publishing.' :
+        'Publish new versions of one exact package with the selected tag. Optional hours are daily UTC, not local time; no overnight interval or 24:00.';
     element('connect-npm-summary').textContent = !npmAvailable(catalog(), credential()) ?
       'npm metadata lookup is unavailable: this deployment must advertise the preset and approve registry.npmjs.org. No fallback or grant is sent.' :
-      !npmNewRuleAvailable(catalog(), selectedApplication) ?
-      'This application already has an npm metadata permission or overlapping registry GET rule. Reuse its saved permission or review and explicitly revoke the conflicting rule before a new grant. Nothing is changed automatically.' :
+      !metadataGrantAvailable() ?
+      'This application already has an npm permission or overlapping registry GET rule. Reuse its saved permission or review and explicitly revoke the conflicting rule before a new grant. Nothing is changed automatically.' :
       'Read package metadata for these exact packages only. Supports npm view and pacote.manifest; no install, publish, tarballs or npm audit. GET only, no request body or query parameters. No response-field setup.';
     element('connect-github-summary').textContent = !githubAvailable(catalog(), credential()) ?
       'GitHub permissions are unavailable: this deployment must advertise the preset and approve api.github.com. No fallback or grant is sent.' :
@@ -217,7 +236,8 @@ function createConnectView(workspace, applications, proxy) {
       (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length ||
         (!gmail && !providerPreset && !availableResponseModes(catalog()).length) || !catalog()?.allowed_upstreams.length);
     element('connect-review').disabled = newRule && (gmail && !gmailAvailable(catalog(), credential()) || github && !githubAvailable(catalog(), credential()) ||
-      npm && (!npmAvailable(catalog(), credential()) || !npmNewRuleAvailable(catalog(), selectedApplication)));
+      npm && (npmPublish ? !npmPublishAvailable(catalog(), credential()) || !npmPublishNewRuleAvailable(catalog(), selectedApplication) :
+        !npmAvailable(catalog(), credential()) || !metadataGrantAvailable()));
   }
   function reviewCurrent() {
     return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule);
@@ -229,7 +249,9 @@ function createConnectView(workspace, applications, proxy) {
     if (reviewCurrent()) {
       const appName = operatorConnectResourceChoices(catalog().applications.filter(item => item.status === 'active'), [actionLabels.application]).find(item => item.id === selectedApplication).name;
       const credentialName = operatorConnectResourceChoices(catalog().credentials.filter(item => item.status === 'active'), [actionLabels.credential]).find(item => item.id === selectedCredential).name;
-      element('connect-review-context').textContent = `${appName} may use ${credentialName} only as follows.`;
+      element('connect-review-context').textContent = isNpmPublishRule(review.rule) ?
+        `${appName} may use ${credentialName} to ${npmPublishReview(review.rule).replace(/^Publish/, 'publish')}` :
+        `${appName} may use ${credentialName} only as follows.`;
     } else element('connect-review-context').textContent =
       'Saved state changed or a selected resource is unavailable. Go Back, verify your choices and Review access again. No grant was sent.';
     element('connect-grant').textContent = review.existing ? 'Use this saved rule' : 'Grant access';
@@ -265,7 +287,11 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-use-key').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials');
     element('connect-use-github').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !catalog()?.capabilities.github;
     element('connect-use-npm').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !catalog()?.capabilities.npm;
-    element('connect-npm-status').textContent = !catalog()?.capabilities.npm ? 'npm metadata lookup is not advertised by this deployment.' :
+    element('connect-npm-status').textContent = catalog()?.capabilities.npm_publish ?
+      catalog().capabilities.npm_publish.destination_allowed && catalog().allowed_upstreams.includes(operatorNpm.origin) ?
+        'npm: choose Read package metadata or Publish package for explicit package access. Publishing can be limited to daily UTC hours. This page has not tested the provider.' :
+        'An npm token can be saved, but publishing cannot be granted until registry.npmjs.org is approved in Proxy setup.' :
+      !catalog()?.capabilities.npm ? 'npm metadata lookup is not advertised by this deployment.' :
       catalog().capabilities.npm.destination_allowed && catalog().allowed_upstreams.includes(operatorNpm.origin) ?
         'npm: save one token and grant Read package metadata for named packages. npm view/pacote.manifest only; no install, publish, tarballs or npm audit. No provider lookup has been tested here.' :
         'An npm token can be saved, but metadata access cannot be granted until the operator approves registry.npmjs.org in deployment settings.';
@@ -321,7 +347,20 @@ function createConnectView(workspace, applications, proxy) {
   });
   function draftRule() {
     if (isNpmCredential(credential())) {
-      if (!npmNewRuleAvailable(catalog(), selectedApplication)) throw operatorError('An existing npm metadata or overlapping registry GET rule conflicts. Reuse the saved permission or explicitly revoke the conflict before a new grant.');
+      if (isNpmPublishRule({operation_bundle: element('connect-operation').value})) {
+        if (!npmPublishNewRuleAvailable(catalog(), selectedApplication)) throw operatorError('An existing npm permission or overlapping registry GET/PUT rule conflicts. Reuse it or explicitly revoke it before a new grant.');
+        const hours = element('connect-npm-publish-hours').value;
+        if (!['any', 'window'].includes(hours)) throw operatorError('Choose any time or explicit daily UTC publishing hours.');
+        const rule = {...npmPublishRuleFields(element('connect-npm-publish-package').value.trim(),
+          element('connect-npm-publish-tag').value.trim(), hours === 'window' ?
+            {start: element('connect-npm-publish-start').value, end: element('connect-npm-publish-end').value} : null),
+          name: ('Publish package · ' + element('connect-npm-publish-package').value.trim()).slice(0, 128),
+          application_id: selectedApplication, credential_id: selectedCredential};
+        if (!supported(rule)) throw operatorError('Publishing or the selected package configuration is unavailable. No grant was sent.');
+        return rule;
+      }
+      if (element('connect-operation').value !== operatorNpm.bundle) throw operatorError('Choose an advertised npm permission. No fallback grant was sent.');
+      if (!metadataGrantAvailable()) throw operatorError('An existing npm permission or overlapping registry GET rule conflicts. Reuse the saved permission or explicitly revoke the conflict before a new grant.');
       const packages = npmPackageInput(element('connect-npm-packages').value);
       const rule = {...npmRuleFields(packages), name: 'Read package metadata',
         application_id: selectedApplication, credential_id: selectedCredential};
@@ -376,11 +415,11 @@ function createConnectView(workspace, applications, proxy) {
       selectedRule = review.rule.id; goto(4); return;
     }
     if (!workspace.ready('access_rules')) return;
-    await workspace.mutate(isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
-      isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
+    await workspace.mutate(isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
+      isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
-  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode'])
+  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours'])
     element(id).addEventListener('change', render);
   element('connect-credential-choice').addEventListener('change', () => {
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;

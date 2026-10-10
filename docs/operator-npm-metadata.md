@@ -5,6 +5,9 @@
 The additive `npm.metadata.v1` profile supports **reading package metadata**.
 It is not an installation or publication preset. The existing `npm.registry`
 write adapter and its approval requirements are unchanged.
+The separate [single-package publishing contract](operator-npm-publish.md)
+remains pending source verification and isolated acceptance; it does not upgrade
+this read-only permission or inherit the metadata acceptance results below.
 
 ## Operator workflow
 

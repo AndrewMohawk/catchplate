@@ -33,6 +33,7 @@ function isGithubCredential(credential) { return credential?.connection_type ===
 function isGithubRule(rule) { return ['github_issues_read_v1', 'github_issues_write_v1'].includes(rule?.operation_bundle); }
 function isNpmCredential(credential) { return credential?.connection_type === 'npm_token_v1'; }
 function isNpmRule(rule) { return rule?.operation_bundle === 'npm_metadata_read_v1'; }
+function isNpmPublishRule(rule) { return rule?.operation_bundle === 'npm_publish_v1'; }
 function gmailAvailable(catalog, credential) {
   return credential?.status === 'active' && credential.auth_type === 'google_oauth' &&
     credential.permission_preset === 'gmail_readonly' && Boolean(catalog?.capabilities.google_oauth) &&
@@ -98,10 +99,12 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
   return {request_fields: requestFields, ...(choice === 'preserve_json_v1' ? {request_body_mode: choice} : {})};
 }
 function operatorRuleContentValid(rule, credential) {
+  if (rule && !isNpmPublishRule(rule) && ['package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
   if (rule && Object.hasOwn(rule, 'operation_bundle')) return isGmailRule(rule) ? gmailRuleValid(rule, credential) :
+    isNpmPublishRule(rule) ? npmPublishRuleValid(rule, credential) :
     isNpmRule(rule) ? npmRuleValid(rule, credential) :
     typeof isGithubRule === 'function' && isGithubRule(rule) && githubRuleValid(rule, credential);
-  if (['github_token_v1', 'npm_token_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages'].some(key => Object.hasOwn(rule, key))) return false;
+  if (['github_token_v1', 'npm_token_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
   if (!rule || !['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers'].every(name =>
       Array.isArray(rule[name]) && rule[name].every(value => typeof value === 'string')) ||
       !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
@@ -126,6 +129,8 @@ function operatorRuleCredentialValid(rule, credential) {
 function operatorRuleSupported(rule, catalog) {
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
+  if (isNpmPublishRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
+    npmPublishRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && npmPublishAvailable(catalog, credential));
   if (isNpmRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
     npmRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && npmAvailable(catalog, credential));
   if (rule?.operation_bundle && typeof isGithubRule === 'function' && isGithubRule(rule))
@@ -347,7 +352,7 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages'])
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'])
       if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
   });
   for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';
@@ -361,9 +366,9 @@ function projectCatalog(value) {
         rule.status === 'active' && (credential.status !== 'active' || application.status !== 'active'))
       throw operatorError('Saved rule content modes or resource references are inconsistent. Changes are disabled.');
   }
-  const npmApplications = accessRules.filter(rule => rule.status === 'active' && isNpmRule(rule)).map(rule => rule.application_id);
+  const npmApplications = accessRules.filter(rule => rule.status === 'active' && (isNpmRule(rule) || isNpmPublishRule(rule))).map(rule => rule.application_id);
   if (new Set(npmApplications).size !== npmApplications.length)
-    throw operatorError('More than one active npm metadata permission belongs to an application. Changes are disabled.');
+    throw operatorError('More than one active npm permission belongs to an application. Changes are disabled.');
   const quarantinedAccounts = new Set(credentials.filter(item => item.status === 'quarantined').map(item => item.id));
   if (accessRules.some(rule => rule.status === 'active' && quarantinedAccounts.has(rule.credential_id)))
     throw operatorError('Saved Google account and access-rule states disagree. Changes are disabled.');
@@ -373,6 +378,7 @@ function projectCatalog(value) {
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   capabilities.github = value.capabilities?.github == null ? null : projectGithubCapability(value.capabilities.github);
   capabilities.npm = value.capabilities?.npm == null ? null : projectNpmCapability(value.capabilities.npm);
+  capabilities.npm_publish = value.capabilities?.npm_publish == null ? null : projectNpmPublishCapability(value.capabilities.npm_publish);
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
     throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
   capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;

@@ -12,7 +12,7 @@ The October 10 paired app/gate rollout verified the deployed read-only UI and
 preserved retained data and empty app-only custody. Outbound DNS/TLS was verified
 at the earlier notification-enabled rollout checkpoint, without sending HTTP.
 No real receiver or native hardware source is configured.
-See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-managed-capable-deployment).
+See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-npm-capable-managed-deployment).
 
 The mental model is simple: **action alerts mean "someone needs to do something";
 audit alerts mean "this happened."** Configure either, both or neither. An action

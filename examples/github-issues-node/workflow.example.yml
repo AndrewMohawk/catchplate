@@ -1,0 +1,72 @@
+# INACTIVE SAMPLE: review and copy into .github/workflows/ deliberately.
+# Keep the example directory and its reviewed package-lock.json in the checkout.
+# Only the final read step receives Serverware configuration or secrets.
+name: Read GitHub issues through Serverware
+on:
+  workflow_dispatch:
+permissions:
+  contents: read # Checkout only; this is not the GitHub API/provider credential.
+concurrency:
+  group: serverware-github-issues-example
+  cancel-in-progress: false
+jobs:
+  read-issues:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    environment: serverware-demo
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+        working-directory: examples/github-issues-node
+    steps:
+      - name: Check out the trusted dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '25.5.0'
+          package-manager-cache: false
+          token: '' # No repository token needed for this public Node download.
+      - name: Install the checked-in dependency lock without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Read one explicitly permitted repository
+        timeout-minutes: 2
+        env:
+          SERVERWARE_PROXY_URL: ${{ vars.SERVERWARE_PROXY_URL }}
+          SERVERWARE_APP_ID: ${{ vars.SERVERWARE_APP_ID }}
+          SERVERWARE_PROXY_TOKEN: ${{ secrets.SERVERWARE_PROXY_TOKEN }}
+          SERVERWARE_GITHUB_OWNER: ${{ vars.SERVERWARE_GITHUB_OWNER }}
+          SERVERWARE_GITHUB_REPO: ${{ vars.SERVERWARE_GITHUB_REPO }}
+          TRUSTED_SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
+          TRUSTED_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(node --version)" = v25.5.0
+          node --input-type=module -e "import { readFileSync } from 'node:fs'; for (const [name, version] of [['@octokit/rest', '22.0.1'], ['undici', '8.11.2']]) { if (JSON.parse(readFileSync('node_modules/' + name + '/package.json', 'utf8')).version !== version) process.exit(1); }"
+          ca_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-github-ca.XXXXXXXX")
+          trap 'rm -f -- "$ca_dir/serverware-ca.pem" "$ca_dir/proxy-ca.pem"; rmdir -- "$ca_dir"' EXIT
+          export SERVERWARE_CA_FILE="$ca_dir/serverware-ca.pem"
+          unset SERVERWARE_PROXY_CA_FILE
+          if [[ -n "$TRUSTED_PROXY_CA_PEM" ]]; then
+            export SERVERWARE_PROXY_CA_FILE="$ca_dir/proxy-ca.pem"
+          fi
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          for (const [path, pem] of [
+            [process.env.SERVERWARE_CA_FILE, process.env.TRUSTED_SERVERWARE_CA_PEM],
+            [process.env.SERVERWARE_PROXY_CA_FILE, process.env.TRUSTED_PROXY_CA_PEM],
+          ]) {
+            if (!path) continue;
+            if (!pem || !pem.includes('-----BEGIN CERTIFICATE-----') || Buffer.byteLength(pem) > 262144) {
+              throw new Error('Explicit trusted CA input required');
+            }
+            writeFileSync(path, pem, { mode: 0o600, flag: 'wx' });
+          }
+          NODE
+          unset TRUSTED_SERVERWARE_CA_PEM TRUSTED_PROXY_CA_PEM
+          timeout --signal=TERM --kill-after=5s 100s node client.mjs list

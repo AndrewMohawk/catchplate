@@ -1,0 +1,13 @@
+/gmail-example
+/gmail-example.exe
+.env
+.env.*
+*.env
+!.env.example
+*.pem
+*.crt
+*.cer
+*.der
+*.key
+*.p12
+*.pfx

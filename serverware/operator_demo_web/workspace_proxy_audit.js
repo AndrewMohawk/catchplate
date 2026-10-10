@@ -1,3 +1,35 @@
+// Repository links contain public source paths only. Never personalize them
+// with an application ID, provider URL, credential, or private configuration.
+function operatorExampleProjects(rule, catalog) {
+  if (!rule || rule.status !== 'active' || !operatorRuleSupported(rule, catalog)) return [];
+  const source = 'https://github.com/AndrewMohawk/serverware/';
+  const branch = 'serverware/operator-workspace/';
+  const project = (label, directory) => ({label, kind: 'project', href: source + 'tree/' + branch + 'examples/' + directory});
+  const guide = (label, filename) => ({label, kind: 'guide', href: source + 'blob/' + branch + 'docs/' + filename});
+  switch (rule.operation_bundle) {
+    case 'github_issues_read_v1':
+    case 'github_issues_write_v1':
+      return [project('Node.js + GitHub Actions', 'github-issues-node'),
+        project('Python', 'github-issues-python'), project('Go', 'github-issues-go')];
+    case 'npm_metadata_read_v1': return [guide('npm metadata guide', 'operator-npm-metadata.md')];
+    case 'npm_publish_v1': return [guide('npm publishing guide', 'operator-npm-publish.md')];
+    case 'gmail_read_v1': return [guide('Google / Gmail guide', 'operator-gmail-job-verification.md')];
+    default: return [];
+  }
+}
+function renderOperatorExampleProjects(rule, catalog) {
+  const panel = element('client-examples'); const links = element('client-example-links');
+  const projects = operatorExampleProjects(rule, catalog);
+  links.replaceChildren(); panel.hidden = projects.length === 0;
+  element('client-example-note').textContent = !projects.length ? '' : projects[0].kind === 'project' ?
+    'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
+    'This permission currently has a setup and verification guide, not a runnable example project. The public guide contains no private client config and does not verify your access.';
+  for (const project of projects) {
+    const link = textNode('a', project.label, 'button secondary');
+    link.href = project.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';
+    links.append(link);
+  }
+}
 function createProxyView(workspace, applications) {
   const home = element('proxy'); const content = textNode('div'); content.id = 'proxy-setup-content';
   content.append(...[...home.children].slice(2)); home.append(content);
@@ -7,6 +39,7 @@ function createProxyView(workspace, applications) {
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
+    renderOperatorExampleProjects(null, null);
     element('gmail-client-controls').hidden = true;
     element('github-client-controls').hidden = true;
     element('npm-client-controls').hidden = true;
@@ -55,6 +88,9 @@ function createProxyView(workspace, applications) {
     const valid = application.token_status === 'valid' && Number.isSafeInteger(application.token_expires_at_epoch_ms) && application.token_expires_at_epoch_ms > Date.now();
     const supported = operatorRuleSupported(rule, catalog);
     renderOperatorCompatibility('client-compatibility-content', rule);
+    // Browsing public code does not require a current token. The existing gates
+    // below still control personalized recipes, copy, and private downloads.
+    renderOperatorExampleProjects(rule, catalog);
     if (!valid || !supported || credential?.status !== 'active') {
       element('client-command').textContent = !valid ? 'The application token is expired, revoked or cannot be verified.' : 'The saved rule or credential is unavailable or unsupported.';
       element('client-guidance').textContent = !valid ? 'Use Applications to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;

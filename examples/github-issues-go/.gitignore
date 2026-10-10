@@ -1,0 +1,5 @@
+/github-issues-go
+*.pem
+.env
+.env.*
+!.env.example

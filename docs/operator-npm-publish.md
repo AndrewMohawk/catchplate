@@ -564,7 +564,7 @@ No run was restarted and nothing was promoted. The next diagnostic boundary
 is the application's actual execution state during the transport stall; these
 results do not justify pooling, caching or a deadline increase by themselves.
 
-The next private diagnostic uses `scripts/operator_private_stack_diagnostic.py`
+The private diagnostic uses `scripts/operator_private_stack_diagnostic.py`
 as a separately pinned, launch-only wrapper around the unchanged application
 entrypoint. It first requires the real custody initializer's unconfigured
 development result, the exact synthetic fixture marker and loopback-only
@@ -580,6 +580,58 @@ in **0.946 seconds**, including one finite child using real `faulthandler` and
 checks that local-value canaries are absent. Configuration, custody ordering
 and mount-admission controls use explicit synthetic seams; they are not proof
 of a running application or an actual captured stall.
+
+The diagnostic-only run from **16:59:25 to 17:00:50 UTC on October 10** used
+the same frozen `4364c3e6` application and `92ee92a2` gate, with the wrapper
+from `9619c4e3`. It reproduced `scoped / client` npm `E503` after prerequisite
+and unscoped completion. The bounded pre-stop collector retained a 5,664-byte
+snapshot (SHA-256 `f1077a082afe14a6cf5d078668a37190acf1dc43cdec0f73a6b4514a43d34ed4`).
+Three threads were inside `db.connect()` at `PRAGMA journal_mode=WAL`: response
+signing's first policy high-water check, a lease's final policy recheck, and
+nonce connection setup before `BEGIN IMMEDIATE`. The preceding connection
+callbacks register SQL functions but execute no SQL, so this is also the first
+database-touch point. The snapshot does not distinguish schema-loading cost
+from locking, identify a lock owner, measure continuous waiting, or prove that
+changing the WAL statement repairs the request failure.
+
+Two generation-refresh transport failures and two guarded terminal 503 writes
+were retained again. The initial one-event audit transport outcome was unknown
+after 3,589 ms; its later preflight was not sent after 5,000 ms. All 12 emitted
+application audit observations completed (15 events, median/maximum
+334/1,412 ms); these cannot be correlated to the unobserved failed request.
+The stopped copy passed `quick_check` and retained the same phase/count pattern
+as run fourteen: 15 leases, three releases, one denial, three CONNECTs and two
+keep-alives. Cleanup succeeded, the wrapper hash matched afterward, and all
+4,941 source and 1,782 npm files remained unchanged. Receipts and frames are
+in `serverware-npm-publish-diagnostic-runner.lWTJdsyo`; the stopped private data
+is in `serverware-npm-publish-private.LPrK4IjN`.
+
+`scripts/test_db_wal_connection_setup.py` then characterized disposable tmpfs
+copies of that stopped SQLite database: 1,335 schema objects and 1,288,121 SQL
+bytes, using the same two function-registration callbacks. Both the existing
+WAL assignment and a read-mode-first alternative returned WAL on all 16 calls.
+Two three-caller batches took 318–381 ms process CPU with assignment and
+320–365 ms with read-first; there was no consistent read-first benefit, so no
+application change was made. Synthetic held-reader, writer and schema-write
+controls likewise did not reproduce a setter-specific failure.
+
+A separate eight-call comparison serialized only the mode/foreign-key setup
+statements, not connection ownership, close, later queries or transactions.
+Its two three-caller batches used 119–142 ms process CPU and 101–121 ms wall
+time, including setup-gate waiting, versus 135–192 ms wall time for the earlier
+assignment batches. This small, separate measurement suggests initialization
+concurrency is worth investigating; it does not establish the live stall's
+cause or an end-to-end repair. The diagnostic uses a 0.1-second SQLite busy
+timeout and copied temporary storage, not the application's 10-second timeout
+or original filesystem. Original DB/WAL/SHM bytes remained unchanged.
+The JSON measurements are retained beside the diagnostic-run receipts.
+All four final characterization controls pass in **0.271 seconds** in the
+network-none pinned app image. The execution-context receipt distinguishes
+the initial two-strategy source from the later serialized-only supplement.
+Before any application setup-serialization change, aggregate waiting must stay
+within the existing budget and held-lock, nested-call, failure-cleanup and
+process-lifecycle behavior need explicit controls. No connection pool,
+authority cache, deadline increase or live rollout has been introduced.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

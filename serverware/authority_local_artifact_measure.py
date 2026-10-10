@@ -8,6 +8,10 @@ Only kernel-enforced ext4 fs-verity content identities may reuse a process-local
 content digest. This is not an eager disk scrub: later reads still fail with EIO
 if their data violates the enforced digest. Metadata, roster and caller checks
 remain fresh, and no authority or session receipt is cached.
+
+An independently pinned content catalog can explicitly supply the same
+content-only relation inside a PID/thread-owned scope. Its claims never seed
+the observed LRU and do not persist after that scope exits.
 """
 from __future__ import annotations
 
@@ -25,6 +29,9 @@ import sys
 import threading
 
 from serverware import authority_artifact_spec as spec
+from serverware import authority_local_content_catalog as _catalog
+
+pinned_content_catalog = _catalog.pinned_content_catalog
 
 FS_IOC_GETFLAGS = 0x80086601
 FS_IOC_GETVERSION = 0x80087601
@@ -134,6 +141,24 @@ def _cache_remember(key, digest):
             _FILE_DIGEST_CACHE.popitem(last=False)
 
 
+def _content_lookup(key):
+    token, selected = _catalog._capture(key)
+    observed = None if key is None else _cache_lookup(key)
+    _require(selected is None or observed is None or selected == observed)
+    return token, observed if observed is not None else selected, observed is None and selected is not None
+
+
+def _content_complete(key, digest, token, catalog_only):
+    # Run after the caller's final custody/deadline check. A callback cannot
+    # remove or replace an activation while retaining its cached result.
+    _catalog._check(token)
+    if key is not None:
+        observed = _cache_lookup(key)
+        _require(observed is None or observed == digest)
+        if not catalog_only:
+            _cache_remember(key, digest)
+
+
 def _digest_owned_file(fd, *, maximum, read=None, check):
     """Content-only measurement of a caller-owned FD, never a claimed digest.
 
@@ -150,7 +175,7 @@ def _digest_owned_file(fd, *, maximum, read=None, check):
     before = os.fstat(fd)
     _require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= maximum)
     cache_key = _file_cache_key(fd, before.st_size)
-    content_digest = None if cache_key is None else _cache_lookup(cache_key)
+    token, content_digest, catalog_only = _content_lookup(cache_key)
     if content_digest is None:
         if read is None:
             digest = hashlib.sha256()
@@ -171,9 +196,35 @@ def _digest_owned_file(fd, *, maximum, read=None, check):
     _require(_file_cache_key(fd, before.st_size) == cache_key)
     _require(_identity(os.fstat(fd)) == _identity(before))
     check()
-    if cache_key is not None:
-        _cache_remember(cache_key, content_digest)
+    _content_complete(cache_key, content_digest, token, catalog_only)
     return "sha256:" + content_digest
+
+
+def observe_catalog_entry(fd, *, check):
+    """Observe a sealed original for an offline content catalog, never seed it.
+
+    The producer supplies current named-FD custody in ``check``. An existing
+    actually observed memo entry may be reused, but an active pinned catalog
+    is forbidden; cold content is read through the original guarded helper.
+    """
+    _require(type(fd) is int and fd >= 3 and callable(check))
+    _catalog._require_inactive()
+
+    def guarded():
+        _catalog._require_inactive()
+        check()
+        _catalog._require_inactive()
+
+    guarded()
+    before = os.fstat(fd)
+    _require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= spec.MAX_FILE_BYTES)
+    key = _file_cache_key(fd, before.st_size)
+    _require(key is not None)
+    digest = _digest_owned_file(fd, maximum=spec.MAX_FILE_BYTES, check=guarded)
+    _require(_file_cache_key(fd, before.st_size) == key
+             and _identity(os.fstat(fd)) == _identity(before))
+    guarded()
+    return dict(fsVerityDigest="sha256:" + key[0].hex(), size=before.st_size, sha256=digest)
 
 
 def _ioctl_number(fd, request):
@@ -305,7 +356,7 @@ def measure_file(root_fd, entry, *, check):
                  and stat.S_IMODE(before.st_mode) == entry["mode"]
                  and before.st_uid == entry["uid"] and before.st_gid == entry["gid"])
         cache_key = _file_cache_key(descriptor, before.st_size)
-        content_digest = None if cache_key is None else _cache_lookup(cache_key)
+        token, content_digest, catalog_only = _content_lookup(cache_key)
         if content_digest is None:
             digest = hashlib.sha256()
             offset = 0
@@ -327,8 +378,7 @@ def measure_file(root_fd, entry, *, check):
         # the terminal check later: after every measurement/validation step,
         # before any cache population or successful return.
         check()
-        if cache_key is not None:
-            _cache_remember(cache_key, content_digest)
+        _content_complete(cache_key, content_digest, token, catalog_only)
         return result
     finally:
         os.close(descriptor)

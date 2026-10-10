@@ -81,9 +81,17 @@ Leaves must be single-link regular files with the exact signed size, ownership
 and mode, actual inode generation, immutable flag and kernel-enforced ext4
 SHA-256 fs-verity. Actual bytes must match the signed content hash. A previously
 observed sealed-content digest in the bounded process memo can satisfy that
-hash observation; a cold standalone invocation reads the bytes. Claimed hashes
-never populate the memo. Invalid prepared inputs are refused, not silently
-converted to full-copy mode.
+hash observation; a cold standalone invocation reads the bytes. An explicitly
+admitted build-time content catalog can also satisfy that observation inside
+its single-use PID/thread-owned scope, including in a fresh process. Its pin
+must come from independent protected selection, not the writable package or
+the catalog itself. The COMMON coordinator carries that pin and the catalog
+through its frozen assembly/read-only payload chain; it does not pass catalog
+activation to forked or exec'd children. Catalog-derived values never populate
+the observed memo or replace any of the current checks above. See
+[startup cost](native-pilot-startup-performance.md#cross-session-reuse-pinned-build-time-content-catalog)
+for the implementation and verification boundary. Invalid prepared inputs are
+refused, not silently converted to full-copy mode.
 
 After validation, the installer publishes the fresh plan and Prepared state,
 moves the selected subtree into private staging with `RENAME_NOREPLACE`, and

@@ -163,7 +163,7 @@ read-only source, no capabilities or host ports, and temporary fixture storage.
 The logs, including the initial listener-test failure, are retained under
 `/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/startup-cache-integration.3IvDdJ6F`.
 
-## Cross-session reuse: remaining implementation boundary
+## Cross-session reuse: pinned build-time content catalog
 
 A new process still starts with an empty measurement memo. Persisting that
 dictionary without an independently trusted binding is not sufficient: the
@@ -171,15 +171,51 @@ ordinary file SHA-256 and its kernel fs-verity digest are different values.
 Likewise, a hash computed after loading `stage.json` does not independently
 authenticate the file that supplied it.
 
-The remaining design is a bounded, content-only catalog produced after actual
-static-file measurement and sealing. It would map each kernel content digest
-and size to its observed file SHA-256. The catalog's expected hash must be
-selected outside the writable session package, through the existing frozen
-assembly and read-only payload chain, before any fresh process imports it.
-The three late files, path/roster checks, ELF admission, current signatures,
-trust state, authorization and deadlines remain outside that reusable catalog.
-This catalog and its consumer integration are **not implemented**; the current
-memo must not be described as a persistent or cross-session cache.
+The implemented catalog records a bounded, content-only mapping from each
+kernel content digest and size to an actually observed file SHA-256. The
+unsigned build observes both the sealed source tree and its independently
+sealed prepared installation copy. It compares those observations with the
+selected roster, rejects conflicting entries, and writes
+`static-content-catalog.json` outside the package tree. The three late files
+are excluded. The format contains no paths, permissions or session authority.
+
+The host extracts the catalog only from the completed base `public.ext4`,
+never the writable session COW. Its SHA-256 is selected independently in
+`pilot-startup-selection.json`; the exact bytes accompany that selection in
+the read-only payload, both covered by the existing assembly freeze. The
+coordinator validates that pin, the closed canonical format, and held/named
+read-only file custody before installation. It reads the bounded catalog once,
+not again at every owner check.
+
+During `PilotLive.run()`, a matching kernel content identity can satisfy the
+first static-file hash observation even in a fresh process. Exact roster,
+metadata, ELF admission, current signatures, trust state, authorization and
+original deadlines remain fresh. Unsupported or absent entries take the normal
+full-read path. The catalog context is single-use and PID/thread-owned, ends
+on success or failure, and never seeds the observed-content memo. Forked or
+exec'd children do not inherit its activation; their cold scans are not removed
+by this change. Standalone callers without an independently admitted catalog
+also retain their first full read.
+
+The SDK passes 56 focused component tests, including 12 new catalog groups.
+Two actual fresh-interpreter workers exercise both artifact measurement and
+retained startup-file hashing with empty observed caches: catalog hits perform
+only the EOF probe, and calls after context exit read the bodies again. Real
+temporary bytes, descriptors and hashes are used; root ownership and kernel
+fs-verity observations are explicitly synthetic. This is source/component
+verification, not real-kernel acceptance or a measured native startup speedup.
+
+COMMON also passes 55 consumer/regression groups and 14 assembly component
+groups: 125 passing tests across the three focused runs. The new checks execute
+the actual catalog producer, live loader and scoped run wrapper, plus the
+host's extraction/pin/copy helpers. The assembly process streams are inert test
+fixtures, not an executed `debugfs`, VM or image build. The retained loader
+keeps metadata custody without rereading the catalog at every owner check.
+
+The source change is not deployed in the retained R97 pilot. No native startup,
+deadline reset, registration retry or pilot mutation was performed for this
+work. Evidence is retained under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/cross-session-content-catalog.d8hGTTHt`.
 
 ## Installation phase timing
 

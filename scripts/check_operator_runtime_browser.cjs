@@ -14,8 +14,8 @@ const PATHS = ['/', CATALOG, NOTIFICATIONS, UPSTREAMS], FIXTURE = 'https://demo-
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2', GMAIL = 'https://gmail.googleapis.com';
 const GOOGLE_SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
-const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
-  'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'app.js'];
+const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
+  'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
@@ -59,8 +59,7 @@ async function identity() {
 }
 function documentBytes() {
   const asset = name => readFileSync(join(source, 'serverware/operator_demo_web', name), 'utf8');
-  const names = managedGoogle ? [...SCRIPTS.slice(0, -1), 'workspace_google_configuration.js', 'app.js'] : SCRIPTS;
-  let html = asset('index.html'); const scripts = names.map(asset).join('\n'), css = asset('style.css');
+  let html = asset('index.html'); const scripts = SCRIPTS.map(asset).join('\n'), css = asset('style.css');
   need(!/<\/script/i.test(scripts) && !/<\/style/i.test(css), 'renderer_raw_text_terminator');
   for (const [marker, value] of [['__OPERATOR_DEMO_STYLE__', css], ['__OPERATOR_DEMO_SCRIPT__', "(() => {\n'use strict';\n" + scripts + '\n})();\n']]) {
     need(html.split(marker).length === 2, 'renderer_marker'); html = html.replace(marker, () => value);
@@ -144,6 +143,26 @@ async function capture(page, selector, name) {
   await page.locator(selector).screenshot({path: join(output, name), animations: 'disabled', timeout: 10000});
   receipt.screenshots.push({file: name, sha256: sha(readFileSync(join(output, name)))});
 }
+async function navigateSection(page, name) {
+  need(['proxy', 'applications', 'notifications'].includes(name), 'navigation_section_refused');
+  const link = page.locator('nav a[href="#' + name + '"]');
+  await link.click();
+  await page.locator('section.page#' + name).waitFor({state: 'visible'});
+  need(await link.getAttribute('aria-current') === 'page' && await page.locator('section.page:visible').count() === 1,
+    'navigation_state_mismatch');
+}
+async function verifyProxyDefault(page) {
+  const checks = {
+    panel_visible: await page.locator('#proxy-upstreams').isVisible(),
+    effective_fixture: await page.locator('#upstreams-effective').innerText() === FIXTURE,
+    form_hidden: await page.locator('#upstreams-form').isHidden(),
+    no_review_get: !seen[UPSTREAMS],
+    restart_notice_present: (await page.locator('#proxy-upstreams').innerText()).includes('Apps still need permission. Changes require a controlled restart.'),
+  };
+  const valid = Object.values(checks).every(value => value === true);
+  if (!valid) receipt.proxy_default_checks = checks; // Fixed booleans only, never DOM text.
+  need(valid, 'proxy_default_mismatch');
+}
 async function run() {
   const args = process.argv.slice(2);
   need(args.length === 3 || args.length === 4 && args[3] === '--managed-google-unconfigured', 'usage_full_app_id_commit_fresh_output');
@@ -196,10 +215,8 @@ async function run() {
   await page.goto(PUBLIC + '/', {waitUntil: 'networkidle'});
   await page.waitForFunction(() => !document.getElementById('credential-fields').disabled && document.getElementById('load-error').hidden);
   need(await page.title() === 'Overview - Serverware operator workspace' && seen[CATALOG] === 1, 'landing_failed');
-  phase = 'proxy'; await page.locator('nav a[href="#proxy"]').click();
-  need(await page.locator('#proxy-upstreams').isVisible() && await page.locator('#upstreams-effective').innerText() === FIXTURE &&
-    await page.locator('#upstreams-form').isHidden() && !seen[UPSTREAMS] &&
-    (await page.locator('#proxy-upstreams').innerText()).includes('Apps still need permission. Changes require a controlled restart.'), 'proxy_default_mismatch');
+  phase = 'proxy'; await navigateSection(page, 'proxy');
+  await verifyProxyDefault(page);
   phase = 'review'; await page.locator('#upstreams-review').click();
   await page.waitForFunction(() => !document.getElementById('upstreams-review').disabled && !document.getElementById('upstreams-form').hidden);
   await page.waitForLoadState('networkidle');
@@ -234,11 +251,11 @@ async function run() {
       await capture(page, '#google-configuration-panel', 'google-configuration-unconfigured-' + width + '.png'); }
     receipt.managed_google = {state: 'unconfigured', revision: 13, pair_ready: true, consent_ready: false, operation: null, prepare_sent: false};
   }
-  phase = 'applications'; await page.setViewportSize({width: 1280, height: 960}); await page.locator('nav a[href="#applications"]').click();
+  phase = 'applications'; await page.setViewportSize({width: 1280, height: 960}); await navigateSection(page, 'applications');
   need(await page.locator('#applications-list [data-resource-id]').count() === before[CATALOG].applications.length, 'retained_application_rows_changed');
   for (const app of before[CATALOG].applications) need(await page.locator('#applications-list [data-resource-id="' + app.id + '"] .badge').innerText() === 'Token expired', 'expired_badge_missing');
   await capture(page, '#applications-list', 'expired-applications.png');
-  phase = 'notifications'; await page.locator('nav a[href="#notifications"]').click();
+  phase = 'notifications'; await navigateSection(page, 'notifications');
   await page.waitForFunction(() => !document.getElementById('notifications-refresh').disabled && document.querySelectorAll('form[data-notification-slot]').length === 4);
   need(seen[NOTIFICATIONS] === 1 && await page.locator('[data-notification-channel="action_required"]').count() === 1 &&
     await page.locator('[data-notification-channel="audit_log"]').count() === 1 &&

@@ -1,6 +1,6 @@
-# Accepted managed-capable, Google-unconfigured deployment as of 2026-10-10.
+# Accepted npm-capable, Google-unconfigured demo after the 2026-10-10 rollout.
 # Required order: base + this SINGLE source layer + curated-gate + notifications.
-# Equivalent to managed-google-candidate with its reviewed source fixed below.
+# Equivalent to npm-publish-candidate with its reviewed source fixed below.
 # Never combine source overrides or add the legacy google layer. Preserve the
 # original private environment and explicit notification interpolation settings.
 # Provider custody must already exist, app-owned 0700 and distinct from other
@@ -10,7 +10,7 @@
 services:
   serverware:
     environment:
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
       SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR: /provider-custody
       SERVERWARE_PROCESS_MODE: serverware-control-plane
@@ -24,7 +24,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-9222b4c090d77aa983d3c01be34e0a2ba79f8e6c
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-3724110941888e753bc194459e14170bc2a28916
         target: /app
         read_only: true
         bind: {create_host_path: false}
@@ -39,7 +39,7 @@ services:
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0/serverware-decision-gate
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85/serverware-decision-gate
         target: /usr/local/bin/serverware-decision-gate
         read_only: true
         bind: {create_host_path: false}

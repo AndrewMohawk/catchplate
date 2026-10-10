@@ -7,8 +7,9 @@ from the metadata-only preset and the legacy `npm.registry` approval workflow;
 neither existing permission is automatically upgraded.
 
 **Verification status: the complete isolated stock-client flow and two retained
-cold starts passed for app `37241109` and gate `82a99cf0`. No live rollout or
-public npm registry acceptance is claimed.** See [run twenty](#run-twenty-complete-isolated-stock-client-flow-passed)
+cold starts passed for app `37241109` and gate `82a99cf0`; the paired live demo
+upgrade and read-only browser checks also passed. Public npm registry acceptance
+is not claimed.** See [run twenty](#run-twenty-complete-isolated-stock-client-flow-passed)
 and the [retained-state rehearsal](operator-managed-retained-verification.md#npm-candidate-two-retained-cold-starts-passed).
 Earlier failed runs and their original evidence boundaries remain documented below.
 
@@ -1145,7 +1146,7 @@ fairness work is optional hardening; the passing stock-client snapshot may
 proceed through the existing retained-state, paired-deployment and runtime
 verification gates without a speculative lock rewrite.
 
-### Deployment preparation, not live rollout
+### Historical deployment preparation
 
 The app `37241109` and gate `82a99cf0` were promoted to immutable artifact storage
 after checking all 4,952 source Git blobs and modes and the original rich equality
@@ -1157,5 +1158,17 @@ also passed, admitting only three proposed changes: app source, gate executable
 and the app's expected gate digest. This configuration review follows the
 [two isolated retained cold starts](operator-managed-retained-verification.md#npm-candidate-two-retained-cold-starts-passed);
 it is not a live rollout. A fresh stopped-consistent backup and the normal paired
-runtime/browser verification gates remain required. This candidate has not been
-rolled out live.
+runtime/browser verification gates were still required at that checkpoint.
+
+### Live demo upgrade
+
+The paired upgrade completed on October 10 at **20:07:25 UTC**, preserving the
+retained state at the stopped first-start comparison and verifying the actual
+app/gate pair before reopening the same edge. The separate internal-app browser
+check passed at **20:13:27 UTC** after correcting the checker's asset list and
+adding explicit navigation waits; both earlier checker receipts remain intact.
+The accepted-source alias matches the actual candidate configuration exactly.
+See the [current deployment checkpoint](../docker/serverware-operator-demo/README.md#current-npm-capable-managed-deployment)
+for the precise preservation, browser and monitoring evidence. This update did
+not renew expired app tokens, approve a real registry destination, contact npm,
+configure notification receivers or perform a native/hardware action.

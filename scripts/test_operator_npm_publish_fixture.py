@@ -870,6 +870,199 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertIn(b"93.184.216.34 registry.npmjs.org\n", network.HOSTS)
         self.assertEqual(network.RESOLV, b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n")
 
+    def failure_observation(self, healths, events=(), *, deadline=10.0, alarm=10.0, read_cost=0.0):
+        """Only the observer's external reads/clocks are synthetic here."""
+        now, calls = [0.0], {"health": 0, "audit": 0, "sleeps": []}
+        def health():
+            index = calls["health"]
+            calls["health"] += 1
+            now[0] += read_cost
+            value = healths[index]
+            if isinstance(value, Exception):
+                raise value
+            return deepcopy(value)
+        def audit():
+            calls["audit"] += 1
+            if isinstance(events, Exception):
+                raise events
+            return deepcopy(list(events))
+        def sleep(seconds):
+            self.assertGreater(seconds, 0)
+            self.assertLessEqual(seconds, 0.1)
+            self.assertLessEqual(seconds, min(deadline, alarm) - now[0])
+            calls["sleeps"].append(seconds)
+            now[0] += seconds
+        def timer(which):
+            self.assertEqual(which, check.signal.ITIMER_REAL)
+            return max(0, alarm - now[0]), 0
+        instance = SimpleNamespace(deadline=deadline, health=health, audit=audit)
+        with patch.object(check.time, "monotonic", lambda: now[0]), \
+                patch.object(check.time, "sleep", sleep), \
+                patch.object(check.signal, "getitimer", timer), \
+                patch.object(check.signal, "alarm", side_effect=AssertionError("observer rearmed alarm")), \
+                patch.object(check.signal, "setitimer", side_effect=AssertionError("observer rearmed timer")):
+            value = check.failure_audit_observation(instance)
+        self.assertEqual(instance.deadline, deadline)
+        self.assertEqual(set(value), {"schema", "healthReads", "queueState", "counters", "auditRead", "durableEventCount"})
+        self.assertEqual(value["schema"], "serverware.privateNpmPublishFailureAudit/v1")
+        self.assertIs(type(value["healthReads"]), int)
+        self.assertTrue(0 <= value["healthReads"] <= 4)
+        self.assertEqual(value["healthReads"], calls["health"])
+        self.assertIn(value["queueState"], {"not_observed", "drained", "pending", "unavailable", "deadline"})
+        self.assertIn(value["auditRead"], {"not_attempted", "observed", "unavailable", "deadline"})
+        self.assertLessEqual(calls["audit"], 1)
+        for canary in (registry.TOKEN, registry.PLACEHOLDER, "private-observer-canary", "authorization", "private.invalid"):
+            self.assertNotIn(canary, json.dumps(value))
+        return value, calls
+
+    @staticmethod
+    def audit_counters(**changes):
+        return {**dict.fromkeys(("dropped", "required_failed", "send_failed", "queue_depth", "reserved",
+            "in_flight_optional", "pending_retry_batches", "pending_retry_events"), 0), **changes}
+
+    def test_failure_observer_reports_bounded_pending_drained_and_delivery_failure_separately(self):
+        rows = [{"id": "synthetic-row", "event_hash": digest(b"row"),
+                 "event": {"private-observer-canary": "https://private.invalid/token"}}]
+        pending = {"audit": self.audit_counters(queue_depth=1, pending_retry_events=2)}
+        empty = {"audit": self.audit_counters()}
+        result, calls = self.failure_observation([pending] * 4, rows)
+        self.assertEqual((result["queueState"], result["auditRead"], result["durableEventCount"]), ("pending", "observed", 1))
+        self.assertEqual(calls, {"health": 4, "audit": 1, "sleeps": [0.1] * 3})
+        result, calls = self.failure_observation([pending, empty], rows)
+        self.assertEqual((result["queueState"], calls), ("drained", {"health": 2, "audit": 1, "sleeps": [0.1]}))
+        failed_delivery = self.audit_counters(dropped=1, required_failed=2, send_failed=3)
+        result, calls = self.failure_observation([{"audit": failed_delivery, "raw": registry.TOKEN}], rows)
+        self.assertEqual(result["queueState"], "drained")
+        self.assertEqual(result["counters"], failed_delivery)
+        self.assertEqual(set(result["counters"]), set(self.audit_counters()))
+        self.assertEqual(calls, {"health": 1, "audit": 1, "sleeps": []})
+        # Queue drain is not successful delivery or an accepted publication.
+        for forbidden in ("ok", "accepted", "productionReady", "auditChainVerified"):
+            self.assertNotIn(forbidden, result)
+
+    def test_failure_observer_refuses_malformed_counters_and_saturated_audit_without_raw_output(self):
+        invalid = [{}, None, {"audit": []}, OSError("private-observer-canary")]
+        for bad in (True, 1.0, -1, 1 << 64, "private-observer-canary"):
+            invalid.append({"audit": self.audit_counters(queue_depth=bad)})
+        for health in invalid:
+            with self.subTest(health_type=type(health).__name__):
+                result, calls = self.failure_observation([health])
+                self.assertEqual((result["queueState"], result["counters"], result["auditRead"]),
+                                 ("unavailable", None, "observed"))
+                self.assertEqual(calls["health"], 1)
+        rows = [{"id": "synthetic-" + str(index), "event_hash": digest(str(index).encode())} for index in range(500)]
+        result, _ = self.failure_observation([{"audit": self.audit_counters()}], rows[:499])
+        self.assertEqual((result["auditRead"], result["durableEventCount"]), ("observed", 499))
+        for events in (rows, rows[:1] * 2, [{"id": "x", "event_hash": "private-observer-canary"}],
+                       OSError("private-observer-canary")):
+            result, calls = self.failure_observation([{"audit": self.audit_counters()}], events)
+            self.assertEqual((result["auditRead"], result["durableEventCount"]), ("unavailable", None))
+            self.assertEqual(calls["audit"], 1)
+
+    def test_failure_observer_never_extends_either_original_deadline_or_rearms_alarm(self):
+        pending = {"audit": self.audit_counters(queue_depth=1)}
+        for deadline, alarm in ((0, 10), (10, 0), (-1, 10)):
+            result, calls = self.failure_observation([], deadline=deadline, alarm=alarm)
+            self.assertEqual((result["queueState"], result["auditRead"]), ("deadline", "deadline"))
+            self.assertEqual(calls, {"health": 0, "audit": 0, "sleeps": []})
+        for deadline, alarm in ((0.05, 10), (10, 0.05)):
+            result, calls = self.failure_observation([pending], deadline=deadline, alarm=alarm)
+            self.assertEqual((result["queueState"], result["auditRead"]), ("deadline", "deadline"))
+            self.assertEqual(calls, {"health": 1, "audit": 0, "sleeps": [0.05]})
+        result, calls = self.failure_observation([pending], alarm=0.05, read_cost=0.05)
+        self.assertEqual((result["queueState"], result["auditRead"]), ("deadline", "deadline"))
+        self.assertEqual(calls, {"health": 1, "audit": 0, "sleeps": []})
+
+    def failing_run(self, failure):
+        """Real run sequencing, synthetic setup APIs/client; no acceptance claim."""
+        instance = object.__new__(check.NpmPublishCheck)
+        instance.args = SimpleNamespace(admin_token_file=Path("/synthetic/admin"))
+        instance.run_id, instance.credential = "synthetic-run", registry.TOKEN
+        instance.deadline, instance.failure_audit = 10.0, None
+        instance.clients, instance.completed, instance.expected_denial_rows, instance.phase_scopes = [], [], [], []
+        instance.mutations = []
+        calls = []
+        instance.health = lambda: {"audit": self.audit_counters()}
+        instance.catalog = lambda: {"revision": 1, **dict.fromkeys(check.COLLECTIONS, []),
+            "limits": {key: {"retained": 0} for key in check.COLLECTIONS},
+            "policy": {"policy_hash": "sha256:" + SHA}, "capabilities": {"npm_publish": {
+                "schema": "serverware.operatorNpmPublish/v1", "destination_allowed": True,
+                "read_metadata_included": True, "operation_bundles": ["npm_publish_v1"], "registry_origin": registry.ORIGIN}}}
+        instance.observe = lambda: {"total": 0}
+        def mutate(path, payload, **kwargs):
+            calls.append(("mutation", path))
+            if path == "/credentials/npm-token":
+                return {"id": "synthetic-credential", "credential_generation": 1}, None, None
+            if path == "/applications":
+                return {"id": payload["name"], "principal_id": "principal-" + payload["name"]}, "synthetic-app-token", None
+            return {"id": payload["name"], "route_id": "route-" + payload["name"]}, None, None
+        instance.mutate = mutate
+        instance.wait_catalog_loaded = lambda *args: None
+        instance.warm_cas_snapshot = lambda: {"credentials": [{}], "applications": [{}] * 4, "access_rules": [{}] * 4}
+        instance.audit_drained = lambda: True
+        instance.audit = lambda: []
+        instance.unchanged = lambda *args: None
+        instance.checkpoint = lambda: {}
+        def client(spec, app, token):
+            calls.append(("client", spec["case"]))
+            if spec["case"] == "unscoped":
+                raise failure
+            self.assertEqual(spec["case"], "prerequisite")
+            instance.clients.append({"phase": spec["case"]})
+        instance.client = client
+        return instance, calls
+
+    def test_failed_client_observation_preserves_exception_identity_and_never_replays_phase(self):
+        for broken_observer in (False, True):
+            with self.subTest(broken_observer=broken_observer):
+                failure = check.ClientFailure("unscoped", None)
+                instance, calls = self.failing_run(failure)
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(check, "token_file", return_value="synthetic-admin"))
+                    stack.enter_context(patch.object(check.time, "monotonic", return_value=0))
+                    stack.enter_context(patch.object(check.signal, "getitimer", return_value=(10, 0)))
+                    stack.enter_context(patch.object(check.signal, "alarm", side_effect=AssertionError("rearmed alarm")))
+                    stack.enter_context(patch.object(check.signal, "setitimer", side_effect=AssertionError("rearmed timer")))
+                    if broken_observer:
+                        stack.enter_context(patch.object(check, "failure_audit_observation", side_effect=OSError("private-observer-canary")))
+                    with self.assertRaises(check.ClientFailure) as caught:
+                        instance.run()
+                self.assertIs(caught.exception, failure)
+                self.assertEqual([row for row in calls if row[0] == "client"], [("client", "prerequisite"), ("client", "unscoped")])
+                self.assertEqual(instance.completed, ["prerequisite"])
+                self.assertEqual(instance.clients, [{"phase": "prerequisite"}])
+                self.assertEqual(len([row for row in calls if row[0] == "mutation"]), 9)
+                self.assertEqual(instance.deadline, 10.0)
+                self.assertEqual(instance.failure_audit["queueState"], "unavailable" if broken_observer else "drained")
+                self.assertNotIn("private-observer-canary", json.dumps(instance.failure_audit))
+                self.assertEqual(str(failure), "stock npm publish failed in unscoped; raw output suppressed")
+
+    def test_failure_main_keeps_original_failure_and_closed_observation_receipt(self):
+        failure = check.ClientFailure("unscoped", None)
+        instance, _ = self.failing_run(failure)
+        args = SimpleNamespace(timeout_seconds=180, expected_binary_sha256="sha256:" + SHA,
+                               fixture_marker_file=Path("/synthetic/marker"), run_claim_file=Path("/synthetic/claim"))
+        output = io.StringIO()
+        with patch.object(check.argparse.ArgumentParser, "parse_args", return_value=args), \
+                patch.object(check, "NpmPublishCheck", return_value=instance), \
+                patch.object(check, "claim_fixture") as claim, \
+                patch.object(check, "token_file", return_value="synthetic-admin"), \
+                patch.object(check.time, "monotonic", return_value=0), \
+                patch.object(check.signal, "getitimer", return_value=(10, 0)), \
+                patch.object(check.signal, "signal"), patch.object(check.signal, "alarm") as alarm, \
+                patch.object(check.signal, "setitimer", side_effect=AssertionError("rearmed timer")), \
+                patch("sys.stdout", output):
+            self.assertEqual(check.main(), 1)
+        self.assertEqual([row.args for row in alarm.call_args_list], [(180,), (0,)])
+        claim.assert_called_once_with(args.fixture_marker_file, args.run_claim_file)
+        value = json.loads(output.getvalue())
+        self.assertEqual(set(value), {"ok", "syntheticOnly", "productionReady", "error", "completedClientPhases", "failureAuditObservation"})
+        self.assertIs(value["ok"], False)
+        self.assertEqual(value["error"], str(failure))
+        self.assertEqual(value["completedClientPhases"], ["prerequisite"])
+        self.assertEqual(value["failureAuditObservation"], instance.failure_audit)
+        self.assertEqual(instance.completed, ["prerequisite"])
+
 
 _NODE_DIAGNOSTIC_VM = r"""
 'use strict';

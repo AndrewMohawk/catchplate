@@ -27,7 +27,7 @@ from scripts import check_operator_npm_metadata as metadata
 from scripts import operator_npm_publish_fixture as fixture
 from scripts.check_operator_catalog import COLLECTIONS, PREFIX, claim_fixture, features
 from scripts.check_operator_demo import SHA256, CheckFailure, require, token_file
-from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, LEASE, RELEASE, RELOAD, START, digest
+from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, DRAIN_COUNTERS, LEASE, RELEASE, RELOAD, START, ZERO_COUNTERS, digest
 
 CONNECT_DENIED = metadata.CONNECT_DENIED
 KEEP_ALIVE = "data_plane.connect.keep_alive"
@@ -80,6 +80,59 @@ class ClientFailure(CheckFailure):
     def __init__(self, phase, value):
         self.observation = client_failure_observation(value, phase)
         super().__init__("stock npm publish failed in " + phase + "; raw output suppressed")
+
+
+def failure_audit_observation(check):
+    """Read-only best effort after a failed child; never acceptance or a replay.
+
+    The already-armed process alarm remains authoritative: the checker object's
+    deadline starts slightly later and must not extend it. A drained sample is
+    only a queue observation, not proof that timed-out requests have finished.
+    """
+    result = {"schema": "serverware.privateNpmPublishFailureAudit/v1", "healthReads": 0,
+        "queueState": "not_observed", "counters": None, "auditRead": "not_attempted",
+        "durableEventCount": None}
+
+    def remaining():
+        return min(check.deadline - time.monotonic(), signal.getitimer(signal.ITIMER_REAL)[0])
+
+    for index in range(4):
+        try:
+            if remaining() <= 0:
+                result["queueState"] = "deadline"
+                break
+            result["healthReads"] += 1
+            audit = check.health().get("audit", {})
+            names = ZERO_COUNTERS + DRAIN_COUNTERS
+            require(isinstance(audit, dict) and all(type(audit.get(name)) is int
+                and 0 <= audit[name] <= (1 << 64) - 1 for name in names),
+                "failure audit counters unavailable")
+            result["counters"] = {name: audit[name] for name in names}
+            drained = all(audit[name] == 0 for name in DRAIN_COUNTERS)
+            result["queueState"] = "drained" if drained else "pending"
+            if drained:
+                break
+            if index < 3:
+                budget = remaining()
+                if budget <= 0:
+                    result["queueState"] = "deadline"
+                    break
+                time.sleep(min(0.1, budget))
+        except Exception:
+            result["queueState"] = "deadline" if remaining() <= 0 else "unavailable"
+            break
+    try:
+        if remaining() <= 0:
+            result["auditRead"] = "deadline"
+        else:
+            # Existing bounded API reader also scans for the fixture credential
+            # and issued app tokens. Never export arbitrary retained event data.
+            events = check.audit()
+            result["durableEventCount"] = len(features.audit_cutoff(events))
+            result["auditRead"] = "observed"
+    except Exception:
+        result["auditRead"] = "deadline" if remaining() <= 0 else "unavailable"
+    return result
 
 
 def run_client(spec, application, token, run_id, seconds):
@@ -230,6 +283,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
         super().__init__(args)
         self.completed, self.expected_denial_rows, self.phase_scopes = [], [], []
         self.cutoff, self.baseline, self.revocation = {}, {}, None
+        self.failure_audit = None
 
     def observe(self):
         status, value = self.json_request(self.registry, "/_fixture/observations", context=self.upstream_ca)
@@ -458,7 +512,18 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
                 route_scopes["PUT"] = (app["principal_id"], rule["route_id"], self.policy_hash)
             self.phase_scopes.append({"phase": phase, "principal": app["principal_id"], "policy": self.policy_hash, "routes": route_scopes})
             self.expected_denial_rows += expected_denials(phase, app, rule)
-            self.client(spec, app, token); self.completed.append(phase)
+            try:
+                self.client(spec, app, token)
+            except ClientFailure:
+                try:
+                    self.failure_audit = failure_audit_observation(self)
+                except Exception:
+                    # Observation must never replace the original child failure.
+                    self.failure_audit = {"schema": "serverware.privateNpmPublishFailureAudit/v1",
+                        "healthReads": 0, "queueState": "unavailable", "counters": None,
+                        "auditRead": "not_attempted", "durableEventCount": None}
+                raise
+            self.completed.append(phase)
             evidence = self.checkpoint(); self.unchanged(pins)
         stored = self.accept_observation(self.observe())
         require(len(stored) == 2 and len(self.wire) == 6, "final publication inventory differs")
@@ -499,6 +564,8 @@ def main():
             "completedClientPhases": [] if check is None else [row["phase"] for row in check.clients]}
         if isinstance(error, ClientFailure) and error.observation is not None:
             result["failedClient"] = error.observation
+        if isinstance(error, ClientFailure) and check is not None and check.failure_audit is not None:
+            result["failureAuditObservation"] = check.failure_audit
     finally:
         signal.alarm(0)
     print(json.dumps(result, sort_keys=True)); return 0 if result["ok"] else 1

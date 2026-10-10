@@ -341,6 +341,19 @@ stored. As above, immediate failure teardown can precede optional audit
 delivery; these absent rows do not identify the terminal 503 cause. Cleanup
 completed and all 4,936 source and 1,782 npm files remained unchanged.
 
+The follow-up failure-only observer performs at most four existing health GETs
+and one bounded durable audit GET after a terminated npm child fails. It keeps
+both original deadlines, never retries the command, and re-raises the original
+failure. Only fixed statuses, validated queue/failure counters and a durable
+event count enter the failure receipt. A sampled empty queue is not successful
+delivery or proof that an earlier timed-out operation has finished. The success
+path and acceptance predicate are unchanged. All 32 fixture controls passed in
+0.798 seconds in the isolated retained client image, including five new observer
+groups and four existing Node-VM groups. An initial app-image attempt stopped
+at the first Node launch because that image lacks `libatomic.so.1`; the corrected
+run used the same client image and Node binary as the stock fixture. These are
+synthetic fixture controls, not another end-to-end publication run.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

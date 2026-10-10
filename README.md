@@ -75,8 +75,9 @@ a YubiKey); audit alerts record what happened. Each has its own Slack and HTTPS
 webhook settings, encrypted URL and explicit synthetic test. The optional,
 default-off operator-development source now includes a read-only native phase
 bridge with exact owner/source and original-expiry checks; legacy approval/JIT
-alerts remain suppressed. Isolated API-to-TLS checks and separate browser fixtures
-are not deployment proof: the relay is not running and this feature is not
+alerts remain suppressed. The isolated browser-to-application-to-TLS workflow
+passes, including independent saves, explicit tests and selected audit delivery.
+This is not deployment proof: the relay is not running and the feature is not
 deployed. It neither grants proxied webhook permissions nor establishes native
 pilot or physical-key acceptance.
 

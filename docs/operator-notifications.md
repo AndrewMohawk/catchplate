@@ -257,7 +257,7 @@ history or implicit loss of uncertain receipts.
 | `operator_notification_custody` / `operator_notification_store` | Independent encrypted settings, explicit initialization, durable operations/cursor/outbox and fixed public status | Deployed custody-mount isolation and operational retention path |
 | `operator_notification_events` | Committed operator-SQLite reader, bounded safe projections, native observation event/filter mapping and exact source comparisons | PostgreSQL/measured source owners and legacy action producers |
 | `operator_notification_transport` | Slack/generic acknowledgement, pinned egress, TLS/deadlines, final pre-dispatch check | Real receiver acceptance after explicit authorized rollout |
-| `operator_notifications` / `operator_notification_api` / Notifications UI | Optional worker, administrator settings/test/receipt routes and separate channel panels; isolated API-to-TLS and separate intercepted-browser acceptance | Running-console-to-API-to-receiver proof after reviewed rollout |
+| `operator_notifications` / `operator_notification_api` / Notifications UI | Optional worker, administrator settings/test/receipt routes and separate channel panels; connected browser-to-full-application-to-local-TLS acceptance | Running-console-to-API-to-receiver proof after reviewed rollout |
 | Native pilot browser owner / COMMON relay / `operator_notification_pilot_source` | Guarded phase observer, separately selected GET-only Unix relay and strict client; immutable source identity, original expiry and final current-source recheck | Reviewed relay/mount provisioning, actual guarded-owner timing and end-to-end delivery/review during a separately authorized native attempt |
 | Existing audit-anchor worker | Remains separate and unchanged | Do not substitute head/count exports for notification event delivery |
 
@@ -271,7 +271,7 @@ history or implicit loss of uncertain receipts.
 | Integrated audit delivery | Current **21/21** source-event checks pass. The earlier API/TLS checkpoint sends four explicit synthetic slot tests plus two adapter copies of one committed fixture application audit event through actual handlers/store/worker | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
 | Failure and backpressure | Connected fixtures pass default-off, worker lifecycle, unknown-outcome no-replay and final pre-dispatch-disable checks. Simulated ingestion-capacity failure still drains a real retained queue. Store fixtures cover bounded retries and 60-second uncertainty recovery | Real crash/restart, lost acknowledgement, saturation and operational retention in the deployed profile |
 | Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
-| Connected browser workflow | Current **15/15** intercepted Notifications browser groups, **11/11** native UI checks and **10/10** asset checks pass. Full browser-to-API-to-worker-to-local-TLS acceptance remains pending; earlier connected harness runs failed before completing the story | Running deployed console, actual receiver and operator workflow |
+| Connected browser workflow | Full browser-to-API-to-worker-to-local-TLS story passes: four independent saves, reload/recovery, explicit saved-revision test and independently selected audit delivery. Current **15/15** intercepted Notifications groups, **11/11** native UI checks and **10/10** asset checks also pass | Running deployed console, actual receiver and operator workflow |
 
 ### Retained isolated verification checkpoints
 
@@ -289,14 +289,39 @@ Current native evidence is retained under
   delivery and post-TLS phase-change suppression are checked independently.
 - `rendered-notifications.log`: **15/15** intercepted browser groups against
   the current UI; screenshots are in
-  `serverware-operator-artifacts/notification-native-source.cPoOMwnX/`.
+  `serverware-operator-artifacts/notifications-browser-synthetic-wDkWee/`.
 - `assets-tests.log`: **10/10** in **0.080 seconds**. The separate native UI
   checks also pass **11/11**.
 
 The cross-UID fixture uses a synthetic relay, not the actual COMMON relay or a
-guarded hardware owner. Full connected-browser acceptance is still pending;
-retained incomplete harness runs are not passing evidence. The earlier results
-below remain distinct historical checkpoints.
+guarded hardware owner. The connected-browser story now passes; its receipt is
+`notification-native.vDixx1QB/notifications-connected-pxUV1n/acceptance.json`.
+It covers 32 actual application requests and six explicit browser mutations:
+four independent destination saves, one labelled Slack-adapter test and one
+application creation that produces the selected webhook audit event. Saving
+alone makes zero outbound connections. Exactly two verified synthetic TLS
+deliveries are acknowledged; the other two destinations receive nothing.
+The worker starts and stops through the full application's actual lifespan,
+the audit chain verifies, and the browser has no console, route or page errors.
+Desktop/mobile screenshots and secret-free reload checks are retained beside
+the receipt. Both browser and backend finish successfully; temporary containers
+are removed after retaining their actual isolation inspections.
+
+The frozen full-source digest for this connected run is
+`443cfea9515efb735b88bd666808eb4220e27e1532c5c51e724e28ae2dfb375b`.
+Chromium forwards exact HTTP bytes through a bounded stdin ASGI adapter into
+the real application in a network-none container. Only synthetic notification
+DNS/address/dial/trust-root seams are substituted. This proves the integrated
+application workflow, not browser TCP ingress, reverse-proxy/SSO behavior, a
+real Slack post, deployment or native hardware. Native observation is unset in
+this story and is exercised separately by the cross-UID fixture.
+
+Earlier harness failures remain retained, not rewritten as passes: private-file
+creation needed the fixture's 0077 umask, the sanitizer needed bytearray support,
+and HTTP header lookup needed case-insensitive semantics. These corrections do
+not change production behavior or returned HTTP bodies/headers. The cross-UID
+fixture also needed container-only KILL capability to reap its child relay.
+The earlier results below remain distinct historical checkpoints.
 
 The earlier connected store suite completed **10/10** checks in **71.273 seconds**:
 `serverware-operator-workspace-evidence/notification-store.TJK3m8ly/final-tests.log`.

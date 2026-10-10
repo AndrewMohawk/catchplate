@@ -807,6 +807,44 @@ Runtime files and originals are retained in
 The failed fixture was not restarted, and the live demo/native pilot was not
 changed.
 
+### Background renewal repair candidate
+
+Activity marking now holds the admitting snapshot's read guard; reload clears
+that activity under its write guard. A surviving route tuple therefore cannot
+inherit activity from the previous policy, and an old request cannot reinsert
+it after publication. Coordinator pruning also retains the active snapshot's
+read guard so an obsolete scan cannot delete newly published cache entries.
+Queued work rechecks its exact scope, purpose, hotness and material freshness
+without pruning caches or switching a secret task into a metadata task.
+
+Admitted operator-static background acquisitions now coordinate with the same
+pinned publication inode used by Python's exclusive publisher. Only the elected
+singleflight leader acquires a separate credential lane and shared publication
+ownership. It synchronizes the policy, rechecks the original task, and retains
+ownership through the single signed lease response and exact cache insertion.
+A changed snapshot is a refusal, never a retargeted or repeated request. A
+follower holds no publication ownership while waiting for its leader.
+
+Renewal tasks now capture a deadline at enqueue using the existing 15-second
+singleflight bound, then cap it by application expiry. Publication acquisition consumes at most
+five seconds of that original budget; it does not replace the operation deadline
+or shorten returned material to the acquisition-only cutoff. The existing
+three-second HTTP cap, five-second requested lease TTL, cache/version checks,
+broker rejection auditing and final-send guards remain. Native and OAuth
+acquisitions do not enter this operator-static publication lane.
+
+The frozen regression roster retains the prior 74 tests, adds six existing
+renewal/reload/singleflight controls, six new finite-executor groups, all 27
+publication-owner tests and three signed publication/ACK integration tests:
+116 tests across 26 phases. The new fixtures cover stale/cold/fresh queued work,
+finite application expiry, exact leader/follower results, signed static lease
+acquisition, publication-first reload without retargeting, deadline exhaustion,
+shared-inode lane exclusion and lock substitution.
+
+This is an independently source-reviewed candidate, not a compiled, tested or
+deployed result. Regression execution and a fresh complete stock-client run are
+still required. No acceptance predicate or retained fixture was changed.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

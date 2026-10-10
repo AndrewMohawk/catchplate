@@ -1,8 +1,9 @@
 //! Operator-only publication coordination. This grants no native authority.
 //!
 //! Python holds EX before its SQLite transaction through durable materialization.
-//! Rust holds local serialization, then SH, through synchronization and the full
-//! audit ACK verification. No caller may enter while holding a dispatch permit.
+//! Rust holds its operation's local lane, then SH, through synchronization and
+//! the full audit ACK or credential response verification. No caller may enter
+//! while holding a dispatch permit. Both lanes share this one pinned lock inode.
 use super::{GateState, PolicyTrustRootSource};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -76,6 +77,10 @@ pub(super) struct Owner {
     // owns an independently opened description, so dropping one cannot unlock another.
     pin: File,
     serial: Mutex<()>,
+    // Credential leaders use a separate bounded lane from audit delivery. Both
+    // lanes hold the same publication SH lock; policy/cache mutations keep
+    // their existing dispatch-authority serialization.
+    credential_serial: Mutex<()>,
     #[cfg(test)]
     test_hook: Option<std::sync::Arc<dyn Fn(TestPhase) + Send + Sync>>,
 }
@@ -115,6 +120,7 @@ impl Owner {
             identity,
             pin,
             serial: Mutex::new(()),
+            credential_serial: Mutex::new(()),
             #[cfg(test)]
             test_hook: None,
         };
@@ -153,11 +159,29 @@ impl Owner {
     }
 
     pub(super) fn acquire(&self, deadline: Instant) -> Result<Permit<'_>, String> {
+        self.acquire_in_lane(&self.serial, deadline, deadline)
+    }
+
+    fn acquire_credential(&self, operation_deadline: Instant) -> Result<Permit<'_>, String> {
+        let acquisition_deadline = deadline().min(operation_deadline);
+        self.acquire_in_lane(
+            &self.credential_serial,
+            acquisition_deadline,
+            operation_deadline,
+        )
+    }
+
+    fn acquire_in_lane<'a>(
+        &'a self,
+        lane: &'a Mutex<()>,
+        acquisition_deadline: Instant,
+        operation_deadline: Instant,
+    ) -> Result<Permit<'a>, String> {
         let serial = loop {
-            remaining(deadline)?;
-            match self.serial.try_lock() {
+            remaining(acquisition_deadline)?;
+            match lane.try_lock() {
                 Ok(guard) => break guard,
-                Err(TryLockError::WouldBlock) => pause(deadline)?,
+                Err(TryLockError::WouldBlock) => pause(acquisition_deadline)?,
                 Err(TryLockError::Poisoned(_)) => return Err(refused()),
             }
         };
@@ -166,7 +190,7 @@ impl Owner {
         #[cfg(test)]
         self.test_checkpoint(TestPhase::BeforeSharedLock);
         loop {
-            remaining(deadline)?;
+            remaining(acquisition_deadline)?;
             if unsafe { libc::flock(descriptor.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
                 break;
             }
@@ -177,13 +201,14 @@ impl Owner {
             {
                 return Err(refused());
             }
-            pause(deadline)?;
+            pause(acquisition_deadline)?;
         }
+        remaining(acquisition_deadline)?;
         let permit = Permit {
             owner: self,
             descriptor,
             _serial: serial,
-            deadline,
+            deadline: operation_deadline,
         };
         permit.check()?;
         Ok(permit)
@@ -295,6 +320,27 @@ pub(super) fn acquire(state: &GateState) -> Result<Option<Permit<'_>>, String> {
         return Err(refused());
     }
     owner.acquire(deadline()).map(Some)
+}
+
+/// Only an elected background credential leader may use this lane. Waiting for
+/// its lane or the shared publication lock spends at most five seconds of the
+/// original task budget. The permit retains that original operation deadline,
+/// rather than shortening subsequently verified material to the lock budget.
+pub(super) fn acquire_credential_on_deadline(
+    state: &GateState,
+    original_deadline: Instant,
+) -> Result<Option<Permit<'_>>, String> {
+    if !selected(state)? {
+        return Ok(None);
+    }
+    let owner = state
+        .operator_audit_publication
+        .as_ref()
+        .ok_or_else(refused)?;
+    if owner.policy_path != Path::new(&state.policy_path) {
+        return Err(refused());
+    }
+    owner.acquire_credential(original_deadline).map(Some)
 }
 
 pub(super) fn require_permit(

@@ -10,6 +10,8 @@ use crate::*;
 
 #[path = "operator_static_preparation_diagnostics_tests.rs"]
 mod diagnostics_tests;
+#[path = "background_renewal_tests.rs"]
+mod background_renewal_tests;
 
 const SUBJECT: &str = "synthetic-static-account";
 const SECRET: &str = "synthetic-static-secret";

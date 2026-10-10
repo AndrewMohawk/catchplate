@@ -12,14 +12,14 @@ use super::{
     active_credential_lease_background_candidates, current_snapshot, digest_json,
     refresh_scoped_credential_material_singleflight, CredentialLeaseGenerationKey,
     CredentialLeaseRenewalPendingGuard, CredentialLeaseRenewalTask, GateState,
-    CREDENTIAL_LEASE_RENEW_BEFORE,
+    CREDENTIAL_LEASE_RENEW_BEFORE, CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT,
 };
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::Scope;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const RECEIVE_TICK: Duration = Duration::from_millis(50);
 
@@ -138,6 +138,9 @@ pub(super) fn start<'scope, 'env: 'scope>(
                     let queued = QueuedRenewal {
                         task: CredentialLeaseRenewalTask {
                             snapshot: Arc::clone(&snapshot), key,
+                            // Shared task metadata only: the native executor
+                            // above retains its existing lifetime/transport path.
+                            deadline: Instant::now() + CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT,
                         },
                         _pending: guard,
                     };

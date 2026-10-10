@@ -92,7 +92,7 @@ pub(super) fn admitted(
     Ok(true)
 }
 
-fn principal_expiry(snapshot: &Snapshot, scope: &CredentialLeaseScope) -> Result<u128, String> {
+pub(super) fn principal_expiry(snapshot: &Snapshot, scope: &CredentialLeaseScope) -> Result<u128, String> {
     snapshot
         .principals
         .iter()
@@ -217,7 +217,7 @@ pub(super) fn prepare_on_deadline(
             .ok_or_else(refused))?,
     );
     diagnostic.observe(Stage::AdmissionDeadline, check_credential_operation_deadline(Some(deadline)))?;
-    mark_credential_lease_activity(state, scope);
+    mark_credential_lease_activity(state, snapshot, scope);
     let pin = match diagnostic.observe(Stage::GenerationLookup, generation_with_margin(state, snapshot, scope))? {
         Some(generation) => generation,
         None => {

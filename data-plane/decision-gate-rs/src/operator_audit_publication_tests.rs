@@ -134,6 +134,184 @@ fn publication_completion_rechecks_deadline() {
 }
 
 #[test]
+fn publication_credential_preserves_original_operation_deadline() {
+    let scratch = Scratch::new();
+    let owner = scratch.owner();
+    // Neither a shorter operation nor one longer than the acquisition cap may
+    // acquire a freshly armed or acquisition-only completion deadline.
+    for budget in [ACQUISITION_BUDGET / 2, ACQUISITION_BUDGET * 2] {
+        let original = Instant::now() + budget;
+        let permit = owner.acquire_credential(original).unwrap();
+        assert_eq!(permit.deadline(), original);
+        assert!(permit.check().is_ok());
+    }
+}
+
+#[test]
+fn publication_credential_and_audit_lanes_independently_exclude_writer() {
+    // Exercise both release orders on one Owner, not two owners that could
+    // conceal accidental sharing of the same local lane.
+    for credential_first in [false, true] {
+        let scratch = Scratch::new();
+        let owner = Arc::new(scratch.owner());
+        let writer = Owner::open_file(&scratch.lock()).unwrap();
+        let original = Instant::now() + Duration::from_secs(10);
+        let first = if credential_first {
+            owner.acquire_credential(original).unwrap()
+        } else {
+            owner.acquire(original).unwrap()
+        };
+        let first_fd = first.descriptor.as_raw_fd();
+        let first_metadata = first.descriptor.metadata().unwrap();
+        let other = Arc::clone(&owner);
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let waiting = std::thread::spawn(move || {
+            let second = if credential_first {
+                other.acquire(original).unwrap()
+            } else {
+                other.acquire_credential(original).unwrap()
+            };
+            let metadata = second.descriptor.metadata().unwrap();
+            ready_tx
+                .send((
+                    second.descriptor.as_raw_fd(),
+                    metadata.dev(),
+                    metadata.ino(),
+                    second.deadline(),
+                ))
+                .unwrap();
+            let released = release_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+            let current = second.check().is_ok();
+            drop(second);
+            (released, current)
+        });
+
+        let ready = ready_rx.recv_timeout(Duration::from_secs(2));
+        let both_exclude_writer = ready.is_ok() && !exclusive(&writer);
+        drop(first);
+        let second_alone_excludes_writer = ready.is_ok() && !exclusive(&writer);
+        // Release and join before asserting so a failed coexistence check
+        // cannot strand a worker holding a permit or its scratch directory.
+        let _ = release_tx.send(());
+        let completed = waiting.join();
+        let (second_fd, device, inode, retained_deadline) = ready.unwrap();
+        assert_ne!(first_fd, second_fd);
+        assert_eq!(first_metadata.dev(), owner.identity.device);
+        assert_eq!(first_metadata.ino(), owner.identity.inode);
+        assert_eq!(device, owner.identity.device);
+        assert_eq!(inode, owner.identity.inode);
+        assert_eq!(retained_deadline, original);
+        assert!(both_exclude_writer);
+        assert!(second_alone_excludes_writer);
+        assert_eq!(completed.unwrap(), (true, true));
+        assert!(exclusive(&writer));
+    }
+}
+
+#[test]
+fn publication_credential_contended_acquisition_keeps_short_original_deadline() {
+    let scratch = Scratch::new();
+    let owner = scratch.owner();
+    let writer = Owner::open_file(&scratch.lock()).unwrap();
+    assert!(exclusive(&writer));
+    let original = Instant::now() + Duration::from_millis(20);
+    assert_eq!(
+        owner.acquire_credential(original).err().unwrap(),
+        "operator publication coordination deadline expired"
+    );
+    assert!(remaining(original).is_err());
+    drop(writer);
+    assert!(owner.acquire_credential(deadline()).is_ok());
+}
+
+#[test]
+fn publication_credential_expired_acquisition_or_operation_is_refused() {
+    let scratch = Scratch::new();
+    let owner = scratch.owner();
+    let expired = Instant::now() - Duration::from_secs(1);
+    let live = Instant::now() + Duration::from_secs(10);
+    assert_eq!(
+        owner.acquire_credential(expired).err().unwrap(),
+        "operator publication coordination deadline expired"
+    );
+    // Exercise the two independently supplied deadlines without a five-second
+    // test delay. A live operation cannot rescue expired acquisition, and a
+    // live acquisition cannot rearm an already expired operation.
+    for (acquisition, operation) in [(expired, live), (live, expired)] {
+        assert_eq!(
+            owner
+                .acquire_in_lane(&owner.credential_serial, acquisition, operation)
+                .err()
+                .unwrap(),
+            "operator publication coordination deadline expired"
+        );
+        let writer = Owner::open_file(&scratch.lock()).unwrap();
+        assert!(exclusive(&writer));
+    }
+    assert!(owner.acquire_credential(live).is_ok());
+}
+
+#[test]
+fn publication_credential_completion_rechecks_operation_deadline() {
+    let scratch = Scratch::new();
+    let owner = scratch.owner();
+    let mut permit = owner.acquire_credential(deadline()).unwrap();
+    permit.deadline = Instant::now() - Duration::from_secs(1);
+    assert_eq!(
+        permit.check().err().unwrap(),
+        "operator publication coordination deadline expired"
+    );
+}
+
+#[test]
+fn publication_credential_replaced_inode_refused_during_acquisition() {
+    let scratch = Scratch::new();
+    let path = scratch.lock();
+    let retained = scratch.0.join("retained-old-lock");
+    let owner = scratch.owner().with_test_hook(Arc::new(move |phase| {
+        if phase == TestPhase::BeforeSharedLock {
+            // The credential descriptor is already open. Substitution must
+            // still fail, rather than adopting the replacement path or inode.
+            fs::rename(&path, &retained).unwrap();
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap()
+                .sync_all()
+                .unwrap();
+        }
+    }));
+    assert_eq!(
+        owner.acquire_credential(deadline()).err().unwrap(),
+        "operator publication coordination refused"
+    );
+    // Subsequent acquisition cannot adopt the substituted path either.
+    assert!(owner.acquire_credential(deadline()).is_err());
+    let old_writer = Owner::open_file(&scratch.0.join("retained-old-lock")).unwrap();
+    assert!(exclusive(&old_writer));
+}
+
+#[test]
+fn publication_credential_replaced_inode_refused_before_completion() {
+    let scratch = Scratch::new();
+    let owner = scratch.owner();
+    let old_writer = Owner::open_file(&scratch.lock()).unwrap();
+    let permit = owner.acquire_credential(deadline()).unwrap();
+    fs::rename(scratch.lock(), scratch.0.join("retained-old-lock")).unwrap();
+    scratch.provision();
+    assert_eq!(
+        permit.check().err().unwrap(),
+        "operator publication coordination refused"
+    );
+    assert!(!exclusive(&old_writer));
+    drop(permit);
+    assert!(exclusive(&old_writer));
+}
+
+#[test]
 fn publication_replaced_inode_refused_before_acquisition() {
     let scratch = Scratch::new();
     let owner = scratch.owner();

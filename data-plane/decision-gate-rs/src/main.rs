@@ -33,6 +33,7 @@ mod operator_google_profile;
 mod operator_google_managed;
 mod operator_google_reconciliation;
 mod operator_static_preparation;
+mod operator_background_renewal;
 mod operator_static_preparation_diagnostics;
 mod operator_response_failure_diagnostics;
 mod native_gate_bootstrap;
@@ -4134,6 +4135,9 @@ impl CredentialLeaseGenerationKey {
 struct CredentialLeaseRenewalTask {
     snapshot: Arc<Snapshot>,
     key: CredentialLeaseGenerationKey,
+    // Queueing, singleflight waiting and operator publication coordination all
+    // consume this original budget; dequeuing never grants a fresh allowance.
+    deadline: Instant,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16056,6 +16060,14 @@ fn refresh_policy_snapshot_guarded(
                 if let Some(permit) = publication { permit.check()?; }
                 state.policy_shadow.commit_operator_reload(operator_reload)?;
                 *current = Arc::clone(&next);
+                // Activity belongs to the snapshot that admitted the request.
+                // Old requests cannot repopulate it after this write guard:
+                // marking also holds the exact snapshot's read guard.
+                state
+                    .credential_lease_activity
+                    .lock()
+                    .expect("credential lease activity mutex poisoned")
+                    .clear();
                 let grants_cleared =
                     clear_local_grants_if_signed_policy_changed(state, &previous, &next);
                 let mut leases = state
@@ -22398,7 +22410,15 @@ fn cached_credential_lease_info(
         .map(lease_info)
 }
 
-fn mark_credential_lease_activity(state: &GateState, scope: &CredentialLeaseScope) {
+fn mark_credential_lease_activity(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) {
+    let active = state.snapshot.read().expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return;
+    }
     state
         .credential_lease_activity
         .lock()
@@ -22714,6 +22734,20 @@ fn refresh_scoped_credential_material_singleflight_on_deadline(
     purpose: CredentialLeasePurpose, request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>, original_deadline: Option<Instant>,
 ) -> Result<(), String> {
+    refresh_scoped_credential_material_singleflight_with_leader(
+        state, snapshot, scope, purpose, request_authority, release_authorization,
+        original_deadline, |deadline| refresh_scoped_credential_material_on_deadline(
+            state, snapshot, scope, purpose, request_authority, release_authorization, deadline,
+        ),
+    )
+}
+
+fn refresh_scoped_credential_material_singleflight_with_leader(
+    state: &GateState, snapshot: &Arc<Snapshot>, scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose, request_authority: Option<&CredentialLeaseRequestAuthority>,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>, original_deadline: Option<Instant>,
+    refresh_leader: impl FnOnce(Option<Instant>) -> Result<(), String>,
+) -> Result<(), String> {
     let original_deadline = operator_google_reconciliation::operation_deadline(state, snapshot, scope,
         request_authority, release_authorization, original_deadline)?;
     check_credential_operation_deadline(original_deadline)?;
@@ -22749,15 +22783,9 @@ fn refresh_scoped_credential_material_singleflight_on_deadline(
     if leader {
         let mut leader_guard =
             CredentialLeaseFlightLeaderGuard::new(state, key, Arc::clone(&flight));
-        let result = refresh_scoped_credential_material_on_deadline(
-            state,
-            snapshot,
-            scope,
-            purpose,
-            request_authority,
-            release_authorization,
-            original_deadline,
-        );
+        // The elected leader owns any publication coordination. A follower
+        // never waits for this flight while retaining a publication permit.
+        let result = refresh_leader(original_deadline);
         leader_guard.publish(result.clone());
         result?;
     } else {
@@ -22895,7 +22923,7 @@ fn ensure_scoped_credential_lease_on_deadline(
             profile,
         )?;
     }
-    mark_credential_lease_activity(state, scope);
+    mark_credential_lease_activity(state, snapshot, scope);
     let cache_key =
         CredentialLeaseCacheKey::new_bound(scope, request_authority, release_authorization);
     let cached = {
@@ -23868,6 +23896,15 @@ fn credential_lease_background_candidates(
     snapshot: &Arc<Snapshot>,
     renew_before: Duration,
 ) -> Vec<CredentialLeaseBackgroundCandidate> {
+    if !policy_trust_is_fresh(state) {
+        return Vec::new();
+    }
+    // Retention below mutates the cache. Keep the selected snapshot current
+    // throughout, so an old coordinator cannot prune newly published leases.
+    let active = state.snapshot.read().expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return Vec::new();
+    }
     let now = Instant::now();
     let now_epoch_ms = now_epoch_ms();
     let deadline = now.checked_add(renew_before).unwrap_or_else(Instant::now);
@@ -23879,6 +23916,8 @@ fn credential_lease_background_candidates(
             .expect("credential lease activity mutex poisoned");
         activity.retain(|scope, last_used| {
             validate_credential_lease_scope(snapshot, scope).is_ok()
+                && (!state.policy_shadow.is_operator_demo()
+                    || operator_static_preparation::principal_expiry(snapshot, scope).is_ok())
                 && now.saturating_duration_since(*last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
         });
         activity.keys().cloned().collect::<Vec<_>>()
@@ -23931,6 +23970,72 @@ fn credential_lease_background_candidates(
         }
     }
     candidates
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CredentialLeaseRenewalStatus {
+    Ineligible,
+    Fresh,
+    Due,
+}
+
+/// Pure exact-purpose recheck for queued work. Unlike the coordinator's cache
+/// maintenance, this must not prune unrelated entries or switch purposes.
+fn credential_lease_background_renewal_status(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
+) -> CredentialLeaseRenewalStatus {
+    use CredentialLeaseRenewalStatus::{Due, Fresh, Ineligible};
+    if !policy_trust_is_fresh(state) {
+        return Ineligible;
+    }
+    let active = state.snapshot.read().expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot)
+        || validate_credential_lease_scope(snapshot, scope).is_err()
+        || (state.policy_shadow.is_operator_demo()
+            && operator_static_preparation::principal_expiry(snapshot, scope).is_err())
+    {
+        return Ineligible;
+    }
+    {
+        let activity = state.credential_lease_activity.lock()
+            .expect("credential lease activity mutex poisoned");
+        if !activity.get(scope).is_some_and(|last_used| {
+            Instant::now().saturating_duration_since(*last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
+        }) {
+            return Ineligible;
+        }
+    }
+    let leases = state.credential_leases.lock().expect("credential lease mutex poisoned");
+    let generations = state.credential_generations.lock()
+        .expect("credential generation mutex poisoned");
+    // Sample only after the cache locks; waiting must not make an old time
+    // sample accidentally extend the freshness margin.
+    let now = Instant::now();
+    let Some(deadline) = now.checked_add(CREDENTIAL_LEASE_RENEW_BEFORE) else {
+        return Ineligible;
+    };
+    let deadline_epoch_ms = now_epoch_ms().saturating_add(CREDENTIAL_LEASE_RENEW_BEFORE.as_millis());
+    let generation = generations.get(scope).filter(|generation| {
+        credential_generation_valid_after(generation, snapshot, deadline_epoch_ms, deadline)
+    });
+    if purpose == CredentialLeasePurpose::GenerationMetadata {
+        return if generation.is_some() { Fresh } else { Due };
+    }
+    let Some(generation) = generation else { return Ineligible; };
+    if credential_scope_requires_release_authorization(state, snapshot, scope).unwrap_or(true) {
+        return Ineligible;
+    }
+    if leases.get(&CredentialLeaseCacheKey::new(scope, None)).is_some_and(|lease| {
+        credential_secret_lease_valid_after(lease, snapshot, deadline_epoch_ms, deadline)
+            && lease.request_authority.is_none()
+            && lease.release_authorization.is_none()
+            && lease.version == generation.version
+            && lease.metadata_sha256 == generation.metadata_sha256
+            && lease.metadata == generation.metadata
+    }) { Fresh } else { Due }
 }
 
 fn active_credential_lease_background_candidates(
@@ -24016,13 +24121,7 @@ fn start_credential_lease_renewal(
                     key: task.key.clone(),
                 };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    refresh_scoped_credential_material_singleflight(
-                        &worker_state,
-                        &task.snapshot,
-                        &task.key.scope,
-                        task.key.purpose,
-                        None,
-                    )
+                    operator_background_renewal::execute(&worker_state, &task)
                 }));
                 match result {
                     Ok(Ok(())) => {}
@@ -24076,6 +24175,7 @@ fn start_credential_lease_renewal(
                 let task = CredentialLeaseRenewalTask {
                     snapshot: Arc::clone(&snapshot),
                     key: key.clone(),
+                    deadline: Instant::now() + CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT,
                 };
                 match sender.try_send(task) {
                     Ok(()) => {}
@@ -36009,7 +36109,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         match info {
             Ok(info) => {
                 if atomic_release {
-                    mark_credential_lease_activity(state, scope);
+                    mark_credential_lease_activity(state, snapshot, scope);
                 }
                 if precredential_gmail_version
                     .is_some_and(|expected| expected != info.info.version)

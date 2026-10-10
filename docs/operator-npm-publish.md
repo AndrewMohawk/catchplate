@@ -1057,3 +1057,57 @@ CPU/memory/process resources. It retains all twelve terminal controls and adds
 nine progress controls, including the actual bounded worker's cancellation and
 the real revoke API's admission/response path. Storage callbacks in this suite
 are explicitly synthetic; this is not a revocation commit or stock-client pass.
+
+### Run twenty: complete isolated stock-client flow passed
+
+The fresh run of source `37241109` completed successfully from **2026-10-10
+19:27:55 to 19:29:18 UTC**, using the unchanged, genuinely built `b55f3024`
+Rust executable. All seven stock-client phases passed, including refusal after
+application revocation. The checker verified both scoped and unscoped publishes,
+all six expected upstream arrivals, four prerequisite metadata releases, no
+unauthorized PUTs and the complete durable SQLite audit chain. Strict TLS and
+default-root preservation remained enabled; neither command nor configured
+transport retries were used.
+
+The checked audit inventory contained six release-start/response pairs, six
+request denials, two revoked-client CONNECT denials, one matching revocation
+and policy reload, and **36 issued leases**, below the unchanged 64-event bound.
+Each completed checkpoint also enforced zero dropped, required-failed and
+send-failed audit counters and a drained audit queue. Cleanup completed with
+no fixture containers or networks remaining. The normal entrypoint and all
+original workload, request and cleanup deadlines were preserved.
+
+The retained pre-stop trace measured the successful revocation response at
+**1,757 ms**: publication wait began at 1 ms and acquisition completed at
+1,366 ms; SQLite open and BEGIN completed at 1,398 ms; COMMIT completed at
+1,586 ms; materialization and publication release at 1,640 ms; and the outbox
+drain at 1,745 ms. Thus publication acquisition consumed 1,365 ms in this
+successful run. It does **not** establish the cause of the timeouts in runs
+eighteen and nineteen. The diagnostic writes can affect scheduling; no
+writer-fairness repair or general latency guarantee is claimed.
+
+Optional post-stop log collection failed independently, before capturing any
+files: the inherited cleanup listing supplied 12-character container IDs,
+whereas the new helper's exact-set comparison required the full 64-character
+IDs in the stopped-state projection. Its receipt correctly says `incomplete`.
+The original pre-stop logs, complete revocation trace and passing client result
+are intact. Do not modify or replay this terminal fixture. A fresh future
+collector should request `docker ps --no-trunc` when gathering cleanup IDs and
+use separate ID-format and duplicate assertions, retaining the exact join and
+original cleanup budget.
+
+Originals are retained in `serverware-catalog-timing-validation.qg5M5tPT` and
+`serverware-npm-publish-private.kiNN0MiC`. Run-receipt SHA-256:
+`761e89f4ddd07f939ce48b0b139e8718fb77828f4d0aab3e9426aec5b660e42e`.
+Checker-result SHA-256:
+`9859f6716cd159c0015f561de6630fc7b7a634fc6221f2eff307babb74c793bf`.
+Source-equality receipt SHA-256:
+`3b39eadb5829cb20c07f27f185829775ec9bf34798dca2ff08ee4e1c62f749ef`.
+
+This proves the isolated flow for this snapshot, not intermittent-timeout
+resolution, real npm service access, npm installation, public DNS, notification
+delivery, native hardware acceptance or production readiness. No live rollout
+or native-pilot action occurred. The next latency investigation should use a
+controlled same-inode shared-reader/exclusive-writer concurrency test, preserving
+the existing acquisition deadlines and proving cleanup after readers exit,
+before selecting any publication-fairness change.

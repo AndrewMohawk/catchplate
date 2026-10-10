@@ -27,6 +27,7 @@ mod control_plane_client_config;
 mod development_sandbox;
 mod operator_demo;
 mod operator_google_profile;
+mod operator_google_managed;
 mod operator_google_reconciliation;
 mod operator_static_preparation;
 mod native_gate_bootstrap;
@@ -52842,6 +52843,12 @@ fn main() -> Result<(), String> {
     } else { None };
     let operator_startup_guard = operator_publication_owner.as_ref()
         .map(|owner| owner.acquire(operator_audit_publication::deadline())).transpose()?;
+    // Managed public configuration is committed publication, not environment
+    // input. Resolve it only under the same SH guard as the first policy load.
+    let operator_selection = operator_selection.map(|selection| {
+        selection.load_committed(operator_startup_guard.as_ref()
+            .ok_or("operator publication startup ownership missing")?)
+    }).transpose()?;
     let initial_policy_mtime = file_mtime(&policy_path);
     let initial_release_evidence_mtimes = release_evidence_mtimes(
         release_provenance_path.as_deref(),

@@ -43,6 +43,7 @@ fn profile(snapshot: &Snapshot, deployment: Deployment) -> Profile {
     let profile = Profile {
         deployment: Arc::new(deployment),
         google: None,
+        managed_google: None,
         active: Arc::new(RwLock::new(ApprovedPolicy {
             high_water: policy_high_water_for(snapshot),
             targets: BTreeSet::new(),
@@ -57,6 +58,32 @@ fn profile(snapshot: &Snapshot, deployment: Deployment) -> Profile {
 
 fn public_deployment() -> Deployment {
     Deployment::parse(r#"["https://api.example.com"]"#, None).unwrap()
+}
+
+#[test]
+fn operator_demo_managed_google_status_and_disabled_cold_scope() {
+    let original = snapshot(1);
+    let mut admitted = profile(&original, public_deployment());
+    assert!(admitted.status().get("managed_google").is_none());
+    let settings = json!({"allowed_upstreams":["https://api.example.com"],"fixture_cidrs":[]});
+    let manifest = json!({"schema":"serverware.operatorGoogleGateConfiguration/v1",
+        "operation":null,"profile_binding":null,"profile_binding_digest":null,
+        "effective_settings":settings,
+        "effective_settings_digest":crate::digest_json_ensure_ascii(&settings)});
+    let configuration = crate::operator_google_managed::parse(manifest.to_string().as_bytes()).unwrap();
+    let identity = configuration.identity.status();
+    admitted.managed_google = Some(configuration.identity);
+    assert_eq!(admitted.status()["managed_google"], identity);
+    assert_eq!(admitted.status()["production_custody_bound"], false);
+    assert!(admitted.validate_snapshot(&original).is_ok());
+    let mut changed = original.clone();
+    changed.credentials.insert("google-account".into(), crate::Credential {
+        provider:"google".into(), provider_subject:Some("synthetic-subject".into()),
+        injection:json!({"type":"bearer","header":"Authorization","field":"access_token",
+            "__serverwareCredentialType":"oauth2"}),
+    });
+    assert!(admitted.validate_snapshot(&changed).is_err());
+    assert_eq!(admitted.status()["managed_google"], identity);
 }
 
 #[test]

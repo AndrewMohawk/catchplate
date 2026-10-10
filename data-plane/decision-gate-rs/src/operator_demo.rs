@@ -118,12 +118,37 @@ impl Target {
     }
 }
 
-struct Deployment {
+pub(super) struct Deployment {
     origins: BTreeSet<Target>,
     fixture_cidrs: Vec<IpNet>,
 }
 
 impl Deployment {
+    pub(super) fn managed(settings: &Value) -> Result<Self, String> {
+        let object = settings.as_object().ok_or_else(refused)?;
+        if object.len() != 2 || !object.contains_key("allowed_upstreams")
+            || !object.contains_key("fixture_cidrs") {
+            return Err(refused());
+        }
+        let origins = object["allowed_upstreams"].as_array().ok_or_else(refused)?;
+        for origin in origins {
+            let raw = origin.as_str().ok_or_else(refused)?;
+            let target = Target::parse(raw)?;
+            let canonical = if target.port == 443 { format!("https://{}", target.host) }
+                else { format!("https://{}:{}", target.host, target.port) };
+            if raw != canonical { return Err(refused()); }
+        }
+        Self::parse(&object["allowed_upstreams"].to_string(),
+            Some(&object["fixture_cidrs"].to_string()))
+    }
+
+    pub(super) fn require_google(&self, enabled: bool) -> Result<(), String> {
+        if enabled && !self.origins.contains(&Target::parse(super::operator_google_profile::ORIGIN)?) {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
     fn parse(origins: &str, fixture: Option<&str>) -> Result<Self, String> {
         if origins.len() > 16 * 1024 || fixture.is_some_and(|value| value.len() > 256) {
             return Err(refused());
@@ -173,8 +198,10 @@ impl Deployment {
 }
 
 pub(crate) struct Selection {
-    deployment: Arc<Deployment>,
+    // None exists only between managed mode selection and the guarded cold load.
+    deployment: Option<Arc<Deployment>>,
     google: Option<super::operator_google_profile::Profile>,
+    managed_google: Option<super::operator_google_managed::Identity>,
 }
 
 fn selected(
@@ -228,9 +255,14 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
         env::args_os().nth(1).is_some(),
         forbidden,
     )?;
-    let google = super::operator_google_profile::Profile::from_environment(operator)?;
+    let managed = super::operator_google_managed::from_environment(operator)?;
+    let google = if managed { None }
+        else { super::operator_google_profile::Profile::from_environment(operator)? };
     if !operator {
         return Ok(None);
+    }
+    if managed {
+        return Ok(Some(Selection { deployment: None, google: None, managed_google: None }));
     }
     let deployment = Deployment::parse(
         &env::var("SERVERWARE_OPERATOR_DEMO_UPSTREAMS").map_err(|_| refused())?,
@@ -238,12 +270,11 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
             .ok()
             .as_deref(),
     )?;
-    if google.is_some() && !deployment.origins.contains(&Target::parse(super::operator_google_profile::ORIGIN)?) {
-        return Err(refused());
-    }
+    deployment.require_google(google.is_some())?;
     Ok(Some(Selection {
-        deployment: Arc::new(deployment),
+        deployment: Some(Arc::new(deployment)),
         google,
+        managed_google: None,
     }))
 }
 
@@ -305,6 +336,7 @@ pub(crate) struct Profile {
     deployment: Arc<Deployment>,
     active: Arc<RwLock<ApprovedPolicy>>,
     google: Option<super::operator_google_profile::Profile>,
+    managed_google: Option<super::operator_google_managed::Identity>,
 }
 pub(crate) struct PreparedReload {
     previous_hash: String,
@@ -312,7 +344,19 @@ pub(crate) struct PreparedReload {
 }
 
 impl Selection {
+    pub(crate) fn load_committed(mut self, permit: &super::operator_audit_publication::Permit<'_>)
+        -> Result<Self, String> {
+        if self.deployment.is_none() {
+            let configuration = super::operator_google_managed::load(permit)?;
+            self.deployment = Some(Arc::new(configuration.deployment));
+            self.google = configuration.google;
+            self.managed_google = Some(configuration.identity);
+        }
+        Ok(self)
+    }
+
     pub(crate) fn admit(self, state: &GateState) -> Result<Profile, String> {
+        let deployment = self.deployment.ok_or_else(refused)?;
         if state.is_production
             || state.native_serving_privileges.is_some()
             || state.native_secret_broker.is_some()
@@ -338,8 +382,9 @@ impl Selection {
         validate_marker(Path::new("/data"))?;
         let snapshot = current_snapshot(state);
         let profile = Profile {
-            deployment: self.deployment,
+            deployment,
             google: self.google,
+            managed_google: self.managed_google,
             active: Arc::new(RwLock::new(ApprovedPolicy {
                 high_water: policy_high_water_for(&snapshot),
                 targets: BTreeSet::new(),
@@ -354,6 +399,13 @@ impl Selection {
 impl Profile {
     fn validate_snapshot(&self, snapshot: &Snapshot) -> Result<ApprovedPolicy, String> {
         if let Some(google) = &self.google { google.validate_snapshot(snapshot)?; }
+        // A disabled managed cold admission cannot acquire Google authority
+        // through a later policy-only reload, even if Gmail was already allowed.
+        if self.managed_google.is_some() && self.google.is_none()
+            && snapshot.credentials.values().any(|credential| credential.kind() == "oauth2"
+                && super::normalized_credential_provider(&credential.provider) == "google") {
+            return Err(refused());
+        }
         if snapshot.policy_id != "serverware-operator-demo"
             || !is_sha256_digest(&snapshot.hash)
             || snapshot.policy_sequence == 0
@@ -431,11 +483,15 @@ impl Profile {
             .read()
             .ok()
             .map(|active| active.high_water.policy_hash.clone());
-        serde_json::json!({"api_version":"serverware.policyShadowRuntimeStatus/v2",
+        let mut value = serde_json::json!({"api_version":"serverware.policyShadowRuntimeStatus/v2",
             "mode":"operator-demo", "enabled":false, "readiness":false,
             "readiness_reason":"intentionally_uncommissioned_operator_demo",
             "production_custody_bound":false, "active_generation":null,
-            "operator_policy_sha256":hash, "upstream_origin_count":self.deployment.origins.len()})
+            "operator_policy_sha256":hash, "upstream_origin_count":self.deployment.origins.len()});
+        if let Some(identity) = &self.managed_google {
+            value["managed_google"] = identity.status();
+        }
+        value
     }
 
     pub(crate) fn effect(

@@ -148,6 +148,13 @@ The current bounded checks passed:
   `e841f843`. These do not execute a real registry publish.
 - 23 of 23 stock-fixture pure tests at `477efa5a`. These inspect the fixture/checker contract,
   not a running stock client.
+- 27 of 27 fixture tests at `918d5bb7`, including four groups executing the
+  actual JavaScript classifier/job with synthetic I/O in a bounded Node VM.
+  Fixed diagnostic labels distinguish stdout shape, error-code presence and
+  selected npm/fetch contexts without exporting summaries, URLs or raw output.
+  The four accepted denial codes and positive receipt checks are unchanged;
+  HTTP 503 and fetch timeouts remain failures. These tests are not stock-client
+  runtime acceptance.
 - 33 of 33 genuine Rust tests at source commit `58b10689`: 11 publishing,
   15 metadata and seven shared send-deadline/revocation regressions. A separate
   normal gate binary was then built, SHA-256
@@ -208,6 +215,22 @@ paths remain under investigation.
 
 All sixth-run containers were removed, private evidence retained, and the
 4,933-file source and 1,782-file stock npm inventories remained unchanged.
+
+A seventh isolated run at `918d5bb7` used the same verified normal Rust binary
+and unchanged limits. It completed prerequisite reads, both publications and
+the wrong-package command, then failed that command's audit checkpoint before
+attempting `outside_window`. The initial four-event audit POST failed at the
+transport stage with an unknown status/outcome and 3,112 ms total attempt time;
+the snapshot and policy sequence remained unchanged. This duration includes
+pre-HTTP work. It is not an HTTP-only timing or proof that the receiver did not
+commit. Ten background lease-renewal warnings were also retained. No npm client
+failure fields were emitted, so this run neither reproduces nor resolves
+the sixth run's outside-window error. All seventh-run containers were removed,
+private evidence retained, and both complete source/npm inventories remained
+unchanged. App-side audit admission, commit and response timing still need to
+be distinguished; unrelated HTTP 200 access-log entries cannot identify the
+failed batch's acknowledgement.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

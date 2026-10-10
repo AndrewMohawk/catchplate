@@ -29,11 +29,18 @@ Rust inputs remain identical. The sixth isolated run of that optimization
 completed both publications and the wrong-package checkpoint without another
 logged audit failure, but its outside-window command still failed. Its closed
 client error code is `unrecognized`; the stopped audit store does not establish
-either the intended time-window 403 or a repeated 503 for that command. Lease
-renewal remains under investigation. No expiry extension, retry workaround or
-live change has been made. The failures remain retained and full stock-publishing
-acceptance is still pending, with no production defect inferred. This does not
-implement or prove installation, tarball reads or default auditing.
+either the intended time-window 403 or a repeated 503 for that command. New
+secret-free npm diagnostics pass 27 fixture tests, including actual JavaScript
+execution with synthetic I/O; the original acceptance checks remain unchanged.
+The seventh isolated run completed the same four commands, then failed the
+wrong-package audit checkpoint before attempting the outside-window command.
+Its four-event audit POST had an unknown transport outcome after 3,112 ms total
+attempt time, including pre-HTTP work. It does not resolve the sixth npm failure.
+Audit timing and lease renewal remain under investigation. No expiry extension,
+retry workaround or live change has been made. The failures remain retained and
+full stock-publishing acceptance is still pending, with no production defect
+inferred. This does not implement or prove installation, tarball reads or default
+auditing.
 
 ## User workflow and defaults
 

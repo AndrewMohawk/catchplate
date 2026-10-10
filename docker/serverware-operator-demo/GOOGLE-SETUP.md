@@ -1,21 +1,66 @@
 > Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
 
-# Optional Google profile: retained operator deployment
+# Google configuration: managed deployment and legacy profile
 
-This is an opt-in configuration and rollout guide, not evidence that Google is
-enabled or that real consent has passed. It does not initialize a new database,
-replace retained data, register a Google client, or authorize a deployment.
+## Current managed deployment
+
+The retained demo now runs managed-capable source
+`9222b4c090d77aa983d3c01be34e0a2ba79f8e6c` with gate binary
+`333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0`.
+Google remains unconfigured: the matching pair is ready for the existing static
+policy, not for account consent. The rollout preserved retained authority and
+left provider custody empty; no Google configuration was prepared or activated.
+See the [current deployment receipt](README.md#current-managed-capable-deployment).
+
+The canonical layer order is `docker-compose.yml`,
+`docker-compose.managed-google-candidate.yml`,
+`docker-compose.curated-gate.yml`, then `docker-compose.notifications.yml`.
+The candidate filename is historical; this is the accepted managed selection.
+Use only one app/gate source-selection layer. **Do not add
+`docker-compose.google.yml` or raw Google profile/secret-file environment inputs
+to this managed deployment.** Managed and externally supplied profiles are
+mutually exclusive.
+
+For first managed configuration, use **Proxy setup → Review Google provider
+settings**. Review the fixed Gmail read-only preset, callback and destination
+change before supplying the client ID and write-only client secret. Explicit
+Prepare saves encrypted, inactive configuration using app-only provider custody;
+it does not restart either service, contact Google or start consent. Recover an
+uncertain result with **Check operation result**, not another Prepare. A pending
+configuration still needs a separately controlled cold restart and matching
+app/gate readiness before the separate account-connection step.
+
+The gate receives the curated publication directory and original lock, marker
+and interception CA leaves, not the application database, master/signing keys or
+provider/notification custody. The interception CA private key remains a required
+gate input. Action-required alerts and audit-log delivery remain independent
+settings under **Notifications**; neither configures Google or starts consent.
+
+See [operator-owned provider configuration](../../docs/operator-provider-configuration.md)
+for the managed API, custody, recovery and acceptance boundaries. The live UI
+and configuration checks were unconfigured and read-only; they do not establish
+real Google consent, refresh, provider access or a native hardware action. This guide does
+not initialize a new database, replace retained data, register a Google client,
+or authorize a deployment.
+
+## Legacy externally managed env/file profile (not the current deployment)
+
+The remainder documents the separate external-file flow and its historical
+rollout procedure. It is not a conversion or secret-rotation recipe for the
+current managed deployment. Do not use it to bypass managed custody or replace
+an existing retained provider binding.
 
 Use `docker-compose.yml`, exactly one reviewed immutable app/gate source
 override, then `docker-compose.google.yml`, in that order. The Google layer does
-not select application source or a binary. The retained deployment now uses
-setup-capable application `1deb896c` and the unchanged normal `e7529b44` gate,
-with Google still disabled. Deploying that source does not prepare or activate
-a Google operation. The explicit reviewed transition, private client inputs
-and separate provider acceptance below remain required; do not enable this
+not select application source or a binary. The historical Google-OFF
+preparatory deployment used setup-capable application `1deb896c` and the normal
+`e7529b44` gate; those are not the current accepted pins. Deploying setup-capable
+source does not prepare or activate a Google operation. The explicit reviewed
+transition, private client inputs and separate provider acceptance below remain
+required; do not enable this
 layer merely because the Google-OFF application update passed preservation.
 
-## Required operator inputs
+### Required operator inputs for the legacy profile
 
 Provide these through a separately protected deployment environment, retaining
 the original environment unchanged. Never put a client secret in YAML, Git,
@@ -48,7 +93,7 @@ Include an outside-data-root secret file in the separately protected recovery
 plan without printing its contents. Profile admission pins its identity and
 contents; replacing the file is not a supported silent rotation.
 
-## Configuration boundaries and preflight
+### Legacy configuration boundaries and preflight
 
 - The app retains its existing sandbox address and gains only the existing
   outbound network, using Docker's dynamic address allocation. No network is
@@ -76,7 +121,7 @@ contents; replacing the file is not a supported silent rotation.
   existing protected console host; no SSO bypass or public callback exception
   is introduced. The proxy's TLS/workload authentication is unchanged.
 
-## Retained-state enablement sequence
+### Legacy retained-state enablement sequence
 
 If the running app lacks the setup API, first deploy the reviewed candidate
 implementation with Google still unselected and the old settings unchanged,

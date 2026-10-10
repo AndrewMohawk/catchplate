@@ -1,4 +1,5 @@
-# Dormant managed, unconfigured candidate; not the accepted/deployed source layer.
+# Managed, unconfigured layer used by the accepted live rollout on 2026-10-10.
+# The historical candidate filename is retained; accepted-source pins its source.
 # Combine in this order: base + this SINGLE source-selection layer + curated-gate
 # + notifications. Never combine with another source override or legacy google.
 # Root must verify the immutable OPERATOR_MANAGED_SOURCE manifest and literal

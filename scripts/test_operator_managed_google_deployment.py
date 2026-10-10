@@ -84,6 +84,15 @@ class ManagedDeploymentTests(unittest.TestCase):
         for service in self.candidate["services"].values():
             self.assertEqual(set(service), {"environment", "volumes"})
 
+    def test_accepted_layer_matches_managed_contract_with_exact_deployed_source(self):
+        accepted = yaml.load((STACK / "docker-compose.accepted-source.yml").read_text(), Loader=ClosedLoader)
+        wanted = expected()
+        wanted["services"]["serverware"]["volumes"][0]["source"] = (
+            "/srv/catchplate-fast/projects/serverware-operator-artifacts/"
+            "source-9222b4c090d77aa983d3c01be34e0a2ba79f8e6c"
+        )
+        self.assertEqual(accepted, wanted)
+
     def test_flags_match_the_existing_proven_fixture_without_importing_it(self):
         tree = ast.parse((ROOT / "scripts/prepare_operator_managed_google_gate_fixture.py").read_text())
         build = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "build")

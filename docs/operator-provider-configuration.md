@@ -2,11 +2,18 @@
 
 ## Status and user outcome
 
-Internal custody, app startup and public gate publication are implemented and
-tested, including an isolated paired managed app/gate fixture. The managed
-configuration API and operator screen also have isolated browser-to-ASGI and
-encrypted-storage acceptance. They are not deployed to the running demo. This is not authorization to
-change a running deployment or proof of real Google access.
+The managed configuration API, operator screen, app startup and curated gate
+publication are deployed to the operator demo at source
+`9222b4c090d77aa983d3c01be34e0a2ba79f8e6c`, paired with gate binary
+`333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0`.
+The live pair is managed-capable but Google remains **unconfigured**:
+`pair_ready: true`, `consent_ready: false`. No live Google Prepare,
+provider activation, account consent or provider request was performed by this
+rollout. See the [current deployment receipt](../docker/serverware-operator-demo/README.md#current-managed-capable-deployment).
+
+The isolated tests below establish separate configuration, encrypted-storage
+and proxy boundaries. They are not a continuous real-provider acceptance or
+authorization to change the running deployment.
 
 The proxy operator should
 be able to configure a provider application in the product, review its effects,
@@ -19,8 +26,32 @@ store the Google application secret. Its deployment procedure still requires
 an externally provisioned private file. That is an administration mechanism,
 not completion of self-service configuration.
 
-The managed v2 flow below uses encrypted application custody instead of that
-external-file procedure. Its account-consent action is still separate.
+The deployed managed v2 flow below uses encrypted application custody instead
+of that external-file procedure. Do not add the legacy `docker-compose.google.yml`
+layer to the managed deployment. Account consent is still a separate action.
+
+### Live, unconfigured deployment checkpoint
+
+On 2026-10-10, the retained live app/gate pair was upgraded without preparing a
+Google configuration. The fresh stopped-state comparison preserved all 1,335
+schema objects, 210 non-audit authority tables and 204 audit records. Its only
+allowed differences were eight derived gate-publication entries, two derived
+CA-file inode replacements and three migration timestamps; original authority,
+keys, tokens, CA material, publication lock and policy/high-water state were
+preserved. Provider and notification custody remained empty.
+
+Actual binary, policy and unconfigured app/gate identity checks passed before
+and after reopening the same edge. The internal read-only browser check made
+17 GET requests, saved seven screenshots and reported no browser errors; all
+four independent notification destinations remained disabled. External checks
+retained the Authelia boundary, and lab health returned 200. The external browser
+also observed an existing Authelia branding-configuration 404; this is not a
+claim of an error-free authenticated external application journey.
+
+The default synthetic-only destination remained unchanged. No new credentials,
+tokens, provider configuration, consent, notification delivery or native hardware
+action was exercised. Exact runtime identities, evidence and route observations
+are in the [deployment receipt](../docker/serverware-operator-demo/README.md#current-managed-capable-deployment).
 
 ### Operator configuration workflow
 
@@ -132,10 +163,10 @@ a key, setup record, custody schema or preparation audit. A separately admitted
 first-key initialization boundary is still required; adding a dummy credential
 is not a product workaround.
 
-These operations are deliberately not connected to the writable API, settings
-UI, managed activation or startup consumer yet. Gate/application isolation and
-the paired cold-configuration consumer below also remain required. This is an
-internal preparation foundation, not self-service configuration or a deployment.
+At this historical v1 checkpoint, these operations were not connected to the
+writable API, settings UI, managed activation or startup consumer. The later v2
+implementation and checkpoints below supersede that integration gap; this v1
+foundation is not itself self-service configuration or deployment acceptance.
 
 Focused verification on 2026-10-10 covered 58 pure custody/bootstrap/decoder
 tests and 46 connected preparation/cold-read/legacy regression groups against
@@ -176,7 +207,7 @@ module's 21 focused checks also passed. Evidence is retained under
 `serverware-operator-workspace-evidence/curated-boundary.IFPloRyU`.
 This checkpoint is the app-side internal consumer only: paired public gate
 configuration, later upstream transitions, observed runtime readiness and the
-writable API/UI still need their own connected acceptance. No live Google
+writable API/UI required the separate subsequent checkpoints. No live Google
 configuration, real provider contact or native action was performed.
 
 ### Public projection, destination changes and readiness checkpoint
@@ -399,16 +430,19 @@ This cannot be implemented solely inside the existing setup handler:
   client secret. Verified ownership/currentness and repair from committed state
   remain mandatory; a successful file write alone is not activation.
 
-The current operator Compose recipe mounts the complete app-data directory
-read-only into the gate, including SQLite and its master key. Managed custody
-must not rely on a public-only parser while leaving both ciphertext and its key
-readable there. The integration needs a curated shared publication directory
-and only the gate's required CA material, excluding the application database and
-master key. Preserve one shared publication-lock inode across both processes.
+The previous operator Compose selection mounted the complete app-data directory
+read-only into the gate, including SQLite and its master key. The current managed
+deployment instead mounts the curated publication directory plus the original
+lock, marker and required interception CA leaves. Application SQLite,
+master/signing keys and provider/notification custody are excluded from the gate.
+Managed custody must not rely on a public-only parser while leaving both
+ciphertext and its key readable there. Preserve one shared publication-lock inode
+across both processes.
 Do not substitute an individual bind mount of `policy-bundle.json`: publication
 uses atomic replacement, so that mount could retain an obsolete file inode.
-This is a coordinated ownership/publication change, not a Compose-only edit or
-authorization to migrate retained live state now.
+This boundary was verified in the live unconfigured rollout above. It remains a
+coordinated ownership/publication contract, not permission for another mount or
+retained-state change.
 
 No runtime environment mutation, `webapp.env` rewrite, arbitrary secret-file
 writer, Docker socket, self-restart privilege or hot-reload claim belongs in
@@ -420,8 +454,9 @@ not prove that old processes stopped.
 The opt-in `operator_gate_publication` publisher now derives a `gate-runtime`
 directory from the committed signed policy under the original publication lock.
 It repairs this copy independently of the canonical policy after a failed
-publication or restart. The dormant `docker-compose.curated-gate.yml` layer
-mounts that directory into the gate, with separate read-only binds of the
+publication or restart. The `docker-compose.curated-gate.yml` layer, now part of
+the current managed deployment, mounts that directory into the gate, with
+separate read-only binds of the
 original lock, marker and required interception CA files. It excludes the app
 database and master/signing keys. The gate still needs the interception CA
 private key; this is not an all-public or production-isolated data plane.
@@ -442,8 +477,9 @@ The earlier fixture's client check passed, but its baseline observer incorrectly
 required a master key before any credential existed; that run is not presented
 as a complete before/after proof. Both records are retained in the evidence
 directory above. This is synthetic proxy/isolation proof, not managed Google,
-real-provider or native-pilot acceptance. Live migration remains unverified;
-no live mount changed.
+real-provider or native-pilot acceptance. At that isolated checkpoint, live
+migration was unverified and no live mount changed. The later live unconfigured
+rollout is recorded separately above.
 
 ## Compatibility, ownership and acceptance
 
@@ -455,9 +491,11 @@ rewrite existing profiles or disconnect accounts to force adoption.
 
 The internal configuration/custody modules, config-independent reader, startup
 integration and public gate consumer now have the isolated acceptance above.
-The authenticated writable API/UI now has the separate isolated checkpoint above.
-Remaining acceptance includes a reviewed deployment transition and a continuous
-configured app/gate, account-consent and ordinary supported client workflow.
+The authenticated writable API/UI has the separate isolated checkpoint above,
+and the managed-capable, unconfigured pair now has live rollout acceptance.
+Remaining acceptance includes a reviewed live provider-configuration activation
+and a continuous configured app/gate, account-consent and ordinary supported
+client workflow.
 Preserve production, enrolled/native ownership, existing-account recovery and
 all provider-selection guards. Do not duplicate their authority in the UI.
 

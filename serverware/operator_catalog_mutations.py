@@ -17,7 +17,7 @@ from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
-    GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput,
+    GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -158,8 +158,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["placeholder"] = record["placeholder"]
         if "request_body_mode" in record:
             result["request_body_mode"] = record["request_body_mode"]
-        from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm
-        if operator_catalog_npm.selected(record):
+        from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish
+        if operator_catalog_npm_publish.selected(record):
+            result.update(operator_catalog_npm_publish.public_fields(record))
+        elif operator_catalog_npm.selected(record):
             result.update(operator_catalog_npm.public_fields(record))
         elif operator_catalog_github.selected(record):
             result.update(operator_catalog_github.public_fields(record))
@@ -304,7 +306,7 @@ def create_application(payload: ApplicationInput, actor_id: str) -> dict:
 
 
 def create_rule(payload: RuleInput, actor_id: str) -> dict:
-    from serverware import operator_demo, operator_catalog_npm
+    from serverware import operator_demo, operator_catalog_npm_publish
     upstream, _ = operator_demo.origin(payload.upstream_url, target=True)
     if upstream not in operator_demo.settings()["allowed_upstreams"]:
         raise ValueError("destination is not deployment-allowlisted")
@@ -325,7 +327,7 @@ def create_rule(payload: RuleInput, actor_id: str) -> dict:
         except CatalogIntegrityError:
             raise ValueError("rule content or credential input is incompatible with the selected credential") from None
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
-        operator_catalog_npm.admit_rule(record, catalog)
+        operator_catalog_npm_publish.admit_rule(record, catalog)
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
     return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
 
@@ -391,7 +393,7 @@ def create_npm_credential(payload: NpmTokenInput, actor_id: str) -> dict:
 
 
 def create_npm_rule(payload: NpmMetadataRuleInput, actor_id: str) -> dict:
-    from serverware import operator_catalog_npm as npm, operator_demo
+    from serverware import operator_catalog_npm as npm, operator_catalog_npm_publish, operator_demo
     if npm.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
         raise ValueError("npm registry is not deployment-allowlisted")
 
@@ -405,11 +407,33 @@ def create_npm_rule(payload: NpmMetadataRuleInput, actor_id: str) -> dict:
             schema.rule_credential_header(record, credential)
         except CatalogIntegrityError:
             raise ValueError("npm metadata preset requires an npm token connection") from None
-        npm.admit_rule(record, catalog)
+        operator_catalog_npm_publish.admit_rule(record, catalog)
         identifier = str(uuid.uuid4())
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
     return _mutate(payload, actor_id, "access_rules", "access_rule.npm_metadata_created", change)
+
+
+def create_npm_publish_rule(payload: NpmPublishRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_npm_publish as npm, operator_demo
+    if npm.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("npm registry is not deployment-allowlisted")
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        record = npm.record_fields(payload)
+        try:
+            npm.validate_rule(record, credential)
+            schema.rule_credential_header(record, credential)
+        except CatalogIntegrityError:
+            raise ValueError("npm publish preset requires an npm token connection") from None
+        npm.admit_rule(record, catalog)
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.npm_publish_created", change)
 
 
 def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
@@ -475,7 +499,7 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 
 def catalog_status() -> dict:
-    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_demo
+    from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_demo
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
@@ -514,6 +538,7 @@ def catalog_status() -> dict:
             "google_reauthorization": google_reauthorization,
             "github": operator_catalog_github.capability(),
             "npm": operator_catalog_npm.capability(),
+            "npm_publish": operator_catalog_npm_publish.capability(),
             "operation_bundles": operation_bundles,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],

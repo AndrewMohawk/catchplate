@@ -25,7 +25,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from serverware import github_issues, npm_metadata
+from serverware import github_issues, npm_metadata, npm_publish
 from serverware.config import (
     POLICY_BUNDLE_PATH,
     POLICY_MIN_ROLLBACK_EPOCH,
@@ -106,7 +106,7 @@ def _deep_freeze(value: Any) -> Any:
     return value
 
 
-SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", npm_metadata.ADAPTER}
+SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", npm_metadata.ADAPTER, npm_publish.ADAPTER}
 GMAIL_READ_ADAPTER = "gmail.read.v1"
 ORDERED_FORM_QUERY_MODE = "orderedFormV1"
 GMAIL_READ_RESPONSE_MODE = "gmailReadJsonV1"
@@ -433,6 +433,8 @@ def adapter_operation_field_names(
         return NPM_OPERATION_FIELDS.get(operation)
     if adapter_type == npm_metadata.ADAPTER:
         return frozenset({"operation", "package"}) if operation == npm_metadata.OPERATION else None
+    if adapter_type == npm_publish.ADAPTER:
+        return npm_publish.OPERATION_FIELDS if operation == npm_publish.OPERATION else None
     return None
 
 
@@ -460,7 +462,7 @@ def adapter_operation_query_fields(
         return frozenset(
             (adapter_config.get("request") or {}).get("allowedQueryKeys") or []
         )
-    if adapter_type in {"npm.registry", npm_metadata.ADAPTER}:
+    if adapter_type in {"npm.registry", npm_metadata.ADAPTER, npm_publish.ADAPTER}:
         return frozenset()
     return None
 SUPPORTED_CONSTRAINTS = {
@@ -5699,6 +5701,8 @@ def _declared_route_operations(
 ) -> set[str]:
     if adapter_type == npm_metadata.ADAPTER:
         return {npm_metadata.OPERATION}
+    if adapter_type == npm_publish.ADAPTER:
+        return {npm_publish.OPERATION}
     if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER}:
         operations: set[str] = set()
         for path in paths:
@@ -5817,6 +5821,14 @@ def validate_buffered_passthrough_response(
     """
     safe_headers = SAFE_RESPONSE_HEADERS
     mode = response.get("mode") if isinstance(response, dict) else None
+    if adapter_type == npm_publish.ADAPTER or mode == npm_publish.MODE:
+        try:
+            if adapter_type != npm_publish.ADAPTER:
+                raise ValueError("typed adapter required")
+            npm_publish.validate_response_profile(response, constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} npm publish response profile is invalid") from None
+        return
     if adapter_type == npm_metadata.ADAPTER or mode == npm_metadata.MODE:
         try:
             if adapter_type != npm_metadata.ADAPTER:
@@ -5951,7 +5963,7 @@ def _validate_optional_response_release_contract(
     adapter_name: str,
     *, adapter_config: dict[str, Any] | None = None,
 ) -> None:
-    if adapter_name == npm_metadata.ADAPTER:
+    if adapter_name in {npm_metadata.ADAPTER, npm_publish.ADAPTER}:
         validate_buffered_passthrough_response(route_id, adapter_name, response,
             adapter_config=adapter_config)
         return
@@ -6165,6 +6177,8 @@ def provider_request_profile(adapter_type: str, mode: str | None = None, *,
         raise PolicyBundleError("unsupported provider query mode")
     if adapter_type == npm_metadata.ADAPTER:
         return npm_metadata.request_profile()
+    if adapter_type == npm_publish.ADAPTER:
+        return npm_publish.request_profile()
     if adapter_type == GMAIL_READ_ADAPTER:
         result = {"allowedHeaders": list(GMAIL_READ_REQUEST_HEADERS), "discardHeaders": [],
             "allowedQueryKeys": list(GMAIL_READ_QUERY_KEYS), "allowedMediaTypes": [],
@@ -6325,6 +6339,12 @@ def _validate_adapter_security_invariants(
     signed_policy: bool,
 ) -> None:
     request_query_mode(adapter_type, adapter_config)
+    if adapter_type == npm_publish.ADAPTER:
+        try:
+            npm_publish.validate_authority(adapter_config, adapter=adapter_type, host=host,
+                credential_ref=credential_ref, jit=jit, methods=methods, paths=paths, constraints=constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} npm publish authority is invalid") from None
     if adapter_type == npm_metadata.ADAPTER:
         try:
             npm_metadata.validate_authority(adapter_config, adapter=adapter_type, host=host,
@@ -6337,7 +6357,7 @@ def _validate_adapter_security_invariants(
                 credential_ref=credential_ref, jit=jit, methods=methods, paths=paths, constraints=constraints)
         except (TypeError, ValueError):
             raise PolicyBundleError(f"route {route_id} GitHub authority is invalid") from None
-    if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2", "npm.registry", npm_metadata.ADAPTER}:
+    if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2", "npm.registry", npm_metadata.ADAPTER, npm_publish.ADAPTER}:
         _validate_provider_request_profile(route_id, adapter_type, adapter_config)
 
     if adapter_type == GMAIL_READ_ADAPTER:
@@ -6967,6 +6987,7 @@ def compile_policy_bundle(
                 raise PolicyBundleError(f"route {route_id} response policy missing")
             response_mode = response_config.get("mode")
             supported_modes = ({npm_metadata.MODE} if adapter_type == npm_metadata.ADAPTER
+                else {npm_publish.MODE} if adapter_type == npm_publish.ADAPTER
                 else {GMAIL_READ_RESPONSE_MODE} if adapter_type == GMAIL_READ_ADAPTER
                 else SUPPORTED_RESPONSE_MODES if adapter_type == "generic.rest" else BUFFERED_RESPONSE_MODES | {"stream"})
             if not isinstance(response_mode, str) or response_mode not in supported_modes:
@@ -7383,6 +7404,15 @@ def compile_policy_bundle(
             or "jit" in item or "responseObservation" in item
         ):
             raise PolicyBundleError(f"route {route_id} npm metadata transport or authority extension is invalid")
+        if adapter_type == npm_publish.ADAPTER and (
+            match.get("scheme") != "https" or match.get("host") != npm_publish.HOST
+            or type(match.get("port")) is not int or match["port"] != 443
+            or match.get("methods") != ["PUT"]
+            or item.get("credentialHeader") != npm_publish.REPLACEMENT
+            or credentials[credential_ref].injection != {"type": "bearer", "header": "Authorization"}
+            or "jit" in item or "responseObservation" in item
+        ):
+            raise PolicyBundleError(f"route {route_id} npm publish transport or authority extension is invalid")
         response_mode = str((adapter_config.get("response") or {}).get("mode") or "")
         if response_mode in STREAMING_RESPONSE_MODES and any(
             constraint.get("type")
@@ -9441,6 +9471,9 @@ def validated_request_routing_target(pretty_url: str, method: str) -> SplitResul
 
 
 def validated_request_urlsplit_for_route(pretty_url: str, route: Any) -> SplitResult:
+    if route.adapter_type == npm_publish.ADAPTER:
+        npm_publish.validate_route(route)
+        return npm_publish.target_parts(pretty_url)
     if route.adapter_type == npm_metadata.ADAPTER:
         npm_metadata.validate_route(route)
         return npm_metadata.target_parts(pretty_url)

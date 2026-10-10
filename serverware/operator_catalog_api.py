@@ -22,7 +22,7 @@ CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/credentials/npm-token", "/applications", "/applications/revoke",
     "/applications/rotate-token", "/applications/proxy-authentication",
-    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata",
+    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
     "/proxy/upstreams", "/proxy/upstreams/cancel",
@@ -257,6 +257,11 @@ async def create_github_rule(request: Request, identity: auth.AdminIdentity = De
 @router.post("/access-rules/npm-metadata")
 async def create_npm_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "NpmMetadataRuleInput", "create_npm_rule", 16384, created=True)
+
+
+@router.post("/access-rules/npm-publish")
+async def create_npm_publish_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "NpmPublishRuleInput", "create_npm_publish_rule", 4096, created=True)
 
 
 async def _google_disconnect_result(function, *args, accepted: bool = False) -> JSONResponse:

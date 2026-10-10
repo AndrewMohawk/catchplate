@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
+  "title": "Serverware closed npm single-version publish v1",
+  "$comment": "One exact package and configured tag, PUT only. No deletion, tag editing, provenance or tarball downloading. Compiler and runtime check exact authority and integrity.",
+  "type": "object", "additionalProperties": false,
+  "required": ["credentialBinding", "package", "tag", "request", "response"],
+  "$defs": {
+    "packageName": {"type": "string", "minLength": 1, "maxLength": 214,
+      "pattern": "^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$"}
+  },
+  "properties": {
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "properties": {
+        "credentialType": {"const": "static"},
+        "provider": {"const": "operator-demo"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "secretClass": {"const": "bearerToken"}
+      }
+    },
+    "package": {"$ref": "#/$defs/packageName"},
+    "tag": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+    "request": {"const": {
+      "allowedHeaders": ["accept", "content-type", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope", "user-agent"],
+      "discardHeaders": ["accept-encoding", "npm-session"], "allowedQueryKeys": [],
+      "allowedMediaTypes": ["application/json"], "maxBodyBytes": 16777216, "valueRules": []
+    }},
+    "response": {"const": {
+      "mode": "npmPublishJsonV1", "maxBodyBytes": 65536,
+      "contentTypes": ["application/json"], "allowedHeaders": [],
+      "error": {"mode": "npmPublishJsonV1", "maxBodyBytes": 65536,
+        "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}
+    }}
+  }
+}

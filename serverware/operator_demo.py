@@ -262,6 +262,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/access-rules/revoke", "/api/operator-demo/access-rules/gmail-read",
         "/api/operator-demo/access-rules/github",
         "/api/operator-demo/access-rules/npm-metadata",
+        "/api/operator-demo/access-rules/npm-publish",
         "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",
         "/api/operator-demo/oauth/google/setup/cancel",
         "/api/operator-demo/proxy/upstreams/cancel",

@@ -69,6 +69,7 @@ _CATALOG = {
     "access_rule.created": "Application permission saved",
     "access_rule.github_created": "GitHub application permission saved",
     "access_rule.npm_metadata_created": "npm package metadata permission saved",
+    "access_rule.npm_publish_created": "npm package publishing permission saved",
     "access_rule.revoked": "Application permission revoked",
     "upstream_setup.prepared": "Proxy destination change prepared; restart required",
     "upstream_setup.cancelled": "Prepared proxy destination change cancelled",

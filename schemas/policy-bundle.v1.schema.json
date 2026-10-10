@@ -1490,6 +1490,13 @@
                 }
               },
               {
+                "type": "object", "required": ["type", "config"], "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "npm.publish.v1"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json"}
+                }
+              },
+              {
                 "type": "object",
                 "required": ["type", "config"],
                 "additionalProperties": false,
@@ -1715,12 +1722,12 @@
               "properties": {"adapter": {
                 "required": ["type", "config"],
                 "properties": {
-                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1"]},
+                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1", "npm.publish.v1"]},
                   "config": {
                     "required": ["response"],
                     "properties": {"response": {
                       "required": ["mode"],
-                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1"]}}
+                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1", "npmPublishJsonV1"]}}
                     }}
                   }
                 }
@@ -1781,9 +1788,24 @@
                   "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmJsonUtf8V1"}
                 }}
               }}},
-              "else": {"properties": {"constraints": {"items": {
-                "not": {"required": ["contentTypePolicy"]}
-              }}}}
+              "else": {
+                "if": {"properties": {"adapter": {"properties": {
+                  "type": {"const": "npm.publish.v1"}
+                }, "required": ["type"]}}, "required": ["adapter"]},
+                "then": {"required": ["constraints"], "properties": {"constraints": {
+                  "minItems": 1, "maxItems": 2,
+                  "contains": {"required": ["type", "contentTypePolicy"], "properties": {
+                    "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmJsonUtf8V1"}
+                  }}, "minContains": 1, "maxContains": 1,
+                  "items": {"if": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                    "then": {"required": ["contentTypePolicy"], "properties": {"contentTypePolicy": {"const": "npmJsonUtf8V1"}}},
+                    "else": {"required": ["type"], "properties": {"type": {"const": "requestTimeWindow"}},
+                      "not": {"required": ["contentTypePolicy"]}}}
+                }}},
+                "else": {"properties": {"constraints": {"items": {
+                  "not": {"required": ["contentTypePolicy"]}
+                }}}}
+              }
             }
           },
           {
@@ -1791,7 +1813,7 @@
               "properties": {
                 "adapter": {
                   "required": ["type"],
-                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1"]}}
+                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1"]}}
                 }
               },
               "required": ["adapter"]

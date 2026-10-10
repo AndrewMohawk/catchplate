@@ -54,9 +54,11 @@ def _request_profile(rule: dict, credential: dict, route: dict) -> None:
 
 def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=None) -> dict:
     from serverware import operator_demo_store as legacy
-    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm
+    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish
     for rule in catalog['access_rules']:
-        if operator_catalog_npm.selected(rule):
+        if operator_catalog_npm_publish.selected(rule):
+            operator_catalog_npm_publish.validate_shape(rule)
+        elif operator_catalog_npm.selected(rule):
             operator_catalog_npm.validate_shape(rule)
         elif operator_catalog_github.selected(rule):
             operator_catalog_github.validate_shape(rule)
@@ -99,7 +101,9 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             operator_catalog_google.validate_rule(rule, credential, profile=metadata_profile)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
-        if operator_catalog_npm.selected(rule):
+        if operator_catalog_npm_publish.selected(rule):
+            emitted = operator_catalog_npm_publish.render_routes(rule, credential, application['principal_id'])
+        elif operator_catalog_npm.selected(rule):
             route = operator_catalog_npm.render_route(rule, credential, application['principal_id'])
         elif operator_catalog_github.selected(rule):
             route = operator_catalog_github.render_route(rule, credential, application['principal_id'])
@@ -109,9 +113,12 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             _request_profile(rule, credential, route)
             _response_profile(rule, route)
         replacement = schema.rule_credential_header(rule, credential)
-        if replacement is not None:
-            route['credentialHeader'] = replacement
-        routes.append(route)
+        if not operator_catalog_npm_publish.selected(rule):
+            emitted = [route]
+        for item in emitted:
+            if replacement is not None:
+                item['credentialHeader'] = dict(replacement)
+            routes.append(item)
     bundle = generated
     bundle['principals'] = [principals[row['id']] for row in catalog['applications'] if row['id'] in principals]
     bundle['credentials'] = [credential_policies[row['id']] for row in catalog['credentials'] if row['id'] in credential_policies]

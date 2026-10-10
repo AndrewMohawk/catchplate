@@ -87,11 +87,16 @@ def _indexes(catalog):
     routes = {}
     for rule in rules.values():
         route = rule.get("route_id")
-        if (not _text(route, 256) or route in routes
+        if (not _text(route, 256)
                 or rule.get("credential_id") not in credentials
                 or rule.get("application_id") not in apps):
             raise ValueError("catalog evidence identity unavailable")
-        routes[route] = rule
+        from serverware import operator_catalog_npm_publish
+        aliases = operator_catalog_npm_publish.route_ids(rule) if operator_catalog_npm_publish.selected(rule) else (route,)
+        for alias in aliases:
+            if not _text(alias, 256) or alias in routes:
+                raise ValueError("catalog evidence identity unavailable")
+            routes[alias] = rule
     return credentials, apps, routes
 
 
@@ -281,6 +286,12 @@ def _project(conn, catalog, now):
                 or apps[rule["application_id"]]["principal_id"] != terminal.get("principal_id")):
             window["unmatched_responses"] += 1
             continue
+        from serverware import operator_catalog_npm_publish
+        if operator_catalog_npm_publish.selected(rule):
+            primary, companion = operator_catalog_npm_publish.route_ids(rule)
+            if (terminal["route_id"], terminal["method"]) not in {(primary, "PUT"), (companion, "GET")}:
+                window["unmatched_responses"] += 1
+                continue
         if not 200 <= terminal["upstream_status"] < 300:
             continue
         account = accounts[rule["credential_id"]]

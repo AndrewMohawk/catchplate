@@ -91,6 +91,40 @@ class NpmMetadataRuleInput(NamedInput):
         return validate_packages(value)
 
 
+class NpmPublishingWindow(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    start: str = Field(min_length=5, max_length=5)
+    end: str = Field(min_length=5, max_length=5)
+
+    @model_validator(mode="after")
+    def daily_utc_window(self):
+        from serverware.npm_publish import validate_window
+        validate_window({"timezone": "UTC", "start": self.start, "end": self.end})
+        return self
+
+
+class NpmPublishRuleInput(NamedInput):
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["npm_publish_v1"]
+    package: str = Field(min_length=1, max_length=214)
+    tag: str = Field(default="latest", min_length=1, max_length=64)
+    publishing_window: NpmPublishingWindow | None = None
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+    @field_validator("package")
+    @classmethod
+    def exact_package(cls, value: str) -> str:
+        from serverware.npm_publish import validate_package
+        return validate_package(value)
+
+    @field_validator("tag")
+    @classmethod
+    def exact_tag(cls, value: str) -> str:
+        from serverware.npm_publish import validate_tag
+        return validate_tag(value)
+
+
 class GithubRepositoryInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     owner: str = Field(min_length=1, max_length=39)

@@ -75,6 +75,8 @@ def _declared(route):
         names = {"npm." + name for name in config["operations"]}
     elif kind == "npm.metadata.v1":
         names = {"npm.metadata.read"}
+    elif kind == "npm.publish.v1":
+        names = {"npm.publish"}
     else:
         require(kind == "generic.rest")
         names = {config["request"]["operation"]["name"]}
@@ -94,6 +96,8 @@ def _builtin(kind, name):
             "npm.distTagWrite": "write", "npm.metadataWrite": "write", "npm.tokenWrite": "administrative"}.get(name)
     if kind == "npm.metadata.v1":
         return "read" if name == "npm.metadata.read" else None
+    if kind == "npm.publish.v1":
+        return "publish" if name == "npm.publish" else None
     return None
 
 

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
-from serverware import db, github_issues, http_client, npm_metadata, runtime
+from serverware import db, github_issues, http_client, npm_metadata, npm_publish, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
@@ -98,6 +98,7 @@ _RESPONSE_CONTENT_TYPES = {
     "json": "application/json",
     GMAIL_READ_RESPONSE_MODE: "application/json",
     npm_metadata.MODE: "application/json",
+    npm_publish.MODE: "application/json",
     BUFFERED_PASSTHROUGH_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE: "application/json",
     BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE: "application/json",
@@ -195,6 +196,10 @@ def gmail_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray
 
 
 def npm_metadata_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
+    return _bounded_json_inspection(raw, maximum)
+
+
+def npm_publish_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
     return _bounded_json_inspection(raw, maximum)
 
 
@@ -1336,7 +1341,7 @@ class ApiAdapter:
     @staticmethod
     def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
         if (route.adapter_config.get("response") or {}).get("mode") not in {
-            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE
         }:
             return None
         try:
@@ -3378,6 +3383,85 @@ class NpmMetadataAdapter(ApiAdapter):
         return PolicyDecision(allowed=True)
 
 
+class NpmPublishAdapter(ApiAdapter):
+    """One exact package, version and tag; bytes remain unchanged after validation."""
+    id = npm_publish.ADAPTER
+
+    @staticmethod
+    def _denied(error: str, status: int = 403) -> PolicyDecision:
+        return PolicyDecision(False, "npm publish contract refused", status, {"error": error})
+
+    def _fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        npm_publish.validate_route(route)
+        fields = npm_publish.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, package=route.adapter_config["package"], tag=route.adapter_config["tag"])
+        if params != {"package": npm_publish.target_parts(flow.request.pretty_url).path[1:]}:
+            raise ValueError("npm publish capture refused")
+        return fields
+
+    def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        try:
+            self._fields(flow, route, params)
+            for name in npm_publish.REQUEST_HEADERS:
+                if len(self._response_header_values(flow.request.headers, name)) > 1:
+                    raise ValueError("npm publish duplicate header refused")
+            content_types = self._response_header_values(flow.request.headers, "content-type")
+            if len(content_types) != 1 or not npm_publish.is_json_content_type(content_types[0]):
+                raise ValueError("npm publish request content type refused")
+            return self._validate_provider_request_profile(flow, route)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_publish_request_denied")
+
+    def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        return self._fields(flow, route, params)
+
+    def _response_contract(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if not flow.response:
+            return self._denied("npm_publish_response_missing", 502)
+        try:
+            self._fields(flow, route, params)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_publish_response_policy_invalid", 502)
+        metadata_error = self._response_metadata_error(flow, route)
+        if metadata_error is not None:
+            return metadata_error
+        if flow.response.status_code not in npm_publish.STATUSES:
+            return self._denied("npm_publish_response_status_denied", 502)
+        content_types = self._response_header_values(flow.response.headers, "content-type")
+        if len(content_types) != 1 or not npm_publish.is_json_content_type(content_types[0]):
+            return self._denied("npm_publish_response_content_type_denied", 502)
+        body = flow.response.raw_content
+        if not isinstance(body, bytes) or not 1 <= len(body) <= 65536:
+            return self._denied("npm_publish_response_body_denied", 502)
+        return PolicyDecision(allowed=True)
+
+    def prepare_response(self, flow: Any, route: Any, params: dict[str, str], *,
+            authorization_factory: Callable[[], tuple[str, float]] | None = None) -> PolicyDecision:
+        return self._response_contract(flow, route, params)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        decision = self._response_contract(flow, route, params)
+        if not decision.allowed:
+            return decision
+        inspection = bytearray()
+        try:
+            payload, inspection = npm_publish_json_inspection(flow.response.raw_content, 65536)
+            if not isinstance(payload, dict):
+                raise ValueError("npm publish response object required")
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_publish_response_invalid", 502)
+        finally:
+            inspection[:] = b"\x00" * len(inspection)
+        profile = route.adapter_config["response"]
+        if flow.response.status_code not in {200, 201}:
+            profile = profile["error"]
+        self._normalize_response_headers(flow, profile, npm_publish.MODE)
+        return PolicyDecision(allowed=True)
+
+
 class NpmRegistryAdapter(ApiAdapter):
     id = "npm.registry"
 
@@ -4128,6 +4212,7 @@ ADAPTERS: dict[str, ApiAdapter] = {
     "x.v2": XV2Adapter(),
     "npm.registry": NpmRegistryAdapter(),
     npm_metadata.ADAPTER: NpmMetadataAdapter(),
+    npm_publish.ADAPTER: NpmPublishAdapter(),
 }
 
 

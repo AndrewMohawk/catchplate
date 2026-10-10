@@ -165,15 +165,18 @@ class EventTests(unittest.TestCase):
     def test_npm_catalog_events_are_audit_only_and_project_safe_details(self):
         resource = str(uuid.uuid4())
         kinds = ("operator_catalog.credential.npm_token_created",
-            "operator_catalog.access_rule.npm_metadata_created")
+            "operator_catalog.access_rule.npm_metadata_created",
+            "operator_catalog.access_rule.npm_publish_created")
         for kind in kinds:
             self.assertIn(kind, events.AUDIT_EVENT_TYPES)
             self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
             self.append(kind, {"resource_id": resource, "revision": 2,
                 "policy_hash": DIGEST, "secret": CANARY,
-                "packages": [CANARY], "destination_url": "https://example.invalid/" + CANARY})
+                "packages": [CANARY], "package": CANARY, "tag": CANARY,
+                "publishing_window": {"start": CANARY, "end": CANARY},
+                "destination_url": "https://example.invalid/" + CANARY})
         batch, cursor = self.read()
-        self.assertEqual(cursor.rowid, 2)
+        self.assertEqual(cursor.rowid, len(kinds))
         self.assertEqual(tuple(item.event_type for item in batch), kinds)
         for item in batch:
             self.assertIsNone(item.action_payload)

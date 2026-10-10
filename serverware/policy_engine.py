@@ -15,10 +15,10 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 
 from mitmproxy import http
 
-from serverware import db, github_issues, npm_metadata, runtime
+from serverware import db, github_issues, npm_metadata, npm_publish, runtime
 from serverware.adapters import (
     _parse_content_type, get_adapter, gmail_read_json_inspection,
-    npm_metadata_json_inspection, preflight_request_admission,
+    npm_metadata_json_inspection, npm_publish_json_inspection, preflight_request_admission,
 )
 from serverware.constraints import (
     _request_value_predicate_matches,
@@ -627,7 +627,7 @@ def _validate_response_content_encoding(
         )
     route = flow.metadata.get("serverware_route")
     if route and (route.adapter_config.get("response") or {}).get("mode") in {
-            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE}:
+            BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE}:
         try:
             _v2_response_header_entries(flow, route)
         except HeaderCompatibilityError as error:
@@ -2872,6 +2872,19 @@ def _npm_metadata_scoped_target(flow: http.HTTPFlow, route: RoutePolicy) -> bool
         return False
 
 
+def _npm_publish_scoped_target(flow: http.HTTPFlow, route: RoutePolicy) -> bool:
+    """Only the signed publish package capture may carry its canonical escaped slash."""
+    if route.adapter_type != npm_publish.ADAPTER:
+        return False
+    try:
+        npm_publish.validate_route(route)
+        fields = npm_publish.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, package=route.adapter_config["package"], tag=route.adapter_config["tag"])
+        return fields["packageName"].startswith("@")
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        return False
+
+
 def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     try:
         raw_target = flow.request.pretty_url
@@ -2997,7 +3010,8 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             params=params,
         )
     if (path_has_encoded_slash and route.adapter_type != "npm.registry"
-            and not _npm_metadata_scoped_target(flow, route)):
+            and not _npm_metadata_scoped_target(flow, route)
+            and not _npm_publish_scoped_target(flow, route)):
         decision = PolicyDecision(
             False,
             "encoded path separator is not allowed for this adapter",
@@ -3270,6 +3284,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         rewritten_path_has_encoded_slash
         and route.adapter_type != "npm.registry"
         and not _npm_metadata_scoped_target(flow, route)
+        and not _npm_publish_scoped_target(flow, route)
     ):
         return pre_reserve_denial(
             PolicyDecision(
@@ -4594,7 +4609,7 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
         guard: _ResponseCredentialGuard | None = None) -> PolicyDecision:
     """Inspect decoded content before release, without changing dispatched bytes."""
     mode = (route.adapter_config.get("response") or {}).get("mode")
-    if mode not in {GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE}:
+    if mode not in {GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE}:
         return PolicyDecision(True)
     guard = guard if guard is not None else getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
     if route.credential_ref and not isinstance(guard, _ResponseCredentialGuard):
@@ -4603,15 +4618,17 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
     inspection = bytearray()
     try:
         raw = flow.response.raw_content
-        inspect_json = npm_metadata_json_inspection if mode == npm_metadata.MODE else gmail_read_json_inspection
+        inspect_json = (npm_publish_json_inspection if mode == npm_publish.MODE
+            else npm_metadata_json_inspection if mode == npm_metadata.MODE else gmail_read_json_inspection)
         _, inspection = inspect_json(raw,
-            1048576 if flow.response.status_code == 200 else 65536)
+            1048576 if mode != npm_publish.MODE and flow.response.status_code == 200 else 65536)
         if guard and (guard.detects(raw) or guard.detects(inspection)):
             return PolicyDecision(False, "response credential reflection denied", 502,
                 {"error": "response_credential_reflection"})
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return PolicyDecision(False, "typed JSON response inspection refused", 502,
-            {"error": "npm_metadata_response_invalid" if mode == npm_metadata.MODE else "gmail_read_response_invalid"})
+            {"error": "npm_publish_response_invalid" if mode == npm_publish.MODE
+                else "npm_metadata_response_invalid" if mode == npm_metadata.MODE else "gmail_read_response_invalid"})
     finally:
         inspection[:] = b"\x00" * len(inspection)
     return PolicyDecision(True)
@@ -4674,7 +4691,7 @@ def _evaluate_response_envelope(
             {"error": "response_envelope_policy_missing"},
         )
     v2 = response_cfg.get("mode") in {
-        BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE}
+        BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE}
     inspection_decision = _typed_json_response_inspection(flow, route, credential_guard)
     if not inspection_decision.allowed:
         return inspection_decision
@@ -4791,6 +4808,12 @@ def _evaluate_response_envelope(
                 and content_types == npm_metadata.CONTENT_TYPES
                 and len(physical_content_types) == 1
                 and npm_metadata.is_json_content_type(physical_content_types[0]))
+            npm_content_type = npm_content_type or (route.adapter_type == npm_publish.ADAPTER
+                and response_cfg.get("mode") == npm_publish.MODE
+                and constraint["contentTypePolicy"] == npm_publish.CONTENT_TYPE_POLICY
+                and content_types == npm_publish.CONTENT_TYPES
+                and len(physical_content_types) == 1
+                and npm_publish.is_json_content_type(physical_content_types[0]))
             if not npm_content_type and (constraint["contentTypePolicy"] != github_issues.CONTENT_TYPE_POLICY
                     or not github_issues.selected(route.adapter_config)
                     or content_types != ["application/json"]

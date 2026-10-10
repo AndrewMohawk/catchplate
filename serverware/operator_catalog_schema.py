@@ -215,7 +215,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
-    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm
+    from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish
+    if operator_catalog_npm_publish.selected(rule):
+        operator_catalog_npm_publish.validate_shape(rule)
+        return None, operator_catalog_npm_publish.RESPONSE_MODE
     if operator_catalog_npm.selected(rule):
         operator_catalog_npm.validate_shape(rule)
         return None, operator_catalog_npm.RESPONSE_MODE
@@ -245,7 +248,10 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
     request_mode, _ = rule_content_modes(rule)
-    from serverware import operator_catalog_github, operator_catalog_npm
+    from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_npm_publish
+    if operator_catalog_npm_publish.selected(rule):
+        operator_catalog_npm_publish.validate_rule(rule, credential)
+        return None
     if operator_catalog_npm.selected(rule):
         operator_catalog_npm.validate_rule(rule, credential)
         return None
@@ -362,8 +368,8 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
             operator_catalog_google.validate_rule(row, credential, profile=metadata_profile)
         if row['status'] == 'active' and (app['status'] != 'active' or credential['status'] != 'active'):
             raise CatalogIntegrityError('active rule has an inactive parent')
-    from serverware import operator_catalog_npm
-    operator_catalog_npm.validate_route_coexistence(catalog['access_rules'])
+    from serverware import operator_catalog_npm_publish
+    operator_catalog_npm_publish.validate_route_coexistence(catalog['access_rules'])
 
 
 def initialize(conn) -> None:

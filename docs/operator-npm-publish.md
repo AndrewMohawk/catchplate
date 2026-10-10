@@ -524,7 +524,45 @@ outbox groups also pass in **0.053 seconds**. Two selected controls against the
 frozen pre-fix `37c12a0f` source detect the missing closes in **3.203 seconds**.
 PostgreSQL coverage is of its Python context wrapper, not a running server.
 This establishes deterministic resource cleanup, not the cause or repair of
-the transport failure. No stock-client run has yet exercised this new helper.
+the transport failure.
+
+A fourteenth, one-shot run exercised that correction at source `4364c3e6`
+with the unchanged, compiler-input-matched `92ee92a2` gate. From **16:37:03 to
+16:38:27 UTC on October 10**, prerequisite and unscoped client/checkpoint work
+completed, including the post-unscoped catalog guard. The scoped command then
+failed at `scoped / client`: npm returned `E503` with process exit 1. Two static
+diagnostics identify `generation_refresh / fetch_transport`; two guarded
+terminal-response observations identify `credential_generation_missing`, with
+both writes completed. These identify the failure boundary, not its root cause
+or independent correlation of a particular gate write to npm's response.
+
+An initial one-event audit POST had transport-stage `outcome_unknown`, no
+status, unchanged snapshot/sequence and **3,893 ms** whole-attempt elapsed time.
+Its recorded retry failed preflight as `not_sent` after **5,000 ms**, without
+snapshot comparisons. Those spans include preflight, not just HTTP execution.
+The failure observer made four health reads and still saw queue depth 3, one
+optional in-flight event, one retry batch/event and `send_failed=1`; the bounded
+durable-audit read was unavailable. Twenty renewal warnings were retained.
+
+All 12 emitted application audit observations completed, covering 15 events.
+Elapsed median/maximum were 215.5/1,586 ms; policy validation/copy/final merge
+were 96/1,273 ms. Initial policy-lock waits were zero, slot waits at most 1 ms
+and audit-worker handoff at most 5 ms. These uncorrelated admitted observations
+do not locate an unobserved transport failure. Docker's last two application
+health probes exceeded their three-second limit before cleanup. The final
+application exit was 137 after the runner's bounded stop, with `OOMKilled=false`;
+this does not establish an earlier crash or an out-of-memory cause.
+
+The stopped database passed `quick_check`, retaining 15 issued leases, the
+three prerequisite/unscoped response releases, one earlier denial, three
+established CONNECTs (including scoped) and two keep-alives. No scoped response
+release or CONNECT/upstream-resolution denial was retained. All project
+containers and networks were removed; all 4,941 source and 1,782 npm files
+remained unchanged. Receipts are in `serverware-npm-publish-runner.zQQuTjOW`,
+with private runtime evidence in `serverware-npm-publish-private.riK50xhb`.
+No run was restarted and nothing was promoted. The next diagnostic boundary
+is the application's actual execution state during the transport stall; these
+results do not justify pooling, caching or a deadline increase by themselves.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

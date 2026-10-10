@@ -3,27 +3,135 @@
 No flags are set here. A read-only mount or actual immutable inode flags must
 already protect every object. A successful scan is not closure/rootfs analysis,
 provenance, installation, or hostile-root protection.
+
+Only kernel-enforced ext4 fs-verity content identities may reuse a process-local
+content digest. This is not an eager disk scrub: later reads still fail with EIO
+if their data violates the enforced digest. Metadata, roster and caller checks
+remain fresh, and no authority or session receipt is cached.
 """
 from __future__ import annotations
 
 import array
+from collections import OrderedDict
+import ctypes
+import errno
 import fcntl
 import hashlib
 import os
 from pathlib import PurePosixPath
 import stat
+import struct
+import sys
+import threading
 
 from serverware import authority_artifact_spec as spec
 
 FS_IOC_GETFLAGS = 0x80086601
 FS_IOC_GETVERSION = 0x80087601
 FS_IMMUTABLE_FL = 0x10
+FS_IOC_MEASURE_VERITY = 0xC0046686
 FIELDS = frozenset({"path", "kind", "mode", "uid", "gid"})
+_FILE_DIGEST_CACHE_LIMIT = min(32768, spec.MAX_BUNDLE_FILES)
+_FILE_DIGEST_CACHE = OrderedDict()
+_FILE_DIGEST_CACHE_LOCK = threading.Lock()
+_FILE_DIGEST_CACHE_PID = os.getpid()
+
+
+class _Statfs(ctypes.Structure):
+    # Linux x86_64 libc statfs ABI, not an inferred mount/path name.
+    _fields_ = [("f_type", ctypes.c_long), ("f_bsize", ctypes.c_long),
+                ("f_blocks", ctypes.c_ulong), ("f_bfree", ctypes.c_ulong),
+                ("f_bavail", ctypes.c_ulong), ("f_files", ctypes.c_ulong),
+                ("f_ffree", ctypes.c_ulong), ("f_fsid", ctypes.c_int * 2),
+                ("f_namelen", ctypes.c_long), ("f_frsize", ctypes.c_long),
+                ("f_flags", ctypes.c_long), ("f_spare", ctypes.c_long * 4)]
+
+
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_FSTATFS = _LIBC.fstatfs
+_FSTATFS.argtypes = (ctypes.c_int, ctypes.POINTER(_Statfs))
+_FSTATFS.restype = ctypes.c_int
 
 
 def _require(value):
     if not value:
         raise ValueError("local artifact source measurement refused")
+
+
+def _ext4_verity_cache_eligible(fd):
+    # Other ABIs retain the original full-read path. On this admitted ABI an
+    # actual syscall failure refuses; it is not mistaken for absent verity.
+    if sys.platform != "linux" or os.uname().machine != "x86_64":
+        return False
+    _require(ctypes.sizeof(ctypes.c_void_p) == ctypes.sizeof(ctypes.c_long) == 8
+             and ctypes.sizeof(_Statfs) == 120)
+    info = _Statfs()
+    result = _FSTATFS(fd, ctypes.byref(info))
+    if result == -1:
+        raise OSError(ctypes.get_errno(), "local artifact filesystem measurement refused")
+    _require(result == 0)
+    # FUSE may emulate MEASURE_VERITY but cannot supply ext4's kernel statfs
+    # type. Read-only mounts and immutable inode flags never admit this cache.
+    return info.f_type == 0xEF53
+
+
+def _fsverity_digest(fd):
+    buffer = bytearray(struct.pack("=HH64s", 0, 64, bytes(64)))
+    try:
+        result = fcntl.ioctl(fd, FS_IOC_MEASURE_VERITY, buffer, True)
+    except OSError as error:
+        if error.errno in (errno.ENODATA, errno.ENOTTY, errno.EOPNOTSUPP):
+            return None
+        raise
+    _require(type(result) is int and result == 0 and len(buffer) == 68)
+    algorithm, size, digest = struct.unpack("=HH64s", buffer)
+    if algorithm == 2 and size == 64:
+        # Valid SHA-512 verity remains measurable by the original byte-read
+        # path; only SHA-256 verity is admitted to this optimization.
+        return None
+    _require(algorithm == 1 and size == 32)
+    return digest[:32]
+
+
+def _file_cache_key(fd, size):
+    if not _ext4_verity_cache_eligible(fd):
+        return None
+    verity = _fsverity_digest(fd)
+    return None if verity is None else (verity, size)
+
+
+def _reset_file_digest_cache():
+    global _FILE_DIGEST_CACHE, _FILE_DIGEST_CACHE_LOCK, _FILE_DIGEST_CACHE_PID
+    _FILE_DIGEST_CACHE = OrderedDict()
+    _FILE_DIGEST_CACHE_LOCK = threading.Lock()
+    _FILE_DIGEST_CACHE_PID = os.getpid()
+
+
+os.register_at_fork(after_in_child=_reset_file_digest_cache)
+
+
+def _cache_lookup(key):
+    # Check before taking a possibly inherited lock. Forked children must not
+    # reuse the parent's memo, even though every lookup remeasures the FD.
+    if os.getpid() != _FILE_DIGEST_CACHE_PID:
+        _reset_file_digest_cache()
+    with _FILE_DIGEST_CACHE_LOCK:
+        value = _FILE_DIGEST_CACHE.get(key)
+        if value is not None:
+            _FILE_DIGEST_CACHE.move_to_end(key)
+        return value
+
+
+def _cache_remember(key, digest):
+    if os.getpid() != _FILE_DIGEST_CACHE_PID:
+        _reset_file_digest_cache()
+    with _FILE_DIGEST_CACHE_LOCK:
+        previous = _FILE_DIGEST_CACHE.get(key)
+        _require(previous is None or previous == digest)
+        _FILE_DIGEST_CACHE[key] = digest
+        _FILE_DIGEST_CACHE.move_to_end(key)
+        while len(_FILE_DIGEST_CACHE) > _FILE_DIGEST_CACHE_LIMIT:
+            _FILE_DIGEST_CACHE.popitem(last=False)
 
 
 def _ioctl_number(fd, request):
@@ -154,18 +262,31 @@ def measure_file(root_fd, entry, *, check):
                  and 0 <= before.st_size <= spec.MAX_FILE_BYTES
                  and stat.S_IMODE(before.st_mode) == entry["mode"]
                  and before.st_uid == entry["uid"] and before.st_gid == entry["gid"])
-        digest = hashlib.sha256()
-        offset = 0
-        while offset < before.st_size:
-            check()
-            raw = os.pread(descriptor, min(1024 * 1024, before.st_size - offset), offset)
-            _require(bool(raw))
-            digest.update(raw)
-            offset += len(raw)
-        check()
-        _require(not os.pread(descriptor, 1, offset) and _identity(os.fstat(descriptor)) == _identity(before))
-        result = dict(entry, size=before.st_size, sha256="sha256:" + digest.hexdigest())
+        cache_key = _file_cache_key(descriptor, before.st_size)
+        content_digest = None if cache_key is None else _cache_lookup(cache_key)
+        if content_digest is None:
+            digest = hashlib.sha256()
+            offset = 0
+            while offset < before.st_size:
+                check()
+                raw = os.pread(descriptor, min(1024 * 1024, before.st_size - offset), offset)
+                _require(bool(raw))
+                digest.update(raw)
+                offset += len(raw)
+            content_digest = digest.hexdigest()
+        else:
+            offset = before.st_size
+        _require(not os.pread(descriptor, 1, offset))
+        _require(_file_cache_key(descriptor, before.st_size) == cache_key)
+        _require(_identity(os.fstat(descriptor)) == _identity(before))
+        result = dict(entry, size=before.st_size, sha256="sha256:" + content_digest)
         spec._validate_file_entry(result)
+        # Preserve the original pre-open/per-chunk callback cadence and make
+        # the terminal check later: after every measurement/validation step,
+        # before any cache population or successful return.
+        check()
+        if cache_key is not None:
+            _cache_remember(cache_key, content_digest)
         return result
     finally:
         os.close(descriptor)

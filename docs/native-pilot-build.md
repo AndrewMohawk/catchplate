@@ -9,7 +9,71 @@ sign grants, install files, start services, contact providers, or replace any
 independent authority with a local manifest. No build or runtime acceptance was
 performed when this source was authored.
 
-## Current engineering assembly
+## Current local synthetic pilot preparation, October 10
+
+The separate COMMON local-synthetic assembly was prepared from SDK
+`55c7f0eb742f1eed12a013420d2b4ca2c8d553da` and COMMON
+`423900f56448d514250d93f49b0d9a609d1ac83d`. It is not the independent,
+production-approved runtime assembly described below.
+
+The new normal Rust gate built successfully in **5 minutes 37 seconds** with
+the pinned Rust 1.88 compiler and retained engineering dependency candidate,
+using `cargo build --release --frozen --offline --bin serverware-decision-gate`.
+The isolated container had no network, a read-only root, four CPUs, 24 GiB of
+memory and no additional swap; it exited zero without an OOM or timeout.
+
+- Binary SHA-256: `52eb5dd73808bc06bb2771d5d82c32bf7e0630dbeaf460aa3032fecca058d043`.
+- Build receipt SHA-256: `d497d31758df21fbcccc2321c82de5392c34b10ac1e18b429ee5cacdfccac6a4`.
+- The actual compiler depfile contains 491 distinct repository inputs and all
+  seven embedded schemas, including `gmail.read.v1.schema.json`.
+- Static comparison against the selected guest's real loader and libraries
+  passed: no unavailable required library or unresolved strong symbol. This
+  check did not execute the gate and is not application acceptance.
+
+Build source, producer, terminal receipt, binary, depfile and compatibility
+observations are retained at
+`/srv/catchplate-fast/tmp/serverware-genuine-rust-55c7f0eb.agssQS`.
+The COMMON correction adds only the missing Gmail-read schema to the exact
+source/dependency comparison. Two focused regression tests and all 26 inert
+template renders passed; compiler, vendor and full source-equality guards were
+not relaxed.
+
+Fresh assembly `serverware-pilot-20261010-r97` completed all 22 steps. Its public
+configuration digest is
+`5e5192baf8126072d893eb820bf42ef03fe603fffa1cceebb6c7b4f84ba2f7cf`.
+The final launch-file digest is
+`d25b2dff9f221495ce8ec7aac5233c21c25d60f16e1e4baa59bba861a2382668`.
+The assembly receipt retains `liveWindowStarted=false`.
+
+The waiting Start page is published at
+<https://serverware.example.com/> behind the existing sign-in boundary.
+Its user unit is `serverware-pilot-20261010-r97-prelaunch.service`, published as
+PID 4091667, invocation `d0667c3061bc4735ab8fbc4f4c9f700f`.
+An operator-loopback GET verified HTTP 200, the actual Start page, one enabled
+Start button, the hidden disabled recovery button and `Cache-Control: no-store`.
+No Start receipt existed and the live guest scope was absent. An unauthenticated
+public request still redirected to sign-in (302); this is not an authenticated
+browser or hardware-ceremony acceptance result. The page states that startup
+after pressing Start can take 20 minutes or more.
+
+The three new isolated dependency services are healthy and have no host port
+bindings. The existing operator demo health route remains 200. No Start request,
+registration ceremony, hardware action, native notification observer or
+production release was performed. Native action notifications still need their
+separate read-only observer admission after actual readiness is published;
+the independently configurable demo notification controls do not imply it is
+connected.
+
+R96 remains a retained terminal attempt. Its **user-manager** prelaunch unit
+was serving a terminal 410 page, with only PID 3373140 in its cgroup and no live
+guest scope. Only that exact failure reporter was stopped for the listener
+handoff, after the new assembly completed. All R96 material was preserved.
+Neither stopping the reporter nor preparing new local material resolves R96's
+unknown cleanup status or authorizes a replay of that attempt.
+
+<a id="current-engineering-assembly"></a>
+
+## Historical full-runtime engineering assembly
 
 All three Python runtimes now have exports from exact frozen source
 `f13b0dd22acbf68930186fb5bd60aea7ffe86ca7`, including the `.421` provider integration.

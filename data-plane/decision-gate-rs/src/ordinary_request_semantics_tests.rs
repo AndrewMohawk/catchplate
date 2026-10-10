@@ -201,7 +201,7 @@ fn ordinary_request_value_operation_and_date_denials_precede_effects() {
             "deniedOperations":["generic.read"]}), "/resource/approved", "credential_operation_denied"),
         (json!({"id":"date","type":"queryDateWindow","phase":"request","parameters":["at"],
             "formats":["rfc3339"],"maxAgeDays":1,"required":true}),
-            "/resource/approved?at=2026-07-12T11:59:59Z", "query_date_window_exceeded"),
+            "/resource/approved?at=2026-07-12T11%3A59%3A59Z", "query_date_window_exceeded"),
     ];
     for operator in [true, false] {
         for (constraint, path, error) in &cases {
@@ -211,7 +211,9 @@ fn ordinary_request_value_operation_and_date_denials_precede_effects() {
             route.constraints.push(json!({"id":"quota","type":"rateLimit","max":1,
                 "windowSeconds":60,"store":"local"}));
             let (state, snapshot) = fixture(vec![route], operator);
-            let (decision, lines, count) = at(&state, &snapshot, request("GET", path, ""), "2026-07-14T12:00:00Z");
+            let req = request("GET", path, "");
+            parse_validated_absolute_target(&req.url).expect("semantic fixture uses a canonical target");
+            let (decision, lines, count) = at(&state, &snapshot, req, "2026-07-14T12:00:00Z");
             assert_eq!(decision["status_code"], 403, "{decision}");
             assert_eq!(decision["payload"]["error"], *error);
             assert_untouched(&state, &lines, count);
@@ -276,7 +278,9 @@ fn ordinary_capture_and_provider_account_bind_before_canonical_quota_once() {
     assert_eq!(counters.values().next().unwrap().count, 1);
     drop(counters);
     let (denied, _, _) = at(&state, &snapshot, request("GET", "/resource/approved", ""), "2026-07-14T12:00:00Z");
-    assert_eq!(denied["status_code"], 429, "{denied}");
+    assert_eq!(denied["status_code"], 403, "{denied}");
+    assert_eq!(denied["payload"]["error"], "credential_rate_limit_exceeded");
+    assert_eq!(denied["payload"]["store"], "local");
     assert_eq!(state.constraint_rate_counters.lock().unwrap().values().next().unwrap().count, 1);
     assert_eq!(state.credential_lease_refresh_success.load(Ordering::Relaxed), 0);
     assert_eq!(state.credential_lease_refresh_failed.load(Ordering::Relaxed), 0);

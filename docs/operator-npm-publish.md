@@ -731,6 +731,17 @@ logs and terminal receipt remain in `serverware-genuine-rust-response-read.LxeT9
 the production repair is unchanged, and the corrected test requires a new
 source freeze and run.
 
+The corrected `23a7fe29` test binary compiled in **4 minutes 50 seconds**.
+All **62 existing tests** passed; four of the six new groups passed, including
+closed-window denial before acquisition, open-window/metadata acquisition,
+missing/noncanonical response-binding sources, and X denial before generation.
+Two new groups failed on fixture assumptions: the existing local quota returns
+403 rather than 429, and raw colons in a date query are refused before semantic
+admission. The test now requires the exact quota error and canonical `%3A`
+query encoding; production behavior is unchanged. Evidence remains in
+`serverware-genuine-rust-ordinary-semantics.gE6GcmF4`. The six additional exact
+tests, normal release build and stock fixture did not run from that snapshot.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

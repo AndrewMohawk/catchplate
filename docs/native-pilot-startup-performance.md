@@ -217,6 +217,47 @@ deadline reset, registration retry or pilot mutation was performed for this
 work. Evidence is retained under
 `/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/cross-session-content-catalog.d8hGTTHt`.
 
+### Real-kernel cold-process check
+
+The optional [catalog kernel checker](../scripts/check_authority_content_catalog_kernel.py)
+passed once on Linux `6.8.0-138-generic`, using actual ext4 SHA-256 fs-verity and
+immutable files in a fresh 64 MiB offline guest disk. SDK source was archived
+from `5c9aa344064f4d75efff3486f752bfc38d748309`; only the new checker was appended,
+separately pinned at
+`b1d0b3b6710eff6b040985e8fade9dfbdaecb91e77f09699c6fedb94f64ea7bf`.
+This is not a newly authenticated assembly or signed-installation result.
+
+The producer actually read and sealed public synthetic content. Two newly
+executed isolated Python interpreters each started with an empty observed memo
+and exercised both `measure_file()` and the default `_digest_owned_file()`
+reader. For the 2 MiB file, each catalog hit made one actual `pread` call (EOF),
+versus two 1 MiB body reads plus EOF on the cold path. The empty file required
+one EOF call in both cases; no saving is claimed for it. Profiling counted the
+real C calls without replacing reads, ioctl results or kernel observations.
+
+Both interpreters rejected a wrong catalog pin, fully read a different sealed
+2 MiB file, and returned to full reads of the original file after catalog scope
+exit without clearing the memo. Catalog hits had not populated that observed
+memo. An actual write-open of the sealed original was refused by the kernel.
+This exercises the measurement helpers, not an admitted startup owner, custom
+startup fallback reader, package signatures, or full Serverware startup.
+
+The guest had no network device or credentials, read-only source/runtime
+inputs, a 60-second outer watchdog and shorter parent/child deadlines. It ran
+from `23:28:36.055` to `23:28:46.422` UTC on 2026-10-10; that roughly ten-second
+component run is **not native pilot startup time**. It exited successfully and
+its dedicated scope was then inactive. All fixture images and logs remain in
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/content-catalog-kernel.TspOaxGc`.
+The `guest.log` SHA-256 is
+`1b775029c48f1e7f0993046113b2ffb00443b826f0f6ba4f541ddb3214631265`.
+No retained pilot was started, reset or modified.
+
+The five SDK cache/catalog suites are also registered in the automated
+isolated-test inventory, and the measurement/catalog modules are present in
+both explicit source-dependency checks. Make parsed and verified those
+inventory entries without running a controller workflow. The opt-in kernel
+checker is deliberately not an automatic unit test.
+
 ## Installation phase timing
 
 Prospective COMMON source now emits nine bounded `INSTALL_*` durations for
@@ -297,11 +338,12 @@ container capabilities, or active-pilot changes were made to obtain a test pass.
 
 ## Remaining work and evidence boundary
 
-The measurement-cache changes alone do not provide cross-session artifact
-reuse or eliminate installation, destination readback, synchronization, ELF
-metadata analysis, or launch authorization. The additional prepared-static
-implementation below targets the repeated static installation work; it does not
-treat a stored hash as proof that mutable files are unchanged.
+The process-local memo alone does not provide cross-session reuse. The pinned
+catalog above adds it for the main startup process's sealed-content hashes,
+not child-process activation, installation, destination readback,
+synchronization, ELF metadata analysis, or launch authorization. The additional
+prepared-static implementation below targets repeated static installation
+work; it does not treat a stored hash as proof that mutable files are unchanged.
 
 No active R97 assembly is modified by source changes in this workspace. A
 startup-time improvement must be measured on a newly authorized deployment;

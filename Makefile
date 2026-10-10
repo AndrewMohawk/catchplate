@@ -631,8 +631,11 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_admission.py \
 	scripts/test_authority_local_startup.py \
 	scripts/test_authority_local_startup_failure_diagnostics.py \
+	scripts/test_authority_local_startup_content_cache.py \
 	scripts/test_authority_package_signature_digest_reuse.py \
 	scripts/test_authority_local_artifacts.py \
+	scripts/test_authority_local_artifact_measure_cache.py \
+	scripts/test_authority_local_content_catalog.py \
 	scripts/test_authority_local_artifact_witness.py \
 	scripts/test_authority_local_trust.py \
 	scripts/test_authority_local_configuration.py \
@@ -640,6 +643,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_rbac_witness.py \
 	scripts/test_authority_local_rbac_bootstrap.py \
 	scripts/test_authority_local_launch_authorization.py \
+	scripts/test_authority_local_launch_content_cache.py \
 	scripts/test_authority_service_descriptor_reads.py \
 	scripts/test_authority_service_denial_diagnostics.py \
 	scripts/test_authority_launcher_native_mappings.py \
@@ -664,6 +668,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_keys.py \
 	scripts/test_authority_local_provenance.py \
 	scripts/test_authority_local_closure.py \
+	scripts/test_authority_local_closure_content_cache.py \
 	scripts/test_authority_local_composition.py \
 	scripts/test_authority_local_assembly.py \
 	scripts/test_authority_local_audit_inclusion.py \
@@ -922,6 +927,8 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 # Include package imports, imported independent oracles, and db.py, which the
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
+	serverware/authority_local_artifact_measure.py \
+	serverware/authority_local_content_catalog.py \
 	serverware/authority_local_artifact_witness.py \
 	serverware/authority_local_trust.py \
 	serverware/authority_local_configuration.py \
@@ -4124,6 +4131,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 		frozen_source_digest="$$(source_tree_digest)"; \
 			for required_source_file in \
 				Makefile \
+				serverware/authority_local_artifact_measure.py \
+				serverware/authority_local_content_catalog.py \
 				serverware/authority_local_artifact_witness.py \
 				serverware/authority_local_trust.py \
 				serverware/authority_local_configuration.py \

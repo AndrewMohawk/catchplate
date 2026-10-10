@@ -31,8 +31,9 @@ STATES = ("queued", "sending", "acknowledged", "failed", "outcome_unknown", "sup
 MAX_QUEUE = 256
 MAX_HISTORY = 10000
 MAX_CONFIGURATIONS = 1024
-# There is no admitted operator-development producer for native/key gestures.
-# Keep this an explicit source capability, not an operator-editable bypass.
+# Legacy approval/JIT producers are not admitted operator-development sources.
+# Separately admitted native observations use their own typed source boundary;
+# never turn this into a blanket action-source or operator-editable bypass.
 ACTION_SOURCE_AVAILABLE = False
 _PREFIX = "operator_notification_"
 _PROCESS = str(uuid.uuid4())
@@ -265,7 +266,7 @@ def _delivery(row):
     if row is None:
         return None
     from serverware.operator_notification_transport import DELIVERY_CODES
-    allowed_codes = DELIVERY_CODES | {"configuration_changed", "action_no_longer_current", "action_expired", "action_source_unavailable"}
+    allowed_codes = DELIVERY_CODES | {"configuration_changed", "action_no_longer_current", "action_expired", "action_source_unavailable", "native_source_unavailable"}
     _require(row["status"] in STATES and (row["last_code"] is None or row["last_code"] in allowed_codes)
         and _identifier(row["delivery_id"]) == row["delivery_id"] and type(row["attempts"]) is int and 0 <= row["attempts"] <= 3
         and (row["http_status"] is None or type(row["http_status"]) is int and 200 <= row["http_status"] <= 599))
@@ -491,6 +492,43 @@ def queue_test(payload, actor):
 
 
 @_safe_errors
+def record_native_observation(notice, now_epoch_ms):
+    """Internal typed bridge ingestion; no HTTP/API or relay read inside this owner.
+
+The worker obtains a closed observation from the separately admitted Unix source
+before calling. One deterministic core-audit row is appended atomically; the
+normal cursor later fans out independent action/audit copies. An exact duplicate
+is a no-op, while any ID reuse with different retained content fails closed.
+"""
+    from serverware.operator_notification_pilot_source import NativePilotNotice, notice_record
+    now = _time(now_epoch_ms)
+    _require(type(notice) is NativePilotNotice)
+    record = events._native_record(notice_record(notice))
+    expires = int(record["observation"]["sourceExpiresAtUnixNanos"])
+    if max(now * 1_000_000, time.time_ns()) >= expires:
+        return None
+    identifier = events.native_event_identifier(record)
+    path = _admit()
+    from serverware import db
+    with _write() as conn:
+        meta, _ = _key(conn, path)
+        if meta is None or max(now * 1_000_000, time.time_ns()) >= expires:
+            return None
+        exists = conn.execute("SELECT 1 FROM audit_events WHERE id=?", (identifier,)).fetchone() is not None
+        retained = db.append_audit_event(conn, event_type=events.NATIVE_OBSERVATION_TYPE,
+            actor_type="system", actor_id="native-pilot-observer", event=record, idempotency_key=identifier)
+        _require(retained["id"] == identifier and retained["event_type"] == events.NATIVE_OBSERVATION_TYPE
+            and retained["actor_type"] == "system" and retained["actor_id"] == "native-pilot-observer"
+            and events._same_projection(retained["event"], record))
+        return {"recorded": not exists, "event_id": identifier}
+
+
+def _action_admitted(payload):
+    return (payload.get("test") is True or events.native_action_payload(payload)
+        or ACTION_SOURCE_AVAILABLE is True)
+
+
+@_safe_errors
 def consume_events(now_epoch_ms):
     now = _time(now_epoch_ms)
     path = _admit()
@@ -511,13 +549,15 @@ def consume_events(now_epoch_ms):
                 continue
             for source in candidates:
                 notice = source.action_payload if slot.startswith("action_required.") else source.audit_payload
-                if notice is not None and source.event_type in configuration["event_types"]:
+                selection = source.filter_event_type or source.event_type
+                if notice is not None and selection in configuration["event_types"]:
                     additions.append((slot, configuration["revision"], source.event_id, notice))
-        active = sum(not slot.startswith("action_required.") or ACTION_SOURCE_AVAILABLE for slot, _, _, _ in additions)
+        active = sum(not slot.startswith("action_required.") or _action_admitted(notice)
+            for slot, _, _, notice in additions)
         _capacity(conn, active, len(additions))
         for slot, revision, source_event_id, notice in additions:
             identifier = _enqueue(conn, slot, revision, source_event_id, notice, now)
-            if slot.startswith("action_required.") and not ACTION_SOURCE_AVAILABLE:
+            if slot.startswith("action_required.") and not _action_admitted(notice):
                 conn.execute("UPDATE operator_notification_deliveries SET status='suppressed',last_code='action_source_unavailable' WHERE delivery_id=?", (identifier,))
         conn.execute("UPDATE operator_notification_meta SET cursor_json=? WHERE singleton=1", (_cursor_json(cursor),))
         return {"consumed": cursor.rowid - _cursor(old_cursor).rowid, "queued": active, "suppressed": len(additions) - active}
@@ -554,7 +594,7 @@ def claim_next(now_epoch_ms):
         for row in pending:
             payload = json.loads(row["payload_json"])
             _require(type(payload) is dict)
-            if row["slot"].startswith("action_required.") and payload.get("test") is not True and not ACTION_SOURCE_AVAILABLE:
+            if row["slot"].startswith("action_required.") and not _action_admitted(payload):
                 _terminal(conn, row, "suppressed", "action_source_unavailable", now)
                 continue
             configuration = _config(conn, row["slot"])
@@ -585,6 +625,27 @@ def _claimed(conn, claim):
     return row
 
 
+def is_native_action(claim) -> bool:
+    """Closed native action recognition, not a live-source assertion."""
+    return (type(claim) is DeliveryClaim and claim.channel == "action_required"
+        and claim.slot in {"action_required.slack", "action_required.webhook"}
+        and events.native_action_payload(claim.payload))
+
+
+@_safe_errors
+def suppress_native_claim(claim, now_epoch_ms):
+    """Retain a fixed refusal after the worker's outside-lock relay recheck."""
+    now = _time(now_epoch_ms)
+    _require(is_native_action(claim))
+    path = _admit()
+    with _write() as conn:
+        _key(conn, path)
+        row = _claimed(conn, claim)
+        if row["status"] == "sending":
+            _terminal(conn, row, "suppressed", "native_source_unavailable", now)
+    return False
+
+
 @_safe_errors
 def current(claim, now_epoch_ms):
     now = _time(now_epoch_ms)
@@ -605,13 +666,26 @@ def current(claim, now_epoch_ms):
                 and claim.payload == _test_payload(test["operation_id"], test["slot"], test["created_at"]))
             _operation(conn, test["operation_id"], test["actor_id"])
         elif claim.channel == "action_required":
-            if not ACTION_SOURCE_AVAILABLE:
+            if is_native_action(claim):
+                original_expiry = events.native_expiry_unix_nanos(claim.payload)
+                current_nanos = max(now * 1_000_000, time.time_ns())
+                if current_nanos >= original_expiry:
+                    reason = "action_expired"
+                elif not events.native_action_matches_source(conn, claim.payload, now_unix_nanos=current_nanos):
+                    reason = "native_source_unavailable"
+            elif not ACTION_SOURCE_AVAILABLE:
                 reason = "action_source_unavailable"
             elif not events.action_is_current(conn, claim.payload, now_epoch_ms=now):
                 expires = datetime.fromisoformat(claim.payload["expires_at"].replace("Z", "+00:00"))
                 reason = "action_expired" if int(expires.timestamp() * 1000) <= now else "action_no_longer_current"
         else:
             _require(events.payload_matches_source(conn, claim.payload, now_epoch_ms=now))
+    # Recheck after the read transaction and custody directory checks finish.
+    # An entry timestamp must not extend the native owner's original nanoseconds.
+    if reason is None and is_native_action(claim):
+        final_expiry = events.native_expiry_unix_nanos(claim.payload)
+        if time.time_ns() >= final_expiry:
+            reason = "action_expired"
     if reason:
         with _write() as conn:
             _key(conn, path)

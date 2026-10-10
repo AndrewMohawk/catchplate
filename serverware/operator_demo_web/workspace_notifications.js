@@ -13,6 +13,92 @@ function notificationTypes(value) {
   return Array.isArray(value) && value.length <= 64 && value.every((item, i) =>
     typeof item === 'string' && /^[a-z][a-z0-9_.]{0,127}$/.test(item) && (!i || value[i - 1] < item));
 }
+const notificationNativePhases = Object.freeze({prepare_available: 'Preparation available', security_key_available: 'Security-key phase available',
+  confirmation_available: 'Confirmation available', waiting: 'Waiting', preparing: 'Preparation in progress',
+  preparing_confirmation: 'Confirmation preparation in progress', action_in_progress: 'Action already in progress',
+  response_captured: 'Response captured — enrollment not confirmed', cancelled: 'Cancelled', expired: 'Expired'});
+const notificationNativeActionPhases = Object.freeze(['prepare_available', 'security_key_available', 'confirmation_available']);
+function notificationNativeExpiry(value) {
+  return typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9223372036854775807n;
+}
+function notificationNativeValid(value) {
+  if (!notificationObject(value, ['configured', 'source_available', 'observation_only', 'last_observation']) ||
+      typeof value.configured !== 'boolean' || typeof value.source_available !== 'boolean' || value.observation_only !== true) return false;
+  const last = value.last_observation;
+  if (!notificationObject(last, ['state', 'observed_at_epoch_ms', 'phase', 'action_available', 'source_expires_at_unix_nanos', 'review_url']) ||
+      !['not_configured', 'not_observed', 'waiting', 'observed', 'unavailable'].includes(last.state) ||
+      typeof last.action_available !== 'boolean' || value.configured !== (last.state !== 'not_configured') ||
+      value.source_available !== ['waiting', 'observed'].includes(last.state) ||
+      (['not_configured', 'not_observed'].includes(last.state) ? last.observed_at_epoch_ms !== null : !notificationInteger(last.observed_at_epoch_ms))) return false;
+  if (last.state !== 'observed') return last.phase === null && !last.action_available && last.source_expires_at_unix_nanos === null && last.review_url === null;
+  return Object.hasOwn(notificationNativePhases, last.phase) &&
+    (last.source_expires_at_unix_nanos === null || notificationNativeExpiry(last.source_expires_at_unix_nanos)) &&
+    typeof last.review_url === 'string' && /^https:\/\/serverware\.example\.com\/pilot-prelaunch\/action-status\/[0-9a-f]{64}\/[0-9a-f]{64}$/.test(last.review_url) &&
+    (!last.action_available || notificationNativeActionPhases.includes(last.phase) && last.source_expires_at_unix_nanos !== null);
+}
+function notificationNativePresentation(value, now = Date.now()) {
+  if (!notificationNativeValid(value)) throw operatorError('Native source observation is unsupported. No action availability can be inferred.');
+  const last = value.last_observation;
+  const result = {source: {not_configured: 'Native source not configured.', not_observed: 'Native source configured; no observation has completed.',
+    waiting: 'The last source read succeeded, but no native phase was available.',
+    unavailable: 'The last source read was unavailable. No actionable phase is confirmed.',
+    observed: 'The last source read succeeded. This cached observation is not a live readiness check.'}[last.state],
+    phase: last.phase === null ? null : 'Last observed phase: ' + notificationNativePhases[last.phase] + '.',
+    observedAt: last.observed_at_epoch_ms, expiresAt: last.source_expires_at_unix_nanos === null ? null : Number(BigInt(last.source_expires_at_unix_nanos) / 1000000n),
+    reviewUrl: last.review_url, availability: 'No native action is offered on this page.', refreshAfterMs: null};
+  if (last.state !== 'observed') return result;
+  const clockValid = notificationInteger(now) && now >= last.observed_at_epoch_ms;
+  const expired = clockValid && last.source_expires_at_unix_nanos !== null && BigInt(now) * 1000000n >= BigInt(last.source_expires_at_unix_nanos);
+  const stale = clockValid && now - last.observed_at_epoch_ms >= 15000;
+  result.availability = !clockValid ? 'This browser clock cannot confirm the observation age. No current action availability is inferred.' :
+    expired ? 'The original source window has expired. No action is offered and its deadline has not been extended.' :
+    stale ? 'This observation is stale (15 seconds or older). No current action availability is inferred.' :
+    last.action_available ? 'That snapshot reported an available action; it does not confirm the action is still available. Inspect authenticated native status and return to the existing registration tab.' :
+    'The last snapshot did not report an available action. No action is offered here.';
+  if (clockValid && !expired) {
+    const remaining = [];
+    if (!stale) remaining.push(last.observed_at_epoch_ms + 15000 - now);
+    if (last.source_expires_at_unix_nanos !== null) remaining.push(Number((BigInt(last.source_expires_at_unix_nanos) + 999999n) / 1000000n) - now);
+    if (remaining.length) result.refreshAfterMs = Math.max(1, Math.min(...remaining));
+  }
+  return result;
+}
+function createNotificationNativeObservation(value, clock = {key: null, latest: null, uncertain: false}) {
+  const last = value.last_observation;
+  const key = JSON.stringify([last.state, last.observed_at_epoch_ms, last.phase, last.source_expires_at_unix_nanos, last.review_url]);
+  // A settings refresh may return the same cached observation. Only a new
+  // observation identity can clear clock uncertainty, not rebuilding its DOM.
+  if (clock.key !== key) { clock.key = key; clock.latest = null; clock.uncertain = false; }
+  const panel = textNode('article'); panel.dataset.notificationNative = '';
+  panel.append(textNode('h3', 'Native source observations'));
+  const source = textNode('p'); source.dataset.nativeSource = '';
+  const phase = textNode('p'); phase.dataset.nativePhase = '';
+  const availability = textNode('p'); availability.dataset.nativeAvailability = ''; availability.setAttribute('role', 'status');
+  const observed = textNode('p', undefined, 'small muted'); observed.dataset.nativeObservedAt = '';
+  const expiry = textNode('p', undefined, 'small muted'); expiry.dataset.nativeExpiry = '';
+  const review = textNode('a', 'Inspect authenticated native status (read only)'); review.dataset.nativeReview = ''; review.referrerPolicy = 'no-referrer';
+  panel.append(source, phase, availability, observed, expiry, review);
+  panel.append(textNode('p', 'Observation only: this page cannot start or prepare a ceremony, request a security-key gesture, approve an action, or confirm enrollment.', 'small muted'));
+  let timer;
+  const stop = () => clearTimeout(timer);
+  const dateLabel = value => { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toISOString() : 'Timestamp unavailable'; };
+  function update(active = true) {
+    stop(); const now = Date.now();
+    if (!notificationInteger(now) || clock.latest !== null && now < clock.latest) clock.uncertain = true;
+    if (notificationInteger(now)) clock.latest = clock.latest === null ? now : Math.max(clock.latest, now);
+    const current = notificationNativePresentation(value, clock.uncertain ? Number.NaN : now);
+    source.textContent = current.source; phase.textContent = current.phase || ''; phase.hidden = current.phase === null;
+    availability.textContent = current.availability;
+    observed.textContent = current.observedAt === null ? 'No completed source observation.' : 'Last source check: ' + dateLabel(current.observedAt) + '.';
+    expiry.textContent = current.expiresAt === null ? 'No original action expiry is present in this observation.' : 'Original source expiry: ' + dateLabel(current.expiresAt) + '.';
+    review.hidden = current.reviewUrl === null;
+    if (current.reviewUrl === null) review.removeAttribute('href'); else review.href = current.reviewUrl;
+    // This timer only demotes cached presentation. It never polls an owner,
+    // renews a deadline, changes delivery settings, or initiates an action.
+    if (active && current.refreshAfterMs !== null) timer = setTimeout(() => update(), Math.min(current.refreshAfterMs, 2147483647));
+  }
+  return {panel, update, stop};
+}
 function notificationSlotValid(value) {
   if (!notificationObject(value, ['slot', 'channel', 'adapter', 'revision', 'label', 'enabled', 'secret_present', 'event_types', 'max_attempts', 'last_delivery']) ||
       !notificationSlots.includes(value.slot) || value.slot !== value.channel + '.' + value.adapter ||
@@ -40,11 +126,12 @@ function projectNotificationStatus(value) {
       !notificationInteger(value.backlog.pending_source_events) || value.backlog.queue_capacity !== 256 || value.backlog.retained_capacity !== 10000) bad();
   const caps = value.capabilities;
   if (!notificationObject(caps, ['action_required', 'audit_log', 'native_hardware', 'source_note', 'test_note']) ||
-      !notificationObject(caps.native_hardware, ['source_available']) || caps.native_hardware.source_available !== false ||
+      !notificationNativeValid(caps.native_hardware) ||
       !['source_note', 'test_note'].every(key => typeof caps[key] === 'string' && caps[key].length <= 512) ||
       !['action_required', 'audit_log'].every(channel => notificationObject(caps[channel], ['source_available', 'event_types']) &&
         typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types)) ||
-      caps.action_required.source_available !== false || caps.audit_log.source_available !== value.available ||
+      !value.available && (caps.action_required.source_available || caps.native_hardware.source_available) ||
+      caps.native_hardware.source_available && !caps.action_required.source_available || caps.audit_log.source_available !== value.available ||
       !value.slots.every(slot => slot.event_types.every(type => caps[slot.channel].event_types.includes(type)))) bad();
   const worker = value.worker;
   if (!notificationObject(worker, ['state', 'last_cycle_at_epoch_ms', 'last_code']) ||
@@ -88,6 +175,8 @@ function notificationOutcome(status) {
 function createNotificationsView(workspace) {
   const prefix = '/api/operator-demo/notifications';
   let status = null; let busy = false; let visible = false; let opened = false;
+  let nativeObservation = null;
+  const nativeObservationClock = {key: null, latest: null, uncertain: false};
   let reference = null; let receipt = null; let storageBlocked = false;
   try {
     const retained = sessionStorage.getItem(notificationOperationKey);
@@ -199,6 +288,7 @@ function createNotificationsView(workspace) {
     forms.set(slot.slot, form); return form;
   }
   function render() {
+    nativeObservation?.stop(); nativeObservation = null;
     clearSecrets(); forms.clear(); element('notifications-panels').replaceChildren();
     element('notifications-worker').textContent = !status ? 'Worker status unavailable.' :
       {disabled: 'Delivery worker disabled.', running: 'Delivery worker running; this is not delivery confirmation.',
@@ -211,9 +301,14 @@ function createNotificationsView(workspace) {
     if (status?.available) {
       for (const [channel, title] of [['action_required', 'Action-required alerts'], ['audit_log', 'Audit-log delivery']]) {
         const section = textNode('section', undefined, 'card'); section.dataset.notificationChannel = channel;
-        section.append(textNode('h2', title), textNode('p', channel === 'action_required' ?
-          'Action-required source is not connected in this deployment. You may configure destinations and send a synthetic test, but native security-key prompts will not be delivered.' :
+        section.append(textNode('h2', title), textNode('p', channel === 'action_required' ? status.capabilities.action_required.source_available ?
+          'Action-required delivery has source support. Native availability below describes only the last source read, not current gesture readiness.' :
+          'Action-required source is not available according to the last recorded status. You may configure destinations and send a synthetic test, but a test does not establish native readiness.' :
           'Delivers safe summaries of newly committed selected audit events. This is not a verified audit archive or an application webhook.'));
+        if (channel === 'action_required') {
+          nativeObservation = createNotificationNativeObservation(status.capabilities.native_hardware, nativeObservationClock);
+          nativeObservation.update(visible); section.append(nativeObservation.panel);
+        }
         const cards = textNode('div', undefined, 'two-column');
         for (const slot of status.slots.filter(item => item.channel === channel)) cards.append(renderSlot(slot));
         section.append(cards); element('notifications-panels').append(section);
@@ -284,6 +379,6 @@ function createNotificationsView(workspace) {
   }
   element('notifications-refresh').addEventListener('click', refresh);
   element('notification-check-operation').addEventListener('click', checkOperation);
-  window.addEventListener('pagehide', clearSecrets); workspace.subscribe(controls); operationMessage(); controls();
-  return {show(active) { visible = active; if (!active) clearSecrets(); controls(); if (active && !opened) { opened = true; refresh(); } }};
+  window.addEventListener('pagehide', () => { clearSecrets(); nativeObservation?.stop(); }); workspace.subscribe(controls); operationMessage(); controls();
+  return {show(active) { visible = active; if (!active) clearSecrets(); nativeObservation?.update(active); controls(); if (active && !opened) { opened = true; refresh(); } }};
 }

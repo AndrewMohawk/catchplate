@@ -1,17 +1,20 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Operator notifications: action alerts and audit delivery
 
 An optional **operator-development source implementation** now includes four
 destination settings, notification-only encrypted custody, a persistent outbox,
 safe audit projections, Slack/generic HTTPS transport, administrator API routes
-and a Notifications panel. It is **not deployed**, and source/fixture acceptance
-does not establish delivery from the running demo or a real Slack workspace.
+and a Notifications panel. A separately admitted, read-only native observation
+bridge is now implemented in source. The feature is **default-off and not
+deployed**; source/fixture acceptance does not establish delivery from the running
+demo, an actual pilot owner or a real Slack workspace.
 
-Real action-required delivery remains disabled by the internal
-`ACTION_SOURCE_AVAILABLE = False` gate. Matching action candidates are retained
-as suppressed; settings and clearly labelled synthetic tests remain usable when
-the optional feature is admitted. Native security-key, measured-runtime and
-PostgreSQL source integration are not implemented by this development slice.
-Notifications cannot approve, prepare, start or extend a ceremony.
+The mental model is simple: **action alerts mean "someone needs to do something";
+audit alerts mean "this happened."** Configure either, both or neither. An action
+alert can ask the operator to prepare, use a YubiKey/security key, or confirm a
+native pilot action. It cannot perform, approve, start or extend that action.
+An audit copy remains historical information even after the action has changed.
 
 This feature sends Serverware's own notifications. It is separate from an
 application calling Slack or another webhook through the credential proxy.
@@ -23,15 +26,19 @@ delivery**. Each channel has its own Slack and generic-webhook slots:
 
 | Slot | Intended use | Current source boundary |
 | --- | --- | --- |
-| `action_required.slack` | Human attention in Slack | Real source suppressed; explicit synthetic tests only |
-| `action_required.webhook` | Human-attention receiver | Real source suppressed; explicit synthetic tests only |
-| `audit_log.slack` | Readable selected audit summaries | Committed operator-development SQLite events |
-| `audit_log.webhook` | Selected structured audit copies | Committed operator-development SQLite events |
+| `action_required.slack` | Ask someone in Slack to act | Separately admitted native observation bridge; legacy approval source suppressed |
+| `action_required.webhook` | Send the same kind of attention request to an automation receiver | Same native source checks, independently configured destination |
+| `audit_log.slack` | Show selected events in Slack | Committed operator-development SQLite events, including recorded native observations |
+| `audit_log.webhook` | Export selected structured event copies | Same committed audit sources, independently configured destination |
 
 Every slot defaults off and independently retains its label, enabled state,
 event filters, maximum attempts, saved revision and latest delivery status.
 Enabling one does not enable the others. A saved URL is write-only: reads reveal
 presence, not the URL, its path/query, fingerprint or encrypted representation.
+For example, send security-key attention requests to a team's Slack channel and
+audit copies to a separate HTTPS log receiver. Turning off Slack action alerts
+does not turn off webhook audit delivery. Every enabled slot also supports its
+own clearly labelled synthetic test, without claiming its real source is ready.
 
 **Save settings** changes configuration and records a secret-free audit event;
 the handler never sends a message. Opening or refreshing the panel never sends
@@ -60,23 +67,25 @@ the event type is supported. Notification bookkeeping is excluded from export
 so retries and configuration changes cannot recursively notify themselves.
 
 The worker adds a stable `delivery_id`, `slot`, saved `revision` and `review_url`.
-The review URL is the configured HTTPS console origin plus `/#audit`; it is an
-authenticated, non-capability locator, not an approval or one-click mutation.
+Audit and synthetic-test review URLs use the configured HTTPS console origin
+plus `/#audit`. Native action alerts instead use the fixed native HTTPS origin
+and the exact attempt/readiness-bound review path from the admitted observation.
+These are authenticated, non-capability locators, not approvals or one-click mutations.
 The source event hash references the authoritative record. It does not make a
 redacted notification an independently verified audit-chain record. Local audit
 storage, verification and audit anchoring remain separate.
 
-The source projection includes exact approval references/digests and original
-expiry when an admitted action record can be recognized, but the current gate
-**suppresses actual action delivery**. "Prepare available", "Use your security
-key" and "Confirm completion" still require distinct typed events at their real
-owners. A preparation row, HTTP 412 or browser readiness poll does not establish
-that a key gesture is ready. A separate, guarded read-only phase observer now
-exists in the common pilot repository. It distinguishes `prepare_available`,
-`security_key_available` and `confirmation_available` while preserving each
-original source expiry. It does not deliver notifications: the host-side bridge
-to this outbox remains unconnected. This feature never adds network workers or
-secrets to that ceremony.
+Native phase filters distinguish `native_pilot.prepare_available`,
+`native_pilot.security_key_available` and `native_pilot.confirmation_available`.
+Only the actual owner's closed observation can provide an actionable source;
+a preparation row, HTTP 412, configured socket or browser readiness poll cannot.
+The retained projection contains public phase/attempt/source identities and the
+original expiry, never options, challenges, credential responses or captures.
+
+The legacy approval/JIT source remains disabled by
+`ACTION_SOURCE_AVAILABLE = False`; matching candidates are suppressed. The new
+native branch does not enable that gate. PostgreSQL and measured-runtime
+notification integration remain outside this operator-development slice.
 
 An acknowledged notification is receiver acknowledgement only—not human
 approval, completed action, verified audit archive, or renewed authorization.
@@ -113,7 +122,38 @@ and at most 3 seconds each for DNS and TCP connection establishment. A bounded
 owner callback rechecks the saved claim **after TLS and immediately before the
 first write**. A disabled/replaced/suppressed claim sends no POST. A false check,
 exception or expired transport deadline cannot trigger a retry or renew a
-source deadline. No transaction or publication lock spans network I/O.
+source deadline. For native actions, that callback freshly reads the selected
+observer, compares the exact source, checks the saved claim/configuration, and
+then rechecks the original nanosecond expiry. No transaction or publication lock
+spans network I/O. An expired, unavailable or changed native action is suppressed;
+its independently selected historical audit copy can still be delivered.
+
+## Native observation bridge: source capability, not a running pilot
+
+The COMMON repository's dedicated relay is implemented at commit
+`ea2811c6d83964934d38fe4fb45b1eb33ed347cb`; it is **not running or provisioned**.
+It accepts only `GET /v1/observation` from app UID 10001 on a dedicated Unix
+socket. The relay runs as UID 1000 and holds an immutable selection of the real
+owner, source files, readiness identity and original clock anchors. Before its
+fixed guarded HTTP GET, it verifies that the exact accepted loopback TCP
+connection belongs to the selected owner. It cannot launch a pilot or forward
+arbitrary methods, URLs, headers or ceremony requests.
+
+The MAIN source client pins the selected socket, parent identity, relay UID,
+attempt and selection once. Replacement files are not silently re-admitted.
+Each read is limited to 8 KiB and two seconds, with no automatic retry. The
+worker records an idempotent committed observation, then the ordinary outbox
+selects action and audit copies independently. Final action dispatch performs
+the fresh source/expiry checks described above; a matching historical row alone
+is never proof that an action is still available.
+
+The UI separates configuration, the last observation and current worker state.
+"Source available" describes the last successful observer read, not live
+hardware readiness. Displayed action availability expires with the original
+source deadline or after 15 seconds without a new observation. Merely saving
+settings, admitting a socket or acknowledging a webhook does not prove that a
+person can complete the ceremony. No network sender or webhook secret is added
+to the ceremony owner.
 
 ## Deployment admission and custody
 
@@ -129,6 +169,8 @@ they are not settings that a message or browser request can override:
 SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED=0
 SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=/var/lib/serverware-notification-custody
 SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON='{"bindings":[]}'
+# Optional native source remains unset until separate owner/socket admission:
+# SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON=...
 ```
 
 The custody directory must already exist, be owned by the application's effective
@@ -137,6 +179,20 @@ Serverware data directory. A deployment must mount it **only into the applicatio
 not the decision gate or other data-plane containers. Path admission is not proof
 of container isolation; actual mount inspection is required before rollout.
 No Compose configuration or running deployment is enabled by this document.
+
+Optional `SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON` is also cold
+configuration, limited to 4096 bytes. Its exact fields are `schema`
+(`serverware.operatorPilotNotificationSource/v1`), `socketPath`, `relayUid`
+(1000), `selectionSha256`, `attemptSha256` and `nativeOrigin`
+(`https://serverware.example.com`). The digests must identify a separately
+admitted real selection; they are not generated from browser input. The host
+relay's fixed socket is
+`/run/user/1000/serverware-notification-observer/observation.sock`. A future
+deployment must expose only its dedicated directory read-only to the app, with
+parent UID 1000:GID 10001 mode 0750 and socket mode 0660. It must not expose the
+ordinary backend socket, ceremony state or the rest of the host runtime
+directory. This document neither provisions that mount nor authorizes another
+pilot attempt or adoption of a retained terminal attempt.
 
 Only an explicit first Save, after proving no retained notification schema or
 notification audit history, may initialize the separate notification key. The
@@ -199,34 +255,62 @@ history or implicit loss of uncertain receipts.
 | Owner | Implemented source slice | Still required |
 | --- | --- | --- |
 | `operator_notification_custody` / `operator_notification_store` | Independent encrypted settings, explicit initialization, durable operations/cursor/outbox and fixed public status | Deployed custody-mount isolation and operational retention path |
-| `operator_notification_events` | Committed operator-SQLite reader, bounded safe projections, exact source comparisons | PostgreSQL/measured source owners and real action producers |
+| `operator_notification_events` | Committed operator-SQLite reader, bounded safe projections, native observation event/filter mapping and exact source comparisons | PostgreSQL/measured source owners and legacy action producers |
 | `operator_notification_transport` | Slack/generic acknowledgement, pinned egress, TLS/deadlines, final pre-dispatch check | Real receiver acceptance after explicit authorized rollout |
 | `operator_notifications` / `operator_notification_api` / Notifications UI | Optional worker, administrator settings/test/receipt routes and separate channel panels; isolated API-to-TLS and separate intercepted-browser acceptance | Running-console-to-API-to-receiver proof after reviewed rollout |
-| Native pilot browser owner | Separate guarded read-only phase observer with original expiry; no new action authority | Connect the observational delivery bridge, authenticated review and exact current-source recheck without changing the ceremony |
+| Native pilot browser owner / COMMON relay / `operator_notification_pilot_source` | Guarded phase observer, separately selected GET-only Unix relay and strict client; immutable source identity, original expiry and final current-source recheck | Reviewed relay/mount provisioning, actual guarded-owner timing and end-to-end delivery/review during a separately authorized native attempt |
 | Existing audit-anchor worker | Remains separate and unchanged | Do not substitute head/count exports for notification event delivery |
 
 ## Acceptance boundary
 
 | Check | Source/fixture evidence | Deployment or hardware proof still required |
 | --- | --- | --- |
-| Four slots and secret custody | **9/9** custody and **10/10** connected store checks pass, including independent slots/revisions, atomic changes, missing-key refusal and public secret canaries | Real app-only custody mount, restart and administrator save/reload |
+| Four slots and secret custody | **9/9** custody checks; current **13/13** connected store checks pass, extending the earlier 10-check checkpoint with native observations | Real app-only custody mount, restart and administrator save/reload |
 | Save versus explicit test | **5/5** integration groups and **15/15** intercepted Notifications browser groups pass. Administrator/origin checks, Save without send, exact-revision queueing and read-only acknowledgement receipts are exercised | Exact saved revision queued from deployed UI and retained receipt inspected |
 | Egress and acknowledgement | **31/31** isolated transport checks pass, including the final pre-dispatch hook: 20 pure and 11 loopback-TLS/process checks, no live webhook | Real configured receiver and actual deployment trust/egress configuration |
-| Integrated audit delivery | **17/17** source-event checks pass. Actual administrator API handlers, encrypted store and worker send four explicit synthetic slot tests plus two adapter copies of one committed fixture application audit event to verified loopback TLS receivers | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
+| Integrated audit delivery | Current **21/21** source-event checks pass. The earlier API/TLS checkpoint sends four explicit synthetic slot tests plus two adapter copies of one committed fixture application audit event through actual handlers/store/worker | Real committed proxy/control-plane events through the supported deployed source owner; live browser and external receiver acceptance |
 | Failure and backpressure | Connected fixtures pass default-off, worker lifecycle, unknown-outcome no-replay and final pre-dispatch-disable checks. Simulated ingestion-capacity failure still drains a real retained queue. Store fixtures cover bounded retries and 60-second uncertainty recovery | Real crash/restart, lost acknowledgement, saturation and operational retention in the deployed profile |
-| Action-required and native key alerts | Synthetic tests deliver through both adapters; actual action candidates remain suppressed. Separate pilot read-only phase-observer inert checks pass; its delivery bridge remains disconnected | Real source bridge, exact pending/expiry revalidation, authenticated review, and authorized physical-key ceremony |
+| Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
+| Connected browser workflow | Current **15/15** intercepted Notifications browser groups, **11/11** native UI checks and **10/10** asset checks pass. Full browser-to-API-to-worker-to-local-TLS acceptance remains pending; earlier connected harness runs failed before completing the story | Running deployed console, actual receiver and operator workflow |
 
 ### Retained isolated verification checkpoints
 
-The connected store suite completed **10/10** checks in **71.273 seconds**:
+The current native-aware source-event suite completed **21/21** checks in
+**1.248 seconds**, and connected store suite completed **13/13** in
+**95.952 seconds**, as verified by the root runner.
+
+Current native evidence is retained under
+`serverware-operator-workspace-evidence/notification-native.vDixx1QB/`:
+
+- `pilot-source-client-tests.log`: **17/17** in **0.899 seconds**.
+- `native-crossuid-final-tests.log`: **2/2** in **16.838 seconds**. A synthetic
+  UID 1000 relay and real UID 10001 application exercise Unix ownership/peer
+  admission, committed storage, worker and verified local TLS. Action/audit
+  delivery and post-TLS phase-change suppression are checked independently.
+- `rendered-notifications.log`: **15/15** intercepted browser groups against
+  the current UI; screenshots are in
+  `serverware-operator-artifacts/notification-native-source.cPoOMwnX/`.
+- `assets-tests.log`: **10/10** in **0.080 seconds**. The separate native UI
+  checks also pass **11/11**.
+
+The cross-UID fixture uses a synthetic relay, not the actual COMMON relay or a
+guarded hardware owner. Full connected-browser acceptance is still pending;
+retained incomplete harness runs are not passing evidence. The earlier results
+below remain distinct historical checkpoints.
+
+The earlier connected store suite completed **10/10** checks in **71.273 seconds**:
 `serverware-operator-workspace-evidence/notification-store.TJK3m8ly/final-tests.log`.
 The verified store SHA-256 is
 `74a68c46dac401d738758fd40bc3e364fd18a5aebcdf6f016f69d8c5412d0931`;
 custody SHA-256 is
 `e205d27f127429192fbd1d2274ad7ea0d4adfc924882857d0d975372c318b9b5`.
 
-The final integration suite completed **5/5** groups in **42.736 seconds**:
+The earlier integration suite completed **5/5** groups in **42.736 seconds**:
 `serverware-operator-workspace-evidence/notification-integration-final.eFVUpZEx/tests.log`.
+The current native-aware worker also passes those **5/5** groups in
+**43.665 seconds**; see `notification-native.vDixx1QB/api-integration-tests.log`
+under the same external evidence root. Its network-none container exited 0
+without OOM. This is still isolated API/TLS acceptance, not live delivery.
 It uses real API admission and handlers, committed development SQLite storage,
 the actual worker and verified local TLS. Four read-only test receipts and two
 additional audit deliveries are acknowledged; none is human approval. Test-only
@@ -243,10 +327,12 @@ Screenshots are retained under `serverware-operator-artifacts/` in
 `connect-browser-synthetic-WmsxIj`. They prove rendered controls, recovery and
 presentation behavior—not a browser connected to the running service.
 
-The separate common pilot repository has pushed commit
+The separate common pilot repository previously pushed commit
 `984b2753c31234644a84a04eb3a192d1dd0c9403`, preserving the original action expiry
-in its guarded read-only phase observations. Its inert projector/GET-handler
-checks do not start a guest, listener, delivery service or hardware. Neither that
+in its guarded read-only phase observations. The later dedicated relay commit
+`ea2811c6d83964934d38fe4fb45b1eb33ed347cb` adds the observational source bridge;
+it does not provision or start it. Inert projector/GET-handler and mocked owner
+checks do not establish actual native-owner timing or exercise hardware. Neither
 commit nor these notification tests authorize a new pilot attempt or establish
 physical-key/native acceptance.
 

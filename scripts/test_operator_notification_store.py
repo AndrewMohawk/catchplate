@@ -340,11 +340,116 @@ def action_source_gate():
     return {"real_action_source_explicitly_gated": True, "synthetic_action_test_available": True}
 
 
+def native_notice(f, phase="prepare_available", *, expires_nanos=None):
+    from test_operator_notification_events import native_record
+    from serverware.operator_notification_pilot_source import NativePilotNotice
+    record = native_record(phase, expires_nanos=expires_nanos if expires_nanos is not None else
+        f.store._now() * 1_000_000 + 60_000_000_000)
+    return NativePilotNotice(record["selection_sha256"], f.store._canonical(record["observation"]))
+
+
+def native_ingestion():
+    f = Fixture()
+    f.save("action_required.webhook", event_types=["native_pilot.security_key_available"])
+    f.save("audit_log.webhook", event_types=["native_pilot.prepare_available", "native_pilot.security_key_available"])
+    prepare = native_notice(f)
+    first = f.store.record_native_observation(prepare, f.store._now())
+    assert first["recorded"] is True
+    original = f.snapshot()
+    duplicate = f.store.record_native_observation(prepare, f.store._now())
+    assert duplicate == {"recorded": False, "event_id": first["event_id"]} and f.snapshot() == original
+    assert f.store.consume_events(f.store._now())["queued"] == 1  # Audit only: action filter excludes Prepare.
+    security = native_notice(f, "security_key_available")
+    second = f.store.record_native_observation(security, f.store._now())
+    assert second["recorded"] and second["event_id"] != first["event_id"]
+    assert f.store.consume_events(f.store._now())["queued"] == 2
+    assert f.store.consume_events(f.store._now())["queued"] == 0
+    claim = f.store.claim_next(f.store._now())
+    assert claim and f.store.is_native_action(claim) and f.store.current(claim, f.store._now())
+    assert claim.payload["details"]["native_pilot"]["observation"]["phase"] == "security_key_available"
+    assert f.store.ACTION_SOURCE_AVAILABLE is False
+    # Local validity is not relay liveness. The worker's changed-source result
+    # terminalizes this same claim, and a transport cancellation cannot reopen it.
+    assert f.store.suppress_native_claim(claim, f.store._now()) is False
+    receipt = f.store.finish(claim, f.transport.DeliveryResult("failed", "dispatch_cancelled"), f.store._now())
+    assert receipt["status"] == "suppressed" and receipt["code"] == "native_source_unavailable"
+    historical = 0
+    while (audit := f.store.claim_next(f.store._now())) is not None:
+        assert audit.channel == "audit_log" and not f.store.is_native_action(audit)
+        assert f.store.current(audit, f.store._now() + 120000)  # Historical audit is not a current action.
+        f.store.finish(audit, f.transport.DeliveryResult("acknowledged", "acknowledged", 200), f.store._now())
+        historical += 1
+    assert historical == 2 and f.db.verify_audit_chain()["ok"]
+    with closing(f.db.connect()) as conn:
+        assert conn.execute("SELECT count(*) FROM audit_events WHERE event_type=?", (f.store.events.NATIVE_OBSERVATION_TYPE,)).fetchone()[0] == 2
+    return {"deduplicated_native_observations": 2, "independent_phase_filters": True,
+        "local_native_binding_not_fresh_relay_authority": True}
+
+
+def native_rollback_and_collision():
+    from serverware.operator_notification_pilot_source import notice_record
+    f = Fixture()
+    f.save(event_types=["native_pilot.prepare_available"])
+    notice = native_notice(f)
+    before = f.snapshot()
+    original_append = f.db.append_audit_event
+    def fail_after_insert(*args, **kwargs):
+        original_append(*args, **kwargs)
+        raise RuntimeError("injected after real native audit append")
+    with patch.object(f.db, "append_audit_event", side_effect=fail_after_insert):
+        try:
+            f.store.record_native_observation(notice, f.store._now())
+        except f.store.NotificationUnavailable:
+            pass
+        else:
+            raise AssertionError("failed native append did not abort publication transaction")
+    assert f.snapshot() == before
+    identifier = f.store.events.native_event_identifier(notice_record(notice))
+    with f.store._write() as conn:
+        original_append(conn, event_type=f.store.events.NATIVE_OBSERVATION_TYPE, actor_type="system",
+            actor_id="native-pilot-observer", event={"wrong_record": "synthetic collision"}, idempotency_key=identifier)
+    collided = f.snapshot()
+    try:
+        f.store.record_native_observation(notice, f.store._now())
+    except f.store.NotificationUnavailable:
+        pass
+    else:
+        raise AssertionError("deterministic native ID collision silently adopted another record")
+    assert f.snapshot() == collided
+    return {"native_audit_append_atomic": True, "exact_collision_refused": True}
+
+
+def native_expiry_and_final_recheck():
+    f = Fixture()
+    f.save("action_required.webhook", event_types=["native_pilot.prepare_available"])
+    expired = native_notice(f, expires_nanos=f.store._now() * 1_000_000 - 1)
+    before = f.snapshot()
+    assert f.store.record_native_observation(expired, f.store._now()) is None
+    assert f.snapshot() == before
+    expiry = f.store._now() * 1_000_000 + 60_000_000_001
+    notice = native_notice(f, expires_nanos=expiry)
+    assert f.store.record_native_observation(notice, f.store._now())["recorded"]
+    assert f.store.consume_events(f.store._now())["queued"] == 1
+    claim = f.store.claim_next(f.store._now())
+    assert f.store.is_native_action(claim)
+    # Exact nanosecond expiry may arrive while a local DB read completes. The
+    # fresh wall-clock check after the snapshot must reject, without rounding.
+    with patch.object(f.store.time, "time_ns", side_effect=[expiry - 1, expiry]):
+        assert not f.store.current(claim, (expiry - 1) // 1_000_000)
+    with closing(f.db.connect()) as conn:
+        row = conn.execute("SELECT status,last_code,payload_json FROM operator_notification_deliveries WHERE delivery_id=?", (claim.delivery_id,)).fetchone()
+        assert row["status"] == "expired" and row["last_code"] == "action_expired"
+        assert json.loads(row["payload_json"])["details"]["native_pilot"]["observation"]["sourceExpiresAtUnixNanos"] == str(expiry)
+    assert f.store.claim_next(f.store._now() + 120000) is None
+    return {"expired_ingestion_refused": True, "original_nanoseconds_rechecked_after_snapshot": True}
+
+
 def worker(name):
     actions = {"settings": settings, "conflicts": conflicts, "tests": explicit_tests,
         "retries": retries_and_unknown, "replacement": replacement, "missing-key": missing_key,
         "rollback": rollback_orphan, "events": committed_events, "retained": retained_grammar,
-        "action-gate": action_source_gate}
+        "action-gate": action_source_gate, "native": native_ingestion,
+        "native-rollback": native_rollback_and_collision, "native-expiry": native_expiry_and_final_recheck}
     print(json.dumps(actions[name](), sort_keys=True))
 
 
@@ -388,6 +493,15 @@ class NotificationStoreTests(unittest.TestCase):
 
     def test_real_action_source_gated_before_decrypt_but_synthetic_test_usable(self):
         self.assertTrue(self.run_worker("action-gate")["real_action_source_explicitly_gated"])
+
+    def test_native_observation_idempotency_independent_filters_and_historical_audit(self):
+        self.assertTrue(self.run_worker("native")["independent_phase_filters"])
+
+    def test_native_audit_transaction_rollback_and_exact_identifier_collision(self):
+        self.assertTrue(self.run_worker("native-rollback")["exact_collision_refused"])
+
+    def test_native_expiry_refuses_ingestion_and_rechecks_after_local_snapshot(self):
+        self.assertTrue(self.run_worker("native-expiry")["original_nanoseconds_rechecked_after_snapshot"])
 
 
 if __name__ == "__main__":

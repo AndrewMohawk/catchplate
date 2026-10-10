@@ -26,6 +26,27 @@ DIGEST = "sha256:" + "a" * 64
 CANARY = "SYNTHETIC-NOTIFICATION-SECRET-DO-NOT-EXPORT"
 
 
+def native_record(phase="prepare_available", *, expires_nanos=None):
+    """Inert exact native-status fixture; never an observed live ceremony."""
+    expiry = expires_nanos if expires_nanos is not None else NOW_MS * 1_000_000 + 60_000_000_000
+    attempt, readiness = "sha256:" + "b" * 64, "sha256:" + "c" * 64
+    value = {"schema": "serverware.pilotActionStatus/v1", "attemptSha256": attempt,
+        "readinessSha256": readiness, "phase": phase, "actionAvailable": True,
+        "attemptNumber": 0 if phase == "prepare_available" else 1,
+        "sourceSha256": readiness if phase == "prepare_available" else "sha256:" + "d" * 64,
+        "setupExpiresAtUnixNanos": str(expiry if phase == "prepare_available" else expiry + 60_000_000_000),
+        "sourceExpiresAtUnixNanos": str(expiry),
+        "reviewPath": "/pilot-prelaunch/action-status/" + attempt[7:] + "/" + readiness[7:],
+        "eventType": "native_pilot." + phase, "eventId": None,
+        "automaticRetryAllowed": False, "enrollmentVerified": False}
+    digest_input = {key: value[key] for key in ("attemptSha256", "readinessSha256", "attemptNumber",
+        "eventType", "sourceSha256", "sourceExpiresAtUnixNanos")}
+    value["eventId"] = "sha256:" + hashlib.sha256(json.dumps(digest_input, sort_keys=True,
+        separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    return {"schema": "serverware.nativePilotNotificationObservation/v1",
+        "selection_sha256": "sha256:" + "e" * 64, "observation": value}
+
+
 class EventTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="serverware-notification-events-")
@@ -63,18 +84,23 @@ class EventTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def append(self, kind="data_plane.response.released", payload=None, *, raw=None, commit=True, actor=CANARY):
-        identifier = str(uuid.uuid4())
+    def append(self, kind="data_plane.response.released", payload=None, *, raw=None, commit=True, actor=CANARY,
+            actor_type="data-plane", identifier=None):
+        identifier = identifier or str(uuid.uuid4())
         previous = self.writer.execute("SELECT event_hash FROM audit_events ORDER BY rowid DESC LIMIT 1").fetchone()
         previous = previous[0] if previous else None
         raw = raw if raw is not None else json.dumps(payload or {}, separators=(",", ":"), sort_keys=True)
-        digest = audit_hash(event_id=identifier, event_type=kind, actor_type="data-plane", actor_id=actor,
+        digest = audit_hash(event_id=identifier, event_type=kind, actor_type=actor_type, actor_id=actor,
             event_json=raw, prev_event_hash=previous, created_at=CREATED)
         self.writer.execute("INSERT INTO audit_events VALUES(?,?,?,?,?,2,NULL,?,?,?)",
-            (identifier, kind, "data-plane", actor, raw, previous, digest, CREATED))
+            (identifier, kind, actor_type, actor, raw, previous, digest, CREATED))
         if commit:
             self.writer.commit()
         return identifier
+
+    def append_native(self, record):
+        return self.append(events.NATIVE_OBSERVATION_TYPE, record, actor_type="system",
+            actor="native-pilot-observer", identifier=events.native_event_identifier(record))
 
     def read(self, cursor=events.EventCursor(), **kwargs):
         with self.reader() as conn:
@@ -115,6 +141,79 @@ class EventTests(unittest.TestCase):
         self.assertEqual(events.ACTION_EVENT_TYPES, tuple(sorted(set(events.ACTION_EVENT_TYPES))))
         self.assertTrue(set(events.ACTION_EVENT_TYPES) <= set(events.AUDIT_EVENT_TYPES))
         self.assertFalse(any(kind.startswith("notification.") for kind in events.AUDIT_EVENT_TYPES))
+
+    def test_native_phase_filters_preserve_durable_source_metadata(self):
+        records = [native_record(phase) for phase in ("prepare_available", "security_key_available", "confirmation_available")]
+        for record in records:
+            self.append_native(record)
+        batch, cursor = self.read()
+        self.assertEqual(cursor.rowid, 3)
+        self.assertEqual(len(batch), 3)
+        for source, record in zip(batch, records):
+            self.assertEqual(source.event_type, events.NATIVE_OBSERVATION_TYPE)
+            self.assertEqual(source.filter_event_type, record["observation"]["eventType"])
+            self.assertIn(source.filter_event_type, events.ACTION_EVENT_TYPES)
+            self.assertIn(source.filter_event_type, events.AUDIT_EVENT_TYPES)
+            self.assertEqual(source.action_payload["source"]["event_type"], events.NATIVE_OBSERVATION_TYPE)
+            self.assertEqual(source.action_payload["details"], {"native_pilot": record})
+            self.assertEqual(source.action_payload["review_path"], record["observation"]["reviewPath"])
+            self.assertEqual(source.audit_payload["review_path"], "/#audit")
+            self.assertTrue(events.native_action_payload(source.action_payload))
+            with self.reader() as conn:
+                self.assertTrue(events.native_action_matches_source(conn, source.action_payload, now_unix_nanos=NOW_MS * 1_000_000))
+
+    def test_native_exact_nanosecond_expiry_and_historical_audit(self):
+        expires = NOW_MS * 1_000_000 + 1
+        record = native_record(expires_nanos=expires)
+        self.append_native(record)
+        batch, _ = self.read()
+        action, audit = batch[0].action_payload, batch[0].audit_payload
+        self.assertEqual(events.native_expiry_unix_nanos(action), expires)
+        with self.reader() as conn:
+            self.assertTrue(events.native_action_matches_source(conn, action, now_unix_nanos=expires - 1))
+            self.assertFalse(events.native_action_matches_source(conn, action, now_unix_nanos=expires))
+            self.assertFalse(events.native_action_matches_source(conn, action, now_unix_nanos=expires + 1))
+            self.assertTrue(events.payload_matches_source(conn, audit, now_epoch_ms=NOW_MS + 60000))
+            expired, _ = events.read_batch(conn, events.EventCursor(), now_epoch_ms=NOW_MS + 1)
+            self.assertIsNone(expired[0].action_payload)
+            self.assertEqual(expired[0].audit_payload, audit)
+
+    def test_native_payload_and_retained_observation_are_closed(self):
+        record = native_record()
+        identifier = self.append_native(record)
+        batch, _ = self.read()
+        action = batch[0].action_payload
+        mutations = []
+        for field, replacement in (("selection_sha256", DIGEST),):
+            candidate = json.loads(json.dumps(action))
+            candidate["details"]["native_pilot"][field] = replacement
+            mutations.append(candidate)
+        candidate = json.loads(json.dumps(action))
+        candidate["details"]["request"] = CANARY
+        mutations.append(candidate)
+        candidate = json.loads(json.dumps(action))
+        candidate["review_path"] = "/start"
+        mutations.append(candidate)
+        for candidate in mutations:
+            self.assertFalse(events.native_action_payload(candidate))
+            with self.reader() as conn:
+                self.assertFalse(events.native_action_matches_source(conn, candidate, now_unix_nanos=NOW_MS * 1_000_000))
+        malformed = json.loads(json.dumps(record))
+        malformed["observation"]["request"] = CANARY
+        self.writer.execute("UPDATE audit_events SET event_json=? WHERE id=?", (json.dumps(malformed), identifier))
+        self.writer.commit()
+        dropped, cursor = self.read()
+        self.assertEqual(dropped, ())
+        self.assertEqual(cursor.rowid, 1)
+        with self.reader() as conn:
+            self.assertFalse(events.payload_matches_source(conn, batch[0].audit_payload, now_epoch_ms=NOW_MS))
+
+    def test_native_source_identity_and_observer_actor_are_bound(self):
+        record = native_record()
+        self.append_native(record)
+        self.writer.execute("UPDATE audit_events SET actor_type='admin'")
+        self.writer.commit()
+        self.assertEqual(self.read()[0], ())
 
     def test_projection_drops_secrets_and_arbitrary_content(self):
         credential = str(uuid.uuid4())

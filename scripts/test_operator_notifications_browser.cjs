@@ -19,7 +19,29 @@ const PRIVATE = ['https://notify.example.test/synthetic-private-destination',
   'synthetic-private-error-MUST-NOT-RENDER'];
 const clone = value => JSON.parse(JSON.stringify(value));
 const EVENTS = JSON.parse(execFileSync('python3', ['-I', '-B', '-c',
-  'import ast,json,pathlib; tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_text()); assignments={n.targets[0].id: n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}; summaries=ast.literal_eval(assignments["_SUMMARIES"]); catalog=ast.literal_eval(assignments["_CATALOG"]); print(json.dumps({"action_required":ast.literal_eval(assignments["ACTION_EVENT_TYPES"]),"audit_log":sorted([*summaries,*["operator_catalog."+key for key in catalog]])}))'],
+  `import ast,json,pathlib
+tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_text())
+assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
+summaries=ast.literal_eval(assignments["_SUMMARIES"])
+catalog=ast.literal_eval(assignments["_CATALOG"])
+native=ast.literal_eval(assignments["NATIVE_EVENT_TYPES"])
+known={"_SUMMARIES":[*summaries,*["operator_catalog."+key for key in catalog]],"NATIVE_EVENT_TYPES":list(native)}
+def event_list(node):
+    if isinstance(node,ast.Name) and node.id in known: return list(known[node.id])
+    if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in {"tuple","sorted"} and len(node.args)==1 and not node.keywords:
+        values=event_list(node.args[0])
+        return sorted(values) if node.func.id=="sorted" else values
+    if isinstance(node,(ast.Tuple,ast.List)):
+        values=[]
+        for item in node.elts:
+            if isinstance(item,ast.Constant) and type(item.value) is str: values.append(item.value)
+            elif isinstance(item,ast.Starred): values.extend(event_list(item.value))
+            else: raise ValueError("unsupported event enum expression")
+        return values
+    raise ValueError("unsupported event enum expression")
+result={"action_required":event_list(assignments["ACTION_EVENT_TYPES"]),"audit_log":event_list(assignments["AUDIT_EVENT_TYPES"])}
+assert all(len(values)<=64 and len(values)==len(set(values)) for values in result.values())
+print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'serverware/operator_demo_portal.py', 'serverware/operator_notification_api.py', 'serverware/operator_notifications.py',
@@ -43,8 +65,11 @@ function status(changes = {}) {
     queue: Object.fromEntries(STATES.map(state => [state, 0])), cursor: null,
     backlog: {pending_source_events: 0, queue_capacity: 256, retained_capacity: 10000},
     capabilities: {audit_log: {source_available: true, event_types: [...EVENTS.audit_log]},
-      action_required: {source_available: false, event_types: [...EVENTS.action_required]}, native_hardware: {source_available: false},
-      source_note: 'Native security-key action notifications are not connected in this deployment.',
+      action_required: {source_available: false, event_types: [...EVENTS.action_required]},
+      native_hardware: {configured: false, source_available: false, observation_only: true, last_observation: {
+        state: 'not_configured', observed_at_epoch_ms: null, phase: null, action_available: false,
+        source_expires_at_unix_nanos: null, review_url: null}},
+      source_note: 'Native source availability describes the last observer read, not live hardware readiness.',
       test_note: 'A synthetic delivery test does not establish hardware readiness or approval.'},
     worker: {state: 'running', last_cycle_at_epoch_ms: NOW, last_code: 'ready'}, ...changes};
 }

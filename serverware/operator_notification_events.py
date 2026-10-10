@@ -25,6 +25,14 @@ _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|\+00:00)\Z")
 _METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 _ACTORS = {"admin", "system", "proxy", "data-plane", "measured-data-plane"}
+NATIVE_OBSERVATION_TYPE = "native_pilot.phase_observed"
+NATIVE_EVENT_TYPES = ("native_pilot.confirmation_available", "native_pilot.prepare_available",
+    "native_pilot.security_key_available")
+_NATIVE_SUMMARIES = {
+    "prepare_available": "Prepare the native pilot",
+    "security_key_available": "Use your security key for the native pilot",
+    "confirmation_available": "Confirm the native pilot action",
+}
 _SUMMARIES = {
     "proxy.request_decision": "Proxy request decision recorded",
     "data_plane.credential.release_started": "Authorized credential use started",
@@ -62,8 +70,8 @@ _CATALOG = {
     "access_rule.revoked": "Application permission revoked",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
-ACTION_EVENT_TYPES = ("approval.requested", "control_plane.approval.requested")
-AUDIT_EVENT_TYPES = tuple(sorted(_SUMMARIES))
+ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", *NATIVE_EVENT_TYPES)))
+AUDIT_EVENT_TYPES = tuple(sorted((*_SUMMARIES, *NATIVE_EVENT_TYPES)))
 _LEGACY = {"approval_request_id", "route_id", "method", "url_commitment", "expires_at"}
 _JIT = _LEGACY | {"principal_id", "credential_id", "credential_version", "policy_hash",
     "request_digest", "operation_digest", "grant_ttl_seconds", "grant_max_uses", "approver_policy_digest"}
@@ -89,6 +97,9 @@ class SourceEvent:
     event_type: str
     audit_payload: dict
     action_payload: dict | None
+    # A native observation has one durable audit type, with independently
+    # selectable closed phase filters. Its source metadata remains unchanged.
+    filter_event_type: str | None = None
 
 
 def _require(condition):
@@ -261,6 +272,82 @@ def _envelope(row, channel, summary, details):
         "summary": summary, "review_path": "/#audit", "details": details}
 
 
+def _native_record(value):
+    # This parser is pure: no configured imports, socket, DNS, or custody access.
+    # Historical records retain their original expiry; validation never renews it.
+    from serverware.operator_notification_pilot_source import validate_record
+    result = validate_record(value)
+    observation = result["observation"]
+    _require(observation["actionAvailable"] is True and observation["phase"] in _NATIVE_SUMMARIES
+        and observation["eventType"] == "native_pilot." + observation["phase"])
+    return result
+
+
+def native_event_identifier(record):
+    """Stable audit key for one admitted selection and original native event."""
+    record = _native_record(record)
+    binding = {"selection_sha256": record["selection_sha256"],
+        "native_event_id": record["observation"]["eventId"]}
+    encoded = json.dumps(binding, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def native_expiry_unix_nanos(payload):
+    """Exact original expiry, never converted through a float or rounded up."""
+    _require(type(payload) is dict and type(payload.get("details")) is dict
+        and set(payload["details"]) == {"native_pilot"})
+    return int(_native_record(payload["details"]["native_pilot"])["observation"]["sourceExpiresAtUnixNanos"])
+
+
+def _native_projection(row, record, channel):
+    record = _native_record(record)
+    observation = record["observation"]
+    _require(row["event_type"] == NATIVE_OBSERVATION_TYPE
+        and row["event_id"] == native_event_identifier(record)
+        and row["actor_type"] == "system" and row["actor_id"] == "native-pilot-observer")
+    summary = _NATIVE_SUMMARIES[observation["phase"]]
+    result = _envelope(row, channel, summary if channel == "action_required" else
+        "Native pilot phase observed: " + observation["phase"].replace("_", " "), {"native_pilot": record})
+    if channel == "action_required":
+        result["review_path"] = observation["reviewPath"]
+    else:
+        result["projection"] = "approved_fields"
+    return result
+
+
+def native_action_payload(payload) -> bool:
+    """Closed shape/binding recognition, not live-owner or dispatch authority."""
+    try:
+        _require(type(payload) is dict and type(payload.get("source")) is dict)
+        source = payload["source"]
+        _require(set(source) == {"event_id", "event_hash", "event_type", "created_at"}
+            and _hash(source["event_id"]) and _hash(source["event_hash"]))
+        _epoch(source["created_at"])
+        row = dict(source, actor_type="system", actor_id="native-pilot-observer")
+        record = payload.get("details", {}).get("native_pilot")
+        return _same_projection(payload, _native_projection(row, record, "action_required"))
+    except (ValueError, TypeError, OverflowError, RecursionError, KeyError, AttributeError):
+        return False
+
+
+def native_action_matches_source(conn, payload, *, now_unix_nanos: int) -> bool:
+    """Local committed-source and original-clock check; never polls the relay.
+
+The worker must separately compare a fresh admitted relay observation immediately
+before dispatch. A matching historical audit row alone cannot establish liveness.
+"""
+    try:
+        _snapshot(conn)
+        _require(type(now_unix_nanos) is int and now_unix_nanos >= 0 and native_action_payload(payload))
+        source = payload["source"]
+        row = _metadata(conn.execute("SELECT " + _COLUMNS + " FROM audit_events WHERE id=?", (source["event_id"],)).fetchone())
+        expected = _native_projection(row, _payload(conn, row["rowid"]), "action_required")
+        return (_same_projection(payload, expected) and _epoch(row["created_at"]) * 1_000_000 <= now_unix_nanos
+            and now_unix_nanos < native_expiry_unix_nanos(expected))
+    except (sqlite3.Error, ValueError, TypeError, OverflowError, RecursionError, KeyError, AttributeError):
+        return False
+
+
 def _approval(conn, row, event, now):
     """Read only selected metadata; never decrypt a request/review/challenge."""
     if event is None or row["event_type"] not in ACTION_EVENT_TYPES:
@@ -322,6 +409,17 @@ def _audit_projection(row, event):
 
 
 def _project(conn, row, now):
+    if row["event_type"] == NATIVE_OBSERVATION_TYPE:
+        try:
+            record = _native_record(_payload(conn, row["rowid"]))
+            audit = _native_projection(row, record, "audit_log")
+            action = _native_projection(row, record, "action_required")
+            if _epoch(row["created_at"]) > now or now * 1_000_000 >= native_expiry_unix_nanos(action):
+                action = None
+            return SourceEvent(row["event_id"], row["event_hash"], row["created_at"], row["event_type"],
+                audit, action, record["observation"]["eventType"])
+        except (ValueError, TypeError, OverflowError, RecursionError, KeyError, AttributeError):
+            return None  # An invalid observation is not an actionable source.
     if row["event_type"] not in _SUMMARIES or not (_uuid(row["event_id"]) or _hash(row["event_id"])):
         return None
     event = _payload(conn, row["rowid"])
@@ -382,11 +480,14 @@ def payload_matches_source(conn, payload, *, now_epoch_ms: int) -> bool:
         _require(type(source) is dict and (_uuid(source.get("event_id")) or _hash(source.get("event_id"))))
         raw = conn.execute("SELECT " + _COLUMNS + " FROM audit_events WHERE id=?", (source["event_id"],)).fetchone()
         row = _metadata(raw)
-        if row["event_type"] not in _SUMMARIES:
+        if row["event_type"] == NATIVE_OBSERVATION_TYPE:
+            expected = _native_projection(row, _payload(conn, row["rowid"]), "audit_log")
+        elif row["event_type"] not in _SUMMARIES:
             return False
-        expected = _audit_projection(row, _payload(conn, row["rowid"]))
+        else:
+            expected = _audit_projection(row, _payload(conn, row["rowid"]))
         return _same_projection(payload, expected)
-    except (sqlite3.Error, ValueError, TypeError, OverflowError, RecursionError):
+    except (sqlite3.Error, ValueError, TypeError, OverflowError, RecursionError, KeyError, AttributeError):
         return False
 
 

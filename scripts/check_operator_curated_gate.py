@@ -102,7 +102,9 @@ try:
             for name in private:
                 try: visible[name] = identity("/data/" + name)
                 except FileNotFoundError: pass
-            need(set(private[:3]) <= visible.keys())
+            # A fresh app has no master key until its first credential is saved.
+            # Never create a dummy credential merely to satisfy an observer.
+            need({private[0], private[2]} <= visible.keys())
         else:
             visible = {}
             for name in private:
@@ -180,6 +182,8 @@ def inspect(identifier, name, config):
 
 
 def verify_transition(before, after, client):
+    base.require("master.key" in after["app_private_files_present"],
+        "real client credential custody was not observed after the check")
     base.require(before.get("schema") == "serverware.privateCuratedGateObservation/v1" and before.get("ok") is True and
         before.get("phase") == "before" and before["preparation_sha256"] == after["preparation_sha256"] and
         before["containers"] == after["containers"] and before["shared_leaves"] == after["shared_leaves"] and

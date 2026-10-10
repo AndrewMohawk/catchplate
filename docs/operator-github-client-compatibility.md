@@ -85,21 +85,39 @@ never automatically retried by the supplied recipe.
 
 ## Verification checkpoint
 
-Recorded for this source slice:
+Recorded checkpoints (the earlier Python and browser suites were not rerun for
+the Rust freshness fix):
 
 - Six protocol tests, six catalog tests and 13 legacy key-replacement tests pass.
 - The focused GitHub UI suite passes one pure group and eight intercepted-browser
   groups across 11 synthetic contexts. Selected existing Connect, proxy-login,
   Gmail-bundle and Google-reauthorization regressions also pass.
-- All 18 selected Rust checks pass; the normal binary has SHA-256 prefix
-  `61c312f1`, built from source `6ee45a31`.
-- In network-isolated synthetic-provider testing, stock Octokit `22.0.1` and
-  Undici `8.11.2` on Node `25.5.0` completed nine legitimate requests and four
-  pre-lease controls once. That run stopped during hostile-Link checks; a second
-  run failed the normal job at `rate_limit`. Neither run passed full acceptance.
-  The exact underlying error was not retained. Source review identified a
-  near-expiry cache availability issue; its fix is under development, not yet a
-  demonstrated explanation or resolution of the runtime failures.
+- On 2026-10-10, all 28 selected Rust checks passed against frozen source
+  `5f06d3efb1bb5adcea70a0e82d9d76d900cd3005`: 18 existing GitHub/regression
+  checks, two expiry checks and eight static-credential preparation checks.
+  The separately built normal release binary has SHA-256
+  `aafc1d1b9bb1d0730317a6420d12a073149f13b09ecaacc9434623a112bc3445`.
+  This is a focused checkpoint, not a full-suite result.
+- The same normal binary passed the complete network-isolated
+  synthetic-provider fixture with stock Octokit `22.0.1`, Undici `8.11.2` and
+  Node `25.5.0`: 11 provider attempts, nine released responses, two exact unsafe
+  pagination-Link blocks and four denials before credential access. The checker
+  verified canonical-v3 requests, raw query/body preservation, response/error
+  metadata and distinct durable audit joins for all 11 attempts. This does not
+  establish hidden-wire-header coverage.
+- Independent review confirmed source/binary provenance across build,
+  preparation, the running executable and checker receipts. Initial and
+  running-checker isolation checks passed with loopback-only networking, no
+  usable default route and no effective/permitted capabilities. The runner
+  completed without retry, removed all six temporary containers and reported
+  successful cleanup; a separate final check found no project containers or
+  networks remaining. Synthetic evidence files were retained.
+- Two earlier fixture runs failed: one during hostile-Link checks after nine
+  legitimate requests, and another at the normal `rate_limit` operation. Their
+  exact underlying errors were not retained. Source review identified and
+  repaired a near-expiry cache availability issue before decision binding; the
+  repaired build now passes the fixture, but that does not retrospectively
+  establish the exact cause of either earlier failure.
 - At `05fbe561`, bounded failure diagnostics were added and ten pure fixture
   groups passed. Expanded SDK failure diagnostics now pass all 14 pure fixture
   groups, including secret-safe output and exact refusal assertions. Separately, all
@@ -111,7 +129,8 @@ Recorded for this source slice:
   authentication, not the retained Bearer branch. Node `22.19` is the dependency
   minimum, not a runtime-tested version in this checkpoint.
 
-Complete that runtime acceptance and pair-provenance review before deployment;
-then separately verify the intended real repository job with authorized provider
-credentials. No real GitHub request, AWS compatibility or npm compatibility is
+Isolated runtime acceptance and pair-provenance review are complete for this
+fixture. Deployment/public DNS and the intended real repository job still need
+separate verification with authorized provider credentials. No real GitHub
+request, AWS compatibility, npm compatibility or overall pilot completion is
 claimed by this checkpoint.

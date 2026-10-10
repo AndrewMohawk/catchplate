@@ -148,6 +148,17 @@ This cannot be implemented solely inside the existing setup handler:
   if used, needs verified ownership/currentness and crash recovery from the
   authoritative committed record; a successful file write is not activation.
 
+The current operator Compose recipe mounts the complete app-data directory
+read-only into the gate, including SQLite and its master key. Managed custody
+must not rely on a public-only parser while leaving both ciphertext and its key
+readable there. The integration needs a curated shared publication directory
+and only the gate's required CA material, excluding the application database and
+master key. Preserve one shared publication-lock inode across both processes.
+Do not substitute an individual bind mount of `policy-bundle.json`: publication
+uses atomic replacement, so that mount could retain an obsolete file inode.
+This is a coordinated ownership/publication change, not a Compose-only edit or
+authorization to migrate retained live state now.
+
 No runtime environment mutation, `webapp.env` rewrite, arbitrary secret-file
 writer, Docker socket, self-restart privilege or hot-reload claim belongs in
 this slice. Restart requirements must be visible. Publication ownership does

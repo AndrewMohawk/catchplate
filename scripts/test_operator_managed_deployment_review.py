@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Pure sanitized engine/model controls; no Docker, files or live env reads."""
+"""Sanitized model and repository recipe controls; no Docker or live env reads."""
 from contextlib import ExitStack
 from copy import deepcopy
+import hashlib
 import json
 import unittest
 from unittest.mock import patch
@@ -97,6 +98,12 @@ def deployed(documents_value):
 
 
 class ManagedDeploymentReviewTests(unittest.TestCase):
+    def test_checked_in_layer_bytes_match_the_reviewed_pins(self):
+        self.assertEqual(set(review.PINS), set(review.LAYERS))
+        for path, expected in review.PINS.items():
+            with self.subTest(layer=path.name):
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected)
+
     def setUp(self):
         stack = ExitStack()
         self.addCleanup(stack.close)

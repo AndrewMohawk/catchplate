@@ -40,7 +40,7 @@ MANAGED = legacy.STACK / "docker-compose.managed-google-candidate.yml"
 CURATED = legacy.STACK / "docker-compose.curated-gate.yml"
 LAYERS = (legacy.BASE, MANAGED, CURATED, legacy.NOTIFICATIONS)
 PINS = {**legacy.PINS,
-    MANAGED: "91f932e68243684614b6841e291823f7c5c2c13515472429e4ba26eee14e6d92",
+    MANAGED: "946691442ff1a78f43c8a919fb8e97fcedcb80bfca93c20ae5751c6dd1ca522b",
     CURATED: "e5335f471f60a2cb918d7e2e201c469012655efcba38fed86ceb6608cf71d6b5"}
 APP_MANAGED_ENV = {
     "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",

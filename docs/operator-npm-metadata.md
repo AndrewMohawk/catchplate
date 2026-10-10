@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # npm package metadata
 
 The additive `npm.metadata.v1` profile supports **reading package metadata**.
@@ -42,9 +44,60 @@ existing grant is silently expanded.
 
 ## Verification boundary
 
-The source implementation and its synthetic client fixture are being verified.
-They are not yet a deployed npm feature or evidence of real npm account access.
-The currently waiting native pilot remains on its frozen source snapshot.
+On **2026-10-10**, the isolated end-to-end metadata fixture passed using stock
+Node **25.5.0**, npm **11.8.0**, pacote **21.0.4** and npm-registry-fetch **19.1.1**.
+Actual `npm view` and `pacote.manifest` calls used the app-scoped HTTPS proxy,
+registry-scoped placeholder and additive CA trust. No client transport was
+replaced, and TLS verification remained enabled. Retries were explicitly set
+to zero; default retry behavior was not tested.
+
+The fixture exercised the actual catalog handlers, custody, policy publication,
+compiled Rust gate, synthetic TLS registry and committed audit records:
+
+- Seven upstream metadata attempts had seven unique audit attempt IDs. Five
+  responses were released, including the expected JSON 404. Package-name
+  mismatch and credential reflection each blocked a response.
+- Wrong application, unlisted package and wrong placeholder were each denied
+  before any credential lease or upstream request.
+- Scoped and unscoped names passed with full JSON and vendor metadata JSON.
+  Whole upstream body hashes/lengths matched the response audit records.
+- Runtime inspection verified the private shared network namespace, no external
+  route or host ports, expected executable, read-only source and shared policy
+  publication lock. The fixture completed in 73 seconds; only its temporary
+  containers were removed. Private runtime files and receipts were retained.
+
+The accepted source is `dc68a571e42760360a5ddfc6387d2094319629e4`. The normal
+Rust binary was genuinely compiled from
+`8cbe796422241afe4f4a1e1fc3898456a103453e`, with SHA-256
+`2bfe5e384d7e9c655de70704c25350c16336c55a2584fc59f363f12164f297d6`.
+The later harness-only change left all production directories and all 493
+compiler inputs byte-identical, so the accepted run reused that binary without
+another build. Private receipts are retained under
+`/srv/catchplate-fast/tmp/serverware-npm-fixture-runner.NBT63N`:
+
+| Receipt | SHA-256 |
+| --- | --- |
+| `checker.stdout.log` | `2379584087bada7f55404a03f8882f2bffe243a62653136fc172be2354b392be` |
+| `run-npm.receipt.json` | `0bcf8ef26a9b51e409d8be649507fd4ecb24b05ddb9772249e6ede2674ac1c3a` |
+
+Earlier attempts caught a missing embedded-schema `$defs` and a disposable
+numeric user's missing home directory. Both failed runs were cleaned up and
+retained separately. The schema now supplies a real referenced definition; the
+strict loader is unchanged. The fixture supplies a private home only to its
+disposable Node/npm processes, with fixed-field diagnostics that omit raw errors.
+
+Supporting checks passed: 15 Python adapter/schema groups, 10 connected npm
+catalog groups, nine pure fixture groups, 12 UI groups and six rendered-browser
+groups. The browser cases intercepted backend responses and did not themselves
+execute a proxy request. The authored Rust unit regressions were not executed;
+release compilation and actual gate startup/client acceptance were executed.
+
+This is **private synthetic metadata acceptance**, not real npm account access,
+public registry/DNS acceptance, installation, publication, or production release.
+No real provider was contacted. This feature has not been deployed to the demo;
+the live operator deployment and waiting native pilot retain their own frozen
+source snapshots. Actual native-key notification and hardware acceptance are
+also separate from these client results.
 
 The broader installation/publishing requirements remain in
 [ordinary npm client compatibility](operator-npm-client-compatibility.md).

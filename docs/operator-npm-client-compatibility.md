@@ -1,9 +1,10 @@
 # Ordinary npm client compatibility
 
 Status: **full install/publish specification; not verified end to end**. The
-additive [package metadata profile](operator-npm-metadata.md) is a narrower
-implementation for metadata lookup only; it does not implement tarball reads,
-default auditing or publication. The remaining gap table below describes the
+additive [package metadata profile](operator-npm-metadata.md) passed private
+synthetic acceptance with stock npm/pacote on 2026-10-10. It is metadata-only,
+not yet deployed, and does not implement tarball reads, default auditing or
+publication. The remaining gap table below describes the
 legacy `npm.registry` path, not the new metadata-only profile. The original
 2026-10-09 source review did not execute npm, build the gate, start a fixture, or
 contact a registry. Existing example/compiler tests are not an npm install or

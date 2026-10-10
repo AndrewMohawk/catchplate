@@ -4,11 +4,8 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
-import os
-from pathlib import Path
 import re
 import secrets
-import tempfile
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -215,32 +212,13 @@ def initialize() -> None:
 def materialize() -> None:
     """DB is authoritative after commit; durable atomic replace is recoverable on startup."""
     db = _require()
-    from serverware.config import POLICY_BUNDLE_PATH
+    from serverware import operator_gate_publication
     with operator_publication.exclusive(), db.connect() as conn:
         row = conn.execute("SELECT signed_bundle_json FROM operator_demo_policy WHERE singleton=1").fetchone()
         if row is None:
             raise RuntimeError("operator demo committed policy unavailable")
         raw = row[0].encode("utf-8")
-        path = Path(POLICY_BUNDLE_PATH)
-        if path.is_symlink():
-            raise RuntimeError("operator demo policy file cannot be a symlink")
-        if path.exists() and path.read_bytes() == raw:
-            return
-        fd, temporary = tempfile.mkstemp(prefix=".operator-policy-", dir=path.parent)
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        operator_gate_publication.materialize(raw)
 
 
 def get_policy_high_water() -> dict | None:

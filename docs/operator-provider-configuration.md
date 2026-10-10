@@ -201,6 +201,26 @@ writer, Docker socket, self-restart privilege or hot-reload claim belongs in
 this slice. Restart requirements must be visible. Publication ownership does
 not prove that old processes stopped.
 
+### Curated gate publication checkpoint
+
+The opt-in `operator_gate_publication` publisher now derives a `gate-runtime`
+directory from the committed signed policy under the original publication lock.
+It repairs this copy independently of the canonical policy after a failed
+publication or restart. The dormant `docker-compose.curated-gate.yml` layer
+mounts that directory into the gate, with separate read-only binds of the
+original lock, marker and required interception CA files. It excludes the app
+database and master/signing keys. The gate still needs the interception CA
+private key; this is not an all-public or production-isolated data plane.
+
+Seven connected checks passed on 2026-10-10 in 96.799 seconds in a network-none
+container: real policy changes, disabled-mode compatibility, stale/missing copy
+repair, postcommit failure followed by fresh startup, unsafe paths and actual
+shared-lock exclusion. Evidence is retained in
+`serverware-operator-workspace-evidence/curated-boundary.IFPloRyU`.
+The separate curated fixture reuses the stock Basic/Bearer client check and
+observes actual mounts before and after policy reloads. Its execution and any
+live migration remain unverified at this checkpoint. No live mount changed.
+
 ## Compatibility, ownership and acceptance
 
 Keep externally managed env/file profiles unchanged and mutually exclusive

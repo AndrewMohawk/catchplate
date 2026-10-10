@@ -53,6 +53,15 @@ checker correction must preserve every prior row and fully validate the final
 inventory, identities, policy, binary and credential generation; merely
 ignoring added rows is not an acceptable fix.
 
+The checker now revalidates a fresh complete snapshot after the first drained
+checkpoint. It requires every previously observed row/hash to remain, permits
+only additional fully validated lease records, and preserves intermediate
+history if another drain is needed. Ten pure regression groups pass, including
+wrong bindings/generations, changed or missing history, unexpected added events,
+queue failure, saturated views and failed chain verification. This is a
+checker-only correction: the failed runtime run remains failed, and a fresh
+isolated run with the separately pinned corrected checker is still required.
+
 Evidence directory:
 `serverware-operator-workspace-evidence/private-retained-pair.mw9wyo1O`.
 It retains the failed checker output, actual isolation/container/network

@@ -365,6 +365,7 @@ class ProxyBasicCheck(OrdinaryClientCheck):
                   for stage in ("initial", "assigned_rule_0", "assigned_rule_1")]
         reload_chain = Counter((previous["policyHash"], current["policyHash"], current["sequence"], index)
                               for index, (previous, current) in enumerate(zip(loaded, loaded[1:]), 1))
+        drained_cutoff = None
         while True:
             events = self.audit()
             cutoff = features.audit_cutoff(events)
@@ -372,6 +373,15 @@ class ProxyBasicCheck(OrdinaryClientCheck):
             for observed_cutoff in self.negative_cutoffs:
                 require(all(cutoff.get(key) == value for key, value in observed_cutoff.items()),
                         "negative phase history changed")
+            if drained_cutoff is not None:
+                # App-side issuance audit is outside the gate's delivery queue:
+                # hot-scope renewal may append either lease purpose after drain.
+                # Preserve every observed row and revalidate the ENTIRE fresh
+                # view below; this is not permission to ignore arbitrary tails.
+                require(all(cutoff.get(key) == value for key, value in drained_cutoff.items()),
+                        "audit history changed after drained checkpoint")
+                require(all(row["id"] in drained_cutoff or row["event_type"] == LEASE for row in events),
+                        "non-lease audit appended after drained checkpoint")
             rows = [row for row in events if row["id"] not in baseline]
             counts = Counter(row["event_type"] for row in rows)
             require(not set(counts) - (set(expected) | {LEASE, RELOAD})
@@ -402,8 +412,12 @@ class ProxyBasicCheck(OrdinaryClientCheck):
                             and event.get("data_plane_binary_digest") == self.args.expected_binary_sha256
                             and event.get("purpose") in {"generationMetadata", "dispatchSecret"}, "lease scope differs")
                     if event.get("purpose") == "dispatchSecret":
-                        require(event.get("expected_credential_version") == 1, "dispatch lease generation differs")
+                        require(type(event.get("expected_credential_version")) is int
+                                and event["expected_credential_version"] == 1, "dispatch lease generation differs")
                         leased.add(scope)
+                    else:
+                        require(event.get("expected_credential_version") is None,
+                                "generation metadata lease unexpectedly pins a version")
                 elif kind == RELOAD:
                     transition = tuple(event.get(key) for key in
                                        ("previous_policy_hash", "policy_hash", "policy_sequence", "routes"))
@@ -415,10 +429,14 @@ class ProxyBasicCheck(OrdinaryClientCheck):
             if (all(counts[key] == count for key, count in expected.items()) and len(pairs) == 4
                     and reloads == reload_chain and leased == scopes and set(self.mutations) <= mutations
                     and self.audit_drained()):
-                break
+                if drained_cutoff is not None:
+                    break
+                drained_cutoff = cutoff
+                continue  # Fresh read gets the same complete oracle, not an equality-only check.
+            if drained_cutoff is not None:
+                drained_cutoff = cutoff
             self.audit_drained()
             time.sleep(min(0.1, self.timeout()))
-        require(features.audit_cutoff(self.audit()) == cutoff, "audit changed after drained checkpoint")
         verified = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
         require(verified.get("ok") is True and verified.get("complete") is True and verified.get("backend") == "sqlite",
                 "complete durable audit verification failed")

@@ -841,9 +841,83 @@ finite application expiry, exact leader/follower results, signed static lease
 acquisition, publication-first reload without retargeting, deadline exhaustion,
 shared-inode lane exclusion and lock substitution.
 
-This is an independently source-reviewed candidate, not a compiled, tested or
-deployed result. Regression execution and a fresh complete stock-client run are
-still required. No acceptance predicate or retained fixture was changed.
+The frozen source `b55f3024a0a2e696a462df723dae9a8a1fdded6a` passed all
+**116 tests across 26 phases**, with zero failures or ignored tests. Test
+compilation took **4 minutes 55 seconds**; the six new background-renewal
+groups completed in **0.42 seconds**. The 51,420,344-byte test executable has
+SHA-256 `03eb7a78dc12da978f8fe3ee249b53c14436234fcf14b96059a4e54c71342b4d`.
+
+Evidence is retained in `serverware-genuine-rust-background-renewal.UnelJrUY`.
+Test-receipt SHA-256:
+`fc98d3de725e82c22faa26fb6bd71d3853b2394717cdc977f4f8e73d401fdd88`.
+The source archive is SHA-256
+`73dc5eae40b46d29cedd60834d0b85a5c70ce6731b8dfb99787758be7db5b996`;
+all 4,949 source files were verified against their Git blobs and modes, with
+source-manifest SHA-256
+`00222091afb64341390fbd9dd3f250a0b346542ea52f8d8192cea0254a20718e`.
+
+The separate normal `cargo build --release --frozen --offline` also passed,
+in **5 minutes 46 seconds**. It actually recompiled the changed data plane and
+produced a 40,881,328-byte mode-0555 executable, SHA-256
+`82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85`.
+Its compiler dependency file includes both `main.rs` and the new production
+background-renewal module. The normal-build receipt is SHA-256
+`b4679c6b62b9e0add258fdc419b560d16be94e945025fc90298e881567e74382`;
+the successful terminal receipt is SHA-256
+`5e782979d11b6900d3923697b2d1aec11c0f9935c85189e8114a10bb6535cb17`.
+The compiler exited zero with no timeout or OOM.
+
+### Run eighteen: durable revocation, incomplete acknowledgement
+
+The fresh stock fixture used the exact `b55f3024` source and normal executable
+above. A pre-launch renderer refused an inconsistent inherited source/binary
+path pair; no runtime had started. The new adapter was corrected to retain all
+parent identity guards, then apply independently reviewed, counted and reversible
+identity-only substitutions. No checker, acceptance predicate or runtime bound
+was changed. Its SHA-256 is
+`4e4168cbc7005acf1096dfd01a9a8f53b7abdec4c72fb112bb227bbc5c1f1466`.
+
+Run eighteen ran once from **18:46:29 to 18:47:51 UTC on October 10** and
+terminated with exit 1. The first six client phases and their checkpoints
+completed: prerequisite, unscoped, scoped, wrong package, outside window and
+wrong placeholder. The `revoked_app` phase reported **`TimeoutError`** at
+`stage=unknown`, before its client command completed. That stage spans the
+revocation mutation and its surrounding catalog/readiness checks; it does not
+identify which request timed out. The final audit-chain verification was not
+reached. Scoped cleanup succeeded, with no fixture containers or networks left.
+
+Two bounded, network-none inspections used ephemeral copies of the stopped
+database mounted read-only. They confirmed `quick_check=ok`, three active
+applications and one revoked application, **42 issued leases and zero rejected
+leases**, six paired credential-release/response events, six request denials,
+six established CONNECT events, six keep-alive events and no revoked-client CONNECT denials
+(that client phase did not run). These are retained database observations, not
+a substitute for the failed client acknowledgement or full audit-chain check.
+
+The revocation audit was recorded at **18:47:49.450576 UTC**, followed by the
+gate reload audit at **18:47:50.311522 UTC**. Both match the final committed
+policy hash and sequence. **No leases were issued after the revocation audit.**
+Thus revocation committed and the gate loaded it; this is not evidence that
+the operation rolled back or that a permanent event-loop deadlock occurred.
+
+No completed revocation HTTP response appears in the retained access log,
+while other app requests continued. The exact delay remains unproven: the
+checker's per-request timeout is four seconds, publication acquisition permits
+five seconds, and mutation completion also includes materialization, optional
+gate/state observation and an audit-outbox drain. Overlapping publication
+readers have no explicit writer-priority mechanism. These are source-level
+latency candidates, not measured attribution. The next investigation must
+separate acquisition, commit/materialization and response-completion timing;
+do not extend deadlines, retry the mutation or remove publication coordination
+to turn this failed run into acceptance.
+
+Originals are retained in `serverware-npm-publish-runner.te64GJ1X` and
+`serverware-npm-publish-private.41QYQs6r`. Run-receipt SHA-256:
+`8577312237b889932373074a8a2cbde0a759d458495862b9ca7876b33c0d2984`.
+Checker-result SHA-256:
+`0f0ad5bdb34ce19efff6a6c842fc0fb0fde074e3f688f1ce8db8a7dacffda8bc`.
+The failed fixture was not restarted. No live demo rollout or native-pilot
+action was performed.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

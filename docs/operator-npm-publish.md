@@ -366,8 +366,43 @@ additional sensitive JSON temporary is scrubbed after use. Unknown or malformed
 503 bodies produce only a fixed unclassified category. A matching body label
 does not prove its producer or internal cause, and a completed guarded write
 does not prove client receipt. The stderr sink is synchronous, not a guaranteed
-nonblocking channel. This source diagnostic still requires a genuine new Rust
-test/build and isolated stock-client execution before it provides runtime evidence.
+nonblocking channel.
+
+At `dbcb36d47f8de737876689e9105f4aea657ba50d`, a genuinely recompiled Rust test
+binary passed all **62** selected controls, including 13 new response-diagnostic
+checks, with no failures or skips. The eight test phases executed in 5.55 seconds
+after compilation. A separate normal release build also completed successfully;
+its SHA-256 is
+`92ee92a218e3aa97df228b055c10a528935a294dd016fe0e070ac7001ac4dc33`.
+Both builds used the same frozen 4,938-file source tree and offline dependency
+inventory. These are fresh test executions, not a relabelled earlier binary or
+combined historical pass count. Build and test receipts are retained in
+`serverware-genuine-rust-response-diag.j5yQ1LeF` under the private evidence root.
+
+The eleventh isolated stock-client run used that exact new normal binary and
+source, with unchanged deadlines, resource limits, seven-command recipe and
+acceptance predicate. It completed prerequisite and unscoped client commands,
+then stopped on **ordinary audit delivery failed**. The gate recorded one
+initial audit transport failure with unknown outcome after 2,947 ms, for a
+two-event batch with matching policy snapshot and sequence. This is not an npm
+503 reproduction or a passing publishing flow. The npm-child failure observer
+was not invoked because this failure occurred at the subsequent audit check.
+
+All 12 admitted app audit observations completed, with elapsed time reaching
+1,164 ms. Initial policy-lock waiting reached 1 ms; validation/copying/final
+merge reached 479 ms, ingestion 209 ms, and outbox work 492 ms (different-record
+maxima). These app observations are not correlated to the failed transport
+batch and do not prove acknowledgement. Two renewal warnings were logged;
+no terminal-503 or static-preparation failure observations were emitted.
+
+The stopped database passed `quick_check` and retained three response releases
+(prerequisite GET, unscoped metadata GET and unscoped PUT), one earlier request
+denial, two established CONNECTs, two keep-alive events and 17 issued leases.
+The isolated project containers and networks are absent after cleanup; all
+4,938 source and 1,782 npm files remain unchanged. The one-shot run receipt and
+logs are retained in `serverware-npm-publish-runner.50YMCZ2u`; runtime data is
+preserved in `serverware-npm-publish-private.AmyKEaAg`. Nothing was replayed or
+promoted to the live demo.
 
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.

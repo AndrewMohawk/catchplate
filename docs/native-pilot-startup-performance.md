@@ -118,6 +118,34 @@ diagnostic helper, not an authorization clock or another startup gate. Original
 phase markers and call order remain intact; a failed phase does not emit a
 successful completion duration. These timings are not present in frozen R97.
 
+## Runtime layout: one mount-table parse per check
+
+`RuntimeLayout.check()` previously reread and parsed `/proc/self/mountinfo`
+once for each verified mount. The prospective implementation reads and indexes
+one bounded fresh snapshot per call, checks every selected mount against it,
+then requires an identical fresh reread followed by namespace and original
+clock checks. Calls with no verified mounts do not read the mount table. No
+snapshot survives a call, and the standalone lookups used during mount creation
+and cleanup still read fresh state. Every existing held-FD, named-path, link and
+mounted-source identity check remains in place.
+
+The apparent duplicate RBAC/cohort traversals in the database guard are not
+removed. Their later observations enforce freshness after intervening work,
+including a distinct RBAC monotonic deadline. Exact owner identity does not
+prove those earlier observations are still current; safe coalescing needs an
+owner-owned freshness contract rather than a caller's remembered success.
+
+The mount-table change is committed in COMMON as `b47b8c251`. Its ten new
+component groups passed together with 28 existing check-path and five timing
+tests: 43 tests in 7.697 seconds. The component fixtures execute the actual
+check, clock and parser methods with explicitly synthetic owner/FD/namespace
+observations. They verify constant read/parse counts, fresh observations on
+every call, changed-state refusal, original custody checks, bounds, cancellation
+and unchanged standalone lookup behavior. A separate read-only container check
+matched the old lookup semantics for all 123 targets in its actual 16,174-byte
+kernel mount table, with an identical fresh reread. Neither test executes native
+pilot mount setup or measures native startup latency. Frozen R97 is unchanged.
+
 ## Local verification
 
 Nine cache test groups pass with real temporary files and synthetic kernel

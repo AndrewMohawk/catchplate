@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 
@@ -58,11 +59,51 @@ GATE_ENV_DELTA = "decision-gate-rs managed public configuration"
 GATE_DATA_DELTA = "decision-gate-rs curated data and four original read-only leaves"
 APPROVED_DELTAS = legacy.APPROVED_DELTAS | {APP_ENV_DELTA, APP_CUSTODY_DELTA, GATE_ENV_DELTA, GATE_DATA_DELTA}
 TRANSITION = (OLD_SOURCE, NEW_SOURCE, OLD_SHA, NEW_SHA, OLD_BINARY, NEW_BINARY)
+# A separate opt-in profile preserves the historical migration above. Root
+# fills these remaining literal receipt pins only after actual npm acceptance.
+# None is deliberately not a fallback to the old managed binary or layer.
+RETAINED_COMMIT = "58b1068934885e123fa63c8884523390e70b9432"
+RETAINED_SOURCE = legacy.ARTIFACTS + "source-" + RETAINED_COMMIT
+RETAINED_MANIFEST_SHA = "6e00a66508b740d355feba089d4e6c7f444a6bbb4e6b14dbf09e744e63c1deab"
+RETAINED_SOURCE_FILES = 4930
+RETAINED_LAYER = legacy.STACK / "docker-compose.npm-publish-candidate.yml"
+RETAINED_CANDIDATE = None
 Refused, require = legacy.Refused, legacy.require
 
 
 def error_receipt(_error):
     return {"ok": False, "error": "managed candidate comparison refused"}
+
+
+def selection(transition_mode):
+    """Choose only one fixed reviewed pair; never take arbitrary CLI pins."""
+    require(transition_mode in {"migration", "retained"}, "managed transition mode")
+    selected = {"commit": NEW_COMMIT, "source": NEW_SOURCE, "binary_sha256": NEW_SHA,
+        "binary": NEW_BINARY, "source_manifest_sha256": SOURCE_MANIFEST_SHA, "source_files": 4910,
+        "join_path": JOIN, "join_sha256": JOIN_SHA, "compiler_source_commit": "ff6d86b1a0267dcb5915e07684bdc5b216dbde7d",
+        "compiler_input_files": 494, "new_build": False, "layers": LAYERS, "pins": PINS,
+        "transition": TRANSITION, "approved_deltas": APPROVED_DELTAS}
+    if transition_mode == "migration":
+        return selected
+    pins = RETAINED_CANDIDATE
+    require(type(pins) is dict and set(pins) == {"binary_sha256", "layer_sha256", "join_path",
+        "join_sha256", "compiler_input_files"}, "retained candidate not pinned")
+    require(all(type(pins[key]) is str and re.fullmatch(r"[0-9a-f]{64}", pins[key]) is not None
+        and pins[key] != "0" * 64 for key in ("binary_sha256", "layer_sha256", "join_sha256"))
+        and pins["binary_sha256"] not in {OLD_SHA, NEW_SHA, legacy.OLD_SHA}, "retained candidate digest pins")
+    require(isinstance(pins["join_path"], Path) and pins["join_path"].is_absolute()
+        and ".." not in pins["join_path"].parts and type(pins["compiler_input_files"]) is int
+        and 1 <= pins["compiler_input_files"] <= 4096, "retained compiler receipt pins")
+    binary = legacy.ARTIFACTS + "sha256-" + pins["binary_sha256"] + "/serverware-decision-gate"
+    selected.update(commit=RETAINED_COMMIT, source=RETAINED_SOURCE, binary_sha256=pins["binary_sha256"],
+        binary=binary, source_manifest_sha256=RETAINED_MANIFEST_SHA, source_files=RETAINED_SOURCE_FILES,
+        join_path=pins["join_path"], join_sha256=pins["join_sha256"], compiler_source_commit=RETAINED_COMMIT,
+        compiler_input_files=pins["compiler_input_files"], new_build=True,
+        layers=(legacy.BASE, RETAINED_LAYER, CURATED, legacy.NOTIFICATIONS),
+        pins={**legacy.PINS, RETAINED_LAYER: pins["layer_sha256"], CURATED: PINS[CURATED]},
+        transition=(NEW_SOURCE, RETAINED_SOURCE, NEW_SHA, pins["binary_sha256"], NEW_BINARY, binary),
+        approved_deltas=legacy.APPROVED_DELTAS)
+    return selected
 
 
 def provider_path(value):
@@ -118,9 +159,15 @@ def candidate_service(name, proposed, provider_custody):
 
 
 def compare_service(name, proposed, live, image, networks, *, provider_custody=PROVIDER_CUSTODY,
-                    digest_file=legacy.file_digest):
+                    digest_file=legacy.file_digest, transition_mode="migration"):
     """Closed delta admission, then unchanged historical retained-setting oracle."""
+    selected = selection(transition_mode)
     candidate_service(name, proposed, provider_custody)
+    if transition_mode == "retained":
+        # No managed field is projected away: the unchanged full comparator
+        # requires every existing flag, custody bind and curated leaf to match.
+        return legacy.compare_service(name, proposed, live, image, networks, digest_file=digest_file,
+            transition=selected["transition"])
     retained = legacy.envmap(live["Config"].get("Env"))
     require(not any(key in FRESH_FLAGS or key.startswith("SERVERWARE_GOOGLE_")
         or key == "SERVERWARE_OPERATOR_GOOGLE_PROFILE" for key in retained), "baseline managed profile already present")
@@ -143,11 +190,13 @@ def compare_service(name, proposed, live, image, networks, *, provider_custody=P
 
 
 def compare_candidate_runtime(name, proposed, live, image, networks, *, provider_custody=PROVIDER_CUSTODY,
-                              digest_file=legacy.file_digest):
+                              digest_file=legacy.file_digest, transition_mode="migration"):
     """No tolerated configuration changes after root recreates the pair."""
+    selected = selection(transition_mode)
     candidate_service(name, proposed, provider_custody)
     changes = legacy.compare_service(name, proposed, live, image, networks, digest_file=digest_file,
-        transition=(NEW_SOURCE, NEW_SOURCE, NEW_SHA, NEW_SHA, NEW_BINARY, NEW_BINARY))
+        transition=(selected["source"], selected["source"], selected["binary_sha256"], selected["binary_sha256"],
+            selected["binary"], selected["binary"]))
     expected = {"serverware": {legacy.APP_DELTA, legacy.DIGEST_DELTA},
         "decision-gate-rs": {legacy.BINARY_DELTA}}.get(name, set())
     require(changes == expected, "candidate exact configuration")
@@ -155,7 +204,8 @@ def compare_candidate_runtime(name, proposed, live, image, networks, *, provider
 
 
 def compare_model(model, observed, images, *, provider_custody=PROVIDER_CUSTODY,
-                  digest_file=legacy.file_digest, phase="proposed"):
+                  digest_file=legacy.file_digest, phase="proposed", transition_mode="migration"):
+    selected = selection(transition_mode)
     require(phase in {"proposed", "deployed"}, "comparison phase")
     legacy.validate_model(model)
     require(set(observed) == legacy.SERVICES, "exact retained services")
@@ -164,13 +214,16 @@ def compare_model(model, observed, images, *, provider_custody=PROVIDER_CUSTODY,
     for name in sorted(legacy.SERVICES):
         proposed = model["services"][name]
         changes.update(compare(name, proposed, observed[name], images[proposed["image"]], model["networks"],
-            provider_custody=provider_custody, digest_file=digest_file))
-    require(changes == (APPROVED_DELTAS if phase == "proposed" else set()), "closed managed transition")
-    return {"ok": True, "schema": "serverware.operatorManagedDeploymentReview/v1", "phase": phase,
-        "sourceCommit": NEW_COMMIT, "candidateBinarySha256": NEW_SHA, "approvedDifferences": sorted(changes),
+            provider_custody=provider_custody, digest_file=digest_file, transition_mode=transition_mode))
+    require(changes == (selected["approved_deltas"] if phase == "proposed" else set()), "closed managed transition")
+    result = {"ok": True, "schema": "serverware.operatorManagedDeploymentReview/v1", "phase": phase,
+        "sourceCommit": selected["commit"], "candidateBinarySha256": selected["binary_sha256"], "approvedDifferences": sorted(changes),
         "notificationsRetained": True, "retainedServicesMustNotBeRecreated": ["demo-upstream", "edge"],
         "providerCustodyMetadataVerified": False, "curatedFilesystemVerified": False,
         "runtimeMutationsPerformed": False, "rolloutVerified": False}
+    if transition_mode == "retained":
+        result["transitionMode"] = "retained"
+    return result
 
 
 def custody_metadata(provider_custody):
@@ -209,26 +262,30 @@ def custody_metadata(provider_custody):
         "privateFileContentsRead": False, "runtimeMutationsPerformed": False, "rolloutVerified": False}
 
 
-def source_identity(source, source_manifest):
-    require(str(source) == NEW_SOURCE, "exact rehearsed source")
-    files = archives.source_inventory(source, source_manifest, SOURCE_MANIFEST_SHA, NEW_COMMIT)
-    require(len(files) == 4910, "rehearsed file inventory")
+def source_identity(source, source_manifest, *, transition_mode="migration"):
+    selected = selection(transition_mode)
+    require(str(source) == selected["source"], "exact rehearsed source")
+    files = archives.source_inventory(source, source_manifest, selected["source_manifest_sha256"], selected["commit"])
+    require(len(files) == selected["source_files"], "rehearsed file inventory")
     for directory, _, names in os.walk(source):
         require(stat.S_IMODE(Path(directory).stat().st_mode) == 0o555, "immutable source directories")
         require(all(stat.S_IMODE((Path(directory) / name).stat().st_mode) in {0o444, 0o555} for name in names), "immutable source files")
-    require(legacy.file_digest(OLD_BINARY) == OLD_SHA and legacy.file_digest(NEW_BINARY) == NEW_SHA, "paired binary bytes")
-    join = archives.pinned_json(JOIN, JOIN_SHA)
-    require(join == {"binarySha256": NEW_SHA, "binarySourceCommit": "ff6d86b1a0267dcb5915e07684bdc5b216dbde7d",
+    _, _, old_sha, new_sha, old_binary, new_binary = selected["transition"]
+    require(legacy.file_digest(old_binary) == old_sha and legacy.file_digest(new_binary) == new_sha, "paired binary bytes")
+    join = archives.pinned_json(selected["join_path"], selected["join_sha256"])
+    require(join == {"binarySha256": selected["binary_sha256"], "binarySourceCommit": selected["compiler_source_commit"],
         "cargoManifestAndLockMatched": True, "completeGitTreeEqualityClaimed": False,
-        "exactCompilerInputFilesMatched": 494, "newRustBuildClaimed": False,
-        "sourceCommit": NEW_COMMIT, "sourceManifestSha256": SOURCE_MANIFEST_SHA}, "retained compiler input join")
+        "exactCompilerInputFilesMatched": selected["compiler_input_files"], "newRustBuildClaimed": selected["new_build"],
+        "sourceCommit": selected["commit"], "sourceManifestSha256": selected["source_manifest_sha256"]}, "retained compiler input join")
 
 
 def review(args):
+    transition_mode = getattr(args, "transition_mode", "migration")
+    selected = selection(transition_mode)
     provider_path(args.provider_custody)
-    source_identity(args.source, args.source_manifest)
-    fingerprints = {path: legacy.file_digest(path) for path in LAYERS}
-    require(fingerprints == PINS, "fixed Compose layers")
+    source_identity(args.source, args.source_manifest, transition_mode=transition_mode)
+    fingerprints = {path: legacy.file_digest(path) for path in selected["layers"]}
+    require(fingerprints == selected["pins"], "fixed Compose layers")
     observed = legacy.discover()
     edge_env = legacy.envmap(observed["edge"]["Config"].get("Env"))
     peer = edge_env.get("TRAEFIK_IPV4")
@@ -236,10 +293,10 @@ def review(args):
         and not ipaddress.IPv4Address(peer).is_unspecified and not ipaddress.IPv4Address(peer).is_multicast,
         "current edge peer selection")
     environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TRAEFIK_IPV4": peer,
-        "OPERATOR_MANAGED_SOURCE": NEW_SOURCE, "OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR": str(args.provider_custody),
+        "OPERATOR_MANAGED_SOURCE": selected["source"], "OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR": str(args.provider_custody),
         "OPERATOR_DEMO_NOTIFICATIONS_ENABLED": "1", "OPERATOR_DEMO_NOTIFICATIONS_CUSTODY_DIR": legacy.CUSTODY}
     command = ["docker", "compose", "-p", legacy.PROJECT, "--env-file", legacy.ENVFILE]
-    for layer in LAYERS:
+    for layer in selected["layers"]:
         command.extend(("-f", str(layer)))
     model = legacy.command_json([*command, "config", "--format", "json"], environment=environment)
     images = {}
@@ -249,16 +306,17 @@ def review(args):
             values = legacy.command_json(["docker", "image", "inspect", reference])
             require(isinstance(values, list) and len(values) == 1, "cached image identity")
             images[reference] = values[0]
-    result = compare_model(model, observed, images, provider_custody=args.provider_custody, phase=args.phase)
+    result = compare_model(model, observed, images, provider_custody=args.provider_custody, phase=args.phase,
+        transition_mode=transition_mode)
     after = legacy.discover()
     for name in legacy.SERVICES:
         old, new = observed[name], after[name]
         require(all(old[key] == new[key] for key in ("Id", "Image", "Config", "HostConfig", "Mounts", "NetworkSettings"))
             and old["State"]["Pid"] == new["State"]["Pid"] and old["State"]["StartedAt"] == new["State"]["StartedAt"],
             "stable inspection identity")
-    require({path: legacy.file_digest(path) for path in LAYERS} == fingerprints, "stable Compose layers")
-    source_identity(args.source, args.source_manifest)
-    return {**result, "sourceFilesVerified": 4910, "compilerInputFilesMatched": 494,
+    require({path: legacy.file_digest(path) for path in selected["layers"]} == fingerprints, "stable Compose layers")
+    source_identity(args.source, args.source_manifest, transition_mode=transition_mode)
+    return {**result, "sourceFilesVerified": selected["source_files"], "compilerInputFilesMatched": selected["compiler_input_files"],
         "edgePeerFromCurrentInspection": True, "services": [{"service": name, "id": observed[name]["Id"]}
             for name in sorted(legacy.SERVICES)]}
 
@@ -270,6 +328,8 @@ def main():
     for name in ("source", "source-manifest", "provider-custody"):
         model.add_argument("--" + name, type=Path, required=True)
     model.add_argument("--phase", choices=("proposed", "deployed"), default="proposed")
+    model.add_argument("--transition-mode", choices=("migration", "retained"), default="migration",
+        help="Explicit already-managed upgrade; refuses until its separate fixed candidate receipt is pinned.")
     metadata = commands.add_parser("custody")
     metadata.add_argument("--provider-custody", type=Path, required=True)
     args = parser.parse_args()

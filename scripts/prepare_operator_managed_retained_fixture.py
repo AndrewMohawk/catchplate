@@ -111,17 +111,27 @@ def build(source, binary, root, *, expected_binary_sha256):
     return config
 
 
-def preflight(root, historical):
+def preflight(root, historical, *, managed_transition="first"):
     """Stopped PRIVATE copy only. Read no live DB and emit no row contents."""
+    base.require(managed_transition in {"first", "retained"}, "explicit managed transition required")
     observed = snapshots.inventory(root / "runtime", root / "notification-custody",
         managed_unconfigured=True, provider_custody_root=root / "provider-custody")
-    base.require(historical.get("schema") == snapshots.SCHEMA and historical.get("live_sqlite_opened") is False,
+    retained = managed_transition == "retained"
+    base.require(historical.get("schema") == (snapshots.MANAGED_SCHEMA if retained else snapshots.SCHEMA)
+        and historical.get("live_sqlite_opened") is False,
         "historical inventory contract differs")
-    for area in ("persistent", "custody"):
+    if retained:
+        base.require(set(historical) == {"schema", "persistent", "custody", "provider_custody",
+            "managed_unconfigured", "live_sqlite_opened"} and historical["managed_unconfigured"] is True,
+            "retained managed inventory contract differs")
+        snapshots.managed_gate_inventory(historical)
+        base.require(snapshots.gate_members(historical) == snapshots.GATE_MEMBERS,
+            "retained baseline gate export required")
+    for area in (("persistent", "custody", "provider_custody") if retained else ("persistent", "custody")):
         base.require({name: snapshots.content(row) for name, row in observed[area].items()} ==
             {name: snapshots.content(row) for name, row in historical[area].items()}, "archive copy content differs")
-    base.require(not snapshots.gate_members(observed) and set(observed["custody"]) == {"."},
-        "rehearsal must start unconfigured without a gate export")
+    base.require(snapshots.gate_members(observed) == (snapshots.GATE_MEMBERS if retained else set())
+        and set(observed["custody"]) == {"."}, "rehearsal gate transition or unconfigured custody differs")
     with tempfile.TemporaryDirectory(prefix="retained-preflight-", dir=root) as temporary:
         connection = snapshots.private_database(root / "runtime", observed, Path(temporary))
         try:
@@ -146,6 +156,8 @@ def preflight(root, historical):
                 "google_state_empty": True, "effective_settings_digest": manifest()["effective_settings_digest"],
                 "managed_identity": managed,
                 "original_database_opened": False, "private_copies_only": True}
+            if retained:
+                result.update(managed_transition="retained", existing_gate_export_preserved=True)
         finally:
             connection.close()
     base.require(snapshots.inventory(root / "runtime", root / "notification-custody",
@@ -154,6 +166,8 @@ def preflight(root, historical):
 
 
 def prepare(args):
+    managed_transition = getattr(args, "managed_transition", "first")
+    base.require(managed_transition in {"first", "retained"}, "explicit managed transition required")
     job_path(args.job_root)
     base.require(args.job_root.resolve() == args.job_root and args.job_root.is_dir()
         and stat.S_IMODE(args.job_root.stat().st_mode) == 0o700, "owned private job required")
@@ -174,6 +188,8 @@ def prepare(args):
         "managed_manifest": manifest(), "network": "none", "keeper_seconds": KEEPER_SECONDS,
         "automatic_execution": False, "initializer": False, "provider_service": False, "notifications_enabled": True,
         "cold_phases": ["first", "retained"], "root_preflight_and_cleanup_required": True}
+    if managed_transition == "retained":
+        receipt.update(managed_transition="retained", cold_phases=["retained", "retained"])
     outputs = {"compose.json": raw.encode(), "preparation.json": (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode(),
         "hosts": HOSTS, "resolv.conf": RESOLV}
     if args.write:
@@ -193,7 +209,7 @@ def prepare(args):
                 and path.read_bytes() == content, "prepared recipe changed")
     if args.preflight:
         base.require(args.private_copies_acknowledged, "explicit stopped-private-copy acknowledgement required")
-        return preflight(args.job_root, historical)
+        return preflight(args.job_root, historical, managed_transition=managed_transition)
     return {"ok": True, **receipt}
 
 
@@ -204,6 +220,8 @@ def main():
     for name in ("expected-source-manifest-sha256", "expected-binary-sha256", "expected-retained-inventory-sha256"):
         parser.add_argument("--" + name, type=base.validated_binary_sha256, required=True)
     parser.add_argument("--expected-source-commit", required=True)
+    parser.add_argument("--managed-transition", choices=("first", "retained"), default="first",
+        help="Opt into an already-managed baseline; the default still requires no existing gate export.")
     phases = parser.add_mutually_exclusive_group()
     for name in ("write", "preflight", "verify-prepared"):
         phases.add_argument("--" + name, action="store_true")

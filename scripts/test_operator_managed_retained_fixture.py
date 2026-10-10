@@ -230,6 +230,39 @@ class PreparationTests(unittest.TestCase):
         self.args.expected_retained_inventory_sha256 = fixture.base.digest(self.historical)
         return database, historical
 
+    def managed_inventory(self):
+        return fixture.snapshots.inventory(self.job / 'runtime', self.job / 'notification-custody',
+            managed_unconfigured=True, provider_custody_root=self.job / 'provider-custody')
+
+    def managed_state(self):
+        """Synthetic stopped copy, not an app initialization or startup fixture."""
+        database, _ = self.synthetic_state()
+        runtime = self.job / 'runtime'
+        originals = {'app-data/' + leaf: b'synthetic original ' + leaf.encode() for leaf in fixture.LEAVES}
+        originals.update({'app-data/master.key': b'synthetic retained key, not a credential',
+            'service-secrets/admin.token': b'synthetic retained token verifier fixture',
+            'gate-data/highwater.json': b'{"synthetic_retained_counter":7}'})
+        for name, raw in originals.items():
+            filename = runtime / name
+            filename.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            filename.write_bytes(raw)
+            filename.chmod(0o600)
+        for name in sorted(fixture.snapshots.GATE_DIRECTORIES):
+            (runtime / name).mkdir(mode=0o700)
+        for name in fixture.snapshots.GATE_MEMBERS - fixture.snapshots.GATE_DIRECTORIES:
+            raw = b''
+            if name == fixture.snapshots.GATE_POLICY:
+                raw = (runtime / fixture.snapshots.POLICY).read_bytes()
+            elif name == fixture.snapshots.GATE_GOOGLE:
+                raw = fixture.snapshots.canonical(fixture.manifest()).encode('ascii')
+            filename = runtime / name
+            filename.write_bytes(raw)
+            filename.chmod(0 if name in fixture.snapshots.GATE_PLACEHOLDERS else 0o600)
+        snapshot = self.managed_inventory()
+        self.historical.write_text(json.dumps(snapshot, sort_keys=True))
+        self.args.expected_retained_inventory_sha256 = fixture.base.digest(self.historical)
+        return database, snapshot
+
     def test_default_no_write_then_exact_four_public_outputs_and_verify(self):
         result = fixture.prepare(self.args)
         self.assertEqual(list(self.job.iterdir()), [])
@@ -345,6 +378,132 @@ class PreparationTests(unittest.TestCase):
         historical = fixture.snapshots.inventory(self.job / 'runtime', self.job / 'notification-custody')
         with self.assertRaises(ValueError):
             fixture.preflight(self.job, historical)
+
+    def test_retained_preflight_requires_explicit_mode_and_preserves_all_eight_entries(self):
+        _, before = self.managed_state()
+        snapshots = fixture.snapshots
+        self.assertEqual(snapshots.gate_members(before), snapshots.GATE_MEMBERS)
+        self.assertEqual(len(snapshots.gate_members(before)), 8)
+        self.assertEqual(before['schema'], snapshots.MANAGED_SCHEMA)
+        with self.assertRaises(ValueError):
+            fixture.preflight(self.job, before)
+        for _ in range(2):
+            # Repeating an observation proves read-only repeatability, not a
+            # cold restart; actual app/gate restarts belong to root's lane.
+            result = fixture.preflight(self.job, before, managed_transition='retained')
+            self.assertTrue(result['ok'])
+            self.assertEqual(result['managed_transition'], 'retained')
+            self.assertTrue(result['existing_gate_export_preserved'])
+            self.assertTrue(result['google_state_empty'])
+            self.assertTrue(result['provider_custody_empty'])
+            after = self.managed_inventory()
+            self.assertEqual(after, before)
+            self.assertEqual(set(after['persistent']) - set(before['persistent']), set())
+            self.assertEqual(snapshots.compare_files(before, after, identities=True,
+                managed_transition='retained'), [])
+        with self.assertRaises(snapshots.SnapshotError):
+            snapshots.compare_files(before, before, identities=True, managed_transition='first')
+
+    def test_retained_preparation_receipt_binds_mode_without_changing_recipe_or_acknowledgement(self):
+        default = fixture.prepare(self.args)
+        self.assertNotIn('managed_transition', default)
+        self.assertEqual(default['cold_phases'], ['first', 'retained'])
+        self.args.managed_transition = 'retained'
+        retained = fixture.prepare(self.args)
+        self.assertEqual(retained, {**default, 'managed_transition': 'retained',
+            'cold_phases': ['retained', 'retained']})
+        self.assertEqual(list(self.job.iterdir()), [])
+        self.assertEqual(self.write(), retained)
+        self.args.verify_prepared = True
+        self.assertEqual(fixture.prepare(self.args), retained)
+        self.args.managed_transition = 'first'
+        with self.assertRaises(ValueError):
+            fixture.prepare(self.args)
+        self.args.managed_transition = 'retained'
+        self.args.preflight = True
+        with patch.object(fixture, 'preflight', side_effect=AssertionError('private read before acknowledgement')):
+            with self.assertRaises(ValueError):
+                fixture.prepare(self.args)
+        self.args.private_copies_acknowledged = True
+        with patch.object(fixture, 'preflight', return_value={'synthetic_dispatch_only': True}) as called:
+            self.assertEqual(fixture.prepare(self.args), {'synthetic_dispatch_only': True})
+        called.assert_called_once_with(self.job, {}, managed_transition='retained')
+        for value in ('', 'managed', 'first,retained', None, True):
+            self.args.managed_transition = value
+            with self.subTest(mode=value), self.assertRaises(ValueError):
+                fixture.prepare(self.args)
+
+    def test_retained_mode_refuses_missing_partial_or_unbound_historical_export(self):
+        _, first = self.synthetic_state()
+        with self.assertRaises(ValueError):
+            fixture.preflight(self.job, first, managed_transition='retained')
+        empty_managed = self.managed_inventory()
+        with self.assertRaises(ValueError):
+            fixture.preflight(self.job, empty_managed, managed_transition='retained')
+        gate = self.job / 'runtime' / fixture.snapshots.GATE_ROOT
+        gate.mkdir(mode=0o700)
+        with self.assertRaises(fixture.snapshots.SnapshotError):
+            fixture.preflight(self.job, empty_managed, managed_transition='retained')
+
+    def test_retained_mode_refuses_public_export_and_custody_expansion(self):
+        _, before = self.managed_state()
+        runtime, snapshots = self.job / 'runtime', fixture.snapshots
+        public = {**fixture.manifest(), 'operation': {'operation_id': 'synthetic-unapproved'}}
+        changes = [(runtime / snapshots.GATE_GOOGLE, snapshots.canonical(public).encode(), 0o600),
+            (runtime / snapshots.GATE_POLICY, b'not the retained authority policy', 0o600),
+            (runtime / sorted(snapshots.GATE_PLACEHOLDERS)[0], b'not an inert mountpoint', 0),
+            (runtime / snapshots.GATE_GOOGLE, snapshots.canonical(fixture.manifest()).encode(), 0o644),
+            (runtime / snapshots.GATE_ROOT / 'unreviewed.json', b'{}', 0o600),
+            (self.job / 'provider-custody/provider-key.json', b'synthetic forbidden key', 0o600),
+            (self.job / 'notification-custody/notification-key.json', b'synthetic forbidden key', 0o600)]
+        for filename, raw, mode in changes:
+            existed = filename.exists()
+            old_mode = filename.stat().st_mode & 0o777 if existed else None
+            old_raw = b'' if old_mode == 0 else filename.read_bytes() if existed else None
+            if existed:
+                filename.chmod(0o600)
+            filename.write_bytes(raw)
+            filename.chmod(mode)
+            try:
+                with self.subTest(leaf=filename.name, mode=mode), self.assertRaises((ValueError, snapshots.SnapshotError)):
+                    # Even a newly pinned corrupted export must still join the
+                    # authoritative copied SQL and empty-custody constraints.
+                    historical = self.managed_inventory()
+                    fixture.preflight(self.job, historical, managed_transition='retained')
+            finally:
+                filename.chmod(0o600)
+                if existed:
+                    filename.write_bytes(old_raw)
+                    filename.chmod(old_mode)
+                else:
+                    filename.unlink()
+        self.assertEqual(self.managed_inventory(), before)
+
+    def test_retained_authority_original_lock_and_custody_identity_are_not_exceptions(self):
+        database, before = self.managed_state()
+        snapshots = fixture.snapshots
+        originals = ['app-data/' + leaf for leaf in fixture.LEAVES]
+        originals.extend((snapshots.POLICY, 'app-data/master.key', 'service-secrets/admin.token',
+            'gate-data/highwater.json', snapshots.DB_MAIN))
+        for name in originals:
+            after = deepcopy(before)
+            after['persistent'][name]['ino'] += 1
+            with self.subTest(original=name), self.assertRaises(snapshots.SnapshotError):
+                snapshots.compare_files(before, after, identities=True, managed_transition='retained')
+        for area in ('custody', 'provider_custody'):
+            for field in ('ino', 'uid', 'mode'):
+                after = deepcopy(before)
+                after[area]['.'][field] += 1
+                with self.subTest(area=area, field=field), self.assertRaises(snapshots.SnapshotError):
+                    snapshots.compare_files(before, after, identities=True, managed_transition='retained')
+        forged = deepcopy(before)
+        forged['unreviewed'] = True
+        with self.assertRaises(ValueError):
+            fixture.preflight(self.job, forged, managed_transition='retained')
+        with sqlite3.connect(database) as connection:
+            connection.execute('UPDATE operator_catalog_credentials SET data_json=?', ('{"auth_type":"changed"}',))
+        with self.assertRaises(ValueError):
+            fixture.preflight(self.job, before, managed_transition='retained')
 
 
 class ProbeTests(unittest.TestCase):

@@ -277,6 +277,24 @@ history or implicit loss of uncertain receipts.
 | Action-required and native key alerts | **17/17** source-client checks and **2/2** cross-UID synthetic-relay-to-worker-to-TLS cases pass. A phase change after TLS suppresses the action POST while preserving its historical audit copy. Legacy approval/JIT candidates remain suppressed | Actual COMMON relay and guarded native owner, authenticated review, external receiver and separately authorized physical-key ceremony |
 | Connected browser workflow | Full isolated browser-to-API-to-worker-to-local-TLS story passes. The latest deployed read-only browser checkpoint passes **13 GETs**, with two channels and four disabled slots on desktop/mobile; **15/15** intercepted groups, **11/11** native UI checks and **10/10** asset checks are separate retained fixture results | Deployed save/test, actual receiver and operator workflow |
 
+### Independent-channel regression checkpoint (October 10, 2026)
+
+The focused repeat at source `6f09f3e77c414d165155e99f64b9795935058050`
+passed **4/4** checks in **37.261 seconds**. Actual store transactions prove
+four independently saved slots, disabling one without disabling the others,
+and slot-scoped suppression after destination replacement. Synthetic native
+observations prove separate phase filters and historical audit delivery after
+the action is no longer available. The real administrator API/store/worker
+path delivered four explicit slot tests and two audit copies to an isolated,
+verified TLS receiver.
+
+Evidence is retained in
+`serverware-operator-workspace-evidence/notification-separation.F2CQhOed`,
+including the exact Python source manifest, command, test log and successful
+container termination. The container had no external network. This focused
+repeat does not re-establish browser acceptance or prove a live YubiKey event,
+configured external receiver or native-pilot action.
+
 ### Current deployed read-only checkpoint (October 10, 2026)
 
 The paired rollout runs app source

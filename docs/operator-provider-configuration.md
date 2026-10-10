@@ -3,8 +3,10 @@
 ## Status and user outcome
 
 Internal custody, app startup and public gate publication are implemented and
-tested; the writable settings API/UI and paired managed app/gate acceptance
-remain unfinished. This is not authorization to change a running deployment.
+tested, including an isolated paired managed app/gate fixture. The writable
+settings API/UI remain unfinished. This is not authorization to change a running
+deployment or proof of real Google access.
+
 The proxy operator should
 be able to configure a provider application in the product, review its effects,
 and activate it without supplying a host secret-file path or asking another
@@ -123,9 +125,44 @@ readiness and three affected legacy-publication checks. The readiness group uses
 real SQLite, publication locks and catalog changes with synthetic health
 transport; it is not an actual managed Rust-gate observation. Evidence is in
 `serverware-operator-workspace-evidence/google-managed-public.Ve6JtMhG`.
-The Rust consumer is implemented but has its own compile/runtime acceptance.
+At this checkpoint, the Rust consumer still needed its own compile/runtime
+acceptance.
 Writable settings, real Google consent, live migration and native acceptance
 are not established by this checkpoint.
+
+### Actual managed app/gate fixture checkpoint
+
+On 2026-10-10, all 13 focused managed-Google Rust tests passed, and the normal
+`cargo build --release --frozen --offline --bin serverware-decision-gate`
+completed with exit 0 at build source
+`ff6d86b1a0267dcb5915e07684bdc5b216dbde7d`. The resulting binary is
+`333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0`.
+`compiled-source-join.json` matches all 494 actual compiler-input files to
+fixture source `6f09f3e77c414d165155e99f64b9795935058050`; this is not a claim
+that the two complete source trees are identical or a production release.
+
+The private fixture observed the actual app and gate matching first with no
+Google configuration, then matching the activated operation, public
+profile/settings bindings and expected binary. Activation preserved the original
+shared leaves and initial policy. Before/after mount observations kept the
+provider key, database and app private signing/master keys outside the gate;
+the separately required interception CA remains a gate input. Stock Requests
+and curl Basic/Bearer checks passed with four upstream forwards, eight
+authentication denials, two policy reloads and zero functional retries.
+
+Evidence is retained in
+`serverware-operator-workspace-evidence/managed-gate.CuSszToX`:
+`result.json`, `unconfigured.stdout`, `activated.stdout`, `clients.stdout`,
+`mount-before.json`, `mount-after.json`, `compiled-source-join.json` and
+`teardown.json`. The same evidence directory retains `rust-build/`, including
+the build/test receipts and logs, original source archive and compiler-input
+record. The byte-verified executable is retained under
+`serverware-operator-artifacts/sha256-333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0/serverware-decision-gate`.
+Private Compose teardown exited 0; fixture data and evidence were retained.
+This is synthetic
+internal configuration/proxy proof only: no real Google consent or provider
+request, new writable API/UI acceptance, native-pilot acceptance, live deployment
+change or production-readiness claim follows.
 
 ## Keep the objects distinct
 
@@ -230,11 +267,11 @@ This cannot be implemented solely inside the existing setup handler:
   The pre-database preflight and activation transaction must revalidate it.
   Neither reader may initialize schemas, contact Google or repair missing
   state as a side effect of reading configuration.
-- The Rust gate currently selects its public Google profile from environment.
-  A paired public cold-configuration consumer must join the same committed
-  activation. The gate must not receive the client secret. A public artifact,
-  if used, needs verified ownership/currentness and crash recovery from the
-  authoritative committed record; a successful file write is not activation.
+- Legacy Rust profiles remain environment-selected. Managed mode instead loads
+  the fixed public configuration artifact under the shared startup lock and
+  reports the exact committed activation identity. The gate never receives the
+  client secret. Verified ownership/currentness and repair from committed state
+  remain mandatory; a successful file write alone is not activation.
 
 The current operator Compose recipe mounts the complete app-data directory
 read-only into the gate, including SQLite and its master key. Managed custody
@@ -290,10 +327,11 @@ profile already exists. Client/callback changes, secret rotation and migration
 of existing provider ownership are separate reviewed transitions; never
 rewrite existing profiles or disconnect accounts to force adoption.
 
-The next implementation needs a dedicated configuration/custody module and
-config-independent reader, narrowly joined to the operator runner, profile
-admission, setup/preflight and API. A separate gate change owns the public cold
-consumer. Preserve production, enrolled/native ownership and all existing
+The internal configuration/custody modules, config-independent reader, startup
+integration and public gate consumer now have the isolated acceptance above.
+The next implementation boundary is the authenticated writable API/UI and
+start-only readiness admission for new consent/reauthorization. Preserve
+production, enrolled/native ownership, existing-account recovery and all
 provider-selection guards. Do not duplicate their authority in the UI.
 
 Acceptance must prove real encrypted storage and write-only responses;

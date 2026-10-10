@@ -227,6 +227,14 @@ def settings() -> dict:
 
 def request_allowed(method: str, path: str) -> bool:
     from serverware import operator_catalog_oauth_profile as google_profile
+    configuration = "/api/operator-demo/oauth/google/configuration/v2"
+    if path == configuration:
+        return method.upper() in {"GET", "POST"}
+    if path == configuration + "/cancel":
+        return method.upper() == "POST"
+    if path.startswith(configuration + "/"):
+        identifier = path[len(configuration) + 1:]
+        return method.upper() == "GET" and bool(identifier) and "/" not in identifier
     if path == "/api/operator-demo/oauth/google/setup":
         return method.upper() in {"GET", "POST"}
     if path == "/api/operator-demo/proxy/upstreams":

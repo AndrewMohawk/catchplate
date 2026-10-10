@@ -89,7 +89,7 @@ class CancelInput(RevisionInput):
 
 
 class ManagedSetupInput(SetupInput):
-    """Internal write-only input; no endpoint accepts this contract yet."""
+    """Write-only managed setup input; secrets are excluded from public receipts."""
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     client_secret: str = Field(min_length=1, max_length=custody.MAX_SECRET_BYTES, repr=False, exclude=True)
 

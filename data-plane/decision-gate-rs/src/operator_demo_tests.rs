@@ -5,6 +5,8 @@
 mod publication_integration;
 #[path = "operator_google_reconciliation_tests.rs"]
 mod google_reconciliation;
+#[path = "operator_static_preparation_tests.rs"]
+mod static_preparation;
 
 use super::*;
 use crate::tests::{generic_policy_route, policy_with_route, test_gate_state, test_snapshot};

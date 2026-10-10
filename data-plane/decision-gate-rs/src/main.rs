@@ -27,6 +27,7 @@ mod development_sandbox;
 mod operator_demo;
 mod operator_google_profile;
 mod operator_google_reconciliation;
+mod operator_static_preparation;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
@@ -21569,6 +21570,9 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
     } else if operator_google_reconciliation::admitted(state, snapshot, scope,
         request_authority, release_authorization)?.is_some() {
         Some(original_deadline.ok_or("operator Google acquisition lost its original deadline")?)
+    } else if original_deadline.is_some() && operator_static_preparation::admitted(
+        state, snapshot, scope, request_authority, release_authorization)? {
+        original_deadline
     } else {
         if original_deadline.is_some() { return Err("native credential operation cannot use a standalone owner".to_owned()); }
         None
@@ -22592,6 +22596,8 @@ fn refresh_scoped_credential_material_on_deadline(
     };
     let operator_google = operator_google_reconciliation::admitted(state, snapshot, scope,
         request_authority, release_authorization)?.is_some();
+    let bounded_operator_static = deadline.is_some() && operator_static_preparation::admitted(
+        state, snapshot, scope, request_authority, release_authorization)?;
     let result = fetch_scoped_credential_lease_attempt_on_deadline(
         state,
         snapshot,
@@ -22616,11 +22622,11 @@ fn refresh_scoped_credential_material_on_deadline(
     .and_then(|material| { check_credential_operation_deadline(deadline)?; match material {
         CredentialLeaseMaterial::GenerationMetadata(generation) => {
             cache_scoped_credential_generation_on_deadline(state, snapshot, scope, generation,
-                if operator_google { deadline } else { None })
+                if operator_google || bounded_operator_static { deadline } else { None })
         }
         CredentialLeaseMaterial::DispatchSecret(lease) => {
             cache_scoped_credential_lease_on_deadline(state, snapshot, scope, *lease,
-                if operator_google { deadline } else { None })
+                if operator_google || bounded_operator_static { deadline } else { None })
         }
     }});
     if let Err(err) = result {
@@ -35820,7 +35826,12 @@ fn decide_internal_with_mode_and_shadow<'a>(
                 snapshot,
                 ActiveMutableEffectKind::CredentialLease,
                 scope,
-                || ensure_scoped_credential_lease(state, snapshot, scope, None),
+                || match operator_static_preparation::prepare_if_admitted(
+                    state, snapshot, scope, proof_requested || req.client_request_digest.is_some(),
+                )? {
+                    Some(info) => Ok(info),
+                    None => ensure_scoped_credential_lease(state, snapshot, scope, None),
+                },
             )
         } else if let Some(info) = preadmission_credential_info {
             Ok(info)

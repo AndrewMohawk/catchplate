@@ -155,12 +155,15 @@ The current bounded checks passed:
   The four accepted denial codes and positive receipt checks are unchanged;
   HTTP 503 and fetch timeouts remain failures. These tests are not stock-client
   runtime acceptance.
-- Seven audit-timing tests and five existing legacy scheduling tests pass with
+- Nine audit-timing tests and five existing legacy scheduling tests pass with
   the timing hooks. The new checks exercise the registered ASGI route/middleware
   and real Ed25519 signing with synthetic storage/context/key inputs: traced,
   disabled and failed-diagnostic responses are byte-identical, rejected requests
   emit no observation, and cancellation retains the shielded worker slot until
-  completion. No database, service startup or deployment acceptance follows.
+  completion. The real policy getter/loader also preserves lock scope, cached
+  validation order and fresh copies under synthetic external I/O; event-driven
+  contention separates lock waiting from loader work. These are not policy
+  authentication, database, service startup or deployment acceptance tests.
 - 33 of 33 genuine Rust tests at source commit `58b10689`: 11 publishing,
   15 metadata and seven shared send-deadline/revocation regressions. A separate
   normal gate binary was then built, SHA-256
@@ -249,6 +252,12 @@ an ACK. Diagnostic locks never wait; the stderr sink is synchronous after send
 and is not claimed to be immune to backpressure. Worker bounds, shielding,
 database operations, signed response contents and deadlines remain unchanged.
 This source diagnostic is not a live deployment or a latency fix.
+
+The follow-up observation adds fixed marks immediately before and after taking
+the existing policy-snapshot lock. Together with the policy-completion mark,
+these distinguish mutex waiting from loader/validation/copying time. They apply
+only to the already-admitted audit signer; ordinary calls keep their existing
+argument-free path, and the lock scope and all policy checks are unchanged.
 
 An eighth isolated run at `7989eee9` used the same verified normal Rust binary
 and unchanged limits. It completed prerequisite reads, both publications and

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Isolated diagnostic/scheduling tests, not DB or deployment acceptance.
 
-The ASGI tests exercise the registered route and middleware plus real Ed25519
-signatures. Only diagnostic eligibility, storage, context and in-memory key
-sources are synthetic. No lifespan, service, provider or socket is started.
+The ASGI tests exercise the registered route, middleware, policy getter/loader
+and real Ed25519 signatures. Eligibility, storage, policy I/O/compilation,
+signing context and in-memory key sources are synthetic. The loader tests prove
+ordering/copy behavior, not policy authentication. No service/socket is started.
 """
 from __future__ import annotations
 
@@ -31,7 +32,8 @@ NONCE = base64.urlsafe_b64encode(bytes([121]) * 32).rstrip(b"=")
 LABELS = (
     "audit_queued", "audit_slot", "audit_worker", "audit_admitted", "audit_done",
     "outbox_queued", "outbox_slot", "outbox_worker", "outbox_done",
-    "sign_queued", "sign_slot", "sign_worker", "sign_policy_done", "sign_manifest_done",
+    "sign_queued", "sign_slot", "sign_worker", "sign_policy_enter",
+    "sign_policy_lock_acquired", "sign_policy_done", "sign_manifest_done",
     "sign_artifacts_done", "sign_statement_done", "sign_crypto_done", "response_ready", "response_sent",
 )
 
@@ -81,6 +83,55 @@ def record(test, line):
     for forbidden in (CANARY, "private.invalid", TOKEN, "syntheticOnly", "Authorization", "eventId"):
         test.assertNotIn(forbidden, line)
     return value
+
+
+class PolicyLookupFixture:
+    """Actual getter/loader and copies; synthetic external authority/I/O only."""
+
+    MISS = ["publication", "stat", "trust", "read", "trust", "compile",
+            "high_water", "identity", "trust_recheck", "high_water", "publication"]
+    HIT = ["publication", "stat", "trust", "high_water", "identity",
+           "trust_recheck", "high_water", "publication"]
+
+    def __init__(self, test, stack):
+        from serverware import policy_bundle as policy
+        self.policy, self.calls = policy, []
+        self.path = Path("/synthetic-audit-timing/policy.json")
+        self.lock = threading.RLock()
+        self.snapshot = policy.PolicySnapshot(
+            raw={"synthetic": {"copy": [1]}}, hash="sha256:" + "2" * 64,
+            principals={}, credentials={}, routes=(),
+        )
+        self.identity = policy.PolicyFileIdentity(1, 2, 3, 4, 0o100600, 1, 2, 5, 6, "sha256:" + "4" * 64)
+        names = ("st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        file_stat = SimpleNamespace(**dict(zip(names, self.identity.stat_components)))
+        self.trust = SimpleNamespace(identity=("synthetic-trust",))
+        self.loader = policy.PolicyBundleLoader(self.path)
+        for name, value in (("POLICY_BUNDLE_PATH", self.path), ("_SNAPSHOT_CACHE_LOCK", self.lock),
+                ("_SNAPSHOT_CACHE", None), ("_POLICY_BUNDLE_LOADER", self.loader)):
+            stack.enter_context(patch.object(policy, name, value))
+        def observed(label, result):
+            def call(*args, **kwargs):
+                test.assertTrue(self.lock._is_owned(), label)
+                self.calls.append(label)
+                return result
+            return call
+        for name, label, result in (
+                ("_require_policy_file_publication_settled", "publication", None),
+                ("_read_secure_file_stat", "stat", file_stat),
+                ("_load_policy_signing_trust", "trust", self.trust),
+                ("_read_stable_policy_file", "read", (b"{}", self.identity)),
+                ("verify_policy_high_water", "high_water", {}),
+                ("_recheck_policy_path_identity", "identity", None),
+                ("_recheck_policy_signing_trust", "trust_recheck", None)):
+            stack.enter_context(patch.object(policy, name, observed(label, result)))
+        def compile_bundle(raw, **kwargs):
+            test.assertTrue(self.lock._is_owned())
+            test.assertEqual(raw, {})
+            test.assertEqual(kwargs, {"verify_signature": True, "validate_schema": True, "signing_trust": self.trust})
+            self.calls.append("compile")
+            return self.snapshot
+        stack.enter_context(patch.object(policy, "compile_policy_bundle", compile_bundle))
 
 
 class AuditTimingTests(unittest.TestCase):
@@ -213,6 +264,109 @@ class AuditTimingTests(unittest.TestCase):
         self.assertEqual((len(self.lines), timing._count), (64, 64))
 
 
+class AuditTimingPolicyLookupTests(unittest.TestCase):
+    def setUp(self):
+        self.stack = observations(self)
+        self.fixture = PolicyLookupFixture(self, self.stack)
+
+    def test_actual_getter_distinguishes_lock_wait_from_loader_work(self):
+        fixture = self.fixture
+        tracker = timing.create(1, DIGEST)
+        timing.activate(tracker)
+        entered, reading, release_read = threading.Event(), threading.Event(), threading.Event()
+        results, failures = [], []
+        original_mark, original_read = timing.mark, fixture.policy._read_stable_policy_file
+        def mark(observation, label):
+            original_mark(observation, label)
+            if observation is tracker and label == "sign_policy_enter":
+                entered.set()
+        def read(path):
+            reading.set()
+            if not release_read.wait(3):
+                raise AssertionError("synthetic policy read was not released")
+            return original_read(path)
+        def lookup():
+            try:
+                results.append(fixture.policy.get_policy_snapshot(_audit_observation=tracker))
+                timing.mark(tracker, "sign_policy_done")
+                timing.finish(tracker, "complete")
+            except BaseException as error:
+                failures.append(error)
+        worker = threading.Thread(target=lookup)
+        with patch.object(timing, "mark", mark), patch.object(fixture.policy, "_read_stable_policy_file", read):
+            try:
+                with fixture.lock:
+                    worker.start()
+                    self.assertTrue(entered.wait(3))
+                    self.assertFalse(reading.is_set())
+                    self.assertEqual(fixture.calls, [])
+                    self.assertEqual(tracker._marks, {"sign_policy_enter": 1})
+                    self.assertEqual(results, [])
+                    with timing._clock_ns.lock:
+                        timing._clock_ns.value = 100_000_000
+                self.assertTrue(reading.wait(3))
+                self.assertEqual(tracker._marks, {"sign_policy_enter": 1, "sign_policy_lock_acquired": 100})
+                self.assertEqual(results, [])
+                self.assertEqual(self.lines, [])
+                with timing._clock_ns.lock:
+                    timing._clock_ns.value = 200_000_000
+            finally:
+                release_read.set()
+                worker.join(4)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].hash, fixture.snapshot.hash)
+        self.assertIsNot(results[0], fixture.snapshot)
+        self.assertEqual(fixture.calls, fixture.MISS)
+        value = record(self, self.lines[0])
+        self.assertEqual(value["marks"], {"sign_policy_enter": 1, "sign_policy_lock_acquired": 100, "sign_policy_done": 200})
+        self.assertEqual(value["outcome"], "complete")
+
+    def test_actual_loader_cache_order_copies_and_disabled_or_bad_observation(self):
+        fixture = self.fixture
+        # The ordinary call never even invokes the diagnostic wrapper.
+        with patch.object(timing, "mark", side_effect=AssertionError("trace-off mark")):
+            first = fixture.policy.get_policy_snapshot()
+        self.assertEqual(fixture.calls, fixture.MISS)
+        self.assertIs(fixture.policy._SNAPSHOT_CACHE, fixture.loader.cache)
+        fixture.calls.clear()
+        second = fixture.policy.get_policy_snapshot(_audit_observation=CANARY)
+        self.assertEqual(fixture.calls, fixture.HIT)
+        self.assertIsNot(first, second)
+        self.assertIsNot(first.raw, second.raw)
+        self.assertIsNot(first.raw["synthetic"], second.raw["synthetic"])
+        with self.assertRaises(TypeError):
+            first.raw["synthetic"]["copy"] = CANARY
+        self.assertEqual(second.raw["synthetic"]["copy"], [1])
+        self.assertEqual(fixture.snapshot.raw, {"synthetic": {"copy": [1]}})
+        fixture.calls.clear()
+        fixture.policy._SNAPSHOT_CACHE = None
+        broken_clock_tracker = timing.create(1, DIGEST)
+        with patch.object(timing, "_clock_ns", side_effect=OSError(CANARY)):
+            third = fixture.policy.get_policy_snapshot(_audit_observation=broken_clock_tracker)
+        self.assertEqual(fixture.calls, fixture.MISS)
+        self.assertEqual(third.hash, first.hash)
+        self.assertEqual(broken_clock_tracker._marks, {})
+        self.assertEqual(self.lines, [])
+        with patch.object(fixture.policy, "verify_policy_high_water",
+                          side_effect=fixture.policy.PolicyBundleError(CANARY)):
+            self.assertIsNone(fixture.policy.get_policy_snapshot(_audit_observation=broken_clock_tracker))
+        self.assertIsNone(fixture.loader.cache)
+        self.assertIsNone(fixture.policy._SNAPSHOT_CACHE)
+        # An unrelated loader failure is propagated as the exact original object.
+        failure = RuntimeError(CANARY)
+        tracker = timing.create(1, DIGEST)
+        timing.activate(tracker)
+        with patch.object(fixture.loader, "load", side_effect=failure):
+            with self.assertRaises(RuntimeError) as caught:
+                fixture.policy.get_policy_snapshot(_audit_observation=tracker)
+        self.assertIs(caught.exception, failure)
+        timing.finish(tracker, "failed")
+        self.assertEqual(record(self, self.lines[0])["marks"].keys(),
+                         {"sign_policy_enter", "sign_policy_lock_acquired"})
+
+
 class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Same isolated app-import boundary as test_legacy_audit_scheduling.
@@ -234,7 +388,9 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.object(app, "DATA_PLANE_AUDIT_INGEST_TOKEN", TOKEN))
         self.stack.enter_context(patch.object(app, "DATA_PLANE_INSTANCE_ID", "synthetic-timing-instance"))
         self.stack.enter_context(patch.object(app, "RELEASE_CHANNEL", "dev"))
-        self.stack.enter_context(patch.object(app, "get_policy_snapshot", return_value=SimpleNamespace(hash="sha256:" + "2" * 64)))
+        self.policy_fixture = PolicyLookupFixture(self, self.stack)
+        self.policy_lookup = self.stack.enter_context(patch.object(
+            app, "get_policy_snapshot", wraps=self.policy_fixture.policy.get_policy_snapshot))
         self.stack.enter_context(patch.object(app, "runtime_manifest_digest", return_value="sha256:" + "3" * 64))
         self.stack.enter_context(patch.object(app, "attestation_artifact_digests", return_value={
             "provenance_digest": None, "image_signatures_digest": None, "source_tree_digest": None}))
@@ -304,11 +460,16 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["outcome"], "complete")
         self.assertEqual(set(value["marks"]), set(LABELS))
         self.assertEqual([value["marks"][label] for label in LABELS], sorted(value["marks"].values()))
+        self.assertEqual(self.policy_lookup.call_count, 1)
+        self.assertEqual(self.policy_lookup.call_args.args, ())
+        self.assertEqual(set(self.policy_lookup.call_args.kwargs), {"_audit_observation"})
+        self.assertIs(type(self.policy_lookup.call_args.kwargs["_audit_observation"]), timing.AuditTiming)
         self.assertEqual(self.drains, [{"limit": 100}])
         self.assertEqual(self.stored[0][1], {"actor_type": "data-plane", "actor_id": "synthetic-timing-instance",
             "producer_event_ids": ["sha256:" + "1" * 64], "producer_instance_id": "synthetic-timing-instance"})
         with patch.object(timing, "create", return_value=None):
             baseline = await self.request()
+        self.policy_lookup.assert_called_with()
         self.assertEqual(traced, baseline)
         with patch.object(timing, "_write_record", side_effect=OSError(CANARY)):
             self.assertEqual(await self.request(), baseline)

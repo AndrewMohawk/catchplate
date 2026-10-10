@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from serverware import github_issues, npm_metadata, npm_publish
+from serverware import operator_audit_timing as _audit_timing
 from serverware.config import (
     POLICY_BUNDLE_PATH,
     POLICY_MIN_ROLLBACK_EPOCH,
@@ -7529,9 +7530,15 @@ def compile_policy_bundle(
     )
 
 
-def get_policy_snapshot() -> PolicySnapshot | None:
+def get_policy_snapshot(
+    *, _audit_observation: _audit_timing.AuditTiming | None = None,
+) -> PolicySnapshot | None:
     global _POLICY_BUNDLE_LOADER, _SNAPSHOT_CACHE
+    if _audit_observation is not None:
+        _audit_timing.mark(_audit_observation, "sign_policy_enter")
     with _SNAPSHOT_CACHE_LOCK:
+        if _audit_observation is not None:
+            _audit_timing.mark(_audit_observation, "sign_policy_lock_acquired")
         if _POLICY_BUNDLE_LOADER.path != POLICY_BUNDLE_PATH:
             _POLICY_BUNDLE_LOADER = PolicyBundleLoader(POLICY_BUNDLE_PATH)
         elif _SNAPSHOT_CACHE is None:

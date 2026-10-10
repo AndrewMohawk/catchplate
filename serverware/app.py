@@ -1377,7 +1377,10 @@ def _signed_control_plane_response_headers(
             )
         context = {field: attestation[field] for field in context_fields}
     else:
-        snapshot = get_policy_snapshot()
+        if audit_timing is not None:
+            snapshot = get_policy_snapshot(_audit_observation=audit_timing)
+        else:
+            snapshot = get_policy_snapshot()
         _audit_timing.mark(audit_timing, "sign_policy_done")
         manifest_digest = runtime_manifest_digest()
         _audit_timing.mark(audit_timing, "sign_manifest_done")

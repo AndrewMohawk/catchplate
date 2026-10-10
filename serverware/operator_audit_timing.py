@@ -18,7 +18,8 @@ _SCHEMA = "serverware.operatorAuditTiming/v1"
 _LABELS = frozenset({
     "audit_queued", "audit_slot", "audit_worker", "audit_admitted", "audit_done",
     "outbox_queued", "outbox_slot", "outbox_worker", "outbox_done",
-    "sign_queued", "sign_slot", "sign_worker", "sign_policy_done",
+    "sign_queued", "sign_slot", "sign_worker", "sign_policy_enter",
+    "sign_policy_lock_acquired", "sign_policy_done",
     "sign_manifest_done", "sign_artifacts_done", "sign_statement_done", "sign_crypto_done",
     "response_ready", "response_sent",
 })

@@ -120,6 +120,23 @@ function operatorGoogleAssignments(credential, catalog, status, includeIds = fal
     return (application?.name || 'Retained application') + (includeIds ? ' (' + id + ')' : '');
   }).join(', ') || 'None';
 }
+function operatorCredentialHasExpiredAppAccess(credential, catalog, now = Date.now()) {
+  const linked = catalog.access_rules.filter(rule => rule.credential_id === credential.id);
+  return linked.length > 0 && linked.every(rule => {
+    const app = catalog.applications.find(item => item.id === rule.application_id);
+    return app?.status === 'revoked' || app?.status === 'active' &&
+      ['valid', 'expired'].includes(app.token_status) && Number.isSafeInteger(app.token_expires_at_epoch_ms) &&
+      app.token_expires_at_epoch_ms > 0 && app.token_expires_at_epoch_ms <= now;
+  });
+}
+function operatorCredentialUseRows(credential, catalog) {
+  const rules = catalog.access_rules.filter(rule => rule.credential_id === credential.id && rule.status === 'active');
+  const apps = [...new Set(rules.map(rule => rule.application_id))].map(id =>
+    catalog.applications.find(item => item.id === id)?.name || 'Unavailable application');
+  return [['Assigned apps', apps.join(', ') || 'No active saved assignments'],
+    ['Saved permissions', rules.map(rule => rule.name + ' — ' + operatorRuleRestrictions(rule)[0][1]).join('; ') ||
+      'None. Saving a key alone grants no app access.']];
+}
 function operatorGoogleAccountRows(credential, catalog) {
   return [['Google account', credential.provider_account], ['Permission preset', credential.permission_preset],
     ['Granted Google scopes', credential.scopes.join(', ')],
@@ -327,16 +344,24 @@ function createCredentialsView(workspace, actions = {}) {
     replacement.render();
     element('credential-fields').disabled = !workspace.ready('credentials');
     if (!catalog) { element('credential-secret').value = ''; return; }
-    renderCards('credentials-list', catalog.credentials.map(credential => {
+    const currentCards = []; const expiredCards = [];
+    const expiredOpen = element('credentials-list').querySelector('[data-expired-app-access]')?.open;
+    for (const credential of catalog.credentials) {
       const google = credential.auth_type === 'google_oauth';
       const badge = credential.status === 'quarantined' ? 'Quarantined · unusable' : credential.status === 'active' ? 'Saved' : 'Revoked locally';
       const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
-        [['Authentication', isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : credential.header_name],
-          ['Active rules', String(credential.active_rule_count)], ['Credential ID', credential.id]]);
+        operatorCredentialUseRows(credential, catalog));
       if (!google) {
         if (isGithubCredential(credential)) card.append(textNode('p',
           'GitHub issue presets only. Stored token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
-        const details = textNode('details'); details.append(textNode('summary', 'Activity details'));
+        card.append(textNode('p', 'Saved assignments are configuration, not proof of a valid app token, provider key, or loaded proxy policy.', 'small muted'));
+        const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
+        const identity = textNode('dl', undefined, 'metadata');
+        for (const [label, value] of [['Credential ID', credential.id],
+          ['Authentication', isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
+          ['Header name', credential.header_name], ['Active rules', String(credential.active_rule_count)],
+          ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
+        details.append(identity);
         if (Object.hasOwn(credential, 'credential_generation')) {
           const metadata = textNode('dl', undefined, 'metadata'); metadata.dataset.keyReplacementDetails = '';
           for (const [label, value] of [['Stored key generation', credential.credential_generation === null ? 'Unavailable after local revocation' : String(credential.credential_generation)],
@@ -366,8 +391,16 @@ function createCredentialsView(workspace, actions = {}) {
         }); card.append(button);
         if (credential.active_rule_count > 0) card.append(textNode('p', 'Revoke the referencing access rules first. Shared application identities are retained.', 'small muted'));
       }
-      return card;
-    }), 'No saved credentials. Add a provider key above; no endpoint configuration is needed.');
+      (operatorCredentialHasExpiredAppAccess(credential, catalog) ? expiredCards : currentCards).push(card);
+    }
+    if (expiredCards.length) {
+      const retained = textNode('details', undefined, 'card'); retained.dataset.expiredAppAccess = ''; retained.open = Boolean(expiredOpen);
+      retained.append(textNode('summary', 'Connections with expired app access (' + expiredCards.length + ')'), textNode('p',
+        'Every linked application has an expired token or is revoked. These saved records remain intact; grouping does not validate or revoke provider keys. Review application access and permissions before using them.', 'small muted'));
+      const review = textNode('a', 'Review applications and tokens'); review.href = '#applications';
+      const list = textNode('div', undefined, 'stack'); list.append(...expiredCards); retained.append(review, list); currentCards.push(retained);
+    }
+    renderCards('credentials-list', currentCards, 'No saved accounts or keys. Use Connect an app for guided setup, or save an API key above.');
   }
   window.addEventListener('pagehide', () => { element('credential-secret').value = ''; });
   workspace.subscribe(render); return {render};

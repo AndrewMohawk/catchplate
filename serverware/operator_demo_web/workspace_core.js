@@ -139,8 +139,15 @@ function chooseModeOptions(id, items, placeholder) {
     missing.value = previous; missing.disabled = true; select.append(missing); select.value = previous;
   }
 }
-const operatorViews = {connect: 'Connect an app', overview: 'Overview', credentials: 'Credentials', applications: 'Applications',
-  'access-rules': 'Access rules', proxy: 'Proxy setup', audit: 'Audit log'};
+const operatorViews = {connect: 'Connect an app', overview: 'Overview', credentials: 'Accounts & keys', applications: 'Applications',
+  'access-rules': 'Permissions', proxy: 'Proxy setup', audit: 'Audit log'};
+function operatorSyntheticPermissions(catalog) {
+  // Destination matching is not provenance: preserve names/records and require
+  // an explicit choice even if only one saved permission matches the fixture.
+  return catalog?.access_rules.filter(rule => rule.upstream_url === 'https://demo-upstream:8443/echo' &&
+    !Object.hasOwn(rule, 'operation_bundle') && rule.methods.length > 0 &&
+    rule.methods.every(method => ['GET', 'POST'].includes(method))) || [];
+}
 const element = id => document.getElementById(id);
 function textNode(tag, text, className) {
   const result = document.createElement(tag);

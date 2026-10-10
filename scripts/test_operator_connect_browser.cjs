@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
+const {runInNewContext} = require('node:vm');
 const {fixture, ready, view, openRestrictions, credential, application, rule, IDS, NOW, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
 
 const ROOT = resolve(__dirname, '..');
@@ -13,6 +14,8 @@ const SECRET = 'synthetic-provider-key-for-connect-fixture';
 const DUMMY = "Bearer CONNECT-DUMMY-'literal'-$value";
 const OTHER_CREDENTIAL = '66666666-6666-4666-8666-666666666666';
 const OTHER_RULE = '77777777-7777-4777-8777-777777777777';
+const SYNTHETIC_ORIGIN = 'https://demo-upstream:8443';
+const fixtureId = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
 const digest = n => 'sha256:' + n.toString(16).padStart(64, '0');
 const token = id => 'synthetic_application_' + id.replaceAll('-', '') + '_generation_1';
 const capabilities = {responseModes: ['projected_json', 'unfiltered_json'], credentialInputModes: ['insert', 'replace_exact']};
@@ -21,7 +24,7 @@ const savedRule = (changes = {}) => rule({credential_input: 'replace_exact', pla
   response_mode: 'unfiltered_json', response_fields: [], ...changes});
 const SOURCE_FILES = ['scripts/test_operator_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
-    'workspace_google.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
+    'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 
@@ -36,7 +39,9 @@ async function step(page, name) {
   await idle(page);
 }
 async function start(page) {
-  await ready(page); await page.locator('#connect').waitFor({state: 'visible'});
+  await ready(page);
+  if (!await page.locator('#connect').isVisible()) await view(page, 'connect');
+  await page.locator('#connect').waitFor({state: 'visible'});
   assert.equal(await page.locator('.page:visible').count(), 1);
   assert.equal(await page.locator('nav a[href="#connect"]').getAttribute('aria-current'), 'page');
   await step(page, 'credential');
@@ -120,6 +125,153 @@ async function chooseSavedRule(page, id = IDS.rule) {
 function changePolicy(state) { state.revision++; state.active = state.loaded = digest(++state.sequence); }
 
 const tests = [
+  ['Overview is the honest starting point and connects a real service only by deliberate choice', browser => fixture(browser,
+    supplied({rules: [savedRule()]}), async (page, state) => {
+      await ready(page); await page.locator('#overview').waitFor({state: 'visible'});
+      assert.equal(await page.locator('.page:visible').count(), 1);
+      assert.equal(await page.locator('nav a[href="#overview"]').getAttribute('aria-current'), 'page');
+      assert.equal(await page.locator('nav a[href="#credentials"]').innerText(), 'Accounts & keys');
+      assert.equal(await page.locator('nav a[href="#access-rules"]').innerText(), 'Permissions');
+      assert.match(await page.locator('#overview-policy').innerText(), /proxy.*loaded.*saved policy/i);
+      assert.match(await page.locator('#overview').innerText(), /not proof.*upstream.*succeeded/i);
+      assert(await page.locator('#overview-try-demo').isEnabled());
+      assert(await page.locator('#overview-demo-panel').isHidden());
+      await page.locator('#overview-connect-service').click(); await step(page, 'credential');
+      assert.match(await page.locator('#connect-progress').innerText(), /account or api key/i);
+      assert(await page.locator('#connect-google').isDisabled());
+      assert(await page.locator('#connect-use-github').isDisabled());
+      assert.equal(state.posts.length, 0);
+      assert(!state.requests.some(item => /oauth|google|github/.test(item.path)));
+    })],
+  ['compact credential cards retain user records and reveal exact technical details without writes', browser => fixture(browser,
+    supplied({credentials: [credential(), credential({id: OTHER_CREDENTIAL, name: 'My custom integration',
+      auth_type: 'header', header_name: 'X-Customer-Key', status: 'revoked'})], rules: [savedRule({name: 'Read saved customer status'})]}), async (page, state) => {
+      const retained = JSON.stringify([state.credentials, state.applications, state.rules]);
+      await ready(page); await view(page, 'credentials');
+      assert.equal(await page.locator('#credentials-list > [data-resource-id]').count(), 2);
+      const card = page.locator('#credentials-list > [data-resource-id="' + IDS.credential + '"]');
+      assert.equal(await card.locator('.badge').innerText(), 'Saved');
+      assert.match(await card.innerText(), /Assigned apps/);
+      assert.match(await card.innerText(), /Reporting application/);
+      assert.match(await card.innerText(), /Saved permissions/);
+      for (const text of ['Read saved customer status', 'GET', UPSTREAM + '/v1/status']) assert((await card.innerText()).includes(text));
+      const details = card.locator('details[data-credential-details]');
+      assert.equal(await details.evaluate(node => node.open), false);
+      assert(await card.getByText(IDS.credential, {exact: true}).isHidden());
+      await details.locator(':scope > summary').click();
+      assert(await card.getByText(IDS.credential, {exact: true}).isVisible());
+      assert.match(await details.innerText(), /Authentication/); assert.match(await details.innerText(), /Bearer token/);
+      assert.match(await details.innerText(), /Active rules/);
+      assert(!(await page.locator('#credentials-list').innerText()).includes(SECRET));
+      const old = page.locator('#credentials-list > [data-resource-id="' + OTHER_CREDENTIAL + '"]');
+      assert.equal(await old.locator('.badge').innerText(), 'Revoked locally');
+      await old.locator('details[data-credential-details] > summary').click();
+      assert(await old.getByText(OTHER_CREDENTIAL, {exact: true}).isVisible());
+      assert.match(await old.innerText(), /X-Customer-Key/);
+      await screenshot(page, 'saved-credentials-details');
+      await view(page, 'overview'); await view(page, 'credentials');
+      assert.equal(await page.locator('#credentials-list > [data-resource-id]').count(), 2);
+      assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), retained);
+      assert.equal(state.posts.length, 0);
+    })],
+  ['synthetic-demo disclosure does not mistake friendly names for a saved demo permission', browser => fixture(browser,
+    supplied({allowedUpstreams: [UPSTREAM, SYNTHETIC_ORIGIN], credentials: [credential({name: 'Demo starter key'})],
+      applications: [application({name: 'Demo starter application'})], rules: [savedRule({name: 'Demo GET echo'}),
+        savedRule({id: OTHER_RULE, name: 'Another demo name', upstream_url: UPSTREAM + '/echo'})]}), async (page, state) => {
+      await ready(page); await page.locator('#overview-try-demo').click();
+      await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
+      assert.equal(await page.locator('[data-demo-rule-id]').count(), 0);
+      assert.match(await page.locator('#overview-demo-status').innerText(), /no.*saved|not.*configured|not.*found/i);
+      assert.equal(state.posts.length, 0);
+      assert(!state.requests.some(item => item.path === '/echo' || item.path === '/ca.pem'));
+      await page.locator('#overview-try-demo').click(); assert(await page.locator('#overview-demo-panel').isHidden());
+    })],
+  ['expired-app grouping preserves every credential and keeps mixed, unknown and unlinked accounts primary', browser => fixture(browser,
+    supplied({credentials: [credential({id: fixtureId(1), name: 'Expired-only saved credential'}),
+      credential({id: fixtureId(2), name: 'Shared with a current app'}), credential({id: fixtureId(3), name: 'Unknown expiry'}),
+      credential({id: fixtureId(4), name: 'New unlinked key'}), credential({id: fixtureId(5), name: 'Revoked-app history'})],
+      applications: [application({id: fixtureId(11), name: 'Expired app', token_expires_at_epoch_ms: NOW - 1000, token_status: 'expired'}),
+        application({id: fixtureId(12), name: 'Current app'}),
+        application({id: fixtureId(13), name: 'Uncertain expiry app', token_expires_at_epoch_ms: null, token_status: 'unknown'}),
+        application({id: fixtureId(14), name: 'Revoked app', status: 'revoked', token_status: 'revoked'})],
+      rules: [savedRule({id: fixtureId(21), credential_id: fixtureId(1), application_id: fixtureId(11)}),
+        savedRule({id: fixtureId(22), credential_id: fixtureId(2), application_id: fixtureId(11)}),
+        savedRule({id: fixtureId(23), credential_id: fixtureId(2), application_id: fixtureId(12)}),
+        savedRule({id: fixtureId(24), credential_id: fixtureId(3), application_id: fixtureId(13)}),
+        savedRule({id: fixtureId(25), credential_id: fixtureId(5), application_id: fixtureId(14), status: 'revoked'})]}), async (page, state) => {
+      const before = JSON.stringify([state.credentials, state.applications, state.rules]);
+      await ready(page); await view(page, 'credentials');
+      const group = page.locator('#credentials-list details[data-expired-app-access]');
+      assert.equal(await group.evaluate(node => node.open), false);
+      assert.match(await group.locator(':scope > summary').innerText(), /Connections with expired app access \(2\)/);
+      assert.equal(await page.locator('#credentials-list [data-resource-id]').count(), 5);
+      for (const number of [1, 5]) assert(await group.locator('[data-resource-id="' + fixtureId(number) + '"]').isHidden());
+      for (const number of [2, 3, 4]) assert(await page.locator('#credentials-list > [data-resource-id="' + fixtureId(number) + '"]').isVisible());
+      await group.locator(':scope > summary').click();
+      for (const number of [1, 5]) assert(await group.locator('[data-resource-id="' + fixtureId(number) + '"]').isVisible());
+      const source = await readFile(join(ROOT, 'serverware/operator_demo_web/workspace_resources.js'), 'utf8');
+      const predicate = runInNewContext(source + '\noperatorCredentialHasExpiredAppAccess;', {}, {timeout: 1000});
+      const conservative = (() => {
+        // These inputs cannot pass catalog admission; exercise the actual pure
+        // grouping predicate without presenting them as accepted UI state.
+        const credential = {id: 'synthetic-credential'};
+        const linked = [{credential_id: credential.id, application_id: 'synthetic-app'}];
+        const app = {id: 'synthetic-app', status: 'active', token_status: 'expired', token_expires_at_epoch_ms: NOW - 1};
+        const grouped = changes => predicate(credential,
+          {access_rules: linked, applications: [{...app, ...changes}]}, NOW);
+        return {
+          missing: predicate(credential, {access_rules: linked, applications: []}, NOW),
+          unlinked: predicate(credential, {access_rules: [], applications: [app]}, NOW),
+          unknownStatus: grouped({status: 'unknown'}), unknownToken: grouped({token_status: 'unknown'}),
+          nonfinite: grouped({token_expires_at_epoch_ms: Infinity}), absentExpiry: grouped({token_expires_at_epoch_ms: null}),
+          stringExpiry: grouped({token_expires_at_epoch_ms: String(NOW - 1)}), zeroExpiry: grouped({token_expires_at_epoch_ms: 0})};
+      })();
+      assert(Object.values(conservative).every(value => value === false), 'unknown evidence never hides a credential');
+      await screenshot(page, 'expired-app-access-retained');
+      assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), before);
+      assert.equal(state.posts.length, 0);
+    })],
+  ['multiple exact synthetic-demo permissions remain explicit choices and keep unusable history visible', browser => fixture(browser,
+    supplied({allowedUpstreams: [UPSTREAM, SYNTHETIC_ORIGIN],
+      credentials: [credential(), credential({id: OTHER_CREDENTIAL, name: 'Another saved account'})],
+      applications: [application(), application({id: IDS.other, name: 'Second existing client'})], rules: [
+        savedRule({name: 'First synthetic permission', upstream_url: SYNTHETIC_ORIGIN + '/echo', methods: ['GET', 'POST']}),
+        savedRule({id: OTHER_RULE, name: 'Second synthetic permission', application_id: IDS.other,
+          credential_id: OTHER_CREDENTIAL, upstream_url: SYNTHETIC_ORIGIN + '/echo', methods: ['POST']}),
+        savedRule({id: '88888888-8888-4888-8888-888888888888', name: 'Revoked synthetic permission',
+          upstream_url: SYNTHETIC_ORIGIN + '/echo', status: 'revoked'}),
+        savedRule({id: '99999999-9999-4999-8999-999999999999', name: 'Demo starter but unrelated path',
+          upstream_url: SYNTHETIC_ORIGIN + '/not-echo'}),
+        savedRule({id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Non-demo method',
+          upstream_url: SYNTHETIC_ORIGIN + '/echo', methods: ['DELETE']})]}), async (page, state) => {
+      const before = JSON.stringify([state.credentials, state.applications, state.rules]);
+      await ready(page); await page.locator('#overview-try-demo').click();
+      await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
+      assert(await page.locator('#overview').isVisible(), 'opening a list never silently selects a client');
+      assert.deepEqual((await page.locator('[data-demo-rule-id]').evaluateAll(items => items.map(item => item.dataset.demoRuleId))).sort(),
+        [IDS.rule, OTHER_RULE, '88888888-8888-4888-8888-888888888888'].sort());
+      const first = page.locator('[data-demo-rule-id="' + IDS.rule + '"]');
+      const second = page.locator('[data-demo-rule-id="' + OTHER_RULE + '"]');
+      const revoked = page.locator('[data-demo-rule-id="88888888-8888-4888-8888-888888888888"]');
+      assert.match(await first.innerText(), /Reporting application/);
+      assert.match(await second.innerText(), /Second existing client/);
+      assert.match(await second.innerText(), /Another saved account/);
+      assert.match(await first.innerText(), /GET.*POST/); assert.match(await second.innerText(), /POST/);
+      assert(await first.getByRole('button', {name: 'Open client setup', exact: true}).isEnabled());
+      assert(await second.getByRole('button', {name: 'Open client setup', exact: true}).isEnabled());
+      assert(await revoked.getByRole('button', {name: 'Open client setup', exact: true}).isDisabled());
+      assert.equal(state.posts.length, 0); await screenshot(page, 'synthetic-demo-explicit-choices');
+      await second.getByRole('button', {name: 'Open client setup', exact: true}).click();
+      await page.locator('#proxy').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#proxy-application').inputValue(), IDS.other);
+      assert.equal(await page.locator('#proxy-rule').inputValue(), OTHER_RULE);
+      assert.equal(await page.locator('#proxy-method').inputValue(), 'POST');
+      assert.match(await page.locator('#client-command').innerText(), /https:\/\/demo-upstream:8443\/echo/);
+      assert.match(await page.locator('#client-template-warning').innerText(), /not.*successful request test/i);
+      await noToken(page);
+      assert.equal(state.posts.length, 0); assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), before);
+      assert(!state.requests.some(item => item.path === '/echo' || item.path === '/ca.pem'));
+    })],
   ['exclusive method choice preserves both key draft and exact saved selection without writes', browser => fixture(browser,
     supplied({credentials: [credential(), credential({id: OTHER_CREDENTIAL, name: 'Another saved key'})]}), async (page, state) => {
       await start(page); await chooseMethod(page, 'key');

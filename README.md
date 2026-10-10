@@ -17,19 +17,35 @@ long-lived credential.
 ## Try the development console
 
 The persistent [operator demo](https://serverware-demo.example.com/)
-uses the homelab login. Its guided setup joins separately managed credentials,
-applications and access rules; Proxy setup provides the proxy address, public
-CA download and client instructions, while Audit log shows recorded activity.
-New supported JSON rules can insert authentication or replace an exact dummy
-value without requiring request/response field lists. Existing restricted rules
-retain their restrictions.
+uses the homelab login. Start with **Explore synthetic demo** to inspect saved
+permissions for the local `/echo` API and their actual allowed methods. Opening
+client setup does not execute a request or renew a token. A synthetic connection
+check tests the proxy flow, not a real GitHub, Google, AWS or npm account. Use
+only made-up keys for this fixture, never a real provider secret.
 
-This deployment permits only its synthetic upstream. Google consent and real
-provider destinations are not enabled. The console and forward proxy are
-different endpoints; public Internet proxy routing remains blocked on the
-reviewed infrastructure bootstrap, not an application setting. Listener settings
-remain deployment-managed. See [verification and current limits](docs/ordinary-client-verification.md)
-and the [credential-first workflow](docs/operator-workspace-requirements.md).
+There are three separate things to configure:
+
+- **Account or API key:** the provider secret belongs to the operator and stays
+  in Serverware. Saving it alone does not grant access or prove it works.
+- **Application:** the worker gets its own Serverware app access token, not the
+  provider secret. Save that token when it is shown once.
+- **Permission:** choose what that app may do with that account or key. For
+  example, “Demo worker may check the demo API,” or, on a configured deployment,
+  “Issue triage may read issues and comments in this GitHub repository.”
+
+**Connect an app** guides you through those choices. **Proxy setup** provides
+the proxy address, public CA download and client instructions; **Audit log**
+shows recorded changes and request outcomes. New supported JSON permissions need
+no request/response field lists unless you want optional content restrictions.
+Existing restricted permissions retain their restrictions. An optional dummy
+header is a public replacement marker, not either of the two secrets above.
+
+Follow the [operator demo walkthrough](docs/operator-demo.md). Its latest
+retained deployment verification covers the synthetic upstream and LAN proxy,
+not real-provider access or an Internet-reachable proxy. The console and forward
+proxy are different endpoints; listener settings and approved destinations are
+deployment-managed. See [verification and current limits](docs/ordinary-client-verification.md)
+and the [operator workflow requirements](docs/operator-workspace-requirements.md).
 The older [fixed sandbox](https://serverware-sandbox.example.com/) remains
 separate and is not the credential-management demo.
 
@@ -37,22 +53,44 @@ Neither development environment establishes native-pilot, hardware or production
 The production status and historical pilot evidence below are separate from
 this persistent testing environment.
 
-## What it controls
+### Real-service setup is separate from the synthetic demo
+
+Provider examples describe useful jobs, not preconnected accounts. Availability
+depends on the deployment's advertised capabilities and approved destinations.
+
+| Job | Current operator-workspace boundary |
+| --- | --- |
+| Read or create GitHub issues and comments | Named-repository PAT permissions and a stock Octokit recipe; isolated synthetic-provider checks passed, not a real GitHub or deployed integration. [Contract](docs/operator-github-client-compatibility.md). |
+| Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. No real Google journey is established by the synthetic demo. |
+| Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
+| Publish an npm package | [Planned operator/client workflow](docs/operator-npm-client-compatibility.md), not an available npm preset. |
+| Publish an image to AWS ECR | [Planned operator/client workflow](docs/operator-aws-client-compatibility.md), not an available AWS preset. |
+| Send a Slack message or arbitrary webhook | Illustrative use case, not a verified provider preset. A custom-header JSON API is not support for every webhook authentication or response format. |
+
+The files under `policies/` are policy examples and engineering fixtures. They
+are not ready-to-use provider accounts or safe defaults to import wholesale.
+Serverware's own [action alerts and audit delivery](docs/operator-notifications.md)
+are a separate specification, not implemented notification settings or an
+application's proxied webhook permission.
+
+## Design examples, not demo defaults
+
+The following diagrams explain intended production workflows. npm publishing
+and the AWS/ECR approval flow are not working integrations in the operator demo.
 
 For example, an application or CI job can publish an updated version of
 `@acme/widgets` with `npm publish`, while policy permits that package's releases
 only **09:00–17:00 UTC daily**. The workload authenticates to Serverware, not with
-the upstream npm token. The default workflow credential shown in both examples
-is `username:password`. This is an example value, not a built-in authentication
-default; real deployments use an explicitly provisioned, scoped identity. Serverware
+the upstream npm token. The illustrative proxy login in both diagrams is
+`username:password`; it is not a built-in login or a value to copy. Real
+deployments use an explicitly provisioned, scoped identity. Serverware
 consumes that credential at ingress and uses the protected provider credential
 on the upstream request only after authorization succeeds. The credential swap
 does not forward the workload credential to the provider.
-These diagrams illustrate intended production flows, not deployed integrations.
 
 ### Example: time-limited npm publishing
 
-![An application sends npm publish with the default example workflow credential username:password. Serverware checks the package and time window, removes the workflow credential and attaches its protected npm token before forwarding to npm. A denied request never reaches npm; the validated result returns without the npm token.](docs/images/npm-time-window-flow.svg)
+![Intended flow: an application sends npm publish with an illustrative proxy login. Serverware checks the package and time window, removes the workload credential and attaches its protected npm token before forwarding to npm. A denied request never reaches npm; the validated result returns without the npm token.](docs/images/npm-time-window-flow.svg)
 
 <details>
 <summary>Equivalent Mermaid sequence (editable)</summary>
@@ -65,7 +103,7 @@ sequenceDiagram
         participant STORE as Protected credential store
     end
     participant NPM as npm registry
-    Note over APP: Default example workflow credential: username:password
+    Note over APP: Illustrative proxy login only: username:password
     APP->>SW: Publish @acme/widgets via npm + username:password
     SW->>SW: Authenticate and consume workload credential; never forward it
     SW->>SW: Check package and 09:00–17:00 UTC
@@ -99,7 +137,7 @@ blocks it. Approval is bound to the AWS account, region, repository and image
 digest—not blanket permission to push arbitrary images. The pipeline never
 receives the upstream AWS/ECR credential.
 
-![A pipeline attempts an ECR image update using the default example workflow credential username:password. Serverware holds the action and then challenges the developer, who approves with a YubiKey. Only after verifying fresh approval for that exact action does Serverware replace the workflow credential with its protected AWS/ECR credential and resume publication. Denial or timeout blocks the update.](docs/images/ecr-yubikey-flow.svg)
+![Intended flow: a pipeline attempts an ECR image update using an illustrative proxy login. Serverware holds the action and then challenges the developer, who approves with a YubiKey. Only after verifying fresh approval for that exact action does Serverware replace the workload credential with its protected AWS/ECR credential and resume publication. Denial or timeout blocks the update.](docs/images/ecr-yubikey-flow.svg)
 
 <details>
 <summary>Equivalent Mermaid sequence (editable)</summary>
@@ -114,7 +152,7 @@ sequenceDiagram
     participant DEV as Developer / approval UI
     participant KEY as YubiKey
     participant ECR as Amazon ECR
-    Note over CI: Default example workflow credential: username:password
+    Note over CI: Illustrative proxy login only: username:password
     CI->>SW: Attempt TEE image publication + username:password
     SW->>SW: Authenticate and consume workload credential; never forward it
     SW->>SW: Check policy; bind exact publication intent
@@ -241,7 +279,8 @@ permitted API response, not a credential lease. This reduces the places where
 upstream credentials need to be stored and the number of workloads that need
 access to them.
 
-For example:
+The full product model includes these use cases; the operator-workspace support
+boundaries above still apply:
 
 - A backend service can call an approved API without keeping the provider key in
   its environment, container image, or application configuration.
@@ -335,6 +374,7 @@ The source includes generic REST, Gmail, X, and npm adapters, plus static
 credential injection and Google/X OAuth onboarding. See the
 [constraint reference and examples](docs/credential-constraints.md) and
 [example policy bundle](policies/demo.policy.json) for exact supported behavior.
+These source components are not all exposed or accepted in the operator demo.
 Policies are typed, bounded data—not arbitrary executable policy code.
 
 ## Request lifecycle

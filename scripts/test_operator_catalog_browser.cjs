@@ -60,7 +60,7 @@ function catalog(state) {
   const loaded = state.active === state.loaded && policy(state).activation === 'active';
   const value = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
     hardwareVerified: false, revision: state.revision, policy: policy(state), proxy_url: 'https://proxy.example.test',
-    allowed_upstreams: [UPSTREAM], credentials: state.credentials.map(item => ({...item,
+    allowed_upstreams: state.allowedUpstreams, credentials: state.credentials.map(item => ({...item,
       active_rule_count: activeRules.filter(itemRule => itemRule.credential_id === item.id).length})),
     applications: state.applications.map(item => {
       const count = activeRules.filter(itemRule => itemRule.application_id === item.id).length;
@@ -140,6 +140,7 @@ function mutation(state, name, body) {
 
 async function fixture(browser, options, exercise) {
   const state = {credentials: copy(options.credentials || []), applications: copy(options.applications || []), rules: copy(options.rules || []),
+    allowedUpstreams: copy(options.allowedUpstreams || [UPSTREAM]),
     responseModes: Object.hasOwn(options, 'responseModes') ? options.responseModes : ['projected_json'],
     credentialInputModes: Object.hasOwn(options, 'credentialInputModes') ? options.credentialInputModes : ['insert'],
     activationOverride: options.activationOverride,
@@ -246,7 +247,7 @@ const tests = [
     assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect your first app');
     await addCredential(page); await ready(page); await view(page, 'overview');
     assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
-    assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect an app with a saved credential');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect an app with a saved account or key');
     await addApplication(page); await heldToken(page); await settled(page); await view(page, 'overview');
     assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
     assert.equal(await page.locator('#overview-next-action').innerText(), 'Choose permitted access for your app');

@@ -25,7 +25,7 @@ function operatorConnectResourceChoices(items, reserved = []) {
 }
 function createConnectView(workspace, applications, proxy) {
   const steps = ['credential', 'application', 'access', 'review', 'setup'];
-  const labels = ['Provider credential', 'Application', 'Allowed use', 'Review access', 'Client setup'];
+  const labels = ['Account or API key', 'Application', 'Permission', 'Review access', 'Client setup'];
   const actionLabels = {credential: 'Choose a saved connection', application: 'Create a new application', rule: 'Grant a new permission'};
   let step = 0; let selectedCredential = ''; let selectedApplication = ''; let selectedRule = '';
   let review = null; let checkpoint = null; let open = false;

@@ -33,7 +33,7 @@ CONNECT_DENIED = metadata.CONNECT_DENIED
 KEEP_ALIVE = "data_plane.connect.keep_alive"
 PHASES = tuple(spec["case"] for spec in fixture.SPECS)
 CLIENT_STAGES = {"input", "identity", "trust", "package", "workspace", "npm_spawn", "npm_process", "npm_json", "npm_denial", "npm_receipt"}
-CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E409"}
+CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E400", "E409"}
 
 
 def client_failure_observation(value, phase):

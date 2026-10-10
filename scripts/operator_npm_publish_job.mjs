@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 const assert = value => { if (!value) throw new Error('synthetic npm publish assertion'); };
 const hash = (algorithm, bytes, encoding = 'hex') => createHash(algorithm).update(bytes).digest(encoding);
 const phases = ['prerequisite', 'unscoped', 'scoped', 'wrong_package', 'outside_window', 'wrong_placeholder', 'revoked_app'];
-const safeCodes = new Set(['E403', 'E404', 'E407', 'E409', 'E502', 'ECONNRESET', 'ECONNREFUSED',
+const safeCodes = new Set(['E400', 'E403', 'E404', 'E407', 'E409', 'E502', 'ECONNRESET', 'ECONNREFUSED',
   'EPROXY', 'ENEEDAUTH', 'EACCES', 'ENOENT', 'EINVAL', 'ENOTFOUND', 'ETIMEDOUT', 'ERR_SYSTEM_ERROR',
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
   'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'ERR_TLS_CERT_ALTNAME_INVALID']);
@@ -72,8 +72,10 @@ try {
     assert(invocation.status !== 0 && ['E403', 'E407', 'ECONNRESET', 'ECONNREFUSED'].includes(errorCode));
     result = { ok: true, refused: true, errorCode };
   } else {
+    stage = 'npm_process';
+    assert(invocation.status === 0);
     stage = 'npm_receipt';
-    assert(invocation.status === 0 && invocation.stderr === '' && value.name === input.package
+    assert(invocation.stderr === '' && value.name === input.package
       && value.version === input.version && value.id === input.package + '@' + input.version
       && value.integrity === 'sha512-' + hash('sha512', payload, 'base64')
       && value.shasum === hash('sha1', payload) && value.size === payload.length);

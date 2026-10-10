@@ -97,6 +97,8 @@ def receiver(server, method, package, body=b"", *, fields=None, path=None):
 class NpmPublishFixtureTests(unittest.TestCase):
     def setUp(self):
         guard = ExitStack(); self.addCleanup(guard.close)
+        self.receiver_stderr = io.StringIO()
+        guard.enter_context(patch("sys.stderr", self.receiver_stderr))
         for target in ("socket.socket", "socket.create_connection", "socket.getaddrinfo", "subprocess.Popen",
                 "subprocess.run", "os.open", "os.mkdir", "os.makedirs", "os.fsync"):
             guard.enter_context(patch(target, side_effect=AssertionError("pure publish fixture test attempted runtime I/O")))
@@ -665,6 +667,159 @@ class NpmPublishFixtureTests(unittest.TestCase):
             self.assertIsNone(check.client_failure_observation({**failure, key: value}, "unscoped"))
         for value in (None, [], {}, False): self.assertIsNone(check.client_failure_observation(failure, value))
         self.assertNotIn("E403", str(check.ClientFailure("unscoped", failure)))
+
+    def test_positive_client_e400_is_closed_failure_diagnostic_not_a_publication_receipt(self):
+        failure = {"schema": "serverware.privateNpmPublishClient/v1", "phase": "scoped", "npmVersion": "11.8.0",
+            "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1", "strictSSL": True,
+            "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
+            "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
+            "error": "stock npm publish operation failed", "stage": "npm_process", "errorCode": "E400",
+            "processExitCode": 1, "stdoutBytes": 76, "stderrBytes": 0}
+        expected = {"phase": "scoped", "stage": "npm_process", "errorCode": "E400", "processExitCode": 1,
+            "stdoutBytes": 76, "stderrBytes": 0}
+        self.assertEqual(check.client_failure_observation(failure, "scoped"), expected)
+        error = check.ClientFailure("scoped", failure)
+        self.assertEqual(error.observation, expected)
+        self.assertEqual(str(error), "stock npm publish failed in scoped; raw output suppressed")
+        self.assertNotIn("E400", str(error))
+        for key, value in (("ok", True), ("error", "synthetic-secret-body-canary"),
+                ("raw", "synthetic-secret-body-canary"), ("headers", {"authorization": "Bearer " + registry.TOKEN}),
+                ("stage", registry.PLACEHOLDER), ("errorCode", registry.TOKEN), ("processExitCode", True)):
+            with self.subTest(field=key):
+                candidate = {**failure, key: value}
+                self.assertIsNone(check.client_failure_observation(candidate, "scoped"))
+                self.assertIsNone(check.ClientFailure("scoped", candidate).observation)
+
+    def test_receiver_refusal_diagnostic_has_closed_fields_labels_and_no_private_values(self):
+        canary = "synthetic-private-header-body-error-canary"
+        fields = {"schema", "ordinal", "expectedCase", "expectedMethod", "actualMethod", "stage", "errorClass"}
+        stages = {"sequence", "target", "framing", "headers", "publish_identity", "publish_manifest",
+            "publish_attachment", "publish_integrity", "storage", "response"}
+        self.assertEqual(registry.REFUSAL_STAGES, stages)
+        self.assertEqual(registry.REFUSAL_ERRORS, {"ValueError", "OSError", "TypeError", "KeyError"})
+        self.assertEqual(registry.REFUSAL_METHODS, {"GET", "PUT", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+        for stage in sorted(stages):
+            for kind in (ValueError, OSError, TypeError, KeyError):
+                error = kind(canary + registry.TOKEN + registry.PLACEHOLDER)
+                record = registry.refusal_observation(5, "scoped", "PUT", "PUT", stage, error)
+                self.assertEqual(set(record), fields)
+                self.assertEqual(record, {"schema": "serverware.privateNpmPublishRefusal/v1", "ordinal": 5,
+                    "expectedCase": "scoped", "expectedMethod": "PUT", "actualMethod": "PUT",
+                    "stage": stage, "errorClass": kind.__name__})
+                output = io.StringIO()
+                with patch("sys.stderr", output):
+                    registry.emit_refusal(5, "scoped", "PUT", "PUT", stage, error)
+                self.assertEqual(len(output.getvalue().splitlines()), 1)
+                self.assertEqual(json.loads(output.getvalue()), record)
+                self.assertLess(len(output.getvalue().encode()), 512)
+                for private in (canary, registry.TOKEN, registry.PLACEHOLDER, "authorization", "requestHeaders", "traceback"):
+                    self.assertNotIn(private, output.getvalue())
+        wrapped = registry.FixtureRefusal("publish_integrity", ValueError(canary))
+        self.assertEqual(str(wrapped), "private npm publish fixture refused")
+        record = registry.refusal_observation(5, "scoped", "PUT", "PUT", "headers", wrapped)
+        self.assertEqual((record["stage"], record["errorClass"]), ("publish_integrity", "ValueError"))
+        record = registry.refusal_observation(5, "scoped", "PUT", canary, "target", ValueError(canary))
+        self.assertEqual(record["actualMethod"], "other")
+        self.assertNotIn(canary, json.dumps(record))
+        controls = [(0, "scoped", "PUT", "headers", ValueError(canary)),
+            (True, "prerequisite", "GET", "headers", ValueError(canary)),
+            (5.0, "scoped", "PUT", "headers", ValueError(canary)),
+            (17, None, None, "sequence", ValueError(canary)),
+            (5, canary, "PUT", "headers", ValueError(canary)),
+            (5, "scoped", "GET", "headers", ValueError(canary)),
+            (5, "scoped", "PUT", canary, ValueError(canary)),
+            (5, "scoped", "PUT", "headers", RuntimeError(canary))]
+        for ordinal, case, method, stage, error in controls:
+            self.assertIsNone(registry.refusal_observation(ordinal, case, method, "PUT", stage, error))
+            output = io.StringIO()
+            with patch("sys.stderr", output):
+                registry.emit_refusal(ordinal, case, method, "PUT", stage, error)
+            self.assertEqual(output.getvalue(), "")
+
+    def test_handler_refusal_stages_keep_fixed_400_and_existing_publication_without_storage(self):
+        canary = "synthetic-private-refusal-canary"
+        spec = registry.spec_for("scoped")
+        prior, _, _ = registry.validate_publish(encoded(publish_document(registry.spec_for("unscoped"))),
+            registry.spec_for("unscoped"))
+        prior["case"] = "unscoped"
+        for stage in ("target", "framing", "headers", "publish_identity", "publish_manifest",
+                "publish_attachment", "publish_integrity", "storage"):
+            document = publish_document(spec)
+            if stage == "publish_identity": document["name"] = canary
+            elif stage == "publish_manifest": document["versions"][spec["version"]]["_npmVersion"] = canary
+            elif stage == "publish_attachment": next(iter(document["_attachments"].values()))["data"] = canary
+            elif stage == "publish_integrity": document["versions"][spec["version"]]["dist"]["tarball"] = canary
+            body = encoded(document)
+            fields = headers("PUT", spec["package"], len(body))
+            if stage in {"framing", "headers"}:
+                field = "content-length" if stage == "framing" else "authorization"
+                value = "0" + str(len(body)) if stage == "framing" else "Bearer " + canary
+                fields = [(key, value if key == field else old) for key, old in fields]
+            server = SimpleNamespace(total=4, attempts=[], stored=[deepcopy(prior)])
+            output = io.StringIO()
+            fault = OSError(canary) if stage == "storage" else AssertionError("refused input reached storage")
+            with patch("sys.stderr", output), patch.object(registry, "save_new", side_effect=fault) as save:
+                status, response, media = receiver(server, "PUT", spec["package"], body, fields=fields,
+                    path="/" + canary if stage == "target" else None)
+            with self.subTest(stage=stage):
+                self.assertEqual((status, response, media), (400, b'{"error":"synthetic publish fixture refused"}', "application/json"))
+                self.assertEqual((server.total, server.attempts), (5, [{"ordinal": 5, "accepted": False}]))
+                self.assertEqual(server.stored, [prior])
+                self.assertEqual(save.call_count, 1 if stage == "storage" else 0)
+                self.assertEqual(json.loads(output.getvalue()), {"schema": "serverware.privateNpmPublishRefusal/v1",
+                    "ordinal": 5, "expectedCase": "scoped", "expectedMethod": "PUT", "actualMethod": "PUT",
+                    "stage": stage, "errorClass": "OSError" if stage == "storage" else "ValueError"})
+                self.assertNotIn(canary, output.getvalue())
+                self.assertNotIn(registry.TOKEN, output.getvalue())
+                self.assertNotIn(registry.PLACEHOLDER, output.getvalue())
+        # Normal success remains six finite arrivals and exactly two immutable
+        # in-memory publications. Diagnostics add no successful-path output.
+        output = io.StringIO()
+        with patch("sys.stderr", output):
+            server, saved = self.sequence()
+        self.assertEqual((server.total, len(server.stored), len(saved)), (6, 2, 4))
+        self.assertEqual(output.getvalue(), "")
+
+    def test_receiver_refusal_logging_is_bounded_and_broken_sink_never_changes_fixed_refusal(self):
+        server = SimpleNamespace(total=0, attempts=[], stored=[])
+        output = io.StringIO()
+        with patch("sys.stderr", output):
+            for _ in range(40):
+                self.assertEqual(receiver(server, "POST", PACKAGES[0])[0], 400)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(records), 16)
+        self.assertEqual([row["ordinal"] for row in records], list(range(1, 17)))
+        self.assertEqual((server.total, len(server.attempts), server.stored), (40, 16, []))
+        self.assertEqual([row["stage"] for row in records], ["target"] * 6 + ["sequence"] * 10)
+        self.assertTrue(all((row["expectedCase"], row["expectedMethod"]) == ARRIVALS[index]
+            for index, row in enumerate(records[:6])))
+        self.assertTrue(all(row["expectedCase"] is None and row["expectedMethod"] is None for row in records[6:]))
+        self.assertTrue(all(row["actualMethod"] == "POST" and row["errorClass"] == "ValueError" for row in records))
+        for broken in ("write", "flush"):
+            sink = SimpleNamespace(write=lambda _: None, flush=lambda: None)
+            def refuse(*_):
+                raise OSError("synthetic-log-sink-secret-canary")
+            setattr(sink, broken, refuse)
+            fresh = SimpleNamespace(total=0, attempts=[], stored=[])
+            with patch("sys.stderr", sink):
+                response = receiver(fresh, "POST", PACKAGES[0])
+            self.assertEqual(response[:2], (400, b'{"error":"synthetic publish fixture refused"}'))
+            self.assertEqual((fresh.total, fresh.attempts, fresh.stored), (1, [{"ordinal": 1, "accepted": False}], []))
+
+    def test_job_nonzero_positive_result_is_process_stage_and_e400_is_diagnostic_only(self):
+        # Source-order coverage only: no Node VM, npm executable or subprocess
+        # runs in this pure Python suite. Root's stock client lane is separate.
+        job = (Path(__file__).parent / "operator_npm_publish_job.mjs").read_text()
+        self.assertIn("new Set(['E400', 'E403'", job)
+        positive = job.split("  } else {\n", 1)[1].split("} catch (error)", 1)[0]
+        self.assertTrue(positive.startswith("    stage = 'npm_process';\n    assert(invocation.status === 0);\n    stage = 'npm_receipt';\n"))
+        denial = job.split("  if (!['unscoped', 'scoped'].includes(phase)) {\n", 1)[1].split("  } else {\n", 1)[0]
+        self.assertIn("assert(invocation.status !== 0 && ['E403', 'E407', 'ECONNRESET', 'ECONNREFUSED'].includes(errorCode));", denial)
+        self.assertNotIn("E400", denial)
+        failure = job.split("} catch (error) {\n", 1)[1].split("} finally", 1)[0]
+        self.assertIn("error: 'stock npm publish operation failed', stage, errorCode", failure)
+        for private in ("error.message", "error.stack", "invocation.stdout", "invocation.stderr", "input.token", "placeholder"):
+            self.assertNotIn(private, failure)
 
     def test_handler_replay_unknown_routes_and_overflow_are_counted_before_refusal(self):
         spec = registry.spec_for("unscoped")

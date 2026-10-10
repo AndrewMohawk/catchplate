@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 from copy import deepcopy
 import gzip
 import hashlib
@@ -21,6 +22,7 @@ from pathlib import Path
 import re
 import signal
 import ssl
+import sys
 import tarfile
 import time
 
@@ -47,6 +49,64 @@ ARRIVALS = (("prerequisite", "GET"), ("unscoped", "GET"), ("unscoped", "PUT"),
     ("scoped", "GET"), ("scoped", "PUT"), ("outside_window", "GET"))
 FULL, CORGI = metadata.FULL, metadata.CORGI
 encoded, digest, path = metadata.encoded, metadata.digest, metadata.path
+REFUSAL_SCHEMA = "serverware.privateNpmPublishRefusal/v1"
+REFUSAL_STAGES = frozenset({"sequence", "target", "framing", "headers", "publish_identity",
+    "publish_manifest", "publish_attachment", "publish_integrity", "storage", "response"})
+REFUSAL_METHODS = frozenset({"GET", "PUT", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+REFUSAL_ERRORS = frozenset({"ValueError", "OSError", "TypeError", "KeyError"})
+
+
+def _error_class(error):
+    for kind in (KeyError, OSError, TypeError, ValueError):
+        if isinstance(error, kind):
+            return kind.__name__
+    return None
+
+
+class FixtureRefusal(ValueError):
+    """Only a closed diagnostic stage, never a request or exception value."""
+    def __init__(self, stage, error):
+        self.stage, self.error_class = stage, _error_class(error)
+        super().__init__("private npm publish fixture refused")
+
+
+@contextmanager
+def _refusal_stage(stage):
+    try:
+        yield
+    except (ValueError, OSError, TypeError, KeyError) as error:
+        raise FixtureRefusal(stage, error) from None
+
+
+def refusal_observation(ordinal, expected_case, expected_method, actual_method, stage, error):
+    """Bounded refusal metadata; no request strings or exception text escape."""
+    if type(error) is FixtureRefusal:
+        stage, error_class = error.stage, error.error_class
+    else:
+        error_class = _error_class(error)
+    if (type(ordinal) is not int or not 1 <= ordinal <= MAX_ATTEMPTS
+            or not isinstance(stage, str) or stage not in REFUSAL_STAGES
+            or not isinstance(error_class, str) or error_class not in REFUSAL_ERRORS):
+        return None
+    expected = ARRIVALS[ordinal - 1] if ordinal <= len(ARRIVALS) else (None, None)
+    if (expected_case, expected_method) != expected:
+        return None
+    return {"schema": REFUSAL_SCHEMA, "ordinal": ordinal, "expectedCase": expected[0],
+        "expectedMethod": expected[1], "actualMethod": actual_method
+            if isinstance(actual_method, str) and actual_method in REFUSAL_METHODS else "other",
+        "stage": stage, "errorClass": error_class}
+
+
+def emit_refusal(ordinal, expected_case, expected_method, actual_method, stage, error):
+    # Diagnostics are not part of admission or storage. A broken log sink must
+    # not alter the existing fixed refusal response or produce raw error text.
+    try:
+        record = refusal_observation(ordinal, expected_case, expected_method, actual_method, stage, error)
+        if record is not None:
+            sys.stderr.write(encoded(record).decode("utf-8") + "\n")
+            sys.stderr.flush()
+    except Exception:
+        pass
 
 
 def require(value):
@@ -94,35 +154,39 @@ def strict_json(raw):
 
 def validate_publish(raw, spec):
     """Independent receiver oracle, not the production publish decoder."""
-    require(isinstance(raw, bytes) and 0 < len(raw) <= MAX_BODY)
-    document = strict_json(raw)
-    package, version = spec["package"], spec["version"]
-    require(isinstance(document, dict) and set(document) ==
-        {"_id", "name", "description", "dist-tags", "versions", "access", "_attachments"})
-    require(document["_id"] == document["name"] == package
-        and document["description"] == "Synthetic publication fixture"
-        and document["access"] == "public" and document["dist-tags"] == {TAG: version}
-        and isinstance(document["versions"], dict) and set(document["versions"]) == {version})
-    manifest = document["versions"][version]
-    require(isinstance(manifest, dict) and manifest.get("name") == package
-        and manifest.get("version") == version and manifest.get("_id") == package + "@" + version
-        and manifest.get("_nodeVersion") == "25.5.0" and manifest.get("_npmVersion") == "11.8.0"
-        and not any(key in manifest for key in ("scripts", "dependencies", "publishConfig", "tag")))
-    name = package + "-" + version + ".tgz"
-    require(isinstance(document["_attachments"], dict) and set(document["_attachments"]) == {name})
-    attachment = document["_attachments"][name]
-    require(isinstance(attachment, dict) and set(attachment) == {"content_type", "data", "length"}
-        and attachment["content_type"] == "application/octet-stream" and isinstance(attachment["data"], str)
-        and type(attachment["length"]) is int)
-    payload = base64.b64decode(attachment["data"], validate=True)
-    require(payload == tarball(spec) and attachment["length"] == len(payload)
-        and base64.b64encode(payload).decode("ascii") == attachment["data"])
-    integrity = "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode("ascii")
-    shasum = hashlib.sha1(payload).hexdigest()
-    dist = manifest.get("dist")
-    require(isinstance(dist, dict) and set(dist) == {"integrity", "shasum", "tarball"}
-        and dist.get("integrity") == integrity and dist.get("shasum") == shasum
-        and dist.get("tarball") == "http://registry.npmjs.org/" + package + "/-/" + name)
+    with _refusal_stage("publish_identity"):
+        require(isinstance(raw, bytes) and 0 < len(raw) <= MAX_BODY)
+        document = strict_json(raw)
+        package, version = spec["package"], spec["version"]
+        require(isinstance(document, dict) and set(document) ==
+            {"_id", "name", "description", "dist-tags", "versions", "access", "_attachments"})
+        require(document["_id"] == document["name"] == package
+            and document["description"] == "Synthetic publication fixture"
+            and document["access"] == "public" and document["dist-tags"] == {TAG: version}
+            and isinstance(document["versions"], dict) and set(document["versions"]) == {version})
+    with _refusal_stage("publish_manifest"):
+        manifest = document["versions"][version]
+        require(isinstance(manifest, dict) and manifest.get("name") == package
+            and manifest.get("version") == version and manifest.get("_id") == package + "@" + version
+            and manifest.get("_nodeVersion") == "25.5.0" and manifest.get("_npmVersion") == "11.8.0"
+            and not any(key in manifest for key in ("scripts", "dependencies", "publishConfig", "tag")))
+    with _refusal_stage("publish_attachment"):
+        name = package + "-" + version + ".tgz"
+        require(isinstance(document["_attachments"], dict) and set(document["_attachments"]) == {name})
+        attachment = document["_attachments"][name]
+        require(isinstance(attachment, dict) and set(attachment) == {"content_type", "data", "length"}
+            and attachment["content_type"] == "application/octet-stream" and isinstance(attachment["data"], str)
+            and type(attachment["length"]) is int)
+        payload = base64.b64decode(attachment["data"], validate=True)
+        require(payload == tarball(spec) and attachment["length"] == len(payload)
+            and base64.b64encode(payload).decode("ascii") == attachment["data"])
+    with _refusal_stage("publish_integrity"):
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode("ascii")
+        shasum = hashlib.sha1(payload).hexdigest()
+        dist = manifest.get("dist")
+        require(isinstance(dist, dict) and set(dist) == {"integrity", "shasum", "tarball"}
+            and dist.get("integrity") == integrity and dist.get("shasum") == shasum
+            and dist.get("tarball") == "http://registry.npmjs.org/" + package + "/-/" + name)
     return {"package": package, "version": version, "tag": TAG, "attachmentName": name,
         "attachmentBytes": len(payload), "tarballSha256": digest(payload),
         "tarballIntegrity": integrity, "tarballShasum": shasum}, manifest, payload
@@ -217,15 +281,20 @@ class Handler(BaseHTTPRequestHandler):
         row = {"ordinal": self.server.total, "accepted": False}
         if self.server.total <= MAX_ATTEMPTS:
             self.server.attempts.append(row)
+        stage = "sequence"
+        case, method = ARRIVALS[self.server.total - 1] if 1 <= self.server.total <= len(ARRIVALS) else (None, None)
         try:
             require(1 <= self.server.total <= len(ARRIVALS))
             case, method = ARRIVALS[self.server.total - 1]
             spec = spec_for(case)
+            stage = "target"
             require(self.command == method and self.path == path(spec["package"]))
+            stage = "framing"
             length = self.headers.get("content-length", "0")
             require(re.fullmatch(r"0|[1-9][0-9]{0,5}", length) and int(length) <= MAX_BODY)
             raw = self.rfile.read(int(length))
             require(len(raw) == int(length))
+            stage = "headers"
             headers = validate_headers([(name.lower(), value) for name, value in self.headers.raw_items()], method, spec["package"], len(raw))
             if method == "GET":
                 status, content_type = 200, "application/vnd.npm.install-v1+json"
@@ -233,6 +302,7 @@ class Handler(BaseHTTPRequestHandler):
                 operation = {"operation": "npm.metadata.read", "package": spec["package"]}
             else:
                 stored, _, payload = validate_publish(raw, spec)
+                stage = "storage"
                 require(not any(old["package"] == stored["package"] and old["version"] == stored["version"] for old in self.server.stored))
                 stored.update(case=case)
                 save_new(Path("/npm-state") / (case + ".tgz"), payload)
@@ -252,8 +322,10 @@ class Handler(BaseHTTPRequestHandler):
                 requestBodySha256=digest(raw), requestBodyBytes=len(raw), operation=operation,
                 status=status, responseContentType=content_type, responseBodySha256=digest(response),
                 responseBodyBytes=len(response), allParsedHeadersValidated=True)
+            stage = "response"
             self.send(status, response, content_type)
-        except (ValueError, OSError, TypeError, KeyError):
+        except (ValueError, OSError, TypeError, KeyError) as error:
+            emit_refusal(self.server.total, case, method, self.command, stage, error)
             self.send(400, b'{"error":"synthetic publish fixture refused"}')
 
     do_PUT = do_POST = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = resource

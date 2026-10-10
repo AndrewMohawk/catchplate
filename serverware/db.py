@@ -25741,7 +25741,7 @@ def record_audit_event(
             event=event,
             idempotency_key=idempotency_key,
         )
-    with connect() as conn:
+    with metadata_connection() as conn:
         return append_audit_event(
             conn,
             event_type=event_type,
@@ -26081,7 +26081,7 @@ def record_audit_event_batch(
         prepared.append((event_type, event, event_json, event_id))
 
     if not audit_uses_postgres():
-        with connect() as conn:
+        with metadata_connection() as conn:
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE")
             if producer_idempotency:
@@ -26232,6 +26232,21 @@ def connect() -> Any:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+@contextlib.contextmanager
+def metadata_connection():
+    """Opt-in transaction scope that closes only a directly owned SQLite handle."""
+    connection = connect()
+    # Check ownership before __enter__: borrowed facades expose their
+    # caller-owned SQLite connection without granting close/commit rights.
+    close_owned = (
+        contextlib.closing(connection)
+        if isinstance(connection, sqlite3.Connection)
+        else contextlib.nullcontext()
+    )
+    with close_owned, connection as conn:
+        yield conn
 
 
 def _lock_metadata_audit_outbox(conn: Any) -> None:
@@ -26560,12 +26575,7 @@ def drain_metadata_audit_outbox(limit: int = 100) -> dict[str, int]:
                 "metadata audit outbox drain limit must be between 1 and 500"
             )
         audited = 0
-        connection = connect()
-        # Check ownership before __enter__: borrowed facades expose their
-        # caller-owned SQLite connection without granting close/commit rights.
-        close_owned = (contextlib.closing(connection) if isinstance(connection, sqlite3.Connection)
-            else contextlib.nullcontext())
-        with close_owned, connection as conn:
+        with metadata_connection() as conn:
             if isinstance(conn, sqlite3.Connection) and not conn.in_transaction:
                 # This is only an empty observation, not a delivery receipt for
                 # a concurrent later enqueue. Finish the read before acquiring
@@ -67692,7 +67702,7 @@ def get_credential(
     *,
     include_inactive: bool = False,
 ) -> dict[str, Any] | None:
-    with connect() as conn:
+    with metadata_connection() as conn:
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
@@ -67709,7 +67719,7 @@ def get_credential(
 def credential_lease_snapshot(item_id: str):
     """Hold the credential mutation lock while a lease is assembled and encrypted."""
     load_master_key()
-    with connect() as conn:
+    with metadata_connection() as conn:
         _lock_credential_mutation(conn, item_id)
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
@@ -67745,7 +67755,7 @@ def credential_ciphertext_snapshot(item_id: str):
 @contextlib.contextmanager
 def credential_generation_snapshot(item_id: str):
     """Hold the mutation lock while reading only non-secret generation metadata."""
-    with connect() as conn:
+    with metadata_connection() as conn:
         _lock_credential_mutation(conn, item_id)
         row = conn.execute(
             "SELECT id, kind, credential_version, metadata, lifecycle_status "

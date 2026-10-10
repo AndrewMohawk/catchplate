@@ -524,7 +524,7 @@ def reserve_credential_lease_nonce(key, nonce, *, now_epoch_ms):
     _nonce_values(key, nonce, now_epoch_ms)
     db = _require()
     from serverware.config import CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES
-    with db.connect() as conn:
+    with db.metadata_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM operator_demo_nonces WHERE expires_at_epoch_ms<=?", (now_epoch_ms,))
         if conn.execute("SELECT 1 FROM operator_demo_nonces WHERE recipient_key_id=? AND nonce_sha256=?", (key, nonce)).fetchone():
@@ -538,6 +538,6 @@ def reserve_credential_lease_nonce(key, nonce, *, now_epoch_ms):
 def credential_lease_nonce_reserved(key, nonce, *, now_epoch_ms):
     _nonce_values(key, nonce, now_epoch_ms)
     db = _require()
-    with db.connect() as conn:
+    with db.metadata_connection() as conn:
         return conn.execute("SELECT 1 FROM operator_demo_nonces WHERE recipient_key_id=? AND nonce_sha256=? AND expires_at_epoch_ms>?",
             (key, nonce, now_epoch_ms)).fetchone() is not None

@@ -476,6 +476,56 @@ I/O seams. Review caught and corrected a test-helper ownership mismatch before
 execution. These are isolated controls, not another stock-client run or a live
 rollout; neither follow-up change has end-to-end acceptance yet.
 
+A thirteenth, one-shot isolated run used source `37c12a0f` and the same
+genuinely built `92ee92a2` gate artifact after verifying its compiler-input
+equivalence. From **16:18:01 to 16:19:20 UTC on October 10**, it completed the
+prerequisite and unscoped client phases, then failed with
+`ordinary audit delivery failed`. The new breadcrumb places this at
+`unscoped / checkpoint_health`: the health response failed the existing
+zero-audit-failure-counter requirement, rather than a checker HTTP timeout.
+The first publish and its preceding audit checks do not establish the complete
+seven-phase flow.
+
+The gate reported an initial two-event audit POST with transport-stage
+`outcome_unknown`, no HTTP status, unchanged snapshot/sequence and **2,960 ms**
+elapsed. That duration includes policy-refresh/preflight work; it is not an
+HTTP-execution measurement or proof of the underlying cause. All 11 admitted
+application observations completed, covering 13 events, with a 202 ms median
+and 883 ms maximum elapsed time. Initial policy-lock and worker-slot waits were
+zero. No two-event observation was retained, but its absence does not establish
+whether that failed batch reached an earlier admission boundary. No terminal
+503 or static-preparation diagnostic was emitted; two renewal warnings were
+retained. Sampled container CPU-throttle counters were aggregate observations,
+not correlated evidence for the failed POST.
+
+The stopped database passed `quick_check`, retaining 15 issued leases, the
+same three prerequisite/unscoped response releases, one earlier denial, two
+established CONNECTs and two keep-alives. All project containers and networks
+were removed, while private evidence was retained. All 4,940 source files and
+1,782 npm files remained unchanged. Receipts are in
+`serverware-npm-publish-runner.ICReyHDi`, with runtime data in
+`serverware-npm-publish-private.eLoDjS3P`. The run was not retried or promoted.
+
+A follow-up source correction extracts the existing ownership-aware outbox
+context into opt-in `db.metadata_connection()` and applies it to seven more
+paths: single/batch audit writes, credential lookup, both static-lease snapshots
+and the operator-demo nonce reserve/read functions. The unchanged factory's
+return determines ownership before context entry. Existing transaction/lock
+lifetimes remain intact; only directly owned SQLite handles close afterward.
+Borrowed facades and PostgreSQL wrappers retain their original behavior. No
+query, validation, timeout or global connection-factory semantics changed.
+
+All **nine** new real-SQLite groups pass in **3.434 seconds**, covering audit
+replay/conflict and rollback, detached encrypted-row reads, competing-writer
+exclusion across snapshot yields, nonce expiry/replay and caller ownership.
+The first execution caught a fixture-only profile-mock restoration error;
+correcting that test seam did not change production code. All **18** existing
+outbox groups also pass in **0.053 seconds**. Two selected controls against the
+frozen pre-fix `37c12a0f` source detect the missing closes in **3.203 seconds**.
+PostgreSQL coverage is of its Python context wrapper, not a running server.
+This establishes deterministic resource cleanup, not the cause or repair of
+the transport failure. No stock-client run has yet exercised this new helper.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

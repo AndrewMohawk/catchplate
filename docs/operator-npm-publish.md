@@ -927,3 +927,56 @@ preflight GET errors, so a
 successful publish command alone is insufficient. No real provider token,
 public registry mutation, live operator rollout or native hardware acceptance
 is claimed here. Existing metadata-only acceptance does not prove publishing.
+
+### Durable mutation receipts and bounded timing
+
+Catalog mutation responses now describe the captured committed revision, policy
+hash and sequence without a subsequent gate-health request or database read.
+They return `activation: "pending"` and `loaded_policy_hash: null`, including
+when policy-file materialization succeeds. Only a fresh catalog GET can confirm
+that the current committed hash and the gate's loaded hash agree. One-time
+application tokens remain in the original response; a materialization failure
+after COMMIT must not masquerade as rollback or invite mutation replay.
+
+Admitted operator-development mutations also have optional closed timing records
+covering worker admission, publication ownership, SQLite work, commit,
+materialization, receipt assembly, the existing audit-outbox drain and the outer
+ASGI send. Each process attempts at most 64 records, each at most 4 KiB, with
+fixed operation/stage labels and no resource identifiers, secrets or error text.
+Diagnostic failures drop observations; they do not change transaction behavior,
+retry work, release an active worker slot or extend a deadline. The stderr sink
+is synchronous, so this is not a latency-neutral logging claim.
+
+The terminal outcome describes response delivery, not mutation success:
+`complete` can describe a successfully sent error response and is not a client
+acknowledgement. Cancellation permanently seals the record even if its shielded
+worker later commits. Missing marks therefore cannot establish rollback. The
+stock checker now identifies each revocation read, the single POST, validation,
+loaded-policy wait and warmed snapshot separately, using the same original
+requests, validators and timeouts. No writer-priority change has been inferred
+from run eighteen.
+
+Focused verification passed **101 distinct checks**: 12 catalog-timing controls,
+four connected mutation-receipt groups, nine existing audit-timing controls,
+five bounded-worker scheduling controls, nine checker-breadcrumb groups,
+32 publish-fixture/JavaScript controls, eight actual loopback HTTP lifecycle and
+key-replacement groups, 13 workspace-store groups, five header-replacement
+groups and four response-mode groups. These ran in bounded, network-none
+containers with read-only source. The JavaScript controls used the pinned
+client image and Node binary, not a package installation or provider connection.
+
+The broader tests exposed a pre-existing positional assumption: compiled routes
+are sorted by randomly generated route IDs, not catalog creation order. The
+header-replacement fixture now joins both exact receipt IDs and checks the
+complete two-route set, retaining the original semantic and negative assertions.
+The new ASGI timing fixture also normalizes HTTP header names before asserting
+`no-store`; the actual sender deliberately writes its security-header casing.
+Neither test correction changes production behavior or relaxes stock acceptance.
+
+There is no Rust source change in this repair. A new Python snapshot may reuse
+the genuine `b55f3024` executable only after separately proving equality of all
+499 actual compiler inputs, the complete 745-file crate and its nine external
+schema inputs, including Git modes. That evidence must retain distinct source
+and binary-build commit identities; it is not a new Rust build or a new run of
+the previously retained 116 Rust tests. The stock-client acceptance outcome
+remains separate from these focused checks.

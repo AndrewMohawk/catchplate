@@ -13,6 +13,7 @@ import uuid
 
 from serverware import operator_catalog_policy as policy
 from serverware import operator_catalog_schema as schema
+from serverware import operator_catalog_timing as _catalog_timing
 from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
@@ -172,46 +173,63 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
 
 def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict:
     db = store._require()
-    publication_failed = False
-    with store.operator_publication.exclusive(), db.connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        schema.require_revision(conn, payload.expected_revision)
-        state = _state(conn)
-        if state["policy_hash"] != payload.expected_policy_hash:
-            raise CatalogConflict()
-        catalog = schema.read_catalog(conn)
-        schema.validate_bindings(conn, catalog)
-        changed = change(db, conn, catalog)
-        schema.validate_bindings(conn)
-        publication = policy.publish(conn) if changed.authority_changed else {**state, "changed": False}
-        revision = schema.advance_revision(conn, payload.expected_revision)
-        audit = {"resource_type": _RESULT_KEYS[collection], "resource_id": changed.resource["id"],
-            "revision": revision, "policy_hash": publication["policy_hash"],
-            "policy_sequence": publication["sequence"]}
-        if collection == "applications":
-            audit.update(token_generation=changed.resource["token_version"],
-                token_expires_at_epoch_ms=changed.resource["token_expires_at_epoch_ms"])
-        if collection == "access_rules":
-            audit.update(application_id=changed.resource["application_id"], credential_id=changed.resource["credential_id"])
-        if changed.affected_rule_ids:
-            audit["affected_rule_ids"] = changed.affected_rule_ids
-        if changed.key_replacement is not None:
-            audit.update({key: changed.key_replacement[key] for key in
-                ("previous_credential_generation", "credential_generation")})
-        if changed.previous_proxy_authentication is not None:
-            audit.update(previous_proxy_authentication=changed.previous_proxy_authentication,
-                proxy_authentication=schema.application_proxy_authentication(changed.resource),
-                affected_rule_ids=changed.affected_rule_ids)
-        db.append_audit_event(conn, event_type="operator_catalog." + event,
-            actor_type="admin", actor_id=actor_id, event=audit)
-        catalog = schema.read_catalog(conn)
-        static_generations = _static_generations(conn, catalog)
-        conn.commit()
-        if publication["changed"]:
-            try:
-                store.materialize()
-            except Exception:
-                publication_failed = True
+    timing = _catalog_timing.current()
+    _catalog_timing.mark(timing, "publication_wait")
+    with store.operator_publication.exclusive():
+        _catalog_timing.mark(timing, "publication_acquired")
+        with db.connect() as conn:
+            _catalog_timing.mark(timing, "sqlite_open")
+            conn.execute("BEGIN IMMEDIATE")
+            _catalog_timing.mark(timing, "sqlite_begin")
+            schema.require_revision(conn, payload.expected_revision)
+            state = _state(conn)
+            if state["policy_hash"] != payload.expected_policy_hash:
+                raise CatalogConflict()
+            catalog = schema.read_catalog(conn)
+            schema.validate_bindings(conn, catalog)
+            _catalog_timing.mark(timing, "bindings_validated")
+            changed = change(db, conn, catalog)
+            _catalog_timing.mark(timing, "change_done")
+            schema.validate_bindings(conn)
+            publication = policy.publish(conn) if changed.authority_changed else {**state, "changed": False}
+            if changed.authority_changed:
+                _catalog_timing.mark(timing, "policy_published")
+            revision = schema.advance_revision(conn, payload.expected_revision)
+            audit = {"resource_type": _RESULT_KEYS[collection], "resource_id": changed.resource["id"],
+                "revision": revision, "policy_hash": publication["policy_hash"],
+                "policy_sequence": publication["sequence"]}
+            if collection == "applications":
+                audit.update(token_generation=changed.resource["token_version"],
+                    token_expires_at_epoch_ms=changed.resource["token_expires_at_epoch_ms"])
+            if collection == "access_rules":
+                audit.update(application_id=changed.resource["application_id"], credential_id=changed.resource["credential_id"])
+            if changed.affected_rule_ids:
+                audit["affected_rule_ids"] = changed.affected_rule_ids
+            if changed.key_replacement is not None:
+                audit.update({key: changed.key_replacement[key] for key in
+                    ("previous_credential_generation", "credential_generation")})
+            if changed.previous_proxy_authentication is not None:
+                audit.update(previous_proxy_authentication=changed.previous_proxy_authentication,
+                    proxy_authentication=schema.application_proxy_authentication(changed.resource),
+                    affected_rule_ids=changed.affected_rule_ids)
+            db.append_audit_event(conn, event_type="operator_catalog." + event,
+                actor_type="admin", actor_id=actor_id, event=audit)
+            _catalog_timing.mark(timing, "audit_appended")
+            catalog = schema.read_catalog(conn)
+            static_generations = _static_generations(conn, catalog)
+            _catalog_timing.mark(timing, "commit_started")
+            conn.commit()
+            _catalog_timing.mark(timing, "commit_done")
+            if publication["changed"]:
+                _catalog_timing.mark(timing, "materialize_started")
+                try:
+                    store.materialize()
+                    _catalog_timing.mark(timing, "materialize_done")
+                except Exception:
+                    # The commit remains authoritative; readiness is observed by
+                    # a later catalog read, never asserted by this mutation receipt.
+                    pass
+    _catalog_timing.mark(timing, "publication_released")
     replacement_receipt = None
     if changed.key_replacement is not None:
         # COMMIT and all publication/DB ownership ended. This clears only this
@@ -226,7 +244,11 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
         replacement_receipt = {key: changed.key_replacement[key] for key in
             ("previous_credential_generation", "credential_generation")}
         replacement_receipt.update(cache_invalidation=cache_invalidation, in_flight_requests="not_recalled")
-    observation = _policy_observation(publication, publication_failed=publication_failed)
+    # Acknowledge the captured durable result without a postcommit network or
+    # database observation. Only a fresh catalog read may confirm gate loading;
+    # even successful materialization is not evidence of proxy enforcement.
+    observation = {"policy_hash": publication["policy_hash"], "sequence": publication["sequence"],
+        "loaded_policy_hash": None, "activation": "pending"}
     result = {_RESULT_KEYS[collection]: _public(collection, changed.resource, catalog, observation,
         time.time_ns() // 1_000_000, static_generations), "revision": revision, "policy": observation}
     if replacement_receipt is not None:
@@ -235,6 +257,7 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
         result["client_token"] = changed.client_token
     if changed.affected_rule_ids:
         result["affected_rule_ids"] = changed.affected_rule_ids
+    _catalog_timing.mark(timing, "receipt_ready")
     return result
 
 

@@ -34,7 +34,9 @@ KEEP_ALIVE = "data_plane.connect.keep_alive"
 PHASES = tuple(spec["case"] for spec in fixture.SPECS)
 FAILURE_PHASES = frozenset((*PHASES, "startup", "final", "unknown"))
 FAILURE_STAGES = frozenset({"startup", "pre_client_catalog", "client", "checkpoint_registry",
-    "checkpoint_audit", "checkpoint_health", "post_checkpoint_catalog", "final_verification", "unknown"})
+    "checkpoint_audit", "checkpoint_health", "post_checkpoint_catalog", "final_verification", "unknown",
+    "revocation_before_catalog", "revocation_post", "revocation_after_catalog", "revocation_finalize",
+    "revocation_wait_loaded", "revocation_warm_cas", "revocation_validate"})
 CLIENT_STAGES = {"input", "identity", "trust", "package", "workspace", "npm_spawn", "npm_process", "npm_json", "npm_denial", "npm_receipt"}
 CLIENT_ERRORS = metadata.CLIENT_ERRORS | {"ENEEDAUTH", "E400", "E401", "E409", "E422", "E429", "E500", "E503", "E504",
     "EPUBLISHCONFLICT", "EPRIVATE", "EUNSCOPED", "EBADSEMVER", "FETCH_ERROR", "EPIPE"}
@@ -520,11 +522,24 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
             app, token = apps[selected]; rule = rules[selected]
             if phase == "revoked_app":
                 self.before_revoke_policy = self.policy_hash
-                self.mutate("/applications/revoke", {"id": app["id"]}, collection="applications", result_key="application",
-                    event="operator_catalog.application.revoked", authority_changed=True)
+                # Same four primitives as mutate(), in the same order. Labels
+                # distinguish the reads from the single POST and its validators.
+                self.failure_stage = "revocation_before_catalog"
+                before = self.catalog()
+                self.failure_stage = "revocation_post"
+                _, _, result = self.submit_mutation(before, "/applications/revoke", {"id": app["id"]},
+                    result_key="application", authority_changed=True)
+                self.failure_stage = "revocation_after_catalog"
+                after = self.catalog()
+                self.failure_stage = "revocation_finalize"
+                self.finalize_mutation(result, after, collection="applications", result_key="application",
+                    event="operator_catalog.application.revoked")
                 self.revocation = self.mutations[-1]
+                self.failure_stage = "revocation_wait_loaded"
                 self.wait_catalog_loaded("publish-application-revoked")
+                self.failure_stage = "revocation_warm_cas"
                 pins = self.warm_cas_snapshot()
+                self.failure_stage = "revocation_validate"
                 require(self.resource(pins, "applications", app["id"])["status"] == "revoked"
                     and self.resource(pins, "access_rules", rule["id"])["status"] == "revoked",
                     "publish application and paired permission did not revoke together")

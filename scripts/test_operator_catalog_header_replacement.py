@@ -94,8 +94,14 @@ def shared_credential_modes():
     assert signed["routes"][1]["adapter"]["config"]["response"]["mode"] == "bufferedPassthrough"
     assert signed["credentials"][0]["injection"] == {"type": "bearer", "header": "Authorization"}
     compiled = bundles.compile_policy_bundle(signed, verify_signature=True, validate_schema=True)
-    assert compiled.routes[0].credential_header is None
-    assert dict(compiled.routes[1].credential_header) == expected
+    # Compilation sorts by route ID; randomly allocated IDs need not preserve
+    # the catalog's creation order used by the signed document above.
+    compiled_routes = {route.id: route for route in compiled.routes}
+    insertion_id = insertion["access_rule"]["route_id"]
+    replacement_id = replacement["access_rule"]["route_id"]
+    assert len(compiled.routes) == 2 and set(compiled_routes) == {insertion_id, replacement_id}
+    assert compiled_routes[insertion_id].credential_header is None
+    assert dict(compiled_routes[replacement_id].credential_header) == expected
     assert workspace.rows(db, "credentials") == core
     assert workspace.rows(db, "credential_generations") == generation
     assert PLACEHOLDER not in json.dumps(workspace.rows(db, "audit_events"))

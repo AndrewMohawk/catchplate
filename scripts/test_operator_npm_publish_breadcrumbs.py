@@ -11,12 +11,15 @@ from unittest.mock import Mock, patch
 
 from scripts import check_operator_npm_publish as check
 from scripts import test_operator_npm_publish_fixture as fixtures
+from scripts.check_operator_catalog import OperatorCatalogCheck
 
 CANARY = "synthetic-secret https://private.invalid/?token=private-canary"
 PHASES = {"prerequisite", "unscoped", "scoped", "wrong_package", "outside_window",
           "wrong_placeholder", "revoked_app", "startup", "final", "unknown"}
 STAGES = {"startup", "pre_client_catalog", "client", "checkpoint_registry", "checkpoint_audit",
-          "checkpoint_health", "post_checkpoint_catalog", "final_verification", "unknown"}
+          "checkpoint_health", "post_checkpoint_catalog", "final_verification", "unknown",
+          "revocation_before_catalog", "revocation_post", "revocation_after_catalog", "revocation_finalize",
+          "revocation_wait_loaded", "revocation_warm_cas", "revocation_validate"}
 
 
 class NpmPublishBreadcrumbTests(unittest.TestCase):
@@ -129,6 +132,217 @@ class NpmPublishBreadcrumbTests(unittest.TestCase):
                 self.assertEqual(instance.completed, ["prerequisite"] if boundary == "post_checkpoint_catalog" else [])
                 self.assertEqual(len([row for row in calls if row[0] == "mutation"]), 9)
                 self.assertEqual(len(catalog_calls), 2 if boundary == "post_checkpoint_catalog" else 1)
+                self.assertEqual(instance.deadline, 10.0)
+                self.sleep.assert_not_called()
+
+    def revocation_fixture(self, failed_call=None, invalid=None):
+        """Real mutation/read validators over inert transport; setup is synthetic."""
+        instance, setup_calls = fixtures.NpmPublishFixtureTests().failing_run(RuntimeError(CANARY))
+        instance.failure_phase, instance.failure_stage = "startup", "startup"
+        instance.control, instance.control_ca = object(), object()
+        instance.issued_tokens, instance.observations = [], []
+        instance.admin_token, instance.wrong_token, instance.client_token = "synthetic-admin", "synthetic-wrong", None
+        instance.snapshot, instance.revocation = None, None
+        old_hash, new_hash = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        instance.policy_hash = old_hash
+        app = {"id": "synthetic-run-scoped", "principal_id": "principal-synthetic-run-scoped"}
+        rule = {"id": app["id"], "route_id": "route-synthetic-run-scoped"}
+        before = {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
+            "productionReady": False, "hardwareVerified": False, "allowed_upstreams": [check.fixture.ORIGIN],
+            "revision": 10, "credentials": [], "applications": [{**app, "version": 1, "status": "active"}],
+            "access_rules": [{**rule, "version": 1, "status": "active"}],
+            "policy": {"policy_hash": old_hash, "sequence": 4, "loaded_policy_hash": old_hash, "activation": "active"}}
+        after = deepcopy(before)
+        after.update(revision=11, policy={"policy_hash": new_hash, "sequence": 5,
+                     "loaded_policy_hash": new_hash, "activation": "active"})
+        for collection in ("applications", "access_rules"):
+            after[collection][0].update(version=2, status="revoked")
+        result = {"revision": 11, "policy": {"policy_hash": new_hash, "sequence": 5},
+                  "application": deepcopy(after["applications"][0])}
+        state = {"calls": [], "posts": [], "catalogs": 0, "validating": False,
+                 "failure": RuntimeError(CANARY), "stop": RuntimeError("synthetic next client boundary")}
+
+        def invoke(name):
+            state["calls"].append(name)
+            if name == failed_call:
+                raise state["failure"]
+
+        original_catalog, original_health = instance.catalog, instance.health
+        original_warm, original_wait = instance.warm_cas_snapshot, instance.wait_catalog_loaded
+        real_clean = instance.clean
+
+        def catalog():
+            if instance.failure_phase != "revoked_app":
+                return original_catalog()
+            name = ("before_catalog", "after_catalog", "wait_catalog", "warm_catalog")[state["catalogs"]]
+            state["catalogs"] += 1
+            invoke(name)
+            document = deepcopy(before if name == "before_catalog" else after)
+            if invalid == "after_revision" and name == "after_catalog":
+                document["revision"] += 1
+            if invalid == "warm_policy" and name == "warm_catalog":
+                document["policy"]["loaded_policy_hash"] = old_hash
+            if invalid == "paired_rule" and name == "warm_catalog":
+                document["access_rules"][0]["status"] = "active"
+            state["document"] = document
+            return check.metadata.NpmMetadataCheck.catalog(instance)
+
+        def control_json(path, **kwargs):
+            self.assertEqual((path, kwargs), (check.PREFIX + "/catalog", {"authenticated": True}))
+            return state["document"]
+
+        def json_request(endpoint, path, **kwargs):
+            self.assertIs(endpoint, instance.control)
+            self.assertIs(kwargs["context"], instance.control_ca)
+            self.assertEqual(path, check.PREFIX + "/applications/revoke")
+            self.assertEqual(set(kwargs), {"context", "method", "payload", "authenticated", "creation"})
+            self.assertEqual({key: value for key, value in kwargs.items() if key != "context"},
+                {"method": "POST", "payload": {"id": app["id"], "expected_revision": 10,
+                 "expected_policy_hash": old_hash}, "authenticated": True, "creation": False})
+            state["posts"].append(deepcopy(kwargs["payload"]))
+            invoke("post")
+            document = deepcopy(result)
+            if invalid == "post_revision":
+                document["revision"] += 1
+            return (503 if invalid == "post_status" else 200), document
+
+        def clean(content, **kwargs):
+            invoke("clean")
+            return real_clean(content, **kwargs)
+
+        def finalize(result, snapshot, **kwargs):
+            invoke("finalize")
+            self.assertEqual(kwargs, {"collection": "applications", "result_key": "application",
+                                     "event": "operator_catalog.application.revoked"})
+            return OperatorCatalogCheck.finalize_mutation(instance, result, snapshot, **kwargs)
+
+        def health():
+            if instance.failure_phase != "revoked_app":
+                return original_health()
+            invoke("wait_health")
+            return {"policy_hash": new_hash, "policy_shadow": {"operator_policy_sha256": new_hash}}
+
+        def wait(label, **kwargs):
+            if label != "publish-application-revoked":
+                return original_wait(label, **kwargs)
+            self.assertEqual(kwargs, {})
+            invoke("wait_loaded")
+            return OperatorCatalogCheck.wait_catalog_loaded(instance, label, **kwargs)
+
+        def warm():
+            if instance.failure_phase != "revoked_app":
+                return original_warm()
+            invoke("warm_cas")
+            value = OperatorCatalogCheck.warm_cas_snapshot(instance)
+            state["validating"] = True
+            return value
+
+        def resource(snapshot, collection, identifier):
+            invoke(("validate_app" if collection == "applications" else "validate_rule")
+                   if state["validating"] else "finalize_resource")
+            return OperatorCatalogCheck.resource(snapshot, collection, identifier)
+
+        def client(spec, application, token):
+            setup_calls.append(("client", spec["case"]))
+            if spec["case"] == "revoked_app":
+                raise state["stop"]
+            instance.clients.append({"phase": spec["case"]})
+
+        instance.catalog, instance.control_json, instance.json_request = catalog, control_json, json_request
+        instance.clean, instance.finalize_mutation, instance.health = clean, finalize, health
+        instance.wait_catalog_loaded, instance.warm_cas_snapshot, instance.resource = wait, warm, resource
+        instance.client = client
+        return instance, state, setup_calls, app, rule
+
+    @staticmethod
+    def original_revocation(instance, app, rule):
+        """The previous block, retaining the actual inherited mutate() as oracle."""
+        instance.failure_phase = "revoked_app"
+        instance.before_revoke_policy = instance.policy_hash
+        OperatorCatalogCheck.mutate(instance, "/applications/revoke", {"id": app["id"]},
+            collection="applications", result_key="application", event="operator_catalog.application.revoked",
+            authority_changed=True)
+        instance.revocation = instance.mutations[-1]
+        instance.wait_catalog_loaded("publish-application-revoked")
+        pins = instance.warm_cas_snapshot()
+        check.require(instance.resource(pins, "applications", app["id"])["status"] == "revoked"
+            and instance.resource(pins, "access_rules", rule["id"])["status"] == "revoked",
+            "publish application and paired permission did not revoke together")
+        return pins
+
+    def run_to_revocation(self, instance):
+        with patch.object(check, "token_file", return_value="synthetic-admin"), \
+                patch.object(check, "failure_audit_observation", side_effect=AssertionError("new diagnostic I/O")):
+            instance.run()
+
+    def test_revocation_success_matches_original_mutate_and_fresh_read_order(self):
+        old, expected, _, app, rule = self.revocation_fixture()
+        pins = self.original_revocation(old, app, rule)
+        instance, state, calls, _, _ = self.revocation_fixture()
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_to_revocation(instance)
+        self.assertIs(caught.exception, state["stop"])
+        self.assertEqual(state["calls"], ["before_catalog", "post", "clean", "after_catalog", "finalize",
+            "finalize_resource", "wait_loaded", "wait_catalog", "wait_health", "warm_cas", "warm_catalog",
+            "validate_app", "validate_rule"])
+        self.assertEqual(state["calls"], expected["calls"])
+        self.assertEqual(state["posts"], expected["posts"])
+        self.assertEqual(len(state["posts"]), 1)
+        self.assertEqual(instance.snapshot, pins)
+        for name in ("policy_hash", "before_revoke_policy", "mutations", "revocation", "observations", "deadline"):
+            self.assertEqual(getattr(instance, name), getattr(old, name))
+        self.assertEqual([name for kind, name in calls if kind == "client"], list(check.PHASES))
+        self.assertEqual(len([row for row in calls if row[0] == "mutation"]), 9)
+        self.assertEqual(instance.completed, list(check.PHASES[:-1]))
+        self.assertEqual(check.failure_location(instance), {"phase": "revoked_app", "stage": "client"})
+        self.assertEqual(instance.deadline, 10.0)
+        self.sleep.assert_not_called()
+
+    def test_each_revocation_failure_preserves_original_exception_and_stops_same_order(self):
+        boundaries = {"before_catalog": "revocation_before_catalog", "post": "revocation_post",
+            "clean": "revocation_post", "after_catalog": "revocation_after_catalog", "finalize": "revocation_finalize",
+            "wait_loaded": "revocation_wait_loaded", "wait_catalog": "revocation_wait_loaded",
+            "wait_health": "revocation_wait_loaded", "warm_cas": "revocation_warm_cas",
+            "warm_catalog": "revocation_warm_cas", "validate_app": "revocation_validate", "validate_rule": "revocation_validate"}
+        for boundary, stage in boundaries.items():
+            with self.subTest(boundary=boundary):
+                old, expected, _, app, rule = self.revocation_fixture(boundary)
+                with self.assertRaises(RuntimeError) as caught_old:
+                    self.original_revocation(old, app, rule)
+                self.assertIs(caught_old.exception, expected["failure"])
+                instance, state, calls, _, _ = self.revocation_fixture(boundary)
+                with self.assertRaises(RuntimeError) as caught:
+                    self.run_to_revocation(instance)
+                self.assertIs(caught.exception, state["failure"])
+                self.assertEqual(state["calls"], expected["calls"])
+                self.assertEqual(state["posts"], expected["posts"])
+                self.assertEqual(len(state["posts"]), 0 if boundary == "before_catalog" else 1)
+                self.assertEqual(check.failure_location(instance), {"phase": "revoked_app", "stage": stage})
+                self.assertNotIn(CANARY, json.dumps(check.failure_location(instance)))
+                self.assertEqual([name for kind, name in calls if kind == "client"], list(check.PHASES[:-1]))
+                self.assertEqual(instance.completed, list(check.PHASES[:-1]))
+                for name in ("policy_hash", "mutations", "revocation", "deadline"):
+                    self.assertEqual(getattr(instance, name), getattr(old, name))
+                self.sleep.assert_not_called()
+
+    def test_revocation_keeps_original_response_persistence_and_paired_status_validators(self):
+        for invalid, stage in (("post_status", "revocation_post"), ("post_revision", "revocation_post"),
+                ("after_revision", "revocation_finalize"), ("warm_policy", "revocation_warm_cas"),
+                ("paired_rule", "revocation_validate")):
+            with self.subTest(invalid=invalid):
+                old, expected, _, app, rule = self.revocation_fixture(invalid=invalid)
+                with self.assertRaises(check.CheckFailure) as caught_old:
+                    self.original_revocation(old, app, rule)
+                instance, state, calls, _, _ = self.revocation_fixture(invalid=invalid)
+                with self.assertRaises(check.CheckFailure) as caught:
+                    self.run_to_revocation(instance)
+                self.assertEqual(str(caught.exception), str(caught_old.exception))
+                self.assertEqual(state["calls"], expected["calls"])
+                self.assertEqual(state["posts"], expected["posts"])
+                self.assertEqual(len(state["posts"]), 1)
+                self.assertEqual(check.failure_location(instance), {"phase": "revoked_app", "stage": stage})
+                self.assertEqual([name for kind, name in calls if kind == "client"], list(check.PHASES[:-1]))
+                self.assertEqual(instance.completed, list(check.PHASES[:-1]))
                 self.assertEqual(instance.deadline, 10.0)
                 self.sleep.assert_not_called()
 

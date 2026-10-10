@@ -57,6 +57,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from serverware import __version__
 from serverware import operator_audit_timing as _audit_timing
+from serverware import operator_catalog_timing as _catalog_timing
 from serverware import release_authorization_profiles as release_profiles
 from serverware import credential_lease_profiles as lease_profiles
 from serverware.portal_workload_identity import (
@@ -436,26 +437,41 @@ async def _run_bounded_blocking(
     *args: Any,
     _audit_observation: _audit_timing.AuditTiming | None = None,
     _audit_phase: str | None = None,
+    _catalog_observation: _catalog_timing.CatalogTiming | None = None,
+    _catalog_phase: str | None = None,
     **kwargs: Any,
 ) -> Any:
     observed = _audit_observation if _audit_phase in {"audit", "outbox", "sign"} else None
+    catalog_observed = _catalog_observation if _catalog_phase in {"mutation", "outbox"} else None
     if observed is not None:
         _audit_timing.mark(observed, _audit_phase + "_queued")
+    if catalog_observed is not None:
+        _catalog_timing.mark(catalog_observed, _catalog_phase + "_queued")
     await slots.acquire()
     if observed is not None:
         _audit_timing.mark(observed, _audit_phase + "_slot")
+    if catalog_observed is not None:
+        _catalog_timing.mark(catalog_observed, _catalog_phase + "_slot")
 
     def observed_call() -> Any:
-        _audit_timing.mark(observed, _audit_phase + "_worker")
+        if observed is not None:
+            _audit_timing.mark(observed, _audit_phase + "_worker")
+        if catalog_observed is not None:
+            _catalog_timing.mark(catalog_observed, _catalog_phase + "_worker")
         try:
+            if catalog_observed is not None:
+                with _catalog_timing.bind(catalog_observed):
+                    return function(*args, **kwargs)
             return function(*args, **kwargs)
         finally:
             if _audit_phase == "outbox":
                 _audit_timing.mark(observed, "outbox_done")
+            if catalog_observed is not None:
+                _catalog_timing.mark(catalog_observed, _catalog_phase + "_done")
 
     try:
         worker = asyncio.create_task(
-            asyncio.to_thread(observed_call) if observed is not None
+            asyncio.to_thread(observed_call) if observed is not None or catalog_observed is not None
             else asyncio.to_thread(function, *args, **kwargs)
         )
     except BaseException:
@@ -521,6 +537,8 @@ async def csrf_middleware(request: Request, call_next):
                 db.drain_metadata_audit_outbox,
                 _audit_observation=request.scope.get("serverware.operator_audit_timing"),
                 _audit_phase="outbox",
+                _catalog_observation=request.scope.get("serverware.operator_catalog_timing"),
+                _catalog_phase="outbox",
                 limit=100,
             )
         except Exception:
@@ -1314,10 +1332,12 @@ class _SignedControlPlaneASGI:
                 else recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
                 else activation_delivery)
             _audit_timing.mark(scope.get("serverware.operator_audit_timing"), "response_ready")
+            _catalog_timing.mark(scope.get("serverware.operator_catalog_timing"), "response_ready")
             await delivery._send_response(scope, receive, send, response,
                 before_dispatch=invalid_request_nonce,
                 downstream_failed=downstream_error is not None or buffered.too_large or not buffered.complete)
             _audit_timing.mark(scope.get("serverware.operator_audit_timing"), "response_sent")
+            _catalog_timing.mark(scope.get("serverware.operator_catalog_timing"), "response_sent")
             if downstream_error is not None:
                 raise downstream_error
             audit_outcome = "complete"
@@ -1339,6 +1359,7 @@ class _SignedControlPlaneASGI:
             # Observation follows the original send/cleanup; it is not an ACK,
             # admission decision, retry trigger or condition of response success.
             _audit_timing.finish(scope.pop("serverware.operator_audit_timing", None), audit_outcome)
+            _catalog_timing.finish(scope.pop("serverware.operator_catalog_timing", None), audit_outcome)
 
 
 def _signed_control_plane_response_headers(

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from serverware import auth, config, operator_demo
+from serverware import operator_catalog_timing as _catalog_timing
 from serverware.setup_receipts import JsonLimits, parse_strict_json_object
 
 
@@ -63,12 +64,15 @@ def _admin_identity(request: Request) -> auth.AdminIdentity:
         _reject(503, "administrator authentication unavailable")
 
 
-async def _blocking(function, *args):
+async def _blocking(function, *args, observation=None):
     from serverware import app as application
 
     # The existing helper retains its slot until the worker exits, including
     # when an HTTP caller disconnects. A cancelled request never retries work.
-    return await application._run_bounded_blocking(_WORKER_SLOTS, function, *args)
+    return await application._run_bounded_blocking(
+        _WORKER_SLOTS, function, *args,
+        _catalog_observation=observation, _catalog_phase="mutation",
+    )
 
 
 def legacy_catalog_refusal() -> JSONResponse:
@@ -156,9 +160,17 @@ async def _mutate(request: Request, identity: auth.AdminIdentity, model_name: st
     from serverware import operator_catalog_schema
 
     _admit(request, mutation=True)
+    # _admit and the route's admin dependency own admission. The tracker is
+    # private until input validation succeeds and never grants authority.
+    observation = _catalog_timing.create(operation_name, operator_development=True)
+    request.scope["serverware.operator_catalog_timing"] = observation
+    _catalog_timing.mark(observation, "api_admitted")
     payload = await _payload(request, getattr(inputs, model_name), maximum)
+    _catalog_timing.mark(observation, "payload_validated")
+    _catalog_timing.activate(observation)
     try:
-        result = await _blocking(getattr(mutations, operation_name), payload, identity.user_id)
+        result = await _blocking(getattr(mutations, operation_name), payload, identity.user_id,
+            observation=observation)
     except mutations.CatalogNotFound:
         _reject(404, "operator catalog resource not found")
     except operator_catalog_schema.CatalogConflict:

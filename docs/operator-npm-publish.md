@@ -722,6 +722,15 @@ This is a source candidate pending a fresh genuine Rust build, ordinary-path
 regression results, and a complete isolated stock-client acceptance run. It is
 not a deployed repair or native pilot acceptance.
 
+The first `73479a8c` test compilation was deliberately stopped after source
+review caught an incorrect test assertion: ordinary legacy success omits a
+top-level `preview` field. The assertion now checks that absence and the actual
+`legacy_rate_limits_committed` result, alongside its existing counter checks.
+The interrupted compilation is not a test failure or pass. Its frozen source,
+logs and terminal receipt remain in `serverware-genuine-rust-response-read.LxeT9IH6`;
+the production repair is unchanged, and the corrected test requires a new
+source freeze and run.
+
 No expiry extension, retry workaround or live-deployment change has been made.
 The complete stock-client flow has not passed; no production defect is inferred.
 

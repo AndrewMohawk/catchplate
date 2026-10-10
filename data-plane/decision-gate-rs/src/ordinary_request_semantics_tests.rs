@@ -260,7 +260,8 @@ fn ordinary_capture_and_provider_account_bind_before_canonical_quota_once() {
     seed_pair(&state, &snapshot);
     let (decision, lines, count) = at(&state, &snapshot, request("GET", "/resource/approved", ""), "2026-07-14T12:00:00Z");
     assert_eq!(decision["allowed"], true, "{decision}");
-    assert_eq!(decision["preview"], false);
+    assert!(decision.get("preview").is_none());
+    assert_eq!(decision["policy_effect_results"]["legacy_rate_limits_committed"], true);
     assert_eq!(decision["credential_version"], 7);
     let expected = json!({"operation":"generic.read","selectedOwner":"approved",
         "providerAccount":sha256_prefixed(b"operator-demo\0synthetic-ordinary-account")});

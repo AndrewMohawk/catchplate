@@ -59,15 +59,22 @@ GATE_ENV_DELTA = "decision-gate-rs managed public configuration"
 GATE_DATA_DELTA = "decision-gate-rs curated data and four original read-only leaves"
 APPROVED_DELTAS = legacy.APPROVED_DELTAS | {APP_ENV_DELTA, APP_CUSTODY_DELTA, GATE_ENV_DELTA, GATE_DATA_DELTA}
 TRANSITION = (OLD_SOURCE, NEW_SOURCE, OLD_SHA, NEW_SHA, OLD_BINARY, NEW_BINARY)
-# A separate opt-in profile preserves the historical migration above. Root
-# fills these remaining literal receipt pins only after actual npm acceptance.
-# None is deliberately not a fallback to the old managed binary or layer.
-RETAINED_COMMIT = "58b1068934885e123fa63c8884523390e70b9432"
+# Separate opt-in for the rehearsed, already-managed upgrade. The Python
+# snapshot reuses the b55f3024 Rust build; the original rich equality receipt
+# is admitted below without manufacturing a new build or transformed receipt.
+RETAINED_COMMIT = "3724110941888e753bc194459e14170bc2a28916"
 RETAINED_SOURCE = legacy.ARTIFACTS + "source-" + RETAINED_COMMIT
-RETAINED_MANIFEST_SHA = "6e00a66508b740d355feba089d4e6c7f444a6bbb4e6b14dbf09e744e63c1deab"
-RETAINED_SOURCE_FILES = 4930
+RETAINED_MANIFEST_SHA = "c11de979a8b8091940fdf22538e9844acff6bc5accc2b2980f4305afb5fe9228"
+RETAINED_SOURCE_FILES = 4952
+RETAINED_COMPILER_COMMIT = "b55f3024a0a2e696a462df723dae9a8a1fdded6a"
 RETAINED_LAYER = legacy.STACK / "docker-compose.npm-publish-candidate.yml"
-RETAINED_CANDIDATE = None
+RETAINED_CANDIDATE = {
+    "binary_sha256": "82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85",
+    "layer_sha256": "d2ef222b896243a7e582ea9f84a44a6b160ebf8cca058bd7a45196393451d383",
+    "join_path": Path("/srv/catchplate-fast/tmp/serverware-catalog-timing-validation.qg5M5tPT/compiled-source-join.json"),
+    "join_sha256": "3b39eadb5829cb20c07f27f185829775ec9bf34798dca2ff08ee4e1c62f749ef",
+    "compiler_input_files": 499,
+}
 Refused, require = legacy.Refused, legacy.require
 
 
@@ -97,8 +104,8 @@ def selection(transition_mode):
     binary = legacy.ARTIFACTS + "sha256-" + pins["binary_sha256"] + "/serverware-decision-gate"
     selected.update(commit=RETAINED_COMMIT, source=RETAINED_SOURCE, binary_sha256=pins["binary_sha256"],
         binary=binary, source_manifest_sha256=RETAINED_MANIFEST_SHA, source_files=RETAINED_SOURCE_FILES,
-        join_path=pins["join_path"], join_sha256=pins["join_sha256"], compiler_source_commit=RETAINED_COMMIT,
-        compiler_input_files=pins["compiler_input_files"], new_build=True,
+        join_path=pins["join_path"], join_sha256=pins["join_sha256"], compiler_source_commit=RETAINED_COMPILER_COMMIT,
+        compiler_input_files=pins["compiler_input_files"], new_build=False,
         layers=(legacy.BASE, RETAINED_LAYER, CURATED, legacy.NOTIFICATIONS),
         pins={**legacy.PINS, RETAINED_LAYER: pins["layer_sha256"], CURATED: PINS[CURATED]},
         transition=(NEW_SOURCE, RETAINED_SOURCE, NEW_SHA, pins["binary_sha256"], NEW_BINARY, binary),
@@ -262,6 +269,58 @@ def custody_metadata(provider_custody):
         "privateFileContentsRead": False, "runtimeMutationsPerformed": False, "rolloutVerified": False}
 
 
+def _retained_compiler_join(selected):
+    """Exact original receipt contract, not a newly generated compatibility receipt."""
+    return {
+        "schema": "serverware.pythonSnapshotCompilerEquality/v1",
+        "sourceCommit": selected["commit"],
+        "sourceTree": "23e2f96a8c0e9b9fbfbc25b272b1e42ccffe2f1e",
+        "sourceManifestSha256": selected["source_manifest_sha256"],
+        "archiveSha256": "dd87e896b23be7c1698b1f242986692c22a1e32e889235870656e9a4d1e1ceb5",
+        "binaryBuildCommit": selected["compiler_source_commit"],
+        "binaryBuildTree": "47359a0e049d1d9a731568e9de05264f93bf9b6f",
+        "binarySha256": selected["binary_sha256"],
+        "buildReceiptSha256": "b4679c6b62b9e0add258fdc419b560d16be94e945025fc90298e881567e74382",
+        "compilerDepfileSha256": "63634621f9bf9c5cd273065f21175b89830de4d74a27daa603c1249f7f1ad880",
+        "cargoManifestAndLockMatched": True,
+        "compilerInputGitModesMatched": True,
+        "completeCrateFilesMatched": 745,
+        "completeGitTreeEqualityClaimed": False,
+        "exactCompilerInputFilesMatched": selected["compiler_input_files"],
+        "newRustBuildClaimed": selected["new_build"],
+        "freshRustTestsRun": 0,
+        "retainedRustTestCommit": RETAINED_COMPILER_COMMIT,
+        "retainedRustTestCount": 116,
+        "retainedRustTestReceiptSha256": "fc98d3de725e82c22faa26fb6bd71d3853b2394717cdc977f4f8e73d401fdd88",
+        "allowedSourceChanges": [
+            "docs/operator-npm-publish.md", "scripts/check_operator_npm_publish.py",
+            "scripts/test_operator_catalog_header_replacement.py",
+            "scripts/test_operator_catalog_mutation_receipts.py", "scripts/test_operator_catalog_timing.py",
+            "scripts/test_operator_npm_publish_breadcrumbs.py", "serverware/app.py",
+            "serverware/operator_catalog_api.py", "serverware/operator_catalog_mutations.py",
+            "serverware/operator_catalog_timing.py",
+        ],
+        "externalCompilerInputs": [
+            "schemas/adapters/generic.rest.schema.json", "schemas/adapters/gmail.read.v1.schema.json",
+            "schemas/adapters/gmail.v1.schema.json", "schemas/adapters/npm.metadata.v1.schema.json",
+            "schemas/adapters/npm.publish.v1.schema.json", "schemas/adapters/npm.registry.schema.json",
+            "schemas/adapters/x.v2.schema.json", "schemas/policy-bundle.v1.schema.json",
+            "schemas/policy-bundle.v2.schema.json",
+        ],
+    }
+
+
+def _validate_retained_compiler_join(join, selected):
+    expected = _retained_compiler_join(selected)
+    require(type(join) is dict and set(join) == set(expected), "retained compiler equality fields")
+    for key, value in expected.items():
+        actual = join[key]
+        # Python equality alone would admit True == 1 and False == 0.
+        require(type(actual) is type(value) and actual == value, "retained compiler equality value")
+        if type(value) is list:
+            require(all(type(item) is str for item in actual), "retained compiler equality list")
+
+
 def source_identity(source, source_manifest, *, transition_mode="migration"):
     selected = selection(transition_mode)
     require(str(source) == selected["source"], "exact rehearsed source")
@@ -273,6 +332,9 @@ def source_identity(source, source_manifest, *, transition_mode="migration"):
     _, _, old_sha, new_sha, old_binary, new_binary = selected["transition"]
     require(legacy.file_digest(old_binary) == old_sha and legacy.file_digest(new_binary) == new_sha, "paired binary bytes")
     join = archives.pinned_json(selected["join_path"], selected["join_sha256"])
+    if transition_mode == "retained":
+        _validate_retained_compiler_join(join, selected)
+        return
     require(join == {"binarySha256": selected["binary_sha256"], "binarySourceCommit": selected["compiler_source_commit"],
         "cargoManifestAndLockMatched": True, "completeGitTreeEqualityClaimed": False,
         "exactCompilerInputFilesMatched": selected["compiler_input_files"], "newRustBuildClaimed": selected["new_build"],

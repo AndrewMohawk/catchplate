@@ -6,10 +6,11 @@ permission also includes metadata GETs for that same package. This is separate
 from the metadata-only preset and the legacy `npm.registry` approval workflow;
 neither existing permission is automatically upgraded.
 
-**Verification status: focused Python, UI, fixture and genuine Rust checks have
-passed; isolated stock-client runtime acceptance remains pending.**
-This document describes the implemented contract and client recipe, not completed
-end-to-end publishing acceptance, a live deployment, or public npm registry acceptance.
+**Verification status: the complete isolated stock-client flow and two retained
+cold starts passed for app `37241109` and gate `82a99cf0`. No live rollout or
+public npm registry acceptance is claimed.** See [run twenty](#run-twenty-complete-isolated-stock-client-flow-passed)
+and the [retained-state rehearsal](operator-managed-retained-verification.md#npm-candidate-two-retained-cold-starts-passed).
+Earlier failed runs and their original evidence boundaries remain documented below.
 
 ## Operator workflow
 
@@ -46,8 +47,8 @@ creating a replacement; the UI does not merge, broaden or revoke grants for you.
 ## Stock npm client recipe
 
 The recipe targets ordinary npm **11.8.0** on Node.js **25.5.0**, without replacing
-its transport. These versions and this publishing flow still require isolated
-acceptance. Use the exact application ID, HTTPS proxy authority and CA material
+its transport. These exact versions passed the isolated seven-phase flow in
+run twenty. Use the exact application ID, HTTPS proxy authority and CA material
 shown by your deployment; the placeholders below are not a working endpoint.
 
 Save a dedicated `serverware-npm.npmrc`. Keep the `${...}` references literal in
@@ -920,7 +921,8 @@ The failed fixture was not restarted. No live demo rollout or native-pilot
 action was performed.
 
 No expiry extension, retry workaround or live-deployment change has been made.
-The complete stock-client flow has not passed; no production defect is inferred.
+At that checkpoint, the complete stock-client flow had not passed; no production
+defect was inferred.
 
 The isolated fixture must prove metadata GETs independently: npm can suppress
 preflight GET errors, so a
@@ -1026,8 +1028,8 @@ Originals are retained in `serverware-catalog-receipt-validation.koRjRmL8` and
 `740e035d094627a603038a2e932497c5c3eadd331dbbd7e50c2d291176786efd`.
 Checker-result SHA-256:
 `960fa4414339f8f41161a92f423205a80aac93817547a5a3402d8e21c7585536`.
-The complete stock-client flow still has not passed. No live rollout, real
-provider request, notification delivery or native-pilot action was performed.
+At that checkpoint, the complete stock-client flow still had not passed. No live
+rollout, real provider request, notification delivery or native-pilot action was performed.
 
 ### Revocation progress diagnostics
 
@@ -1142,3 +1144,18 @@ No lock protocol, timeout, cancellation or authority behavior changed. Further
 fairness work is optional hardening; the passing stock-client snapshot may
 proceed through the existing retained-state, paired-deployment and runtime
 verification gates without a speculative lock rewrite.
+
+### Deployment preparation, not live rollout
+
+The app `37241109` and gate `82a99cf0` were promoted to immutable artifact storage
+after checking all 4,952 source Git blobs and modes and the original rich equality
+receipt for 499 compiler inputs. The app snapshot and `b55f3024` compiler commit
+remain distinct; this is reuse of the existing Rust build, not a new build or
+fresh Rust test run. The managed deployment reviewer passed **24 tests in
+0.485 seconds**. Its read-only comparison against the current live configuration
+also passed, admitting only three proposed changes: app source, gate executable
+and the app's expected gate digest. This configuration review follows the
+[two isolated retained cold starts](operator-managed-retained-verification.md#npm-candidate-two-retained-cold-starts-passed);
+it is not a live rollout. A fresh stopped-consistent backup and the normal paired
+runtime/browser verification gates remain required. This candidate has not been
+rolled out live.

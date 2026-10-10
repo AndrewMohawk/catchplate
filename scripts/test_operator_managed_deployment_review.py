@@ -17,7 +17,51 @@ from scripts import test_operator_demo_deployment_review as historical
 CANARY = 'synthetic-private-drift-value-never-public'
 SYNTHETIC_CANDIDATE = {'binary_sha256': '7' * 64, 'layer_sha256': '8' * 64,
     'join_path': Path('/synthetic/public/compiler-join.json'), 'join_sha256': '9' * 64,
-    'compiler_input_files': 500}
+    'compiler_input_files': 499}
+
+
+def rich_compiler_join():
+    """Independent public receipt fixture; the executable digest is synthetic.
+
+    No production expected-receipt helper is used as this test's oracle. These
+    facts describe compiler-input equality, not a new build or full-tree match.
+    """
+    return {
+        'allowedSourceChanges': [
+            'docs/operator-npm-publish.md', 'scripts/check_operator_npm_publish.py',
+            'scripts/test_operator_catalog_header_replacement.py',
+            'scripts/test_operator_catalog_mutation_receipts.py',
+            'scripts/test_operator_catalog_timing.py',
+            'scripts/test_operator_npm_publish_breadcrumbs.py', 'serverware/app.py',
+            'serverware/operator_catalog_api.py', 'serverware/operator_catalog_mutations.py',
+            'serverware/operator_catalog_timing.py'],
+        'archiveSha256': 'dd87e896b23be7c1698b1f242986692c22a1e32e889235870656e9a4d1e1ceb5',
+        'binaryBuildCommit': 'b55f3024a0a2e696a462df723dae9a8a1fdded6a',
+        'binaryBuildTree': '47359a0e049d1d9a731568e9de05264f93bf9b6f',
+        'binarySha256': SYNTHETIC_CANDIDATE['binary_sha256'],
+        'buildReceiptSha256': 'b4679c6b62b9e0add258fdc419b560d16be94e945025fc90298e881567e74382',
+        'cargoManifestAndLockMatched': True,
+        'compilerDepfileSha256': '63634621f9bf9c5cd273065f21175b89830de4d74a27daa603c1249f7f1ad880',
+        'compilerInputGitModesMatched': True,
+        'completeCrateFilesMatched': 745,
+        'completeGitTreeEqualityClaimed': False,
+        'exactCompilerInputFilesMatched': 499,
+        'externalCompilerInputs': [
+            'schemas/adapters/generic.rest.schema.json', 'schemas/adapters/gmail.read.v1.schema.json',
+            'schemas/adapters/gmail.v1.schema.json', 'schemas/adapters/npm.metadata.v1.schema.json',
+            'schemas/adapters/npm.publish.v1.schema.json', 'schemas/adapters/npm.registry.schema.json',
+            'schemas/adapters/x.v2.schema.json', 'schemas/policy-bundle.v1.schema.json',
+            'schemas/policy-bundle.v2.schema.json'],
+        'freshRustTestsRun': 0,
+        'newRustBuildClaimed': False,
+        'retainedRustTestCommit': 'b55f3024a0a2e696a462df723dae9a8a1fdded6a',
+        'retainedRustTestCount': 116,
+        'retainedRustTestReceiptSha256': 'fc98d3de725e82c22faa26fb6bd71d3853b2394717cdc977f4f8e73d401fdd88',
+        'schema': 'serverware.pythonSnapshotCompilerEquality/v1',
+        'sourceCommit': '3724110941888e753bc194459e14170bc2a28916',
+        'sourceManifestSha256': 'c11de979a8b8091940fdf22538e9844acff6bc5accc2b2980f4305afb5fe9228',
+        'sourceTree': '23e2f96a8c0e9b9fbfbc25b272b1e42ccffe2f1e',
+    }
 
 
 def mount(target, source, readonly=True):
@@ -119,6 +163,28 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
         for path, expected in review.PINS.items():
             with self.subTest(layer=path.name):
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected)
+
+    def test_retained_recipe_changes_only_binary_pins_and_keeps_required_source_selection(self):
+        selected = review.selection('retained')
+        candidate = review.RETAINED_LAYER.read_bytes()
+        self.assertEqual(hashlib.sha256(candidate).hexdigest(),
+            'd2ef222b896243a7e582ea9f84a44a6b160ebf8cca058bd7a45196393451d383')
+        self.assertEqual(selected['pins'][review.RETAINED_LAYER], hashlib.sha256(candidate).hexdigest())
+        # Compare the complete executable YAML body to the already-pinned
+        # historical layer, without inventing a permissive YAML normalizer.
+        retained_body = review.MANAGED.read_bytes().split(b'services:\n', 1)[1]
+        candidate_body = candidate.split(b'services:\n', 1)[1]
+        old = b'333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0'
+        new = b'82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85'
+        self.assertEqual(retained_body.count(old), 2)
+        self.assertEqual(candidate_body.count(new), 2)
+        self.assertEqual(candidate_body, retained_body.replace(old, new))
+        for required in (
+                b'${OPERATOR_MANAGED_SOURCE:?Set the reviewed immutable managed source directory}',
+                b'${OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR:?Set the reviewed empty app-only provider custody directory}'):
+            self.assertEqual(candidate_body.count(required), 1)
+        self.assertEqual(selected['layers'], (legacy.BASE, review.RETAINED_LAYER, review.CURATED, legacy.NOTIFICATIONS))
+        self.assertNotIn(review.RETAINED_LAYER, review.selection('migration')['layers'])
 
     def setUp(self):
         stack = ExitStack()
@@ -394,7 +460,7 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
         self.assertEqual(result['approvedDifferences'], sorted(legacy.APPROVED_DELTAS))
         self.assertEqual(len(result['approvedDifferences']), 3)
         self.assertEqual(result['transitionMode'], 'retained')
-        self.assertEqual(result['sourceCommit'], '58b1068934885e123fa63c8884523390e70b9432')
+        self.assertEqual(result['sourceCommit'], '3724110941888e753bc194459e14170bc2a28916')
         self.assertEqual(result['candidateBinarySha256'], SYNTHETIC_CANDIDATE['binary_sha256'])
         for field in ('rolloutVerified', 'runtimeMutationsPerformed', 'providerCustodyMetadataVerified', 'curatedFilesystemVerified'):
             self.assertFalse(result[field])
@@ -416,10 +482,12 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
         self.assertEqual(selected['transition'], (review.NEW_SOURCE, review.RETAINED_SOURCE,
             review.NEW_SHA, SYNTHETIC_CANDIDATE['binary_sha256'], review.NEW_BINARY,
             legacy.ARTIFACTS + 'sha256-' + SYNTHETIC_CANDIDATE['binary_sha256'] + '/serverware-decision-gate'))
-        self.assertEqual(selected['source_manifest_sha256'], '6e00a66508b740d355feba089d4e6c7f444a6bbb4e6b14dbf09e744e63c1deab')
-        self.assertEqual(selected['source_files'], 4930)
-        self.assertEqual(selected['compiler_source_commit'], review.RETAINED_COMMIT)
-        self.assertIs(selected['new_build'], True)
+        self.assertEqual(selected['source_manifest_sha256'], 'c11de979a8b8091940fdf22538e9844acff6bc5accc2b2980f4305afb5fe9228')
+        self.assertEqual(selected['source_files'], 4952)
+        self.assertEqual(selected['compiler_source_commit'], 'b55f3024a0a2e696a462df723dae9a8a1fdded6a')
+        self.assertNotEqual(selected['compiler_source_commit'], selected['commit'])
+        self.assertEqual(selected['compiler_input_files'], 499)
+        self.assertIs(selected['new_build'], False)
         self.assertEqual(selected['layers'], (legacy.BASE, review.RETAINED_LAYER, review.CURATED, legacy.NOTIFICATIONS))
         self.assertEqual(set(selected['pins']), set(selected['layers']))
         self.assertEqual(selected['pins'][review.RETAINED_LAYER], SYNTHETIC_CANDIDATE['layer_sha256'])
@@ -534,15 +602,12 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
     def test_retained_public_artifact_receipt_requires_exact_source_manifest_and_compiler_join(self):
         selected = review.selection('retained')
         source, manifest = Path(review.RETAINED_SOURCE), Path('/synthetic/public/source-manifest.json')
-        joined = {'binarySha256': SYNTHETIC_CANDIDATE['binary_sha256'], 'binarySourceCommit': review.RETAINED_COMMIT,
-            'cargoManifestAndLockMatched': True, 'completeGitTreeEqualityClaimed': False,
-            'exactCompilerInputFilesMatched': SYNTHETIC_CANDIDATE['compiler_input_files'], 'newRustBuildClaimed': True,
-            'sourceCommit': review.RETAINED_COMMIT, 'sourceManifestSha256': review.RETAINED_MANIFEST_SHA}
+        joined = rich_compiler_join()
         binaries = {review.NEW_BINARY: review.NEW_SHA, selected['binary']: SYNTHETIC_CANDIDATE['binary_sha256']}
         # Only public artifact-reading seams are inert. The actual selection,
         # pin propagation and exact receipt admission run unchanged; this is
         # not evidence that those source or binary artifacts exist on disk.
-        with patch.object(review.archives, 'source_inventory', return_value=dict.fromkeys(range(4930), 'synthetic')) as inventory, \
+        with patch.object(review.archives, 'source_inventory', return_value=dict.fromkeys(range(4952), 'synthetic')) as inventory, \
                 patch.object(review.os, 'walk', return_value=[(str(source), [], ['asset'])]), \
                 patch.object(Path, 'stat', side_effect=lambda *args, **kwargs: SimpleNamespace(st_mode=0o555)), \
                 patch.object(legacy, 'file_digest', side_effect=lambda path: binaries[path]) as hashed, \
@@ -551,17 +616,56 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
             inventory.assert_called_once_with(source, manifest, review.RETAINED_MANIFEST_SHA, review.RETAINED_COMMIT)
             receipt.assert_called_once_with(SYNTHETIC_CANDIDATE['join_path'], SYNTHETIC_CANDIDATE['join_sha256'])
             self.assertEqual([call.args[0] for call in hashed.call_args_list], [review.NEW_BINARY, selected['binary']])
+            self.assertEqual(receipt.return_value, rich_compiler_join())
             controls = [{**joined, field: CANARY} for field in joined]
-            controls.extend(({**joined, 'unreviewed': True}, {key: value for key, value in joined.items() if key != 'newRustBuildClaimed'}))
+            controls.extend({key: value for key, value in joined.items() if key != missing} for missing in joined)
+            controls.extend((None, [], list(joined.items()), {**joined, 'unreviewed': CANARY}))
+            # A lossy eight-field derivative is not the original rich receipt,
+            # even when all of its overlapping facts happen to agree.
+            old_join = {key: joined[key] for key in ('binarySha256', 'cargoManifestAndLockMatched',
+                'completeGitTreeEqualityClaimed', 'exactCompilerInputFilesMatched', 'newRustBuildClaimed',
+                'sourceCommit', 'sourceManifestSha256')}
+            old_join['binarySourceCommit'] = joined['binaryBuildCommit']
+            controls.append(old_join)
+            for field, value in joined.items():
+                if type(value) is bool:
+                    controls.extend({**joined, field: changed} for changed in (int(value), not value, str(value)))
+                elif type(value) is int:
+                    controls.extend({**joined, field: changed} for changed in
+                        (float(value), bool(value), str(value), value + 1, value - 1))
+                elif type(value) is str:
+                    # Same-shaped provenance substitutions must also refuse.
+                    if field.endswith('Sha256'):
+                        controls.append({**joined, field: '6' * 64})
+                    elif field.endswith(('Commit', 'Tree')):
+                        controls.append({**joined, field: '6' * 40})
+                elif type(value) is list:
+                    controls.extend({**joined, field: changed} for changed in (
+                        tuple(value), value[:-1], value + [value[-1]], list(reversed(value)),
+                        [*value[:-1], CANARY], [*value[:-1], 1]))
+            controls.extend((
+                {**joined, 'binaryBuildCommit': joined['sourceCommit']},
+                {**joined, 'retainedRustTestCommit': joined['sourceCommit']},
+                {**joined, 'sourceCommit': joined['binaryBuildCommit']},
+                {**joined, 'binaryBuildTree': joined['sourceTree']},
+                {**joined, 'externalCompilerInputs': [*joined['externalCompilerInputs'], 'serverware/app.py']},
+                {**joined, 'allowedSourceChanges': [*joined['allowedSourceChanges'], 'data-plane/decision-gate-rs/src/main.rs']},
+                {**joined, 'schema': 'serverware.pythonSnapshotCompilerEquality/v2'},
+            ))
             for index, changed in enumerate(controls):
                 receipt.return_value = changed
-                with self.subTest(join_control=index), self.assertRaises(legacy.Refused):
-                    review.source_identity(source, manifest, transition_mode='retained')
+                with self.subTest(join_control=index):
+                    with self.assertRaises(legacy.Refused) as caught:
+                        review.source_identity(source, manifest, transition_mode='retained')
+                    self.assertNotIn(CANARY, str(caught.exception))
+                    self.assertEqual(review.error_receipt(caught.exception),
+                        {'ok': False, 'error': 'managed candidate comparison refused'})
             receipt.return_value = joined
-            inventory.return_value = {}
-            with self.assertRaises(legacy.Refused):
-                review.source_identity(source, manifest, transition_mode='retained')
-            inventory.return_value = dict.fromkeys(range(4930), 'synthetic')
+            for count in (0, 4930, 4951, 4953):
+                inventory.return_value = dict.fromkeys(range(count), 'synthetic')
+                with self.subTest(source_files=count), self.assertRaises(legacy.Refused):
+                    review.source_identity(source, manifest, transition_mode='retained')
+            inventory.return_value = dict.fromkeys(range(4952), 'synthetic')
             for binary in binaries:
                 original = binaries[binary]
                 binaries[binary] = '0' * 64
@@ -570,6 +674,29 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                 binaries[binary] = original
             with self.assertRaises(legacy.Refused):
                 review.source_identity(Path(review.NEW_SOURCE), manifest, transition_mode='retained')
+
+    def test_migration_source_identity_retains_its_original_eight_field_receipt(self):
+        selected = review.selection('migration')
+        source, manifest = Path(review.NEW_SOURCE), Path('/synthetic/public/legacy-manifest.json')
+        joined = {
+            'binarySha256': '333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0',
+            'binarySourceCommit': 'ff6d86b1a0267dcb5915e07684bdc5b216dbde7d',
+            'cargoManifestAndLockMatched': True, 'completeGitTreeEqualityClaimed': False,
+            'exactCompilerInputFilesMatched': 494, 'newRustBuildClaimed': False,
+            'sourceCommit': '9222b4c090d77aa983d3c01be34e0a2ba79f8e6c',
+            'sourceManifestSha256': 'b724e252161476dbd5106aadbb71c4229afb36e47c1528e4678e166333f7a3da'}
+        binaries = {review.OLD_BINARY: review.OLD_SHA, review.NEW_BINARY: review.NEW_SHA}
+        with patch.object(review.archives, 'source_inventory', return_value=dict.fromkeys(range(4910), 'synthetic')), \
+                patch.object(review.os, 'walk', return_value=[(str(source), [], ['asset'])]), \
+                patch.object(Path, 'stat', return_value=SimpleNamespace(st_mode=0o555)), \
+                patch.object(legacy, 'file_digest', side_effect=lambda path: binaries[path]), \
+                patch.object(review.archives, 'pinned_json', return_value=joined) as receipt, \
+                patch.object(review, '_validate_retained_compiler_join', side_effect=AssertionError('retained branch in migration')):
+            review.source_identity(source, manifest)
+            receipt.assert_called_once_with(selected['join_path'], selected['join_sha256'])
+            receipt.return_value = rich_compiler_join()
+            with self.assertRaises(legacy.Refused):
+                review.source_identity(source, manifest)
 
 
 if __name__ == '__main__':

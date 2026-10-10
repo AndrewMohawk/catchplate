@@ -1111,3 +1111,34 @@ or native-pilot action occurred. The next latency investigation should use a
 controlled same-inode shared-reader/exclusive-writer concurrency test, preserving
 the existing acquisition deadlines and proving cleanup after readers exit,
 before selecting any publication-fairness change.
+
+### Controlled publication-lock contention
+
+`scripts/test_operator_publication_contention.py` passed **three groups in
+21.114 seconds** in the pinned backend image, with no network, read-only source,
+private temporary storage and bounded CPU, memory and process resources. Two
+child processes independently open the real publication inode; the writer uses
+the unchanged Python `operator_publication.exclusive()` implementation. Pipe
+barriers follow actual failed exclusive-lock attempts, not simulated lock
+results or scheduling sleeps.
+
+The checks demonstrate that late shared readers can enter while an exclusive
+writer waits, that continuously overlapping short readers can exhaust its
+original five-second acquisition budget, and that reader exceptions and process
+exit release their separate lock ownership. After readers stop, a new independent
+writer succeeds; the timed-out operation is not retried or rearmed. No SQLite
+database is created and no provider or native operation runs.
+
+This is an adversarial Linux lock schedule, **not** actual Rust/HTTP traffic or
+proof of the cause of runs eighteen and nineteen. It does not justify changing
+the production coordination protocol on its own. The generic acceptance checker
+allows at most four seconds per HTTP request; the browser allows thirty seconds,
+while publication acquisition retains its five-second limit. The product
+requirement is revocation enforcement after the new policy is loaded, including
+warmed credentials—not a separately specified four-second revocation SLA.
+Earlier fixture failures remain failures under their original limits.
+
+No lock protocol, timeout, cancellation or authority behavior changed. Further
+fairness work is optional hardening; the passing stock-client snapshot may
+proceed through the existing retained-state, paired-deployment and runtime
+verification gates without a speculative lock rewrite.

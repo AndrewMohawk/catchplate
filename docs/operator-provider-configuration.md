@@ -76,6 +76,28 @@ temporary test containers were removed, not evidence or live services.
 No managed activation, writable settings API, real Google request, live upgrade
 or native-pilot acceptance was exercised by these tests.
 
+### Managed v2 app-startup checkpoint
+
+The internal `review_configuration` / `prepare_configuration` path now uses a
+separate app-only provider key and an exact retained operation selector. It does
+not adopt the earlier v1 foundation. Only explicit first Prepare can initialize
+that key; cold readers never regenerate it. A provisional profile is usable only
+inside the real startup transaction, and normal serving requires the exact
+activation to be committed and re-read. Cancellation retains history while
+clearing only its matching selector. No environment file or variable is rewritten.
+
+Eight connected groups passed on 2026-10-10 in 202.427 seconds in a network-none
+container, including fresh preparation, activation, second restart, commit
+gating, cancellation/reprepare, stale configuration and missing custody refusal,
+rollback, and actor-owned recovery after a lost response. The independent key
+module's 21 focused checks also passed. Evidence is retained under
+`serverware-operator-workspace-evidence/google-managed-cold.sZ8pumYD` and
+`serverware-operator-workspace-evidence/curated-boundary.IFPloRyU`.
+This checkpoint is the app-side internal consumer only: paired public gate
+configuration, later upstream transitions, observed runtime readiness and the
+writable API/UI still need their own connected acceptance. No live Google
+configuration, real provider contact or native action was performed.
+
 ## Keep the objects distinct
 
 | Object | Operator action | What it does not imply |

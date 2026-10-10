@@ -65,6 +65,7 @@ class _Admission:
 
 
 _admission: _Admission | None = None
+_managed_seen = False
 
 
 def _refuse() -> None:
@@ -73,10 +74,25 @@ def _refuse() -> None:
 
 def selected() -> bool:
     """Only an unconfigured capability is disabled; invalid/drifted input fails."""
+    if _managed_mode():
+        from serverware import operator_google_managed_config
+        return operator_google_managed_config.selected()
     value = os.getenv(_SELECTION, "")
     if value not in {"", PROFILE} or (_admission is not None and value != PROFILE):
         _refuse()
     return value == PROFILE
+
+
+def _managed_mode() -> bool:
+    global _managed_seen
+    value = os.getenv("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED", "0")
+    if value not in {"0", "1"} or (_managed_seen and value != "1"):
+        _refuse()
+    if value == "1":
+        if _admission is not None:
+            _refuse()
+        _managed_seen = True
+    return value == "1"
 
 
 def _environment() -> tuple[tuple[str, str], ...]:
@@ -99,11 +115,8 @@ def _record(client_id: str, redirect_uri: str) -> dict:
     }
 
 
-def _raw_profile() -> tuple[Profile, Path]:
-    # This runs before config's existing client-secret reader. In particular,
-    # selecting a native/enrolled owner must not read this development secret.
-    if not selected():
-        _refuse()
+def _raw_development_directory(*, managed: bool = False) -> Path:
+    """Configuration-independent ownership guard shared by both cold profiles."""
     expected = {
         "SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_RELEASE_CHANNEL": "dev",
         "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
@@ -111,6 +124,15 @@ def _raw_profile() -> tuple[Profile, Path]:
         "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
         "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
     }
+    if managed:
+        expected.update(SERVERWARE_DEV_AUTHENTICATOR="0", SERVERWARE_DEV_DEMO_SEED="0",
+            SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED="1")
+        if (os.getenv("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED") != "1"
+                or _SELECTION in os.environ
+                or any(key.startswith("SERVERWARE_GOOGLE_") for key in os.environ)
+                or os.getenv("SERVERWARE_TEE_PLATFORM", "none-dev") != "none-dev"
+                or os.getenv("SERVERWARE_TEE_QUOTE_PROVIDER", "dev-signed-quote") != "dev-signed-quote"):
+            _refuse()
     if (any(os.getenv(key) != value for key, value in expected.items())
             or os.getenv("SERVERWARE_PRODUCTION_IMAGE", "0") != "0"
             or os.getenv("SERVERWARE_DEVELOPMENT_SANDBOX", "0") != "0"):
@@ -148,6 +170,15 @@ def _raw_profile() -> tuple[Profile, Path]:
     if (any(os.getenv("SERVERWARE_" + key, "0") != "0" for key in _PROTECTED_FLAGS)
             or os.getenv("SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES", "")):
         _refuse()
+    return directory
+
+
+def _raw_profile() -> tuple[Profile, Path]:
+    # This runs before config's existing client-secret reader. In particular,
+    # selecting a native/enrolled owner must not read this development secret.
+    if not selected():
+        _refuse()
+    _raw_development_directory()
     client_id = os.getenv("SERVERWARE_GOOGLE_OAUTH_CLIENT_ID", "")
     if _CLIENT_ID.fullmatch(client_id) is None:
         _refuse()
@@ -233,8 +264,12 @@ def _check_pin(admission: _Admission) -> None:
         os.close(current)
 
 
-def load_configuration(*, production_image: bool, release_channel: str) -> tuple[str, str, Path, str]:
+def load_configuration(*, production_image: bool, release_channel: str) -> tuple[str, str, Path | None, str]:
     """Config-import preflight; never used by the unchanged disabled profile."""
+    if _managed_mode():
+        from serverware import operator_google_managed_config
+        return operator_google_managed_config.load_configuration(
+            production_image=production_image, release_channel=release_channel)
     global _admission
     descriptor = None
     try:
@@ -263,6 +298,9 @@ def load_configuration(*, production_image: bool, release_channel: str) -> tuple
 
 def validate_imported_configuration(config) -> Profile:
     """No database/owner side effects; usable before the operator marker is pinned."""
+    if _managed_mode():
+        from serverware import operator_google_managed_config
+        return operator_google_managed_config.validate_imported_configuration(config)
     try:
         value = _admission
         if value is None:
@@ -291,6 +329,9 @@ def validate_imported_configuration(config) -> Profile:
 
 def require_profile() -> Profile:
     """Return the immutable admitted capability, including on an existing DB tx."""
+    if _managed_mode():
+        from serverware import operator_google_managed_config
+        return operator_google_managed_config.require_profile()
     if not selected() or _admission is None:
         _refuse()
     from serverware import config, operator_demo, oauth_application_owner

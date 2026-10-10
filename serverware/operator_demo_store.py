@@ -185,27 +185,30 @@ def initialize() -> None:
                 expires_at_epoch_ms INTEGER NOT NULL, PRIMARY KEY(recipient_key_id,nonce_sha256));
         """)
         conn.execute("BEGIN IMMEDIATE")
-        settings = operator_demo.settings()
-        pinned = json.dumps({key: settings[key] for key in ("allowed_upstreams", "fixture_cidrs")}, sort_keys=True)
-        previous = conn.execute("SELECT settings_json FROM operator_demo_settings WHERE singleton=1").fetchone()
-        from serverware import operator_google_setup, operator_upstream_setup
-        upstream_applied = operator_upstream_setup.startup(conn, previous[0] if previous else None, pinned,
-            retained_authority=retained_authority)
-        setup_applied = upstream_applied or operator_google_setup.startup(conn, previous[0] if previous else None, pinned,
-            retained_authority=retained_authority)
-        if previous is None:
-            conn.execute("INSERT INTO operator_demo_settings VALUES(1,?)", (pinned,))
-        elif previous[0] != pinned and not setup_applied:
-            raise RuntimeError("operator demo deployment allowlist changed; separate data required")
-        if conn.execute("SELECT 1 FROM operator_demo_policy").fetchone() is None:
-            initial_hash = "sha256:" + hashlib.sha256(secrets.token_bytes(32)).hexdigest()
-            raw, digest = _signed([], 1, initial_hash)
-            conn.execute("INSERT INTO operator_demo_policy VALUES(1,1,?,?,?,?)",
-                (digest, raw, initial_hash, db.iso_now()))
-        from serverware import operator_catalog_schema
-        if not setup_applied:
-            operator_catalog_schema.initialize(conn)
-        conn.commit()
+        from serverware import operator_google_managed_config
+        with operator_google_managed_config.startup_transaction(conn):
+            settings = operator_demo.settings()
+            pinned = json.dumps({key: settings[key] for key in ("allowed_upstreams", "fixture_cidrs")}, sort_keys=True)
+            previous = conn.execute("SELECT settings_json FROM operator_demo_settings WHERE singleton=1").fetchone()
+            from serverware import operator_google_setup, operator_upstream_setup
+            upstream_applied = operator_upstream_setup.startup(conn, previous[0] if previous else None, pinned,
+                retained_authority=retained_authority)
+            setup_applied = upstream_applied or operator_google_setup.startup(conn, previous[0] if previous else None, pinned,
+                retained_authority=retained_authority)
+            if previous is None:
+                conn.execute("INSERT INTO operator_demo_settings VALUES(1,?)", (pinned,))
+            elif previous[0] != pinned and not setup_applied:
+                raise RuntimeError("operator demo deployment allowlist changed; separate data required")
+            if conn.execute("SELECT 1 FROM operator_demo_policy").fetchone() is None:
+                initial_hash = "sha256:" + hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+                raw, digest = _signed([], 1, initial_hash)
+                conn.execute("INSERT INTO operator_demo_policy VALUES(1,1,?,?,?,?)",
+                    (digest, raw, initial_hash, db.iso_now()))
+            from serverware import operator_catalog_schema
+            if not setup_applied:
+                operator_catalog_schema.initialize(conn)
+            conn.commit()
+            operator_google_managed_config.committed(conn)
         materialize()
 
 

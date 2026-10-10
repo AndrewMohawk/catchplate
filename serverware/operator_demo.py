@@ -98,6 +98,28 @@ def active() -> bool:
     return True
 
 
+def _destinations(raw, fixture) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Validate both raw deployment inputs and retained managed settings."""
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 16:
+        raise RuntimeError("operator demo requires 1-16 explicitly allowed HTTPS origins")
+    upstreams = tuple(origin(item)[0] for item in raw)
+    if len(set(upstreams)) != len(upstreams):
+        raise RuntimeError("operator demo upstream origins must be unique")
+    if not isinstance(fixture, list) or len(fixture) > 1:
+        raise RuntimeError("operator demo fixture requires at most one pinned host CIDR")
+    if bool(fixture) != ("https://demo-upstream:8443" in upstreams):
+        raise RuntimeError("operator demo fixture requires its explicit pinned host CIDR")
+    for item in fixture:
+        network = ipaddress.ip_network(item, strict=True)
+        address = network.network_address
+        private = tuple(ipaddress.ip_network(cidr) for cidr in (
+            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "fc00::/7", "::1/128"))
+        if (str(network) != item or network.prefixlen != network.max_prefixlen
+                or not any(address.version == candidate.version and address in candidate for candidate in private)):
+            raise RuntimeError("operator demo fixture CIDR must pin one private or loopback host")
+    return upstreams, tuple(fixture)
+
+
 def activate() -> None:
     global _pid, _configuration, _directory, _identity, _marker_identity, _upstreams, _fixture_cidrs, _proxy_url
     if _pid is not None:
@@ -146,24 +168,14 @@ def activate() -> None:
                             "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH", "SERVERWARE_SCHEMA_DIR"}):
             raise RuntimeError("operator demo refuses provider, external key or native authority configuration")
     raw = json.loads(os.environ.get("SERVERWARE_OPERATOR_DEMO_UPSTREAMS", "null"))
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 16:
-        raise RuntimeError("operator demo requires 1-16 explicitly allowed HTTPS origins")
-    upstreams = tuple(origin(item)[0] for item in raw)
-    if len(set(upstreams)) != len(upstreams):
-        raise RuntimeError("operator demo upstream origins must be unique")
     fixture = json.loads(os.getenv("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", "[]"))
-    if not isinstance(fixture, list) or len(fixture) > 1:
-        raise RuntimeError("operator demo fixture requires at most one pinned host CIDR")
-    if bool(fixture) != ("https://demo-upstream:8443" in upstreams):
-        raise RuntimeError("operator demo fixture requires its explicit pinned host CIDR")
-    for item in fixture:
-        network = ipaddress.ip_network(item, strict=True)
-        address = network.network_address
-        private = tuple(ipaddress.ip_network(cidr) for cidr in (
-            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "fc00::/7", "::1/128"))
-        if (str(network) != item or network.prefixlen != network.max_prefixlen
-                or not any(address.version == candidate.version and address in candidate for candidate in private)):
-            raise RuntimeError("operator demo fixture CIDR must pin one private or loopback host")
+    upstreams, fixture_cidrs = _destinations(raw, fixture)
+    from serverware import operator_google_managed_config
+    effective = operator_google_managed_config.effective_settings({
+        "allowed_upstreams": list(upstreams), "fixture_cidrs": list(fixture_cidrs)})
+    if type(effective) is not dict or set(effective) != {"allowed_upstreams", "fixture_cidrs"}:
+        raise RuntimeError("operator demo managed settings differ")
+    upstreams, fixture_cidrs = _destinations(effective["allowed_upstreams"], effective["fixture_cidrs"])
     proxy = os.environ.get("SERVERWARE_OPERATOR_DEMO_PROXY_URL", "")
     proxy_origin, _ = origin(proxy)
     from serverware import config
@@ -203,7 +215,7 @@ def activate() -> None:
         _marker_identity = identity
     finally:
         os.close(fd)
-    _directory, _upstreams, _fixture_cidrs, _proxy_url = directory, upstreams, tuple(fixture), proxy_origin
+    _directory, _upstreams, _fixture_cidrs, _proxy_url = directory, upstreams, fixture_cidrs, proxy_origin
     _configuration, _pid = _environment(), os.getpid()
 
 

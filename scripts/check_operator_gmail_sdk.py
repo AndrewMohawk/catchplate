@@ -53,6 +53,7 @@ DENIED = "data_plane.connect.denied"
 LEASE = "data_plane.credential_lease.issued"
 LEASE_REJECT = "data_plane.credential_lease.rejected"
 RELOAD = "data_plane.policy.reloaded"
+RELOAD_FAILED = "data_plane.policy.reload_failed"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 ROW_KEYS = {"ordinal", "case", "method", "path", "rawQuery", "hostMatches", "headersMatch", "framingMatch",
@@ -189,6 +190,76 @@ def request_commitments(row, *, scope, credential_id, generation):
     return digest(canonical), digest({k: v for k, v in canonical.items() if k not in {"v", "client_ip"}})
 
 
+def _audit_ordered(events, pairs):
+    def when(item):
+        value = item.get("created_at")
+        require(type(value) is str and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:\+00:00|Z)", value),
+            "Gmail SDK publication audit timestamp differs")
+        try:
+            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise CheckFailure("Gmail SDK publication audit timestamp differs") from None
+        require(result.tzinfo == timezone.utc, "Gmail SDK publication audit clock differs")
+        return result
+
+    # /api/audit omits SQLite rowid and can be newest-first. The verified
+    # predecessor hashes prove durable order independently of presentation.
+    by_hash = {item["event_hash"]: item for item in events}
+    require(len(by_hash) == len(events), "Gmail SDK publication audit hashes collide")
+    def precedes(earlier, later):
+        if not when(earlier) < when(later):
+            return False
+        current = later
+        for _ in events:
+            previous = current.get("prev_event_hash")
+            if previous == earlier["event_hash"]:
+                return True
+            if type(previous) is not str or previous not in by_hash:
+                return False
+            current = by_hash[previous]
+        return False
+    return all(precedes(earlier, later) for earlier, later in pairs)
+
+
+def grant_publication_reload_failures(events, scope, credential_id, *, grant):
+    """One known failed dev-attestation observation before the saved grant loads."""
+    failures = [row for row in events if row["event_type"] == RELOAD_FAILED]
+    require(len(failures) <= 1, "Gmail SDK repeated grant publication reload failure")
+    if not failures:
+        return 0
+    require(type(grant) is dict and set(grant) == {
+        "rule_id", "application_id", "revision", "policy_sequence", "previous_policy_hash"}
+        and all(type(grant[k]) is str and UUID.fullmatch(grant[k]) for k in ("rule_id", "application_id"))
+        and all(type(grant[k]) is int and grant[k] > 0 for k in ("revision", "policy_sequence"))
+        and type(grant["previous_policy_hash"]) is str and SHA256.fullmatch(grant["previous_policy_hash"])
+        and grant["previous_policy_hash"] != scope[2], "Gmail SDK reload failure lacks explicit grant")
+    row = failures[0]
+    require(type(row["id"]) is str and SHA256.fullmatch(row["id"])
+        and row["event"] == {"component": "serverware-decision-gate-rs", "active_policy_hash": grant["previous_policy_hash"],
+            "error": "policy_reload_failed",
+            "error_sha256": digest(b"control-plane attestation missing policy_signing_key_id")},
+        "Gmail SDK reload failure is not the exact unavailable dev-policy observation")
+    created = [r for r in events if r["event_type"] == "operator_catalog.access_rule.created"]
+    reloaded = [r for r in events if r["event_type"] == RELOAD and r["event"].get("policy_hash") == scope[2]]
+    require(len(created) == len(reloaded) == 1, "Gmail SDK reload failure lacks one saved grant and reload")
+    before, after = created[0], reloaded[0]
+    require(type(before["id"]) is str and UUID.fullmatch(before["id"])
+        and type(after["id"]) is str and SHA256.fullmatch(after["id"])
+        and all(before["event"].get(k) == v for k, v in {"resource_type": "access_rule",
+            "resource_id": grant["rule_id"], "application_id": grant["application_id"], "credential_id": credential_id,
+            "revision": grant["revision"], "policy_sequence": grant["policy_sequence"], "policy_hash": scope[2]}.items())
+        and all(type(before["event"].get(k)) is int for k in ("revision", "policy_sequence"))
+        and after["event"].get("previous_policy_hash") == grant["previous_policy_hash"]
+        and type(after["event"].get("policy_sequence")) is int
+        and after["event"]["policy_sequence"] == grant["policy_sequence"],
+        "Gmail SDK reload failure is outside the exact saved grant transition")
+    releases = [r for r in events if r["event_type"] in {START, RELEASE}]
+    require(Counter(r["event_type"] for r in releases) == Counter({START: 8, RELEASE: 8})
+        and _audit_ordered(events, [(before, row), (row, after), *((after, r) for r in releases)]),
+        "Gmail SDK reload failure is not before reads and between grant and reload")
+    return 1
+
+
 def revocation_publication_rejections(events, rejections, scope, credential_id, *, expected_binary_sha256, revocation):
     """One observed fail-closed metadata race, not a general renewal allowance."""
     require(len(rejections) <= 1, "Gmail SDK repeated revocation publication rejection")
@@ -238,34 +309,8 @@ def revocation_publication_rejections(events, rejections, scope, credential_id, 
         and after["event"]["policy_sequence"] == revocation["policy_sequence"],
         "Gmail SDK publication rejection is outside the exact rule and policy transition")
 
-    def when(item):
-        value = item.get("created_at")
-        require(type(value) is str and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:\+00:00|Z)", value),
-            "Gmail SDK publication audit timestamp differs")
-        try:
-            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            raise CheckFailure("Gmail SDK publication audit timestamp differs") from None
-        require(result.tzinfo == timezone.utc, "Gmail SDK publication audit clock differs")
-        return result
-
-    # /api/audit omits SQLite rowid and can be newest-first. The verified
-    # predecessor hashes prove durable order independently of presentation.
-    by_hash = {item["event_hash"]: item for item in events}
-    require(len(by_hash) == len(events), "Gmail SDK publication audit hashes collide")
-    def precedes(earlier, later):
-        current = later
-        for _ in events:
-            previous = current.get("prev_event_hash")
-            if previous == earlier["event_hash"]:
-                return True
-            if type(previous) is not str or previous not in by_hash:
-                return False
-            current = by_hash[previous]
-        return False
-    require(when(before) < when(row) < when(after) and precedes(before, row) and precedes(row, after)
-        and all(when(item) < when(before) and precedes(item, before)
-            for item in events if item["event_type"] in {START, RELEASE}),
+    require(_audit_ordered(events, [(before, row), (row, after),
+        *((item, before) for item in events if item["event_type"] in {START, RELEASE})]),
         "Gmail SDK publication rejection is not after reads and between revoke and reload")
     return 1
 
@@ -634,6 +679,9 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             expected_binary_sha256=self.args.expected_binary_sha256,
             revocation={"rule_id": rule["id"], "application_id": app["id"], "revision": revoked["revision"],
                 "policy_sequence": revoked["policy"]["sequence"], "policy_hash": revoked["policy"]["policy_hash"]})
+        grant_failures = grant_publication_reload_failures(events, self.scope, credential["id"],
+            grant={"rule_id": rule["id"], "application_id": app["id"], "revision": pinned["revision"],
+                "policy_sequence": pinned["policy"]["sequence"], "previous_policy_hash": initial["policy"]["policy_hash"]})
         cutoff = features.audit_cutoff(events)
         require(all(cutoff.get(k) == v for prior in [baseline, *self.cutoffs] for k, v in prior.items()),
             "Gmail SDK audit history changed")
@@ -651,7 +699,7 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             "originalAccessExpiresAtEpochMs": expiry, "refreshCompletedAtExpiry": self.provider_observations[3]["refreshCompletedAtExpiry"],
             "completed": self.completed, "providerObservations": self.provider_observations, "requests": self.wire_commitments,
             "negativeControls": self.denials, "durableAuditEventIds": audit_ids, "auditAttemptIds": attempts,
-            "namedAuditInventory": dict(sorted(named.items())), **generations}
+            "namedAuditInventory": dict(sorted(named.items())), "grantPublicationReloadFailures": grant_failures, **generations}
         validate_success_result(result); serialized = encoded(result); self.clean(serialized)
         require(all(value.encode() not in serialized for value in self.transient_values), "Gmail SDK OAuth flow material escaped")
         return result
@@ -665,7 +713,8 @@ def validate_success_result(value):
         "exampleSourceSha256", "credentialId", "applicationIds", "ruleId", "policyHash", "revokedPolicyHash", "policyRevisions",
         "originalAccessExpiresAtEpochMs", "refreshCompletedAtExpiry", "completed", "providerObservations", "requests", "negativeControls",
         "durableAuditEventIds", "auditAttemptIds", "namedAuditInventory", "initialCredentialVersion", "refreshedCredentialVersion",
-        "canonicalRequestVersion", "generationAuditEventIds", "reconciliationRejections", "revocationPublicationRejections"}
+        "canonicalRequestVersion", "generationAuditEventIds", "reconciliationRejections", "revocationPublicationRejections",
+        "grantPublicationReloadFailures"}
     require(type(value) is dict and set(value) == fields and value["schema"] == SCHEMA
         and all(value[k] is True for k in true_flags) and all(value[k] is False for k in false_flags), "Gmail SDK result shape differs")
     for key, expected in {"providerAttempts": 8, "automaticRefreshes": 1, "initialCredentialVersion": 1,
@@ -675,6 +724,8 @@ def validate_success_result(value):
         "Gmail SDK no-envelope reconciliation count differs")
     require(type(value["revocationPublicationRejections"]) is int and value["revocationPublicationRejections"] in (0, 1),
         "Gmail SDK no-envelope revocation publication count differs")
+    require(type(value["grantPublicationReloadFailures"]) is int and value["grantPublicationReloadFailures"] in (0, 1),
+        "Gmail SDK grant publication reload failure count differs")
     require(all(type(value[k]) is str and SHA256.fullmatch(value[k]) for k in ("dataPlaneBinaryDigest", "policyHash", "revokedPolicyHash"))
         and value["policyHash"] != value["revokedPolicyHash"] and type(value["goExampleSha256"]) is str and HEX.fullmatch(value["goExampleSha256"])
         and type(value["exampleSourceSha256"]) is dict and set(value["exampleSourceSha256"]) == set(SOURCE_FILES)
@@ -752,6 +803,8 @@ def validate_success_result(value):
     rejected_count = value["reconciliationRejections"] + value["revocationPublicationRejections"]
     if rejected_count:
         expected[LEASE_REJECT] = rejected_count
+    if value["grantPublicationReloadFailures"]:
+        expected[RELOAD_FAILED] = 1
     require(type(inventory) is dict and set(inventory) == set(expected) | {LEASE}
         and all(type(v) is int for v in inventory.values()) and all(inventory[k] == v for k, v in expected.items())
         and 1 <= inventory[LEASE] <= 128, "Gmail SDK named audit inventory differs")

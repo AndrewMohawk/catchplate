@@ -30,7 +30,9 @@ Rust build succeeded and all 12 Alchemy Rust groups passed. Browser checks passe
 16 Alchemy groups and 13 X regression groups with unchanged source; those checks
 use synthetic intercepted APIs, not the real backend. Actual SDK-through-proxy/TLS
 acceptance has not passed; real-provider, native and deployment acceptance remain
-unverified.
+unverified. The [Alchemy verification record](operator-alchemy-verification.md)
+retains both failed isolated runs, the completed SDK/control checks, and the
+second run's pre-dispatch refusal without treating partial progress as a pass.
 
 ## Ship X username reads first
 

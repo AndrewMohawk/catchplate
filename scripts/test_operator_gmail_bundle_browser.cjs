@@ -121,6 +121,9 @@ async function refresh(page, state) {
 async function commandReady(page) { await page.waitForFunction(() => !document.querySelector('#copy-command').disabled); }
 async function bundleForm(page) {
   await pair(page); assert.equal(await page.locator('#connect-operation').inputValue(), BUNDLE);
+  // These retained controls exercise custom HTTP insertion/replacement, not
+  // the official SDK's separately gated Basic-login and fixed-dummy contract.
+  await page.locator('#connect-gmail-client').selectOption('custom');
   for (const id of ['connect-path', 'connect-response-mode', 'connect-query-keys', 'connect-request-body-mode']) {
     assert(await page.locator('#' + id).isHidden()); assert(await page.locator('#' + id).isDisabled());
   }
@@ -197,6 +200,7 @@ const tests = [
     assert.equal(await page.locator('#connect-operation').inputValue(), BUNDLE); assert(await page.locator('#connect-path').isHidden());
     assert(await page.locator('#connect-response-mode').isDisabled());
     const token = await page.locator('#client-token').inputValue(); assert(token.startsWith('synthetic_application_'));
+    await page.locator('#connect-gmail-client').selectOption('custom');
     await page.locator('#connect-credential-input').selectOption('replace_exact'); await page.locator('#connect-placeholder').fill(DUMMY);
     await review(page); await grant(page); await commandReady(page);
     assert.equal(observed.posts[0].placeholder, DUMMY); assert.equal(state.posts.length, 1); assert.equal(state.posts[0].name, 'applications');

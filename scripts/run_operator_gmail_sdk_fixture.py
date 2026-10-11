@@ -2,7 +2,8 @@
 """One bounded, isolated official-Go-Gmail-SDK acceptance, never a deployment.
 
 Requires a clean exact source checkout and prebuilt, explicitly pinned gate and
-Go example. No build/download/retry, Node runtime, or Python SDK overlay. Each
+Go example. No build/download/retry or Python SDK overlay. The opt-in browser
+uses cached host Chromium and an exact checker-container stdio bridge. Each
 invocation claims a new private root; failed state and bounded logs are retained.
 """
 from __future__ import annotations
@@ -26,6 +27,11 @@ from scripts.run_operator_x_examples_fixture import Run, absolute_path, sha256, 
 SOURCE_FILE = Path(__file__).resolve()
 SOURCE_SCRIPT = "scripts/run_operator_gmail_sdk_fixture.py"
 WORK_SECONDS, CLEANUP_SECONDS = 390, 60
+NODE = Path("/home/catchplate/.nvm/versions/node/v25.5.0/bin/node")
+NODE_SHA256 = "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d"
+CHROME = Path("/home/catchplate/.cache/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell")
+CHROME_SHA256 = "27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c317c"
+BROWSER_DRIVER = "scripts/check_operator_gmail_sdk_browser.cjs"
 
 
 class GmailSdkRun(Run):
@@ -34,6 +40,42 @@ class GmailSdkRun(Run):
     def __init__(self, args):
         super().__init__(args)
         self.deadline = None
+        self.browser_unit = None
+        self.browser_unit_armed = False
+
+    def browser_units(self, label):
+        raw = self.command(label, ["systemctl", "--user", "list-units", "--all", "--plain",
+            "--no-legend", "--no-pager", self.browser_unit], 3)
+        return bool(raw.strip())
+
+    def browser_preflight(self, recipe):
+        for file, pin in ((NODE, NODE_SHA256), (CHROME, CHROME_SHA256)):
+            require(file.is_file() and not file.is_symlink() and recipe.base.digest(file) == pin)
+        self.browser_unit = self.project + "-browser.service"
+        require(re.fullmatch(r"serverware-gmail-sdk-private-[0-9a-f]{12}-browser\.service", self.browser_unit))
+        require(not self.browser_units("browser-unit-before"), "browser unit already exists")
+        require(not self.command("browser-unit-files-before", ["systemctl", "--user", "list-unit-files",
+            "--no-legend", "--no-pager", self.browser_unit], 3).strip(), "browser unit file already exists")
+        self.save("browser-inputs.json", {"unit": self.browser_unit, "nodeSha256": NODE_SHA256,
+            "chromiumSha256": CHROME_SHA256, "driverSha256": recipe.base.digest(self.args.source / BROWSER_DRIVER),
+            "hostRendering": True, "containerStdioTransport": True, "runtimeMaxSeconds": 185,
+            "timeoutStopSeconds": 5, "killMode": "control-group", "restart": "no"})
+
+    def browser_cleanup(self):
+        if not self.browser_unit_armed:
+            return True
+        present = self.browser_units("browser-unit-cleanup-before")
+        if present:
+            self.command("browser-unit-stop", ["systemctl", "--user", "stop", self.browser_unit], 8)
+        present = self.browser_units("browser-unit-cleanup-after")
+        if present:
+            raw = self.command("browser-unit-terminal", ["systemctl", "--user", "show", self.browser_unit,
+                "--property=ActiveState,SubState,ControlGroup,MainPID"], 3).decode()
+            fields = dict(line.split("=", 1) for line in raw.splitlines())
+            require(fields.get("ActiveState") in {"inactive", "failed"}
+                and fields.get("MainPID") == "0" and not fields.get("ControlGroup"), "browser descendants remain")
+        self.save("browser-cleanup.json", {"unit": self.browser_unit, "clean": True, "collected": not present})
+        return True
 
     def command(self, name, arguments, seconds=30):
         if self.deadline is not None:
@@ -46,6 +88,10 @@ class GmailSdkRun(Run):
     def cleanup(self):
         self.deadline = time.monotonic() + CLEANUP_SECONDS
         errors = []
+        try:
+            self.browser_cleanup()
+        except Exception:
+            errors.append("browser-unit")
         try:
             rows = self.container_rows("cleanup-before")
         except Exception:
@@ -74,7 +120,7 @@ class GmailSdkRun(Run):
         except Exception:
             clean = False
             errors.append("verification")
-        return clean, errors
+        return clean and "browser-unit" not in errors, errors
 
     def wait_edge_ready(self, edge):
         """Observe this existing process; never restart it or extend its clock."""
@@ -110,6 +156,9 @@ class GmailSdkRun(Run):
         for row in rows:
             name = row["Config"]["Labels"]["com.docker.compose.service"]
             service, host = config["services"][name], row["HostConfig"]
+            if name == "check" and service.get("stdin_open"):
+                require(row["Config"].get("OpenStdin") is True and row["Config"].get("Tty") is False,
+                    "browser checker stdio differs")
             require(row["RestartCount"] == 0 and not row["State"]["OOMKilled"]
                 and not host["Privileged"] and host["ReadonlyRootfs"] and not host["PortBindings"]
                 and row["Image"] == image_ids[service["image"]]
@@ -165,8 +214,11 @@ class GmailSdkRun(Run):
                 require(path.is_file() and not path.is_symlink() and path.stat().st_mode & 4
                     and recipe.base.digest(path) == expected)
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root, args.go,
-                expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256)
+                expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
+                browser_permission=getattr(args, "browser_permission", False))
             self.project, self.services = config["name"], config["services"]
+            if getattr(args, "browser_permission", False):
+                self.browser_preflight(recipe)
             image_ids = {}
             for index, image in enumerate(sorted({service["image"] for service in self.services.values()})):
                 require(re.fullmatch(r"(?:python@)?sha256:[0-9a-f]{64}", image))
@@ -215,12 +267,25 @@ class GmailSdkRun(Run):
             # This is the original keeper cutoff, not a new lifetime allocation.
             self.deadline = min(begun + WORK_SECONDS, keeper_anchor + recipe.KEEPER_SECONDS - 15)
             phase = "checker"
-            self.command("checker-start", ["docker", "start", checker], 10)
-            exit_code = int(self.command("checker-wait", ["docker", "wait", checker], 190))
-            raw = self.command("checker-result", ["docker", "logs", checker], 5)
+            if getattr(args, "browser_permission", False):
+                require(not self.browser_units("browser-unit-at-start"), "browser unit appeared before start")
+                self.browser_unit_armed = True  # Uncertain launch still owns exact-unit cleanup.
+                raw = self.command("checker-browser", ["systemd-run", "--user", "--wait", "--pipe", "--collect",
+                    "--quiet", "--service-type=exec", "--unit=" + self.browser_unit,
+                    "--property=RuntimeMaxSec=185", "--property=TimeoutStopSec=5",
+                    "--property=KillMode=control-group", "--property=Restart=no",
+                    "--property=MemoryMax=2G", "--property=TasksMax=128", "--property=UMask=0077",
+                    str(NODE), str(args.source / BROWSER_DRIVER), checker, str(args.evidence)], 190)
+                importlib.import_module("scripts.operator_gmail_sdk_browser").validate_joined_result(json.loads(raw))
+                exit_code = 0
+                require(not self.browser_units("browser-unit-after"), "completed browser unit was not collected")
+            else:
+                self.command("checker-start", ["docker", "start", checker], 10)
+                exit_code = int(self.command("checker-wait", ["docker", "wait", checker], 190))
+                raw = self.command("checker-result", ["docker", "logs", checker], 5)
+                importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(json.loads(raw))
             terminal = json.loads(self.command("checker-state", ["docker", "inspect", "--format", "{{json .State}}", checker], 5))
             require(exit_code == 0 and terminal["Status"] == "exited" and terminal["ExitCode"] == 0 and not terminal["OOMKilled"])
-            importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(json.loads(raw))
             success, phase = True, "complete"
         except (Exception, KeyboardInterrupt) as error:
             failure = failure_site(error, args.source)
@@ -243,6 +308,7 @@ def main():
     parser.add_argument("--commit", required=True)
     for name in ("expected-binary-sha256", "expected-go-sha256"):
         parser.add_argument("--" + name, type=sha256, required=True)
+    parser.add_argument("--browser-permission", action="store_true")
     args = parser.parse_args()
     # One fixed local daemon reaches inherited helpers and every child command.
     for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION"):

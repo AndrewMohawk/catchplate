@@ -218,6 +218,11 @@ const tests = [
   }],
   ['validated exact Gmail replacement links the Go project and preserves the guide', () => {
     const value = gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'});
+    assert.equal(value.applications[0].proxy_authentication, 'basic_and_bearer_v1');
+    assert.deepEqual(value.capabilities.application_proxy_authentication, {
+      schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
+      path: '/api/operator-demo/applications/proxy-authentication'});
+    assert.equal(value.access_rules[0].query_mode, 'orderedFormV1');
     assert.deepEqual(links(value), [
       {label: 'Go + Gmail SDK', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-go'},
       {label: 'Google / Gmail guide', kind: 'guide', href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
@@ -225,6 +230,12 @@ const tests = [
     assert.equal(node('client-example-links').children.length, 2);
     assert.match(node('client-example-note').textContent, /separate from your private client config/);
     assert.match(node('client-example-note').textContent, /opening an example does not run it or verify access/);
+    const bearer = clone(value); bearer.applications[0].proxy_authentication = 'bearer';
+    assert.deepEqual(links(bearer), [{label: 'Google / Gmail guide', kind: 'guide',
+      href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
+    const legacy = clone(value); delete legacy.access_rules[0].query_mode;
+    legacy.access_rules[0].allowed_headers = ['accept', 'accept-encoding', 'user-agent', 'x-goog-api-client'];
+    assert.deepEqual(links(legacy), links(bearer));
   }],
   ['Gmail insertion and other valid dummy values retain guide-only discovery', () => {
     for (const changes of [{}, ...['Bearer another-public-dummy', 'bearer serverware-gmail-placeholder-v1',
@@ -235,8 +246,8 @@ const tests = [
       assert.deepEqual(links(value), [{label: 'Google / Gmail guide', kind: 'guide',
         href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
       render(value); const note = node('client-example-note').textContent;
-      assert.match(note, /guide only/); assert.match(note, /exact Gmail dummy-header replacement/);
-      assert.match(note, /contains no private client config and does not verify your access/);
+      assert.match(note, /guide only/); assert.match(note, /ordered Gmail queries, the exact public dummy/);
+      assert.match(note, /standard username\/password proxy login/); assert.match(note, /never changed here/);
       assert(!note.includes('not a runnable example project')); assert(!note.includes('PRIVATE_DUMMY_CANARY'));
     }
     for (const changes of [

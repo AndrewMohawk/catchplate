@@ -28,7 +28,8 @@ RUNTIME_SERVICES = {"network", "provider", "serverware", "decision-gate-rs", "ed
 CHECKER_SECONDS, CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 180, 210, 75
 
 
-def build(source, binary, initializer, root, go, *, expected_binary_sha256, expected_go_sha256):
+def build(source, binary, initializer, root, go, *, expected_binary_sha256, expected_go_sha256, browser_permission=False):
+    base.require(type(browser_permission) is bool, "browser permission opt-in differs")
     base.validated_binary_sha256(expected_go_sha256)
     base.require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-gmail-sdk-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private Gmail SDK root required")
@@ -58,6 +59,9 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
     check["command"][check["command"].index("--ca-file") + 1] = "/client-trust/inner-ca.pem"
     check["command"] += ["--proxy-ca-file", "/client-trust/outer-ca.pem",
         "--combined-ca-file", "/client-trust/combined-ca.pem", "--expected-go-sha256", expected_go_sha256]
+    if browser_permission:
+        check["command"].append("--browser-permission")
+        check["stdin_open"] = True
     check["volumes"] = [mount for mount in check["volumes"] if mount["target"] != "/client-dependencies"]
     pki = runtime / "https-proxy/basic-pki"
     check["volumes"] += [base.bind(go, GO_TARGET),
@@ -100,7 +104,8 @@ def prepare(args):
         base.require(path.is_absolute() and path.resolve() == path and path.is_file() and not path.is_symlink()
             and base.digest(path) == expected and path.stat().st_mode & 4, "pinned input differs")
     config = build(args.source, args.binary, args.initializer, args.job_root, args.go,
-        expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256)
+        expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
+        browser_permission=getattr(args, "browser_permission", False))
     compose = json.dumps(config, sort_keys=True, indent=2) + "\n"
     receipt = {"schema": "serverware.privateGmailSdkPreparation/v1", "sourceCommit": args.commit,
         "source": str(args.source), "sourceCommitValidationRequiredByRunner": True,
@@ -128,6 +133,7 @@ def main():
     for name in ("expected-binary-sha256", "expected-go-sha256"):
         parser.add_argument("--" + name, type=base.validated_binary_sha256, required=True)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--browser-permission", action="store_true")
     try:
         print(json.dumps(prepare(parser.parse_args()), sort_keys=True, indent=2))
     except (ValueError, OSError, KeyError, TypeError):

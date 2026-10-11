@@ -85,6 +85,29 @@ _CATALOG = {
     "google_setup.activated": "Google provider configuration activated",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
+# Ordinary Google lifecycle history, never a live action-required source. Keep
+# intent/exchange bookkeeping and internal schema admission out of the filters.
+_GOOGLE_SUMMARIES = {
+    "operator_catalog.oauth.consent_started": "Google account consent started",
+    "operator_catalog.oauth.account_connected": "Google account connected; application access is separate",
+    "operator_catalog.oauth.consent_failed": "Google account consent failed; review account status",
+    "credential.oauth_refreshed": "Google account access token refreshed",
+    "credential.oauth_refresh_failed": "Google account refresh failed; review account status",
+    "operator_catalog.oauth.reauthorization_started": "Google account reauthorization started",
+    "operator_catalog.oauth.reauthorized": "Google account reauthorization committed",
+    "operator_catalog.oauth.reauthorization_failed": "Google account reauthorization failed; review retained status",
+    "operator_catalog.oauth.disconnect_requested": "Google disconnect requested; provider acceptance is not yet proven",
+    "operator_catalog.oauth.disconnect_provider_accepted": "Google accepted disconnect; propagation is not proven",
+    "operator_catalog.oauth.disconnect_retry_retained": "Google disconnect remains unconfirmed; retry retained",
+    "operator_catalog.oauth.cleanup_quarantined": "Google account access quarantined; review cleanup status",
+    "operator_catalog.oauth.cleanup_fenced": "Google cleanup locally fenced; provider outcome is separate",
+    "operator_catalog.oauth.refresh_rejected": "Google rejected refresh; no new account material was issued",
+}
+_SUMMARIES.update(_GOOGLE_SUMMARIES)
+_GOOGLE_IDS = {
+    "operator_catalog.oauth.reauthorized": ("operator-google-reauthorized:", "operation_id"),
+    "operator_catalog.oauth.refresh_rejected": ("operator-google-refresh-rejected:", "work_id"),
+}
 # These producers use idempotency keys as audit IDs, not generated event UUIDs.
 # Only their six exact type/namespace/action pairings are admitted; this is not
 # a general extension to notification IDs or to action-required sources.
@@ -158,6 +181,11 @@ def _setup_operation(identifier, event_type):
 def _event_identifier(identifier, event_type):
     if event_type in _SETUP_IDS:
         return _setup_operation(identifier, event_type) is not None
+    if event_type in _GOOGLE_IDS:
+        prefix, _ = _GOOGLE_IDS[event_type]
+        return isinstance(identifier, str) and identifier.startswith(prefix) and _uuid(identifier[len(prefix):])
+    if event_type in _GOOGLE_SUMMARIES:
+        return _uuid(identifier)
     return _uuid(identifier) or _hash(identifier)
 
 
@@ -313,6 +341,139 @@ def _details(row, event):
     return result
 
 
+def _google_details(row, event):
+    """Closed producer-specific audit projection; no account or token reads.
+
+    Rich producer receipts are not notification DTOs. Validate their public
+    lifecycle bindings and copy only explicitly selected scalar references and
+    counts. Malformed new-family events have no metadata-only fallback.
+    """
+    kind = row["event_type"]
+    _require(type(event) is dict and _text(row["actor_id"], 256)
+        and _event_identifier(row["event_id"], kind))
+    system = kind in {"credential.oauth_refreshed", "credential.oauth_refresh_failed",
+        "operator_catalog.oauth.refresh_rejected"}
+    _require(row["actor_type"] == ("system" if system else "admin"))
+    if kind in _GOOGLE_IDS:
+        prefix, key = _GOOGLE_IDS[kind]
+        _require(_uuid(event.get(key)) and row["event_id"] == prefix + event[key])
+    result = {"actor_type": row["actor_type"], "provider": "google"}
+    if _identifier(row["actor_id"]):
+        result["actor_id"] = row["actor_id"]
+
+    def references(*keys):
+        for key in keys:
+            _require(_uuid(event.get(key)))
+            result[key] = event[key]
+
+    def numbers(*keys):
+        for key in keys:
+            _require(_integer(event.get(key), 1))
+            result[key] = event[key]
+
+    def policy(revision="revision"):
+        numbers(revision)
+        _require(_hash(event.get("policy_hash")))
+        result["policy_hash"] = event["policy_hash"]
+
+    def count(key, output):
+        value = event.get(key)
+        _require(type(value) is list and len(value) <= 1024 and all(_uuid(item) for item in value)
+            and value == sorted(set(value)))
+        result[output] = len(value)
+
+    if kind in {"credential.oauth_refreshed", "credential.oauth_refresh_failed"}:
+        _require(row["actor_id"] == "oauth-refresh" and event.get("provider") == "google")
+        references("credential_id")
+        numbers("credential_version")
+        if kind == "credential.oauth_refreshed":
+            numbers("previous_credential_version")
+            _require(event["credential_version"] > event["previous_credential_version"]
+                and _integer(event.get("expires_at_epoch_ms"), 1)
+                and type(event.get("refresh_token_rotated")) is bool)
+        else:
+            _require(event.get("reason") in ("OAuthError", "ValueError", "TypeError", "JSONDecodeError"))
+    elif kind in {"operator_catalog.oauth.consent_started", "operator_catalog.oauth.account_connected",
+                  "operator_catalog.oauth.consent_failed"}:
+        _require(event.get("provider") == "google")
+        references("intent_id")
+        if kind == "operator_catalog.oauth.consent_failed":
+            _require(event.get("reason") in ("consent_denied", "exchange_failed", "persistence_failed", "identity_conflict"))
+        else:
+            connected = kind == "operator_catalog.oauth.account_connected"
+            _require(event.get("status") == ("connected" if connected else "awaiting_consent")
+                and event.get("reason") is None)
+            if connected:
+                references("credential_id")
+            else:
+                _require("credential_id" in event and event["credential_id"] is None)
+            policy()
+    elif kind in {"operator_catalog.oauth.reauthorization_started", "operator_catalog.oauth.reauthorized",
+                  "operator_catalog.oauth.reauthorization_failed"}:
+        references("operation_id", "credential_id")
+        if kind == "operator_catalog.oauth.reauthorization_failed":
+            _require(event.get("status") in ("review_required", "denied", "failed")
+                and event.get("reason") in ("start_failed", "state_changed", "consent_denied", "exchange_failed",
+                    "adoption_uncertain", "identity_mismatch", "candidate_unavailable")
+                and event.get("provider_revocation") == "not_requested")
+        else:
+            numbers("credential_generation")
+            policy()
+            count("affected_rule_ids", "affected_rule_count")
+            if kind == "operator_catalog.oauth.reauthorized":
+                _require(event.get("schema") == "serverware.operatorGoogleReauthorizationReceipt/v1")
+                references("original_oauth_intent_id")
+                numbers("previous_credential_generation")
+                _require(event["credential_generation"] == event["previous_credential_generation"] + 1)
+                count("application_ids", "application_count")
+    elif kind in {"operator_catalog.oauth.disconnect_requested", "operator_catalog.oauth.disconnect_provider_accepted",
+                  "operator_catalog.oauth.disconnect_retry_retained"}:
+        references("operation_id", "credential_id")
+        if kind == "operator_catalog.oauth.disconnect_requested":
+            _require(event.get("schema") == "serverware.operatorGoogleDisconnectReceipt/v1"
+                and event.get("actor_id") == row["actor_id"] and event.get("project_wide_acknowledged") is True)
+            policy()
+            numbers("policy_sequence")
+            count("credential_ids", "credential_count")
+            _require(event["credential_id"] in event["credential_ids"])
+            count("affected_rule_ids", "affected_rule_count")
+            count("affected_application_ids", "application_count")
+        elif kind == "operator_catalog.oauth.disconnect_provider_accepted":
+            _require(event.get("provider") == "google" and event.get("provider_outcome") == "accepted"
+                and event.get("propagation") == "not_proven" and event.get("reconnect") == "blocked")
+        else:
+            _require(event.get("provider_outcome") == "not_proven")
+            numbers("attempts")
+            _epoch(event.get("next_attempt_at"))
+    elif kind in {"operator_catalog.oauth.cleanup_quarantined", "operator_catalog.oauth.cleanup_fenced"}:
+        references("work_id")
+        count("credential_ids", "credential_count")
+        if kind == "operator_catalog.oauth.cleanup_quarantined":
+            policy()
+            count("revoked_rule_ids", "revoked_rule_count")
+            _require(event.get("reason") in ("operator_google_rejected", "google_grant_collision",
+                "registration_failed", "refresh_failed", "explicit_disconnect"))
+        else:
+            _require(event.get("schema") == "serverware.operatorGoogleCleanupFence/v1"
+                and event.get("source") in ("operator_google_initial_v1", "operator_google_refresh_v1",
+                    "operator_google_disconnect_v1", "operator_google_reauthorization_v1"))
+            policy("catalog_revision")
+    else:
+        _require(kind == "operator_catalog.oauth.refresh_rejected"
+            and event.get("schema") == "serverware.operatorGoogleRefreshRejected/v1"
+            and event.get("source") == "operator_google_refresh_v1"
+            and event.get("outcome") == "definite_refresh_rejected" and event.get("issued_material") is False
+            and event.get("provider_revocation") == "not_requested")
+        references("work_id", "credential_id")
+        numbers("credential_generation")
+        status = event.get("http_status")
+        codes = ("invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+            "unsupported_grant_type", "invalid_scope") if type(status) is int and status == 400 else (
+            ("invalid_client",) if type(status) is int and status == 401 else ())
+        _require(event.get("error_code") in codes)
+    return result
+
+
 def _envelope(row, channel, summary, details):
     return {"schema": SCHEMA, "channel": channel,
         "source": {key: row[key] for key in ("event_id", "event_hash", "event_type", "created_at")},
@@ -450,7 +611,8 @@ def _approval(conn, row, event, now):
 
 
 def _audit_projection(row, event):
-    audit = _envelope(row, "audit_log", _SUMMARIES[row["event_type"]], _details(row, event))
+    details = _google_details(row, event) if row["event_type"] in _GOOGLE_SUMMARIES else _details(row, event)
+    audit = _envelope(row, "audit_log", _SUMMARIES[row["event_type"]], details)
     audit["projection"] = "metadata_only" if event is None else "approved_fields"
     return audit
 
@@ -472,7 +634,10 @@ def _project(conn, row, now):
     event = _payload(conn, row["rowid"])
     if not _setup_binding(row, event):
         return None
-    audit = _audit_projection(row, event)
+    try:
+        audit = _audit_projection(row, event)
+    except (ValueError, TypeError, OverflowError):
+        return None
     try:
         action = _approval(conn, row, event, now)
     except (ValueError, TypeError, OverflowError, sqlite3.Error):

@@ -21,19 +21,25 @@ delete, modification, attachment, history, profile or Calendar calls.
    one-time application token privately.
 3. Choose the named **Read Gmail** permission (`gmail_read_v1`). It must advertise
    `orderedFormV1`, which admits the SDK's repeated `metadataHeaders` parameters.
-   Under **How your existing client sends provider authentication**, select
-   **Replace a dummy header value**. Set **Exact dummy header value** to:
+   Leave **Gmail client** set to **Official Gmail SDK**, the default for a new
+   Read Gmail permission. The workspace fills in the exact public dummy and
+   checks that the selected application supports Basic proxy login. Review and
+   save the permission; no response fields or dummy value need to be entered.
+   The SDK's fixed header value is:
 
    ```text
    Bearer serverware-gmail-placeholder-v1
    ```
 
    This is the full, case-sensitive `Authorization` value, including one space.
-   The default **Add credential automatically** mode expects no provider header
-   and is **not compatible with this example**. Never put a real Google token or
-   the application token in the dummy field. Existing insertion permissions are
-   not silently upgraded; select/create the intended replacement permission and
-   resolve any overlapping permission explicitly.
+   **Custom HTTP client** preserves the separate automatic-insertion or custom
+   dummy choices. Automatic insertion expects no provider header and is **not
+   compatible with this example**. On older deployments without the Gmail client
+   choice, explicitly choose **Replace a dummy header value** and enter the
+   exact value above. Never enter a real Google token or application token.
+   Existing permissions and application login modes are not silently upgraded;
+   enable Basic in Applications if needed, select/create the intended replacement
+   permission, and resolve any overlapping permission explicitly.
 4. Use the workspace's actual HTTPS proxy address and download its interception
    CA. A working source checkout does not make a deployment or Google account ready.
 

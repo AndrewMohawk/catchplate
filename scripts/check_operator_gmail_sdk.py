@@ -496,10 +496,18 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             require(app.get("proxy_authentication") == "basic_and_bearer_v1", "Gmail SDK saved app proxy auth differs")
             apps.append((app, token))
         (app, self.client_token), (unassigned, wrong_token) = apps
-        rule, _, _ = self.mutate("/access-rules/gmail-read", {"name": self.run_id + "-sdk", "application_id": app["id"],
-            "credential_id": credential["id"], "operation_bundle": "gmail_read_v1", "age_policy": {"mode": "unrestricted"},
-            "credential_input": "replace_exact", "placeholder": DUMMY}, collection="access_rules", result_key="access_rule",
-            event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
+        if getattr(self.args, "browser_permission", False):
+            from scripts.operator_gmail_sdk_browser import create_permission
+            self.phase = "browser_permission"
+            rule, _ = create_permission(self, app, credential)
+            # This is a fresh independent persisted-audit read, before any SDK
+            # provider request, not an assertion supplied by the browser.
+            features.verify_audit(self)
+        else:
+            rule, _, _ = self.mutate("/access-rules/gmail-read", {"name": self.run_id + "-sdk", "application_id": app["id"],
+                "credential_id": credential["id"], "operation_bundle": "gmail_read_v1", "age_policy": {"mode": "unrestricted"},
+                "credential_input": "replace_exact", "placeholder": DUMMY}, collection="access_rules", result_key="access_rule",
+                event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
         require_rule(rule, app["id"], credential["id"])
         pinned, _ = self.wait_catalog_loaded("gmail_sdk_rule")
         require_rule(self.resource(pinned, "access_rules", rule["id"]), app["id"], credential["id"])
@@ -674,7 +682,7 @@ def run_checks(args):
         check = GmailSdkCheck(args)
         return check.run()
     except Exception as error:
-        phase = check.phase if check is not None and check.phase in ("startup", "revoke", *PHASES) else "startup"
+        phase = check.phase if check is not None and check.phase in ("startup", "revoke", "browser_permission", *PHASES) else "startup"
         return {"schema": SCHEMA, "ok": False, "syntheticOnly": True, "realGoogleVerified": False,
             "productionReady": False, "phase": phase,
             "failureSite": failure_site(error, Path(__file__).resolve().parents[1]),
@@ -690,6 +698,7 @@ def main():
     for name in ("control-ca-file", "management-ca-file"):
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument("--browser-permission", action="store_true")
     args = parser.parse_args()
     def expired(_signum, _frame):
         raise CheckFailure("Gmail SDK process deadline exceeded")
@@ -699,7 +708,7 @@ def main():
         result = run_checks(args)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
-    print(json.dumps(result, sort_keys=True))
+    print(json.dumps({"type": "result", "result": result} if args.browser_permission else result, sort_keys=True), flush=True)
     return 0 if result["ok"] else 1
 
 

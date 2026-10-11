@@ -73,6 +73,21 @@ function createConnectView(workspace, applications, proxy) {
   function goto(next) { step = next; render(); if (open) element('connect-progress').scrollIntoView({block: 'nearest'}); }
   function activePair() { return credential() && validApp(application()); }
   function supported(rule) { return operatorRuleSupported(rule, catalog()); }
+  function gmailSdkRule() {
+    return {...gmailRuleFields(), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
+      credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'};
+  }
+  function gmailSdkProblem() {
+    if (!gmailAvailable(catalog(), credential()) || !catalog()?.allowed_upstreams.includes(operatorGmail.origin) ||
+        !availableCredentialInputModes(catalog()).includes('replace_exact'))
+      return 'The exact Read Gmail permission, approved Gmail destination and dummy-header replacement must all be advertised. No fallback permission is selected.';
+    if (!projectApplicationProxyAuthenticationCapability(catalog()?.capabilities?.application_proxy_authentication))
+      return 'Standard username/password proxy login is not advertised. The official SDK choice is unavailable; no login mode or permission is changed.';
+    if (applicationProxyAuthentication(application()) !== 'basic_and_bearer_v1')
+      return 'The official Gmail SDK needs standard username/password proxy login. In Applications, explicitly enable it for this app, then refresh here. No token or login mode is changed automatically.';
+    if (!supported(gmailSdkRule())) return 'This account, application or Gmail permission is unavailable. Refresh and review again; no fallback grant is sent.';
+    return '';
+  }
   function confirmCheckpoint() {
     if (!checkpoint || !catalog() || workspace.state.busy || workspace.state.uncertain || catalog().revision < checkpoint.revision) return;
     if (checkpoint.xPolicyHash && catalog().revision === checkpoint.revision && catalog().policy.policy_hash !== checkpoint.xPolicyHash) {
@@ -111,8 +126,8 @@ function createConnectView(workspace, applications, proxy) {
     }
     if (checkpoint.collection === 'access_rules') {
       if (item.application_id !== selectedApplication || item.credential_id !== selectedCredential) { message('Saved rule references did not match this setup. Review saved state.'); return; }
-      if (isGmailRule(review?.rule) && (!isGmailRule(item) || item.query_mode !== review.rule.query_mode ||
-          item.credential_input !== review.rule.credential_input || item.placeholder !== review.rule.placeholder)) {
+      if (isGmailRule(review?.rule) && (!gmailRuleValid(item, credential()) || item.query_mode !== review.rule.query_mode ||
+          !operatorExact(gmailRulePayload(item), gmailRulePayload(review.rule)))) {
         message('The saved permission does not match the reviewed Read Gmail configuration. Review saved state; no repeat request was sent.'); return;
       }
       if (isGithubRule(review?.rule) && (!githubRuleValid(item, credential()) ||
@@ -202,6 +217,7 @@ function createConnectView(workspace, applications, proxy) {
     const newApp = element('connect-application-choice').value === 'new';
     const newRule = element('connect-rule-choice').value === 'new';
     const gmail = newRule && element('connect-operation').value === operatorGmail.bundle;
+    const gmailSdk = gmail && element('connect-gmail-client').value === 'sdk';
     const github = newRule && (isGithubCredential(credential()) || isGithubRule({operation_bundle: element('connect-operation').value}));
     const npm = newRule && (isNpmCredential(credential()) || isNpmRule({operation_bundle: element('connect-operation').value}));
     const npmPublish = npm && isNpmPublishRule({operation_bundle: element('connect-operation').value});
@@ -248,8 +264,14 @@ function createConnectView(workspace, applications, proxy) {
     // required controls. Switching permissions never clears the exact-rule draft.
     element('connect-operation-group').hidden = x || alchemy || !newRule || credential()?.auth_type !== 'google_oauth' && !gmail && !providerPreset;
     fields('connect-exact-destination', newRule && !gmail && !providerPreset);
-    element('connect-credential-input-group').hidden = !newRule || providerPreset;
-    if (!newRule || providerPreset) for (const input of element('connect-credential-input-group').querySelectorAll('input,select,textarea')) input.disabled = true;
+    element('connect-credential-input-group').hidden = !newRule || providerPreset || gmailSdk;
+    if (!newRule || providerPreset || gmailSdk) for (const input of element('connect-credential-input-group').querySelectorAll('input,select,textarea')) input.disabled = true;
+    fields('connect-gmail-client-group', gmail);
+    element('connect-gmail-sdk-summary').hidden = !gmailSdk;
+    element('connect-gmail-sdk-status').textContent = gmailSdk ? gmailSdkProblem() ||
+      'The fixed public dummy and standard proxy login are supported. Review the permission below; this page does not run the SDK or verify Google access.' :
+      'Choose automatic insertion or your own exact public dummy below. These custom HTTP settings are retained when switching client choices; no saved permission is changed.';
+    element('connect-gmail-sdk-app-link').hidden = !gmailSdk || applicationProxyAuthentication(application()) === 'basic_and_bearer_v1';
     fields('connect-github-repository', github);
     fields('connect-x-username-group', x);
     fields('connect-alchemy-chain-group', alchemy);
@@ -299,7 +321,8 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-access-fields').disabled = !writable() || Boolean(checkpoint) || !activePair() || newRule &&
       (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length ||
         (!gmail && !providerPreset && !availableResponseModes(catalog()).length) || !catalog()?.allowed_upstreams.length);
-    element('connect-review').disabled = newRule && (gmail && !gmailAvailable(catalog(), credential()) || github && !githubAvailable(catalog(), credential()) ||
+    element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) ||
+      !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
       alchemy && !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ||
       npm && (npmPublish ? !npmPublishAvailable(catalog(), credential()) || !npmPublishNewRuleAvailable(catalog(), selectedApplication) :
@@ -307,12 +330,15 @@ function createConnectView(workspace, applications, proxy) {
   }
   function reviewCurrent() {
     return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule) &&
+      (review.gmailClient !== 'sdk' || !gmailSdkProblem() && operatorExact(review.rule, gmailSdkRule())) &&
       (!isXRule(review.rule) || xCredentialReceiptMatches(credential(), review.xCredential)) &&
       (!isAlchemyRule(review.rule) || alchemyCredentialReceiptMatches(credential(), review.alchemyCredential));
   }
   function renderReview() {
     if (!review) return;
     const rows = [...operatorRuleCredentialRows(review.rule, credential()), ...operatorRuleRestrictions(review.rule)];
+    if (review.gmailClient === 'sdk') rows.unshift(['Gmail client', 'Official Gmail SDK · Go example'],
+      ['Public dummy, not a secret', 'The SDK sends the exact dummy below. The application token authenticates separately to the HTTPS proxy using standard username/password login.']);
     element('connect-review-details').replaceChildren(...rows.flatMap(([name, value]) => [textNode('dt', name), textNode('dd', value)]));
     if (reviewCurrent()) {
       const appName = operatorConnectResourceChoices(catalog().applications.filter(item => item.status === 'active'), [actionLabels.application]).find(item => item.id === selectedApplication).name;
@@ -499,6 +525,13 @@ function createConnectView(workspace, applications, proxy) {
       return rule;
     }
     if (element('connect-operation').value === operatorGmail.bundle) {
+      const client = element('connect-gmail-client').value;
+      if (!['sdk', 'custom'].includes(client)) throw operatorError('Choose the official Gmail SDK or an explicit custom HTTP client. No grant was sent.');
+      if (client === 'sdk') {
+        const problem = gmailSdkProblem();
+        if (problem) throw operatorError(problem);
+        return gmailSdkRule();
+      }
       const rule = {...gmailRuleFields(), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
         credential_input: element('connect-credential-input').value};
       if (rule.credential_input === 'replace_exact') rule.placeholder = element('connect-placeholder').value;
@@ -528,6 +561,7 @@ function createConnectView(workspace, applications, proxy) {
       const rule = existing ? matchingRules().find(item => item.id === element('connect-rule-choice').value) : draftRule();
       if (!supported(rule)) throw operatorError('The selected saved rule is unavailable or unsupported. Choose again; no permissions were changed.');
       review = {existing, rule: JSON.parse(JSON.stringify(rule)), revision: catalog().revision, policyHash: catalog().policy.policy_hash};
+      if (!existing && isGmailRule(rule)) review.gmailClient = element('connect-gmail-client').value;
       if (isXRule(rule)) review.xCredential = xCredentialReceipt(credential(), credential().name);
       if (isAlchemyRule(rule)) review.alchemyCredential = alchemyCredentialReceipt(credential(), credential().name);
       message('Review the exact effective permissions before continuing.'); goto(3);
@@ -544,7 +578,7 @@ function createConnectView(workspace, applications, proxy) {
       isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
-  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain'])
+  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-gmail-client', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain'])
     element(id).addEventListener('change', render);
   element('connect-credential-choice').addEventListener('change', () => {
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;

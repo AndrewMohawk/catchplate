@@ -77,8 +77,31 @@ producer namespace, operation UUID, action, administrator actor type and payload
 operation reference must agree, including at the final pre-delivery check.
 Malformed or unbound setup events are skipped, not exported as metadata-only.
 Client IDs, provider profiles, encrypted custody and destination settings are
-not included in these copies. Other Google account-consent/refresh events are
-not yet in the export allowlist; their local audit records remain separate.
+not included in these copies.
+
+Google account consent, connection, reauthorization, disconnect, cleanup and
+refresh history also have separate **audit-only** filters. Fourteen lifecycle
+types bring the full audit filter list to 64; the existing 64-filter limit is
+unchanged. Each copy uses a fixed summary and validated public UUID references,
+generation/revision information or bounded counts. No email address, account
+identity, OAuth client ID, scope list, token, consent state/code, URL or raw
+provider error is exported. Producer actor types and deterministic event IDs
+must match their event references, including at the final pre-delivery check;
+malformed lifecycle records are skipped. These events never request approval,
+touch a security key, or enable action-required delivery. Existing saved filter
+selections and disabled destinations stay unchanged.
+
+Focused verification on October 11 passed all 41 distinct controls: 25 existing
+event tests, 11 Google projection tests and five connected producer/store tests.
+The first run passed 39; two test-only mistakes (duplicate synthetic event IDs
+and the initial-consent denial status) were corrected and those two checks
+passed separately. Actual consent/refresh, reauthorization, disconnect/cleanup
+and rejection producers were joined to committed audit projections and their
+final source recheck. Saving and recovering all 64 filters also passed. These
+network-disabled checks did not deliver notifications, contact Google or enable
+action sources. Evidence is retained in `google-notification-lifecycle.sBfyVHej`
+and `google-notification-lifecycle-corrected.lF6Jojmw` beneath the operator
+workspace evidence directory.
 
 The worker adds a stable `delivery_id`, `slot`, saved `revision` and `review_url`.
 Audit and synthetic-test review URLs use the configured HTTPS console origin

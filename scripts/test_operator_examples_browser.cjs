@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {mkdtemp} = require('node:fs/promises');
 const {join} = require('node:path');
 const {fixture, githubRule} = require('./test_operator_github_browser.cjs');
-const {ready, view} = require('./test_operator_catalog_browser.cjs');
+const {ready, view, application} = require('./test_operator_catalog_browser.cjs');
 const npm = require('./test_operator_npm_browser.cjs');
 const gmail = require('./test_operator_gmail_bundle_browser.cjs');
 
@@ -66,13 +66,18 @@ async function main() {
       assert.equal(observed.creates.length + observed.grants.length, 0);
       assert.deepEqual(state.errors, []);
     });
-    for (const replace of [false, true]) {
+    for (const [replace, basic] of [[false, false], [true, false], [true, true]]) {
       const rule = gmail.bundleRule(replace ? {credential_input: 'replace_exact',
         placeholder: 'Bearer serverware-gmail-placeholder-v1'} : {});
-      await gmail.fixture(browser, gmail.options({rules: [rule]}), async (page, state, observed) => {
+      await gmail.fixture(browser, gmail.options({rules: [rule], applications: [application(basic ? {proxy_authentication: 'basic_and_bearer_v1'} : {})],
+        gmailTransform(value) {
+          if (basic) value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+            modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
+          return value;
+        }}), async (page, state, observed) => {
         const paths = ['blob/' + branch + 'docs/operator-gmail-job-verification.md'];
-        if (replace) paths.unshift('tree/' + branch + 'examples/google-gmail-go');
-        await checkLinks(page, replace ? 'gmail-project' : 'gmail-guide', paths);
+        if (replace && basic) paths.unshift('tree/' + branch + 'examples/google-gmail-go');
+        await checkLinks(page, replace && basic ? 'gmail-project' : replace ? 'gmail-bearer-guide' : 'gmail-guide', paths);
         assert.equal(observed.posts.length, 0); assert.deepEqual(state.posts, []);
         assert.deepEqual(state.errors, []);
       });

@@ -1,5 +1,12 @@
 // Repository links contain public source paths only. Never personalize them
 // with an application ID, provider URL, credential, or private configuration.
+function operatorGmailSdkCompatible(rule, catalog) {
+  const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
+  return Boolean(isGmailRule(rule) && rule.query_mode === 'orderedFormV1' &&
+    rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' &&
+    catalog?.allowed_upstreams.includes(operatorGmail.origin) &&
+    applicationProxyAuthentication(application) === 'basic_and_bearer_v1' && operatorRuleSupported(rule, catalog));
+}
 function operatorExampleProjects(rule, catalog) {
   if (!rule || rule.status !== 'active' || !operatorRuleSupported(rule, catalog)) return [];
   const source = 'https://github.com/AndrewMohawk/serverware/';
@@ -26,7 +33,7 @@ function operatorExampleProjects(rule, catalog) {
         href: source + 'blob/' + branch + 'examples/alchemy-chain-status-node/workflow.example.yml'},
       guide('Alchemy preset scope and compatibility', 'operator-provider-presets.md')];
     case 'gmail_read_v1': return [
-      ...(rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' ?
+      ...(operatorGmailSdkCompatible(rule, catalog) ?
         [project('Go + Gmail SDK', 'google-gmail-go')] : []),
       guide('Google / Gmail guide', 'operator-gmail-job-verification.md')];
     default: return [];
@@ -40,7 +47,7 @@ function renderOperatorExampleProjects(rule, catalog) {
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
-    'This saved permission links to its setup and verification guide only. The Go SDK project requires the documented exact Gmail dummy-header replacement. The public guide contains no private client config and does not verify your access.';
+    'This saved permission links to its setup and verification guide only. The Go SDK project requires ordered Gmail queries, the exact public dummy and this app’s standard username/password proxy login. Saved permissions and login modes are never changed here.';
   for (const project of projects) {
     const link = textNode('a', project.label, 'button secondary');
     link.href = project.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';
@@ -59,6 +66,7 @@ function createProxyView(workspace, applications) {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     renderOperatorExampleProjects(null, null);
     element('gmail-client-controls').hidden = true;
+    element('gmail-sdk-guidance').hidden = true; element('gmail-sdk-app-link').hidden = true;
     element('github-client-controls').hidden = true;
     element('npm-client-controls').hidden = true;
     element('npm-publish-client-controls').hidden = true;
@@ -117,6 +125,16 @@ function createProxyView(workspace, applications) {
     // Browsing public code does not require a current token. The existing gates
     // below still control personalized recipes, copy, and private downloads.
     renderOperatorExampleProjects(rule, catalog);
+    if (gmail) {
+      const sdk = operatorGmailSdkCompatible(rule, catalog);
+      const needsBasic = applicationProxyAuthentication(application) !== 'basic_and_bearer_v1';
+      element('gmail-sdk-guidance').hidden = false;
+      element('gmail-sdk-app-link').hidden = !needsBasic;
+      element('gmail-sdk-guidance').textContent = sdk ?
+        'Use the Go + Gmail SDK project below for the bounded mail-reading job. It uses this exact public dummy, your separate Serverware app ID/token and the downloaded CA. Both TLS legs remain verified; this page has not run the job or tested your account.' : needsBasic ?
+        'The official Gmail SDK needs standard username/password proxy login. Use Applications to explicitly enable it if advertised, then refresh. This page does not change your app or token. The saved permission must also use ordered Gmail queries and the exact SDK dummy.' :
+        'This saved permission does not match the official SDK’s ordered-query and public-dummy contract. Keep using its existing HTTP configuration, or explicitly review a new Read Gmail permission with the Official Gmail SDK choice. No saved rule is upgraded or widened here.';
+    }
     if (!valid || !supported || credential?.status !== 'active') {
       element('client-command').textContent = !valid ? 'The application token is expired, revoked or cannot be verified.' : 'The saved rule or credential is unavailable or unsupported.';
       element('client-guidance').textContent = !valid ? 'Use Applications to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;

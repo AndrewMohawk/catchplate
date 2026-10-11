@@ -615,6 +615,8 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_operator_catalog_observation.py \
+	scripts/test_operator_notification_google_events.py \
+	scripts/test_operator_notification_google_integration.py \
 	scripts/test_npm_weekday_hours_example.py \
 	scripts/test_alchemy_rpc_read.py \
 	scripts/test_alchemy_policy_engine.py \
@@ -625,6 +627,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_operator_gmail_sdk_fixture.py \
 	scripts/test_operator_gmail_sdk_recipe.py \
 	scripts/test_operator_gmail_sdk_checker.py \
+	scripts/test_operator_gmail_sdk_browser.py \
 	scripts/test_operator_npm_example_fixture.py \
 	scripts/test_operator_npm_example_recipe.py \
 	scripts/test_operator_npm_example_checker.py \
@@ -11288,6 +11291,15 @@ verify-operator-aws-credentials:
 
 verify-operator-aws-browser:
 	node scripts/test_operator_aws_browser.cjs
+
+# Synthetic rendered UI and public links only; no OAuth or proxy execution.
+.PHONY: verify-operator-gmail-sdk-choice
+verify-operator-gmail-sdk-choice:
+	node scripts/test_operator_gmail_sdk_browser.cjs
+	node scripts/test_operator_gmail_sdk_choice_browser.cjs
+	node scripts/test_operator_gmail_bundle_browser.cjs
+	node scripts/test_operator_example_links.cjs
+	node scripts/test_operator_examples_browser.cjs
 
 verify-credential-ciphertext-codec:
 	$(TEST_PYTHON_RUN) -B scripts/test_credential_ciphertext_codec.py

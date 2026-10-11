@@ -114,6 +114,7 @@ class Fixture:
         """Actual observer/parser with bounded synthetic HTTP response bytes."""
         trace = []
         fixture = self
+        pending_callback = during_request
         body = json.dumps({"ok": True, "policy_hash": digest}, separators=(",", ":")).encode()
 
         class Connection:
@@ -122,11 +123,13 @@ class Fixture:
                 trace.append("open")
 
             def request(self, method, path, *, headers):
+                nonlocal pending_callback
                 fixture.store.operator_publication.assert_not_held()
                 assert (method, path, headers) == ("GET", "/healthz", {"Connection": "close"})
                 trace.append("request")
-                if during_request is not None:
-                    during_request()
+                if pending_callback is not None:
+                    callback, pending_callback = pending_callback, None
+                    callback()
                 if unavailable:
                     raise ConnectionError("synthetic gate unavailable")
 
@@ -148,8 +151,14 @@ class Fixture:
 
         with patch.object(self.store.http.client, "HTTPConnection", Connection):
             result = self.mutations.catalog_status()
-        assert trace == (["open", "request", "close"] if unavailable else
+        # Catalog GET observes policy readiness and both provider capabilities.
+        # The race hook represents one concurrent commit, not one per observer.
+        observation = (["open", "request", "close"] if unavailable else
             ["open", "request", "response", "read", "close"])
+        assert trace == observation * 3
+        assert pending_callback is None
+        assert result["capabilities"]["x"] is None
+        assert result["capabilities"]["alchemy"] is None
         public = json.dumps(result, sort_keys=True)
         private = [workspace.common._PROVIDER_SECRET, *self.tokens,
             *[row["token_sha256"] for row in workspace.catalog(self.db, self.schema)["applications"]]]

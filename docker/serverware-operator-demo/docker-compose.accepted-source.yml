@@ -1,6 +1,7 @@
-# Accepted header-hotfixed, Google-unconfigured demo after the 2026-10-11 rollout.
+# Accepted header/media-hotfixed, Google-unconfigured demo after the 2026-10-11 rollout.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
-# Equivalent to npm-publish-candidate with its reviewed source fixed below.
+# This pair includes the genuinely rebuilt response-media fix; the historical
+# npm-publish-candidate retains the previous Rust executable and is not equivalent.
 # Never combine source overrides or add the legacy google layer. Preserve the
 # original private environment and explicit notification interpolation settings.
 # Provider custody must already exist, app-owned 0700 and distinct from other
@@ -10,7 +11,7 @@
 services:
   serverware:
     environment:
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:9a0e2e083e32e62cdf5ab92c6d956c264f19913b9c32612bbf5de868887e6a3c
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
       SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR: /provider-custody
       SERVERWARE_PROCESS_MODE: serverware-control-plane
@@ -24,7 +25,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-3b17957446e3a2bf7aedb2044e383c293d778a22
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-40dbd8462569cecb7ca6f491ccb93df398a6a0dc
         target: /app
         read_only: true
         bind: {create_host_path: false}
@@ -39,7 +40,7 @@ services:
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85/serverware-decision-gate
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-9a0e2e083e32e62cdf5ab92c6d956c264f19913b9c32612bbf5de868887e6a3c/serverware-decision-gate
         target: /usr/local/bin/serverware-decision-gate
         read_only: true
         bind: {create_host_path: false}

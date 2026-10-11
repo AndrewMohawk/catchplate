@@ -650,7 +650,10 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_artifacts.py \
 	scripts/test_authority_local_artifact_measure_cache.py \
 	scripts/test_authority_local_content_catalog.py \
+	scripts/test_authority_local_prepared_contract.py \
+	scripts/test_authority_local_prepared_install.py \
 	scripts/test_authority_local_prepared_content_catalog.py \
+	scripts/test_authority_local_prepared_scan.py \
 	scripts/test_authority_local_artifact_witness.py \
 	scripts/test_authority_local_trust.py \
 	scripts/test_authority_local_configuration.py \

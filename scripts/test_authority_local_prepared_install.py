@@ -69,6 +69,7 @@ class PreparedTree:
         self.stack.enter_context(patch.object(measure, "_FILE_DIGEST_CACHE_LOCK", threading.Lock()))
         self.owner = install.LocalAuthorityInstaller(install._TOKEN)
         self.owner.check = self.check  # Explicit filesystem-only component seam.
+        self.owner._check_scan_path = lambda _links: self.check()  # Same synthetic lifetime seam.
         self.owner.root = self.owner._hold(os.open(self.directory, install._READ | os.O_DIRECTORY))
         self.owner.source_root = self.owner._hold(os.open(self.source, install._READ | os.O_DIRECTORY))
         info = self.prepared.stat()

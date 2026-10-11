@@ -367,6 +367,75 @@ new suites are in the isolated-test inventory, verified by parsing Make without
 starting a controller workflow. Evidence shares the directory above; full
 native startup latency remains unmeasured and R97 is unchanged.
 
+## Prepared-static scan: bound metadata work by path depth
+
+The prepared installer still swept every retained directory's named and held
+metadata at each file boundary, including on content-catalog hits. The roster
+grew throughout the walk, so this read-only preflight performed work proportional
+to files times previously discovered directories. Avoiding body reads alone did
+not remove that cost.
+
+The scan now checks the original destination ancestry and selected prepared root,
+plus the current file's ancestor chain. Every such check still observes the
+original source descriptors, owner, clocks, source-root identity and frozen state.
+The leaf's named/held identity, generation, permissions, immutable flag, mount,
+kernel content identity and EOF checks remain unchanged. A direct `_adopt()` call
+retains its original full check by default.
+
+Full retained-directory checks remain at scan entry and exit, before any plan
+publication or consumption of the prepared tree. A changed previously scanned
+sibling may be detected at scan exit rather than during another sibling's read;
+it still refuses before installation effects. All effect-bearing checks in
+`run()`, including copying, directory freezing, renames and receipt publication,
+are unchanged. In particular, this does not optimize the separate per-directory
+freezing loop or cache a successful authorization.
+
+## Assembly selection: include the optimized runtime-layout helper
+
+The assembly's source-selection list omitted `pilot_runtime_layout.py`. The
+drafting path could therefore copy an older helper from the retained baseline
+drivers and pin that old copy, despite the current tracked helper implementing
+installed-content reuse and bounded mount-table parsing. Explicitly selecting
+the tracked helper makes those existing changes part of the next assembly and
+subjects it to the same exact-source comparison as other selected drivers.
+
+Neither change modifies an existing assembly. Full native startup latency still
+requires a fresh authorized pilot measurement.
+
+The source-selection repair is COMMON commit `db9c7c515`. Six new selection
+groups execute the real draft-copy and final pin-comparison loops against
+temporary stale baselines and actual tracked source. All pass, as do 14 existing
+catalog/assembly groups; these do not execute a builder, guest or full assembly.
+
+Seven new installer scan groups pass across the initial and corrected-fixture
+runs. Real temporary files, named paths and descriptors exercise the actual
+scan guards; process admission, clocks, source-root admission and kernel
+ownership/verity observations are explicitly synthetic. Widths of 1, 8 and 24
+sibling branches retain exactly two full sweeps and a maximum four-link current
+path; deeper trees increase that path bound with depth, not sibling count.
+The cold-catalog case observes actual file bytes before producing the catalog,
+clears the observed memo, then verifies EOF-only adoption without memo seeding
+while original clock and custody callbacks remain fresh. Empty-file EOF parity
+is not a claimed saving. Changed current ancestors and original sources refuse
+during the scan; a changed prior sibling refuses at the full exit check before
+any publication or consumption. Default direct adoption retains full checks.
+
+The first scan run exposed a fixture error: `mkdir(parents=True)` had created
+intermediate directories with mode 0755, so the unchanged production 0700 check
+correctly refused before the intended probes. Only the fixture's controlled
+directories were corrected. The four passing groups were retained and the
+three affected groups reran successfully; this is not one complete corrected
+suite run. An additional 33 existing SDK controls passed; one unrelated
+root-only DAC control was skipped in the non-root container. These are 60
+distinct passing focused groups across the runs, not native startup acceptance.
+
+All checks used the existing offline image with read-only source, no capabilities
+or host ports, and disposable temporary storage. The prepared contract,
+filesystem, catalog and new scan tests are in the isolated-test inventory;
+Make parsed that inventory without invoking a build or controller. Logs,
+including the initial fixture failure, are retained under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/startup-prepared-scan.HZXocMr5`.
+
 ## Local verification
 
 Nine cache test groups pass with real temporary files and synthetic kernel

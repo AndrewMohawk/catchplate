@@ -265,7 +265,7 @@ class LocalAuthorityInstaller:
             self.handles.remove(fd)
             self.uncertain = False
 
-    def check(self):
+    def _check_base(self):
         self._origin(); _require(not self.failed)
         now_boot, now_epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
         value = self.value
@@ -275,14 +275,34 @@ class LocalAuthorityInstaller:
         self.last_boot, self.last_epoch = now_boot, now_epoch
         for fd, identity, raw in self.sources.values():
             _require(protected._identity(os.fstat(fd)) == identity)
-        for parent, name, fd, identity in self.links:
+
+    def _check_links(self, links):
+        for parent, name, fd, identity in links:
             info = os.stat(name, dir_fd=parent, follow_symlinks=False)
             actual = os.fstat(fd)
             _require((info.st_dev, info.st_ino) == identity == (actual.st_dev, actual.st_ino)
                 and actual.st_uid == actual.st_gid == 0 and not actual.st_mode & 0o022)
+
+    def _check_source_root(self):
         if getattr(self, "source_identity", None) is not None:
             _require(_identity(self.source_root) == self.source_identity)
             _frozen(self.source_root)
+
+    def check(self):
+        self._check_base()
+        self._check_links(self.links)
+        self._check_source_root()
+
+    def _check_scan_path(self, links):
+        """Fresh guards for one read-only scan path, not a saved full check.
+
+        The caller retains destination ancestry and the prepared root plus the
+        current directory's ancestors. Previously scanned siblings are checked
+        again by the full scan-exit guard, before any installation effect.
+        """
+        self._check_base()
+        self._check_links(links)
+        self._check_source_root()
 
     def _destination(self):
         with _owning(): current = self._hold(os.open("/", _READ | os.O_DIRECTORY))
@@ -470,9 +490,11 @@ class LocalAuthorityInstaller:
         self._drop(target); self.check()
         return row
 
-    def _adopt(self, entry):
+    def _adopt(self, entry, *, check=None):
         """Measure one already sealed static leaf without rewriting or sealing it."""
-        self.check()
+        _require(check is None or callable(check))
+        check = self.check if check is None else check
+        check()
         _require(entry["action"] == "adopt-prepared-static")
         path = entry["path"]
         with _owning(): fd = self._hold(_open_beneath(self.tree, path, _READ))
@@ -493,7 +515,7 @@ class LocalAuthorityInstaller:
             _require(key is not None)
 
             def check_adopted():
-                self.check()
+                check()
                 _require(protected._identity(os.fstat(fd)) == stamp
                     and protected._identity(os.stat(path, dir_fd=self.tree, follow_symlinks=False)) == stamp
                     and _identity(fd) == identity and _flags(fd) & _IMMUTABLE
@@ -507,7 +529,7 @@ class LocalAuthorityInstaller:
                 **identity, size=before.st_size, immutable=True, action="adopt-prepared-static")
         finally:
             self._drop(fd)
-        self.check()
+        check()
         return row
 
     def _prepared_tree(self):
@@ -530,8 +552,11 @@ class LocalAuthorityInstaller:
         parents, installed, seen_directories = {"": self.tree}, {}, set()
         mount_id = _mount_id(self.root)
 
-        def visit(fd, prefix):
-            self.check()
+        def visit(fd, prefix, path_links):
+            def check_path():
+                self._check_scan_path(path_links)
+
+            check_path()
             before = os.fstat(fd)
             _require(stat.S_ISDIR(before.st_mode) and before.st_uid == before.st_gid == 0
                 and stat.S_IMODE(before.st_mode) == 0o700
@@ -540,22 +565,27 @@ class LocalAuthorityInstaller:
             _identity(fd)  # Every retained directory needs a real inode generation.
             with os.scandir(fd) as children:
                 for child in children:
-                    self.check()
+                    check_path()
                     path = prefix + child.name
                     _require(path in rows or path in directories)
                     if path in rows:
                         _require(path not in installed)
-                        installed[path] = self._adopt(rows[path])
+                        installed[path] = self._adopt(rows[path], check=check_path)
                     else:
                         _require(path not in seen_directories)
                         with _owning(): held = self._hold(_open_beneath(fd, child.name, _READ | os.O_DIRECTORY))
                         current = os.fstat(held)
-                        self.links.append((fd, child.name, held, (current.st_dev, current.st_ino)))
+                        link = (fd, child.name, held, (current.st_dev, current.st_ino))
+                        self.links.append(link)
                         parents[path] = held; seen_directories.add(path)
-                        visit(held, path + "/")
+                        visit(held, path + "/", path_links + (link,))
             _require(protected._identity(os.fstat(fd)) == protected._identity(before))
+            check_path()
 
-        visit(self.tree, "")
+        # Capture after retaining the selected root. Only this read-only walk
+        # uses path guards; full checks at entry/exit and all mutation sites
+        # retain the complete link roster, including previously visited peers.
+        visit(self.tree, "", tuple(self.links))
         _require(set(installed) == set(rows) and seen_directories == directories)
         self.check()
         return parents, installed

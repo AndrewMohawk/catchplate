@@ -1,6 +1,8 @@
 //! Finite executor controls with real signed policy/quote/material verification.
 //! Synthetic loopback authority only: no provider or native custody acceptance.
 use super::*;
+#[path = "operator_static_release_tests.rs"]
+mod release_tests;
 use crate::operator_audit_publication::{Owner, TestPhase, LOCK_NAME};
 use crate::operator_background_renewal::execute;
 use std::os::fd::AsRawFd;

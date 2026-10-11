@@ -22706,8 +22706,19 @@ fn refresh_scoped_credential_material_on_deadline(
     purpose: CredentialLeasePurpose, request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>, deadline: Option<Instant>,
 ) -> Result<(), String> {
+    refresh_scoped_credential_material_pinned_on_deadline(
+        state, snapshot, scope, purpose, request_authority, release_authorization, deadline, None,
+    )
+}
+
+fn refresh_scoped_credential_material_pinned_on_deadline(
+    state: &GateState, snapshot: &Arc<Snapshot>, scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose, request_authority: Option<&CredentialLeaseRequestAuthority>,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>, deadline: Option<Instant>,
+    expected_pin: Option<&CredentialLeaseGeneration>,
+) -> Result<(), String> {
     check_credential_operation_deadline(deadline)?;
-    let expected_generation = if purpose == CredentialLeasePurpose::DispatchSecret {
+    let expected_generation: Option<CredentialLeaseGeneration> = if purpose == CredentialLeasePurpose::DispatchSecret {
         let validation_epoch_ms = now_epoch_ms();
         let validation_monotonic = Instant::now();
         state
@@ -22729,6 +22740,24 @@ fn refresh_scoped_credential_material_on_deadline(
     } else {
         None
     };
+    // Compare the exact generation that will be passed to fetch, not a prior
+    // cache observation. Renewal may change expiry, never this request's pin.
+    if let Some(pin) = expected_pin {
+        if deadline.is_none()
+            || !operator_static_preparation::admitted(
+                state, snapshot, scope, request_authority, release_authorization,
+            )?
+            || !expected_generation.as_ref().is_some_and(|generation| {
+                generation.profile == pin.profile
+                    && generation.policy_hash == pin.policy_hash
+                    && generation.version == pin.version
+                    && generation.metadata_sha256 == pin.metadata_sha256
+                    && generation.metadata == pin.metadata
+            })
+        {
+            return Err("operator static release generation changed before secret fetch".to_owned());
+        }
+    }
     let operator_google = operator_google_reconciliation::admitted(state, snapshot, scope,
         request_authority, release_authorization)?.is_some();
     let bounded_operator_static = deadline.is_some() && operator_static_preparation::admitted(
@@ -24862,6 +24891,22 @@ fn record_required_credential_release_start(
     url: &Url,
     binding: &CredentialLeaseReleaseBinding,
 ) -> bool {
+    record_required_credential_release_start_for_scope(
+        state, decision, method, url, &binding.scope, binding.version,
+    )
+}
+
+// This records a pre-dispatch intent, not provider arrival or send authority.
+// Ordinary operator-static requests can acknowledge it before final lease
+// selection; every other caller retains the binding-based wrapper above.
+fn record_required_credential_release_start_for_scope(
+    state: &GateState,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    scope: &CredentialLeaseScope,
+    version: u64,
+) -> bool {
     if !audit_enabled(state) {
         state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
         return false;
@@ -24875,8 +24920,8 @@ fn record_required_credential_release_start(
             "release_started",
             json!({
                 "stage":"credential_release",
-                "credential_ref":binding.scope.credential_id,
-                "credential_version":binding.version,
+                "credential_ref":scope.credential_id,
+                "credential_version":version,
             }),
         ),
         true,
@@ -46573,6 +46618,9 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     mut response_observation: Option<&mut ResponseObservationTrace>,
     keep_alive: bool,
 ) -> ForwardResult {
+    // Starts before the decision's preparation budget, so post-audit static
+    // acquisition cannot restart or expand the existing fifteen-second bound.
+    let operator_release_deadline = Instant::now() + CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT;
     let mut shadow_finalization = shadow_admission
         .as_ref()
         .and_then(ShadowAdmission::finalization_handle);
@@ -46965,18 +47013,28 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         TransientProviderRequest::new(headers, upstream_url.clone());
     let mut response_secret_guard = ResponseSecretGuard::default();
     let mut credential_release_binding = None;
+    let mut operator_release_audited = false;
     if let Some(credential_ref) = decision.get("credential_ref").and_then(Value::as_str) {
         let credential_version = decision
             .get("credential_version")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let lease = match credential_lease_for_release(
-            state,
-            snapshot,
-            &decision,
-            credential_ref,
-            credential_version,
+        let selected_lease = match operator_static_preparation::prepare_release_if_admitted(
+            state, snapshot, &decision, &request.method, &upstream_url,
+            v2_proof_requested || response_proof_requested || client_request_digest.is_some()
+                || release_authorization.is_some() || route_streaming || shadow_finalization.is_some(),
+            operator_release_deadline,
         ) {
+            Ok(Some(lease)) => {
+                operator_release_audited = true;
+                Ok(lease)
+            }
+            Ok(None) => credential_lease_for_release(
+                state, snapshot, &decision, credential_ref, credential_version,
+            ),
+            Err(_) => Err("operator_static_release_unavailable"),
+        };
+        let lease = match selected_lease {
             Ok(lease) => lease,
             Err(_) => {
                 enqueue_audit(
@@ -47081,7 +47139,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
-    if release_authorization.is_none()
+    if !operator_release_audited && release_authorization.is_none()
         && credential_release_binding.as_ref().is_some_and(|binding| {
             !record_required_credential_release_start(
                 state,

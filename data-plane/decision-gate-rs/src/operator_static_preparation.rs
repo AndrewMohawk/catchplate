@@ -1,4 +1,4 @@
-//! Freshness preparation before an ordinary operator-static decision is fixed.
+//! Freshness preparation for ordinary operator-static decisions and release.
 //! This is not send authority, a lease extension, or a provider-request retry.
 use super::*;
 use super::operator_static_preparation_diagnostics::{Attempt, Stage};
@@ -134,15 +134,24 @@ fn generation_with_margin(
         .cloned())
 }
 
+fn same_generation(left: &CredentialLeaseGeneration, right: &CredentialLeaseGeneration) -> bool {
+    left.profile == right.profile
+        && left.policy_hash == right.policy_hash
+        && left.version == right.version
+        && left.metadata_sha256 == right.metadata_sha256
+        && left.metadata == right.metadata
+}
+
 /// Both caches are examined together, after their locks have been acquired.
 /// The pin is the generation selected before dispatch-secret acquisition. A
 /// concurrent new static generation is a refusal, never a reconciliation.
-fn pair_with_margin(
+fn pair_with_margin<T>(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
     pin: &CredentialLeaseGeneration,
-) -> Result<Option<CredentialLeaseInfo>, String> {
+    select: impl FnOnce(&SecretLease) -> T,
+) -> Result<Option<T>, String> {
     let active = state.snapshot.read().map_err(|_| refused())?;
     if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
         return Err(refused());
@@ -151,11 +160,7 @@ fn pair_with_margin(
     let generations = state.credential_generations.lock().map_err(|_| refused())?;
     let (epoch, monotonic) = margin()?;
     let generation = generations.get(scope).ok_or_else(refused)?;
-    if generation.profile != pin.profile
-        || generation.version != pin.version
-        || generation.metadata_sha256 != pin.metadata_sha256
-        || generation.metadata != pin.metadata
-    {
+    if !same_generation(generation, pin) {
         return Err(refused());
     }
     if !credential_generation_valid_after(generation, snapshot, epoch, monotonic) {
@@ -173,7 +178,7 @@ fn pair_with_margin(
                 && lease.release_authorization.is_none()
                 && credential_secret_lease_valid_after(lease, snapshot, epoch, monotonic)
         })
-        .map(lease_info))
+        .map(select))
 }
 
 /// None means an excluded owner/request and keeps its old acquisition path.
@@ -199,6 +204,17 @@ pub(super) fn prepare_on_deadline(
     scope: &CredentialLeaseScope,
     deadline: Instant,
 ) -> Result<CredentialLeaseInfo, String> {
+    prepare_pair_on_deadline(state, snapshot, scope, deadline, None, lease_info)
+}
+
+fn prepare_pair_on_deadline<T>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    deadline: Instant,
+    expected_pin: Option<&CredentialLeaseGeneration>,
+    select: impl FnOnce(&SecretLease) -> T,
+) -> Result<T, String> {
     check_credential_operation_deadline(Some(deadline))?;
     if !admitted(state, snapshot, scope, None, None)? {
         return Err(refused());
@@ -218,6 +234,15 @@ pub(super) fn prepare_on_deadline(
     );
     diagnostic.observe(Stage::AdmissionDeadline, check_credential_operation_deadline(Some(deadline)))?;
     mark_credential_lease_activity(state, snapshot, scope);
+    if let Some(expected) = expected_pin {
+        let generations = state.credential_generations.lock().map_err(|_| refused())?;
+        let current = generations.get(scope).ok_or_else(refused)?;
+        if !same_generation(current, expected)
+            || !credential_generation_floor_matches(current, snapshot)
+        {
+            return diagnostic.observe(Stage::GenerationLookup, Err(refused()));
+        }
+    }
     let pin = match diagnostic.observe(Stage::GenerationLookup, generation_with_margin(state, snapshot, scope))? {
         Some(generation) => generation,
         None => {
@@ -234,25 +259,128 @@ pub(super) fn prepare_on_deadline(
             diagnostic.observe(Stage::GenerationMargin, generation.ok_or_else(refused))?
         }
     };
+    if expected_pin.is_some_and(|expected| !same_generation(&pin, expected)) {
+        return diagnostic.observe(Stage::GenerationMargin, Err(refused()));
+    }
     diagnostic.observe(Stage::Binding, validate_runtime_credential_binding(snapshot, scope, &pin.metadata))?;
     diagnostic.observe(Stage::Binding, check_credential_operation_deadline(Some(deadline)))?;
-    if diagnostic.observe(Stage::PairBeforeSecret, pair_with_margin(state, snapshot, scope, &pin))?.is_none() {
-        diagnostic.observe(Stage::SecretRefresh, refresh_scoped_credential_material_singleflight_on_deadline(
-            state,
-            snapshot,
-            scope,
-            CredentialLeasePurpose::DispatchSecret,
-            None,
-            None,
-            Some(deadline),
-        ))?;
+    if diagnostic.observe(Stage::PairBeforeSecret, pair_with_margin(state, snapshot, scope, &pin, lease_info))?.is_none() {
+        let result = if expected_pin.is_some() {
+            refresh_scoped_credential_material_singleflight_with_leader(
+                state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
+                None, None, Some(deadline),
+                |original_deadline| refresh_scoped_credential_material_pinned_on_deadline(
+                    state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
+                    None, None, original_deadline, Some(&pin),
+                ),
+            )
+        } else {
+            refresh_scoped_credential_material_singleflight_on_deadline(
+                state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
+                None, None, Some(deadline),
+            )
+        };
+        diagnostic.observe(Stage::SecretRefresh, result)?;
     }
     // No further acquisition, even if either renewed value is already short.
     if !diagnostic.observe(Stage::FinalAdmission, admitted(state, snapshot, scope, None, None))? {
         return diagnostic.observe(Stage::FinalAdmission, Err(refused()));
     }
-    let info = diagnostic.observe(Stage::FinalPair, pair_with_margin(state, snapshot, scope, &pin))?;
+    if expected_pin.is_some()
+        && credential_lease_profile(state, &snapshot.hash)? != ReleaseProfile::Legacy
+    {
+        return diagnostic.observe(Stage::FinalAdmission, Err(refused()));
+    }
+    let info = diagnostic.observe(Stage::FinalPair, pair_with_margin(state, snapshot, scope, &pin, select))?;
     let info = diagnostic.observe(Stage::FinalPair, info.ok_or_else(refused))?;
     diagnostic.observe(Stage::FinalDeadline, check_credential_operation_deadline(Some(deadline)))?;
     Ok(info)
+}
+
+/// Audit the fixed decision before selecting the secret used for injection.
+/// An acknowledged attempt is not provider arrival. No secret or release
+/// binding is retained across the audit wait, and there is no provider retry.
+pub(super) fn prepare_release_if_admitted(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    proof_requested: bool,
+    original_deadline: Instant,
+) -> Result<Option<SecretLease>, String> {
+    if proof_requested
+        || !state.policy_shadow.is_operator_demo()
+        || decision.get("client_request_digest").is_some_and(|value| !value.is_null())
+        || decision.get("release_authorization").is_some_and(|value| !value.is_null())
+    {
+        return Ok(None);
+    }
+    let Some(credential_id) = decision.get("credential_ref").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let credential_id = credential_id.as_str().filter(|value| !value.is_empty()).ok_or_else(refused)?;
+    let principal_id = decision.get("principal_id").and_then(Value::as_str)
+        .filter(|value| !value.is_empty()).ok_or_else(refused)?;
+    let route_id = decision.get("route_id").and_then(Value::as_str)
+        .filter(|value| !value.is_empty()).ok_or_else(refused)?;
+    let scope = CredentialLeaseScope::new(principal_id, route_id, credential_id);
+    if !admitted(state, snapshot, &scope, None, None)? {
+        return Ok(None);
+    }
+    if decision.get("allowed").and_then(Value::as_bool) != Some(true)
+        || decision.get("action").and_then(Value::as_str) != Some("allow")
+        || decision.pointer("/jit/required").and_then(Value::as_bool) != Some(false)
+    {
+        return Err(refused());
+    }
+    let route = decision_route_context(snapshot, decision, method, url).map_err(|_| refused())?;
+    if route.route.credential_ref.as_deref() != Some(credential_id) {
+        return Err(refused());
+    }
+    let version = decision.get("credential_version").and_then(Value::as_u64)
+        .filter(|version| *version > 0).ok_or_else(refused)?;
+    let canonical = decision.get("canonical_request").and_then(Value::as_object).ok_or_else(refused)?;
+    let version_text = version.to_string();
+    if canonical.get("principal").and_then(Value::as_str) != Some(principal_id)
+        || canonical.get("route_id").and_then(Value::as_str) != Some(route_id)
+        || canonical.get("credential_ref").and_then(Value::as_str) != Some(credential_id)
+        || canonical.get("credential_version").and_then(Value::as_str) != Some(version_text.as_str())
+        || canonical.get("policy_hash").and_then(Value::as_str) != Some(snapshot.hash.as_str())
+        || credential_lease_profile(state, &snapshot.hash)? != ReleaseProfile::Legacy
+    {
+        return Err(refused());
+    }
+    check_credential_operation_deadline(Some(original_deadline))?;
+    let app_remaining = principal_expiry(snapshot, &scope)?.checked_sub(now_epoch_ms())
+        .and_then(|remaining| u64::try_from(remaining).ok()).ok_or_else(refused)?;
+    let deadline = original_deadline.min(Instant::now()
+        .checked_add(Duration::from_millis(app_remaining)).ok_or_else(refused)?);
+    check_credential_operation_deadline(Some(deadline))?;
+    let pin = {
+        let active = state.snapshot.read().map_err(|_| refused())?;
+        if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+            return Err(refused());
+        }
+        let generations = state.credential_generations.lock().map_err(|_| refused())?;
+        let generation = generations.get(&scope).ok_or_else(refused)?;
+        if generation.profile != ReleaseProfile::Legacy
+            || generation.version != version
+            || !credential_generation_valid_after(generation, snapshot, now_epoch_ms(), Instant::now())
+        {
+            return Err(refused());
+        }
+        generation.clone()
+    };
+    validate_runtime_credential_binding(snapshot, &scope, &pin.metadata)?;
+    check_credential_operation_deadline(Some(deadline))?;
+    // All cache/snapshot guards above have been released. The existing audit
+    // helper owns and drops its publication permit before acquisition begins.
+    if !record_required_credential_release_start_for_scope(
+        state, decision, method, url, &scope, version,
+    ) {
+        return Err("required credential release audit unavailable".to_owned());
+    }
+    check_credential_operation_deadline(Some(deadline))?;
+    prepare_pair_on_deadline(state, snapshot, &scope, deadline, Some(&pin), Clone::clone).map(Some)
 }

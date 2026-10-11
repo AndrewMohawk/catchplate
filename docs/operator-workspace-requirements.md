@@ -494,8 +494,11 @@ consent callback. Generic catalog rules still bind one literal path; the new
 explicit Read Gmail bundle covers bounded list, pagination and returned-ID
 message reads with its own ordinary query contract. Its isolated Requests job
 passed before and after actual synthetic-token expiry without new consent or
-exposing provider tokens. See [the exact verification boundary](operator-gmail-job-verification.md).
-Real Google, the joined browser journey and stock SDK compatibility remain open.
+exposing provider tokens. The actual official Go Gmail SDK example subsequently
+passed that local workflow over an HTTPS proxy using Basic CONNECT and separate
+trust roots, with wrong-trust, unassigned-app and revocation controls. See
+[the exact verification boundary](operator-gmail-job-verification.md).
+Real Google, the joined browser journey and other SDKs remain open.
 Mail-age restrictions remain optional, with their independent response checks
 when selected. Attachments, history and other operations must be named explicitly
 rather than silently included in a vague "Google access" grant.
@@ -548,23 +551,20 @@ grant family and revoke affected rules. Reconnect must preserve and deliberately
 reconcile the existing account identity and assignments through its own supported
 workflow. Account-level repair must show which applications it affects.
 
-## Remaining ordinary-client usability gaps
+## Ordinary-client compatibility boundaries and remaining gaps
 
 The current source is not yet a general "just replace authentication" proxy.
 Removing mandatory response projection solves only one part of that journey:
 
-- Standard proxy username/password configuration is not yet supported for
-  catalog applications. The signed policy and Rust CONNECT identity capture
-  accept their scoped Bearer tokens; stock Requests proxy URL credentials emit
-  Basic instead. The Gmail job therefore uses a custom adapter. This is a real
-  ordinary-client authentication gap, separate from provider Basic injection.
-  Add an explicit signed transport choice with hash/expiry checks and unchanged
-  legacy semantics, not literal app credentials in policy or a hidden header
-  rewrite. Acceptance needs unmodified Requests and curl over a verified HTTPS
-  proxy, correct outer/inner CA trust, wrong/expired-identity denial before
-  upstream contact, continued Bearer compatibility and proof that workload
-  credentials never reach the provider. Test the named clients without claiming
-  arbitrary SDK support or real Google acceptance.
+- Standard Basic proxy login is now an explicit signed choice for catalog
+  applications, retaining scoped token hash/expiry checks and legacy Bearer
+  behavior. The [Requests/curl verification and rollout record](operator-basic-rollout.md)
+  distinguishes isolated HTTPS acceptance from the bounded live smoke. The
+  official Go Gmail example also now has isolated Basic/HTTPS acceptance;
+  the older Requests Gmail job alone used a custom Bearer adapter. This does
+  not implement provider Basic injection, renew expired application tokens or
+  establish arbitrary SDK support. Client trust configuration and workload
+  credential separation remain part of each named client's acceptance.
 - Legacy rules can interpret an empty request-field list as forbidding a body.
   New supported rules explicitly preserve bounded strict JSON without field
   declarations; the deployed UI selects the advertised contract automatically.

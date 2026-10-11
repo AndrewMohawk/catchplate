@@ -12,7 +12,18 @@ cold restart without replacing the saved catalog. This is separate from account
 consent and does not enable Google in the live demo. See the
 [setup contract and verification](operator-google-setup.md).
 
-Current joined checkpoint, 2026-10-09: the isolated **Read Gmail** job passed
+Current joined checkpoint, 2026-10-11 UTC: the actual checked-in official Go
+Gmail SDK example passed through the normal Rust proxy in an isolated network
+fixture. It completed eight list/pagination/message requests across actual
+synthetic-token expiry, with one automatic refresh, Basic CONNECT over HTTPS,
+separate outer/inner trust roots and matching durable audit records. Wrong trust
+roots, an unassigned application and revoked permission caused no provider
+requests. The same account/application continued without reconnection. This is
+the named SDK's local workflow, not real Google, public deployment, browser or
+native-pilot acceptance. See the
+[joined SDK record](operator-gmail-job-verification.md#joined-official-sdk-result-2026-10-11-utc).
+
+The earlier joined checkpoint, 2026-10-09: the isolated **Read Gmail** job passed
 list/pagination/message reads before and after actual synthetic-token expiry:
 eight proxy requests, one automatic refresh and eight matching audit attempts.
 The same account and application continued without reconnection. This used

@@ -128,11 +128,20 @@ redirect after refusal, bounds, and CONNECT credential separation. TLS tests use
 synthetic certificates to check both correct and crossed trust roles without
 opening sockets.
 
-These are offline source/serialization tests, **not** a successful Gmail consent,
-proxy dispatch, token refresh, live Google request or deployed HTTPS acceptance
-claim. On 2026-10-10, all eight test groups passed with Go 1.23.12 and the pinned
-dependencies (`GOPROXY=off go test -p 2 -count=1 -v ./...`); no live network test
-has been run. Python's generated Gmail client was not substituted: its reviewed
-default `httplib2` transport does
+On 2026-10-10, all eight offline groups passed with Go 1.23.12 and the pinned
+dependencies (`GOPROXY=off go test -p 2 -count=1 -v ./...`). A separate isolated
+network run passed on 2026-10-11 UTC using this actual compiled entrypoint and
+the normal Serverware application and Rust proxy. It completed list/pagination
+and returned-ID reads before and after genuine synthetic-token expiry: eight
+requests, one automatic refresh, separate HTTPS-proxy/interception trust roots,
+Basic CONNECT authentication and matching durable audit records. Wrong outer
+CA, wrong inner CA, an unassigned application and a revoked permission each
+failed without any extra provider request. See the
+[joined verification record](../../docs/operator-gmail-job-verification.md#joined-official-sdk-result-2026-10-11-utc).
+
+That run used a local synthetic provider with no external network or real Google
+credentials. It does **not** prove real Google consent, a live Google request,
+public deployment or a joined browser journey. Python's generated Gmail client
+was not substituted: its reviewed default `httplib2` transport does
 not provide the required TLS-to-HTTPS-proxy hop, so this example deliberately uses
 the official Go SDK instead.

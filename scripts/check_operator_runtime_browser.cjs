@@ -18,10 +18,11 @@ const REVIEWED_UPSTREAMS = [[FIXTURE], [FIXTURE, GMAIL],
 const GOOGLE_SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
 const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
-  'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
-const SCRIPT_ROSTERS = [SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
-  SCRIPTS.filter(name => !['workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
-  SCRIPTS.filter(name => name !== 'workspace_aws.js'), SCRIPTS];
+  'workspace_resources.js', 'workspace_applications.js', 'workspace_gmail_sdk.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
+const PRE_GMAIL_SCRIPTS = SCRIPTS.filter(name => name !== 'workspace_gmail_sdk.js');
+const SCRIPT_ROSTERS = [PRE_GMAIL_SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
+  PRE_GMAIL_SCRIPTS.filter(name => !['workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
+  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;

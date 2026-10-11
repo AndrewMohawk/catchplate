@@ -40,8 +40,14 @@ delete, modification, attachment, history, profile or Calendar calls.
    Existing permissions and application login modes are not silently upgraded;
    enable Basic in Applications if needed, select/create the intended replacement
    permission, and resolve any overlapping permission explicitly.
-4. Use the workspace's actual HTTPS proxy address and download its interception
-   CA. A working source checkout does not make a deployment or Google account ready.
+4. After the exact saved permission is loaded, use **Proxy setup** (also shown
+   at the end of Connect). Download the interception CA, enter its local path,
+   and set the optional separate proxy CA path only if your proxy uses a private
+   certificate authority. **Copy connection template** supplies the Go SDK job
+   recipe for this exact application and permission, not a manual Gmail cURL
+   request. The public recipe contains no application or Google token and does
+   not run anything in the browser. A working source checkout does not make a
+   deployment or Google account ready.
 
 This permission is GET-only for `https://gmail.googleapis.com/gmail/v1/users/me/messages`
 and individual message paths. The permission itself has **no age restriction**;
@@ -68,7 +74,23 @@ use those pins, not regenerate them as part of running the example. Local build
 binaries, real environment files and CA/key material are ignored; keep the
 checked-in `.env.example` free of secrets.
 
-`.env.example` is a reference; the program does not automatically load it. Set
+With the binary built, set `SERVERWARE_PROXY_TOKEN` privately and paste the
+workspace's copied recipe into Bash from this project directory. It passes the
+token through stdin into the child's process environment, never a command-line
+argument, and starts `./gmail-example` with only the selected SDK settings.
+Ambient provider credentials, proxy overrides and TLS overrides are not carried
+into that child. The parent shell's environment is unchanged. The recipe does
+not install dependencies, renew the application token or repeat a failed job.
+
+The optional **private client configuration** download is available only while
+the browser holds this application's one-time token. Its `client_recipe` includes
+the exact SDK environment, including that private token, plus the example
+directory and entrypoint. Keep the JSON out of source control. It is reference
+configuration, not an executable, and this Go program does not load it
+automatically. A previously saved application's token cannot be retrieved by
+opening Proxy setup.
+
+For manual configuration, `.env.example` is a reference; the program does not automatically load it. Set
 these variables in the process environment using your private secret-injection
 method:
 

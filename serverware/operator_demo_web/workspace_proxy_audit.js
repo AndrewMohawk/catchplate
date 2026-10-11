@@ -61,11 +61,17 @@ function createProxyView(workspace, applications) {
   let gmailContext = '';
   let githubContext = '';
   let alchemyContext = '';
+  function gmailSdkOptions(catalog, application, rule) {
+    return {proxyUrl: catalog.proxy_url, applicationId: application.id, accessRuleId: rule.id,
+      tokenExpiresAtEpochMs: application.token_expires_at_epoch_ms,
+      caPath: element('ca-path').value, proxyCaPath: element('gmail-proxy-ca-path').value};
+  }
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     renderOperatorExampleProjects(null, null);
     element('gmail-client-controls').hidden = true;
+    element('gmail-sdk-client-controls').hidden = true;
     element('gmail-sdk-guidance').hidden = true; element('gmail-sdk-app-link').hidden = true;
     element('github-client-controls').hidden = true;
     element('npm-client-controls').hidden = true;
@@ -81,6 +87,7 @@ function createProxyView(workspace, applications) {
     chooseOptions('proxy-rule', catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id), 'Add an access rule for this application');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
     const gmail = isGmailRule(rule);
+    const gmailSdk = operatorGmailSdkCompatible(rule, catalog);
     const github = isGithubRule(rule);
     const npm = isNpmRule(rule);
     const npmPublish = isNpmPublishRule(rule);
@@ -97,20 +104,22 @@ function createProxyView(workspace, applications) {
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github || npm || npmPublish || x || alchemy; element('proxy-method').disabled = github || npm || npmPublish || x || alchemy;
-    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || x || alchemy;
+    element('proxy-method').hidden = github || npm || npmPublish || x || alchemy || gmailSdk; element('proxy-method').disabled = github || npm || npmPublish || x || alchemy || gmailSdk;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || x || alchemy || gmailSdk;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
-    element('gmail-client-controls').hidden = !gmail;
-    const messageRead = gmail && element('gmail-client-operation').value === 'message';
+    element('gmail-client-controls').hidden = !gmail || gmailSdk;
+    element('gmail-sdk-client-controls').hidden = !gmailSdk;
+    const messageRead = gmail && !gmailSdk && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-title').textContent = alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official Go SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
     element('client-template-warning').textContent = alchemy ?
       'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here and this page does not prove provider entitlement.' : x ?
       'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
-      'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmail ?
+      'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmailSdk ?
+      'Run the existing official Go example to list at most two pages of five inbox messages and read metadata for their returned IDs. It prints counts only, makes no writes, and has a two-minute overall deadline. This page does not run the job or verify Google access.' : gmail ?
       'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
       'This template includes no request body or query parameter values. It is not a complete API operation or a successful request test. Supply endpoint-specific data in your existing client, using only what the selected rule permits.';
     chooseOptions('proxy-method', (rule?.methods || []).filter(method => operatorMethods.includes(method)).map(method => ({id: method, name: method})), 'No supported method');
@@ -131,7 +140,7 @@ function createProxyView(workspace, applications) {
       element('gmail-sdk-guidance').hidden = false;
       element('gmail-sdk-app-link').hidden = !needsBasic;
       element('gmail-sdk-guidance').textContent = sdk ?
-        'Use the Go + Gmail SDK project below for the bounded mail-reading job. It uses this exact public dummy, your separate Serverware app ID/token and the downloaded CA. Both TLS legs remain verified; this page has not run the job or tested your account.' : needsBasic ?
+        'Copy the Bash recipe for the Go + Gmail SDK project below. Build the reviewed example before supplying your Serverware app token. The recipe runs the bounded job in a clean child environment, with the public dummy and independently verified TLS roots; this page has not run it or tested your account.' : needsBasic ?
         'The official Gmail SDK needs standard username/password proxy login. Use Applications to explicitly enable it if advertised, then refresh. This page does not change your app or token. The saved permission must also use ordered Gmail queries and the exact SDK dummy.' :
         'This saved permission does not match the official SDK’s ordered-query and public-dummy contract. Keep using its existing HTTP configuration, or explicitly review a new Read Gmail permission with the Official Gmail SDK choice. No saved rule is upgraded or widened here.';
     }
@@ -163,12 +172,15 @@ function createProxyView(workspace, applications) {
         packages: rule.packages, packageName: element('npm-client-package').value, caPath: element('ca-path').value}) : github ? buildGithubClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         repository: rule.repository, bundle: rule.operation_bundle, operation: element('github-client-operation').value,
         caPath: element('ca-path').value, proxyCaPath: element('github-proxy-ca-path').value}) :
+        gmailSdk ? buildGmailSdkClientRecipe(gmailSdkOptions(catalog, application, rule)) :
         buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
         caPath: element('ca-path').value, allowedHeaders: rule.allowed_headers,
         credentialInput: rule.credential_input, placeholder: rule.placeholder, credential,
         proxyAuthentication, applicationId: application.id});
       dummyHeader = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
-    } catch (_) { element('client-command').textContent = 'A valid public HTTPS proxy and supported rule are required.'; return; }
+    } catch (_) { element('client-command').textContent = gmailSdk ?
+      'A current saved Gmail SDK application, valid HTTPS proxy and explicit printable CA paths are required.' :
+      'A valid public HTTPS proxy and supported rule are required.'; return; }
     element('client-command').textContent = command;
     const ready = workspace.loaded() && rule.enforcement === 'active' && application.access_status === 'active' && !workspace.state.busy && !workspace.state.uncertain;
     element('copy-command').disabled = !ready;
@@ -184,6 +196,14 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (gmailSdk) {
+      element('client-guidance').textContent = (ready ?
+        'The exact saved policy is loaded and the application token is not expired. ' :
+        'Wait for the exact saved policy to load and resolve uncertain changes before copying or running. ') +
+        'From examples/google-gmail-go, run the copied Bash recipe with the already-built ./gmail-example and your application token set privately. No provider credentials are inherited by the job. The SDK reads a bounded inbox sample and prints counts only; no complete-mailbox or age-policy claim. ' +
+        'The optional private JSON download contains the matching application token and explicit SDK environment/entrypoint. It is not an executable; keep it out of source control. No client connection was tested here.';
+      return;
+    }
     if (alchemy) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No Alchemy request was tested here. ' :
         'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
@@ -252,13 +272,15 @@ function createProxyView(workspace, applications) {
   for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package', 'alchemy-client-method']) element(id).addEventListener('change', render);
   element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
+  element('gmail-proxy-ca-path').addEventListener('input', render);
   element('github-proxy-ca-path').addEventListener('input', render);
   element('alchemy-proxy-ca-path').addEventListener('input', render);
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = !element('alchemy-client-controls').hidden ?
+      element('client-copy-status').textContent = !element('gmail-sdk-client-controls').hidden ?
+        'Copied the Bash recipe for the existing Go Gmail job. Set the application token privately and use the reviewed built example; no Google token, build or request is included in this copy action.' : !element('alchemy-client-controls').hidden ?
         'Copied the fixed Alchemy JSON-RPC read template. Set the Serverware app token locally, never the provider key. No request was executed by this page.' : !element('npm-publish-client-controls').hidden ?
         'Copied npmrc settings and the separate publishing command. Review the local package before running it; this page sent no publish request.' : !element('npm-client-controls').hidden ?
         'Copied npmrc settings and the separate metadata command. Set the app token and a fresh private cache locally; no lookup was executed by this page.' : !element('github-client-controls').hidden ?
@@ -300,7 +322,12 @@ function createProxyView(workspace, applications) {
       if (Object.hasOwn(rule, 'query_mode')) config.query_mode = rule.query_mode;
       config.operations = [{name: 'List messages', method: 'GET', url: rule.upstream_url},
         {name: 'Read message', method: 'GET', url_template: rule.upstream_url + '/{message_id}', message_id_source: 'id returned by this account message list'}];
-      config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
+      if (operatorGmailSdkCompatible(rule, catalog)) {
+        try { config.client_recipe = gmailSdkClientConfiguration(gmailSdkOptions(catalog, application, rule), token); }
+        catch (_) { element('client-copy-status').textContent = 'Private Gmail SDK configuration is unavailable; refresh and confirm this application token and CA paths.'; return; }
+        config.proxy_ca_file = element('gmail-proxy-ca-path').value || null;
+        config.note += ' Contains this application token in client_recipe.environment and proxy_password. Run only the existing reviewed Go inbox example with the explicit clean environment/entrypoint; this JSON is not an executable. Bounded sample, no age restriction. Keep out of source control.';
+      } else config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
     }
     if (isGithubRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.repository = {...rule.repository}; config.query_mode = rule.query_mode;

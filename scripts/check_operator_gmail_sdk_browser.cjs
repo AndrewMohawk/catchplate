@@ -16,7 +16,7 @@ const CHROME_SHA = '27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c
 const sha = value => 'sha256:' + crypto.createHash('sha256').update(value).digest('hex');
 function requireValue(value) { if (!value) throw new Error('Gmail browser permission check refused'); }
 const STAGES = ['inputs', 'launch_browser', 'await_checker', 'open_page', 'await_observer', 'select_account',
-  'select_app', 'select_permission', 'review', 'grant', 'await_saved', 'close_browser', 'await_sdk'];
+  'select_app', 'select_permission', 'review', 'grant', 'await_saved', 'copy_recipe', 'close_browser', 'await_sdk'];
 const FAILURES = ['workflow', 'deadline', 'signal', 'request_refused', 'page_error', 'console_error',
   'websocket', 'popup', 'download', 'checker_io', 'checker_frame', 'checker_exit'];
 function failureReceipt(stage, code, observations) {
@@ -35,6 +35,13 @@ function requestFrame(request, id) {
     ['accept', 'content-type', 'origin', 'referer'].includes(key)));
   requireValue(!Object.keys(request.headers()).some(key => /^(authorization|proxy-authorization|cookie|x-serverware-)/.test(key)));
   return {type: 'request', id, method, path: url.pathname, headers, body: raw.toString('base64')};
+}
+function copiedRecipeFrame(copied, displayed, id) {
+  requireValue(typeof copied === 'string' && copied === displayed && !copied.includes('\0')
+    && Number.isSafeInteger(id) && id >= 1 && id <= 16);
+  const raw = Buffer.from(copied, 'utf8');
+  requireValue(raw.length > 0 && raw.length <= 8192 && raw.toString('utf8') === copied);
+  return {type: 'done', id, copiedRecipe: raw.toString('base64')};
 }
 
 async function main() {
@@ -82,6 +89,7 @@ async function main() {
       args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update',
         '--disable-domain-reliability', '--disable-sync', '--no-first-run', '--host-resolver-rules=MAP * ~NOTFOUND']});
     context = await browser.newContext({viewport: {width: 1440, height: 1000}, serviceWorkers: 'block', acceptDownloads: false});
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: ORIGIN});
     await context.routeWebSocket('**/*', socket => { observations.refusedRequests++; socket.close(); fail('websocket'); });
     await context.route('**/*', route => {
       chain = chain.then(async () => {
@@ -181,15 +189,32 @@ async function main() {
     requireValue(await page.locator('#client-token').inputValue() === '' && await page.locator('#one-time-access').isHidden());
     requireValue(await page.evaluate(() => localStorage.length === 0 && sessionStorage.length === 0));
     await screenshot('saved.png');
+    stage = 'copy_recipe';
+    await page.locator('#gmail-sdk-client-controls').waitFor({state: 'visible'});
+    requireValue(await page.locator('#gmail-client-controls').isHidden()
+      && await page.locator('#download-config').isDisabled());
+    await page.locator('#ca-path').fill('/client-trust/inner-ca.pem');
+    await page.locator('#gmail-proxy-ca-path').fill('/client-trust/outer-ca.pem');
+    await page.locator('#copy-command').click();
+    await page.locator('#client-copy-status').filter({hasText: /^Copied the Bash recipe for the existing Go Gmail job\./})
+      .waitFor({state: 'visible'});
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    const displayed = await page.locator('#client-command').textContent();
+    const handoff = copiedRecipeFrame(copied, displayed, sequence + 1);
+    observations.copiedRecipeSha256 = sha(Buffer.from(copied, 'utf8'));
+    observations.copiedRecipeBytes = Buffer.byteLength(copied, 'utf8');
+    observations.steps.push('copy_sdk_recipe');
     await chain;
     stage = 'close_browser';
     await browser.close(); browser = null; observations.browserClosed = true;
-    const completion = await send({type: 'done', id: sequence + 1});
+    requireValue(handoff.id === sequence + 1);
+    const completion = await send(handoff);
     requireValue(completion.type === 'permission'); permission = completion.permission;
     stage = 'await_sdk';
     const sdk = await result, terminal = await exited;
     requireValue(!failed && terminal.code === 0 && terminal.signal === null && buffer.length === 0 && stderrBytes === 0);
     return {schema: 'serverware.privateGmailBrowserSdk/v1', ok: true, browserPermissionVerified: true,
+      browserClientHandoffVerified: true,
       syntheticOAuthProgrammatic: true, externalSsoVerified: false, browser: observations, permission, sdk};
   } catch (error) {
     if (!failure) failure = failureReceipt(stage, 'workflow', observations);
@@ -202,7 +227,7 @@ async function main() {
     // The exact systemd unit owns final descendant teardown even if Node exits.
   }
 }
-module.exports = {requestFrame, failureReceipt};
+module.exports = {requestFrame, failureReceipt, copiedRecipeFrame};
 if (require.main === module) main().then(value => process.stdout.write(JSON.stringify(value) + '\n')).catch(() => {
   process.stderr.write('Gmail browser permission check failed; no request or credential details emitted\n'); process.exitCode = 1;
 });

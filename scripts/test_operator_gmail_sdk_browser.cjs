@@ -1,7 +1,7 @@
 'use strict';
 // Inert request projection controls: importing the driver launches nothing.
 const assert = require('node:assert/strict');
-const {requestFrame, failureReceipt} = require('./check_operator_gmail_sdk_browser.cjs');
+const {requestFrame, failureReceipt, copiedRecipeFrame} = require('./check_operator_gmail_sdk_browser.cjs');
 const origin = 'https://serverware-demo.example.com';
 const raw = Buffer.from('{ "exact": "bytes" }');
 const request = (url, method = 'GET', body = null, headers = {}) => ({
@@ -31,4 +31,14 @@ assert.deepEqual(failureReceipt('await_observer', 'request_refused', counters), 
 const safe = failureReceipt('secret-canary', 'secret-canary', {...counters, postCount: 'secret-canary', raw: 'secret-canary'});
 assert.equal(safe.stage, 'inputs'); assert.equal(safe.code, 'workflow'); assert.equal(safe.postCount, null);
 assert(!JSON.stringify(safe).includes('secret-canary'));
-console.log('Gmail browser bridge inert request/diagnostic controls passed (18 cases; no browser or network)');
+const recipe = '# public synthetic recipe\nexport VALUE=\'exact bytes\'\n';
+assert.deepEqual(copiedRecipeFrame(recipe, recipe, 7), {
+  type: 'done', id: 7, copiedRecipe: Buffer.from(recipe).toString('base64')});
+for (const [copied, displayed, id] of [[recipe, recipe + '\n', 7], ['', '', 7],
+  ['x'.repeat(8193), 'x'.repeat(8193), 7], ['é'.repeat(4097), 'é'.repeat(4097), 7],
+  ['\ud800', '\ud800', 7], ['x\0y', 'x\0y', 7], [recipe, recipe, 0], [recipe, recipe, 17],
+  [recipe, recipe, true], [Buffer.from(recipe), recipe, 7]]) {
+  assert.throws(() => copiedRecipeFrame(copied, displayed, id));
+}
+assert.equal(failureReceipt('copy_recipe', 'workflow', counters).stage, 'copy_recipe');
+console.log('Gmail browser bridge inert request/diagnostic/copy-frame controls passed (30 cases; no browser or network)');

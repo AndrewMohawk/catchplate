@@ -42,6 +42,106 @@ def strict_json(raw):
         parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
 
 
+_RECIPE_COMMENTS = (
+    "# Gmail SDK job (Bash): run from examples/google-gmail-go with the reviewed ./gmail-example already built.",
+    "# Prepare dependencies/build before supplying the app token. This recipe does not download or build anything.",
+    "# Set SERVERWARE_PROXY_TOKEN privately first. Never use a Google token. Both TLS checks remain enabled.",
+    "# serverware.gmailSdkClient/v1",
+)
+_RECIPE_PREFIX = "\n".join((
+    "(", "  set +x", "  set -eu", '  case "${SERVERWARE_PROXY_TOKEN-}" in',
+    "    ''|*[!A-Za-z0-9_-]*) printf '%s\\n' 'Set the issued Serverware application token privately' >&2; exit 1 ;;",
+    "  esac",
+    '  [ "${#SERVERWARE_PROXY_TOKEN}" -eq 43 ] || { printf \'%s\\n\' \'Set the issued Serverware application token privately\' >&2; exit 1; }',
+    '  printf \'%s\\n\' "$SERVERWARE_PROXY_TOKEN" |',
+    "    /usr/bin/env -i LANG=C.UTF-8 /bin/sh -c ",
+))
+_CHILD_PREFIX = ("set -eu", "IFS= read -r SERVERWARE_PROXY_TOKEN", "exec </dev/null",
+    "unset PWD OLDPWD SHLVL _", "export SERVERWARE_PROXY_TOKEN")
+_PUBLIC_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE")
+
+
+def _unquote_recipe(value):
+    """Inverse of the one admitted single-quote encoding, not a shell parser."""
+    require(type(value) is str and value.startswith("'") and value.endswith("'"),
+        "copied Gmail recipe quoting differs")
+    decoded = value[1:-1].replace("'\\''", "'")
+    require("'" + decoded.replace("'", "'\\''") + "'" == value,
+        "copied Gmail recipe quoting differs")
+    return decoded
+
+
+def parse_copied_recipe(raw):
+    """Admit only the complete public recipe; never evaluate browser text."""
+    require(type(raw) is bytes and 0 < len(raw) <= 8192, "copied Gmail recipe bound differs")
+    text = raw.decode("utf-8", errors="strict")
+    require("\0" not in text and "\r" not in text, "copied Gmail recipe characters differ")
+    lines = text.split("\n", 6)
+    require(len(lines) == 7 and tuple(lines[:4]) == _RECIPE_COMMENTS,
+        "copied Gmail recipe header differs")
+    rule = re.fullmatch(r"# access_rule_id: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", lines[4])
+    expiry = re.fullmatch(r"# token_expires_at_epoch_ms: ([1-9][0-9]{0,15})", lines[5])
+    require(rule is not None and expiry is not None and int(expiry[1]) <= 2**53 - 1,
+        "copied Gmail recipe saved identity differs")
+    outer = lines[6]
+    require(outer.startswith(_RECIPE_PREFIX) and outer.endswith("\n)"), "copied Gmail recipe commands differ")
+    child = _unquote_recipe(outer[len(_RECIPE_PREFIX):-2]).split("\n")
+    require(len(child) in (9, 10) and tuple(child[:5]) == _CHILD_PREFIX and child[-1] == "exec ./gmail-example",
+        "copied Gmail recipe child differs")
+    environment = {"LANG": "C.UTF-8"}
+    for key, line in zip(_PUBLIC_ENV, child[5:-1]):
+        prefix = "export " + key + "="
+        require(line.startswith(prefix), "copied Gmail recipe environment differs")
+        value = _unquote_recipe(line[len(prefix):])
+        require(0 < len(value) <= 512 and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value),
+            "copied Gmail recipe value differs")
+        environment[key] = value
+    return {"environment": environment, "access_rule_id": rule[1], "token_expires_at_epoch_ms": int(expiry[1])}
+
+
+def copied_client_environment(raw, *, application, rule, token):
+    from scripts.check_operator_gmail_sdk import PROXY, TRUST_FILES
+    parsed = parse_copied_recipe(raw)
+    environment = parsed["environment"]
+    require(set(environment) == {"LANG", *_PUBLIC_ENV}
+        and environment["SERVERWARE_PROXY_URL"] == PROXY
+        and environment["SERVERWARE_APP_ID"] == application["id"]
+        and environment["SERVERWARE_CA_FILE"] == str(TRUST_FILES["inner"])
+        and environment["SERVERWARE_PROXY_CA_FILE"] == str(TRUST_FILES["outer"])
+        and parsed["access_rule_id"] == rule["id"] and rule["application_id"] == application["id"]
+        and type(application.get("token_expires_at_epoch_ms")) is int
+        and parsed["token_expires_at_epoch_ms"] == application["token_expires_at_epoch_ms"]
+        and parsed["token_expires_at_epoch_ms"] > time.time_ns() // 1_000_000,
+        "copied Gmail recipe does not match the saved fixture")
+    require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is not None
+        and token.encode() not in raw, "copied Gmail recipe token boundary differs")
+    environment["SERVERWARE_PROXY_TOKEN"] = token
+    return environment
+
+
+def copied_phase_environment(environment, *, application, token, phase):
+    from scripts.check_operator_gmail_sdk import PHASES, TRUST_FILES, UUID
+    require(type(environment) is dict and set(environment) == {"LANG", *_PUBLIC_ENV, "SERVERWARE_PROXY_TOKEN"}
+        and phase in PHASES and type(application) is str and UUID.fullmatch(application)
+        and type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token),
+        "copied Gmail SDK handoff unavailable")
+    # All positive calls and revocation reuse the copied identity and token. The
+    # existing explicit wrong-app control alone substitutes another saved app.
+    require((application != environment["SERVERWARE_APP_ID"] and token != environment["SERVERWARE_PROXY_TOKEN"])
+        if phase == "wrong_app" else (application == environment["SERVERWARE_APP_ID"]
+            and token == environment["SERVERWARE_PROXY_TOKEN"]), "copied Gmail SDK app differs")
+    result = dict(environment)
+    if phase == "wrong_outer_ca":
+        result["SERVERWARE_CA_FILE"], result["SERVERWARE_PROXY_CA_FILE"] = (
+            environment["SERVERWARE_PROXY_CA_FILE"], environment["SERVERWARE_CA_FILE"])
+    elif phase == "wrong_inner_ca":
+        result["SERVERWARE_CA_FILE"] = environment["SERVERWARE_PROXY_CA_FILE"]
+        result["SERVERWARE_PROXY_CA_FILE"] = str(TRUST_FILES["combined"])
+    elif phase == "wrong_app":
+        result["SERVERWARE_APP_ID"], result["SERVERWARE_PROXY_TOKEN"] = application, token
+    return result
+
+
 def expected_payload(before, application_id, credential_id):
     return {"name": "Read Gmail", "application_id": application_id, "credential_id": credential_id,
         "operation_bundle": "gmail_read_v1", "age_policy": {"mode": "unrestricted"},
@@ -177,8 +277,19 @@ def _create_permission(check, application, credential):
             sequence += 1
             require(sequence <= 16 and time.monotonic() < end, "browser frame budget expired")
             if frame.get("type") == "done":
-                require(set(frame) == {"id", "type"} and posted and proof is not None and intents == 1,
+                require(set(frame) == {"id", "type", "copiedRecipe"} and posted and proof is not None and intents == 1,
                     "browser completed without its single saved grant")
+                require(type(frame["copiedRecipe"]) is str and len(frame["copiedRecipe"]) <= 10924,
+                    "browser copied recipe bound differs")
+                recipe = base64.b64decode(frame["copiedRecipe"], validate=True)
+                require(base64.b64encode(recipe).decode() == frame["copiedRecipe"],
+                    "browser copied recipe encoding differs")
+                # Only the public clipboard bytes cross the bridge. The application
+                # token stays in this checker and is never returned to the browser.
+                check.browser_client_environment = copied_client_environment(recipe,
+                    application=application, rule=result["access_rule"], token=check.client_token)
+                proof["copiedRecipeSha256"] = sha(recipe)
+                proof["copiedRecipeBytes"] = len(recipe)
                 proof["catalogGets"] = catalogs
                 proof["intentGets"] = intents
                 emit({"type": "permission", "id": sequence, "permission": proof})
@@ -223,20 +334,23 @@ def _create_permission(check, application, credential):
 def validate_joined_result(value):
     from scripts.check_operator_gmail_sdk import validate_success_result, SHA256, UUID
     require(type(value) is dict and set(value) == {"schema", "ok", "browserPermissionVerified", "syntheticOAuthProgrammatic",
-        "externalSsoVerified", "browser", "permission", "sdk"} and value["schema"] == JOINED_SCHEMA
+        "browserClientHandoffVerified", "externalSsoVerified", "browser", "permission", "sdk"} and value["schema"] == JOINED_SCHEMA
         and value["ok"] is True and value["browserPermissionVerified"] is True
+        and value["browserClientHandoffVerified"] is True
         and value["syntheticOAuthProgrammatic"] is True and value["externalSsoVerified"] is False,
         "joined Gmail browser result differs")
     sdk, proof, browser = value["sdk"], value["permission"], value["browser"]
     validate_success_result(sdk)  # Legacy SDK evidence and negative controls stay unchanged.
     require(type(proof) is dict and set(proof) == {"schema", "submitted", "requestSha256", "responseSha256", "htmlSha256",
-        "ruleId", "revision", "policyHash", "grantPosts", "catalogGets", "intentGets"} and proof["schema"] == SCHEMA
+        "ruleId", "revision", "policyHash", "grantPosts", "catalogGets", "intentGets",
+        "copiedRecipeSha256", "copiedRecipeBytes"} and proof["schema"] == SCHEMA
         and proof["ruleId"] == sdk["ruleId"] and proof["policyHash"] == sdk["policyHash"]
         and type(proof["revision"]) is int and proof["revision"] == sdk["policyRevisions"]["accepted"] and type(proof["grantPosts"]) is int
         and proof["grantPosts"] == 1 and type(proof["catalogGets"]) is int and 3 <= proof["catalogGets"] <= 8
         and type(proof["intentGets"]) is int and proof["intentGets"] == 1
+        and type(proof["copiedRecipeBytes"]) is int and 0 < proof["copiedRecipeBytes"] <= 8192
         and all(type(proof[key]) is str and SHA256.fullmatch(proof[key])
-            for key in ("requestSha256", "responseSha256", "htmlSha256")), "joined Gmail grant proof differs")
+            for key in ("requestSha256", "responseSha256", "htmlSha256", "copiedRecipeSha256")), "joined Gmail grant proof differs")
     payload = proof["submitted"]
     require(type(payload) is dict and type(payload.get("expected_revision")) is int
         and payload["expected_revision"] + 1 == proof["revision"]
@@ -247,14 +361,16 @@ def validate_joined_result(value):
         "joined Gmail browser selection differs")
     require(type(browser) is dict and set(browser) == {"postCount", "getCount", "pageErrors", "consoleErrors",
         "refusedRequests", "browserClosed", "selectedApplicationId", "selectedCredentialId", "savedRuleId",
-        "requestSha256", "responseSha256", "htmlSha256", "steps", "screenshots"}
+        "requestSha256", "responseSha256", "htmlSha256", "copiedRecipeSha256", "copiedRecipeBytes", "steps", "screenshots"}
         and type(browser["postCount"]) is int and browser["postCount"] == 1
         and type(browser["getCount"]) is int and browser["getCount"] == proof["catalogGets"] + proof["intentGets"] + 1
         and all(type(browser[key]) is int and browser[key] == 0 for key in ("pageErrors", "consoleErrors", "refusedRequests"))
         and browser["browserClosed"] is True and browser["selectedApplicationId"] == payload["application_id"]
         and browser["selectedCredentialId"] == payload["credential_id"] and browser["savedRuleId"] == proof["ruleId"]
-        and all(browser[key] == proof[key] for key in ("requestSha256", "responseSha256", "htmlSha256"))
-        and browser["steps"] == ["saved_account", "saved_basic_app", "official_sdk_default", "review", "grant", "saved_setup"]
+        and type(browser["copiedRecipeBytes"]) is int
+        and all(browser[key] == proof[key] for key in ("requestSha256", "responseSha256", "htmlSha256",
+            "copiedRecipeSha256", "copiedRecipeBytes"))
+        and browser["steps"] == ["saved_account", "saved_basic_app", "official_sdk_default", "review", "grant", "saved_setup", "copy_sdk_recipe"]
         and type(browser["screenshots"]) is list and len(browser["screenshots"]) == 2,
         "joined Gmail browser observations differ")
     for row, name in zip(browser["screenshots"], ("review.png", "saved.png")):

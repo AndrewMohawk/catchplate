@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // Rendered production UI with intercepted, independently validated synthetic
-// catalog responses only. No app, OAuth, provider, proxy, SDK or CA is contacted.
+// catalog responses and a controlled local shell stub only. No real app, OAuth,
+// provider, proxy, SDK or CA is contacted.
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
-const {readFile, readdir, mkdtemp, writeFile} = require('node:fs/promises');
+const {execFile} = require('node:child_process');
+const {promisify} = require('node:util');
+const vm = require('node:vm');
+const {readFile, readdir, mkdtemp, writeFile, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const {fixture, options, bundleRule} = require('./test_operator_gmail_bundle_browser.cjs');
-const {ready, view, openRestrictions, credential, application, rule, IDS} = require('./test_operator_catalog_browser.cjs');
-const {pair, step, review, grant, refresh, google, digest} = require('./test_operator_ordinary_modes_browser.cjs');
+const {ready, view, openRestrictions, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
+const {pair, step, review, grant, refresh, google, digest, downloadedConfig, publicCatalog} = require('./test_operator_ordinary_modes_browser.cjs');
+const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
 
 const ROOT = resolve(__dirname, '..');
 const BUNDLE = 'gmail_read_v1';
@@ -19,6 +24,9 @@ const AUTH = {schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bear
   path: '/api/operator-demo/applications/proxy-authentication'};
 const PROJECT = 'https://github.com/AndrewMohawk/serverware/tree/serverware/operator-workspace/examples/google-gmail-go';
 const GUIDE = 'https://github.com/AndrewMohawk/serverware/blob/serverware/operator-workspace/docs/operator-gmail-job-verification.md';
+const PRIVATE = ['synthetic-gmail-provider-private-never-render', 'synthetic-gmail-refresh-private-never-render'];
+const CLIENT_TOKEN = Buffer.alloc(32, 85).toString('base64url');
+const executeFile = promisify(execFile);
 const clone = value => JSON.parse(JSON.stringify(value));
 function sdkOptions(changes = {}) {
   const transform = changes.gmailTransform;
@@ -56,6 +64,96 @@ async function projects(page, expected) {
 async function shot(page, directory, name) {
   await page.screenshot({path: join(directory, name + '.png'), fullPage: true, mask: [page.locator('#client-token')]});
 }
+function sdkRule(changes = {}) { return bundleRule({credential_input: 'replace_exact', placeholder: DUMMY, ...changes}); }
+async function copiedCommand(page) {
+  assert(await page.locator('#copy-command').isEnabled());
+  const displayed = await page.locator('#client-command').innerText();
+  await page.evaluate(() => navigator.clipboard.writeText('synthetic-before-copy'));
+  await page.locator('#copy-command').click();
+  await page.waitForFunction(async expected => (await navigator.clipboard.readText()) === expected, displayed);
+  assert((await page.locator('#client-copy-status').innerText()).startsWith('Copied'));
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  assert.equal(copied, displayed, 'the real Copy handler writes the displayed complete recipe');
+  return copied;
+}
+async function rotateHeldToken(page, state, controls) {
+  // This one synthetic API response needs the real token wire shape. The old
+  // generic fixture intentionally uses a noncanonical descriptive token. Keep
+  // real UI rotation/hold/reconciliation, with an independent bounded DTO oracle.
+  await controls.context.route('**/api/operator-demo/applications/rotate-token', async route => {
+    try {
+      const request = route.request(); const url = new URL(request.url());
+      assert.equal(url.origin, 'https://operator-catalog.example.test'); assert.equal(url.search, '');
+      assert.equal(request.method(), 'POST'); assert(request.headers()['content-type'].startsWith('application/json'));
+      const bytes = request.postDataBuffer(); assert(bytes && bytes.length <= 2048);
+      const body = JSON.parse(bytes.toString());
+      assert.deepEqual(body, {id: IDS.application, token_lifetime_seconds: 86400,
+        expected_revision: state.revision, expected_policy_hash: state.active});
+      assert.equal(state.posts.length, 0);
+      state.posts.push({name: 'applications/rotate-token', body});
+      state.requests.push({path: url.pathname, query: '', method: 'POST'});
+      const app = state.applications.find(value => value.id === IDS.application);
+      assert.equal(app.status, 'active'); assert.equal(app.proxy_authentication, BASIC);
+      app.token_generation++; app.token_status = 'valid'; app.token_expires_at_epoch_ms = NOW + 86400000;
+      state.revision++; state.active = digest(++state.sequence); state.loaded = state.active;
+      const catalog = publicCatalog(state);
+      await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({
+        application: catalog.applications.find(value => value.id === IDS.application),
+        revision: catalog.revision, policy: catalog.policy, client_token: CLIENT_TOKEN})});
+    } catch (error) { state.errors.push('synthetic SDK rotation contract: ' + error.name); await route.abort(); }
+  });
+  await view(page, 'applications');
+  const card = page.locator(`#applications-list [data-resource-id="${IDS.application}"]`);
+  await card.locator('.application-rotate-ttl').selectOption('86400');
+  await card.locator('[data-action="rotate-application"]').click();
+  await page.locator('#one-time-access').waitFor({state: 'visible'});
+  await page.waitForFunction(() => !document.querySelector('#application-fields').disabled);
+  assert.deepEqual(state.posts.map(value => value.name), ['applications/rotate-token']);
+  const held = await page.locator('#client-token').inputValue();
+  assert.equal(held, CLIENT_TOKEN); return held;
+}
+async function publicSecretsAbsent(page, command, token = '') {
+  const publicText = await page.locator('body').innerText();
+  const storage = await page.evaluate(() => JSON.stringify([Object.values(localStorage), Object.values(sessionStorage)]));
+  for (const secret of [...PRIVATE, ...(token ? [token] : [])]) {
+    assert(!command.includes(secret), 'public recipe never embeds a credential');
+    assert(!publicText.includes(secret), 'public text never displays a credential');
+    assert(!storage.includes(secret), 'client handoff stores no credential in browser storage');
+  }
+}
+async function sdkHelpers() {
+  const source = await readFile(join(ROOT, 'serverware/operator_demo_web/workspace_gmail_sdk.js'), 'utf8');
+  return vm.runInNewContext(source + '\n({buildGmailSdkClientRecipe, gmailSdkClientConfiguration});', {}, {timeout: 1000});
+}
+async function stubDirectory(evidence) {
+  const directory = await mkdtemp(join(evidence, 'sdk-shell-stub-'));
+  // No SDK, network modules, CA reads or child launches. Inspect only this
+  // controlled process, its own input and the reserved parent command line.
+  const source = '#!' + process.execPath + '\n' + [
+    "const fs = require('node:fs');",
+    'const deadline = setTimeout(() => process.exit(97), 2000);',
+    "fs.readFile(0, 'utf8', (error, input) => {",
+    'if (error || input.length > 1024) process.exit(98); clearTimeout(deadline);',
+    "const token = process.env.SERVERWARE_PROXY_TOKEN || '';",
+    "const parent = fs.readFileSync('/proc/' + process.ppid + '/cmdline', 'utf8');",
+    'process.stdout.write(JSON.stringify({environment: process.env, args: process.argv.slice(2), input,',
+    '  tokenInArgv: process.argv.some(value => value.includes(token)), tokenInParentArgv: parent.includes(token)}));',
+    '});',
+  ].join('\n');
+  await writeFile(join(directory, 'gmail-example'), source, {flag: 'wx', mode: 0o700});
+  return directory;
+}
+async function runCopiedRecipe(command, directory, token) {
+  const ambient = {PATH: '/usr/bin:/bin', HOME: '/synthetic-home-not-used', SERVERWARE_PROXY_TOKEN: token,
+    GOOGLE_APPLICATION_CREDENTIALS: '/synthetic-no-google-credentials', GOOGLE_API_USE_CLIENT_CERTIFICATE: 'true',
+    GOOGLE_API_USE_MTLS_ENDPOINT: 'always', GODEBUG: 'synthetic-must-not-reach-client',
+    SSL_CERT_FILE: '/synthetic-wrong-roots', SSL_CERT_DIR: '/synthetic-wrong-directory',
+    HTTPS_PROXY: 'http://ambient.invalid', HTTP_PROXY: 'http://ambient.invalid', ALL_PROXY: 'http://ambient.invalid',
+    NO_PROXY: '*', https_proxy: 'http://ambient.invalid', http_proxy: 'http://ambient.invalid', no_proxy: '*',
+    SERVERWARE_PROXY_CA_FILE: '/synthetic-stale-outer-root', SERVERWARE_CA_FILE: '/synthetic-stale-inner-root'};
+  return executeFile('/bin/bash', ['--noprofile', '--norc', '-c', command], {
+    cwd: directory, env: ambient, timeout: 5000, maxBuffer: 32768, encoding: 'utf8', killSignal: 'SIGKILL'});
+}
 
 const tests = [
   ['default SDK has no manual dummy or response fields and sends exactly the reviewed fixed grant', async (browser, evidence) =>
@@ -76,7 +174,7 @@ const tests = [
       assert.equal(state.posts.length, 0);
       assert.equal(state.rules[0].query_mode, 'orderedFormV1');
       await projects(page, [PROJECT, GUIDE]);
-      assert.match(await page.locator('#gmail-sdk-guidance').innerText(), /has not run the job or tested your account/);
+      assert.match(await page.locator('#gmail-sdk-guidance').innerText(), /has not run it or tested your account/);
       assert(await page.locator('#download-config').isDisabled(), 'no saved token is retrieved');
       await view(page, 'connect'); await refresh(page); assert.equal(observed.posts.length, 1);
     })],
@@ -227,6 +325,184 @@ const tests = [
       })],
 ];
 
+// The added handoff controls use the same intercepted rendered application.
+// A local stub may inspect a copied shell recipe; the real SDK is never run.
+const handoffTests = [
+  ['SDK handoff pure helpers keep public and private inputs separate and refuse malformed configuration', async () => {
+    const helpers = await sdkHelpers();
+    const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, accessRuleId: IDS.rule,
+      tokenExpiresAtEpochMs: NOW + 86400000, nowEpochMs: NOW, caPath: './serverware-ca.pem', proxyCaPath: ''};
+    const publicRecipe = helpers.buildGmailSdkClientRecipe({...input, token: CLIENT_TOKEN, providerSecret: PRIVATE[0]});
+    assert(!publicRecipe.includes(CLIENT_TOKEN)); assert(!publicRecipe.includes(PRIVATE[0]));
+    const config = clone(helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN));
+    assert.deepEqual(config, {schema: 'serverware.gmailSdkClient/v1', example_directory: 'examples/google-gmail-go',
+      entrypoint: './gmail-example', clear_environment: true, environment: {LANG: 'C.UTF-8',
+        SERVERWARE_PROXY_URL: input.proxyUrl, SERVERWARE_APP_ID: IDS.application,
+        SERVERWARE_CA_FILE: input.caPath, SERVERWARE_PROXY_TOKEN: CLIENT_TOKEN},
+      token_expires_at_epoch_ms: input.tokenExpiresAtEpochMs, access_rule_id: IDS.rule});
+    for (const [key, values] of [
+      ['proxyUrl', ['http://proxy.example.test', 'https://user:password@proxy.example.test',
+        'https://proxy.example.test/path', 'https://proxy.example.test/?q=1', 'https://proxy.example.test/#fragment',
+        'https://gmail.googleapis.com', 'https://127.0.0.1', 'https://proxy.local', 'https://proxy.example.test:65536']],
+      ['applicationId', ['', 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA', IDS.application + "'", null]],
+      ['accessRuleId', ['', '../rule', null]],
+      ['tokenExpiresAtEpochMs', [NOW, NOW - 1, null, String(NOW + 1), Infinity]],
+      ['nowEpochMs', [0, -1, null, 1.5]],
+      ['caPath', ['', 'inner\nroot.pem', 'inner\0root.pem', 'x'.repeat(513), null]],
+      ['proxyCaPath', ['outer\rroot.pem', 'outer\x7froot.pem', 'x'.repeat(513), null]],
+    ]) for (const value of values) {
+      assert.throws(() => helpers.buildGmailSdkClientRecipe({...input, [key]: value}), key);
+      assert.throws(() => helpers.gmailSdkClientConfiguration({...input, [key]: value}, CLIENT_TOKEN), key);
+    }
+    for (const value of ['', CLIENT_TOKEN + 'A', CLIENT_TOKEN.slice(0, -1) + 'B', 'bad\nvalue', PRIVATE[0], null])
+      assert.throws(() => helpers.gmailSdkClientConfiguration(input, value));
+    const distinct = helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN);
+    distinct.environment.SERVERWARE_APP_ID = IDS.other;
+    assert.equal(helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN).environment.SERVERWARE_APP_ID, IDS.application);
+  }],
+  ['SDK handoff actual Copy executes only the local stub with quoted roots, clean env and private stdin token', async (browser, evidence) => {
+    const directory = await stubDirectory(evidence); const marker = join(directory, 'must-not-exist');
+    const inner = "./interception's $(touch " + marker + ').pem';
+    const outer = "./proxy's `touch " + marker + '` $HOME.pem';
+    await fixture(browser, sdkOptions({rules: [sdkRule()]}), async (page, state, observed) => {
+      await ready(page); await view(page, 'proxy');
+      assert(await page.locator('#gmail-sdk-client-controls').isVisible());
+      assert(await page.locator('#gmail-client-controls').isHidden());
+      assert(await page.locator('#proxy-method').isHidden()); assert(await page.locator('#proxy-method').isDisabled());
+      assert(await page.locator('#gmail-message-id').isHidden());
+      assert(await page.locator('#download-config').isDisabled(), 'saved tokens are never retrieved');
+      await page.locator('#ca-path').fill('');
+      assert(await page.locator('#copy-command').isDisabled(), 'no missing inner root fallback');
+      await page.locator('#ca-path').fill(inner); await page.locator('#gmail-proxy-ca-path').fill(outer);
+      const command = await copiedCommand(page);
+      assert(command.includes('./gmail-example')); assert(!command.includes('curl '));
+      assert(!/--insecure|--proxy-insecure|InsecureSkipVerify/.test(command));
+      await publicSecretsAbsent(page, command, CLIENT_TOKEN);
+      const {stdout, stderr} = await runCopiedRecipe(command, directory, CLIENT_TOKEN);
+      assert.equal(stderr, '');
+      assert.deepEqual(JSON.parse(stdout), {environment: {LANG: 'C.UTF-8', SERVERWARE_PROXY_URL: 'https://proxy.example.test',
+        SERVERWARE_APP_ID: IDS.application, SERVERWARE_CA_FILE: inner, SERVERWARE_PROXY_CA_FILE: outer,
+        SERVERWARE_PROXY_TOKEN: CLIENT_TOKEN}, args: [], input: '', tokenInArgv: false, tokenInParentArgv: false});
+      await assert.rejects(stat(marker), {code: 'ENOENT'});
+      // Clearing the optional outer root means system roots, never inheritance
+      // from the poisoned ambient SERVERWARE_PROXY_CA_FILE or SSL settings.
+      await page.locator('#gmail-proxy-ca-path').fill('');
+      const defaultRoots = await runCopiedRecipe(await copiedCommand(page), directory, CLIENT_TOKEN);
+      assert.equal(defaultRoots.stderr, '');
+      const expected = {LANG: 'C.UTF-8', SERVERWARE_PROXY_URL: 'https://proxy.example.test',
+        SERVERWARE_APP_ID: IDS.application, SERVERWARE_CA_FILE: inner, SERVERWARE_PROXY_TOKEN: CLIENT_TOKEN};
+      assert.deepEqual(JSON.parse(defaultRoots.stdout).environment, expected);
+      for (const token of ['', 'bad-token', CLIENT_TOKEN + '\n']) {
+        await assert.rejects(runCopiedRecipe(command, directory, token), error => {
+          assert.equal(error.code, 1); assert.equal(error.stdout, '');
+          assert.equal(error.stderr, 'Set the issued Serverware application token privately\n'); return true;
+        });
+      }
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.locator('#gmail-sdk-client-controls').isVisible());
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await shot(page, evidence, 'sdk-handoff-mobile'); noWrites(state, observed);
+    });
+  }],
+  ['SDK handoff actual private Download matches the held generation and clears on expiry or dismissal', async browser =>
+    fixture(browser, sdkOptions({rules: [sdkRule()]}), async (page, state, observed, controls) => {
+      await ready(page); const held = await rotateHeldToken(page, state, controls); await view(page, 'proxy');
+      const inner = "./inner's literal $name.pem"; const outer = "./outer's literal $name.pem";
+      await page.locator('#ca-path').fill(inner); await page.locator('#gmail-proxy-ca-path').fill(outer);
+      assert(await page.locator('#download-config').isEnabled());
+      const command = await copiedCommand(page); await publicSecretsAbsent(page, command, held);
+      const downloadEvent = page.waitForEvent('download');
+      const config = await downloadedConfig(page);
+      assert.equal((await downloadEvent).suggestedFilename(), 'serverware-client.private.json');
+      assert.equal(config.proxy_authentication, BASIC); assert.equal(config.proxy_username, IDS.application);
+      assert.equal(config.proxy_password, held); assert.equal(config.ca_file, inner); assert.equal(config.proxy_ca_file, outer);
+      assert.deepEqual(config.request_headers, {Authorization: DUMMY});
+      assert.deepEqual(config.client_recipe, {schema: 'serverware.gmailSdkClient/v1',
+        example_directory: 'examples/google-gmail-go', entrypoint: './gmail-example', clear_environment: true,
+        environment: {LANG: 'C.UTF-8', SERVERWARE_PROXY_URL: 'https://proxy.example.test', SERVERWARE_APP_ID: IDS.application,
+          SERVERWARE_CA_FILE: inner, SERVERWARE_PROXY_CA_FILE: outer, SERVERWARE_PROXY_TOKEN: held},
+        token_expires_at_epoch_ms: state.applications[0].token_expires_at_epoch_ms, access_rule_id: IDS.rule});
+      for (const secret of PRIVATE) assert(!JSON.stringify(config).includes(secret));
+      await view(page, 'applications'); await page.locator('#dismiss-token').click(); await view(page, 'proxy');
+      assert(await page.locator('#download-config').isDisabled()); assert(await page.locator('#copy-command').isEnabled());
+      state.applications[0].token_expires_at_epoch_ms = NOW; await refresh(page, 'proxy-refresh');
+      assert(await page.locator('#copy-command').isDisabled()); assert(await page.locator('#download-config').isDisabled());
+      assert.equal(state.posts.length, 1); assert.equal(observed.posts.length, 0);
+    })],
+  ['SDK handoff forgets a held token whose catalog generation or original expiry changed', async browser => {
+    for (const change of [state => { state.applications[0].token_generation++; },
+      state => { state.applications[0].token_expires_at_epoch_ms = NOW; }]) {
+      await fixture(browser, sdkOptions({rules: [sdkRule()]}), async (page, state, observed, controls) => {
+        await ready(page); await rotateHeldToken(page, state, controls); await view(page, 'proxy');
+        assert(await page.locator('#download-config').isEnabled());
+        change(state); await refresh(page, 'proxy-refresh');
+        assert(await page.locator('#download-config').isDisabled());
+        assert.equal(await page.locator('#client-token').inputValue(), '');
+        assert.equal(state.posts.length, 1); assert.equal(observed.posts.length, 0);
+      });
+    }
+  }],
+  ['SDK handoff preserves the legacy cURL bytes for every non-SDK Gmail choice', async browser => {
+    const legacy = sdkRule({allowed_headers: ['accept', 'accept-encoding', 'user-agent', 'x-goog-api-client']});
+    delete legacy.query_mode;
+    for (const [saved, app] of [[bundleRule(), application({proxy_authentication: BASIC})],
+      [bundleRule({credential_input: 'replace_exact', placeholder: CUSTOM}), application({proxy_authentication: BASIC})],
+      [legacy, application({proxy_authentication: BASIC})], [sdkRule(), application()]]) {
+      await fixture(browser, sdkOptions({rules: [saved], applications: [app]}), async (page, state, observed) => {
+        await ready(page); const before = clone(state.rules); await view(page, 'proxy');
+        assert(await page.locator('#gmail-sdk-client-controls').isHidden());
+        assert(await page.locator('#gmail-client-controls').isVisible());
+        assert(await page.locator('#proxy-method').isVisible());
+        const inputs = {proxyUrl: 'https://proxy.example.test', upstreamUrl: saved.upstream_url,
+          method: 'GET', caPath: './serverware-ca.pem', allowedHeaders: saved.allowed_headers,
+          credentialInput: saved.credential_input, placeholder: saved.placeholder, credential: google(),
+          proxyAuthentication: app.proxy_authentication || 'bearer', applicationId: IDS.application};
+        assert.equal(await copiedCommand(page), buildCurlCommand(inputs));
+        await page.locator('#gmail-client-operation').selectOption('message');
+        assert(await page.locator('#copy-command').isDisabled(), 'a real returned message ID is still required');
+        await page.locator('#gmail-message-id').fill('synthetic_message_1');
+        assert.equal(await copiedCommand(page), buildCurlCommand({...inputs,
+          upstreamUrl: saved.upstream_url + '/synthetic_message_1'}));
+        assert.deepEqual(state.rules, before); noWrites(state, observed);
+      });
+    }
+  }],
+  ['SDK handoff requires current loaded policy, valid app expiry and active credential', async browser => {
+    const changes = [
+      state => { state.loaded = digest(0); },
+      state => { state.activationOverride = 'pending'; },
+      state => { state.applications[0].token_status = 'expired'; },
+      state => { state.applications[0].token_expires_at_epoch_ms = NOW; },
+      state => { state.applications[0].token_status = 'revoked'; },
+      state => { state.credentials[0].status = 'revoked'; },
+    ];
+    for (const change of changes) await fixture(browser, sdkOptions({rules: [sdkRule()]}), async (page, state, observed) => {
+      await ready(page); await view(page, 'proxy');
+      assert(await page.locator('#gmail-sdk-client-controls').isVisible());
+      assert(await page.locator('#copy-command').isEnabled());
+      change(state); await refresh(page, 'proxy-refresh');
+      assert(await page.locator('#copy-command').isDisabled());
+      assert(await page.locator('#download-config').isDisabled());
+      noWrites(state, observed);
+    });
+  }],
+  ['SDK handoff cannot copy or export a saved but uncertain grant', async browser =>
+    fixture(browser, sdkOptions({loseReceipt: true}), async (page, state, observed) => {
+      await sdkDraft(page); await review(page); await page.locator('#connect-grant').click();
+      await page.locator('#mutation-review').waitFor({state: 'visible'});
+      await page.waitForFunction(() => !document.querySelector('#connect-status-refresh').disabled);
+      await refresh(page); await view(page, 'proxy');
+      assert.equal(observed.posts.length, 1); assert.equal(state.rules.length, 1);
+      assert.equal(state.active, state.loaded, 'synthetic policy loading alone does not clear uncertainty');
+      assert(await page.locator('#copy-command').isDisabled());
+      assert(await page.locator('#download-config').isDisabled());
+      await refresh(page, 'proxy-refresh');
+      assert.equal(observed.posts.length, 1); assert.equal(state.posts.length, 0);
+      assert(await page.locator('#copy-command').isDisabled());
+    })],
+];
+tests.push(...handoffTests);
+
 async function hashes() {
   const web = 'serverware/operator_demo_web/';
   const files = ['scripts/test_operator_gmail_sdk_choice_browser.cjs', 'scripts/test_operator_gmail_bundle_browser.cjs',
@@ -235,12 +511,12 @@ async function hashes() {
   return Object.fromEntries(await Promise.all(files.sort().map(async file =>
     [file, createHash('sha256').update(await readFile(join(ROOT, file))).digest('hex')])));
 }
-async function run(browser, directory) {
+async function run(browser, directory, selected = tests) {
   const before = await hashes(); let finished = 0; let timer;
   await writeFile(join(directory, 'sources-before.json'), JSON.stringify(before, null, 2) + '\n', {flag: 'wx', mode: 0o600});
   try {
     await Promise.race([(async () => {
-      for (const [name, test] of tests) {
+      for (const [name, test] of selected) {
         await test(browser, directory); finished++; console.log('PASS ' + name);
       }
     })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('bounded_browser_deadline')), 150000); })]);
@@ -250,7 +526,7 @@ async function run(browser, directory) {
     assert.deepEqual(after, before, 'source frozen during browser controls');
   }
   const result = {ok: true, groups: finished, liveRequests: 0, providerRequests: 0, sdkExecuted: false,
-    scope: 'intercepted rendered UI only; no API-store, proxy, TLS or provider acceptance', artifactDirectory: directory};
+    scope: 'intercepted rendered UI and local shell stub only; no API-store, SDK, proxy, TLS or provider acceptance', artifactDirectory: directory};
   await writeFile(join(directory, 'result.json'), JSON.stringify(result, null, 2) + '\n', {flag: 'wx', mode: 0o600});
   return result;
 }
@@ -268,4 +544,4 @@ if (require.main === module) main().catch(error => {
     frames: String(error.stack).split('\n').filter(line => /test_operator_gmail_sdk_choice_browser\.cjs:\d+:\d+/.test(line))}));
   process.exitCode = 1;
 });
-module.exports = {run};
+module.exports = {run, runFocused: (browser, directory) => run(browser, directory, handoffTests)};

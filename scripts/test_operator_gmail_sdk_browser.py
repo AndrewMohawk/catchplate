@@ -22,6 +22,10 @@ from scripts.check_operator_demo import CheckFailure
 
 BEFORE = {"revision": 4, "policy": {"sequence": 1, "policy_hash": oracle.sha(890)}}
 APP, CREDENTIAL, RULE = oracle.uid(2), oracle.uid(1), oracle.uid(4)
+APP_EXPIRY = 4102444800000
+APP_VALUE = {"id": APP, "token_expires_at_epoch_ms": APP_EXPIRY}
+RULE_VALUE = {"id": RULE, "application_id": APP, "credential_id": CREDENTIAL}
+APP_TOKEN = "a" * 43  # Synthetic application token; never sent to the browser.
 PAYLOAD = bridge.expected_payload(BEFORE, APP, CREDENTIAL)
 RAW = json.dumps(PAYLOAD, indent=1).encode()
 INTENT_VALUE = {"apiVersion": "serverware.operatorGoogleConsent/v1", "productionReady": False,
@@ -30,6 +34,28 @@ INTENT_VALUE = {"apiVersion": "serverware.operatorGoogleConsent/v1", "production
         "permission_preset": "gmail_readonly", "scopes": ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"],
         "created_at": "2026-10-11T00:00:00+00:00", "expires_at_epoch": 1791700000,
         "status": "connected", "credential_id": CREDENTIAL}]}
+
+
+def copied_recipe(*, inner="/client-trust/inner-ca.pem", outer="/client-trust/outer-ca.pem"):
+    """Independent literal recipe oracle, not the production JS builder/parser."""
+    quote = lambda value: "'" + value.replace("'", "'\\''") + "'"
+    child = "\n".join([
+        "set -eu", "IFS= read -r SERVERWARE_PROXY_TOKEN", "exec </dev/null", "unset PWD OLDPWD SHLVL _",
+        "export SERVERWARE_PROXY_TOKEN",
+        "export SERVERWARE_PROXY_URL='https://proxy.operator-basic.example.test:8443'",
+        "export SERVERWARE_APP_ID='" + APP + "'", "export SERVERWARE_CA_FILE=" + quote(inner),
+        *(["export SERVERWARE_PROXY_CA_FILE=" + quote(outer)] if outer else []), "exec ./gmail-example"])
+    return ("# Gmail SDK job (Bash): run from examples/google-gmail-go with the reviewed ./gmail-example already built.\n"
+        "# Prepare dependencies/build before supplying the app token. This recipe does not download or build anything.\n"
+        "# Set SERVERWARE_PROXY_TOKEN privately first. Never use a Google token. Both TLS checks remain enabled.\n"
+        "# serverware.gmailSdkClient/v1\n"
+        f"# access_rule_id: {RULE}\n# token_expires_at_epoch_ms: {APP_EXPIRY}\n"
+        "(\n  set +x\n  set -eu\n  case \"${SERVERWARE_PROXY_TOKEN-}\" in\n"
+        "    ''|*[!A-Za-z0-9_-]*) printf '%s\\n' 'Set the issued Serverware application token privately' >&2; exit 1 ;;\n"
+        "  esac\n"
+        '  [ "${#SERVERWARE_PROXY_TOKEN}" -eq 43 ] || { printf \'%s\\n\' \'Set the issued Serverware application token privately\' >&2; exit 1; }\n'
+        '  printf \'%s\\n\' "$SERVERWARE_PROXY_TOKEN" |\n'
+        "    /usr/bin/env -i LANG=C.UTF-8 /bin/sh -c " + quote(child) + "\n)").encode()
 
 
 def frame(method="POST", path=bridge.GRANT, raw=RAW, number=3):
@@ -121,15 +147,16 @@ class BrowserBridgeTests(unittest.TestCase):
 
     def test_actual_frame_loop_one_post_and_independent_catalog_finalize(self):
         result = {"revision": 5, "policy": {"sequence": 2, "policy_hash": oracle.sha(900)},
-            "access_rule": {"id": RULE, "application_id": APP, "credential_id": CREDENTIAL}}
+            "access_rule": RULE_VALUE}
         after = {**result, "access_rules": [result["access_rule"]]}
         frames = [frame("GET", "/", b"", 1), frame("GET", bridge.CATALOG, b"", 2),
             frame("GET", bridge.INTENTS, b"", 3), frame("GET", bridge.CATALOG, b"", 4), frame(number=5),
-            frame("GET", bridge.CATALOG, b"", 6), {"type": "done", "id": 7}]
+            frame("GET", bridge.CATALOG, b"", 6),
+            {"type": "done", "id": 7, "copiedRecipe": base64.b64encode(copied_recipe()).decode()}]
         read, write = os.pipe()
         try:
             os.write(write, b"".join(json.dumps(value).encode() + b"\n" for value in frames)); os.close(write); write = None
-            check = SimpleNamespace(deadline=time.monotonic() + 1,
+            check = SimpleNamespace(deadline=time.monotonic() + 1, client_token=APP_TOKEN,
                 catalog=Mock(side_effect=[BEFORE, BEFORE, after]), finalize_mutation=Mock())
             def response(_check, request, raw):
                 if request["path"] == bridge.INTENTS: return 200, [], json.dumps(INTENT_VALUE).encode()
@@ -139,13 +166,17 @@ class BrowserBridgeTests(unittest.TestCase):
                 return 200, [], b"<html>fixture</html>" if request["path"] == "/" else json.dumps(after).encode()
             with patch.object(bridge.sys, "stdin", SimpleNamespace(fileno=lambda: read)), \
                  patch.object(bridge, "exchange", side_effect=response) as transport, patch.object(bridge, "emit") as emit:
-                rule, actual = bridge._create_permission(check, {"id": APP}, {"id": CREDENTIAL, "name": "fixture-account"})
+                rule, actual = bridge._create_permission(check, APP_VALUE, {"id": CREDENTIAL, "name": "fixture-account"})
             self.assertEqual((rule, actual), (result["access_rule"], result))
             self.assertEqual(sum(call.args[1]["method"] == "POST" for call in transport.call_args_list), 1)
             check.finalize_mutation.assert_called_once_with(result, after, collection="access_rules",
                 result_key="access_rule", event="operator_catalog.access_rule.created")
             proof = emit.call_args.args[0]["permission"]
             self.assertEqual((proof["grantPosts"], proof["catalogGets"], proof["intentGets"], proof["requestSha256"]), (1, 3, 1, bridge.sha(RAW)))
+            self.assertEqual((proof["copiedRecipeSha256"], proof["copiedRecipeBytes"]),
+                (bridge.sha(copied_recipe()), len(copied_recipe())))
+            self.assertEqual(check.browser_client_environment["SERVERWARE_PROXY_TOKEN"], APP_TOKEN)
+            self.assertNotIn(APP_TOKEN, repr(emit.call_args_list))
             self.assertTrue(os.get_blocking(read))
         finally:
             os.close(read)
@@ -227,21 +258,115 @@ class BrowserBridgeTests(unittest.TestCase):
         sdk = oracle.success_result(oracle.commitments(oracle.provider_documents()["refreshed"]))
         proof = {"schema": bridge.SCHEMA, "submitted": PAYLOAD, "requestSha256": bridge.sha(RAW),
             "responseSha256": oracle.sha(2), "htmlSha256": oracle.sha(3), "ruleId": RULE,
-            "revision": 5, "policyHash": sdk["policyHash"], "grantPosts": 1, "catalogGets": 3, "intentGets": 1}
+            "revision": 5, "policyHash": sdk["policyHash"], "grantPosts": 1, "catalogGets": 3, "intentGets": 1,
+            "copiedRecipeSha256": bridge.sha(copied_recipe()), "copiedRecipeBytes": len(copied_recipe())}
         browser = {"postCount": 1, "getCount": 5, "pageErrors": 0, "consoleErrors": 0, "refusedRequests": 0,
             "browserClosed": True, "selectedApplicationId": APP, "selectedCredentialId": CREDENTIAL, "savedRuleId": RULE,
-            **{key: proof[key] for key in ("requestSha256", "responseSha256", "htmlSha256")},
-            "steps": ["saved_account", "saved_basic_app", "official_sdk_default", "review", "grant", "saved_setup"],
+            **{key: proof[key] for key in ("requestSha256", "responseSha256", "htmlSha256", "copiedRecipeSha256", "copiedRecipeBytes")},
+            "steps": ["saved_account", "saved_basic_app", "official_sdk_default", "review", "grant", "saved_setup", "copy_sdk_recipe"],
             "screenshots": [{"file": name, "sha256": oracle.sha(4)} for name in ("review.png", "saved.png")]}
         value = {"schema": bridge.JOINED_SCHEMA, "ok": True, "browserPermissionVerified": True,
+            "browserClientHandoffVerified": True,
             "syntheticOAuthProgrammatic": True, "externalSsoVerified": False, "browser": browser, "permission": proof, "sdk": sdk}
         self.assertTrue(bridge.validate_joined_result(value))
         for section, key, replacement in (("browser", "postCount", True), ("browser", "selectedApplicationId", oracle.uid(9)),
                 ("permission", "requestSha256", oracle.sha(22)), ("permission", "grantPosts", 2),
                 ("permission", "intentGets", True), ("permission", "intentGets", 0), ("permission", "catalogGets", 2),
+                ("permission", "copiedRecipeSha256", oracle.sha(88)), ("permission", "copiedRecipeBytes", True),
+                ("browser", "copiedRecipeBytes", 0), ("browser", "copiedRecipeSha256", "not-a-hash"),
+                ("browser", "steps", browser["steps"][:-1]),
                 ("sdk", "browserUiVerified", True), ("sdk", "providerAttempts", 7), ("sdk", "automaticRefreshes", 0)):
             bad = deepcopy(value); bad[section][key] = replacement
             with self.subTest(section=section, key=key), self.assertRaises(CheckFailure): bridge.validate_joined_result(bad)
+        bad = deepcopy(value); bad["browserClientHandoffVerified"] = False
+        with self.assertRaises(CheckFailure): bridge.validate_joined_result(bad)
+
+    def test_closed_copied_recipe_extracts_actual_assignments_and_no_secret(self):
+        parsed = bridge.parse_copied_recipe(copied_recipe())
+        self.assertEqual(parsed, {"access_rule_id": RULE, "token_expires_at_epoch_ms": APP_EXPIRY,
+            "environment": {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
+                "SERVERWARE_APP_ID": APP, "SERVERWARE_CA_FILE": "/client-trust/inner-ca.pem",
+                "SERVERWARE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}})
+        environment = bridge.copied_client_environment(copied_recipe(), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
+        self.assertEqual(environment, {**parsed["environment"], "SERVERWARE_PROXY_TOKEN": APP_TOKEN})
+        self.assertNotIn(APP_TOKEN.encode(), copied_recipe())
+        # Shell-looking path characters remain literal data; the joined fixture
+        # then refuses paths other than its two pinned CA mounts.
+        unusual = "/tmp/CA's $(no_command); $HOME.pem"
+        self.assertEqual(bridge.parse_copied_recipe(copied_recipe(inner=unusual))["environment"]["SERVERWARE_CA_FILE"], unusual)
+        with self.assertRaises(CheckFailure):
+            bridge.copied_client_environment(copied_recipe(inner=unusual), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
+        self.assertNotIn("SERVERWARE_PROXY_CA_FILE", bridge.parse_copied_recipe(copied_recipe(outer=""))["environment"])
+
+    def test_copied_recipe_refuses_changed_commands_fields_and_saved_identity(self):
+        original = copied_recipe()
+        for raw in (b"", original + b"\n", original + b"\nexec evil", b"x" * 8193, b"\xff", original.replace(b"\n", b"\r\n"),
+                original.replace(b"set +x", b"set -x"), original.replace(b"env -i", b"env"),
+                original.replace(b"exec ./gmail-example", b"exec ./other-client"),
+                original.replace(b"exec </dev/null", b"exec <&0"), original.replace(b"unset PWD OLDPWD SHLVL _", b"# skipped"),
+                original.replace(b"export SERVERWARE_CA_FILE=", b"export HOME="),
+                original.replace(b"export SERVERWARE_APP_ID=", b"export SERVERWARE_APP_ID=evil;"),
+                original.replace(b"export SERVERWARE_PROXY_TOKEN", b"export SERVERWARE_PROXY_TOKEN=wrong"),
+                original.replace(str(APP_EXPIRY).encode(), b"9007199254740992")):
+            with self.subTest(raw_hash=bridge.sha(raw)), self.assertRaises((CheckFailure, UnicodeError)):
+                bridge.parse_copied_recipe(raw)
+        for raw, app, rule, token in ((copied_recipe(outer=""), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original.replace(APP.encode(), oracle.uid(22).encode()), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original.replace(RULE.encode(), oracle.uid(23).encode()), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original, {**APP_VALUE, "token_expires_at_epoch_ms": APP_EXPIRY + 1}, RULE_VALUE, APP_TOKEN),
+                (original, APP_VALUE, {**RULE_VALUE, "application_id": oracle.uid(33)}, APP_TOKEN),
+                (original, APP_VALUE, RULE_VALUE, "short")):
+            with self.subTest(raw_hash=bridge.sha(raw)), self.assertRaises(CheckFailure):
+                bridge.copied_client_environment(raw, application=app, rule=rule, token=token)
+        with patch.object(bridge.time, "time_ns", return_value=APP_EXPIRY * 1_000_000), self.assertRaises(CheckFailure):
+            bridge.copied_client_environment(original, application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
+
+    def test_actual_client_boundary_uses_copied_environment_and_only_explicit_control_changes(self):
+        checker = oracle.checker
+        environment = bridge.copied_client_environment(copied_recipe(), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
+        instance = checker.GmailSdkCheck.__new__(checker.GmailSdkCheck)
+        instance.args = SimpleNamespace(browser_permission=True)
+        instance.deadline = time.monotonic() + 29
+        instance.current_files, instance.clean, instance.completed = Mock(), Mock(), []
+        instance.browser_client_environment = environment
+        with patch.object(checker, "client_environment", side_effect=AssertionError("independent environment used")), \
+             patch.object(checker, "run_example") as run:
+            for phase in checker.PHASES:
+                positive = phase in ("first", "refreshed")
+                run.return_value = (0, checker.SUCCESS, b"") if positive else (1, b"", checker.DENIAL)
+                application, token = (oracle.uid(3), "b" * 43) if phase == "wrong_app" else (APP, APP_TOKEN)
+                instance.client(phase, {"id": application}, token)
+                passed, budget = run.call_args.args
+                expected = dict(environment)
+                if phase == "wrong_outer_ca":
+                    expected["SERVERWARE_CA_FILE"], expected["SERVERWARE_PROXY_CA_FILE"] = (
+                        environment["SERVERWARE_PROXY_CA_FILE"], environment["SERVERWARE_CA_FILE"])
+                elif phase == "wrong_inner_ca":
+                    expected["SERVERWARE_CA_FILE"] = environment["SERVERWARE_PROXY_CA_FILE"]
+                    expected["SERVERWARE_PROXY_CA_FILE"] = "/client-trust/combined-ca.pem"
+                elif phase == "wrong_app": expected.update(SERVERWARE_APP_ID=application, SERVERWARE_PROXY_TOKEN=token)
+                self.assertEqual(passed, expected)
+                self.assertIsNot(passed, environment)
+                self.assertTrue(0 < budget <= 29)
+            self.assertEqual(run.call_count, 6)
+        self.assertEqual(environment["SERVERWARE_APP_ID"], APP)
+        self.assertEqual(environment["SERVERWARE_CA_FILE"], "/client-trust/inner-ca.pem")
+        self.assertEqual([row["phase"] for row in instance.completed], list(checker.PHASES))
+
+    def test_missing_or_mismatched_handoff_never_falls_back_or_launches(self):
+        checker = oracle.checker
+        instance = checker.GmailSdkCheck.__new__(checker.GmailSdkCheck)
+        instance.args = SimpleNamespace(browser_permission=True)
+        instance.current_files = Mock()
+        with patch.object(checker, "client_environment", side_effect=AssertionError("fallback")), \
+             patch.object(checker, "run_example") as launch, self.assertRaises(CheckFailure):
+            instance.client("first", {"id": APP}, APP_TOKEN)
+        launch.assert_not_called()
+        environment = bridge.copied_client_environment(copied_recipe(), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
+        for phase, app, token in (("first", oracle.uid(3), APP_TOKEN), ("refreshed", APP, "b" * 43),
+                ("wrong_app", APP, APP_TOKEN), ("unknown", APP, APP_TOKEN)):
+            with self.subTest(phase=phase), self.assertRaises(CheckFailure):
+                bridge.copied_phase_environment(environment, application=app, token=token, phase=phase)
 
 
 if __name__ == "__main__": unittest.main()

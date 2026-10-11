@@ -562,7 +562,15 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
 
     def client(self, phase, application, token):
         self.phase = phase; self.current_files()
-        result = run_example(client_environment(application["id"], token, phase), min(30, self.deadline - time.monotonic()))
+        if getattr(self.args, "browser_permission", False):
+            from scripts.operator_gmail_sdk_browser import copied_phase_environment
+            environment = copied_phase_environment(getattr(self, "browser_client_environment", None),
+                application=application["id"], token=token, phase=phase)
+        else:
+            environment = client_environment(application["id"], token, phase)
+        # The joined browser path uses actual copied fields; only the explicit
+        # existing denial controls change that environment. No shell is evaluated.
+        result = run_example(environment, min(30, self.deadline - time.monotonic()))
         self.current_files(); self.clean(result[1]); self.clean(result[2])
         self.completed.append(validate_client_result(phase, *result))
 

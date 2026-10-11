@@ -1,4 +1,5 @@
-# Paired X/Alchemy-capable, header/media-hotfixed, Google-unconfigured demo.
+# AWS-storage and key-lifecycle repair; same X/Alchemy proxy, Google unconfigured.
+# AWS credentials are storage-only: no signing, grants or ECR publication.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
 # This pair includes the genuinely rebuilt provider and response-media fixes; the historical
 # npm-publish-candidate retains the previous Rust executable and is not equivalent.
@@ -25,7 +26,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-384099dd928fdc8c6fc02859ebc65b6455b06fce
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-17cd4e976e1c1710f5eb047acec5c7fa46ffc2e0
         target: /app
         read_only: true
         bind: {create_host_path: false}

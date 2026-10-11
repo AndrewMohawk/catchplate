@@ -275,7 +275,8 @@ def create_credential(payload: CredentialInput, actor_id: str) -> dict:
         subject = str(uuid.uuid4())
         credential = db.create_credential(payload.name, payload.auth_type, payload.secret,
             {"provider_id": "operator-demo", "provider_subject": subject,
-             "secret_class": "bearerToken" if payload.auth_type == "bearer" else "customHeader"}, _connection=conn)
+             "secret_class": "bearerToken" if payload.auth_type == "bearer" else "customHeader",
+             **({"injection_name": payload.header_name} if payload.auth_type == "header" else {})}, _connection=conn)
         record = {"id": credential["id"], "name": payload.name, "auth_type": payload.auth_type,
             "header_name": "Authorization" if payload.auth_type == "bearer" else payload.header_name,
             "provider_subject": subject, "created_at": db.iso_now(), "status": "active"}

@@ -863,6 +863,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_control_plane_rbac_audit.py \
 	scripts/test_control_plane_two_person.py \
 	scripts/test_cosign_sigstore.py \
+	scripts/test_credential_injection_name_binding.py \
 	scripts/test_custody_response_proof.sh \
 	scripts/test_decision_gate_approval_publish.sh \
 	scripts/test_decision_gate_audit.sh \
@@ -11247,6 +11248,11 @@ verify-credential-policy-contracts:
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_credential_constraints.py
 	$(MITMPROXY_TEST_RUN) python scripts/test_credential_constraints.py --proxy-transport-only
 	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml
+
+# Isolated SQLite/binding component only; not native-controller or live proxy coverage.
+.PHONY: verify-credential-injection-name-binding
+verify-credential-injection-name-binding:
+	$(TEST_PYTHON_RUN) -B scripts/test_credential_injection_name_binding.py -f
 
 verify-control-plane-startup:
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py

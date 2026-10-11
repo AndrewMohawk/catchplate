@@ -19341,9 +19341,13 @@ def _assert_credential_injection_binding(
             status_code=409,
             detail="managed OAuth credentials require canonical access-token-only bearer injection",
         )
-    if injection_type in {"header", "query", "cookie"} and injection.get(
-        "name"
-    ) != metadata.get("injection_name"):
+    injection_name = injection.get("name")
+    stored_name = metadata.get("injection_name")
+    # HTTP field names are ASCII case-insensitive; other injection names are not.
+    if (injection_type == "header" and isinstance(injection_name, str)
+            and isinstance(stored_name, str) and injection_name.isascii() and stored_name.isascii()):
+        injection_name, stored_name = injection_name.lower(), stored_name.lower()
+    if injection_type in {"header", "query", "cookie"} and injection_name != stored_name:
         raise HTTPException(
             status_code=409,
             detail="stored credential injection name does not match the signed policy",

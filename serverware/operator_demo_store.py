@@ -304,7 +304,8 @@ def create_connection(payload: ConnectionInput, actor_id: str) -> tuple[dict, st
             raise RuntimeError("operator demo policy unavailable")
         credential = db.create_credential(payload.name, "bearer" if payload.auth_type == "bearer" else "header",
             payload.secret, {"provider_id": "operator-demo", "provider_subject": identifier,
-                "secret_class": "bearerToken" if payload.auth_type == "bearer" else "customHeader"}, _connection=conn)
+                "secret_class": "bearerToken" if payload.auth_type == "bearer" else "customHeader",
+                **({"injection_name": payload.header_name} if payload.auth_type == "header" else {})}, _connection=conn)
         record["credential_id"] = credential["id"]
         raw, digest = _signed([*rows, record], state["sequence"] + 1, state["initial_hash"])
         conn.execute("INSERT INTO operator_demo_connections VALUES (?,?)", (identifier, json.dumps(record, sort_keys=True)))

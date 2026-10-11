@@ -100,11 +100,11 @@ def parse_copied_recipe(raw):
 
 
 def copied_client_environment(raw, *, application, rule, token):
-    from scripts.check_operator_gmail_sdk import PROXY, TRUST_FILES
+    from scripts.check_operator_gmail_sdk import BROWSER_PROXY_URL, TRUST_FILES
     parsed = parse_copied_recipe(raw)
     environment = parsed["environment"]
     require(set(environment) == {"LANG", *_PUBLIC_ENV}
-        and environment["SERVERWARE_PROXY_URL"] == PROXY
+        and environment["SERVERWARE_PROXY_URL"] == BROWSER_PROXY_URL
         and environment["SERVERWARE_APP_ID"] == application["id"]
         and environment["SERVERWARE_CA_FILE"] == str(TRUST_FILES["inner"])
         and environment["SERVERWARE_PROXY_CA_FILE"] == str(TRUST_FILES["outer"])

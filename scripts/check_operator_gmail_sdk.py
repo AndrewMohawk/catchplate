@@ -28,6 +28,7 @@ if __package__ in (None, ""):
 
 from scripts import check_operator_google_refresh as base
 from scripts import operator_gmail_sdk_fixture as fixture
+from scripts.operator_gmail_sdk_fixture_network import BROWSER_PROXY_ADDRESS, BROWSER_PROXY_URL
 from scripts.check_operator_catalog import COLLECTIONS, claim_fixture, features
 from scripts.check_operator_demo import CheckFailure, SHA256, require, token_file
 from scripts.check_operator_github_examples import _child_exit_status, _cleanup_example_group
@@ -63,6 +64,11 @@ REQUEST_KEYS = {"case", "generation", "requestDigest", "operationDigest", "respo
 NEGATIVE_KINDS = {"wrong_outer_ca": None, "wrong_inner_ca": CONNECT, "wrong_app": DENIED, "revoked": DENIED}
 TRUST_FILES = {"inner": Path("/client-trust/inner-ca.pem"), "outer": Path("/client-trust/outer-ca.pem"),
     "combined": Path("/client-trust/combined-ca.pem")}
+
+
+def fixture_proxy(browser_permission):
+    require(type(browser_permission) is bool, "Gmail SDK browser mode differs")
+    return (BROWSER_PROXY_URL, BROWSER_PROXY_ADDRESS) if browser_permission else (PROXY, "127.0.0.1")
 
 
 def encoded(value):
@@ -523,7 +529,9 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
     def __init__(self, args):
         self.phase = "startup"
         super().__init__(args)
-        require(self.control.address == self.management.address == self.proxy.address == "127.0.0.1",
+        expected_url, expected_address = fixture_proxy(getattr(args, "browser_permission", False))
+        require(args.proxy_url == expected_url and self.control.address == self.management.address == "127.0.0.1"
+            and self.proxy.address == expected_address,
             "Gmail SDK fixed local peer differs")
         self.completed, self.denials, self.cutoffs = [], [], []
         self.pins = {}
@@ -823,7 +831,8 @@ def run_checks(args):
     check = None
     try:
         require(args.control_base == args.operator_origin == base.fixture.CONTROL_ORIGIN
-            and args.management_base == "http://127.0.0.1:9091" and args.proxy_url == PROXY
+            and args.management_base == "http://127.0.0.1:9091"
+            and args.proxy_url == fixture_proxy(getattr(args, "browser_permission", False))[0]
             and args.ca_file == TRUST_FILES["inner"] and args.proxy_ca_file == TRUST_FILES["outer"]
             and args.combined_ca_file == TRUST_FILES["combined"], "Gmail SDK fixed endpoint or trust path differs")
         require(type(args.expected_binary_sha256) is str and SHA256.fullmatch(args.expected_binary_sha256)

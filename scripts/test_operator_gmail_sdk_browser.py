@@ -42,7 +42,7 @@ def copied_recipe(*, inner="/client-trust/inner-ca.pem", outer="/client-trust/ou
     child = "\n".join([
         "set -eu", "IFS= read -r SERVERWARE_PROXY_TOKEN", "exec </dev/null", "unset PWD OLDPWD SHLVL _",
         "export SERVERWARE_PROXY_TOKEN",
-        "export SERVERWARE_PROXY_URL='https://proxy.operator-basic.example.test:8443'",
+        "export SERVERWARE_PROXY_URL='https://serverware-gmail-proxy.example.com'",
         "export SERVERWARE_APP_ID='" + APP + "'", "export SERVERWARE_CA_FILE=" + quote(inner),
         *(["export SERVERWARE_PROXY_CA_FILE=" + quote(outer)] if outer else []), "exec ./gmail-example"])
     return ("# Gmail SDK job (Bash): run from examples/google-gmail-go with the reviewed ./gmail-example already built.\n"
@@ -197,12 +197,19 @@ class BrowserBridgeTests(unittest.TestCase):
         self.assertNotIn(check.admin_token, str(response.getheaders.return_value))
         connection.close.assert_called_once()
 
-    def test_opt_in_is_only_stdin_and_checker_flag_no_default_recipe_change(self):
+    def test_opt_in_uses_matching_local_browser_endpoint_no_default_recipe_change(self):
         original = recipe.build(*topology.ARGS, **topology.PINS)
         enabled = recipe.build(*topology.ARGS, **topology.PINS, browser_permission=True)
         expected = deepcopy(original)
         expected["services"]["check"]["stdin_open"] = True
         expected["services"]["check"]["command"].append("--browser-permission")
+        command = expected["services"]["check"]["command"]
+        command[command.index("--proxy-url") + 1] = "https://serverware-gmail-proxy.example.com"
+        expected["services"]["initialize"]["command"][-1] = "browser-initialize"
+        expected["services"]["edge"]["command"][-1] = "browser-edge"
+        expected["services"]["basic-pki"]["command"] += ["--proxy-hostname", "serverware-gmail-proxy.example.com"]
+        for service in ("serverware", "decision-gate-rs"):
+            expected["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = "https://serverware-gmail-proxy.example.com"
         self.assertEqual(enabled, expected)
         self.assertEqual(recipe.build(*topology.ARGS, **topology.PINS, browser_permission=False), original)
         for value in (1, "yes", None):
@@ -284,7 +291,7 @@ class BrowserBridgeTests(unittest.TestCase):
     def test_closed_copied_recipe_extracts_actual_assignments_and_no_secret(self):
         parsed = bridge.parse_copied_recipe(copied_recipe())
         self.assertEqual(parsed, {"access_rule_id": RULE, "token_expires_at_epoch_ms": APP_EXPIRY,
-            "environment": {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
+            "environment": {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://serverware-gmail-proxy.example.com",
                 "SERVERWARE_APP_ID": APP, "SERVERWARE_CA_FILE": "/client-trust/inner-ca.pem",
                 "SERVERWARE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}})
         environment = bridge.copied_client_environment(copied_recipe(), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
@@ -311,6 +318,8 @@ class BrowserBridgeTests(unittest.TestCase):
             with self.subTest(raw_hash=bridge.sha(raw)), self.assertRaises((CheckFailure, UnicodeError)):
                 bridge.parse_copied_recipe(raw)
         for raw, app, rule, token in ((copied_recipe(outer=""), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original.replace(b"https://serverware-gmail-proxy.example.com", b"https://serverware-proxy.example.com"), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original.replace(b"https://serverware-gmail-proxy.example.com", b"https://proxy.operator-basic.example.test:8443"), APP_VALUE, RULE_VALUE, APP_TOKEN),
                 (original.replace(APP.encode(), oracle.uid(22).encode()), APP_VALUE, RULE_VALUE, APP_TOKEN),
                 (original.replace(RULE.encode(), oracle.uid(23).encode()), APP_VALUE, RULE_VALUE, APP_TOKEN),
                 (original, {**APP_VALUE, "token_expires_at_epoch_ms": APP_EXPIRY + 1}, RULE_VALUE, APP_TOKEN),

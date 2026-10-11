@@ -115,6 +115,67 @@ class GmailSdkRecipeTests(unittest.TestCase):
         self.assertEqual(self.config["services"]["basic-pki"]["volumes"][1],
             recipe.base.bind(JOB / "runtime/https-proxy", "/fixture-runtime", False))
 
+    def test_browser_endpoint_config_hosts_and_checker_are_one_closed_choice(self):
+        from scripts import check_operator_gmail_sdk as checker
+        enabled = recipe.build(*ARGS, **PINS, browser_permission=True)
+        url = "https://serverware-gmail-proxy.example.com"
+        for mode, config, expected in ((False, self.config, "https://proxy.operator-basic.example.test:8443"),
+                                      (True, enabled, url)):
+            services = config["services"]
+            command = services["check"]["command"]
+            self.assertEqual(command[command.index("--proxy-url") + 1], expected)
+            self.assertEqual(checker.fixture_proxy(mode), (expected, "127.0.0.2" if mode else "127.0.0.1"))
+            self.assertEqual(services["initialize"]["command"][-1], "browser-initialize" if mode else "initialize")
+            self.assertEqual(services["edge"]["command"][-1], "browser-edge" if mode else "edge")
+            self.assertEqual("--proxy-hostname" in services["basic-pki"]["command"], mode)
+        for service in ("serverware", "decision-gate-rs"):
+            self.assertEqual(enabled["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"], url)
+            self.assertEqual(self.config["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"],
+                "https://serverware-proxy.example.com")
+        original = b"127.0.0.1 localhost serverware decision-gate-rs serverware-demo.example.com\n93.184.216.34 gmail.googleapis.com\n"
+        self.assertEqual(glue.hosts_bytes(original), original.replace(b"serverware-demo.example.com\n",
+            b"serverware-demo.example.com proxy.operator-basic.example.test\n"))
+        self.assertEqual(glue.hosts_bytes(original, browser_permission=True),
+            original + b"127.0.0.2 serverware-gmail-proxy.example.com\n")
+        for value in (None, 0, 1, "true"):
+            with self.subTest(value=value), self.assertRaises(checker.CheckFailure): checker.fixture_proxy(value)
+            with self.subTest(value=value), self.assertRaises(ValueError): glue.hosts_bytes(original, browser_permission=value)
+        for service in ("serverware", "decision-gate-rs"):
+            for altered in ("https://serverware-proxy.example.com", "https://proxy.operator-basic.example.test:8443", url + ":443"):
+                wrong = deepcopy(enabled)
+                wrong["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = altered
+                with self.subTest(service=service, altered=altered), self.assertRaises(ValueError):
+                    recipe.validate(wrong, *ARGS, **PINS, browser_permission=True)
+        for service in ("initialize", "edge", "basic-pki", "check"):
+            wrong = deepcopy(enabled)
+            wrong["services"][service]["command"] = deepcopy(self.config["services"][service]["command"])
+            with self.subTest(service=service), self.assertRaises(ValueError):
+                recipe.validate(wrong, *ARGS, **PINS, browser_permission=True)
+
+    def test_actual_checker_peer_guard_refuses_mode_origin_and_address_drift(self):
+        # Synthetic resolved peers only; the actual constructor's guard runs.
+        # Accepted cases stop at their first file pin, never read files/connect.
+        from scripts import check_operator_gmail_sdk as checker
+        from scripts.check_operator_demo import CheckFailure
+        stop = RuntimeError("fixture stopped before file pin")
+        for mode in (False, True):
+            url, address = checker.fixture_proxy(mode)
+            for wrong in (None, "origin", "proxy", "control", "management"):
+                args = SimpleNamespace(browser_permission=mode, proxy_url=url if wrong != "origin" else url + ":443")
+                def resolved(owner, _args):
+                    owner.control = SimpleNamespace(address="127.0.0.2" if wrong == "control" else "127.0.0.1")
+                    owner.management = SimpleNamespace(address="127.0.0.2" if wrong == "management" else "127.0.0.1")
+                    owner.proxy = SimpleNamespace(address=("127.0.0.1" if mode else "127.0.0.2") if wrong == "proxy" else address)
+                with self.subTest(mode=mode, wrong=wrong), \
+                     patch.object(checker.base.GoogleRefreshCheck, "__init__", resolved), \
+                     patch.object(checker, "read_pin", side_effect=stop) as read:
+                    with self.assertRaises(CheckFailure if wrong else RuntimeError) as caught:
+                        checker.GmailSdkCheck(args)
+                    if wrong: read.assert_not_called()
+                    else:
+                        self.assertIs(caught.exception, stop)
+                        self.assertEqual(read.call_count, 1)
+
     def test_exact_recipe_rejects_omitted_extra_services_ports_and_network_interfaces(self):
         recipe.validate(self.config, *ARGS, **PINS)
         def mutate(value, case):

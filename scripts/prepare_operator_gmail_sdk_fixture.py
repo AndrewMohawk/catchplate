@@ -17,7 +17,7 @@ import re
 
 from scripts import prepare_operator_google_fixture as google
 from scripts import prepare_operator_proxy_basic_fixture as basic
-from scripts.operator_gmail_sdk_fixture_network import KEEPER_SECONDS, EDGE_SECONDS
+from scripts.operator_gmail_sdk_fixture_network import KEEPER_SECONDS, EDGE_SECONDS, BROWSER_PROXY_HOST, BROWSER_PROXY_URL
 from scripts.operator_google_fixture import CONTROL_ORIGIN
 
 base = google.base
@@ -49,19 +49,22 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
                 mount["source"] = str(root / path.relative_to(template))
             if mount["target"] == "/etc/hosts":
                 mount["source"] = str(runtime / "gmail-sdk-hosts")
-    services["initialize"]["command"] = ["python", "-B", "-m", "scripts.operator_gmail_sdk_fixture_network", "initialize"]
+    services["initialize"]["command"] = ["python", "-B", "-m", "scripts.operator_gmail_sdk_fixture_network",
+        "browser-initialize" if browser_permission else "initialize"]
     services["provider"]["command"] = ["python", "-B", "-m", "scripts.operator_gmail_sdk_fixture", "--lifetime-seconds", "300"]
     check = services["check"]
     check.update(image=base.APP_IMAGE, cpus=1, mem_limit="512m", memswap_limit="512m")
     check["environment"] = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app"}
     check["command"][2] = CHECKER
-    check["command"][check["command"].index("--proxy-url") + 1] = PROXY_URL
+    check["command"][check["command"].index("--proxy-url") + 1] = BROWSER_PROXY_URL if browser_permission else PROXY_URL
     check["command"][check["command"].index("--ca-file") + 1] = "/client-trust/inner-ca.pem"
     check["command"] += ["--proxy-ca-file", "/client-trust/outer-ca.pem",
         "--combined-ca-file", "/client-trust/combined-ca.pem", "--expected-go-sha256", expected_go_sha256]
     if browser_permission:
         check["command"].append("--browser-permission")
         check["stdin_open"] = True
+        for name in ("serverware", "decision-gate-rs"):
+            services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = BROWSER_PROXY_URL
     check["volumes"] = [mount for mount in check["volumes"] if mount["target"] != "/client-dependencies"]
     pki = runtime / "https-proxy/basic-pki"
     check["volumes"] += [base.bind(go, GO_TARGET),
@@ -77,8 +80,11 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
             "--runtime-root", "/fixture-runtime", "--inner-ca-file", "/inner-ca.pem"],
         "volumes": [base.bind(source, "/app"), base.bind(runtime / "https-proxy", "/fixture-runtime", False),
             base.bind(runtime / "app-data/mitmproxy/mitmproxy-ca-cert.pem", "/inner-ca.pem")]}
+    if browser_permission:
+        services["basic-pki"]["command"] += ["--proxy-hostname", BROWSER_PROXY_HOST]
     services["edge"] = {**deepcopy(common), "profiles": ["edge"],
-        "command": ["python", "-B", "-m", "scripts.operator_gmail_sdk_fixture_network", "edge"],
+        "command": ["python", "-B", "-m", "scripts.operator_gmail_sdk_fixture_network",
+            "browser-edge" if browser_permission else "edge"],
         "volumes": [base.bind(source, "/app"), base.bind(pki / "outer-cert.pem", "/edge/cert.pem"),
             base.bind(pki / "outer-key.pem", "/edge/key.pem"),
             base.bind(runtime / "gmail-sdk-hosts", "/etc/hosts"),

@@ -26,6 +26,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 RUNTIME_ROOT = Path("/fixture-runtime")
 INNER_CA_FILE = Path("/inner-ca.pem")
 PROXY_HOST = "proxy.operator-basic.example.test"
+PROXY_HOSTNAMES = (PROXY_HOST, "serverware-gmail-proxy.example.com")
 _DIRECTORIES = frozenset({"app-data", "gate-data", "upstream-data", "service-secrets"})
 _MARKER = ".private-fixture.json"
 _OWNER = (10001, 10001)
@@ -85,7 +86,8 @@ def _write(directory_fd, name, value):
         os.fsync(output.fileno())
 
 
-def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE):
+def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE, *, proxy_hostname=PROXY_HOST):
+    require(type(proxy_hostname) is str and proxy_hostname in PROXY_HOSTNAMES)
     require(runtime_root == RUNTIME_ROOT and inner_ca_file == INNER_CA_FILE and os.geteuid() == 0)
     require({name for _, name in socket.if_nameindex()} == {"lo"})
     os.umask(0o077)
@@ -123,14 +125,14 @@ def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE):
             .sign(root_key, hashes.SHA256()))
         leaf_key = ec.generate_private_key(ec.SECP256R1())
         leaf = (x509.CertificateBuilder()
-            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, PROXY_HOST)]))
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, proxy_hostname)]))
             .issuer_name(name).public_key(leaf_key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - dt.timedelta(minutes=1)).not_valid_after(now + dt.timedelta(hours=1))
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
                 key_encipherment=False, data_encipherment=False, key_agreement=False,
                 key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName(PROXY_HOST)]), critical=False)
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(proxy_hostname)]), critical=False)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()), critical=False)
             .sign(root_key, hashes.SHA256()))
@@ -155,7 +157,7 @@ def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE):
             os.fsync(descriptor)
         os.fsync(root_fd)
         print(json.dumps({"schema": "serverware.proxyBasicFixturePki/v1", "syntheticOnly": True,
-            "proxyHostname": PROXY_HOST, "innerCaSha256": "sha256:" + inner_fingerprint.hex(),
+            "proxyHostname": proxy_hostname, "innerCaSha256": "sha256:" + inner_fingerprint.hex(),
             "outerCaSha256": "sha256:" + outer_fingerprint.hex(),
             "outerLeafSha256": "sha256:" + leaf.fingerprint(hashes.SHA256()).hex(),
             "requestsRootCount": 2, "rootPrivateKeyPersisted": False}, sort_keys=True))
@@ -169,10 +171,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime-root", required=True, choices=(str(RUNTIME_ROOT),))
     parser.add_argument("--inner-ca-file", required=True, choices=(str(INNER_CA_FILE),))
+    parser.add_argument("--proxy-hostname", choices=PROXY_HOSTNAMES, default=PROXY_HOST)
     args = parser.parse_args()
     signal.alarm(20)
     try:
-        prepare(Path(args.runtime_root), Path(args.inner_ca_file))
+        prepare(Path(args.runtime_root), Path(args.inner_ca_file), proxy_hostname=args.proxy_hostname)
     except Exception:
         raise SystemExit("Private Basic fixture setup refused; any partial output is retained. Do not retry.") from None
     finally:

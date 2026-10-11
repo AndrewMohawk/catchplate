@@ -69,12 +69,14 @@ class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = False
     request_queue_size = 8
 
-    def __init__(self, listen, gate, context, lifetime):
+    def __init__(self, listen, gate, context, lifetime, *, port=PROXY_PORT):
+        if type(port) is not int or port not in (443, PROXY_PORT):
+            raise ValueError("private relay port must be 443 or 8443")
         self.gate, self.context = gate, context
         self.deadline = time.monotonic() + lifetime
         self.slots = threading.BoundedSemaphore(8)
         self.accepted = 0
-        super().__init__((listen, PROXY_PORT), Relay)
+        super().__init__((listen, port), Relay)
 
     def get_request(self):
         raw, peer = super().get_request()

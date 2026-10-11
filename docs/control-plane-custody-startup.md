@@ -128,6 +128,50 @@ A successful fresh readback may retain its first unsigned local observation;
 stored observation metadata is never fresh proof, a terminal business state,
 permission to reset an attempt or authority to resend.
 
+## Configuration versus writer admission, 2026-10-11
+
+The ordinary startup gate previously called `db.require_atomic_release_writer`
+directly from the hot control-plane process. That guard correctly requires a
+measured executor context, so it prevented startup from reaching the installed
+external reconciliation facade. Both startup call sites now use
+`db.require_atomic_release_storage_configuration` instead. The helper checks
+configured PostgreSQL backends and matching nonempty DSNs only; it does not
+connect, verify schema/connectivity, acquire writer authority or establish
+readiness. The privileged writer guard is unchanged.
+
+Startup still dispatches reconciliation and audit draining through the actual
+installed facades, before CA material and the final PID marker. Exceptions still
+abort startup. This is a handoff repair, **not completed atomic startup**: the
+current `release.reconcile` kernel requires an attempt identifier, while the
+startup facade supplies only `limit`, `now_epoch_ms` and `actor_id`. A genuine
+bounded candidate-selection/reconciliation adapter is still missing. The audit
+kernel has an empty-candidate result, but that does not repair reconciliation
+or establish that the entire backlog is empty. Neither a fabricated candidate
+nor a synthetic successful transport response is acceptable production proof.
+
+The complete real transition registry and planner now import successfully.
+Older registration tests incorrectly expected six missing recovery programs;
+those operations are explicitly disabled, absent from planning, and denied by
+the current contract. Updated tests use the actual registry for positive
+closure, then remove enabled entries or insert disabled ones for negatives.
+Registry closure does not make disabled recovery available or prove execution.
+
+Run the offline configuration, facade and registration controls with
+`make verify-control-plane-startup-dispatch`; set `TEST_PYTHON_RUN` to an existing
+dependency-equipped Python runner to reuse it without a build. These controls
+do not start a pilot, PostgreSQL or a provider connection. Their synthetic
+transport boundary is not measured authority, native startup or live app proof.
+The cached, network-disabled dependency image passed all 27 controls in that
+target, plus all 19 existing startup/service-credential controls. The standalone
+startup suite now explicitly selects its required control-plane process mode.
+The broader script is not green: a bounded run was stopped without a final
+suite result, then two targeted typed-planner controls reproduced an expected
+error mismatch (`typed transition query identity changed`) and a test call to
+`_read_root_set` missing `deadline_epoch_ns`. Those failures were not repaired or
+counted as passes in this batch.
+No running app deployment, DNS record or retained pilot state was changed by
+this source/test batch.
+
 ## Remaining deployment work
 
 This source integration has not been built or exercised. Operators still need

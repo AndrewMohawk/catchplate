@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise the registry guard with synthetic metadata, never authority execution.
+"""Exercise real source registration and bounded metadata fault injection.
 
-These tests do not assert that the real operation implementation is complete.
-The source-root control-plane startup test remains the integration gate for it.
+Positive registration uses the complete actual registry, not invented kernels.
+Negative tests change one contributor or operation contract. Registration does
+not establish configured authority execution, PostgreSQL admission or a pilot.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from serverware import authority_contract  # noqa: E402
 from serverware import authority_transition_core as core  # noqa: E402
 from serverware import authority_transition_policy  # noqa: E402
 from serverware import authority_transition_quota  # noqa: E402
-from serverware import authority_transition_release  # noqa: E402
+from serverware import authority_transition_registry  # noqa: E402
 
 
 _CHALLENGE_OPERATIONS = frozenset(
@@ -31,25 +32,24 @@ _CHALLENGE_OPERATIONS = frozenset(
         "webauthn.challenge.consume",
     }
 )
-_DISABLED_OPERATIONS = frozenset({"jit.consume"})
+_DISABLED_OPERATIONS = frozenset({
+    "jit.consume",
+    "webauthn.recovery.create",
+    "webauthn.recovery.candidate",
+    "webauthn.recovery.finalize",
+    "webauthn.recovery.expire",
+    "webauthn.recovery.prune",
+    "webauthn.recovery.invalidate",
+})
 
 
 class AuthorityTransitionRegistryTests(unittest.TestCase):
-    def _kernels(self) -> dict[str, SimpleNamespace]:
-        return {
-            operation: SimpleNamespace(
-                operation=operation,
-                handler=authority_contract.operation_spec(operation)["handler"],
-                program_id=authority_contract.transition_program_id(operation),
-                permits_empty_mutation=False,
-            )
-            for operation in authority_contract.OPERATION_REGISTRY
-            if operation not in _CHALLENGE_OPERATIONS | _DISABLED_OPERATIONS
-        }
+    def _kernels(self) -> dict[str, core.TransitionKernel]:
+        return dict(authority_transition_policy.KERNELS)
 
     def _load_registry(
         self,
-        kernels: dict[str, SimpleNamespace],
+        kernels: dict[str, object],
         *,
         quota_kernels: dict[str, SimpleNamespace] | None = None,
     ) -> dict[str, object]:
@@ -58,21 +58,27 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
             patch.object(
                 authority_transition_quota,
                 "KERNELS",
-                quota_kernels if quota_kernels is not None else {},
+                {**authority_transition_quota.KERNELS, **(quota_kernels or {})},
             ),
-            patch.object(authority_transition_release, "KERNELS", {}),
         ):
             return runpy.run_path(
                 str(ROOT / "serverware" / "authority_transition_registry.py")
             )
 
-    def test_exact_metadata_partition_is_accepted(self) -> None:
-        kernels = self._kernels()
-        loaded = self._load_registry(kernels)
-        self.assertEqual(set(loaded["KERNELS"]), set(kernels))
+    def test_actual_complete_source_partition_is_accepted(self) -> None:
+        # Do not replace any registry, operation or kernel for this positive.
+        loaded = runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+        self.assertEqual(loaded["INTENTIONALLY_DISABLED_OPERATIONS"], _DISABLED_OPERATIONS)
+        self.assertEqual(loaded["WEBAUTHN_CHALLENGE_OPERATIONS"], _CHALLENGE_OPERATIONS)
+        self.assertEqual(set(loaded["KERNELS"]), {
+            operation for operation in authority_contract.OPERATION_REGISTRY
+            if authority_contract.operation_spec(operation)["planningMode"] == "typed-pure-transition"
+        })
+        self.assertTrue(all(kernel is authority_transition_registry.KERNELS[operation]
+            for operation, kernel in loaded["KERNELS"].items()))
         self.assertEqual(
             loaded["PLANNABLE_OPERATIONS"],
-            set(kernels) | _CHALLENGE_OPERATIONS,
+            set(authority_contract.OPERATION_REGISTRY) - _DISABLED_OPERATIONS,
         )
         self.assertEqual(loaded["_CLOSURE_ERRORS"], ())
         self.assertFalse(
@@ -82,19 +88,20 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
     def test_missing_kernels_are_named_in_sorted_order(self) -> None:
         kernels = self._kernels()
         missing = (
-            "webauthn.credential.revoke",
-            "webauthn.registration.finalize",
-            "webauthn.trust.complete",
-            "webauthn.trust.stage",
+            "webauthn.counter.cas",
+            "webauthn.trust.error",
         )
         for operation in missing:
             kernels.pop(operation)
         with self.assertRaises(RuntimeError) as caught:
             self._load_registry(kernels)
-        self.assertEqual(
-            str(caught.exception),
-            "authority transition registry is not closed: "
+        self.assertIn(
             "missing transition kernels=[" + ", ".join(missing) + "]",
+            str(caught.exception),
+        )
+        self.assertIn(
+            "uncovered operation contracts=[" + ", ".join(missing) + "]",
+            str(caught.exception),
         )
 
     def test_unknown_kernel_is_rejected_without_contract_lookup_error(self) -> None:
@@ -116,7 +123,10 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
         ):
             with self.subTest(attribute=attribute):
                 kernels = self._kernels()
-                setattr(kernels[operation], attribute, value)
+                original = kernels[operation]
+                fields = {name: getattr(original, name) for name in
+                    ("operation", "handler", "program_id", "permits_empty_mutation")}
+                kernels[operation] = SimpleNamespace(**{**fields, attribute: value})
                 with self.assertRaisesRegex(
                     RuntimeError,
                     rf"invalid transition kernel {operation}=\[{diagnostic}\]",
@@ -124,24 +134,25 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
                     self._load_registry(kernels)
 
     def test_disabled_operation_cannot_be_registered(self) -> None:
-        kernels = self._kernels()
-        operation = "jit.consume"
-        kernels[operation] = SimpleNamespace(
-            operation=operation,
-            handler=authority_contract.operation_spec(operation)["handler"],
-            program_id=authority_contract.transition_program_id(operation),
-            permits_empty_mutation=False,
-        )
-        with self.assertRaises(RuntimeError) as caught:
-            self._load_registry(kernels)
-        self.assertIn(
-            "unexpected transition kernels=[jit.consume]",
-            str(caught.exception),
-        )
-        self.assertIn(
-            "disabled operations are plannable=[jit.consume]",
-            str(caught.exception),
-        )
+        for operation in sorted(_DISABLED_OPERATIONS):
+            with self.subTest(operation=operation):
+                kernels = self._kernels()
+                kernels[operation] = SimpleNamespace(
+                    operation=operation,
+                    handler=authority_contract.operation_spec(operation)["handler"],
+                    program_id=authority_contract.transition_program_id(operation),
+                    permits_empty_mutation=False,
+                )
+                with self.assertRaises(RuntimeError) as caught:
+                    self._load_registry(kernels)
+                self.assertIn(
+                    f"unexpected transition kernels=[{operation}]",
+                    str(caught.exception),
+                )
+                self.assertIn(
+                    f"disabled operations are plannable=[{operation}]",
+                    str(caught.exception),
+                )
 
     def test_planning_modes_remain_closed(self) -> None:
         for operation in (
@@ -219,7 +230,7 @@ class JitRequestDependencyContractTests(unittest.TestCase):
                       "counterPolicy": "strict-or-zero", "maxAssertionAgeSeconds": 60,
                   }}
         digest = "sha256:" + "1" * 64
-        return {
+        arguments = {
             "route_id": "route:fixture", "method": "GET", "url_commitment": digest,
             "principal_id": "principal:fixture", "credential_id": "", "credential_version": 0,
             "policy_hash": digest, "request_digest": digest, "operation_digest": None,
@@ -231,6 +242,8 @@ class JitRequestDependencyContractTests(unittest.TestCase):
                 "serverware.jitApproverPolicy/v1", core.canonical_bytes(policy)
             ),
         }
+        arguments["businessIntent"] = authority_contract.synthesize_business_intent("jit.request", arguments)
+        return arguments
 
     def test_jit_request_reads_routes_not_a_fictitious_policies_relation(self) -> None:
         spec = authority_contract.operation_spec("jit.request")

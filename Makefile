@@ -11294,6 +11294,13 @@ verify-credential-ciphertext-codec:
 verify-control-plane-startup:
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
 
+# Offline configuration/facade controls, not admitted authority or a pilot.
+.PHONY: verify-control-plane-startup-dispatch
+verify-control-plane-startup-dispatch:
+	$(TEST_PYTHON_RUN) -B scripts/test_control_plane_atomic_startup_dispatch.py
+	$(TEST_PYTHON_RUN) -B scripts/test_authority_transition_registry.py
+	$(TEST_PYTHON_RUN) -B scripts/test_authority_jit_successor_registration.py
+
 # Standalone browser names route through the same promoted OCI sequence.
 verify-portal-browser-oauth-no-build: verify-consolidated-no-build
 

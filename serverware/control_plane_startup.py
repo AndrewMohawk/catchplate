@@ -267,14 +267,16 @@ def validate_control_plane_startup() -> None:
         enforce_policy_high_water(snapshot)
         if production_release() and policy_uses_atomic_release_authorization(snapshot):
             try:
-                db.require_atomic_release_writer()
-            except db.ReleaseAuthorizationError as exc:
+                db.require_atomic_release_storage_configuration()
+            except db.MetadataStoreError as exc:
                 raise RuntimeError(
-                    "production atomic release authorization requires metadata and "
-                    "grant stores on the same writer DSN and schema"
+                    "production atomic release authorization requires PostgreSQL "
+                    "metadata and grant stores configured with the same DSN"
                 ) from exc
     if ATOMIC_RELEASE_AUTHORIZATION_ENABLED:
-        db.require_atomic_release_writer()
+        # The hot process checks configuration, then uses the installed writer
+        # facades to dispatch externally. It must never acquire writer context.
+        db.require_atomic_release_storage_configuration()
         db.reconcile_release_authorizations(
             limit=RELEASE_AUTHORIZATION_RECONCILE_LIMIT
         )

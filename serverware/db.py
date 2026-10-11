@@ -77190,6 +77190,17 @@ def release_authorization_writer_status() -> dict[str, Any]:
     }
 
 
+def require_atomic_release_storage_configuration() -> dict[str, Any]:
+    """Check configured store compatibility without acquiring writer authority.
+
+    Matching PostgreSQL DSNs are configuration evidence only: this does not
+    connect to a database, validate its schema, or authorize a hot-process write.
+    Startup must still dispatch reconciliation through the measured authority.
+    """
+    _require_postgres_jit_authority("atomic release authorization")
+    return release_authorization_writer_status()
+
+
 def require_atomic_release_writer() -> dict[str, Any]:
     _require_postgres_jit_authority("atomic release authorization")
     _require_external_measured_authority_writer_dispatch(

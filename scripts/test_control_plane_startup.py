@@ -22,6 +22,9 @@ os.environ["SERVERWARE_DATA_DIR"] = _TEMP_DIR.name
 os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+# This standalone suite exercises the ordinary control-plane runner and ASGI
+# hooks; their cold admission must see the actual required process mode.
+os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
 
 from serverware import control_plane_runner, control_plane_startup  # noqa: E402
 from serverware.signed_http import SignedOnlyHttpToolsProtocol  # noqa: E402
@@ -517,7 +520,7 @@ class ControlPlaneStartupTests(unittest.TestCase):
         high_water.assert_called_once_with(snapshot)
         ensure_ca.assert_called_once_with()
 
-    def test_production_composed_policy_requires_one_atomic_writer(self) -> None:
+    def test_production_composed_policy_requires_compatible_atomic_storage(self) -> None:
         snapshot = object()
         with (
             patch.multiple(control_plane_startup, **_PRODUCTION_CONFIGURATION),
@@ -540,14 +543,14 @@ class ControlPlaneStartupTests(unittest.TestCase):
             ),
             patch.object(
                 control_plane_startup.db,
-                "require_atomic_release_writer",
-                side_effect=control_plane_startup.db.ReleaseAuthorizationError(
-                    "different writers"
+                "require_atomic_release_storage_configuration",
+                side_effect=control_plane_startup.db.MetadataStoreError(
+                    "different configured stores"
                 ),
             ),
             patch.object(control_plane_startup, "ensure_mitm_ca_material") as ensure_ca,
         ):
-            with self.assertRaisesRegex(RuntimeError, "same writer DSN and schema"):
+            with self.assertRaisesRegex(RuntimeError, "configured with the same DSN"):
                 control_plane_startup.validate_control_plane_startup()
         ensure_ca.assert_not_called()
 
@@ -572,7 +575,10 @@ class ControlPlaneStartupTests(unittest.TestCase):
                 "policy_uses_atomic_release_authorization",
                 return_value=False,
             ),
-            patch.object(control_plane_startup.db, "require_atomic_release_writer") as writer,
+            patch.object(
+                control_plane_startup.db,
+                "require_atomic_release_storage_configuration",
+            ) as storage_configuration,
             patch.object(control_plane_startup.db, "reconcile_release_authorizations") as reap,
             patch.object(
                 control_plane_startup.db,
@@ -581,7 +587,7 @@ class ControlPlaneStartupTests(unittest.TestCase):
             patch.object(control_plane_startup, "ensure_mitm_ca_material"),
         ):
             control_plane_startup.validate_control_plane_startup()
-        writer.assert_called_once_with()
+        storage_configuration.assert_called_once_with()
         reap.assert_called_once_with(limit=37)
         drain.assert_called_once_with(37)
 

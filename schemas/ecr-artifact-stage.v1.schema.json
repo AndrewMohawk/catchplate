@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/ecr-artifact-stage.v1.schema.json",
+  "title": "Unsigned local ECR artifact preparation marker",
+  "description": "Written after local copying and verification. This marker is not a signature, immutable custody proof, approval, upload grant or evidence of an AWS operation. Recheck the retained content before any future use.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "artifactSha256", "manifestDigest", "unsigned"],
+  "properties": {
+    "schema": {"const": "serverware.ecrArtifactStage/v1"},
+    "artifactSha256": {"$ref": "#/$defs/digest"},
+    "manifestDigest": {"$ref": "#/$defs/digest"},
+    "unsigned": {"const": true}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71}
+  }
+}

@@ -11260,6 +11260,13 @@ verify-credential-injection-name-binding:
 verify-proxy-json-media-parameters:
 	cargo test --locked --release --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-decision-gate json_media_parameters -- --test-threads=1
 
+# Offline byte/copy/CLI components only; no provider, approval or proxy admission.
+.PHONY: verify-ecr-image-preparation
+verify-ecr-image-preparation:
+	python3 -I -B scripts/test_ecr_image_artifact.py
+	python3 -I -B scripts/test_ecr_artifact_staging.py
+	python3 -I -B scripts/test_prepare_ecr_image_artifact.py
+
 verify-control-plane-startup:
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
 

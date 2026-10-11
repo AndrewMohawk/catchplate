@@ -1,10 +1,16 @@
 # AWS ordinary-client compatibility plan
 
-Status: **standalone signing foundation tested; proxy integration not implemented
-or accepted**. This document proposes a bounded operator-development feature,
+Status: **signing foundation and local exact-image preparation tested;
+proxy publication is not implemented or accepted**. This document proposes a
+bounded operator-development feature,
 not AWS-wide SDK support, a production credential service, or completion of the
 native pilot. No AWS requests were sent. The checks below exercise local SDK
 serialization and isolated signing, not a working AWS connection.
+
+The [exact-image preparation component](operator-ecr-image-preparation.md)
+adds actual whole-artifact byte validation and unsigned local copying before
+the future approval request. It does not change JIT authority, make the SQLite
+demo capable of native approval, or activate an AWS destination or permission.
 
 ## Verified foundation (2026-10-10)
 

@@ -319,7 +319,11 @@ def gate_refusals():
             refused(lambda: f.mutations.create_x_rule(grant, ACTOR), f.schema.CatalogConflict)
             assert len(clients) == 2
             status = f.mutations.catalog_status()
-            assert status["capabilities"]["x"] is None and len(clients) == 3
+            assert status["capabilities"]["x"] is None
+            assert status["capabilities"]["alchemy"] is None
+            # Two refused mutations above, then one fresh observation for each
+            # of the X and Alchemy capabilities during catalog projection.
+            assert len(clients) == 4
             mutate.assert_not_called()
         assert f.snapshot() == before
     # Matching stale request and gate hashes still fail the real local SQL

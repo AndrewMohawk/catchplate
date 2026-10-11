@@ -54,8 +54,13 @@ class GmailSdkRun(Run):
         self.browser_unit = self.project + "-browser.service"
         require(re.fullmatch(r"serverware-gmail-sdk-private-[0-9a-f]{12}-browser\.service", self.browser_unit))
         require(not self.browser_units("browser-unit-before"), "browser unit already exists")
-        require(not self.command("browser-unit-files-before", ["systemctl", "--user", "list-unit-files",
-            "--no-legend", "--no-pager", self.browser_unit], 3).strip(), "browser unit file already exists")
+        # systemd 255 returns 1 for an empty exact-name unit-file match. Keep
+        # command errors fatal: include one known static sentinel and require
+        # that exact row alone, rather than accepting a nonzero exit status.
+        unit_files = self.command("browser-unit-files-before", ["systemctl", "--user", "list-unit-files",
+            "--no-legend", "--no-pager", self.browser_unit, "default.target"], 3)
+        require([line.split() for line in unit_files.decode("ascii").splitlines()] == [["default.target", "static", "-"]],
+            "browser unit file exists or sentinel differs")
         self.save("browser-inputs.json", {"unit": self.browser_unit, "nodeSha256": NODE_SHA256,
             "chromiumSha256": CHROME_SHA256, "driverSha256": recipe.base.digest(self.args.source / BROWSER_DRIVER),
             "hostRendering": True, "containerStdioTransport": True, "runtimeMaxSeconds": 185,

@@ -163,6 +163,37 @@ class BrowserBridgeTests(unittest.TestCase):
                 return_value=b"ActiveState=active\nMainPID=123\nControlGroup=/retained\n"), self.assertRaises(ValueError):
             run.browser_cleanup()
 
+    def test_absent_unit_preflight_requires_exact_sentinel_and_successful_command(self):
+        run = runner.GmailSdkRun(SimpleNamespace(source=Path("/synthetic/source")))
+        run.project = "serverware-gmail-sdk-private-11ea48cffa22"
+        candidate = run.project + "-browser.service"
+        pins = {runner.NODE: runner.NODE_SHA256, runner.CHROME: runner.CHROME_SHA256}
+        with patch.object(Path, "is_file", return_value=True), patch.object(Path, "is_symlink", return_value=False), \
+             patch.object(recipe.base, "digest", side_effect=lambda file: pins.get(file, "a" * 64)), \
+             patch.object(run, "browser_units", return_value=False) as loaded, patch.object(run, "save") as save:
+            with patch.object(run, "command", return_value=b"default.target static -\n") as command:
+                run.browser_preflight(recipe)
+                command.assert_called_once_with("browser-unit-files-before", ["systemctl", "--user", "list-unit-files",
+                    "--no-legend", "--no-pager", candidate, "default.target"], 3)
+                loaded.assert_called_once_with("browser-unit-before")
+                self.assertEqual(save.call_args.args[1]["unit"], candidate)
+            for output in (b"", b"default.target static\n", b"default.target enabled enabled\n",
+                    b"default.target static -\nother.service static -\n",
+                    ("default.target static -\n" + candidate + " static -\n").encode(),
+                    b"default.target static -\n\n", b"\xff"):
+                save.reset_mock()
+                with self.subTest(output=output), patch.object(run, "command", return_value=output), self.assertRaises(ValueError):
+                    run.browser_preflight(recipe)
+                save.assert_not_called()
+            save.reset_mock()
+            with patch.object(run, "command", side_effect=ValueError("synthetic systemd failure")), self.assertRaises(ValueError):
+                run.browser_preflight(recipe)
+            save.assert_not_called()
+            loaded.return_value = True
+            with patch.object(run, "command") as command, self.assertRaises(ValueError):
+                run.browser_preflight(recipe)
+            command.assert_not_called()
+
     def test_joined_receipt_keeps_all_sdk_controls_and_binds_actual_grant(self):
         sdk = oracle.success_result(oracle.commitments(oracle.provider_documents()["refreshed"]))
         proof = {"schema": bridge.SCHEMA, "submitted": PAYLOAD, "requestSha256": bridge.sha(RAW),

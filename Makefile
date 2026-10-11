@@ -11267,6 +11267,17 @@ verify-ecr-image-preparation:
 	python3 -I -B scripts/test_ecr_artifact_staging.py
 	python3 -I -B scripts/test_prepare_ecr_image_artifact.py
 
+# Offline publication proposals and stock SDK serialization, not authority or AWS.
+ECR_SDK_TEST_PYTHON ?= /usr/bin/python3
+.PHONY: verify-ecr-publication-plan verify-ecr-sdk-publication
+verify-ecr-publication-plan:
+	python3 -I -B scripts/test_ecr_image_custody.py
+	python3 -I -B scripts/test_ecr_sdk_protocol.py
+	python3 -I -B scripts/test_ecr_publication_plan.py
+
+verify-ecr-sdk-publication:
+	$(ECR_SDK_TEST_PYTHON) -I -B scripts/test_ecr_sdk_publication.py
+
 # Local encrypted custody and release refusals, not AWS/proxy publication.
 .PHONY: verify-operator-aws-credentials verify-operator-aws-browser verify-credential-ciphertext-codec
 verify-operator-aws-credentials:

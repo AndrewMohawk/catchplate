@@ -1,9 +1,10 @@
 # Exact-image preparation for the ECR publishing workflow
 
 This is the local artifact-preparation component of the planned ECR workflow.
-It does **not** enable AWS publishing in the operator app. The encrypted AWS
-credential type, compound publication authority, approved continuation, proxy
-dispatch integration and actual SDK-through-proxy acceptance remain unfinished.
+It does **not** enable AWS publishing in the operator app. Encrypted AWS
+[credential storage](operator-aws-credentials.md) is implemented, but compound
+publication authority, approved continuation, proxy dispatch integration and
+actual SDK-through-proxy acceptance remain unfinished.
 Ordinary app startup never depends on this preparation or a native pilot.
 
 ## Why preparation precedes approval
@@ -88,6 +89,9 @@ on uncertain writes without automatic replay.
 The broader [AWS integration plan](operator-aws-client-compatibility.md) and its
 real-provider acceptance gates remain applicable. No Docker-push compatibility,
 native custody or real AWS publication follows from this preparation component.
+The [publication planner](operator-ecr-publication-plan.md) connects verified
+content to bounded SDK request/response proposals; it does not turn this mutable
+stage into trusted custody or confer permission to send them.
 
 ## Verification checkpoint (2026-10-11)
 

@@ -1,17 +1,20 @@
 # AWS ordinary-client compatibility plan
 
-Status: **signing foundation and local exact-image preparation tested;
-storage-only credential management implemented; proxy publication is not
-implemented or accepted**. This document proposes a
+Status: **signing, exact-image preparation, sealed process-local content and
+bounded publication planning tested; storage-only credential management
+implemented; proxy publication is not implemented or accepted**. This document proposes a
 bounded operator-development feature,
 not AWS-wide SDK support, a production credential service, or completion of the
-native pilot. No AWS requests were sent. The checks below exercise local SDK
-serialization and isolated signing, not a working AWS connection.
+native pilot. No AWS requests were sent. The checks exercise local SDK
+serialization, signing and simulated responses, not a working AWS connection.
 
 The [exact-image preparation component](operator-ecr-image-preparation.md)
 adds actual whole-artifact byte validation and unsigned local copying before
 the future approval request. It does not change JIT authority, make the SQLite
 demo capable of native approval, or activate an AWS destination or permission.
+The [publication planner](operator-ecr-publication-plan.md) supplies bounded
+request/response state proposals over that verified image. Durable authority,
+currentness checks and actual proxy dispatch remain separate unfinished work.
 
 ## Verified foundation (2026-10-10)
 
@@ -55,7 +58,7 @@ authentication remains separate from provider credentials and public SDK dummy
 credentials. Saving a credential or application grants no AWS access by itself.
 
 The [README ECR example](../README.md#example-yubikey-approved-aws-tee-image-update)
-(lines 87–147) requires exact-image, request-triggered hardware approval and
+requires exact-image, request-triggered hardware approval and
 explicitly leaves its integration open. The
 [workspace requirements](operator-workspace-requirements.md#what-the-original-examples-imply)
 distinguish operation bundles from generic header replacement and optional
@@ -136,8 +139,9 @@ available merely because the first upload request arrived.
 For the original exact-image approval requirement, obtain and bind the complete
 manifest/layer intent **before any protected upload effect**, or design an
 explicitly approved bounded staging protocol. Approval only at `PutImage` does
-not retrospectively authorize earlier uploads. This unresolved workflow needs
-an explicit design decision, not an approval checkbox or fabricated ceremony.
+not retrospectively authorize earlier uploads. The selected preparation and
+publication design preserves that requirement; its authoritative continuation
+is not yet implemented. An approval checkbox cannot substitute for it.
 
 Docker registry authentication uses a different
 [ECR authorization-token workflow](https://docs.aws.amazon.com/AmazonECR/latest/userguide/registry_auth.html).

@@ -510,3 +510,26 @@ Its `guest.log` SHA-256 is
 The guest ran from 21:53:23 to 21:53:27 UTC. Those four seconds are the tiny
 component probe, **not Serverware startup time**. The images, harness and log
 were retained; no native pilot was restarted or altered.
+
+### Cold catalog through prepared installation
+
+The connected component suite now passes a catalog produced by actual file
+observations into two fresh, isolated Python interpreters. Each invokes the
+actual prepared-tree validation/adoption readers with an empty observed-content
+memo. Matching static files receive only EOF probes; their selected hashes,
+metadata, roster and physical identities are still checked. After catalog scope
+exit, the same readers read the full bodies again without clearing the memo.
+
+Wrong catalog pins, wrong selected content, changed permissions, extra entries
+and the original cancellation exception are refused without consuming the
+prepared tree. The workers ignore ambient Python optimization settings so these
+assertions cannot silently disappear. All 25 connected, prepared-install and
+catalog tests passed in 10.219 seconds in the cached, network-disabled test
+runtime. Two initial failures were test-oracle mistakes, corrected before this
+passing run; no production behavior was changed.
+
+These checks use real bytes, descriptors and hashes, with explicitly synthetic
+root ownership, filesystem eligibility and kernel seals. They join the catalog
+and installer code paths; they are not signed-installation acceptance or an
+end-to-end startup measurement. Frozen R97 remains unchanged. Evidence:
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/prepared-catalog-connected.Zj076r6W/tests-isolated-worker.log`.

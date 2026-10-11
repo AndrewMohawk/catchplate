@@ -513,6 +513,14 @@ name. ECR additionally needs its actual authentication and multi-request image
 publication protocol; a generic JSON route and static header insertion do not
 implement that integration.
 
+The actual downloadable npm project now passes its complete isolated workflow
+through the real proxy: default read-only metadata, scoped/unscoped manifest
+reads and publications, six request denials, eight unassigned/revoked CONNECT
+denials, trust failures and local publication guards. Its 21-case acceptance
+joins stored tarball bytes and the persisted audit chain; it does not imply
+public npm access, installation, CI execution or live-demo acceptance. See
+[the exact npm example evidence](operator-npm-example-acceptance.md).
+
 Judge the simplified demo by two complete jobs: a normal client replaces its
 configured dummy authentication with **zero response-configuration interactions**,
 and a background mail worker uses a connected account across token expiry.

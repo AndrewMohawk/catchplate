@@ -173,5 +173,18 @@ and npm-registry-fetch. The version-only check is:
 node --input-type=module -e "import { verifyVersions } from './client.mjs'; verifyVersions();"
 ```
 
-This checks installed package metadata, not a registry request. Actual proxy
-acceptance for this example remains pending.
+This checks installed package metadata, not a registry request.
+
+## Isolated proxy verification
+
+On 2026-10-11 UTC, this unchanged launcher and worker passed all 21 integration
+cases through the actual Serverware application, Rust gate and HTTPS proxy
+against an isolated synthetic registry. The run verified metadata reads, both
+scoped and unscoped publications, permission/time-window/revocation denials,
+missing-root TLS failures and local publication guards. Stored tarball bytes
+and the durable audit chain were checked independently.
+
+See [the acceptance record](../../docs/operator-npm-example-acceptance.md),
+including the retained first failure and its checker correction. This is not
+public npm, GitHub Actions, dependency-installation or current-deployment
+acceptance. The project still never publishes by default.

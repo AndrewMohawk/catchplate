@@ -8,9 +8,11 @@ that result does not establish live-deployment acceptance or implement tarball
 reads, default auditing or publication. The remaining gap table below describes the
 legacy `npm.registry` path, not the new metadata-only profile. The original
 2026-10-09 source review did not execute npm, build the gate, start a fixture, or
-contact a registry. Existing example/compiler tests are not a runtime result
-for the downloadable `examples/npm-registry/client.mjs` launcher; its separate
-acceptance remains pending.
+contact a registry. The actual downloadable `examples/npm-registry/client.mjs`
+launcher subsequently [passed its own 21-case isolated acceptance](operator-npm-example-acceptance.md)
+on 2026-10-11 UTC, with the unchanged npm/pacote clients, independently stored
+publications and a verified audit chain. That is runtime evidence separate from
+example/compiler tests, but still not public-provider or deployment acceptance.
 
 The separate [package-publishing permission](operator-npm-publish.md) is now
 implemented with one exact package/tag, prerequisite metadata reads and optional

@@ -27,6 +27,7 @@ SHELL := /bin/sh
 .PHONY: verify-production-proxy-ingress-materials
 .PHONY: verify-provider-policy-parity verify-webauthn-trust-projection verify-authority-row-mutations
 .PHONY: verify-authority-verifier-read verify-authority-planner-writer
+.PHONY: verify-authority-webauthn-receipts verify-authority-webauthn-receipts-postgres
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
 .PHONY: verify-portal-registration-capture
@@ -11349,6 +11350,18 @@ verify-webauthn-trust-projection:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	python3 scripts/test_webauthn_trust_projection_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
 	python3 scripts/test_postgres_trigger_manifest.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+
+# No build, network or cluster startup; synthetic signatures are not hardware.
+verify-authority-webauthn-receipts:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_executor_optional_evidence.py
+
+# The caller owns a disposable local Unix-socket cluster. This runs the actual
+# shared writer predicate, not full authority admission or native commissioning.
+verify-authority-webauthn-receipts-postgres:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
 
 # Component entrypoint only; not prepared native-controller coverage.
 # Changed-excluded-test admission must continue to refuse an unprepared lane.

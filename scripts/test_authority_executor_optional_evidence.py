@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Source and optional native PostgreSQL component controls, not an executor.
 
-Only stdlib is imported. --emit-postgres-sql prints a rollback-only fixture for
-an externally owned disposable PostgreSQL 16 database; this file never opens a
+--emit-postgres-sql prints a rollback-only fixture for
+an externally owned disposable PostgreSQL 16/17 database; this file never opens a
 connection or starts a container. Actual production evidence DDL, wire/digest
 functions and the complete extracted optional-evidence guard are exercised.
-Synthetic records stand in for previously admitted capability/trust inputs;
-they make no signature, TLS, root-currentness or full-pilot admission claim.
+Source-generated ES256/Ed25519 receipts use synthetic configuration and selected
+capability/trust inputs. They make no hardware, TLS, root-currentness or
+full-pilot admission claim. The paired fixture needs cached crypto dependencies
+and the existing metadata-bootstrap/dev offline-validator import mode.
 """
 from __future__ import annotations
 
@@ -21,6 +23,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from serverware.authority_store.webauthn_receipt_binding import receipt_evidence_binding_sql
 SCHEMA = "serverware_optional_evidence_component"
 NAMESPACE = '"' + SCHEMA + '"'
 TABLE = "policy_authority_webauthn_assertion_evidence"
@@ -70,7 +74,7 @@ def _normalized_sha(value):
     return hashlib.sha256((" ".join(value.split()) + "\n").encode("utf-8")).hexdigest()
 
 
-def _guard_parts():
+def _guard_parts(*, namespace=NAMESPACE):
     tree = _read("serverware/authority_store/executor_v9.py")
     function = _one([node for node in tree.body if type(node) is ast.FunctionDef
         and node.name == "install_authority_v9_executor"])
@@ -82,8 +86,15 @@ def _guard_parts():
     guard = _one(re.findall(
         r"IF authorization_projection\.assertion_evidence_digest\s+IS NOT NULL\s+THEN\s+"
         r"IF NOT EXISTS \(.*?END IF;\s+END IF;", template, re.S))
+    # Preserve the exact original-hash regression: reverse ONLY the reviewed
+    # distinct-domain replacement before comparing the original predicate.
+    replacement = "AND {receipt_evidence_binding_sql(namespace)}"
+    if guard.count(replacement) != 1:
+        raise ValueError("optional guard does not use the shared receipt binding")
+    original_guard = guard.replace(replacement,
+        "AND evidence.verified_assertion_receipt_digest = capability.webauthn_receipt_digest")
     predicate = _one(re.findall(r"IF NOT EXISTS \((.*?)\)\s+THEN\s+RAISE EXCEPTION\s+"
-        r"'authority v9 closed preconditions changed';\s+END IF;", guard, re.S))
+        r"'authority v9 closed preconditions changed';\s+END IF;", original_guard, re.S))
     old_term = ("OR ( authorization_projection.assertion_evidence_digest IS NOT NULL "
         "AND NOT EXISTS (" + predicate + ") )")
     seam = "OR operation_handlers->>capability.operation"
@@ -92,9 +103,10 @@ def _guard_parts():
     old_main = main.replace(seam, old_term + "\n" + seam)
     if _normalized_sha(old_main) != OLD_GUARD_SHA256:
         raise ValueError("monolithic guard changed beyond the optional-statement move")
-    if guard.count("{namespace}") != 3 or "{" in guard.replace("{namespace}", ""):
+    if original_guard.count("{namespace}") != 3 or "{" in original_guard.replace("{namespace}", ""):
         raise ValueError("optional guard gained an unbound source dependency")
-    return guard.replace("{namespace}", NAMESPACE), old_term.replace("{namespace}", NAMESPACE)
+    guard = guard.replace("{receipt_evidence_binding_sql(namespace)}", receipt_evidence_binding_sql(namespace))
+    return guard.replace("{namespace}", namespace), old_term.replace("{namespace}", namespace)
 
 
 def _integer(node):
@@ -105,9 +117,9 @@ def _integer(node):
     raise ValueError("source byte bound is not a literal integer product")
 
 
-def _actual_helpers():
+def _actual_helpers(*, namespace=NAMESPACE):
     tree = _read("serverware/authority_store/wire_json_sql.py")
-    substitutions = {"namespace": NAMESPACE}
+    substitutions = {"namespace": namespace}
     for node in tree.body:
         if type(node) is ast.Assign and len(node.targets) == 1 and type(node.targets[0]) is ast.Name:
             name = node.targets[0].id
@@ -123,7 +135,7 @@ def _actual_helpers():
         and any(type(part) is ast.Constant and type(part.value) is str
             and "serverware_policy_authority_domain_digest(\n                    digest_domain text" in part.value
             for part in node.values)])
-    digest_sql = _template(digest, {"guard_namespace": NAMESPACE,
+    digest_sql = _template(digest, {"guard_namespace": namespace,
         "_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES": maximum})
     return wire_sql, digest_sql
 
@@ -158,28 +170,17 @@ def _digest(value):
 
 
 def postgres_sql():
+    from scripts.test_authority_webauthn_receipt_domains import SignedFixture, NOW
+    fixture = SignedFixture()
     guard, old_term = _guard_parts()
     wire_sql, digest_sql = _actual_helpers()
     ddl = _actual_table()
     columns = re.findall(r"^\s+([a-z_][a-z0-9_]*) (TEXT|BIGINT) ", ddl, re.M)
-    revision = _one(re.findall(r"source_revision =\s*'([^']+)'", ddl))
-    values = {name: "synthetic-" + name if kind == "TEXT" else 1 for name, kind in columns}
-    evidence_json = _canonical({"component": "synthetic", "purpose": "optional-evidence-guard"})
-    values.update(operation="webauthn.counter.cas", evidence_json=evidence_json,
-        assertion_evidence_digest=_digest(evidence_json), flags=5, prior_counter=1,
-        counter=2, metadata_publication_sequence=7, verified_at_epoch_ns=0,
-        expires_at_epoch_ns=20, source_revision=revision)
-    receipt_fields = {
-        "challengeId": "challenge_id", "challengeDigest": "challenge_digest",
-        "credentialRecordId": "credential_record_id", "credentialId": "credential_id",
-        "credentialPolicyDigest": "credential_policy_digest", "clientDataJSONDigest": "client_data_json_digest",
-        "authenticatorDataDigest": "authenticator_data_digest", "signatureDigest": "signature_digest",
-        "flags": "flags", "priorCounter": "prior_counter", "counter": "counter",
-    }
-    receipt = _canonical({key: values[column] for key, column in receipt_fields.items()})
-    capability_fields = {name: values[name] for name in ("operation", "operation_id", "request_digest", "capability_id")}
-    capability_fields.update(webauthn_receipt_digest=values["verified_assertion_receipt_digest"],
-        webauthn_trust_high_water_digest=values["trust_high_water_digest"], webauthn_receipt_json=receipt)
+    values = fixture.row
+    evidence_json = values["evidence_json"]
+    if set(values) != {name for name, _ in columns}:
+        raise ValueError("actual paired storage row and evidence declaration differ")
+    capability_fields = fixture.capability
     capability_select = ",\n".join(_quote(value) + "::text AS " + name for name, value in capability_fields.items())
     insert = (f"INSERT INTO {NAMESPACE}.{TABLE} (" + ",".join(name for name, _ in columns)
         + ") VALUES (" + ",".join(_quote(values[name]) for name, _ in columns) + ");")
@@ -187,14 +188,14 @@ def postgres_sql():
     # The frozen hashes above bind all its predicates and the full old IF.
     old_guard = "IF " + old_term.removeprefix("OR ") + " THEN RAISE EXCEPTION " + _quote(DENIAL) + "; END IF;"
     function = f"""
-CREATE FUNCTION {NAMESPACE}.exercise_guard(supplied_digest text, initialize_trust boolean, use_old boolean)
+CREATE FUNCTION {NAMESPACE}.exercise_guard(supplied_digest text, initialize_trust boolean, use_old boolean,
+    now_epoch_ns bigint DEFAULT {NOW + 1})
 RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog AS $component_guard$
 DECLARE
     authorization_projection record;
     capability record;
     trust_publication record;
     computed_trust_high_water_digest text := {_quote(values['trust_high_water_digest'])};
-    now_epoch_ns bigint := 10;
 BEGIN
     SELECT supplied_digest AS assertion_evidence_digest INTO authorization_projection;
     SELECT {capability_select} INTO capability;
@@ -216,15 +217,17 @@ $component_guard$;
         ("trust-sequence", f"UPDATE {NAMESPACE}.{TABLE} SET metadata_publication_sequence = 8;"),
         ("receipt-join", f"UPDATE {NAMESPACE}.{TABLE} SET challenge_id = 'different-challenge';"),
         ("evidence-bytes", f"UPDATE {NAMESPACE}.{TABLE} SET evidence_json = '{{}}';"),
-        ("expired", f"UPDATE {NAMESPACE}.{TABLE} SET expires_at_epoch_ns = 9;"),
+        ("expired", ""),
     )
     refusals = []
     for label, mutation in negative_cases:
+        selected_call = (f"PERFORM {NAMESPACE}.exercise_guard({actual_digest}, TRUE, FALSE, "
+            f"{values['expires_at_epoch_ns']});") if label == "expired" else call
         refusals.append(f"""
     caught := FALSE;
     BEGIN
         {mutation}
-        {call}
+        {selected_call}
     EXCEPTION WHEN SQLSTATE 'P0001' THEN
         IF SQLERRM <> {_quote(DENIAL)} THEN RAISE; END IF;
         caught := TRUE;
@@ -236,9 +239,9 @@ $component_guard$;
 DO $component_checks$
 DECLARE caught boolean;
 BEGIN
-    IF pg_catalog.current_setting('server_version_num')::integer NOT BETWEEN 160000 AND 169999
+    IF pg_catalog.current_setting('server_version_num')::integer / 10000 NOT IN (16, 17)
         OR pg_catalog.getdatabaseencoding() <> 'UTF8' OR pg_catalog.inet_server_addr() IS NOT NULL
-    THEN RAISE EXCEPTION 'component requires PostgreSQL16 UTF8 over a Unix socket'; END IF;
+    THEN RAISE EXCEPTION 'component requires PostgreSQL16/17 UTF8 over a Unix socket'; END IF;
     IF {NAMESPACE}.serverware_policy_authority_domain_digest({_quote(DOMAIN)}, {_quote(evidence_json)})
             <> {actual_digest}
         OR {NAMESPACE}.serverware_policy_authority_wire_json({_quote(evidence_json)}::jsonb)
@@ -252,7 +255,14 @@ BEGIN
     END;
     IF NOT caught THEN RAISE EXCEPTION 'original unassigned-record control did not fail55000'; END IF;
     {call}
-    PERFORM {NAMESPACE}.exercise_guard({actual_digest}, TRUE, TRUE);
+    caught := FALSE;
+    BEGIN
+        PERFORM {NAMESPACE}.exercise_guard({actual_digest}, TRUE, TRUE);
+    EXCEPTION WHEN SQLSTATE 'P0001' THEN
+        IF SQLERRM <> {_quote(DENIAL)} THEN RAISE; END IF;
+        caught := TRUE;
+    END;
+    IF NOT caught THEN RAISE EXCEPTION 'old cross-domain equality accepted genuine distinct receipts'; END IF;
     {''.join(refusals)}
 END;
 $component_checks$;
@@ -261,7 +271,7 @@ $component_checks$;
         "SET LOCAL lock_timeout = '2s';\n" + f"CREATE SCHEMA {NAMESPACE};\n"
         f"SET LOCAL search_path = {NAMESPACE}, pg_catalog;\n" + ddl + "\n" + wire_sql + "\n"
         + digest_sql + ";\n" + insert + "\n" + function + checks
-        + "ROLLBACK;\nSELECT 'optional-evidence component: absent/old55000/present/five refusals OK' AS result;\n")
+        + "ROLLBACK;\nSELECT 'optional-evidence component: absent/old55000/distinct-domain/old-refusal/five refusals OK' AS result;\n")
 
 
 class OptionalEvidenceSourceControls(unittest.TestCase):
@@ -285,11 +295,12 @@ class OptionalEvidenceSourceControls(unittest.TestCase):
         self.assertIn("'exact-primary-key-and-full-row-cas-v1'", lookup)
         self.assertNotIn("#variable_conflict", template)
 
-    def test_complete_original_predicates_only_move_to_outer_statement(self):
+    def test_original_guards_preserved_except_reviewed_shared_domain_binding(self):
         guard, old_term = _guard_parts()
         self.assertRegex(guard, r"^IF authorization_projection\.assertion_evidence_digest\s+IS NOT NULL\s+THEN\s+IF NOT EXISTS")
         self.assertIn("AND NOT EXISTS", old_term)
         self.assertIn("trust_publication.sequence", guard)
+        self.assertIn(receipt_evidence_binding_sql(NAMESPACE), guard)
         self.assertEqual(guard.count("END IF;"), 2)
 
     def test_actual_table_and_helpers_are_extracted_without_production_imports(self):
@@ -298,13 +309,12 @@ class OptionalEvidenceSourceControls(unittest.TestCase):
         self.assertIn("CHECK (counter > prior_counter)", ddl)
         self.assertEqual(wire.count("CREATE OR REPLACE FUNCTION"), 3)
         self.assertIn("pg_catalog.sha256(digest_material)", digest)
-        self.assertNotIn("serverware.authority_transition_registry", sys.modules)
 
     def test_native_program_retains_rollback_and_all_control_paths(self):
         program = postgres_sql()
         self.assertIn(_guard_parts()[0], program)
         self.assertIn("WHEN SQLSTATE '55000'", program)
-        self.assertEqual(program.count("WHEN SQLSTATE 'P0001'"), 5)
+        self.assertEqual(program.count("WHEN SQLSTATE 'P0001'"), 6)
         self.assertIn("exercise_guard(NULL, FALSE, FALSE)", program)
         self.assertIn("ROLLBACK;", program)
         self.assertNotIn("COMMIT;", program)

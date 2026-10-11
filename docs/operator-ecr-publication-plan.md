@@ -101,6 +101,60 @@ release transition kernels, transition registry, measured PostgreSQL writer and
 Rust final-send path. A separate SQLite ledger or `approved=true` field would
 not implement them. The generic AWS credential-release refusals stay in place.
 
+### Approval-writer prerequisites
+
+Tracing the actual approval path found a shared v9 writer defect: its stored
+assertion check compared the capability's `WebAuthnReceipt/v1` digest with the
+different, verifier-signed `VerifiedWebAuthnAssertionReceipt/v1` digest. Valid
+producer output cannot satisfy that equality. The source now uses
+`authority_store/webauthn_receipt_binding.py` in the existing executor guard to
+recompute three distinct commitments: the capability receipt, the unsigned
+verifier statement, and the complete signed evidence document. It also binds
+the exact original fields to their stored columns. Existing signature admission,
+current trust, expiry, challenge and counter checks remain required.
+
+This repair does not complete JIT approval or enable ECR. The application's
+`approve_request` arguments still differ from the old `jit.decide` kernel
+contract; that kernel lacks the current verified-assertion handoff; and its
+decision foreign key requires a historical receipt that the current executor
+does not persist. Historical revalidation also equates the distinct authority
+approver-policy and JIT approver-policy digest families; it needs an exact policy
+projection, not a renamed hash. The next integration must connect those actual
+interfaces and prove a committed grant from a raw signed assertion. A fabricated
+approved row or a `jit.assertion.issue` receipt is not that proof. Historical
+receipt and capability custody remains framework-owned, not an additional
+business-table read permission for an ECR kernel.
+
+No installed SQL function, database schema, live grant, AWS capability or native
+attempt is changed by this source repair. Updating an existing installed writer
+also requires its exact function/manifest repair path; the ordinary app must
+not silently reinstall authority functions on page load.
+
+The focused receipt checks require no pilot or build:
+
+```sh
+make verify-authority-webauthn-receipts
+# For an already prepared disposable local Unix-socket PostgreSQL fixture:
+SERVERWARE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-webauthn-receipts-postgres
+```
+
+The PostgreSQL target also requires `SERVERWARE_TEST_POSTGRES_DSN`; it never
+starts a database or falls back to the application's connection configuration.
+
+The October 11 focused run passed all **12 tests** (three signed-producer/source,
+five PostgreSQL and four retained optional-guard groups), plus the actual
+rollback-only SQL program. That program preserves the no-assertion regression,
+reproduces the old unassigned-record error, rejects genuine records under the
+old cross-domain comparison, accepts them under the new guard and exercises
+five denial controls. PostgreSQL 17.11/Python 3.11.15 ran in the existing pinned
+engineering image with no network, read-only source and a disposable Unix-socket
+database. The complete job took 16.237 seconds, exited zero without OOM, and
+shut down cleanly; the test container was removed and source hashes were
+unchanged. No build or download ran. Logs, source pins and execution evidence
+are retained in `serverware-operator-workspace-evidence/webauthn-receipt-binding.4DjdDwvh`.
+These are signed synthetic-input and actual SQL-guard results, not a complete
+authority transaction, physical-key approval, provider request or deployment.
+
 ## Verification scope
 
 Run the pure protocol/planner checks without a provider or pilot:

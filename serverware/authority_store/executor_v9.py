@@ -41,6 +41,9 @@ from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
     webauthn_credential_policy_sql,
 )
+from serverware.authority_store.webauthn_receipt_binding import (
+    receipt_evidence_binding_sql,
+)
 from serverware.authority_store.root_transition_sql import (
     assert_root_transition_after_sql,
     assert_root_transition_before_sql,
@@ -1630,8 +1633,7 @@ def install_authority_v9_executor(
                                 capability.request_digest
                           AND evidence.capability_id =
                                 capability.capability_id
-                          AND evidence.verified_assertion_receipt_digest =
-                                capability.webauthn_receipt_digest
+                          AND {receipt_evidence_binding_sql(namespace)}
                           AND evidence.trust_high_water_digest =
                                 capability.webauthn_trust_high_water_digest
                           AND evidence.trust_high_water_digest =

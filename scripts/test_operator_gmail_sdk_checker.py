@@ -23,6 +23,8 @@ def uid(number):
 
 SCOPE = ("synthetic-principal", "synthetic-route", sha(900))
 CREDENTIAL = uid(1)
+REVOCATION = {"rule_id": uid(4), "application_id": uid(2), "revision": 6,
+    "policy_sequence": 3, "policy_hash": sha(902)}
 PHASES = ("first", "refreshed", "wrong_outer_ca", "wrong_inner_ca", "wrong_app", "revoked")
 START, RELEASE = "data_plane.credential.release_started", "data_plane.response.released"
 CONNECT, DENIED = "data_plane.connect.established", "data_plane.connect.denied"
@@ -89,6 +91,8 @@ def audit_rows(wire):
     def append(kind, event):
         events.append({"id": sha(100 + len(events)) if kind in {START, RELEASE} else uid(100 + len(events)),
             "event_hash": sha(100 + len(events)),
+            "prev_event_hash": events[-1]["event_hash"] if events else None,
+            "created_at": "2026-10-11T22:06:%02d.000000+00:00" % len(events),
             "event_type": kind, "event": event})
     append("credential.oauth_connected", {"credential_id": CREDENTIAL, "credential_version": 1})
     append("credential.oauth_refreshed", {"credential_id": CREDENTIAL, "provider": "google",
@@ -125,6 +129,27 @@ def reconciliation_row():
         "credential_count": 0, "credential_ids": [], "issued_at_epoch_ms": None, "expires_at_epoch_ms": None}}
 
 
+def publication_rows(wire, *, rollover=True):
+    rows = audit_rows(wire)
+    if rollover:
+        rows.append({**reconciliation_row(), "prev_event_hash": rows[-1]["event_hash"],
+            "created_at": "2026-10-11T22:06:30.000000+00:00"})
+    rejection = {**reconciliation_row()["event"], "status_code": 503,
+        "reason": "active signed policy bundle is unavailable", "purpose": "generationMetadata",
+        "expected_credential_version": None, "expected_metadata_sha256": None, "recipient_key_id": sha(905)}
+    for index, (kind, event, timestamp) in enumerate((
+            ("operator_catalog.access_rule.revoked", {"resource_type": "access_rule", "resource_id": uid(4),
+                "application_id": uid(2), "credential_id": CREDENTIAL, "revision": 6,
+                "policy_sequence": 3, "policy_hash": sha(902)}, "2026-10-11T22:06:58.523932+00:00"),
+            (REJECTED, rejection, "2026-10-11T22:06:58.655651+00:00"),
+            (checker.RELOAD, {"previous_policy_hash": SCOPE[2], "policy_hash": sha(902), "policy_sequence": 3},
+                "2026-10-11T22:06:59.714774+00:00"))):
+        rows.append({"id": sha(600 + index) if kind == checker.RELOAD else uid(600 + index),
+            "event_hash": sha(600 + index), "prev_event_hash": rows[-1]["event_hash"],
+            "event_type": kind, "event": event, "created_at": timestamp})
+    return rows
+
+
 def counts(consent, refresh, reads):
     return {key: value for key, value in {
         "authorization_requests": consent, "authorization_codes_issued": consent, "authorization_code_exchanges": consent,
@@ -143,6 +168,7 @@ def success_result(wire):
         "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
         "providerAttempts": 8, "automaticRefreshes": 1, "initialCredentialVersion": 1,
         "refreshedCredentialVersion": 2, "canonicalRequestVersion": 3, "reconciliationRejections": 0,
+        "revocationPublicationRejections": 0,
         "dataPlaneBinaryDigest": sha(901), "goExampleSha256": "a" * 64,
         "exampleSourceSha256": {"examples/google-gmail-go/main.go": "b" * 64,
             "examples/google-gmail-go/go.mod": "c" * 64, "examples/google-gmail-go/go.sum": "d" * 64},
@@ -296,6 +322,85 @@ class GmailSdkCheckerTests(unittest.TestCase):
         with self.assertRaises(checker.CheckFailure):
             checker.generation_evidence(rows, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(999))
 
+    def test_publication_refusal_is_separate_and_only_between_exact_revoke_and_reload(self):
+        rows = publication_rows(self.wire)
+        def check(value, context=REVOCATION):
+            return checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire,
+                expected_binary_sha256=sha(901), revocation=context)
+        expected = check(rows)
+        self.assertEqual((expected["reconciliationRejections"], expected["revocationPublicationRejections"]), (1, 1))
+        self.assertEqual(check(list(reversed(rows))), expected)
+        self.assertEqual(check(publication_rows(self.wire, rollover=False))["reconciliationRejections"], 0)
+        with self.assertRaises(checker.CheckFailure): check(rows, None)
+        context_changes = ({"rule_id": uid(999)}, {"application_id": uid(999)}, {"revision": 7},
+            {"revision": True}, {"policy_sequence": 4}, {"policy_sequence": True},
+            {"policy_hash": SCOPE[2]}, {"policy_hash": sha(999)}, {"extra": "secret-canary"})
+        for change in context_changes:
+            with self.subTest(context=change), self.assertRaises(checker.CheckFailure):
+                check(rows, {**REVOCATION, **change})
+        changes = (
+            lambda r: r[-3]["event"].update(resource_id=uid(999)),
+            lambda r: r[-3]["event"].update(resource_type="credential"),
+            lambda r: r[-3]["event"].update(application_id=uid(999)),
+            lambda r: r[-3]["event"].update(credential_id=uid(999)),
+            lambda r: r[-3]["event"].update(revision=True),
+            lambda r: r[-3]["event"].update(policy_sequence=4),
+            lambda r: r[-1]["event"].update(previous_policy_hash=sha(999)),
+            lambda r: r[-1]["event"].update(policy_hash=sha(999)),
+            lambda r: r[-1]["event"].update(policy_sequence=True),
+            lambda r: r[-1]["event"].update(policy_sequence=4),
+            lambda r: r[-2].update(created_at=r[-3]["created_at"]),
+            lambda r: r[-2].update(created_at=r[-1]["created_at"]),
+            lambda r: r[-2].update(created_at="2026-10-11T22:06:57+00:00"),
+            lambda r: r[-2].update(created_at="2026-10-11T22:07:01+00:00"),
+            lambda r: r[-2].update(created_at="2026-10-11T22:06:58.600000"),
+            lambda r: r[-2].update(created_at="2026-99-11T22:06:58+00:00"),
+            lambda r: r[-2].pop("created_at"),
+            lambda r: r[-2].update(prev_event_hash=r[-3]["prev_event_hash"]),
+            lambda r: r[-1].update(prev_event_hash=r[-3]["event_hash"]),
+            lambda r: r[-3].update(prev_event_hash=sha(999)),
+            lambda r: r[-3].update(prev_event_hash=r[-1]["event_hash"]),
+            lambda r: r[2].update(created_at=r[-1]["created_at"]),
+            lambda r: r.pop(-3), lambda r: r.pop(-1))
+        for index, change in enumerate(changes):
+            value = deepcopy(rows); change(value)
+            with self.subTest(case=index), self.assertRaises(checker.CheckFailure): check(value)
+        for index in (-3, -2, -1):
+            value = deepcopy(rows); duplicate = deepcopy(value[index])
+            duplicate.update(id=sha(998) if index == -1 else uid(998), event_hash=sha(998))
+            value.append(duplicate)
+            with self.subTest(duplicate=index), self.assertRaises(checker.CheckFailure): check(value)
+        # This new category does not lift the independent original rollover cap.
+        value = deepcopy(rows); extra = reconciliation_row(); extra.update(id=uid(997), event_hash=sha(997))
+        with self.assertRaises(checker.CheckFailure): check(value + [extra])
+
+    def test_publication_refusal_requires_closed_empty_old_policy_metadata(self):
+        rows = publication_rows(self.wire)
+        def check(value):
+            return checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire,
+                expected_binary_sha256=sha(901), revocation=REVOCATION)
+        changes = (("reason", "generationAdvancedBeforeEnvelope"), ("purpose", "dispatchSecret"),
+            ("outcome", "issued"), ("status_code", 409), ("status_code", True),
+            ("principal_id", "wrong-principal"), ("route_id", "wrong-route"), ("policy_hash", sha(902)),
+            ("credential_id", uid(999)), ("data_plane_binary_digest", sha(999)),
+            ("expected_credential_version", 2), ("expected_metadata_sha256", sha(904)),
+            ("recipient_key_id", "secret-canary"), ("recipient_nonce_sha256", "secret-canary"),
+            ("requested_max_ttl_seconds", 6), ("requested_max_ttl_seconds", True),
+            ("recipient_attestation_present", True), ("recipient_attestation_present", 0),
+            ("credential_count", 1), ("credential_count", False), ("credential_ids", [CREDENTIAL]),
+            ("credential_ids", ()), ("release_quota_claim_count", 1), ("release_quota_claim_count", False),
+            ("secretCiphertext", "secret-canary"), ("extra", "secret-canary"))
+        null_fields = ("expected_credential_version", "expected_metadata_sha256", "release_attempt_id",
+            "release_binding_digest", "release_kind", "release_reservation_id", "release_request_digest",
+            "release_operation_digest", "issued_at_epoch_ms", "expires_at_epoch_ms")
+        for field, replacement in (*changes, *((field, "secret-canary") for field in null_fields)):
+            value = deepcopy(rows); value[-2]["event"][field] = replacement
+            with self.subTest(field=field), self.assertRaises(checker.CheckFailure) as caught: check(value)
+            self.assertNotIn("secret-canary", str(caught.exception))
+        for field in rows[-2]["event"]:
+            value = deepcopy(rows); del value[-2]["event"][field]
+            with self.subTest(missing=field), self.assertRaises(checker.CheckFailure): check(value)
+
     def test_actual_denial_join_rejects_provider_arrival_before_further_audit_io(self):
         document = self.documents["refreshed"]
         self.assertTrue(checker.validate_no_arrivals(document, deepcopy(document)))
@@ -312,6 +417,17 @@ class GmailSdkCheckerTests(unittest.TestCase):
             with self.assertRaises(checker.CheckFailure):
                 value.deny("wrong_app", {"id": uid(3)}, "synthetic-token", document)
             self.assertEqual(calls, ["client"])
+        # A publication refusal is permitted only in the explicit revoke/reload
+        # gap, never inside any of the unchanged SDK denial observations.
+        for phase in PHASES[2:]:
+            value = checker.GmailSdkCheck.__new__(checker.GmailSdkCheck)
+            value.settled_audit = lambda: []
+            value.client = lambda *args: None
+            value.observe = lambda *args, **kwargs: deepcopy(document)
+            value.audit = lambda: [publication_rows(self.wire)[-2]]
+            value.audit_drained = lambda: self.fail("rejected lease must stop before further audit polling")
+            with self.subTest(phase=phase), self.assertRaises(checker.CheckFailure):
+                value.deny(phase, {"id": uid(3)}, "synthetic-token", document)
 
     def test_process_results_are_exact_and_errors_never_accept_arbitrary_output(self):
         for phase in PHASES:
@@ -350,6 +466,18 @@ class GmailSdkCheckerTests(unittest.TestCase):
         reconciled["reconciliationRejections"] = 1
         reconciled["namedAuditInventory"][REJECTED] = 1
         self.assertTrue(checker.validate_success_result(reconciled))
+        publication = deepcopy(reconciled)
+        publication["revocationPublicationRejections"] = 1
+        publication["namedAuditInventory"][REJECTED] = 2
+        self.assertTrue(checker.validate_success_result(publication))
+        for field, replacement in (("revocationPublicationRejections", True), ("revocationPublicationRejections", 2),
+                ("revocationPublicationRejections", -1), ("revocationPublicationRejections", 0),
+                ("reconciliationRejections", 0)):
+            value = deepcopy(publication); value[field] = replacement
+            with self.subTest(field=field, replacement=replacement), self.assertRaises(checker.CheckFailure):
+                checker.validate_success_result(value)
+        value = deepcopy(publication); value["namedAuditInventory"][REJECTED] = 3
+        with self.assertRaises(checker.CheckFailure): checker.validate_success_result(value)
         for mutation in (lambda v: v.update(reconciliationRejections=0),
                 lambda v: v["namedAuditInventory"].pop(REJECTED),
                 lambda v: v["namedAuditInventory"].update({REJECTED: 2}),
@@ -361,6 +489,7 @@ class GmailSdkCheckerTests(unittest.TestCase):
         changes = (lambda v: v.update(secret="secret-canary"), lambda v: v.pop("auditChainVerified"),
             lambda v: v.update(ok=1), lambda v: v.update(productionReady=True), lambda v: v.update(realGoogleVerified=True),
             lambda v: v.pop("reconciliationRejections"), lambda v: v.update(reconciliationRejections=True),
+            lambda v: v.pop("revocationPublicationRejections"), lambda v: v.update(revocationPublicationRejections=1),
             lambda v: v.update(reconciliationRejections=-1), lambda v: v.update(reconciliationRejections=2),
             lambda v: v.update(reconciliationRejections=1), lambda v: v["namedAuditInventory"].update({REJECTED: 1}),
             lambda v: v.update(automaticRefreshes=True), lambda v: v.update(providerAttempts=9),

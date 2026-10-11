@@ -11254,6 +11254,12 @@ verify-credential-policy-contracts:
 verify-credential-injection-name-binding:
 	$(TEST_PYTHON_RUN) -B scripts/test_credential_injection_name_binding.py -f
 
+# Select the proxy binary explicitly: an unqualified cargo test also builds
+# unrelated native executables before applying the test-name filter.
+.PHONY: verify-proxy-json-media-parameters
+verify-proxy-json-media-parameters:
+	cargo test --locked --release --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-decision-gate json_media_parameters -- --test-threads=1
+
 verify-control-plane-startup:
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
 

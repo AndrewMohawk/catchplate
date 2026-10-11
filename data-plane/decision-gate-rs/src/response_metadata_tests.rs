@@ -240,6 +240,96 @@ fn response_metadata_v2_real_finalizer_preserves_json_error_and_empty204_bytes()
     }
 }
 
+fn json_media_fixture(mode: &str) -> (Arc<Snapshot>, GateState, Value, Url) {
+    let (base, _, decision, url) = fixture();
+    let mut snapshot = (*base).clone();
+    let route = &mut snapshot.routes[0];
+    if mode == "json" {
+        route.adapter_config["response"] = test_snapshot(1).routes[0].adapter_config["response"].clone();
+    } else {
+        route.adapter_config["response"]["mode"] = json!(mode);
+        route.adapter_config["response"]["error"]["mode"] = json!(mode);
+    }
+    if mode != buffered_response::JSON_OR_EMPTY_204_V2_MODE {
+        route.constraints[0].as_object_mut().unwrap().remove("unlistedHeaderPolicy");
+    }
+    if !buffered_response::json_or_empty_204_mode(mode) {
+        route.constraints[0]["bodyPresence"] = json!("required");
+        route.constraints[0]["statusCodes"] = json!([200, 400, 500]);
+    }
+    validate_route_response_release_mode(route).unwrap();
+    let snapshot = Arc::new(snapshot);
+    let state = test_gate_state(Arc::clone(&snapshot));
+    (snapshot, state, decision, url)
+}
+
+#[test]
+fn response_metadata_json_media_parameters_real_finalizer_preserves_v1_v2_bytes() {
+    let body = b"\n{\"safe\":true,\"escaped\":\"\\u0061\",\"exp\":1e+02}\r\n";
+    for mode in [buffered_response::JSON_OR_EMPTY_204_MODE, buffered_response::JSON_OR_EMPTY_204_V2_MODE] {
+        for status in [200, 400, 500] {
+            for media in ["application/json; charset=utf-8", "Application/JSON; Charset=\"UTF-8\"",
+                "application/json; profile=fixture; charset=utf-8"]
+            {
+                let (snapshot, state, decision, url) = json_media_fixture(mode);
+                let wire = finalize(&snapshot, &state, &decision, &url,
+                    upstream(status, &format!("Content-Type: {media}\r\n"), body), &ResponseSecretGuard::default());
+                let parsed = parse_buffered_response(&wire).unwrap();
+                assert_eq!(parsed.status, status, "{mode}: {media}");
+                assert_eq!(parsed.body, body);
+                assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+            }
+        }
+    }
+}
+
+#[test]
+fn response_metadata_json_media_parameters_real_finalizer_refuses_ambiguity() {
+    for mode in [buffered_response::JSON_OR_EMPTY_204_MODE, buffered_response::JSON_OR_EMPTY_204_V2_MODE] {
+        for status in [200, 400, 500] {
+            for (extra, error) in [
+                ("", "response_json_content_type_missing"),
+                ("Content-Type: text/plain; charset=utf-8\r\n", "response_json_content_type_mismatch"),
+                ("Content-Type: application/json; charset\r\n", "response_json_content_type_malformed"),
+                ("Content-Type: application/json; charset=\r\n", "response_json_content_type_malformed"),
+                ("Content-Type: application/json; charset=\"utf-8\r\n", "response_json_content_type_malformed"),
+                ("Content-Type: application/json; charset=utf-8; CHARSET=utf-8\r\n", "response_json_content_type_malformed"),
+                ("Content-Type: application/json; charset=utf-8\r\nContent-Type: application/json; charset=utf-8\r\n",
+                    if mode == buffered_response::JSON_OR_EMPTY_204_V2_MODE { "response_metadata_duplicate" }
+                    else { "response_json_content_type_duplicate" }),
+            ] {
+                let (snapshot, state, decision, url) = json_media_fixture(mode);
+                let wire = finalize(&snapshot, &state, &decision, &url,
+                    upstream(status, extra, b"{}"), &ResponseSecretGuard::default());
+                let parsed = parse_buffered_response(&wire).unwrap();
+                assert_eq!(parsed.status, 502, "{mode}: {extra}");
+                assert_eq!(serde_json::from_slice::<Value>(parsed.body).unwrap()["error"], error);
+                assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+            }
+        }
+    }
+}
+
+#[test]
+fn response_metadata_json_media_parameters_real_finalizer_keeps_legacy_exact() {
+    for mode in ["json", buffered_response::MODE] {
+        for media in ["application/json", "application/json; charset=utf-8", "Application/JSON"] {
+            let (snapshot, state, decision, url) = json_media_fixture(mode);
+            let wire = finalize(&snapshot, &state, &decision, &url,
+                upstream(200, &format!("Content-Type: {media}\r\n"), b"{\"safe\":true}"), &ResponseSecretGuard::default());
+            let parsed = parse_buffered_response(&wire).unwrap();
+            if media == "application/json" {
+                assert_eq!(parsed.status, 200);
+                assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+            } else {
+                assert_eq!(parsed.status, 502, "{mode}: {media}");
+                assert_eq!(serde_json::from_slice::<Value>(parsed.body).unwrap()["error"], "response_envelope_content_type_denied");
+                assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+            }
+        }
+    }
+}
+
 #[test]
 fn response_metadata_v2_real_finalizer_blocks_framing_secrets_and_semantic_bypasses() {
     for extra in ["Content-Length: 0\r\n", "Trailer: x-test\r\n", "Content-Type: text/plain\r\n",

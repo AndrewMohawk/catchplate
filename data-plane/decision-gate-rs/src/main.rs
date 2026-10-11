@@ -35113,6 +35113,9 @@ fn enforce_response_envelope(
     if media_policy.is_some() && content_type_values.iter().any(|value|
         value.to_str().ok().is_none_or(|value| match media_policy {
             Some(github_issues::CONTENT_TYPE_POLICY) => !github_issues::is_json_content_type(value),
+            // Internal selection only, after full Gmail route validation; it is
+            // not an admitted signed contentTypePolicy value.
+            Some(gmail_read::MODE) => normalized_provider_request_media_type(value).as_deref() != Some("application/json"),
             Some(npm_metadata::CONTENT_TYPE_POLICY) => !npm_metadata::is_json_content_type(value),
             Some(x_app_read::CONTENT_TYPE_POLICY) => !x_app_read::is_json_content_type(value),
             Some(alchemy_rpc_read::CONTENT_TYPE_POLICY) => !alchemy_rpc_read::is_json_content_type(value),
@@ -35139,7 +35142,11 @@ fn enforce_response_envelope(
             }
             let content_type = content_type_values[0].to_str().ok();
             let media_type = content_type.and_then(normalized_provider_request_media_type);
-            if (media_policy.is_none() && media_type.as_deref() != content_type)
+            // Explicit JSON-or-empty V1/V2 envelopes admit strictly parsed
+            // media parameters, matching Python; legacy required stays exact.
+            if (media_policy.is_none()
+                && presence != buffered_response::JSON_OR_EMPTY_204_PRESENCE
+                && media_type.as_deref() != content_type)
                 || !constraint
                     .get("contentTypes")
                     .and_then(Value::as_array)
@@ -35233,7 +35240,9 @@ fn validate_response_envelopes(
     body_length: Option<u64>,
     operation: Option<&Value>,
 ) -> Result<(), Value> {
-    let media_policy = if route.adapter_type == x_app_read::ADAPTER {
+    let media_policy = if route.adapter_type == gmail_read::ADAPTER {
+        gmail_read::validate_route(route).map(|()| Some(gmail_read::MODE))
+    } else if route.adapter_type == x_app_read::ADAPTER {
         x_app_read::validate_route(route).map(|()| Some(x_app_read::CONTENT_TYPE_POLICY))
     } else if route.adapter_type == alchemy_rpc_read::ADAPTER {
         alchemy_rpc_read::validate_route(route).map(|()| Some(alchemy_rpc_read::CONTENT_TYPE_POLICY))

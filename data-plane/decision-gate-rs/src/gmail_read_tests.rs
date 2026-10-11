@@ -224,6 +224,70 @@ fn gmail_read_real_finalizer_releases_json_and_discards_only_bounded_metadata() 
 }
 
 #[test]
+fn gmail_read_json_media_parameters_real_finalizer_preserves_success_and_error_bytes() {
+    for (status, body) in [(200, br#" {"messages":[{"id":"a"}],"nextPageToken":"cursor"} "#.as_slice()),
+        (403, br#" {"error":{"code":403},"detail":"kept"} "#),
+        (500, br#" {"error":{"code":500},"detail":"kept"} "#)]
+    {
+        for media in ["application/json; charset=utf-8", "Application/JSON; Charset=\"UTF-8\"",
+            "application/json; profile=fixture; charset=utf-8"]
+        {
+            let (snapshot, state, decision, url) = fixture();
+            let response = upstream(status, &format!("Content-Type: {media}\r\nServer: synthetic\r\n"), body);
+            let wire = finalized(&snapshot, &state, &decision, &url, response, &ResponseSecretGuard::default());
+            let parsed = parse_buffered_response(&wire).unwrap();
+            assert_eq!(parsed.status, status, "{media}");
+            assert_eq!(parsed.body, body);
+            assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+            assert!(!parsed.headers.contains_key("server"));
+        }
+    }
+}
+
+#[test]
+fn gmail_read_json_media_parameters_real_finalizer_refuses_ambiguity() {
+    for status in [200, 403, 500] {
+        for extra in ["", "Content-Type: text/plain; charset=utf-8\r\n",
+            "Content-Type: application/json; charset\r\n",
+            "Content-Type: application/json; charset=\r\n",
+            "Content-Type: application/json; charset=\"utf-8\r\n",
+            "Content-Type: application/json; charset=utf-8; CHARSET=utf-8\r\n",
+            "Content-Type: application/json; charset=utf-8\r\nContent-Type: application/json; charset=utf-8\r\n"]
+        {
+            let (snapshot, state, decision, url) = fixture();
+            let wire = finalized(&snapshot, &state, &decision, &url,
+                upstream(status, extra, b"{}"), &ResponseSecretGuard::default());
+            let parsed = parse_buffered_response(&wire).unwrap();
+            assert_eq!(parsed.status, 502, "{extra}");
+            assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+        }
+    }
+}
+
+#[test]
+fn gmail_read_json_media_parameters_require_the_full_validated_route() {
+    let mut fields = HeaderMap::new();
+    fields.insert("content-type", HeaderValue::from_static("application/json; charset=utf-8"));
+    validate_response_envelopes(&route(), StatusCode::OK, &fields, Some(2), None).unwrap();
+    for variant in 0..5 {
+        let mut invalid = route();
+        match variant {
+            0 => invalid.host = "other.example".into(),
+            1 => invalid.adapter_config["response"]["mode"] = json!("json"),
+            2 => invalid.adapter_config["agePolicy"] = json!({"mode":"unrestricted", "extra":true}),
+            3 => invalid.constraints[0]["contentTypePolicy"] = json!(MODE),
+            _ => invalid.paths = vec![compile_template("/gmail/**").unwrap()],
+        }
+        assert_eq!(validate_response_envelopes(&invalid, StatusCode::OK, &fields, Some(2), None)
+            .unwrap_err()["error"], "response_envelope_policy_invalid");
+    }
+    let mut generic = test_snapshot(1).routes[0].clone();
+    generic.constraints[0]["contentTypePolicy"] = json!(MODE);
+    assert!(validate_route_response_release_mode(&generic).is_err());
+    assert!(validate_response_envelopes(&generic, StatusCode::OK, &fields, Some(2), None).is_err());
+}
+
+#[test]
 fn gmail_read_real_finalizer_retains_framing_reflection_and_revocation_guards() {
     let (snapshot,state,decision,url)=fixture(); let mut guard=ResponseSecretGuard::default(); guard.add_text_encodings("synthetic-secret");
     for headers in ["Content-Type: application/json\r\nX-Discarded: synthetic-secret\r\n",

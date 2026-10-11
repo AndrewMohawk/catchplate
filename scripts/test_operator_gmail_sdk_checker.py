@@ -374,6 +374,30 @@ class GmailSdkCheckerTests(unittest.TestCase):
         value = deepcopy(rows); extra = reconciliation_row(); extra.update(id=uid(997), event_hash=sha(997))
         with self.assertRaises(checker.CheckFailure): check(value + [extra])
 
+    def test_publication_refusal_accepts_only_two_exact_early_status_reason_pairs(self):
+        rows = publication_rows(self.wire)
+        def check(value):
+            return checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire,
+                expected_binary_sha256=sha(901), revocation=REVOCATION)
+        expected = check(rows)
+        inactive = deepcopy(rows)
+        inactive[-2]["event"].update(status_code=409, reason="data-plane policy hash is not active")
+        self.assertEqual(check(inactive), expected)
+        self.assertEqual(check(list(reversed(inactive))), expected)
+        for status, reason in ((409, "active signed policy bundle is unavailable"),
+                (503, "data-plane policy hash is not active"), (409, "generationAdvancedBeforeEnvelope"),
+                (409, "principal is not assigned to the requested active route"),
+                (409, "credential does not match the requested active route"),
+                (409, "credential is not declared by the active policy"),
+                (503, "active signed policy bundle became unavailable"), (409, "secret-canary")):
+            value = deepcopy(rows); value[-2]["event"].update(status_code=status, reason=reason)
+            with self.subTest(status=status, reason=reason), self.assertRaises(checker.CheckFailure) as caught: check(value)
+            self.assertNotIn("secret-canary", str(caught.exception))
+        outside = deepcopy(inactive); outside[-2].update(created_at=outside[-1]["created_at"])
+        with self.assertRaises(checker.CheckFailure): check(outside)
+        with self.assertRaises(checker.CheckFailure):
+            checker.generation_evidence(inactive, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
+
     def test_publication_refusal_requires_closed_empty_old_policy_metadata(self):
         rows = publication_rows(self.wire)
         def check(value):
@@ -419,14 +443,17 @@ class GmailSdkCheckerTests(unittest.TestCase):
             self.assertEqual(calls, ["client"])
         # A publication refusal is permitted only in the explicit revoke/reload
         # gap, never inside any of the unchanged SDK denial observations.
-        for phase in PHASES[2:]:
+        for phase, status, reason in ((phase, status, reason) for phase in PHASES[2:] for status, reason in (
+                (503, "active signed policy bundle is unavailable"), (409, "data-plane policy hash is not active"))):
             value = checker.GmailSdkCheck.__new__(checker.GmailSdkCheck)
             value.settled_audit = lambda: []
             value.client = lambda *args: None
             value.observe = lambda *args, **kwargs: deepcopy(document)
-            value.audit = lambda: [publication_rows(self.wire)[-2]]
+            rejection = publication_rows(self.wire)[-2]
+            rejection["event"].update(status_code=status, reason=reason)
+            value.audit = lambda: [rejection]
             value.audit_drained = lambda: self.fail("rejected lease must stop before further audit polling")
-            with self.subTest(phase=phase), self.assertRaises(checker.CheckFailure):
+            with self.subTest(phase=phase, status=status), self.assertRaises(checker.CheckFailure):
                 value.deny(phase, {"id": uid(3)}, "synthetic-token", document)
 
     def test_process_results_are_exact_and_errors_never_accept_arbitrary_output(self):

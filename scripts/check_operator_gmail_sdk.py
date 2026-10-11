@@ -202,16 +202,20 @@ def revocation_publication_rejections(events, rejections, scope, credential_id, 
         and revocation["policy_hash"] != scope[2], "Gmail SDK publication rejection lacks explicit revocation")
     row = rejections[0]
     event = row["event"]
-    fixed = {"outcome": "rejected", "status_code": 503, "reason": "active signed policy bundle is unavailable",
-        "purpose": "generationMetadata", "principal_id": scope[0], "route_id": scope[1], "policy_hash": scope[2],
+    fixed = {"outcome": "rejected", "purpose": "generationMetadata",
+        "principal_id": scope[0], "route_id": scope[1], "policy_hash": scope[2],
         "credential_id": credential_id, "data_plane_binary_digest": expected_binary_sha256,
         "credential_count": 0, "credential_ids": [], "release_quota_claim_count": 0, "requested_max_ttl_seconds": 5}
     null_fields = {"expected_credential_version", "expected_metadata_sha256", "release_attempt_id",
         "release_binding_digest", "release_kind", "release_reservation_id", "release_request_digest",
         "release_operation_digest", "issued_at_epoch_ms", "expires_at_epoch_ms"}
     require(type(event) is dict and set(event) == set(fixed) | null_fields | {
-        "recipient_key_id", "recipient_nonce_sha256", "recipient_attestation_present"}
+        "status_code", "reason", "recipient_key_id", "recipient_nonce_sha256", "recipient_attestation_present"}
         and all(event.get(k) == v for k, v in fixed.items())
+        # The two consecutive producer guards reject before route authority,
+        # nonce reservation or credential access. No other 409/503 is admitted.
+        and (event.get("status_code"), event.get("reason")) in (
+            (503, "active signed policy bundle is unavailable"), (409, "data-plane policy hash is not active"))
         and all(type(event.get(k)) is int for k in ("status_code", "credential_count",
             "release_quota_claim_count", "requested_max_ttl_seconds"))
         and type(event["credential_ids"]) is list and event["recipient_attestation_present"] is False

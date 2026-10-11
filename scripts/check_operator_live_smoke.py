@@ -114,6 +114,67 @@ def preserved_rows(before, after, additions):
         require(all(current[key] == value for key, value in original.items()), "an existing catalog resource changed")
 
 
+def catalog_state(snapshot):
+    """Exclude only the documented read-only audit projection, not authority.
+
+    Its clock, bounded tail statistics and derived account observations change
+    without a catalog mutation. Actual request/audit evidence is checked by
+    scoped_audit/verify_audit, independently of this optional UI projection.
+    """
+    activity = snapshot.get("observed_activity")
+    require(isinstance(activity, dict) and set(activity) == {
+        "schema", "status", "observed_at_epoch_ms", "chain_verification", "window", "accounts"}
+        and activity["schema"] == "serverware.operatorAccountActivity/v1"
+        and activity["status"] in {"available", "unavailable"}
+        and activity["chain_verification"] == "not_checked",
+        "live catalog activity projection differs")
+
+    def integer(value, maximum=9_007_199_254_740_991):
+        return type(value) is int and 0 <= value <= maximum
+
+    require(integer(activity["observed_at_epoch_ms"]), "live catalog activity clock differs")
+    limits = {"row_limit": 256, "event_byte_limit": 16384, "byte_limit": 2097152}
+    flags = {"has_older_rows", "byte_budget_exhausted", "incomplete"}
+    counts = {"rows_scanned", "bytes_read", "oversized_events", "invalid_events", "unmatched_responses"}
+    window = activity["window"]
+    require(isinstance(window, dict) and set(window) == set(limits) | flags | counts
+        and all(type(window[key]) is int and window[key] == value for key, value in limits.items())
+        and all(type(window[key]) is bool for key in flags)
+        and all(integer(window[key], 2097152 if key == "bytes_read" else 256) for key in counts),
+        "live catalog activity window differs")
+    accounts = activity["accounts"]
+    require(isinstance(accounts, list) and len(accounts) <= 1024, "live catalog activity accounts differ")
+    identifiers = set()
+    for account in accounts:
+        require(isinstance(account, dict) and set(account) == {"credential_id", "last_successful_response",
+            "last_refresh_success", "last_refresh_failure", "last_refresh_outcome"}
+            and isinstance(account["credential_id"], str) and account["credential_id"] not in identifiers
+            and account["last_refresh_outcome"] in {"unobserved", "success", "failure"},
+            "live catalog activity account differs")
+        identifiers.add(account["credential_id"])
+        for field in ("last_successful_response", "last_refresh_success", "last_refresh_failure"):
+            observation = account[field]
+            if observation is None:
+                continue
+            expected = {"event_id", "recorded_at_epoch_ms", "credential_version"}
+            if field == "last_successful_response":
+                expected |= {"application_id", "rule_id"}
+            require(isinstance(observation, dict) and set(observation) == expected
+                and isinstance(observation["event_id"], str) and len(observation["event_id"]) in {36, 71}
+                and integer(observation["recorded_at_epoch_ms"], activity["observed_at_epoch_ms"])
+                and integer(observation["credential_version"]) and observation["credential_version"] > 0
+                and all(isinstance(observation[key], str) and len(observation[key]) == 36
+                    for key in expected & {"application_id", "rule_id"}),
+                "live catalog activity observation differs")
+    require(identifiers == ({row["id"] for row in snapshot["credentials"]}
+        if activity["status"] == "available" else set()), "live catalog activity account roster differs")
+    return {key: value for key, value in snapshot.items() if key != "observed_activity"}
+
+
+def require_catalog_unchanged(before, after, message):
+    require(catalog_state(before) == catalog_state(after), message)
+
+
 def response_evidence(case, status, headers, body, policy_hash):
     document = json.loads(body)
     if case in ERRORS:
@@ -333,7 +394,7 @@ class LiveSmoke(OperatorCatalogCheck):
                            credential_id=credential["id"], data_plane_binary_digest=self.args.expected_binary_sha256)
         for case, dummy in CASES:
             current = self.warm_cas_snapshot()
-            require(current == snapshot, "live catalog drifted before smoke request")
+            require_catalog_unchanged(snapshot, current, "live catalog drifted before smoke request")
             before = self.counts()
             expected_before = (global_before, 0)
             require(before == expected_before, "unexpected upstream traffic before live smoke request")
@@ -352,7 +413,7 @@ class LiveSmoke(OperatorCatalogCheck):
         require(self.counts() == (global_before + 1, 1), "live smoke total dispatch budget differs")
         evidence = self.verify_audit(audit_before, scope, lease_scope)
         final = self.warm_cas_snapshot()
-        require(final == snapshot, "live catalog changed during smoke")
+        require_catalog_unchanged(snapshot, final, "live catalog changed during smoke")
         preserved_rows(initial, final, self.additions)
         self.results.extend(["existing_catalog_preserved_three_synthetic_resources_added",
             "public_https_proxy_and_interception_tls_verified", "two_placeholder_denials_without_dispatch",

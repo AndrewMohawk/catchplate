@@ -32,6 +32,21 @@ def catalog():
     return value
 
 
+def observed_catalog():
+    value = catalog()
+    value.update(revision=16, policy={"policy_hash": POLICY, "sequence": 7,
+        "loaded_policy_hash": POLICY, "activation": "active"})
+    value["observed_activity"] = {"schema": "serverware.operatorAccountActivity/v1",
+        "status": "available", "observed_at_epoch_ms": 1000, "chain_verification": "not_checked",
+        "window": {"row_limit": 256, "event_byte_limit": 16384, "byte_limit": 2097152,
+            "rows_scanned": 12, "bytes_read": 0, "has_older_rows": False,
+            "byte_budget_exhausted": False, "oversized_events": 0, "invalid_events": 0,
+            "unmatched_responses": 0, "incomplete": False},
+        "accounts": [{"credential_id": "credentials", "last_successful_response": None,
+            "last_refresh_success": None, "last_refresh_failure": None, "last_refresh_outcome": "unobserved"}]}
+    return value
+
+
 def response():
     document = {"method": "POST", "path": "/echo", "authorization_present": True,
         "authorization_scheme": "Bearer", "authorization_matches_expected": True,
@@ -132,6 +147,58 @@ class LiveSmokeTests(unittest.TestCase):
             else: changed["credentials"].append({"id": "unexpected"})
             with self.subTest(mode=mode), self.assertRaises(smoke.CheckFailure):
                 smoke.preserved_rows(before, changed, additions)
+
+    def test_catalog_comparison_allows_only_readonly_activity_changes(self):
+        before = observed_catalog()
+        after = deepcopy(before)
+        activity = after["observed_activity"]
+        activity["observed_at_epoch_ms"] = 2000
+        activity["window"].update(rows_scanned=15, bytes_read=500)
+        activity["accounts"][0]["last_successful_response"] = {
+            "event_id": ATTEMPT, "recorded_at_epoch_ms": 1500, "credential_version": 1,
+            "application_id": "00000000-0000-4000-8000-000000000001",
+            "rule_id": "00000000-0000-4000-8000-000000000002"}
+        smoke.require_catalog_unchanged(before, after, "changed")
+        self.assertNotEqual(before["observed_activity"], after["observed_activity"])
+        self.assertIn("observed_activity", after)  # Comparison does not mutate its inputs.
+
+    def test_catalog_comparison_rejects_every_other_root_or_resource_change(self):
+        before = observed_catalog()
+        changes = (
+            lambda row: row["credentials"][0].update(status="revoked"),
+            lambda row: row["applications"][0].update(token_generation=2),
+            lambda row: row["access_rules"][0].update(methods=["DELETE"]),
+            lambda row: row["policy"].update(policy_hash=OTHER_PIN),
+            lambda row: row["policy"].update(loaded_policy_hash=None),
+            lambda row: row.update(revision=17),
+            lambda row: row["limits"]["credentials"].update(retained=2),
+            lambda row: row["capabilities"].update(other=True),
+            lambda row: row.update(proxy_url="https://other.example"),
+            lambda row: row.update(unexpected_field=True),
+        )
+        for index, change in enumerate(changes):
+            after = deepcopy(before)
+            change(after)
+            with self.subTest(index=index), self.assertRaises(smoke.CheckFailure):
+                smoke.require_catalog_unchanged(before, after, "changed")
+
+    def test_catalog_activity_exclusion_requires_exact_readonly_shape(self):
+        changes = (
+            lambda row: row.pop("observed_activity"),
+            lambda row: row["observed_activity"].update(schema="other"),
+            lambda row: row["observed_activity"].update(chain_verification="verified"),
+            lambda row: row["observed_activity"].update(observed_at_epoch_ms=True),
+            lambda row: row["observed_activity"].update(authority={}),
+            lambda row: row["observed_activity"]["window"].update(row_limit=1000),
+            lambda row: row["observed_activity"]["window"].update(incomplete=1),
+            lambda row: row["observed_activity"]["accounts"][0].update(secret="not permitted"),
+            lambda row: row["observed_activity"]["accounts"][0].update(credential_id="other"),
+        )
+        for index, change in enumerate(changes):
+            after = observed_catalog()
+            change(after)
+            with self.subTest(index=index), self.assertRaises(smoke.CheckFailure):
+                smoke.require_catalog_unchanged(observed_catalog(), after, "changed")
 
     def test_proxy_uses_system_trust_not_interception_ca(self):
         endpoint = SimpleNamespace(host="serverware-proxy.example.com", scheme="https", port=443)

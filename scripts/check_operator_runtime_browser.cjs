@@ -2,7 +2,8 @@
 'use strict';
 // Actual app responses through an internal GET-only bridge. No external SSO,
 // provider, proxy, CA, notification delivery, restart or mutation acceptance.
-// Usage: node scripts/check_operator_runtime_browser.cjs FULL_APP_ID SOURCE_COMMIT FRESH_OUTPUT_DIRECTORY [--managed-google-unconfigured]
+// Usage: node scripts/check_operator_runtime_browser.cjs FULL_APP_ID SOURCE_COMMIT FRESH_OUTPUT_DIRECTORY
+//   [--managed-google-unconfigured] [--expected-upstreams JSON_ARRAY] [--expected-catalog-revision INTEGER]
 const {readFileSync, realpathSync, mkdirSync, writeFileSync} = require('node:fs');
 const {join, dirname, resolve, isAbsolute} = require('node:path');
 const {createHash} = require('node:crypto');
@@ -12,10 +13,14 @@ const ROOT = resolve(__dirname, '..'), PUBLIC = 'https://serverware-demo.example
 const CATALOG = '/api/operator-demo/catalog', NOTIFICATIONS = '/api/operator-demo/notifications', UPSTREAMS = '/api/operator-demo/proxy/upstreams';
 const PATHS = ['/', CATALOG, NOTIFICATIONS, UPSTREAMS], FIXTURE = 'https://demo-upstream:8443';
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2', GMAIL = 'https://gmail.googleapis.com';
+const REVIEWED_UPSTREAMS = [[FIXTURE], [FIXTURE, GMAIL],
+  [FIXTURE, 'https://api.github.com', 'https://registry.npmjs.org', GMAIL]];
 const GOOGLE_SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
-const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
+const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js', 'workspace_alchemy.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
   'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
+const SCRIPT_ROSTERS = [SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js'].includes(name)),
+  SCRIPTS.filter(name => name !== 'workspace_alchemy.js'), SCRIPTS];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
@@ -24,10 +29,57 @@ class Refusal extends Error {}
 function need(value, reason) { if (!value) throw new Refusal(reason); }
 let appId, commit, output, source, manifest, expectedHtml, bridgeCode, browser, context, phase = 'parameters', claimed = false, stopped = false, timer;
 let managedGoogle = false;
+let expectedUpstreams = [FIXTURE], expectedRevision = null;
 const paths = () => managedGoogle ? [...PATHS, GOOGLE] : PATHS;
 const children = new Set(), before = {}, seen = {};
 const receipt = {schema: 'serverware.operatorRuntimeReadonlyBrowser/v1', ok: false, gets: [], screenshots: [], refused_requests: 0,
   page_errors: 0, console_errors: 0, boundary: 'Actual internal app HTML/APIs only. No external SSO, provider, proxy, CA, delivery or mutation acceptance.'};
+function parseRuntimeOptions(args) {
+  need(Array.isArray(args) && args.length >= 3 && args.length <= 8 && args.every(value => typeof value === 'string'),
+    'usage_full_app_id_commit_fresh_output');
+  const selected = {appId: args[0], commit: args[1], output: args[2], managedGoogle: false,
+    expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false};
+  const used = new Set();
+  for (let index = 3; index < args.length; index++) {
+    const flag = args[index];
+    need(['--managed-google-unconfigured', '--expected-upstreams', '--expected-catalog-revision'].includes(flag) && !used.has(flag),
+      'runtime_option_refused');
+    used.add(flag);
+    if (flag === '--managed-google-unconfigured') selected.managedGoogle = true;
+    else {
+      const value = args[++index];
+      need(typeof value === 'string' && value.length <= 1024, 'runtime_option_value_refused');
+      if (flag === '--expected-upstreams') {
+        let origins;
+        try { origins = JSON.parse(value); } catch (_) { throw new Refusal('expected_upstreams_refused'); }
+        need(REVIEWED_UPSTREAMS.some(reviewed => serial(origins) === serial(reviewed)), 'expected_upstreams_refused');
+        selected.expectedUpstreams = origins; selected.explicitUpstreams = true;
+      } else {
+        need(/^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value)), 'expected_revision_refused');
+        selected.expectedRevision = Number(value);
+      }
+    }
+  }
+  return selected;
+}
+const expectedGoogleRevision = () => expectedRevision === null ? 13 : expectedRevision;
+const expectedGoogleOrigins = () => expectedUpstreams.includes(GMAIL) ? [...expectedUpstreams] : [...expectedUpstreams, GMAIL];
+const expectedGoogleAddedOrigin = () => expectedUpstreams.includes(GMAIL) ?
+  'None — https://gmail.googleapis.com is already an allowed destination.' : GMAIL;
+function applicationBadge(application, catalog, now = Date.now()) {
+  const expiry = application.token_expires_at_epoch_ms;
+  const loaded = catalog.policy?.activation === 'active' && catalog.policy.loaded_policy_hash === catalog.policy.policy_hash;
+  need(['active', 'revoked'].includes(application.status) && Number.isSafeInteger(expiry) && expiry > 0 &&
+    Number.isSafeInteger(application.token_generation) && application.token_generation > 0 &&
+    Number.isSafeInteger(application.active_rule_count) && application.active_rule_count >= 0, 'reviewed_application_state_mismatch');
+  const revoked = application.status === 'revoked', expired = now >= expiry;
+  const token = revoked ? 'revoked' : expired ? 'expired' : 'valid';
+  const access = revoked ? loaded ? 'revoked' : 'pending' : !application.active_rule_count ? 'unassigned' :
+    loaded && !expired ? 'active' : 'pending';
+  need(application.token_status === token && application.access_status === access, 'reviewed_application_state_mismatch');
+  return revoked ? loaded ? 'Revoked · enforced' : 'Revoked · enforcement pending' : expired ? 'Token expired' :
+    access === 'unassigned' ? 'No access rules' : loaded && access === 'active' ? 'Active' : 'Access pending';
+}
 function command(binary, args, input = '', timeout = 25000) {
   need(!stopped, 'run_stopped');
   return new Promise((resolve, reject) => {
@@ -57,9 +109,22 @@ async function identity() {
   const inside = await bridge({op: 'source', manifest_sha256: manifest.manifest_sha256, files: manifest.files});
   need(inside.manifest_sha256 === manifest.manifest_sha256 && inside.files === manifest.files, 'container_source_mismatch');
 }
+function sourceScriptFiles() {
+  // Read only the fixed literal from the already Git-verified source. Never
+  // execute its renderer or permit arbitrary filenames/imports from the tuple.
+  const portal = readFileSync(join(source, 'serverware/operator_demo_portal.py'), 'utf8');
+  need(Buffer.byteLength(portal, 'utf8') <= 65536 && (portal.match(/^SCRIPT_FILES\s*=/gm) || []).length === 1,
+    'renderer_roster_refused');
+  const match = /^SCRIPT_FILES = \(([^)]*)\)/m.exec(portal);
+  need(match && /^\s*"[a-z_]+\.js"(?:\s*,\s*"[a-z_]+\.js")*\s*,?\s*$/.test(match[1]), 'renderer_roster_refused');
+  const names = JSON.parse('[' + match[1].replace(/,\s*$/, '') + ']');
+  need(SCRIPT_ROSTERS.some(roster => serial(names) === serial(roster)), 'renderer_roster_refused');
+  return names;
+}
 function documentBytes() {
+  const names = sourceScriptFiles();
   const asset = name => readFileSync(join(source, 'serverware/operator_demo_web', name), 'utf8');
-  let html = asset('index.html'); const scripts = SCRIPTS.map(asset).join('\n'), css = asset('style.css');
+  let html = asset('index.html'); const scripts = names.map(asset).join('\n'), css = asset('style.css');
   need(!/<\/script/i.test(scripts) && !/<\/style/i.test(css), 'renderer_raw_text_terminator');
   for (const [marker, value] of [['__OPERATOR_DEMO_STYLE__', css], ['__OPERATOR_DEMO_SCRIPT__', "(() => {\n'use strict';\n" + scripts + '\n})();\n']]) {
     need(html.split(marker).length === 2, 'renderer_marker'); html = html.replace(marker, () => value);
@@ -76,11 +141,15 @@ function snapshot(path, value) {
 function validate(path, value) {
   if (path === CATALOG) {
     need(value.schema === 'serverware.operatorCatalog/v1' && value.mode === 'operator-development' && value.productionReady === false &&
-      value.hardwareVerified === false && serial(value.allowed_upstreams) === serial([FIXTURE]), 'catalog_profile_or_destination_changed');
+      value.hardwareVerified === false && serial(value.allowed_upstreams) === serial(expectedUpstreams), 'catalog_profile_or_destination_changed');
     for (const key of ['credentials', 'applications', 'access_rules']) need(Array.isArray(value[key]) && value[key].length > 0, 'retained_resources_missing');
-    need(value.applications.every(app => app.status === 'active' && app.token_status === 'expired' &&
+    if (expectedRevision === null) need(value.applications.every(app => app.status === 'active' && app.token_status === 'expired' &&
       Number.isSafeInteger(app.token_expires_at_epoch_ms) && app.token_expires_at_epoch_ms > 0 && app.token_expires_at_epoch_ms <= Date.now()), 'retained_app_not_expired');
-    if (managedGoogle) need(value.revision === 13 && value.capabilities?.oauth === false && value.capabilities.google_oauth === null,
+    else {
+      need(value.revision === expectedRevision, 'reviewed_catalog_revision_mismatch');
+      for (const application of value.applications) applicationBadge(application, value);
+    }
+    if (managedGoogle) need(value.revision === expectedGoogleRevision() && value.capabilities?.oauth === false && value.capabilities.google_oauth === null,
       'managed_unconfigured_catalog_mismatch');
   } else if (path === NOTIFICATIONS) {
     need(value.schema === 'serverware.operatorNotifications/v1' && value.available === true && Array.isArray(value.slots) &&
@@ -93,7 +162,7 @@ function validate(path, value) {
   } else if (path === GOOGLE) {
     need(managedGoogle && exactKeys(value, ['schema', 'state', 'revision', 'policy_hash', 'effective_settings', 'effective_settings_digest',
       'public_url', 'redirect_uri', 'permission_preset', 'scopes', 'blocked_reason', 'review', 'operation', 'readiness']) &&
-      value.schema === 'serverware.operatorGoogleConfiguration/v2' && value.state === 'unconfigured' && value.revision === 13 &&
+      value.schema === 'serverware.operatorGoogleConfiguration/v2' && value.state === 'unconfigured' && value.revision === expectedGoogleRevision() &&
       value.revision === before[CATALOG].revision && value.policy_hash === before[CATALOG].policy.policy_hash &&
       exactKeys(value.effective_settings, ['allowed_upstreams', 'fixture_cidrs']) &&
       serial(value.effective_settings) === serial(before[UPSTREAMS].old_settings) &&
@@ -110,11 +179,14 @@ function validate(path, value) {
       review.schema === 'serverware.operatorGoogleManagedSetupReview/v2' && review.expected_revision === value.revision &&
       review.expected_policy_hash === value.policy_hash && review.expected_settings_digest === value.effective_settings_digest &&
       serial(review.old_settings) === serial(value.effective_settings) &&
-      serial(review.target_settings) === serial({allowed_upstreams: [FIXTURE, GMAIL], fixture_cidrs: value.effective_settings.fixture_cidrs}) &&
+      serial(review.target_settings) === serial({allowed_upstreams: expectedGoogleOrigins(), fixture_cidrs: value.effective_settings.fixture_cidrs}) &&
       review.public_url === PUBLIC && review.redirect_uri === value.redirect_uri && review.provider_id === 'google' &&
       review.permission_preset === 'gmail_readonly' && serial(review.scopes) === serial(GOOGLE_SCOPES) && review.eligible === true,
       'managed_google_review_mismatch');
-  } else need(value.schema === 'serverware.operatorUpstreamSetupReview/v1' && serial(value.old_settings?.allowed_upstreams) === serial([FIXTURE]) &&
+  } else need(value.schema === 'serverware.operatorUpstreamSetupReview/v1' &&
+    exactKeys(value.old_settings, ['allowed_upstreams', 'fixture_cidrs']) &&
+    serial(value.old_settings.allowed_upstreams) === serial(expectedUpstreams) &&
+    value.expected_settings_digest === 'sha256:' + sha(serial(value.old_settings)) &&
     value.cold_restart_required === true && value.eligible === true && value.pending_operation_id === null && value.blocked_reason === null &&
     value.expected_revision === before[CATALOG].revision && value.expected_policy_hash === before[CATALOG].policy.policy_hash, 'upstream_review_mismatch');
   const observed = snapshot(path, value);
@@ -154,7 +226,7 @@ async function navigateSection(page, name) {
 async function verifyProxyDefault(page) {
   const checks = {
     panel_visible: await page.locator('#proxy-upstreams').isVisible(),
-    effective_fixture: await page.locator('#upstreams-effective').innerText() === FIXTURE,
+    effective_fixture: await page.locator('#upstreams-effective').innerText() === expectedUpstreams.join('\n'),
     form_hidden: await page.locator('#upstreams-form').isHidden(),
     no_review_get: !seen[UPSTREAMS],
     restart_notice_present: (await page.locator('#proxy-upstreams').innerText()).includes('Apps still need permission. Changes require a controlled restart.'),
@@ -164,9 +236,8 @@ async function verifyProxyDefault(page) {
   need(valid, 'proxy_default_mismatch');
 }
 async function run() {
-  const args = process.argv.slice(2);
-  need(args.length === 3 || args.length === 4 && args[3] === '--managed-google-unconfigured', 'usage_full_app_id_commit_fresh_output');
-  [appId, commit, output] = args; managedGoogle = args.length === 4;
+  const selected = parseRuntimeOptions(process.argv.slice(2));
+  ({appId, commit, output, managedGoogle, expectedUpstreams, expectedRevision} = selected);
   need(/^[0-9a-f]{64}$/.test(appId) && /^[0-9a-f]{40}$/.test(commit) && isAbsolute(output) && resolve(output) === output &&
     realpathSync(dirname(output)) === dirname(output), 'exact_parameters_required');
   source = join(dirname(ROOT), 'serverware-operator-artifacts/source-' + commit);
@@ -175,8 +246,12 @@ async function run() {
   mkdirSync(output, {mode: 0o700}); claimed = true; // A used directory can never be replayed.
   receipt.app_container_id = appId; receipt.source_commit = commit; receipt.started_at = new Date().toISOString();
   if (managedGoogle) receipt.mode = 'managed-google-unconfigured';
+  if (selected.explicitUpstreams || expectedRevision !== null) receipt.expected_upstreams = [...expectedUpstreams];
+  if (expectedRevision !== null) receipt.expected_catalog_revision = expectedRevision;
   receipt.checker_sha256 = sha(readFileSync(__filename)); receipt.bridge_sha256 = sha(bridgeCode);
-  writeFileSync(join(output, 'run-claim.json'), serial({appId, commit, started_at: receipt.started_at}) + '\n', {flag: 'wx', mode: 0o600});
+  writeFileSync(join(output, 'run-claim.json'), serial({appId, commit, started_at: receipt.started_at,
+    ...(receipt.expected_upstreams ? {expected_upstreams: receipt.expected_upstreams} : {}),
+    ...(expectedRevision !== null ? {expected_catalog_revision: expectedRevision} : {})}) + '\n', {flag: 'wx', mode: 0o600});
   phase = 'identity_before'; await identity(); expectedHtml = documentBytes();
   phase = 'public_before'; for (const path of paths()) await get(path);
   phase = 'render';
@@ -220,8 +295,8 @@ async function run() {
   phase = 'review'; await page.locator('#upstreams-review').click();
   await page.waitForFunction(() => !document.getElementById('upstreams-review').disabled && !document.getElementById('upstreams-form').hidden);
   await page.waitForLoadState('networkidle');
-  need(seen[UPSTREAMS] === 1 && seen[CATALOG] === 2 && await page.locator('#upstreams-proposed').inputValue() === FIXTURE &&
-    await page.locator('#upstreams-effective').innerText() === FIXTURE && await page.locator('#upstreams-prepare').isDisabled() &&
+  need(seen[UPSTREAMS] === 1 && seen[CATALOG] === 2 && await page.locator('#upstreams-proposed').inputValue() === expectedUpstreams.join('\n') &&
+    await page.locator('#upstreams-effective').innerText() === expectedUpstreams.join('\n') && await page.locator('#upstreams-prepare').isDisabled() &&
     await page.locator('#upstreams-operation').isHidden() && (await page.locator('#upstreams-form').innerText()).includes('cold restart before it takes effect'), 'review_not_readonly');
   for (const width of [1280, 390]) { await page.setViewportSize({width, height: width === 1280 ? 960 : 844}); await capture(page, '#proxy', 'proxy-review-' + width + '.png'); }
   if (managedGoogle) {
@@ -244,17 +319,18 @@ async function run() {
     await page.locator('#google-configuration-scopes').locator('..').locator(':scope > summary').click();
     need(await page.locator('#google-configuration-scopes').isVisible() &&
       await page.locator('#google-configuration-scopes').innerText() === GOOGLE_SCOPES.join('\n') &&
-      await page.locator('#google-configuration-added-upstream').innerText() === GMAIL &&
+      await page.locator('#google-configuration-added-upstream').innerText() === expectedGoogleAddedOrigin() &&
       (await page.locator('#google-configuration-review-state').innerText()).includes('Prepare does not restart services or contact Google.'),
       'managed_google_scope_review_mismatch');
     for (const width of [1280, 390]) { await page.setViewportSize({width, height: width === 1280 ? 960 : 844});
       await capture(page, '#google-configuration-panel', 'google-configuration-unconfigured-' + width + '.png'); }
-    receipt.managed_google = {state: 'unconfigured', revision: 13, pair_ready: true, consent_ready: false, operation: null, prepare_sent: false};
+    receipt.managed_google = {state: 'unconfigured', revision: expectedGoogleRevision(), pair_ready: true, consent_ready: false, operation: null, prepare_sent: false};
   }
   phase = 'applications'; await page.setViewportSize({width: 1280, height: 960}); await navigateSection(page, 'applications');
   need(await page.locator('#applications-list [data-resource-id]').count() === before[CATALOG].applications.length, 'retained_application_rows_changed');
-  for (const app of before[CATALOG].applications) need(await page.locator('#applications-list [data-resource-id="' + app.id + '"] .badge').innerText() === 'Token expired', 'expired_badge_missing');
-  await capture(page, '#applications-list', 'expired-applications.png');
+  for (const app of before[CATALOG].applications) need(await page.locator('#applications-list [data-resource-id="' + app.id + '"] .badge').innerText() ===
+    (expectedRevision === null ? 'Token expired' : applicationBadge(app, before[CATALOG])), 'application_badge_mismatch');
+  await capture(page, '#applications-list', expectedRevision === null ? 'expired-applications.png' : 'reviewed-applications.png');
   phase = 'notifications'; await navigateSection(page, 'notifications');
   await page.waitForFunction(() => !document.getElementById('notifications-refresh').disabled && document.querySelectorAll('form[data-notification-slot]').length === 4);
   need(seen[NOTIFICATIONS] === 1 && await page.locator('[data-notification-channel="action_required"]').count() === 1 &&
@@ -275,9 +351,12 @@ async function run() {
   receipt.source = manifest; receipt.html_sha256 = sha(expectedHtml);
   receipt.unchanged_public_sha256 = Object.fromEntries(Object.entries(before).map(([path, value]) => [path, sha(serial(value))]));
   receipt.ignored_sampling_clocks = ['catalog.observed_activity.observed_at_epoch_ms', 'notifications.worker.last_cycle_at_epoch_ms'];
-  receipt.checks = ['exact_running_readonly_source_before_after', 'actual_html_and_public_resources_unchanged', 'proxy_effective_fixture_and_explicit_GET_review',
-    'restart_required_no_preparation', 'retained_expired_applications', 'separate_action_and_audit_four_disabled_slots', 'desktop_mobile_no_overflow', 'browser_closed'];
-  if (managedGoogle) receipt.checks.push('managed_unconfigured_exact_GET_review_revision13_pair_ready_no_consent', 'empty_writeonly_provider_form_no_prepare');
+  receipt.checks = ['exact_running_readonly_source_before_after', 'actual_html_and_public_resources_unchanged',
+    selected.explicitUpstreams ? 'proxy_exact_reviewed_destinations_and_explicit_GET_review' : 'proxy_effective_fixture_and_explicit_GET_review',
+    'restart_required_no_preparation', expectedRevision === null ? 'retained_expired_applications' : 'exact_reviewed_application_states_and_badges',
+    'separate_action_and_audit_four_disabled_slots', 'desktop_mobile_no_overflow', 'browser_closed'];
+  if (managedGoogle) receipt.checks.push(expectedRevision === null ? 'managed_unconfigured_exact_GET_review_revision13_pair_ready_no_consent' :
+    'managed_unconfigured_exact_reviewed_revision_pair_ready_no_consent', 'empty_writeonly_provider_form_no_prepare');
   receipt.ok = true; phase = 'complete';
 }
 (async () => {

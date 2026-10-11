@@ -10,7 +10,14 @@ const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '..');
 const ASSETS = path.join(ROOT, 'serverware/operator_demo_web');
+const PORTAL = path.join(ROOT, 'serverware/operator_demo_portal.py');
 const CHECKER = path.join(__dirname, 'check_operator_runtime_browser.cjs');
+const NOW = 1800000000000, FIXTURE = 'https://demo-upstream:8443', GMAIL = 'https://gmail.googleapis.com';
+const UPSTREAM_LISTS = [[FIXTURE], [FIXTURE, GMAIL],
+  [FIXTURE, 'https://api.github.com', 'https://registry.npmjs.org', GMAIL]];
+const CATALOG = '/api/operator-demo/catalog', UPSTREAMS = '/api/operator-demo/proxy/upstreams';
+const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2';
+const PUBLIC = 'https://serverware-demo.example.com', POLICY = 'sha256:' + 'a'.repeat(64);
 const source = fs.readFileSync(CHECKER, 'utf8');
 const entrypoint = '\n(async () => {\n';
 assert.equal(source.split(entrypoint).length, 2, 'one explicit runtime entrypoint');
@@ -28,8 +35,15 @@ sys.addaudithook(deny_runtime)
 spec = importlib.util.spec_from_file_location('public_renderer_only', pathlib.Path(sys.argv[1]))
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+scripts = module.SCRIPT_FILES
+variants = []
+for omitted in ({'workspace_x.js', 'workspace_alchemy.js'}, {'workspace_alchemy.js'}, set()):
+    module.SCRIPT_FILES = tuple(name for name in scripts if name not in omitted)
+    module.render.cache_clear()
+    variants.append({'scripts': module.SCRIPT_FILES,
+        'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
 print(json.dumps({'scripts': module.SCRIPT_FILES,
-    'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')}))
+    'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii'), 'variants': variants}))
 `, path.join(ROOT, 'serverware/operator_demo_portal.py')],
   {encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024,
     env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}}));
@@ -40,14 +54,14 @@ function forbidden() { forbiddenCalls++; throw new Error('pure asset test attemp
 
 function fixture(overrides = {}) {
   const reads = [];
-  const context = vm.createContext({Buffer, structuredClone, __dirname, __filename: CHECKER,
+  const context = vm.createContext({Buffer, structuredClone, Date: class extends Date { static now() { return NOW; } }, __dirname, __filename: CHECKER,
     fixtureRoot: ROOT, fixtureReply: null, fixtureRequests: [],
     require(name) {
       if (name === 'node:path') return path;
       if (name === 'node:crypto') return require(name);
       if (name === 'node:fs') return {
         readFileSync(filename, encoding) {
-          assert.equal(path.dirname(filename), ASSETS, 'only selected public assets may be read');
+          assert(filename === PORTAL || path.dirname(filename) === ASSETS, 'only selected public renderer/assets may be read');
           assert.equal(encoding, 'utf8');
           const name = path.basename(filename); reads.push(name);
           if (Object.hasOwn(overrides, name)) {
@@ -71,37 +85,82 @@ function fixture(overrides = {}) {
     }};
 }
 
+function reviewed(origins = UPSTREAM_LISTS[2], revision = 39, managed = true) {
+  const f = fixture();
+  f.context.origins = [...origins]; f.context.revision = revision; f.context.managed = managed;
+  f.run('expectedUpstreams = origins; expectedRevision = revision; managedGoogle = managed');
+  const app = (id, status, expiry, token, access, rules) => ({id, status, token_expires_at_epoch_ms: expiry,
+    token_generation: 1, token_status: token, access_status: access, active_rule_count: rules});
+  const catalog = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
+    hardwareVerified: false, revision: revision === null ? 13 : revision, allowed_upstreams: [...origins],
+    policy: {activation: 'active', policy_hash: POLICY, loaded_policy_hash: POLICY},
+    capabilities: {oauth: false, google_oauth: null}, observed_activity: {observed_at_epoch_ms: NOW},
+    credentials: [{id: 'credential'}], access_rules: [{id: 'rule'}], applications: [
+      app('active', 'active', NOW + 600000, 'valid', 'active', 1),
+      app('expired', 'active', NOW - 1000, 'expired', 'pending', 1),
+      app('revoked', 'revoked', NOW + 600000, 'revoked', 'revoked', 0)]};
+  if (revision === null) catalog.applications = [catalog.applications[1]];
+  const settings = {allowed_upstreams: [...origins], fixture_cidrs: ['127.0.0.0/8']};
+  // Independent fixed-key canonical input, not the checker's serial/hash helper.
+  const digest = 'sha256:' + require('node:crypto').createHash('sha256').update(JSON.stringify(settings)).digest('hex');
+  const upstreams = {schema: 'serverware.operatorUpstreamSetupReview/v1', old_settings: settings,
+    expected_settings_digest: digest, cold_restart_required: true, eligible: true, pending_operation_id: null,
+    blocked_reason: null, expected_revision: catalog.revision, expected_policy_hash: POLICY};
+  const google = {schema: 'serverware.operatorGoogleConfiguration/v2', state: 'unconfigured', revision: catalog.revision,
+    policy_hash: POLICY, effective_settings: structuredClone(settings), effective_settings_digest: digest,
+    public_url: PUBLIC, redirect_uri: PUBLIC + '/api/oauth/callback/google', permission_preset: 'gmail_readonly',
+    scopes: ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'], blocked_reason: null, operation: null,
+    readiness: {pair_ready: true, consent_ready: false, loaded_policy_hash: POLICY},
+    review: {schema: 'serverware.operatorGoogleManagedSetupReview/v2', expected_revision: catalog.revision,
+      expected_policy_hash: POLICY, expected_settings_digest: digest, old_settings: structuredClone(settings),
+      target_settings: {allowed_upstreams: origins.includes(GMAIL) ? [...origins] : [...origins, GMAIL],
+        fixture_cidrs: ['127.0.0.0/8']}, public_url: PUBLIC, redirect_uri: PUBLIC + '/api/oauth/callback/google',
+      provider_id: 'google', permission_preset: 'gmail_readonly',
+      scopes: ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'], eligible: true}};
+  return {f, catalog, upstreams, google};
+}
+function validate(f, route, value) {
+  f.context.fixturePath = route; f.context.fixtureValue = value;
+  return f.run('validate(fixturePath, fixtureValue)');
+}
+
 const tests = [
-  ['actual documentBytes matches current Python renderer in both checker modes', async () => {
-    for (const managed of [false, true]) {
-      const f = fixture();
-      const names = JSON.parse(f.run('JSON.stringify(SCRIPTS)'));
-      assert.deepEqual(names, reference.scripts);
+  ['actual documentBytes matches all three closed Python renderer rosters in both checker modes', async () => {
+    for (const variant of reference.variants) {
+      for (const managed of [false, true]) {
+      const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
+      const names = JSON.parse(f.run('JSON.stringify(sourceScriptFiles())'));
+      assert.deepEqual(names, variant.scripts);
       assert.equal(new Set(names).size, names.length);
       assert.equal(names[names.indexOf('workspace_npm.js') + 1], 'workspace_npm_publish.js');
       assert.deepEqual(names.slice(-2), ['workspace_google_configuration.js', 'app.js']);
+      f.reads.length = 0;
       const actual = f.render(managed);
-      assert(actual.equals(expected), 'exact UTF-8 HTML bytes must match actual renderer');
-      assert.deepEqual(f.reads, ['index.html', ...reference.scripts, 'style.css']);
+      const bytes = Buffer.from(variant.html, 'base64');
+      assert(actual.equals(bytes), 'exact UTF-8 HTML bytes must match actual renderer');
+      assert.deepEqual(f.reads, ['operator_demo_portal.py', 'index.html', ...variant.scripts, 'style.css']);
       f.context.fixtureExpected = actual; f.run('expectedHtml = fixtureExpected');
-      const response = await f.getActual(expected);
-      assert(response.body.equals(expected));
+      const response = await f.getActual(bytes);
+      assert(response.body.equals(bytes));
       assert.equal(f.context.fixtureRequests.length, 1);
       assert.equal(f.context.fixtureRequests[0].path, '/');
       assert.equal(f.context.fixtureRequests[0].op, 'get');
       assert.equal(f.context.fixtureRequests[0].managed_google_unconfigured, managed ? true : undefined);
+      }
     }
   }],
   ['missing or reordered modules and any changed response byte fail exact HTML comparison', async () => {
-    for (const change of [
-      'SCRIPTS.splice(SCRIPTS.indexOf("workspace_npm_publish.js"), 1)',
-      'SCRIPTS.splice(SCRIPTS.indexOf("workspace_google_configuration.js"), 1)',
-      '[SCRIPTS[2], SCRIPTS[3]] = [SCRIPTS[3], SCRIPTS[2]]']) {
-      const f = fixture(); f.run(change);
-      const wrong = f.render(true); assert(!wrong.equals(expected));
-      f.context.fixtureExpected = wrong; f.run('expectedHtml = fixtureExpected');
-      await assert.rejects(f.getActual(expected), error => error.message === 'actual_renderer_mismatch');
+    for (const names of [reference.scripts.filter(name => name !== 'workspace_npm_publish.js'),
+      reference.scripts.filter(name => name !== 'workspace_google_configuration.js'),
+      [reference.scripts[1], reference.scripts[0], ...reference.scripts.slice(2)],
+      [...reference.scripts, 'unknown.js'], [...reference.scripts, reference.scripts[0]],
+      ['../private.js', ...reference.scripts.slice(1)]]) {
+      const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + names.map(JSON.stringify).join(', ') + ')\n'});
+      assert.throws(() => f.render(true), error => error.message === 'renderer_roster_refused');
     }
+    for (const portal of ['SCRIPT_FILES = make_scripts()\n', 'SCRIPT_FILES = ("app.js",)\nSCRIPT_FILES = ("app.js",)\n',
+      'x'.repeat(65537), 'SCRIPT_FILES = ("app.js", extra)\n'])
+      assert.throws(() => fixture({'operator_demo_portal.py': portal}).render(false), error => error.message === 'renderer_roster_refused');
     const f = fixture(); f.context.fixtureExpected = f.render(false); f.run('expectedHtml = fixtureExpected');
     const changed = Buffer.from(expected); changed[changed.length - 1] ^= 1;
     await assert.rejects(f.getActual(changed), error => error.message === 'actual_renderer_mismatch');
@@ -194,6 +253,125 @@ const tests = [
         assert.deepEqual(JSON.parse(projection), {...expectedChecks, [failed]: false});
         assert(!projection.includes(canary));
       }
+      assert.equal(f.context.fixtureRequests.length, 0);
+    }
+  }],
+  ['runtime options accept only the three exact reviewed rosters and positive safe revisions', () => {
+    const f = fixture(), base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
+    const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
+    assert.deepEqual(parse(base), {appId: base[0], commit: base[1], output: base[2], managedGoogle: false,
+      expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false});
+    assert.equal(parse([...base, '--managed-google-unconfigured']).managedGoogle, true);
+    for (const origins of UPSTREAM_LISTS) {
+      const result = parse([...base, '--expected-catalog-revision', '39', '--expected-upstreams', JSON.stringify(origins),
+        '--managed-google-unconfigured']);
+      assert.deepEqual(result.expectedUpstreams, origins); assert.equal(result.expectedRevision, 39);
+      assert.equal(result.managedGoogle, true); assert.equal(result.explicitUpstreams, true);
+    }
+    for (const invalid of [[], [GMAIL], [FIXTURE, FIXTURE], [...UPSTREAM_LISTS[2], 'https://extra.invalid'],
+      [...UPSTREAM_LISTS[2]].reverse(), ['https://demo-upstream:8443/'], null, {}, 'https://api.github.com'])
+      assert.throws(() => parse([...base, '--expected-upstreams', JSON.stringify(invalid)]),
+        error => error.message === 'expected_upstreams_refused');
+    for (const invalid of ['', '0', '-1', '1.5', '01', '+39', ' 39', '39 ', 'true', '9007199254740992'])
+      assert.throws(() => parse([...base, '--expected-catalog-revision', invalid]), error => error.message === 'expected_revision_refused');
+    for (const suffix of [['--expected-upstreams'], ['--expected-catalog-revision'], ['--unknown'],
+      ['--expected-upstreams', '['], ['--expected-upstreams', 'x'.repeat(1025)],
+      ['--managed-google-unconfigured', '--managed-google-unconfigured'],
+      ['--expected-catalog-revision', '39', '--expected-catalog-revision', '40']])
+      assert.throws(() => parse([...base, ...suffix]));
+    assert.equal(f.context.fixtureRequests.length, 0);
+  }],
+  ['reviewed catalog admits coherent mixed application states and exact badge labels only', () => {
+    const {f, catalog} = reviewed(); validate(f, CATALOG, catalog);
+    f.context.sampleCatalog = catalog;
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(sampleCatalog.applications.map(app => applicationBadge(app, sampleCatalog)))')),
+      ['Active', 'Token expired', 'Revoked · enforced']);
+    for (const [patch, policy, expected] of [
+      [{active_rule_count: 0, access_status: 'unassigned'}, catalog.policy, 'No access rules'],
+      [{access_status: 'pending'}, {...catalog.policy, activation: 'pending', loaded_policy_hash: null}, 'Access pending'],
+      [{status: 'revoked', token_status: 'revoked', access_status: 'pending'},
+        {...catalog.policy, activation: 'pending', loaded_policy_hash: null}, 'Revoked · enforcement pending'],
+      [{token_expires_at_epoch_ms: NOW, token_status: 'expired', access_status: 'pending'}, catalog.policy, 'Token expired']]) {
+      f.context.sampleApp = {...catalog.applications[0], ...patch}; f.context.samplePolicy = policy;
+      assert.equal(f.run('applicationBadge(sampleApp, {policy: samplePolicy})'), expected);
+    }
+    for (const patch of [{status: 'expired'}, {token_status: 'expired'}, {token_status: 'revoked'}, {access_status: 'pending'},
+      {token_expires_at_epoch_ms: 0}, {token_expires_at_epoch_ms: '1800000600000'}, {token_expires_at_epoch_ms: 1.5},
+      {token_expires_at_epoch_ms: null}, {token_generation: 0}, {token_generation: true}, {active_rule_count: -1},
+      {active_rule_count: '1'}]) {
+      const sample = reviewed(); Object.assign(sample.catalog.applications[0], patch);
+      assert.throws(() => validate(sample.f, CATALOG, sample.catalog), error => error.message === 'reviewed_application_state_mismatch');
+    }
+    for (const mutate of [c => c.revision = 40, c => c.revision = '39', c => c.allowed_upstreams.pop(),
+      c => c.allowed_upstreams.push('https://extra.invalid'), c => c.productionReady = true]) {
+      const sample = reviewed(); mutate(sample.catalog); assert.throws(() => validate(sample.f, CATALOG, sample.catalog));
+    }
+    for (const managed of [false, true]) {
+      const legacy = reviewed([FIXTURE], null, managed); validate(legacy.f, CATALOG, legacy.catalog);
+      const invalid = reviewed([FIXTURE], null, managed); invalid.catalog.applications[0].token_status = 'valid';
+      assert.throws(() => validate(invalid.f, CATALOG, invalid.catalog), error => error.message === 'retained_app_not_expired');
+    }
+    const legacyRevision = reviewed([FIXTURE], null, true); legacyRevision.catalog.revision = 39;
+    assert.throws(() => validate(legacyRevision.f, CATALOG, legacyRevision.catalog), error => error.message === 'managed_unconfigured_catalog_mismatch');
+  }],
+  ['upstream review preserves exact settings digest revision policy and no-pending-operation CAS', () => {
+    for (const origins of UPSTREAM_LISTS) {
+      const sample = reviewed(origins); validate(sample.f, CATALOG, sample.catalog); validate(sample.f, UPSTREAMS, sample.upstreams);
+    }
+    for (const mutate of [v => v.old_settings.allowed_upstreams.pop(), v => v.old_settings.fixture_cidrs.push('10.0.0.0/8'),
+      v => v.old_settings.extra = true, v => v.expected_settings_digest = 'sha256:' + 'b'.repeat(64),
+      v => v.expected_revision = 38, v => v.expected_policy_hash = 'sha256:' + 'b'.repeat(64),
+      v => v.eligible = false, v => v.cold_restart_required = false, v => v.pending_operation_id = 'pending',
+      v => v.blocked_reason = 'blocked']) {
+      const sample = reviewed(); validate(sample.f, CATALOG, sample.catalog); mutate(sample.upstreams);
+      assert.throws(() => validate(sample.f, UPSTREAMS, sample.upstreams), error => error.message === 'upstream_review_mismatch');
+    }
+  }],
+  ['managed Google uses reviewed revision and exact current origins plus Gmail only when absent', () => {
+    for (const origins of UPSTREAM_LISTS) {
+      for (const revision of [null, 39]) {
+        const sample = reviewed(origins, revision); validate(sample.f, CATALOG, sample.catalog);
+        validate(sample.f, UPSTREAMS, sample.upstreams); validate(sample.f, GOOGLE, sample.google);
+        assert.equal(sample.f.run('expectedGoogleAddedOrigin()'), origins.includes(GMAIL) ?
+          'None — https://gmail.googleapis.com is already an allowed destination.' : GMAIL);
+      }
+    }
+    for (const mutate of [v => v.revision = 13, v => v.policy_hash = 'sha256:' + 'b'.repeat(64),
+      v => v.effective_settings_digest = 'sha256:' + 'b'.repeat(64), v => v.review.expected_revision = 13,
+      v => v.review.expected_policy_hash = 'sha256:' + 'b'.repeat(64), v => v.review.expected_settings_digest = 'sha256:' + 'b'.repeat(64),
+      v => v.review.target_settings.allowed_upstreams.push(GMAIL), v => v.review.target_settings.allowed_upstreams.shift(),
+      v => v.review.target_settings.fixture_cidrs.push('10.0.0.0/8'), v => v.review.eligible = false,
+      v => v.readiness.pair_ready = false, v => v.readiness.consent_ready = true, v => v.operation = {},
+      v => v.scopes.push('extra'), v => v.review.provider_id = 'unknown']) {
+      const sample = reviewed(); validate(sample.f, CATALOG, sample.catalog); validate(sample.f, UPSTREAMS, sample.upstreams);
+      mutate(sample.google); assert.throws(() => validate(sample.f, GOOGLE, sample.google));
+    }
+  }],
+  ['before and after snapshots ignore only the original sampling clock and refuse resource drift', () => {
+    const sample = reviewed(); validate(sample.f, CATALOG, sample.catalog);
+    const clockOnly = structuredClone(sample.catalog); clockOnly.observed_activity.observed_at_epoch_ms++;
+    validate(sample.f, CATALOG, clockOnly);
+    for (const mutate of [c => c.credentials[0].name = 'changed', c => c.applications[0].token_generation++,
+      c => c.access_rules[0].id = 'different', c => c.observed_activity.new_field = true]) {
+      const changed = structuredClone(sample.catalog); mutate(changed);
+      assert.throws(() => validate(sample.f, CATALOG, changed), error => error.message === 'public_resource_changed_during_read');
+    }
+    validate(sample.f, UPSTREAMS, sample.upstreams);
+    const changedReview = structuredClone(sample.upstreams); changedReview.new_field = true;
+    assert.throws(() => validate(sample.f, UPSTREAMS, changedReview), error => error.message === 'public_resource_changed_during_read');
+  }],
+  ['proxy DOM comparison requires the exact reviewed four-origin display with no extra request', async () => {
+    for (const text of [UPSTREAM_LISTS[2].join('\n'), FIXTURE, [...UPSTREAM_LISTS[2]].reverse().join('\n'),
+      [...UPSTREAM_LISTS[2], 'https://extra.invalid'].join('\n')]) {
+      const {f} = reviewed();
+      f.context.fixturePage = {locator(selector) {
+        if (selector === '#proxy-upstreams') return {async isVisible() { return true; },
+          async innerText() { return 'Apps still need permission. Changes require a controlled restart.'; }};
+        if (selector === '#upstreams-effective') return {async innerText() { return text; }};
+        assert.equal(selector, '#upstreams-form'); return {async isHidden() { return true; }};
+      }};
+      if (text === UPSTREAM_LISTS[2].join('\n')) await f.run('verifyProxyDefault(fixturePage)');
+      else await assert.rejects(f.run('verifyProxyDefault(fixturePage)'), error => error.message === 'proxy_default_mismatch');
       assert.equal(f.context.fixtureRequests.length, 0);
     }
   }],

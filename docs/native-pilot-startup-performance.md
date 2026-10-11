@@ -23,6 +23,26 @@ The unchanged R97 attempt reached `REGISTRATION_START_BROWSER_READY` at
 21:11:02 UTC, about 23 minutes after Start. This is registration readiness,
 not completed enrollment or an optimized-startup measurement.
 
+### Retained attempt is terminal, not still initializing
+
+A read-only recheck at 2026-10-11 01:38 UTC found the user-manager
+`serverware-pilot-20261010-r97-prelaunch.service` still running, but no R97 live
+scope or administrative service. The retained native log records
+`HOST_COORDINATOR_EXIT_CODE=1` after `wait_for_start()` failed its original
+clock check while waiting for registration to begin. The retained readiness
+window expired at 2026-10-10 22:18:23.319935934 UTC; the log's final modification
+was at 22:18:24 UTC. The capture directory contains only `start-readiness.json`,
+not a completed registration handoff. An active prelaunch web process is not a
+live native pilot or hardware enrollment.
+
+The host reports `CLEANUP_KNOWN=1`, while the outer launcher reports
+`CLEANUP_UNKNOWN`; these are different boundaries, not proof of complete
+cleanup. Both refuse retry. The retained R97 assembly and state were not
+modified. Startup optimizations still require a separately authorized fresh
+pilot; this checkpoint neither renews the old window nor authorizes a restart.
+
+### Baseline timing attribution
+
 The seven logged launch triplets total about 346 seconds: 116 seconds acquiring
 inputs, 87 seconds acquiring issuers, and 143 seconds publishing. Installation
 phase markers do not include individual timestamps, so the log cannot apportion

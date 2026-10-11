@@ -122,7 +122,8 @@ class KernelFixture:
                    "rpId": "unit.example", "origin": "https://unit.example"}
         challenge["payload_json"] = wire(payload).decode("ascii")
         public = {**payload, "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(challenge))}
+            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+                                         wire(context_oracle.challenge_binding(challenge)))}
         evidence = {"operation": OPERATION, "operationId": self.operation_id,
             "requestDigest": self.request_digest, "credentialRecordId": self.signer_id,
             "credentialId": signer["credential_id"], "challengeId": challenge["id"],
@@ -466,9 +467,10 @@ def assertion_work(work, fixture, expected):
     credential = fixture.lookup("webauthn_credentials", fixture.signer_id)
     challenge = fixture.lookup("webauthn_challenges", "assertion-challenge")
     row, challenge_row = credential["row"], challenge["row"]
+    binding = context_oracle.challenge_binding(challenge_row)
     payload = json.loads(challenge_row["payload_json"])
     public = {**payload, "challengeId": challenge_row["id"], "challenge": challenge_row["challenge"],
-        "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(challenge_row))}
+        "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(binding))}
     work.utf8(OPERATION)
     work.utf8(fixture.request_digest)
     work.hashes += 1
@@ -478,7 +480,8 @@ def assertion_work(work, fixture, expected):
     work.graph(challenge_row)
     work.stored(challenge_row["payload_json"])
     work.graph(payload)
-    work.canonical(challenge_row)
+    work.graph(challenge_row)  # prepare the actual ten-field projection from its full source row
+    work.canonical(binding)
     work.hashes += 1
     work.codec(challenge_row["challenge"])
     work.graph(challenge_row)  # actual complete challenge field-set construction
@@ -554,6 +557,35 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
         self.assertEqual(actual.mutations, expected["mutations"])
         self.assertEqual(actual.result, expected["result"])
         self.assertEqual(actual.work_units, expected["work_units"])
+
+    def test_challenge_binding_charges_full_projection_source_and_ten_field_encoding(self):
+        original = KernelFixture().lookup("webauthn_challenges", "assertion-challenge")["row"]
+        expected_digest = framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+                                 wire(context_oracle.challenge_binding(original)))
+        for retained in (False, True):
+            row = copy.deepcopy(original)
+            if retained:
+                row.update(retention_recovery_id="fixture-recovery",
+                    retention_recovery_row_digest=digest(b"retained source row"),
+                    retention_reference_mask=1)
+            independent = ExpectedWork()
+            independent.graph(row)
+            independent.canonical(context_oracle.challenge_binding(row))
+            independent.hashes += 1
+            shared = meter(max_input_bytes=independent.input_bytes,
+                           max_json_nodes=independent.json_nodes)
+            before = copy.deepcopy(row)
+            with self.subTest(retained=retained):
+                self.assertEqual(candidate._challenge_row_digest(row, work=shared), expected_digest)
+                self.assertEqual(metric_tuple(shared), independent.total)
+                self.assertEqual(row, before)
+                self.assertNotEqual(expected_digest,
+                    framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(row)))
+                for limits in ({"max_input_bytes": independent.input_bytes - 1},
+                               {"max_json_nodes": independent.json_nodes - 1}):
+                    with self.assertRaises(accounting.QueryReadWorkError):
+                        candidate._challenge_row_digest(row, work=meter(**limits))
+                    self.assertEqual(row, before)
 
     def test_real_full_cascade_matches_independent_mutations_result_and_public_route(self):
         fixture = KernelFixture()
@@ -635,7 +667,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
             selected("oidc_browser_sessions", {"id": "unrelated-session"},
                      {"id": "unrelated-session", "bound_webauthn_credential_id": "other", "status": "active"}),
             selected("webauthn_challenges", {"id": "expired-registration"},
-                     {"id": "expired-registration", "challenge_type": "registration", "used_at": None,
+                     {**registration, "id": "expired-registration", "challenge_type": "registration", "used_at": None,
                       "user_id": "third-user", "expires_at": fixture.now.isoformat()}),
         )
         fixture.context = replace(fixture.context, selected_rows=(*fixture.context.selected_rows, *extras))

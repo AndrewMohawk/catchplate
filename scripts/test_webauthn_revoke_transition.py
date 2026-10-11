@@ -50,6 +50,31 @@ def framed(domain: str, *frames: bytes) -> str:
     return "sha256:" + value.hexdigest()
 
 
+# Literal verifier-reader projection, independent of the production helper.
+# Retention columns remain in the authenticated primary row and full-row CAS.
+CHALLENGE_BINDING_FIELDS = (
+    "id", "challenge", "challenge_type", "user_id", "scope_key",
+    "approval_request_id", "payload_json", "expires_at", "used_at", "created_at",
+)
+CHALLENGE_RETENTION_FIELDS = (
+    "retention_recovery_id", "retention_recovery_row_digest",
+    "retention_jit_receipt_digest", "retention_jit_row_digest",
+    "retention_activation_receipt_digest", "retention_activation_row_digest",
+    "retention_reference_mask",
+)
+
+
+def challenge_binding(row: dict) -> dict:
+    return {name: row[name] for name in CHALLENGE_BINDING_FIELDS}
+
+
+def challenge_with_retention(row: dict) -> dict:
+    if set(row) != set(CHALLENGE_BINDING_FIELDS):
+        raise ValueError("fixture challenge must supply all ten reader fields")
+    return {**row, **{name: None for name in CHALLENGE_RETENTION_FIELDS[:-1]},
+            "retention_reference_mask": 0}
+
+
 COUNTER_TABLE = "policy_authority_bounded_aggregate_states"
 COUNTER_KIND = "metadata-audit-outbox-global-capacity-v1"
 COUNTER_PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
@@ -148,7 +173,7 @@ class RevokeTransitionTests(unittest.TestCase):
         signer_id = "credential-signer" if separate_signer else self.values["record_id"]
         signer = self.credential(signer_id)
         raw_challenge = b"pure local candidate challenge"
-        challenge = {
+        challenge = challenge_with_retention({
             "id": "assertion-challenge",
             "challenge": base64.urlsafe_b64encode(raw_challenge).decode("ascii").rstrip("="),
             "challenge_type": "policy_authority", "user_id": "user-owner",
@@ -160,12 +185,12 @@ class RevokeTransitionTests(unittest.TestCase):
             }).decode("ascii"),
             "expires_at": (self.now + timedelta(minutes=1)).isoformat(),
             "used_at": None, "created_at": self.now.isoformat(),
-        }
+        })
         challenge_public = {
             **json.loads(challenge["payload_json"]),
             "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": core.framed_digest(
-                "serverware.policyAuthorityWebAuthnChallengeRow/v1", core.canonical_bytes(challenge),
+            "challengeRowDigest": framed(
+                "serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(challenge_binding(challenge)),
             ),
         }
         # Deliberately a trusted projection, NOT an independently signed receipt.
@@ -206,11 +231,14 @@ class RevokeTransitionTests(unittest.TestCase):
             "payload_digest": digest(b"fixture approval payload"),
             "requester_id": "user-requester", "approved_by": "user-owner",
         }))
-        rows.append(selected("webauthn_challenges", "registration-other-user", {
+        rows.append(selected("webauthn_challenges", "registration-other-user", challenge_with_retention({
             "id": "registration-other-user", "challenge_type": "registration",
             "user_id": "different-user", "used_at": None,
+            "challenge": "cmVnaXN0cmF0aW9u", "scope_key": None,
+            "approval_request_id": None, "payload_json": "{}",
             "expires_at": (self.now + timedelta(minutes=2)).isoformat(),
-        }))
+            "created_at": self.now.isoformat(),
+        })))
         for subject in ("approval-one", None):
             item_id = candidate.audit_id(candidate.OPERATION, self.request_digest, subject)
             rows.append(selected("metadata_audit_outbox", item_id, None))
@@ -277,6 +305,46 @@ class RevokeTransitionTests(unittest.TestCase):
         self.assertEqual(result["credential"]["sign_count"], 3)
         self.assertEqual(context.selected_rows, before)
         self.assertEqual(self.kernel.transition(context), transition)
+
+    def test_reader_challenge_binding_preserves_full_retention_cas(self) -> None:
+        context = self.context()
+        for item in context.selected_rows:
+            if item["table"] == "webauthn_challenges":
+                self.assertEqual(set(item["row"]),
+                    set(CHALLENGE_BINDING_FIELDS) | set(CHALLENGE_RETENTION_FIELDS))
+                self.assertEqual(len(item["row"]), 17)
+        challenge = context.exact("webauthn_challenges", {"id": "assertion-challenge"})["row"]
+        challenge.update(retention_recovery_id="fixture-recovery",
+            retention_recovery_row_digest=digest(b"fixture retained recovery row"),
+            retention_reference_mask=1)
+        original = copy.deepcopy(challenge)
+        binding = challenge_binding(challenge)
+        self.assertEqual(len(binding), 10)
+        self.assertNotEqual(framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(binding)),
+                            framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(challenge)))
+        transition = self.kernel.transition(context)
+        changed = self.mutation_rows(transition)[("webauthn_challenges", "assertion-challenge")]
+        self.assertEqual(changed["expectedRow"], original)
+        self.assertEqual(changed["row"], {**original, "used_at": self.now.isoformat()})
+        self.assertEqual(challenge, original)
+        # A receipt over the old full-row hash is not the real reader's receipt.
+        wrong_public = {**json.loads(challenge["payload_json"]),
+            "challengeId": challenge["id"], "challenge": challenge["challenge"],
+            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+                                          canonical(challenge))}
+        wrong = {**context.verified_webauthn_evidence,
+                 "challengeDigest": digest(canonical(wrong_public))}
+        with self.assertRaises(core.TransitionKernelError):
+            self.kernel.transition(replace(context, verified_webauthn_evidence=wrong))
+        for mode in ("missing-retention", "extra-field"):
+            malformed = self.context()
+            row = malformed.exact("webauthn_challenges", {"id": "assertion-challenge"})["row"]
+            if mode == "missing-retention":
+                del row["retention_recovery_id"]
+            else:
+                row["unexpected"] = None
+            with self.subTest(mode=mode), self.assertRaises(core.TransitionKernelError):
+                self.kernel.transition(malformed)
 
     def test_separate_same_user_signer_updates_its_counter_not_revocation(self) -> None:
         transition = self.kernel.transition(self.context(separate_signer=True))
@@ -360,12 +428,16 @@ class RevokeTransitionTests(unittest.TestCase):
         self.assertEqual(len(audit_queries), 2)
         self.assertTrue(all(query.absent_key is not None and query.maximum_rows == 1 for query in audit_queries))
         self.assertFalse(any("audit_capacity_" in query.query_id or query.table == COUNTER_TABLE for query in queries))
-        self.assertEqual(sum(query.maximum_rows for query in queries), 11)
+        # Both session partitions reserve two rows. The complete pending-trust
+        # query plus exact high-water/publication reads add three trust rows.
+        self.assertEqual(sum(query.maximum_rows for query in complete_queries), 8)
+        self.assertEqual(sum(query.maximum_rows for query in exact_queries), 6)
+        self.assertEqual(sum(query.maximum_rows for query in queries), 14)
         composed_queries = capacity.add_capacity_query(candidate.OPERATION, queries)
         self.assertEqual(composed_queries[:-1], queries)
         self.assertEqual(composed_queries[-1].absent_key, {"aggregate_id": COUNTER_ID})
         self.assertEqual(composed_queries[-1].maximum_rows, 1)
-        self.assertEqual(sum(query.maximum_rows for query in composed_queries), 12)
+        self.assertEqual(sum(query.maximum_rows for query in composed_queries), 15)
 
     def test_every_invalidated_approval_has_its_own_absent_key_audit(self) -> None:
         context = self.context()

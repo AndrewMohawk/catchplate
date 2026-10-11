@@ -113,17 +113,37 @@ verifier statement, and the complete signed evidence document. It also binds
 the exact original fields to their stored columns. Existing signature admission,
 current trust, expiry, challenge and counter checks remain required.
 
-This repair does not complete JIT approval or enable ECR. The application's
-`approve_request` arguments still differ from the old `jit.decide` kernel
-contract; that kernel lacks the current verified-assertion handoff; and its
-decision foreign key requires a historical receipt that the current executor
-does not persist. Historical revalidation also equates the distinct authority
-approver-policy and JIT approver-policy digest families; it needs an exact policy
-projection, not a renamed hash. The next integration must connect those actual
-interfaces and prove a committed grant from a raw signed assertion. A fabricated
-approved row or a `jit.assertion.issue` receipt is not that proof. Historical
-receipt and capability custody remains framework-owned, not an additional
-business-table read permission for an ECR kernel.
+The connected source repair now accepts the application's actual
+`approve_request` arguments and independently verified assertion evidence. It
+derives the raw receipt from the original challenge and credential fields;
+the writer retains its genuine capability receipt before the decision's
+immediate foreign key. The credential reader supplies its actual stored trust
+fields, and grant revalidation uses an explicit projection between the distinct
+authority and JIT policy domains, without renaming either commitment.
+
+Challenge receipts hash the verifier reader's original ten fields. The seven
+additional retention fields remain present in the selected row and the writer's
+full-row compare-and-swap; they are neither discarded nor silently added to the
+historical receipt format. Credential binding retains its separate,
+length-framed digest format. The reader, kernel and fresh/historical SQL guards
+now share those explicit projection definitions.
+
+The first decision can initialize its count only with authenticated aggregate
+absence and an independently checked empty decision partition. Subsequent
+decisions require the complete bounded voter roster and current eligibility of
+each original committed vote. Thresholds up to 16, any-required-role semantics,
+one-use review receipts, challenge/counter CAS and original deadlines remain
+required. A committed replay checks retained history; it never backfills a
+receipt, consumes another counter or renews a grant. Historical receipt and
+capability custody remains framework-owned, not an additional business-table
+permission for an ECR kernel.
+
+This source connection does not enable ECR or prove the complete installed
+authority path. The focused joined fixture begins with a pending approval and
+synthetic admission/trust inputs; it does not exercise browser ingress,
+`jit.request`, measured writer admission, a physical key or a provider. Genuine
+cryptographic verification and actual transaction SQL within that boundary
+must not be described as a completed native or production approval.
 
 No installed SQL function, database schema, live grant, AWS capability or native
 attempt is changed by this source repair. Updating an existing installed writer
@@ -134,8 +154,11 @@ The focused receipt checks require no pilot or build:
 
 ```sh
 make verify-authority-webauthn-receipts
+# Actual request/kernel and policy-domain component controls:
+make verify-authority-jit-approval
 # For an already prepared disposable local Unix-socket PostgreSQL fixture:
 SERVERWARE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-webauthn-receipts-postgres
+SERVERWARE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-jit-approval-postgres
 ```
 
 The PostgreSQL target also requires `SERVERWARE_TEST_POSTGRES_DSN`; it never
@@ -154,6 +177,31 @@ unchanged. No build or download ran. Logs, source pins and execution evidence
 are retained in `serverware-operator-workspace-evidence/webauthn-receipt-binding.4DjdDwvh`.
 These are signed synthetic-input and actual SQL-guard results, not a complete
 authority transaction, physical-key approval, provider request or deployment.
+
+The follow-up JIT source regression run passed **54 tests**: 21 revocation
+transitions, 21 work-bound controls, eight receipt-domain groups and four
+optional-evidence groups, plus the emitted rollback-only SQL. It completed in
+20.584 seconds with the same pinned, network-disabled engineering image and
+read-only source; no build or download ran. The preceding focused run also
+passed ten policy-projection and six reader-projection tests. Earlier failed
+checkpoints are retained, not replaced: a missing first-decision aggregate
+INSERT template, an incomplete disposable RBAC fixture, and a stale test-only
+query-count oracle. Logs and per-run source pins are under
+`serverware-operator-workspace-evidence/jit-approval-integration.H8suZhEl`.
+
+The expanded joined fixture then passed all **eight groups** (three pure and
+five PostgreSQL), for **78 passing focused groups** across this source repair.
+It exercises genuine signatures, the actual fresh assertion CAS guard,
+immediate receipt foreign key, first-decision initialization, threshold-two
+approval and real grant revalidation. Refusal controls cover changed prior
+voters, roles, trust, counters and writer commitments. Full retention-row CAS
+drift and a late transaction cancellation roll back history and completion;
+exact replay neither renews a grant nor backfills missing history. The eight
+groups took 13.869 seconds; the complete disposable job took 18.299 seconds,
+exited zero without OOM and stopped PostgreSQL cleanly. Both source manifests
+were unchanged and the container was removed. Its RBAC root admission and
+framework completion remain synthetic inputs, not a full installed-writer
+acceptance result. No live deployment or real key/provider action followed.
 
 ## Verification scope
 

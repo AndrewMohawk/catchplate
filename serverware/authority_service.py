@@ -61,6 +61,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from serverware import authority_contract
+from serverware import authority_approver_policy
 from serverware import authority_recovery_configuration as recovery_configuration
 from serverware import authority_challenge_policy as challenge_maintenance_policy
 from serverware.authority_denial_diagnostics import report_denial as _denial_diagnostics
@@ -7612,14 +7613,14 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "WebAuthn authoritative binding is invalid"
             )
+        from serverware import authority_webauthn_bindings
+
         challenge = {
             **payload,
             "challengeId": challenge_binding["id"],
             "challenge": challenge_binding["challenge"],
-            "challengeRowDigest": _domain_digest(
-                "serverware.policyAuthorityWebAuthnChallengeRow/v1",
-                _canonical(challenge_binding),
-            ),
+            "challengeRowDigest":
+                authority_webauthn_bindings.challenge_row_digest(challenge_binding),
         }
         credential = {
             "credentialRecordId": credential_binding["id"],
@@ -7628,16 +7629,19 @@ class AuthorityProcess:
             "publicKeyCoseBase64Url":
                 credential_binding["public_key_cose"],
             "signCount": int(credential_binding["sign_count"]),
+            "aaguid": credential_binding["aaguid"],
             "authenticatorClass":
                 credential_binding["authenticator_class"],
             "attestationTrusted":
                 bool(credential_binding["attestation_trusted"]),
+            "trustBundleDigest":
+                credential_binding["attestation_trust_bundle_digest"],
+            "trustBundleSequence":
+                credential_binding["attestation_trust_bundle_sequence"],
             "credentialPolicyDigest": credential_policy_digest,
             "trustHighWaterDigest": trust_high_water_digest,
-            "credentialBindingDigest": _framed_digest(
-                "serverware.policyAuthorityWebAuthnCredentialBinding/v1",
-                _canonical(credential_binding),
-            ),
+            "credentialBindingDigest":
+                authority_webauthn_bindings.credential_binding_digest(credential_binding),
             "rpId": webauthn["rpId"],
             "origin": webauthn["origin"],
             "revoked": False,
@@ -8343,78 +8347,13 @@ class AuthorityProcess:
     def _approver_policy_material(
         arguments: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        aliases = {
-            "requiredApproverRoles": (
-                "required_approver_roles",
-                "required_roles",
-            ),
-            "allowedApproverIds": ("allowed_approver_ids",),
-            "requireWebAuthn": (
-                "require_webauthn",
-                "require_approver_webauthn",
-            ),
-            "threshold": ("threshold", "approval_threshold"),
-            "credentialPolicy": (
-                "credential_policy",
-                "approver_credential_policy",
-            ),
-        }
-        material: dict[str, Any] = {
-            "schema": "serverware.authorityApproverPolicyBinding/v1"
-        }
-        missing = False
-        for output_name, input_names in aliases.items():
-            found = False
-            for input_name in input_names:
-                if input_name in arguments:
-                    material[output_name] = (
-                        AuthorityProcess._policy_argument_value(
-                            arguments[input_name]
-                        )
-                    )
-                    found = True
-                    break
-            if not found:
-                missing = True
-        if missing:
-            return None
-        allowed_ids = material["allowedApproverIds"]
-        if allowed_ids is None:
-            material["allowedApproverIds"] = []
-            material["allowAnyApproverId"] = True
-        else:
-            if not isinstance(allowed_ids, list):
-                return None
-            material["allowedApproverIds"] = sorted(allowed_ids)
-            material["allowAnyApproverId"] = False
-        roles = material["requiredApproverRoles"]
-        if not isinstance(roles, list):
-            return None
-        material["requiredApproverRoles"] = sorted(roles)
-        if (
-            not isinstance(material["requireWebAuthn"], bool)
-            or not isinstance(material["threshold"], int)
-            or isinstance(material["threshold"], bool)
-            or material["threshold"] < 1
-            or not isinstance(material["credentialPolicy"], Mapping)
-        ):
-            return None
-        material["credentialPolicy"] = dict(
-            material["credentialPolicy"]
-        )
-        return material
+        return authority_approver_policy.material(arguments)
 
     @staticmethod
     def _approver_policy_digest(
         arguments: Mapping[str, Any],
     ) -> str | None:
-        material = AuthorityProcess._approver_policy_material(arguments)
-        if material is None:
-            return None
-        return _domain_digest(
-            "serverware.authorityApproverPolicyBinding/v1",
-            _canonical(material),
-        )
+        return authority_approver_policy.digest(arguments)
 
     @staticmethod
     def _enforce_approver_webauthn_policy(

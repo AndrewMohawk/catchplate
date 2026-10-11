@@ -44,6 +44,12 @@ from serverware.authority_store.webauthn_trust_sql import (
 from serverware.authority_store.webauthn_receipt_binding import (
     receipt_evidence_binding_sql,
 )
+from serverware.authority_store.webauthn_receipt_history import (
+    assert_webauthn_receipt_history_sql,
+    retain_webauthn_receipt_sql,
+)
+from serverware.authority_store.jit_prior_decision_sql import assert_prior_jit_decisions_sql
+from serverware.authority_store.webauthn_challenge_sql import challenge_original_sql
 from serverware.authority_store.root_transition_sql import (
     assert_root_transition_after_sql,
     assert_root_transition_before_sql,
@@ -963,6 +969,7 @@ def install_authority_v9_executor(
                         'authority v9 committed retry is not exact';
                 END IF;
                 {assert_root_transition_replay_sql(namespace)}
+                {assert_webauthn_receipt_history_sql(namespace)}
                 RETURN execution_envelope.terminal_receipt_json;
             ELSIF capability.status <> 'issued'
                 OR execution_envelope.status <> 'reserved'
@@ -1723,8 +1730,7 @@ def install_authority_v9_executor(
                                     'serverware.policyAuthorityWebAuthnChallengeRow/v1',
                                     {namespace}.
                                         serverware_policy_authority_wire_json(
-                                            challenge_mutation.value
-                                                ->'expectedRow'
+                                            {challenge_original_sql()}
                                         )
                                 ) =
                                 capability.webauthn_receipt_json
@@ -1873,6 +1879,13 @@ def install_authority_v9_executor(
                         'authority v9 WebAuthn CAS mutations are incomplete';
                 END IF;
             END IF;
+
+            {assert_prior_jit_decisions_sql(namespace)}
+
+            -- Framework history uses only the admitted raw receipt. Retain it
+            -- before the decision's immediate FK, in this same transaction;
+            -- any subsequent business CAS or commit failure rolls it back.
+            {retain_webauthn_receipt_sql(namespace)}
 
             IF capability.operation = 'rbac.binding.mutate' THEN
                 IF NULLIF(pg_catalog.current_setting('serverware.policy_authority_rbac_operation_id', true), '') IS NOT NULL THEN

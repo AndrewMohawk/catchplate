@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from serverware import authority_contract, authority_primary_contract, grants
+from serverware import authority_approver_policy
 from serverware import operator_google_cleanup_store as _operator_google_cleanup
 from serverware import sqlite_connection_setup as _sqlite_connection_setup
 from serverware.policy_shadow_assignment_fields import LEGACY_FIELDS as _POLICY_SHADOW_ASSIGNMENT_LEGACY_FIELDS
@@ -70424,6 +70425,7 @@ def _authority_jit_webauthn_assertion_receipt(
         or not isinstance(authn.get("assertion"), Mapping)
         or not isinstance(authn.get("credential_id"), str)
         or not isinstance(challenge_id, str)
+        or not isinstance(approver_policy_digest, str)
     ):
         raise MetadataStoreError(
             "JIT approval requires one authority-verified assertion"
@@ -70439,17 +70441,29 @@ def _authority_jit_webauthn_assertion_receipt(
                capability.status AS capability_status,
                capability.approver_policy_digest
                    AS capability_approver_policy_digest,
-               credential.user_id AS credential_user_id
+               credential.user_id AS credential_user_id,
+               approval.approver_policy_json,
+               approval.approver_policy_digest
         FROM policy_authority_webauthn_assertion_receipts AS receipt
         JOIN policy_authority_writer_capabilities AS capability
           ON capability.capability_id = receipt.capability_id
         JOIN webauthn_credentials AS credential
           ON credential.id = receipt.credential_record_id
          AND credential.credential_id = receipt.credential_id
+        JOIN approval_requests AS approval ON approval.id = ?
         WHERE receipt.capability_id = ?
         """,
-        (context["capabilityId"],),
+        (approval_request_id, context["capabilityId"]),
     ).fetchone()
+    if row is None:
+        raise MetadataStoreError("JIT authority assertion receipt binding is invalid")
+    policy, _policy_json, stored_policy_digest = _stored_jit_approver_policy(row)
+    if not hmac.compare_digest(stored_policy_digest, approver_policy_digest):
+        raise MetadataStoreError("JIT authority stored approver policy changed")
+    try:
+        authority_policy_digest = authority_approver_policy.from_jit_policy(policy)
+    except authority_approver_policy.ApproverPolicyError:
+        raise MetadataStoreError("JIT authority approver policy binding is invalid") from None
     assertion = dict(authn["assertion"])
     assertion_credential_id = (
         assertion.get("id") or assertion.get("rawId")
@@ -70464,7 +70478,7 @@ def _authority_jit_webauthn_assertion_receipt(
         or row["credential_user_id"] != approver_id
         or row["capability_status"] != "reserved"
         or row["capability_approver_policy_digest"]
-            != approver_policy_digest
+            != authority_policy_digest
         or int(row["flags"]) & 5 != 5
         or int(row["counter"]) <= int(row["prior_counter"])
         or not isinstance(row["receipt_json"], str)
@@ -70799,7 +70813,7 @@ def approve_request(
             "AND (capability.status IN ('committed', 'reconciled') "
             "OR (capability.status = 'reserved' "
             "AND decision.approver_id = ?))",
-            (item_id, policy_digest, policy_digest, actor_id),
+            (item_id, policy_digest, authority_approver_policy.from_jit_policy(policy), actor_id),
         ).fetchone()
         decision_count = int(
             decision_count_row["count"] if decision_count_row else 0
@@ -77486,7 +77500,11 @@ def _authority_jit_receipt_binding(
         (receipt_digest, capability_id),
     ).fetchone()
     credential_policy = policy["credentialPolicy"]
-    _policy_json, policy_digest = _jit_approver_policy_binding(policy)
+    _policy_json, _stored_policy_digest = _jit_approver_policy_binding(policy)
+    try:
+        authority_policy_digest = authority_approver_policy.from_jit_policy(policy)
+    except authority_approver_policy.ApproverPolicyError:
+        return None
     if row is None:
         return None
     try:
@@ -77524,7 +77542,7 @@ def _authority_jit_receipt_binding(
     if (
         row["operation"] != "jit.decide"
         or row["request_digest"] != request_digest
-        or row["capability_approver_policy_digest"] != policy_digest
+        or row["capability_approver_policy_digest"] != authority_policy_digest
         or row["capability_status"] not in {
             "committed",
             "reconciled",

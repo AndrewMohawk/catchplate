@@ -28,6 +28,7 @@ SHELL := /bin/sh
 .PHONY: verify-provider-policy-parity verify-webauthn-trust-projection verify-authority-row-mutations
 .PHONY: verify-authority-verifier-read verify-authority-planner-writer
 .PHONY: verify-authority-webauthn-receipts verify-authority-webauthn-receipts-postgres
+.PHONY: verify-authority-jit-approval verify-authority-jit-approval-postgres
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
 .PHONY: verify-portal-registration-capture
@@ -11362,6 +11363,22 @@ verify-authority-webauthn-receipts-postgres:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+
+# Actual request/kernel and signed synthetic assertion controls; no pilot,
+# provider traffic, build or database startup is performed by these targets.
+verify-authority-jit-approval:
+	python3 scripts/test_authority_approver_policy.py
+	python3 -I -B scripts/test_authority_webauthn_reader_projection.py
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_jit_approval.py
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_webauthn_revoke_transition.py
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_webauthn_revocation_work.py
+
+# Caller-owned disposable private Unix-socket database only. This joins the
+# kernel and production SQL fragments, not installed full-writer admission.
+verify-authority-jit-approval-postgres:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev SERVERWARE_METADATA_STORE_BACKEND=postgres SERVERWARE_METADATA_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" SERVERWARE_GRANT_STORE_BACKEND=postgres SERVERWARE_GRANT_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" python3 scripts/test_authority_jit_approval.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
 
 # Component entrypoint only; not prepared native-controller coverage.
 # Changed-excluded-test admission must continue to refuse an unprepared lane.

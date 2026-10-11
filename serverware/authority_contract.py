@@ -1371,6 +1371,8 @@ def _spec(
     )
     declared_framework_preconditions = (
         set(_BASE_FRAMEWORK_PRECONDITIONS)
+        | ({"policy_authority_webauthn_assertion_receipts", "policy_authority_writer_receipts"}
+            if handler == "approve_request" else set())
         | ({REVOCATION_RETAINED_TABLE} if handler == "revoke_webauthn_credential" else set())
         | (
             {"policy_authority_webauthn_assertion_evidence"}
@@ -1380,6 +1382,7 @@ def _spec(
     )
     declared_framework_writes = (
         set(_BASE_FRAMEWORK_WRITES)
+        | ({"policy_authority_webauthn_assertion_receipts"} if handler == "approve_request" else set())
         | (
             {"policy_authority_webauthn_assertion_evidence"}
             if receipt_required
@@ -2768,7 +2771,6 @@ _OPERATIONS = {
             + _WEBAUTHN
             + _VERIFIED_APPROVAL_AUTHORITY
             + _PHASE2_AGGREGATE
-            + _PHASE2_EVIDENCE
         ),
         writes=(
             "approval_requests",
@@ -2779,16 +2781,16 @@ _OPERATIONS = {
             "webauthn_challenges",
             "webauthn_credentials",
         )
-        + _PHASE2_AGGREGATE
-        + _PHASE2_EVIDENCE,
+        + _PHASE2_AGGREGATE,
         selectors={"approval_requests": (("arguments", "item_id"),)},
+        mutation_kinds={
+            # Only the atomic first decision may initialize this exact absent
+            # partition; the writer also proves its actual voter set empty.
+            "policy_authority_bounded_aggregate_states": ("INSERT", "UPDATE"),
+        },
         webauthn="bound-verified-assertion-receipt",
         approver_policy=True,
-        proof_primitives=_PHASE2_EXACT_AGGREGATE_PROOF_SET
-            + ("external-evidence-receipt",),
-        external_evidence_types=(
-            "webauthn-hardware-authorization/v1",
-        ),
+        proof_primitives=_PHASE2_EXACT_AGGREGATE_PROOF_SET,
         maximum_query_rows=32,
         maximum_mutations=24,
         maximum_work_units=512,

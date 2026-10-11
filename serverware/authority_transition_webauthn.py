@@ -431,12 +431,8 @@ def _transition_result(*, mutations, result, work_units: int, work: _ValidationW
 
 
 def _challenge_row_digest(row, *, work: _ValidationWork | None) -> str:
-    if work is not None:
-        work.prepare_encoding(row)
-    encoded = core.canonical_bytes(row)
-    if work is not None:
-        work.charge(hashes=1)
-    return core.framed_digest("serverware.policyAuthorityWebAuthnChallengeRow/v1", encoded)
+    from serverware.authority_webauthn_bindings import challenge_row_digest
+    return challenge_row_digest(row, work=work)
 
 
 def _sha256_bytes(value: bytes, *, work: _ValidationWork | None) -> str:

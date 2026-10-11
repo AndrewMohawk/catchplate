@@ -17,7 +17,9 @@ long-lived credential.
 ## Try the development console
 
 The persistent [operator demo](https://serverware-demo.example.com/)
-uses the homelab login. Start with **Explore synthetic demo** to inspect saved
+uses the homelab login. It is already running: opening it does not start a
+native pilot, compile the proxy or require a verification ceremony. Start with
+**Connect an app** for your own account or key, or **Explore synthetic demo** to inspect saved
 permissions for the local `/echo` API and their actual allowed methods. Opening
 client setup does not execute a request or renew a token. A synthetic connection
 check tests the proxy flow, not a real GitHub, Google, AWS or npm account. Use
@@ -41,8 +43,10 @@ Existing restricted permissions retain their restrictions. An optional dummy
 header is a public replacement marker, not either of the two secrets above.
 
 Follow the [operator demo walkthrough](docs/operator-demo.md). Its latest
-retained deployment verification covers the synthetic upstream and LAN proxy,
-not real-provider access or an Internet-reachable proxy. The console and forward
+retained deployment verification covers the synthetic upstream and a GitHub
+public read through the LAN proxy, not authenticated provider-account access or
+an Internet-reachable proxy. Public proxy DNS still needs its separately reviewed
+repair; starting a native pilot cannot repair it. The console and forward
 proxy are different endpoints; listener settings and approved destinations are
 deployment-managed. The new [destination review workflow](docs/operator-proxy-destinations.md)
 prepares retained configuration for a controlled restart; it does not apply live
@@ -65,7 +69,9 @@ depends on the deployment's advertised capabilities and approved destinations.
 | Read or create GitHub issues and comments | Named-repository PAT permissions and a stock Octokit recipe; isolated synthetic-provider checks passed, not a real GitHub or deployed integration. [Contract](docs/operator-github-client-compatibility.md). |
 | Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. No real Google journey is established by the synthetic demo. |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
-| Publish an npm package | [Planned operator/client workflow](docs/operator-npm-client-compatibility.md), not an available npm preset. |
+| Publish an npm package | Named-package publishing preset and downloadable stock npm example; all 21 isolated cases passed. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |
+| Look up an X username | App-bearer preset for one exact username; Node/Python/Go examples passed against an isolated provider. This is not account-authorized posting. [Verification](docs/operator-x-username-verification.md). |
+| Read an Ethereum chain through Alchemy | Key-based, selected-chain RPC preset with Node/Python/Go examples; isolated proxy acceptance passed, not real-provider entitlement or blockchain writes. [Verification](docs/operator-alchemy-verification.md). |
 | Publish an image to AWS ECR | [Planned operator/client workflow](docs/operator-aws-client-compatibility.md), not an available AWS preset. |
 | Send a Slack message or arbitrary webhook | Illustrative use case, not a verified provider preset. A custom-header JSON API is not support for every webhook authentication or response format. |
 
@@ -88,8 +94,10 @@ action or physical-key acceptance, or grant proxied webhook permissions.
 
 ## Design examples, not demo defaults
 
-The following diagrams explain intended production workflows. npm publishing
-and the AWS/ECR approval flow are not working integrations in the operator demo.
+The following diagrams explain intended production workflows. The npm preset
+supports named-package publishing, but the illustrated time-window option is
+not yet a guided operator setting. AWS/ECR image approval remains unimplemented
+in the operator demo; its signing helper alone is not a working integration.
 
 For example, an application or CI job can publish an updated version of
 `@acme/widgets` with `npm publish`, while policy permits that package's releases

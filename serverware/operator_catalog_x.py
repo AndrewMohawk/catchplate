@@ -161,6 +161,11 @@ def require_available(policy_hash: str) -> None:
 def capability(policy_hash: str) -> dict | None:
     if not _available(policy_hash):
         return None
+    return _capability()
+
+
+def _capability() -> dict:
+    """Display DTO only; caller owns its fresh, policy-bound observation."""
     from serverware import operator_demo
     return {"schema": "serverware.operatorXAppRead/v1", "connection_type": CONNECTION,
         "create_credential_path": "/api/operator-demo/credentials/x-app-bearer",

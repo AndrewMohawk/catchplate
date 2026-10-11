@@ -614,6 +614,7 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_onboarding_evidence.py \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
+	scripts/test_operator_catalog_observation.py \
 	scripts/test_npm_weekday_hours_example.py \
 	scripts/test_alchemy_rpc_read.py \
 	scripts/test_alchemy_policy_engine.py \

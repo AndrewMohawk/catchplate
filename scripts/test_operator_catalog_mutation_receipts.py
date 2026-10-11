@@ -151,11 +151,11 @@ class Fixture:
 
         with patch.object(self.store.http.client, "HTTPConnection", Connection):
             result = self.mutations.catalog_status()
-        # Catalog GET observes policy readiness and both provider capabilities.
-        # The race hook represents one concurrent commit, not one per observer.
+        # Catalog GET shares one response for policy and both capabilities.
+        # The race hook still represents exactly one concurrent commit.
         observation = (["open", "request", "close"] if unavailable else
             ["open", "request", "response", "read", "close"])
-        assert trace == observation * 3
+        assert trace == observation
         assert pending_callback is None
         assert result["capabilities"]["x"] is None
         assert result["capabilities"]["alchemy"] is None

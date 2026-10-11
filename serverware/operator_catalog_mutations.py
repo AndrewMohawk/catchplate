@@ -96,6 +96,45 @@ def _policy_observation(state: dict, *, publication_failed: bool = False) -> dic
         if not publication_failed and loaded is not None and loaded == current == state["policy_hash"] else "pending"}
 
 
+def _catalog_observation(state: dict) -> tuple[dict, bool, bool]:
+    """One bounded gate read for this catalog response, never a shared cache.
+
+    Managed mode retains its before/after configuration and binary checks.
+    The final local read fences both capability displays to the serialized
+    catalog's policy, not merely to whichever newer policy the gate reports.
+    Mutation receipts and admission keep their separate fresh observers.
+    """
+    loaded, current = None, None
+    x_available, alchemy_available = False, False
+    try:
+        from serverware import operator_catalog_x, operator_catalog_alchemy
+        from serverware import operator_google_managed_config as managed
+        from serverware import operator_publication as publication
+        publication.assert_not_held()
+        if managed.enabled():
+            from serverware import operator_google_managed_readiness as readiness
+            observed = readiness.observe_catalog()
+            if observed["ready"] is True:
+                loaded = observed["loaded_policy_hash"]
+                x_available, alchemy_available = observed["x_available"], observed["alchemy_available"]
+        else:
+            observed = store.loaded_gate_status()
+            if type(observed) is dict and observed.get("ok") is True:
+                loaded = observed["policy_hash"]
+                x_available = operator_catalog_x.gate_descriptor_matches(observed.get("operator_x_app_read"))
+                alchemy_available = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
+        # Starts only after HTTP and any managed snapshots have closed.
+        with store._require().metadata_connection() as conn:
+            current = _state(conn)["policy_hash"]
+    except Exception:
+        current = None
+        x_available, alchemy_available = False, False
+    active = loaded is not None and loaded == current == state["policy_hash"]
+    return ({"policy_hash": state["policy_hash"], "sequence": state["sequence"],
+        "loaded_policy_hash": loaded, "activation": "active" if active else "pending"},
+        active and x_available, active and alchemy_available)
+
+
 def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
     """Core generations from the SAME catalog snapshot, never a lease/decrypt."""
     result = {}
@@ -670,7 +709,7 @@ def catalog_status() -> dict:
             "active_max": MAX_ACTIVE_RESOURCES, "retained_max": MAX_RETAINED_RESOURCES} for collection in _RESULT_KEYS}
         observed_activity = operator_catalog_activity.project(
             conn, catalog, observed_at_epoch_ms=time.time_ns() // 1_000_000)
-    observation = _policy_observation(state)
+    observation, x_available, alchemy_available = _catalog_observation(state)
     now, settings = time.time_ns() // 1_000_000, operator_demo.settings()
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
@@ -693,8 +732,8 @@ def catalog_status() -> dict:
             "google_disconnect": google_disconnect,
             "google_reauthorization": google_reauthorization,
             "github": operator_catalog_github.capability(),
-            "x": operator_catalog_x.capability(state["policy_hash"]),
-            "alchemy": operator_catalog_alchemy.capability(state["policy_hash"]),
+            "x": operator_catalog_x._capability() if x_available else None,
+            "alchemy": operator_catalog_alchemy._capability() if alchemy_available else None,
             "npm": operator_catalog_npm.capability(),
             "npm_publish": operator_catalog_npm_publish.capability(),
             "operation_bundles": operation_bundles,

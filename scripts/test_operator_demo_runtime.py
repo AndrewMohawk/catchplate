@@ -89,6 +89,8 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
                 for name in TOKEN_NAMES:
                     diagnostic = diagnostic.replace(self.environment["SERVERWARE_" + name], "[test token]")
                 diagnostic = diagnostic.replace(self.provider_secret, "[test provider secret]")
+                for token in getattr(self, "_private_client_tokens", ()):
+                    diagnostic = diagnostic.replace(token, "[test client token]")
                 print("Bounded operator-demo diagnostics:\n" + diagnostic, file=sys.stderr)
                 raise
             finally:
@@ -106,68 +108,149 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
             "response_fields": ["id", "name"]}
 
     def test_authenticated_create_validation_ca_and_restart(self):
-        with self.runner():
-            code, _, _ = self.request("GET", "/api/operator-demo/status", auth=False)
-            self.assertEqual(code, 401)
-            code, body, _ = self.request("GET", "/api/operator-demo/status")
+        prefix = "/api/operator-demo/"
+        collections = ("credentials", "applications", "access_rules")
+        self._private_client_tokens = []
+
+        def public_body(body):
+            private = (self.provider_secret, self.admin, *self._private_client_tokens)
+            self.assertFalse(any(value.encode() in body for value in private),
+                "public response exposed synthetic private material")
+
+        def catalog():
+            code, body, headers = self.request("GET", prefix + "catalog")
             self.assertEqual(code, 200)
-            initial = json.loads(body)
+            public_body(body)
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            return json.loads(body)
+
+        def review(value):
+            return {"expected_revision": value["revision"],
+                "expected_policy_hash": value["policy"]["policy_hash"]}
+
+        def authority(value):
+            # Exclude live observation clocks, not any saved resource or policy.
+            return {key: value[key] for key in (*collections, "revision", "policy")}
+
+        def create(route, payload):
+            code, body, headers = self.request("POST", prefix + route, body=payload, origin=self.origin)
+            self.assertEqual(code, 201, "modern resource creation did not commit")
+            public_body(body)
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            result = json.loads(body)
+            self.assertEqual(result["policy"]["activation"], "pending")
+            self.assertIsNone(result["policy"]["loaded_policy_hash"])
+            return result
+
+        with self.runner():
+            for path in (prefix + "catalog", prefix + "status"):
+                code, _, _ = self.request("GET", path, auth=False)
+                self.assertEqual(code, 401)
+            initial = catalog()
+            self.assertEqual(initial["schema"], "serverware.operatorCatalog/v1")
             self.assertEqual(initial["mode"], "operator-development")
-            self.assertEqual(initial["connections"], [])
-            self.assertIsNone(initial["loaded_policy_hash"])
+            for key in collections:
+                self.assertEqual(initial[key], [])
+            self.assertIsNone(initial["policy"]["loaded_policy_hash"])
             self.assertFalse(initial["productionReady"])
             self.assertFalse(initial["hardwareVerified"])
-            self.assertFalse(initial["syntheticOnly"])
+            # The modern catalog has no legacy syntheticOnly field. The actual
+            # authenticated profile endpoint distinguishes ordinary demo from
+            # the development-sandbox runner without inventing gate readiness.
+            code, body, _ = self.request("GET", "/api/auth/status")
+            self.assertEqual(code, 200)
+            public_body(body)
+            profile = json.loads(body)
+            self.assertTrue(profile["authenticated"])
+            self.assertTrue(profile["operatorDemo"])
+            self.assertFalse(profile["developmentSandbox"])
+            self.assertEqual(profile["authMethod"], "operator-demo-header")
+            for method, path, payload in (("GET", "status", None), ("POST", "connections", self.payload())):
+                code, body, _ = self.request(method, prefix + path, body=payload, origin=self.origin)
+                self.assertEqual(code, 409)
+                public_body(body)
+                refusal = json.loads(body)
+                self.assertEqual(refusal["code"], "operator_demo_resource_model_changed")
+                self.assertEqual(refusal["catalog_path"], prefix + "catalog")
+
+            credential_payload = {**review(initial), "name": "HTTP fixture key",
+                "auth_type": "bearer", "secret": self.provider_secret}
+            code, _, _ = self.request("POST", prefix + "credentials",
+                body=credential_payload, auth=False, origin=self.origin)
+            self.assertEqual(code, 401)
             for origin in (None, "https://foreign.example.com"):
-                code, _, _ = self.request("POST", "/api/operator-demo/connections", body=self.payload(), origin=origin)
+                code, _, _ = self.request("POST", prefix + "credentials", body=credential_payload, origin=origin)
                 self.assertEqual(code, 403)
-            invalid = dict(self.payload(), response_fields=[], extra=self.provider_secret)
-            code, body, _ = self.request("POST", "/api/operator-demo/connections", body=invalid, origin=self.origin)
+            code, body, _ = self.request("POST", prefix + "credentials",
+                body={**credential_payload, "extra": self.provider_secret}, origin=self.origin)
             self.assertEqual(code, 422)
-            self.assertNotIn(self.provider_secret.encode(), body)
+            public_body(body)
+            code, _, _ = self.request("POST", prefix + "credentials", body=b"x" * 16385, origin=self.origin)
+            self.assertEqual(code, 413)
+            self.assertEqual(authority(catalog()), authority(initial))
+            credential = create("credentials", credential_payload)["credential"]
+            current = catalog()
+            self.assertEqual(current["applications"], [])
+            self.assertEqual(current["access_rules"], [])
+            application_result = create("applications", {**review(current), "name": "HTTP fixture app",
+                "token_lifetime_seconds": 3600})
+            client_token = application_result["client_token"]
+            self.assertGreaterEqual(len(client_token), 40)
+            self._private_client_tokens.append(client_token)
+            application = application_result["application"]
+            self.assertEqual(application["access_status"], "unassigned")
+            before_rule = catalog()
+            self.assertEqual(before_rule["access_rules"], [])
+            rule_payload = {**review(before_rule), "name": "HTTP fixture permission",
+                "application_id": application["id"], "credential_id": credential["id"],
+                "upstream_url": "https://api.example.com/v1/account", "methods": ["GET"],
+                "response_mode": "projected_json", "response_fields": ["id", "name"]}
+            for invalid in ({**rule_payload, "response_fields": []},
+                    {**rule_payload, "extra": self.provider_secret}):
+                code, body, _ = self.request("POST", prefix + "access-rules", body=invalid, origin=self.origin)
+                self.assertEqual(code, 422)
+                public_body(body)
             for methods in (["HEAD"], ["GET", "HEAD"], ["OPTIONS", "HEAD"]):
                 with self.subTest(methods=methods):
-                    code, body, _ = self.request("POST", "/api/operator-demo/connections",
-                        body=dict(self.payload(), methods=methods), origin=self.origin)
+                    code, body, _ = self.request("POST", prefix + "access-rules",
+                        body={**rule_payload, "methods": methods}, origin=self.origin)
                     self.assertEqual(code, 422)
-                    self.assertNotIn(self.provider_secret.encode(), body)
-            code, body, _ = self.request("GET", "/api/operator-demo/status")
-            self.assertEqual(code, 200)
-            self.assertEqual(json.loads(body)["connections"], [])
-            code, _, _ = self.request("POST", "/api/operator-demo/connections", body=b"x" * 32769, origin=self.origin)
+                    public_body(body)
+            code, _, _ = self.request("POST", prefix + "access-rules", body=b"x" * 32769, origin=self.origin)
             self.assertEqual(code, 413)
-            code, body, headers = self.request("POST", "/api/operator-demo/connections", body=self.payload(), origin=self.origin)
-            self.assertEqual(code, 200, "valid connection did not commit")
-            self.assertNotIn(self.provider_secret.encode(), body)
-            result = json.loads(body)
-            client_token = result["client_token"]
-            self.assertGreaterEqual(len(client_token), 40)
-            self.assertEqual(result["activation"], "pending")
-            self.assertEqual(headers.get("cache-control"), "no-store")
-            self.assertEqual(result["connection"]["response_fields"], ["id", "name"])
-            code, body, _ = self.request("GET", "/api/operator-demo/status")
-            self.assertEqual(code, 200)
-            saved = json.loads(body)
-            self.assertEqual(len(saved["connections"]), 1)
-            self.assertEqual(saved["connections"][0]["activation"], "pending")
-            self.assertEqual(saved["connections"][0]["client_status"], "pending")
-            self.assertNotIn(client_token.encode(), body)
-            self.assertNotIn(self.provider_secret.encode(), body)
-            self.assertEqual(saved["active_policy_hash"], result["policy_hash"])
+            self.assertEqual(authority(catalog()), authority(before_rule))
+            result = create("access-rules", rule_payload)
+            self.assertEqual(result["access_rule"]["response_fields"], ["id", "name"])
+            saved = catalog()
+            for key in collections:
+                self.assertEqual(len(saved[key]), 1)
+            self.assertEqual(saved["credentials"][0]["id"], credential["id"])
+            self.assertEqual(saved["applications"][0]["id"], application["id"])
+            self.assertEqual(saved["applications"][0]["access_status"], "pending")
+            self.assertEqual(saved["access_rules"][0]["enforcement"], "pending")
+            self.assertEqual(saved["policy"], result["policy"])
+            code, body, _ = self.request("GET", "/ca.pem", auth=False)
+            self.assertEqual(code, 401)
+            self.assertNotIn(b"BEGIN CERTIFICATE", body)
+            public_body(body)
             code, body, _ = self.request("GET", "/ca.pem")
             self.assertEqual(code, 200)
             self.assertIn(b"BEGIN CERTIFICATE", body)
             self.assertNotIn(b"PRIVATE KEY", body)
+            public_body(body)
+            ca_bytes = body
             for route in ("/api/credentials", "/api/policy/publish", "/api/demo/seed"):
                 code, _, _ = self.request("POST", route, body={}, origin=self.origin)
                 self.assertEqual(code, 403)
         with self.runner():
-            code, body, _ = self.request("GET", "/api/operator-demo/status")
+            restarted = catalog()
+            self.assertEqual(authority(restarted), authority(saved))
+            self.assertIsNone(restarted["policy"]["loaded_policy_hash"])
+            self.assertEqual(restarted["policy"]["activation"], "pending")
+            code, body, _ = self.request("GET", "/ca.pem")
             self.assertEqual(code, 200)
-            restarted = json.loads(body)
-            self.assertEqual(restarted["connections"], saved["connections"])
-            self.assertEqual(restarted["active_policy_hash"], saved["active_policy_hash"])
-            self.assertIsNone(restarted["loaded_policy_hash"])
+            public_body(body)
+            self.assertEqual(body, ca_bytes)
 
 
 if __name__ == "__main__":

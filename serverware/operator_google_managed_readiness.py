@@ -70,7 +70,7 @@ def _snapshot():
                     "expected_binary_digest": config.EXPECTED_DATA_PLANE_BINARY_DIGEST}
 
 
-def _observe(*, require_x: bool = False, require_alchemy: bool = False) -> dict:
+def _observe(*, require_x: bool = False, require_alchemy: bool = False, catalog: bool = False) -> dict:
     """Fixed public outcome; unavailable observation never implies rollback.
 
     Must be called outside ALL caller-owned publication/SQLite transactions.
@@ -78,6 +78,8 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False) -> dict:
     nested scope. No state, key or public artifact is created or repaired.
     """
     result = {"ready": False, "policy_hash": None, "loaded_policy_hash": None, "managed_google": None}
+    if catalog:
+        result.update(x_available=False, alchemy_available=False)
     try:
         from serverware import operator_google_managed_config as managed
         from serverware import operator_publication as publication
@@ -110,10 +112,16 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False) -> dict:
             and type(observed.get("data_plane_binary_digest")) is str
             and observed["data_plane_binary_digest"] == after["expected_binary_digest"]
             and identity == after["managed_google"])
+        if catalog and result["ready"]:
+            from serverware import operator_catalog_x, operator_catalog_alchemy
+            result["x_available"] = operator_catalog_x.gate_descriptor_matches(observed.get("operator_x_app_read"))
+            result["alchemy_available"] = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
     except Exception:
         # Never serialize configured paths, ciphertext, secret material or a
         # transport/SQLite error. A failed observer cannot undo a prior commit.
         result["ready"] = False
+        if catalog:
+            result.update(x_available=False, alchemy_available=False)
     return result
 
 
@@ -130,6 +138,16 @@ def observe_x() -> dict:
 def observe_alchemy() -> dict:
     """Join Alchemy compatibility to the same fresh, exactly bound gate response."""
     return _observe(require_alchemy=True)
+
+
+def observe_catalog() -> dict:
+    """One display-only observation; optional markers fail independently.
+
+    Both descriptors belong to the exact health response bracketed by the
+    managed snapshots. The caller must still join to its catalog snapshot and
+    reread the current policy. Mutation admission never consumes this result.
+    """
+    return _observe(catalog=True)
 
 
 def _start_observation(value):

@@ -154,6 +154,11 @@ def require_available(policy_hash: str) -> None:
 def capability(policy_hash: str) -> dict | None:
     if not _available(policy_hash):
         return None
+    return _capability()
+
+
+def _capability() -> dict:
+    """Display DTO only; caller owns its fresh, policy-bound observation."""
     from serverware import operator_demo
     allowed = operator_demo.settings()["allowed_upstreams"]
     return {"schema": "serverware.operatorAlchemyRpcRead/v1", "connection_type": CONNECTION,

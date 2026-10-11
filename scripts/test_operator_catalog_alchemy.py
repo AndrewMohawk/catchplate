@@ -391,7 +391,7 @@ def gate_refusals():
             assert len(clients) == 2
             status = f.mutations.catalog_status()
             assert status["capabilities"]["alchemy"] is None
-            assert len(clients) > 2  # Status also observes independent provider capabilities.
+            assert len(clients) == 3  # Two mutations and one shared catalog observation.
             mutate.assert_not_called()
         assert f.snapshot() == before
     # Matching stale request and gate hashes still fail the real local SQL

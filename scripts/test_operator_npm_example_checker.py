@@ -627,6 +627,7 @@ class NpmExampleCheckerTests(unittest.TestCase):
         receipt["namedAuditInventory"]["data_plane.credential_lease.issued"] = 3
         self.assertTrue(checker.validate_success_result(receipt))
         for change in (
+                lambda v: v["namedAuditInventory"].update({"data_plane.credential_lease.issued": 1}),
                 lambda v: v["phaseEvidence"][16].update(localConcurrentLeaseEventIds=[]),
                 lambda v: v["phaseEvidence"][16].update(newAuditEventIds=[]),
                 lambda v: v["phaseEvidence"][16].update(localConcurrentLeaseEventIds=[uid(8100)]),

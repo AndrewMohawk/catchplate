@@ -675,6 +675,7 @@ def validate_success_result(value):
     require(type(counts) is dict and set(counts) in (set(expected) | {CONNECT, LEASE}, set(expected) | {CONNECT, LEASE, KEEP_ALIVE})
         and all(type(v) is int for v in counts.values()) and all(counts[k] == v for k, v in expected.items())
         and 1 <= counts[LEASE] <= 128 and 0 <= counts.get(KEEP_ALIVE, 0) <= 5
+        and sum(len(row["localConcurrentLeaseEventIds"]) for row in phases) <= counts[LEASE]
         and counts[CONNECT] + counts.get(KEEP_ALIVE, 0) == 17, "npm example final named audit inventory differs")
     return True
 

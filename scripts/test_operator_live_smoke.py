@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure live-smoke guard tests; no network, catalog, containers or provider."""
 from copy import deepcopy
-from io import BytesIO
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -18,7 +18,8 @@ REQUEST = "sha256:" + "b" * 64
 OPERATION = "sha256:" + "c" * 64
 ATTEMPT = "sha256:" + "d" * 64
 SCOPE = ("new-principal", "new-route", POLICY)
-OLD_PIN = "sha256:9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4"
+EXPECTED_PIN = "sha256:" + "f" * 64
+OTHER_PIN = "sha256:" + "e" * 64
 
 
 def catalog():
@@ -58,8 +59,8 @@ def audit_fixture():
 
 
 class LiveSmokeTests(unittest.TestCase):
-    def test_selected_v2_contract_and_promoted_pin_are_exact(self):
-        self.assertEqual(smoke.PIN, "sha256:eba8cc0df0fcde6645e4b2b2c7d8d14e04bdad90e4587ee73fe2dc522108432d")
+    def test_selected_v2_contract_requires_a_caller_supplied_pin(self):
+        self.assertFalse(hasattr(smoke, "PIN"))
         self.assertEqual(smoke.RESPONSE_MODE, "unfiltered_json_or_empty_v2")
         self.assertEqual(smoke.RESPONSE_VALIDATION_MODE, "bufferedJsonOrEmpty204V2")
         self.assertEqual(smoke.CREATIONS, (("/credentials", "credentials", "credential"),
@@ -105,16 +106,16 @@ class LiveSmokeTests(unittest.TestCase):
 
     def test_runtime_health_refuses_old_or_missing_binary_pin(self):
         check = smoke.LiveSmoke.__new__(smoke.LiveSmoke)
-        check.args = SimpleNamespace(expected_binary_sha256=smoke.PIN)
+        check.args = SimpleNamespace(expected_binary_sha256=EXPECTED_PIN)
         check.management, check.management_ca = object(), None
         health = {"ok": True, "policy_shadow_serving_ready": True,
             "policy_shadow": {"mode": "operator-demo", "enabled": False, "readiness": False, "production_custody_bound": False},
-            "data_plane_binary_digest": smoke.PIN, "policy_trust_root_source": "attested-control-plane",
+            "data_plane_binary_digest": EXPECTED_PIN, "policy_trust_root_source": "attested-control-plane",
             "policy_signing_key_id": "synthetic-key", "connect_mitm_interceptor": True,
             "audit": {"enabled": True}, "release_authorization": {"enabled": False}}
         check.json_request = Mock(return_value=(200, health))
         self.assertEqual(check.health(), health)
-        for pin in (OLD_PIN, None):
+        for pin in (OTHER_PIN, None):
             check.json_request.return_value = (200, {**health, "data_plane_binary_digest": pin})
             with self.subTest(pin=pin), self.assertRaises(smoke.CheckFailure):
                 check.health()
@@ -197,11 +198,12 @@ class LiveSmokeTests(unittest.TestCase):
     def test_receipt_names_v2_and_keeps_echo_proof_limits(self):
         check = smoke.LiveSmoke.__new__(smoke.LiveSmoke)
         check.run_id, check.results, check.plans = "synthetic-run", [], []
+        check.args = SimpleNamespace(expected_binary_sha256=EXPECTED_PIN)
         check.feature_observations, check.token_retained = [], False
         check.clean = Mock()
         for ok in (False, True):
             result = check.receipt(ok)
-            self.assertEqual(result["dataPlaneBinaryDigest"], smoke.PIN)
+            self.assertEqual(result["dataPlaneBinaryDigest"], EXPECTED_PIN)
             self.assertEqual(result["responseMode"], "unfiltered_json_or_empty_v2")
             self.assertEqual(result["auditResponseMode"], "bufferedJsonOrEmpty204V2")
             for field in ("rawBodyPreservationVerified", "empty204Verified", "browserTransactionVerified",
@@ -215,22 +217,51 @@ class LiveSmokeTests(unittest.TestCase):
 
     def test_no_execution_flag_prevents_network_constructor(self):
         with patch.object(smoke, "LiveSmoke") as constructor:
-            result = smoke.run_checks(SimpleNamespace(execute=False, timeout_seconds=120))
+            result = smoke.run_checks(SimpleNamespace(execute=False, timeout_seconds=120,
+                expected_binary_sha256=EXPECTED_PIN))
             self.assertFalse(result["ok"])
             constructor.assert_not_called()
+
+    def test_missing_or_malformed_expected_pin_refuses_before_claim_or_constructor(self):
+        inputs = [{}] + [{"expected_binary_sha256": value} for value in (
+            None, "", "f" * 64, "sha256:" + "F" * 64, "sha256:" + "f" * 63,
+            "sha256:" + "f" * 65, EXPECTED_PIN + "\n", 123)]
+        for values in inputs:
+            args = SimpleNamespace(execute=True, timeout_seconds=120,
+                run_claim_file=Path("/private/.operator-live-smoke.claim"), **values)
+            with self.subTest(values=values), patch.object(smoke, "LiveSmoke") as constructor, \
+                    patch.object(smoke, "private_output") as claim:
+                result = smoke.run_checks(args)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error"], "explicit expected binary SHA256 required")
+                constructor.assert_not_called()
+                claim.assert_not_called()
+
+    def test_cli_expected_pin_is_mandatory(self):
+        argv = ["check_operator_live_smoke.py", "--execute", "--admin-token-file", "/private/admin",
+            "--ca-file", "/private/ca", "--upstream-ca-file", "/private/upstream-ca",
+            "--run-claim-file", "/private/.operator-live-smoke.claim"]
+        with patch("sys.argv", argv), patch("sys.stderr", new=StringIO()) as errors, \
+                patch.object(smoke, "run_checks") as run, self.assertRaises(SystemExit) as caught:
+            smoke.main()
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--expected-binary-sha256", errors.getvalue())
+        run.assert_not_called()
 
     def test_claim_durably_precedes_api_run(self):
         order = []
         check = Mock(run_id="run", plans=[{"name": "synthetic"}])
         check.run.side_effect = lambda: order.append("run") or {"ok": True}
-        args = SimpleNamespace(execute=True, timeout_seconds=120, run_claim_file=Path("/private/.operator-live-smoke.claim"))
-        with patch.object(smoke, "LiveSmoke", return_value=check), \
+        args = SimpleNamespace(execute=True, timeout_seconds=120, expected_binary_sha256=EXPECTED_PIN,
+            run_claim_file=Path("/private/.operator-live-smoke.claim"))
+        with patch.object(smoke, "LiveSmoke", return_value=check) as constructor, \
                 patch.object(smoke, "private_output", side_effect=lambda *args: order.append("claim")), \
                 patch.object(Path, "exists", return_value=False), patch.object(Path, "is_symlink", return_value=False):
             self.assertTrue(smoke.run_checks(args)["ok"])
         self.assertEqual(order, ["claim", "run"])
+        constructor.assert_called_once_with(args)
         self.assertEqual(args.proxy_url, smoke.PROXY)
-        self.assertEqual(args.expected_binary_sha256, smoke.PIN)
+        self.assertEqual(args.expected_binary_sha256, EXPECTED_PIN)
         self.assertIsNone(args.proxy_ca_file)
 
     def test_uncertain_mutation_remains_named_and_is_not_retried(self):

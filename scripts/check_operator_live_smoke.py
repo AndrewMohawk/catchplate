@@ -42,7 +42,6 @@ except ModuleNotFoundError:
 # operator_demo.origin canonicalizes default HTTPS port 443 out of catalog URLs.
 # Endpoint still requires/connects port 443 and verifies this exact TLS hostname.
 PROXY = "https://serverware-proxy.example.com"
-PIN = "sha256:f430734734cb43fb60eb1e28a863b337c314bb3e5377b23b6671564c62a91d9b"
 RESPONSE_MODE = V2_RESPONSE_MODE
 RESPONSE_VALIDATION_MODE = RESPONSE_MODES[RESPONSE_MODE]
 DUMMY = "Bearer SERVERWARE_LIVE_SMOKE_DUMMY"
@@ -331,7 +330,7 @@ class LiveSmoke(OperatorCatalogCheck):
         self.client_token = token
         scope = (application["principal_id"], rule["route_id"], self.policy_hash)
         lease_scope = dict(zip(("principal_id", "route_id", "policy_hash"), scope), purpose="dispatchSecret",
-                           credential_id=credential["id"], data_plane_binary_digest=PIN)
+                           credential_id=credential["id"], data_plane_binary_digest=self.args.expected_binary_sha256)
         for case, dummy in CASES:
             current = self.warm_cas_snapshot()
             require(current == snapshot, "live catalog drifted before smoke request")
@@ -366,7 +365,7 @@ class LiveSmoke(OperatorCatalogCheck):
             "requestObservations": self.feature_observations, "clientTokenRetainedPrivately": self.token_retained,
             "resourcesAutomaticallyCleaned": False, "rawBodyPreservationVerified": False, "empty204Verified": False,
             "browserTransactionVerified": False, "externalDnsVerified": False, "productionReady": False,
-            "dataPlaneBinaryDigest": PIN, "responseMode": RESPONSE_MODE,
+            "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "responseMode": RESPONSE_MODE,
             "auditResponseMode": RESPONSE_VALIDATION_MODE, "proxyUrl": PROXY}
         self.clean(json.dumps(result, sort_keys=True).encode("utf-8"))
         return result
@@ -375,12 +374,13 @@ class LiveSmoke(OperatorCatalogCheck):
 def run_checks(args):
     check = None
     try:
+        pin = getattr(args, "expected_binary_sha256", None)
+        require(isinstance(pin, str) and SHA256.fullmatch(pin), "explicit expected binary SHA256 required")
         require(args.execute is True and type(args.timeout_seconds) is int and 10 <= args.timeout_seconds <= 120,
                 "explicit live execution and bounded timeout required")
         require(args.run_claim_file.name == ".operator-live-smoke.claim", "live smoke claim filename differs")
         args.control_base, args.management_base = "http://172.16.249.19:3000", "http://172.16.249.20:9091"
         args.proxy_url, args.operator_origin, args.upstream_address = PROXY, "https://serverware-demo.example.com", "172.16.249.18"
-        args.expected_binary_sha256 = PIN
         args.proxy_ca_file = args.control_ca_file = args.management_ca_file = None
         check = LiveSmoke(args)
         private_output(args.run_claim_file, json.dumps({"runId": check.run_id, "plannedResources": check.plans,
@@ -399,6 +399,8 @@ def main():
     parser.add_argument("--execute", action="store_true", help="Consume this one-shot live smoke authorization")
     for name in ("admin-token-file", "ca-file", "upstream-ca-file", "run-claim-file"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--expected-binary-sha256", required=True,
+        help="Independently selected binary digest, formatted sha256:<64 lowercase hex>")
     parser.add_argument("--timeout-seconds", type=int, default=120)
     args = parser.parse_args()
     def expired(_signum, _frame):

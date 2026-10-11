@@ -1,8 +1,9 @@
 # Go: read Ethereum chain status through Serverware
 
-**Component-verified; actual-proxy acceptance pending.** Eight main test groups
-passed and the example binary was built. The Alchemy UI remains guide-only;
-neither deployed support nor real-provider/native-pilot acceptance is verified.
+**Isolated actual SDK-through-proxy/TLS acceptance passed** from source
+`062180fe`. Eight main component test groups also passed and the example binary
+was built. Deployed support, Actions and real-provider/native-pilot acceptance
+remain unverified.
 This example uses the ordinary
 [`go-ethereum/rpc` client pinned to v1.15.11](https://github.com/ethereum/go-ethereum/tree/v1.15.11/rpc),
 not an Alchemy-specific SDK or a replacement HTTP implementation. It makes two
@@ -131,6 +132,9 @@ Do not disable checksum verification or download a different toolchain implicitl
 The source tests cover actual SDK request serialization, both chains, exact
 empty-array parameters, fixed dummy authentication, CONNECT-only application
 authentication, fixed errors, no redirects/retries and per-host TLS trust.
-The eight main test groups passed; actual SDK-through-proxy/TLS acceptance has
-not run and remains a separate result. Nothing here creates a credential,
-approves a destination, deploys a service, or runs a provider-backed GitHub Action.
+The eight main test groups passed. Separately, the actual binary passed two
+mainnet reads and wrong-application, wrong-chain and revoked-grant denials through
+the real proxy with a synthetic provider, exact key replacement and separate TLS
+roots. See the [verification record](../../docs/operator-alchemy-verification.md),
+which retains both earlier failures. Nothing here creates a credential, approves
+a destination, deploys a service, or runs a provider-backed GitHub Action.

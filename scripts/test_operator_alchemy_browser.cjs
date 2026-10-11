@@ -58,16 +58,30 @@ async function recipe(page, chain = CHAINS[0], method = RPC[0]) {
   assert.match(await page.locator('#connect-activation').innerText(), /no upstream request has been tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No Alchemy request was tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /HTTP 200 can contain an RPC error/);
-  assert.match(await page.locator('#client-guidance').innerText(), /SDK verification is pending/);
+  const source = 'https://github.com/AndrewMohawk/serverware/';
+  const branch = 'serverware/operator-workspace/';
   const links = page.locator('#client-example-links a');
   assert.deepEqual(await links.evaluateAll(items => items.map(item => [item.textContent, item.getAttribute('href')])), [
-    ['Alchemy preset scope and compatibility', 'https://github.com/AndrewMohawk/serverware/blob/serverware/operator-workspace/docs/operator-provider-presets.md'],
+    ['Node.js', source + 'tree/' + branch + 'examples/alchemy-chain-status-node'],
+    ['Python', source + 'tree/' + branch + 'examples/alchemy-chain-status-python'],
+    ['Go', source + 'tree/' + branch + 'examples/alchemy-chain-status-go'],
+    ['GitHub Actions recipe (inactive)', source + 'blob/' + branch + 'examples/alchemy-chain-status-node/workflow.example.yml'],
+    ['Alchemy preset scope and compatibility', source + 'blob/' + branch + 'docs/operator-provider-presets.md'],
   ]);
-  assert.equal(await links.first().getAttribute('target'), '_blank');
-  assert.equal(await links.first().getAttribute('rel'), 'noopener noreferrer');
-  assert.equal(await links.first().getAttribute('referrerpolicy'), 'no-referrer');
+  for (const link of await links.all()) {
+    assert.equal(await link.getAttribute('target'), '_blank');
+    assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
+    assert.equal(await link.getAttribute('referrerpolicy'), 'no-referrer');
+    const url = new URL(await link.getAttribute('href'));
+    assert.equal(url.origin, 'https://github.com'); assert.equal(url.username + url.password + url.search + url.hash, '');
+    for (const privateValue of [PRIVATE, APP_TOKEN, IDS.application, IDS.credential, IDS.rule]) assert(!url.href.includes(privateValue));
+  }
+  const acceptance = 'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
+    'This page has not tested your Alchemy credentials or provider entitlement. ' +
+    'The GitHub Actions recipe is inactive and has not been run.';
   assert.equal(await page.locator('#client-example-note').innerText(),
-    'Public scope and compatibility guide only. Ordinary Alchemy SDK verification is pending; this page has not run a client or verified provider access.');
+    'Public source only, separate from your private client config. ' + acceptance);
+  assert((await page.locator('#client-guidance').innerText()).endsWith(acceptance));
   await privateAbsent(page); return text;
 }
 async function noAutomaticWrite(page, observed) {

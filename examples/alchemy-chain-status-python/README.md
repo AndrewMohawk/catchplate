@@ -1,9 +1,9 @@
 # Alchemy chain status with web3.py
 
 Status: implemented; **10 offline SDK tests passed** with the full installed
-transitive dependencies. Actual SDK-through-proxy/TLS acceptance has not run;
-the Alchemy UI remains guide-only. No deployment, native-pilot acceptance,
-Alchemy request or provider entitlement is claimed. This example uses the
+transitive dependencies, and **isolated actual SDK-through-proxy/TLS acceptance
+passed** from source `062180fe`. No deployment, Actions, native-pilot acceptance,
+real Alchemy request or provider entitlement is claimed. This example uses the
 ordinary `Web3.eth.chain_id` and `Web3.eth.block_number` properties, not a custom
 JSON-RPC client. It does not request wallets, transactions, balances, NFT APIs,
 WebSockets, batching or `web3_clientVersion`.
@@ -85,7 +85,12 @@ The 10 passing offline tests use the actual pinned web3.py/Requests preparation 
 synthetic responses at `HTTPAdapter.send`, with sockets forbidden. They inspect
 separate TLS policies but do not perform a TLS handshake, CONNECT, proxy
 credential replacement or provider request. Those acceptance checks remain
-separate and pending.
+separate: the actual entrypoint subsequently passed two mainnet reads and
+wrong-application, wrong-chain and revoked-grant denials through the real proxy
+with a synthetic provider. The passing run verified exact key replacement and
+separate TLS roots, with one pooled tunnel for Python's two successful calls.
+The [verification record](../../docs/operator-alchemy-verification.md) preserves
+the complete result and both earlier failed runs.
 
 ## Primary implementation references
 

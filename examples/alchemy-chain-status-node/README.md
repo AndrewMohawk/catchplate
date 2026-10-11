@@ -80,9 +80,9 @@ Both TLS legs verify hostnames and certificates:
   supply `SERVERWARE_PROXY_CA_FILE`; only the child receives that additional
   root via `NODE_EXTRA_CA_CERTS`. The inner explicit `ca` does not inherit it.
 
-There is no system trust-store modification or insecure fallback. This separate
-trust configuration is source-reviewed; actual dual-TLS verification remains
-an independent integration test, not something the inert tests prove.
+There is no system trust-store modification or insecure fallback. Separate-root
+dual-TLS verification passed in the isolated actual-proxy run recorded below;
+it is not a claim made from the inert tests alone.
 [Node extra-CA semantics](https://nodejs.org/download/release/v25.5.0/docs/api/cli.html#node_extra_ca_certsfile),
 [Node tunnel implementation](https://github.com/nodejs/node/blob/v25.5.0/lib/https.js).
 
@@ -103,8 +103,13 @@ upstream HTTP client's default Accept value. Serverware owns the bounded
 ## Verification and CI
 
 Component verification passed: **15 tests** across the two suites below, using
-the installed pinned dependencies. Actual SDK-through-proxy/TLS acceptance has
-not run, and the Alchemy UI remains guide-only pending that verification.
+the installed pinned dependencies. The actual entrypoint also passed isolated
+SDK-through-proxy/TLS acceptance from source `062180fe`: two mainnet reads, plus
+wrong-application, wrong-chain and revoked-grant denials. The fixture used a
+synthetic provider and verified exact key replacement and separate TLS roots.
+See the [verification record](../../docs/operator-alchemy-verification.md),
+including both earlier failed runs. Real Alchemy, Actions, native-pilot and
+deployment acceptance remain unverified.
 
 ```sh
 npm test

@@ -359,7 +359,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-alchemy-status').textContent = !catalog()?.capabilities.alchemy ?
       'Alchemy chain-status reads are not advertised by this deployment. A manual key is not a substitute for the JSON-RPC preset.' : !alchemyDestinationAvailable(catalog()) ?
       'Alchemy needs the exact mainnet or Sepolia origin approved in Proxy setup first. This page will not add destinations or restart services.' :
-      'Alchemy: save a key, choose an app and explicitly select an approved chain. Only eth_chainId and eth_blockNumber; no transactions, arbitrary RPC or provider request. Ordinary SDK verification is pending.';
+      'Alchemy: save a key, choose an app and explicitly select an approved chain. Only eth_chainId and eth_blockNumber; no transactions or arbitrary RPC. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement.';
     element('connect-x-status').textContent = !catalog()?.capabilities.x ?
       'X app-only username lookup is not advertised by this deployment. No generic fallback or provider request is sent.' : !xDestinationAvailable(catalog()) ?
       'X username lookup needs the exact api.x.com destination approved in Proxy setup first. This page will not add it or restart services.' :

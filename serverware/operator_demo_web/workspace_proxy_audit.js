@@ -20,7 +20,11 @@ function operatorExampleProjects(rule, catalog) {
       {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
         href: source + 'blob/' + branch + 'examples/x-username-node/workflow.example.yml'},
       guide('X preset scope and compatibility', 'operator-provider-presets.md')];
-    case 'alchemy_chain_status_read_v1': return [guide('Alchemy preset scope and compatibility', 'operator-provider-presets.md')];
+    case 'alchemy_chain_status_read_v1': return [project('Node.js', 'alchemy-chain-status-node'),
+      project('Python', 'alchemy-chain-status-python'), project('Go', 'alchemy-chain-status-go'),
+      {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
+        href: source + 'blob/' + branch + 'examples/alchemy-chain-status-node/workflow.example.yml'},
+      guide('Alchemy preset scope and compatibility', 'operator-provider-presets.md')];
     case 'gmail_read_v1': return [
       ...(rule.credential_input === 'replace_exact' && rule.placeholder === 'Bearer serverware-gmail-placeholder-v1' ?
         [project('Go + Gmail SDK', 'google-gmail-go')] : []),
@@ -33,7 +37,7 @@ function renderOperatorExampleProjects(rule, catalog) {
   const projects = operatorExampleProjects(rule, catalog);
   links.replaceChildren(); panel.hidden = projects.length === 0;
   element('client-example-note').textContent = !projects.length ? '' : isAlchemyRule(rule) ?
-    'Public scope and compatibility guide only. Ordinary Alchemy SDK verification is pending; this page has not run a client or verified provider access.' : isXRule(rule) ?
+    'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires the documented exact Gmail dummy-header replacement. The public guide contains no private client config and does not verify your access.';
@@ -94,7 +98,7 @@ function createProxyView(workspace, applications) {
     element('gmail-message-group').hidden = !messageRead;
     element('client-template-title').textContent = alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
     element('client-template-warning').textContent = alchemy ?
-      'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here; ordinary SDK verification is pending.' : x ?
+      'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here and this page does not prove provider entitlement.' : x ?
       'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
@@ -166,7 +170,8 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. No Alchemy request was tested here. ' :
         'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
         'Read ' + rule.chain + ' only: eth_chainId and eth_blockNumber, POST to keyless /v2, params: [] and no URL query. No arbitrary RPC, batches, notifications, transactions, wallets, WebSockets, NFT or Notify APIs. ' +
-        'The fixed public dummy is not your Alchemy key. The app token authenticates separately to the proxy. Keep both TLS legs verified. HTTP 200 can contain an RPC error. Ordinary Alchemy SDK verification is pending; this page has not verified provider access.';
+        'The fixed public dummy is not your Alchemy key. The app token authenticates separately to the proxy. Keep both TLS legs verified. HTTP 200 can contain an RPC error. ' +
+        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.';
       return;
     }
     if (x) {

@@ -1,7 +1,6 @@
 # X and Alchemy operator presets
 
-Status (2026-10-10): **X isolated SDK-through-proxy acceptance passed;
-Alchemy is implemented and component-verified, with proxy acceptance pending.**
+Status: **X and Alchemy isolated SDK-through-proxy acceptance passed.**
 X has a separate adapter, catalog/API, guided UI and pinned Node/Python/Go
 examples. All three actual entrypoints passed using
 source `eb5d12e5` and the normal Rust binary recorded below. Each client's
@@ -17,8 +16,10 @@ X request, GitHub Actions run nor deployment acceptance is claimed. X controls
 require a fresh matching gate capability; an older gate cannot implicitly enable the preset.
 
 Alchemy's adapter, catalog/API, UI source, examples and isolated fixture/checker
-are implemented. Its UI remains guide-only pending acceptance; this does not
-establish support in a deployed app/gate pair.
+are implemented. Source `062180fe` passed the complete synthetic-provider SDK
+flow in 86.005 seconds including cleanup, not native startup. This does not
+establish support in a deployed app/gate pair; recipe links are not a deployment
+or provider-entitlement claim.
 
 The component checkpoint in `alchemy-verification.1YKDDXyl` records 33 passing
 core/fixture/runner checks, 11 catalog checks and 5 API checks. The installed SDK
@@ -28,11 +29,19 @@ had one cross-suite import-isolation failure; the isolated asset rerun passed
 all 13 checks. That combined run is not recorded as a clean pass. The optimized
 Rust build succeeded and all 12 Alchemy Rust groups passed. Browser checks passed
 16 Alchemy groups and 13 X regression groups with unchanged source; those checks
-use synthetic intercepted APIs, not the real backend. Actual SDK-through-proxy/TLS
-acceptance has not passed; real-provider, native and deployment acceptance remain
-unverified. The [Alchemy verification record](operator-alchemy-verification.md)
-retains both failed isolated runs, the completed SDK/control checks, and the
-second run's pre-dispatch refusal without treating partial progress as a pass.
+use synthetic intercepted APIs, not the real backend. The later actual
+SDK-through-proxy/TLS run passed all 12 SDK phases, with 12 upstream arrivals,
+8 releases, 4 response blocks, 9 CONNECT denials and 5 raw request denials.
+Real-provider, Actions, native and deployment acceptance remain unverified.
+The [Alchemy verification record](operator-alchemy-verification.md) preserves
+both earlier failures and the third pass. The ordering fix passed 28 focused
+release-mode tests, including six new audit/lease groups, and 11 existing
+release/audit/send-boundary regressions. The actual-fetch pin race is
+source-reviewed, not independently injected by those six new groups.
+The subsequent recipe-link update passed 14 public-link groups, 16 Alchemy
+browser groups, 13 X browser regression groups and 13 isolated asset tests.
+Desktop/mobile screenshots were inspected; browser evidence remains synthetic
+API UI testing, not another provider or SDK acceptance run.
 
 ## Ship X username reads first
 
@@ -197,7 +206,7 @@ dummy credential. The passed X recipes are:
 
 These are explicit supported client configurations, not a claim that ambient
 proxy settings or unchanged retry defaults suffice. The implemented Alchemy
-examples have passed offline SDK checks, not actual-proxy acceptance:
+examples have passed offline SDK checks and the isolated actual-proxy flow:
 
 - [Node](../examples/alchemy-chain-status-node/README.md): pinned official
   `alchemy-sdk` **3.6.5**, ethers **5.8.0**, Node **25.5.0**, with keyless `url`,
@@ -261,9 +270,8 @@ verified trust; never use TLS-disable settings.
    prove provider entitlement, billing, token validity or a live GitHub Actions
    run. Never turn source/UI completion into these claims.
 
-The X projects have passed the isolated through-proxy gate; this is not permission
-to deploy or proof that a deployment has the paired preset. Alchemy is implemented
-and component-verified, but its guide-only UI must not imply completed proxy/TLS
-acceptance. Offline SDK checks, isolated proxy/TLS acceptance, deployment
-acceptance and real-provider access remain separate results. Keep existing
-GitHub/npm/Google and manual workflows unchanged while adding each complete slice.
+The X and Alchemy projects have passed their isolated through-proxy gates; this
+is not permission to deploy or proof that a deployment has the paired presets.
+Offline SDK checks, isolated proxy/TLS acceptance, deployment acceptance and
+real-provider access remain separate results. Keep existing GitHub/npm/Google
+and manual workflows unchanged while adding each complete slice.

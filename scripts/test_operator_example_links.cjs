@@ -69,6 +69,26 @@ function x() {
     response_mode: 'x_app_read_json_v1', source_pair_required: true};
   return value;
 }
+function alchemy(chain = 'eth-mainnet') {
+  // Independent public pair and descriptor, not production helper output or
+  // the browser fixture. Discovery grants no permission and runs no SDK.
+  const origin = 'https://' + chain + '.g.alchemy.com';
+  const saved = rule({operation_bundle: 'alchemy_chain_status_read_v1', chain,
+    upstream_url: origin + '/v2', methods: ['POST'], request_fields: [], response_fields: [], query_keys: [],
+    allowed_headers: ['accept', 'accept-language', 'alchemy-ethers-sdk-method', 'alchemy-ethers-sdk-version', 'sec-fetch-mode', 'user-agent'],
+    response_mode: 'alchemy_rpc_read_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer serverware-alchemy-placeholder-v1'});
+  const value = rawCatalog({credentials: [credential({connection_type: 'alchemy_key_v1', provider_id: 'alchemy',
+    credential_generation: 1})], rules: [saved], allowed: [origin]});
+  value.capabilities.alchemy = {schema: 'serverware.operatorAlchemyRpcRead/v1', connection_type: 'alchemy_key_v1',
+    create_credential_path: '/api/operator-demo/credentials/alchemy-key',
+    create_rule_path: '/api/operator-demo/access-rules/alchemy-chain-status',
+    chains: [{chain: 'eth-mainnet', api_origin: 'https://eth-mainnet.g.alchemy.com', destination_allowed: true},
+      {chain: 'eth-sepolia', api_origin: 'https://eth-sepolia.g.alchemy.com', destination_allowed: true}],
+    operation_bundles: ['alchemy_chain_status_read_v1'], rpc_methods: ['eth_chainId', 'eth_blockNumber'],
+    sdk_auth_token: 'serverware-alchemy-placeholder-v1', placeholder: 'Bearer serverware-alchemy-placeholder-v1',
+    response_mode: 'alchemy_rpc_read_json_v1', source_pair_required: true};
+  return value;
+}
 const tests = [
   ['provider-first entry choices preserve the existing controls and forms', () => {
     for (const [id, label] of [['connect-use-github', 'GitHub'], ['connect-use-npm', 'npm'],
@@ -128,6 +148,61 @@ const tests = [
     pending.capabilities.x = x().capabilities.x;
     assert.deepEqual(links(pending), links(x()), 'a refreshed exact capability restores discovery without changing the rule');
   }],
+  ['validated Alchemy chains link three pinned projects and an inactive Actions recipe', () => {
+    const expected = [
+      {label: 'Node.js', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/alchemy-chain-status-node'},
+      {label: 'Python', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/alchemy-chain-status-python'},
+      {label: 'Go', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/alchemy-chain-status-go'},
+      {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
+        href: BASE + 'blob/' + BRANCH + 'examples/alchemy-chain-status-node/workflow.example.yml'},
+      {label: 'Alchemy preset scope and compatibility', kind: 'guide', href: BASE + 'blob/' + BRANCH + 'docs/operator-provider-presets.md'},
+    ];
+    for (const chain of ['eth-mainnet', 'eth-sepolia']) {
+      const value = alchemy(chain); assert.deepEqual(links(value), expected);
+      render(value); assert.equal(node('client-example-links').children.length, 5);
+      assert.equal(node('client-example-note').textContent,
+        'Public source only, separate from your private client config. ' +
+        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
+        'This page has not tested your Alchemy credentials or provider entitlement. ' +
+        'The GitHub Actions recipe is inactive and has not been run.');
+      assert(!node('client-example-note').textContent.includes('verification is pending'));
+      assert(!links(value).some(item => item.href.includes('/.github/workflows/')));
+    }
+    const workflow = 'examples/alchemy-chain-status-node/workflow.example.yml';
+    assert(statSync(resolve(ROOT, workflow)).isFile());
+    assert.match(readFileSync(resolve(ROOT, workflow), 'utf8'), /workflow_dispatch:/);
+  }],
+  ['Alchemy discovery requires the exact pair, capability, approved chain and RPC profile', () => {
+    for (const change of [value => { delete value.capabilities.alchemy; }, value => { value.capabilities.alchemy = null; },
+      value => { value.capabilities.alchemy.source_pair_required = false; }, value => { value.capabilities.alchemy.extra = true; },
+      value => { value.capabilities.alchemy.chains[0].destination_allowed = false; },
+      value => { value.capabilities.alchemy.chains[0].api_origin = 'https://arbitrary.example.test'; },
+      value => { value.capabilities.alchemy.chains.reverse(); }, value => { value.capabilities.alchemy.chains[0].chain = 'polygon-mainnet'; },
+      value => { value.capabilities.alchemy.rpc_methods.push('eth_sendRawTransaction'); },
+      value => { value.capabilities.alchemy.create_rule_path = '/api/operator-demo/access-rules'; },
+      value => { value.capabilities.alchemy.sdk_auth_token = 'other-dummy'; },
+      value => { value.allowed_upstreams = []; }, value => { value.allowed_upstreams = ['https://eth-sepolia.g.alchemy.com']; },
+      value => { value.credentials[0].connection_type = 'x_app_bearer_v1'; }, value => { value.credentials[0].provider_id = 'x'; },
+      value => { value.credentials[0].auth_type = 'header'; value.credentials[0].header_name = 'X-API-Key'; },
+      value => { value.credentials[0].legacy_upstream_origin = 'https://eth-mainnet.g.alchemy.com'; },
+      value => { value.access_rules[0].credential_id = IDS.other; }, value => { value.access_rules[0].application_id = IDS.other; },
+      value => { value.access_rules[0].chain = 'eth-sepolia'; }, value => { value.access_rules[0].chain = 'polygon-mainnet'; },
+      value => { value.access_rules[0].upstream_url += '/PRIVATE_KEY'; }, value => { value.access_rules[0].upstream_url += '?key=PRIVATE_KEY'; },
+      value => { value.access_rules[0].methods = ['GET']; }, value => { value.access_rules[0].request_fields = ['params']; },
+      value => { value.access_rules[0].response_fields = ['result']; }, value => { value.access_rules[0].query_keys = ['key']; },
+      value => { value.access_rules[0].allowed_headers.push('x-api-key'); },
+      value => { value.access_rules[0].request_body_mode = 'preserve_json_v1'; },
+      value => { value.access_rules[0].query_mode = 'githubRestV1'; },
+      value => { value.access_rules[0].response_mode = 'unfiltered_json_or_empty_v2'; },
+      value => { value.access_rules[0].credential_input = 'insert'; },
+      value => { value.access_rules[0].placeholder = 'Bearer other-dummy'; }]) {
+      const value = alchemy(); change(value); assert.deepEqual(links(value), []);
+    }
+    const pending = alchemy(); const savedRule = clone(pending.access_rules[0]); pending.capabilities.alchemy = null;
+    assert.deepEqual(links(pending), [], 'pending policy loading withholds paired discovery');
+    pending.capabilities.alchemy = alchemy().capabilities.alchemy;
+    assert.deepEqual(links(pending), links(alchemy())); assert.deepEqual(pending.access_rules[0], savedRule);
+  }],
   ['validated npm read and publish link the existing project alongside their own guides', () => {
     for (const [value, filename] of [[rawCatalog({rules: [npmRule()]}), 'operator-npm-metadata.md'],
       [publishing(), 'operator-npm-publish.md']]) {
@@ -183,7 +258,7 @@ const tests = [
     }
     const manual = rawCatalog({credentials: [credential()], rules: [rule()]});
     assert.deepEqual(links(manual), []);
-    for (const original of [rawCatalog({rules: [npmRule()]}), publishing(), x(),
+    for (const original of [rawCatalog({rules: [npmRule()]}), publishing(), x(), alchemy(), alchemy('eth-sepolia'),
       gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'})]) {
       for (const change of [value => { value.access_rules[0].status = 'revoked'; },
         value => { value.credentials[0].status = 'revoked'; }, value => { value.applications[0].status = 'revoked'; },
@@ -193,7 +268,7 @@ const tests = [
     }
   }],
   ['public links remain readable with an expired app token, without weakening recipe guards', () => {
-    for (const value of [github(), x()]) {
+    for (const value of [github(), x(), alchemy(), alchemy('eth-sepolia')]) {
       const expected = links(value);
       value.applications[0] = application({...value.applications[0], token_status: 'expired', token_expires_at_epoch_ms: 1});
       assert.deepEqual(links(value), expected);
@@ -204,7 +279,7 @@ const tests = [
     assert.match(PROXY, /element\('download-config'\)\.disabled = !ready \|\| !applications\.tokenFor\(application\.id\)/);
   }],
   ['links never interpolate IDs, private tokens, custom URLs, query strings or fragments', () => {
-    for (const value of [github(), rawCatalog({rules: [npmRule()]}), publishing(), x(), gmail(),
+    for (const value of [github(), rawCatalog({rules: [npmRule()]}), publishing(), x(), alchemy(), alchemy('eth-sepolia'), gmail(),
       gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'})]) {
       const expected = links(value);
       value.proxy_url = 'https://PRIVATE_TOKEN@private.example.test/?PRIVATE_QUERY';
@@ -223,7 +298,7 @@ const tests = [
     render(github()); assert.equal(node('client-examples').hidden, false);
     assert.match(node('client-example-note').textContent, /README.*verification status/);
     assert.match(node('client-example-note').textContent, /separate from your private client config/);
-    for (const value of [github(), x()]) {
+    for (const value of [github(), x(), alchemy(), alchemy('eth-sepolia')]) {
       render(value);
       for (const anchor of node('client-example-links').children) {
         assert.equal(anchor.tag, 'a'); assert.equal(anchor.target, '_blank');
@@ -231,6 +306,9 @@ const tests = [
         assert.equal(anchor.download, undefined); assert.deepEqual(anchor.events, {});
       }
     }
+    const unavailable = alchemy(); unavailable.capabilities.alchemy = null; render(unavailable);
+    assert.equal(node('client-examples').hidden, true); assert.equal(node('client-example-links').children.length, 0);
+    assert.equal(node('client-example-note').textContent, '');
     render(null); assert.equal(node('client-examples').hidden, true);
     assert.equal(node('client-example-links').children.length, 0); assert.equal(node('client-example-note').textContent, '');
     assert.match(PROXY, /function render\(\) \{\s*command = '';[^\n]*\n\s*renderOperatorExampleProjects\(null, null\)/);
@@ -238,7 +316,8 @@ const tests = [
   }],
   ['all advertised project directories contain a README in the source snapshot', () => {
     for (const directory of ['github-issues-node', 'github-issues-python', 'github-issues-go', 'npm-registry', 'google-gmail-go',
-      'x-username-node', 'x-username-python', 'x-username-go'])
+      'x-username-node', 'x-username-python', 'x-username-go',
+      'alchemy-chain-status-node', 'alchemy-chain-status-python', 'alchemy-chain-status-go'])
       assert(statSync(resolve(ROOT, 'examples', directory, 'README.md')).isFile());
     assert(statSync(resolve(ROOT, 'docs/operator-gmail-job-verification.md')).isFile());
     assert(statSync(resolve(ROOT, 'docs/operator-provider-presets.md')).isFile());

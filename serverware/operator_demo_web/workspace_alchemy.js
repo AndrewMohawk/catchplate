@@ -95,6 +95,6 @@ function renderAlchemyCompatibility(id) {
     'One JSON-RPC request up to 64 KiB: jsonrpc 2.0, an ID, eth_chainId or eth_blockNumber, and params: []. IDs are integers 0–9007199254740991 or nonempty printable ASCII strings up to 64 bytes. No batches, notifications, arbitrary methods or parameters.',
     'Full strict JSON responses up to 64 KiB. HTTP 200 must contain the same typed request ID and exactly one result or error. An RPC error is not a successful method result. Supported HTTP errors: 400, 401, 403, 404, 429, 500, 502, 503 and 504.',
     'No response-field setup. Bounded response metadata is checked and discarded; no response headers are forwarded. Redirects, compression, empty 204/304 and streaming are unsupported. Keep both proxy and destination TLS verification enabled.',
-    'Ordinary Alchemy SDK verification is pending; this page has not run a client or verified provider access. No transactions, wallets, WebSockets, NFT or Notify APIs are granted.'
+    'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run. No transactions, wallets, WebSockets, NFT or Notify APIs are granted.'
   ].map(value => textNode('p', value, 'small muted')));
 }

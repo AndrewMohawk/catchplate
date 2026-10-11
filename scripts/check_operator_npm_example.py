@@ -234,6 +234,22 @@ def connection_units(spec):
     return (0, count) if phase.startswith(("wrong_app_", "revoked_")) else (count, 0)
 
 
+def local_lease_delta(before, after, event_kinds):
+    """Account for concurrent issuance, after the full audit validator ran.
+
+    This does not attribute a lease to a background task or to the local client.
+    Existing rows remain immutable; no new request or connection row is allowed.
+    """
+    require(type(before) is dict and type(after) is dict and type(event_kinds) is dict
+        and len(before) <= len(after) <= 500 and set(event_kinds) == set(after)
+        and all(type(k) is str and type(v) is str and SHA256.fullmatch(v) for k, v in after.items())
+        and all(after.get(k) == v for k, v in before.items()), "npm example local audit history changed")
+    added = sorted(set(after) - set(before))
+    require(len(added) <= 64 and all(UUID.fullmatch(k) and event_kinds[k] == LEASE for k in added),
+        "npm example local refusal produced a request or connection event")
+    return added
+
+
 def run_client(spec, environment, seconds):
     require(spec in fixture.SPECS and 0 < seconds <= 25, "npm example process deadline differs")
     deadline = time.monotonic() + seconds
@@ -427,6 +443,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             and counts[CONNECT_DENIED] == needed_connect_denied)
         if self.revocation is not None:
             complete = complete and counts[RELOAD] == counts["operator_catalog.application.revoked"] == 1
+        self.audit_kinds = {row["id"]: row["event_type"] for row in events}
         return complete, {"namedAuditInventory": dict(sorted(counts.items())), "auditAttemptIds": sorted(pairs)}
 
     def checkpoint(self):
@@ -517,16 +534,17 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             if not any(case == phase for case, _ in fixture.ARRIVALS):
                 require(self.previous_provider == before_provider, "npm example denied/local phase changed provider state")
             new_ids = sorted(set(self.cutoff) - set(before_cutoff))
-            if phase in LOCAL_PHASES:
-                require(self.cutoff == before_cutoff, "npm example local-only refusal produced an audit event")
+            local_leases = local_lease_delta(before_cutoff, self.cutoff, self.audit_kinds) if phase in LOCAL_PHASES else []
             units, denied = connection_units(spec)
             self.phase_evidence.append({"phase": phase, "applicationId": app["id"], "policyHash": self.policy_hash,
                 "providerAttemptsBefore": before_provider["total"], "providerAttemptsAfter": self.previous_provider["total"],
                 "newAuditEventIds": new_ids, "requestDenials": len(expected_denials(spec, rule)),
-                "connectDenials": denied, "connectRequestUnits": units, "localOnly": phase in LOCAL_PHASES})
+                "connectDenials": denied, "connectRequestUnits": units, "localOnly": phase in LOCAL_PHASES,
+                "localConcurrentLeaseEventIds": local_leases})
             self.unchanged(pins)
         self.phase = "final"; evidence = self.checkpoint(); events = self.audit()
-        self.validate_audits(events)
+        complete, evidence = self.validate_audits(events)
+        require(complete, "npm example final retained audit snapshot incomplete")
         found, durable = set(), set()
         for row in events:
             event = row["event"]
@@ -619,7 +637,8 @@ def validate_success_result(value):
         units, denied = connection_units(spec)
         expected_requests = 1 if phase in {"metadata_only_publish", "outside_window_publish", "wrong_package_view", "wrong_package_manifest"} else 2 if phase == "wrong_package_publish" else 0
         require(type(row) is dict and set(row) == {"phase", "applicationId", "policyHash", "providerAttemptsBefore",
-            "providerAttemptsAfter", "newAuditEventIds", "requestDenials", "connectDenials", "connectRequestUnits", "localOnly"}
+            "providerAttemptsAfter", "newAuditEventIds", "requestDenials", "connectDenials", "connectRequestUnits", "localOnly",
+            "localConcurrentLeaseEventIds"}
             and row["phase"] == phase and row["applicationId"] == apps[spec["application"]]
             and row["policyHash"] == value["revokedPolicyHash" if phase.startswith("revoked_") else "policyHash"]
             and row["localOnly"] is (phase in LOCAL_PHASES)
@@ -627,9 +646,14 @@ def validate_success_result(value):
                 "providerAttemptsAfter": next_count, "requestDenials": expected_requests, "connectDenials": denied,
                 "connectRequestUnits": units}.items()), "npm example checkpoint/control count differs")
         audit_ids = row["newAuditEventIds"]
+        local_leases = row["localConcurrentLeaseEventIds"]
+        require(type(local_leases) is list and all(type(v) is str and UUID.fullmatch(v) for v in local_leases)
+            and local_leases == sorted(set(local_leases))
+            and (local_leases == audit_ids if phase in LOCAL_PHASES else local_leases == []),
+            "npm example local concurrent lease accounting differs")
         require(type(audit_ids) is list and len(audit_ids) <= 64 and all(type(v) is str and (UUID.fullmatch(v) or SHA256.fullmatch(v)) for v in audit_ids)
             and len(set(audit_ids)) == len(audit_ids) and not seen.intersection(audit_ids)
-            and (not audit_ids if phase in LOCAL_PHASES else bool(audit_ids) if units or denied else True),
+            and (bool(audit_ids) if units or denied else True),
             "npm example checkpoint audit identities differ")
         seen.update(audit_ids); count = next_count
     mutations = value["catalogMutations"]

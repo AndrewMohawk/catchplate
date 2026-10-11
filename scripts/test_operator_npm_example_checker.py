@@ -319,7 +319,8 @@ def success_result():
             "providerAttemptsBefore": count, "providerAttemptsAfter": following,
             "newAuditEventIds": [sha(2000 + index)] if units or denied else [], "requestDenials": len(denial_signatures(spec)),
             "connectDenials": denied, "connectRequestUnits": units,
-            "localOnly": spec["case"] in {"missing_confirmation", "wrong_tarball_hash"}})
+            "localOnly": spec["case"] in {"missing_confirmation", "wrong_tarball_hash"},
+            "localConcurrentLeaseEventIds": []})
         count = following
     mutations = [("operator_catalog.credential.npm_token_created", CREDENTIAL, sha(3000))]
     mutations += [("operator_catalog.application.created", app, sha(3001 + index)) for index, app in enumerate(apps.values())]
@@ -570,6 +571,75 @@ class NpmExampleCheckerTests(unittest.TestCase):
         for seconds in (0, 26):
             with self.assertRaises(checker.CheckFailure):
                 checker.run_client(SPECS[0], {}, seconds)
+
+    def test_local_refusal_allows_only_explicit_validated_concurrent_lease_delta(self):
+        instance, rows = runtime_fixture()
+        self.assertTrue(instance.validate_audits(rows)[0])
+        before = dict(instance.cutoff)
+        original_kinds = {row["id"]: row["event_type"] for row in rows}
+        self.assertEqual(checker.local_lease_delta(before, before, original_kinds), [])
+        template = next(row for row in rows if row["event_type"] == "data_plane.credential_lease.issued")
+        added = []
+        for number, purpose in ((8101, "dispatchSecret"), (8100, "generationMetadata")):
+            row = deepcopy(template); row.update(id=uid(number), event_hash=sha(number))
+            row["event"].update(purpose=purpose, expected_credential_version=1 if purpose == "dispatchSecret" else None)
+            added.append(row)
+        self.assertTrue(instance.validate_audits(rows + added)[0])
+        expected = [uid(8100), uid(8101)]
+        self.assertEqual(checker.local_lease_delta(before, instance.cutoff, instance.audit_kinds), expected)
+        self.assertEqual({key: instance.cutoff[key] for key in before}, before)
+        # The classifier is used only after the existing full authority checks.
+        # A lease label cannot make an invalid issued row eligible.
+        for change in ({"principal_id": "other"}, {"route_id": "other"}, {"policy_hash": sha(999)},
+                {"credential_id": uid(999)}, {"data_plane_binary_digest": sha(999)},
+                {"expected_credential_version": 2}, {"expected_credential_version": True},
+                {"status_code": 503}, {"outcome": "rejected"}, {"purpose": "secret-canary"}):
+            wrong = deepcopy(added[0]); wrong["event"].update(change)
+            with self.subTest(authority=list(change)), self.assertRaises(checker.CheckFailure):
+                runtime_fixture()[0].validate_audits(rows + [wrong])
+        for kind in (START, RELEASE, BLOCK, "data_plane.connect.established", "data_plane.connect.keep_alive",
+                CONNECT_DENIED, "data_plane.request.denied", "data_plane.policy.reloaded",
+                "data_plane.credential_lease.rejected", "unknown.secret-canary"):
+            kinds = dict(instance.audit_kinds); kinds[uid(8100)] = kind
+            with self.subTest(kind=kind), self.assertRaises(checker.CheckFailure) as caught:
+                checker.local_lease_delta(before, instance.cutoff, kinds)
+            self.assertNotIn("secret-canary", str(caught.exception))
+        after, kinds = dict(instance.cutoff), dict(instance.audit_kinds)
+        changes = (
+            lambda a, k: a.update({next(iter(before)): sha(999)}),
+            lambda a, k: (a.pop(next(iter(before))), k.pop(next(iter(before)))),
+            lambda a, k: a.update({uid(8100): "secret-canary"}),
+            lambda a, k: k.pop(uid(8100)),
+            lambda a, k: k.update({uid(9999): "data_plane.credential_lease.issued"}),
+            lambda a, k: (a.update({sha(8100): a.pop(uid(8100))}), k.update({sha(8100): k.pop(uid(8100))})),
+        )
+        for index, change in enumerate(changes):
+            a, k = dict(after), dict(kinds); change(a, k)
+            with self.subTest(delta=index), self.assertRaises(checker.CheckFailure):
+                checker.local_lease_delta(before, a, k)
+        overflow = {uid(9000 + index): sha(9000 + index) for index in range(65)}
+        with self.assertRaises(checker.CheckFailure):
+            checker.local_lease_delta(before, {**before, **overflow},
+                {**original_kinds, **{key: "data_plane.credential_lease.issued" for key in overflow}})
+        receipt = success_result()
+        local = receipt["phaseEvidence"][16]
+        local.update(newAuditEventIds=expected[:], localConcurrentLeaseEventIds=expected[:])
+        receipt["namedAuditInventory"]["data_plane.credential_lease.issued"] = 3
+        self.assertTrue(checker.validate_success_result(receipt))
+        for change in (
+                lambda v: v["phaseEvidence"][16].update(localConcurrentLeaseEventIds=[]),
+                lambda v: v["phaseEvidence"][16].update(newAuditEventIds=[]),
+                lambda v: v["phaseEvidence"][16].update(localConcurrentLeaseEventIds=[uid(8100)]),
+                lambda v: v["phaseEvidence"][16].update(newAuditEventIds=[sha(999)], localConcurrentLeaseEventIds=[sha(999)]),
+                lambda v: v["phaseEvidence"][16].update(newAuditEventIds=expected[::-1], localConcurrentLeaseEventIds=expected[::-1]),
+                lambda v: v["phaseEvidence"][16].update(providerAttemptsAfter=11),
+                lambda v: v["phaseEvidence"][16].update(connectRequestUnits=1),
+                lambda v: v["phaseEvidence"][16].update(requestDenials=1),
+                lambda v: v["phaseEvidence"][0].update(localConcurrentLeaseEventIds=[uid(999)]),
+                lambda v: v["phaseEvidence"][17].update(newAuditEventIds=expected[:], localConcurrentLeaseEventIds=expected[:])):
+            value = deepcopy(receipt); change(value)
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_success_result(value)
 
     def test_closed_receipt_rejects_counts_pins_storage_and_local_audit_claims(self):
         good = success_result()

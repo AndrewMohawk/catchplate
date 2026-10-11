@@ -24,6 +24,12 @@ BEFORE = {"revision": 4, "policy": {"sequence": 1, "policy_hash": oracle.sha(890
 APP, CREDENTIAL, RULE = oracle.uid(2), oracle.uid(1), oracle.uid(4)
 PAYLOAD = bridge.expected_payload(BEFORE, APP, CREDENTIAL)
 RAW = json.dumps(PAYLOAD, indent=1).encode()
+INTENT_VALUE = {"apiVersion": "serverware.operatorGoogleConsent/v1", "productionReady": False,
+    "protectedActivationSupported": False, "limits": {"active": 32, "retained": 1024},
+    "intents": [{"id": oracle.uid(12), "name": "fixture-account", "provider_id": "google",
+        "permission_preset": "gmail_readonly", "scopes": ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"],
+        "created_at": "2026-10-11T00:00:00+00:00", "expires_at_epoch": 1791700000,
+        "status": "connected", "credential_id": CREDENTIAL}]}
 
 
 def frame(method="POST", path=bridge.GRANT, raw=RAW, number=3):
@@ -75,6 +81,27 @@ class BrowserBridgeTests(unittest.TestCase):
             selected.select.side_effect = None; selected.select.return_value = [1]
             bridge.read_frame(999, selected, b"", time.monotonic() + 1)
 
+    def test_exact_single_intents_get_and_closed_connected_metadata(self):
+        request = frame("GET", bridge.INTENTS, b"", 3)
+        self.assertEqual(bridge.validate_request(request, PAYLOAD, posted=False, documents=1, catalogs=1, intents=0), b"")
+        for change in ({"intents": 1}, {"posted": True}, {"documents": 0}, {"catalogs": 0}):
+            values = {"posted": False, "documents": 1, "catalogs": 1, "intents": 0, **change}
+            with self.subTest(change=change), self.assertRaises(CheckFailure): bridge.validate_request(request, PAYLOAD, **values)
+        for request in (frame("POST", bridge.INTENTS), frame("GET", bridge.INTENTS + "?id=other", b""),
+                        frame("GET", bridge.INTENTS, b"body")):
+            with self.assertRaises(CheckFailure): bridge.validate_request(request, PAYLOAD, posted=False, documents=1, catalogs=1)
+        credential = {"id": CREDENTIAL, "name": "fixture-account"}
+        bridge.validate_intents(json.dumps(INTENT_VALUE).encode(), credential)
+        for key in ("state", "authorizationUrl", "code", "nonce", "access_token", "client_secret", "state_digest"):
+            bad = deepcopy(INTENT_VALUE); bad["intents"][0][key] = "secret-canary"
+            with self.subTest(key=key), self.assertRaises(CheckFailure): bridge.validate_intents(json.dumps(bad).encode(), credential)
+        for key, value in (("status", "awaiting_consent"), ("credential_id", oracle.uid(33)), ("name", "other"),
+                           ("expires_at_epoch", True), ("scopes", [])):
+            bad = deepcopy(INTENT_VALUE); bad["intents"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(CheckFailure): bridge.validate_intents(json.dumps(bad).encode(), credential)
+        bad = deepcopy(INTENT_VALUE); bad["intents"].append(deepcopy(bad["intents"][0]))
+        with self.assertRaises(CheckFailure): bridge.validate_intents(json.dumps(bad).encode(), credential)
+
     def test_original_deadline_and_alarm_restored_without_extension_on_both_outcomes(self):
         for failure in (False, True):
             check = SimpleNamespace(deadline=140)
@@ -96,27 +123,29 @@ class BrowserBridgeTests(unittest.TestCase):
         result = {"revision": 5, "policy": {"sequence": 2, "policy_hash": oracle.sha(900)},
             "access_rule": {"id": RULE, "application_id": APP, "credential_id": CREDENTIAL}}
         after = {**result, "access_rules": [result["access_rule"]]}
-        frames = [frame("GET", "/", b"", 1), frame("GET", bridge.CATALOG, b"", 2), frame(),
-            frame("GET", bridge.CATALOG, b"", 4), {"type": "done", "id": 5}]
+        frames = [frame("GET", "/", b"", 1), frame("GET", bridge.CATALOG, b"", 2),
+            frame("GET", bridge.INTENTS, b"", 3), frame("GET", bridge.CATALOG, b"", 4), frame(number=5),
+            frame("GET", bridge.CATALOG, b"", 6), {"type": "done", "id": 7}]
         read, write = os.pipe()
         try:
             os.write(write, b"".join(json.dumps(value).encode() + b"\n" for value in frames)); os.close(write); write = None
             check = SimpleNamespace(deadline=time.monotonic() + 1,
                 catalog=Mock(side_effect=[BEFORE, BEFORE, after]), finalize_mutation=Mock())
             def response(_check, request, raw):
+                if request["path"] == bridge.INTENTS: return 200, [], json.dumps(INTENT_VALUE).encode()
                 if request["method"] == "POST":
                     self.assertEqual(raw, RAW)
                     return 201, [], json.dumps(result).encode()
                 return 200, [], b"<html>fixture</html>" if request["path"] == "/" else json.dumps(after).encode()
             with patch.object(bridge.sys, "stdin", SimpleNamespace(fileno=lambda: read)), \
                  patch.object(bridge, "exchange", side_effect=response) as transport, patch.object(bridge, "emit") as emit:
-                rule, actual = bridge._create_permission(check, {"id": APP}, {"id": CREDENTIAL})
+                rule, actual = bridge._create_permission(check, {"id": APP}, {"id": CREDENTIAL, "name": "fixture-account"})
             self.assertEqual((rule, actual), (result["access_rule"], result))
             self.assertEqual(sum(call.args[1]["method"] == "POST" for call in transport.call_args_list), 1)
             check.finalize_mutation.assert_called_once_with(result, after, collection="access_rules",
                 result_key="access_rule", event="operator_catalog.access_rule.created")
             proof = emit.call_args.args[0]["permission"]
-            self.assertEqual((proof["grantPosts"], proof["catalogGets"], proof["requestSha256"]), (1, 2, bridge.sha(RAW)))
+            self.assertEqual((proof["grantPosts"], proof["catalogGets"], proof["intentGets"], proof["requestSha256"]), (1, 3, 1, bridge.sha(RAW)))
             self.assertTrue(os.get_blocking(read))
         finally:
             os.close(read)
@@ -198,8 +227,8 @@ class BrowserBridgeTests(unittest.TestCase):
         sdk = oracle.success_result(oracle.commitments(oracle.provider_documents()["refreshed"]))
         proof = {"schema": bridge.SCHEMA, "submitted": PAYLOAD, "requestSha256": bridge.sha(RAW),
             "responseSha256": oracle.sha(2), "htmlSha256": oracle.sha(3), "ruleId": RULE,
-            "revision": 5, "policyHash": sdk["policyHash"], "grantPosts": 1, "catalogGets": 2}
-        browser = {"postCount": 1, "getCount": 3, "pageErrors": 0, "consoleErrors": 0, "refusedRequests": 0,
+            "revision": 5, "policyHash": sdk["policyHash"], "grantPosts": 1, "catalogGets": 3, "intentGets": 1}
+        browser = {"postCount": 1, "getCount": 5, "pageErrors": 0, "consoleErrors": 0, "refusedRequests": 0,
             "browserClosed": True, "selectedApplicationId": APP, "selectedCredentialId": CREDENTIAL, "savedRuleId": RULE,
             **{key: proof[key] for key in ("requestSha256", "responseSha256", "htmlSha256")},
             "steps": ["saved_account", "saved_basic_app", "official_sdk_default", "review", "grant", "saved_setup"],
@@ -209,6 +238,7 @@ class BrowserBridgeTests(unittest.TestCase):
         self.assertTrue(bridge.validate_joined_result(value))
         for section, key, replacement in (("browser", "postCount", True), ("browser", "selectedApplicationId", oracle.uid(9)),
                 ("permission", "requestSha256", oracle.sha(22)), ("permission", "grantPosts", 2),
+                ("permission", "intentGets", True), ("permission", "intentGets", 0), ("permission", "catalogGets", 2),
                 ("sdk", "browserUiVerified", True), ("sdk", "providerAttempts", 7), ("sdk", "automaticRefreshes", 0)):
             bad = deepcopy(value); bad[section][key] = replacement
             with self.subTest(section=section, key=key), self.assertRaises(CheckFailure): bridge.validate_joined_result(bad)

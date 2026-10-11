@@ -9,16 +9,27 @@ const {spawn} = require('node:child_process');
 const ORIGIN = 'https://serverware-demo.example.com';
 const CATALOG = '/api/operator-demo/catalog';
 const GRANT = '/api/operator-demo/access-rules/gmail-read';
+const INTENTS = '/api/operator-demo/oauth/google/intents';
 const PLAYWRIGHT = '/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright';
 const CHROME = '/home/catchplate/.cache/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell';
 const CHROME_SHA = '27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c317c';
 const sha = value => 'sha256:' + crypto.createHash('sha256').update(value).digest('hex');
 function requireValue(value) { if (!value) throw new Error('Gmail browser permission check refused'); }
+const STAGES = ['inputs', 'launch_browser', 'await_checker', 'open_page', 'await_observer', 'select_account',
+  'select_app', 'select_permission', 'review', 'grant', 'await_saved', 'close_browser', 'await_sdk'];
+const FAILURES = ['workflow', 'deadline', 'signal', 'request_refused', 'page_error', 'console_error',
+  'websocket', 'popup', 'download', 'checker_io', 'checker_frame', 'checker_exit'];
+function failureReceipt(stage, code, observations) {
+  const count = name => Number.isSafeInteger(observations[name]) && observations[name] >= 0 && observations[name] <= 32 ? observations[name] : null;
+  return {schema: 'serverware.privateGmailBrowserFailure/v1', stage: STAGES.includes(stage) ? stage : 'inputs',
+    code: FAILURES.includes(code) ? code : 'workflow', postCount: count('postCount'), getCount: count('getCount'),
+    pageErrors: count('pageErrors'), consoleErrors: count('consoleErrors'), refusedRequests: count('refusedRequests')};
+}
 function requestFrame(request, id) {
   const url = new URL(request.url());
   requireValue(url.origin === ORIGIN && !url.username && !url.password && !url.search && !url.hash);
   const method = request.method(), raw = request.postDataBuffer() || Buffer.alloc(0);
-  requireValue(method === 'GET' && ['/', CATALOG].includes(url.pathname) && !raw.length ||
+  requireValue(method === 'GET' && ['/', CATALOG, INTENTS].includes(url.pathname) && !raw.length ||
     method === 'POST' && url.pathname === GRANT && raw.length > 0 && raw.length <= 4096);
   const headers = Object.fromEntries(Object.entries(request.headers()).filter(([key]) =>
     ['accept', 'content-type', 'origin', 'referer'].includes(key)));
@@ -35,39 +46,43 @@ async function main() {
   const target = path.join(evidence, 'gmail-browser');
   fs.mkdirSync(target, {mode: 0o700});
   const {chromium} = require(PLAYWRIGHT);
-  let browser, context, child, pending = null, readyResolve, readyReject, resultResolve, resultReject;
+  let browser, context, child, pending = null, readyResolve, readyReject, resultResolve, resultReject, observerResolve, observerReject;
   let failed = null, buffer = Buffer.alloc(0), total = 0, stderrBytes = 0, sequence = 0;
   let permission, saved, lastCatalog, observedPost = false, chain = Promise.resolve();
+  let stage = 'inputs', failure = null, intentGets = 0, catalogGets = 0;
   const observations = {postCount: 0, getCount: 0, pageErrors: 0, consoleErrors: 0,
     refusedRequests: 0, browserClosed: false, steps: [], screenshots: []};
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const result = new Promise((resolve, reject) => { resultResolve = resolve; resultReject = reject; });
+  const observer = new Promise((resolve, reject) => { observerResolve = resolve; observerReject = reject; });
   // Mark both promises handled even if startup fails before awaiting either.
-  ready.catch(() => {}); result.catch(() => {});
-  function fail() {
+  ready.catch(() => {}); result.catch(() => {}); observer.catch(() => {});
+  function fail(code = 'workflow') {
     if (failed) return;
+    failure = failureReceipt(stage, code, observations);
     failed = new Error('Gmail browser permission check refused');
-    readyReject(failed); resultReject(failed);
+    readyReject(failed); resultReject(failed); observerReject(failed);
     if (pending) { pending.reject(failed); pending = null; }
   }
   function send(frame) {
     requireValue(!failed && child && !pending && ++sequence === frame.id && sequence <= 16);
     return new Promise((resolve, reject) => {
       pending = {id: frame.id, resolve, reject};
-      child.stdin.write(JSON.stringify(frame) + '\n', error => { if (error) fail(); });
+      child.stdin.write(JSON.stringify(frame) + '\n', error => { if (error) fail('checker_io'); });
     });
   }
-  const timer = setTimeout(fail, 180000); // systemd's independent 185s cap owns all descendants.
-  const onSignal = () => { fail(); if (browser) browser.close().catch(() => {}); };
+  const timer = setTimeout(() => fail('deadline'), 180000); // systemd's independent 185s cap owns all descendants.
+  const onSignal = () => { fail('signal'); if (browser) browser.close().catch(() => {}); };
   process.once('SIGTERM', onSignal); process.once('SIGINT', onSignal);
   try {
     // Cold browser startup occurs before the checker issues its 90-second token.
+    stage = 'launch_browser';
     browser = await chromium.launch({executablePath: CHROME, headless: true, timeout: 10000,
       env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'},
       args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update',
         '--disable-domain-reliability', '--disable-sync', '--no-first-run', '--host-resolver-rules=MAP * ~NOTFOUND']});
     context = await browser.newContext({viewport: {width: 1440, height: 1000}, serviceWorkers: 'block', acceptDownloads: false});
-    await context.routeWebSocket('**/*', socket => { observations.refusedRequests++; socket.close(); fail(); });
+    await context.routeWebSocket('**/*', socket => { observations.refusedRequests++; socket.close(); fail('websocket'); });
     await context.route('**/*', route => {
       chain = chain.then(async () => {
         try {
@@ -82,24 +97,27 @@ async function main() {
           const body = Buffer.from(response.body, 'base64');
           requireValue(body.toString('base64') === response.body && body.length > 0 && body.length <= 2 * 1024 ** 2);
           if (frame.path === '/') observations.htmlSha256 = sha(body);
-          else if (frame.method === 'GET') lastCatalog = JSON.parse(body);
+          else if (frame.path === CATALOG) { lastCatalog = JSON.parse(body); catalogGets++; }
+          else if (frame.path === INTENTS) { requireValue(++intentGets === 1); }
           else { saved = JSON.parse(body); observations.responseSha256 = sha(body); }
           await route.fulfill({status: response.status, headers: Object.fromEntries(response.headers), body});
-        } catch (_) { observations.refusedRequests++; await route.abort().catch(() => {}); fail(); }
+          if (frame.path === CATALOG && intentGets === 1 && catalogGets >= 2) observerResolve();
+        } catch (_) { observations.refusedRequests++; fail('request_refused'); await route.abort().catch(() => {}); }
       });
       return chain;
     });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
-    page.on('pageerror', () => { observations.pageErrors++; fail(); });
-    page.on('console', message => { if (message.type() === 'error') { observations.consoleErrors++; fail(); } });
-    page.on('popup', popup => { observations.refusedRequests++; popup.close().catch(() => {}); fail(); });
-    page.on('download', download => { observations.refusedRequests++; download.cancel().catch(() => {}); fail(); });
+    page.on('pageerror', () => { observations.pageErrors++; fail('page_error'); });
+    page.on('console', message => { if (message.type() === 'error') { observations.consoleErrors++; fail('console_error'); } });
+    page.on('popup', popup => { observations.refusedRequests++; popup.close().catch(() => {}); fail('popup'); });
+    page.on('download', download => { observations.refusedRequests++; download.cancel().catch(() => {}); fail('download'); });
+    stage = 'await_checker';
     child = spawn('/usr/bin/docker', ['start', '--attach', '--interactive', checker], {
       stdio: ['pipe', 'pipe', 'pipe'], env: {PATH: '/usr/bin:/bin', DOCKER_HOST: 'unix:///var/run/docker.sock'}});
     const exited = new Promise(resolve => { child.once('exit', (code, signal) => resolve({code, signal})); });
-    child.on('error', fail);
-    child.stderr.on('data', data => { stderrBytes += data.length; if (stderrBytes > 65536) fail(); });
+    child.on('error', () => fail('checker_io'));
+    child.stderr.on('data', data => { stderrBytes += data.length; if (stderrBytes > 65536) fail('checker_io'); });
     child.stdout.on('data', data => {
       try {
         total += data.length; requireValue(total <= 8 * 1024 ** 2);
@@ -119,21 +137,27 @@ async function main() {
             const next = pending; pending = null; next.resolve(frame);
           }
         }
-      } catch (_) { fail(); }
+      } catch (_) { fail('checker_frame'); }
     });
-    child.once('exit', () => { if (!permission) fail(); });
+    child.once('exit', () => { if (!permission) fail('checker_exit'); });
     const identity = await ready;
+    stage = 'open_page';
     await page.goto(ORIGIN + '/#connect', {waitUntil: 'domcontentloaded'});
+    stage = 'await_observer'; await observer; requireValue(!failed);
+    stage = 'select_account';
     await page.locator('#connect-use-saved').click();
     await page.locator('#connect-credential-choice').selectOption(identity.credentialId);
     await page.locator('#connect-credential-next').click(); observations.steps.push('saved_account');
+    stage = 'select_app';
     await page.locator('#connect-application-choice').selectOption(identity.applicationId);
     await page.locator('#connect-application-next').click(); observations.steps.push('saved_basic_app');
+    stage = 'select_permission';
     await page.locator('#connect-rule-choice').selectOption('new');
     await page.locator('#connect-operation').selectOption('gmail_read_v1');
     requireValue(await page.locator('#connect-gmail-client').inputValue() === 'sdk');
     requireValue(lastCatalog.applications.find(app => app.id === identity.applicationId)?.proxy_authentication === 'basic_and_bearer_v1');
     observations.steps.push('official_sdk_default');
+    stage = 'review';
     await page.locator('#connect-review').click();
     requireValue((await page.locator('#connect-review-details').innerText()).includes('Official Gmail SDK · Go example'));
     observations.steps.push('review');
@@ -142,7 +166,9 @@ async function main() {
       observations.screenshots.push({file: name, sha256: sha(raw)});
     };
     await screenshot('review.png');
+    stage = 'grant'; requireValue(!failed);
     await page.locator('#connect-grant').click(); observations.steps.push('grant');
+    stage = 'await_saved';
     await page.locator('#connect-setup-step').waitFor({state: 'visible'});
     requireValue(saved?.access_rule?.application_id === identity.applicationId
       && saved.access_rule.credential_id === identity.credentialId && saved.access_rule.credential_input === 'replace_exact'
@@ -156,13 +182,19 @@ async function main() {
     requireValue(await page.evaluate(() => localStorage.length === 0 && sessionStorage.length === 0));
     await screenshot('saved.png');
     await chain;
+    stage = 'close_browser';
     await browser.close(); browser = null; observations.browserClosed = true;
     const completion = await send({type: 'done', id: sequence + 1});
     requireValue(completion.type === 'permission'); permission = completion.permission;
+    stage = 'await_sdk';
     const sdk = await result, terminal = await exited;
     requireValue(!failed && terminal.code === 0 && terminal.signal === null && buffer.length === 0 && stderrBytes === 0);
     return {schema: 'serverware.privateGmailBrowserSdk/v1', ok: true, browserPermissionVerified: true,
       syntheticOAuthProgrammatic: true, externalSsoVerified: false, browser: observations, permission, sdk};
+  } catch (error) {
+    if (!failure) failure = failureReceipt(stage, 'workflow', observations);
+    fs.writeFileSync(path.join(target, 'failure.json'), JSON.stringify(failure) + '\n', {flag: 'wx', mode: 0o600});
+    throw error;
   } finally {
     clearTimeout(timer); process.removeListener('SIGTERM', onSignal); process.removeListener('SIGINT', onSignal);
     if (browser) await browser.close().catch(() => {});
@@ -170,7 +202,7 @@ async function main() {
     // The exact systemd unit owns final descendant teardown even if Node exits.
   }
 }
-module.exports = {requestFrame};
+module.exports = {requestFrame, failureReceipt};
 if (require.main === module) main().then(value => process.stdout.write(JSON.stringify(value) + '\n')).catch(() => {
   process.stderr.write('Gmail browser permission check failed; no request or credential details emitted\n'); process.exitCode = 1;
 });

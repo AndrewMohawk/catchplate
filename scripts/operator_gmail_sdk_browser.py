@@ -10,6 +10,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import selectors
 import signal
 import sys
@@ -20,6 +21,7 @@ from scripts.check_operator_demo import require
 ORIGIN = "https://serverware-demo.example.com"
 CATALOG = "/api/operator-demo/catalog"
 GRANT = "/api/operator-demo/access-rules/gmail-read"
+INTENTS = "/api/operator-demo/oauth/google/intents"
 SCHEMA = "serverware.privateGmailBrowserPermission/v1"
 JOINED_SCHEMA = "serverware.privateGmailBrowserSdk/v1"
 MAX_FRAME, MAX_BODY, GRANT_SECONDS = 16384, 2 * 1024**2, 20
@@ -47,7 +49,7 @@ def expected_payload(before, application_id, credential_id):
         "expected_revision": before["revision"], "expected_policy_hash": before["policy"]["policy_hash"]}
 
 
-def validate_request(frame, expected, *, posted, documents, catalogs):
+def validate_request(frame, expected, *, posted, documents, catalogs, intents=0):
     require(type(frame) is dict and set(frame) == {"id", "type", "method", "path", "headers", "body"}
         and frame["type"] == "request" and type(frame["id"]) is int and 1 <= frame["id"] <= 16,
         "browser request frame differs")
@@ -60,7 +62,9 @@ def validate_request(frame, expected, *, posted, documents, catalogs):
     require(base64.b64encode(raw).decode() == frame["body"], "browser body encoding differs")
     if frame["method"] == "GET":
         require(not raw and ((frame["path"] == "/" and documents == 0)
-            or (frame["path"] == CATALOG and catalogs < 8)), "browser GET route or count differs")
+            or (frame["path"] == CATALOG and catalogs < 8)
+            or (frame["path"] == INTENTS and documents == 1 and catalogs >= 1 and intents == 0 and not posted)),
+            "browser GET route or count differs")
     else:
         require(frame["method"] == "POST" and frame["path"] == GRANT and not posted and documents == 1
             and catalogs >= 1 and 0 < len(raw) <= 4096 and headers.get("origin") == ORIGIN
@@ -69,6 +73,25 @@ def validate_request(frame, expected, *, posted, documents, catalogs):
         require(type(value) is dict and value == expected and type(value.get("expected_revision")) is int,
             "browser grant selected identities or CAS differs")
     return raw
+
+
+def validate_intents(raw, credential):
+    """Only the single already-connected fixture account's public history."""
+    value = strict_json(raw)
+    require(type(value) is dict and set(value) == {"apiVersion", "intents", "limits", "productionReady", "protectedActivationSupported"}
+        and value["apiVersion"] == "serverware.operatorGoogleConsent/v1" and value["productionReady"] is False
+        and value["protectedActivationSupported"] is False and value["limits"] == {"active": 32, "retained": 1024}
+        and type(value["intents"]) is list and len(value["intents"]) == 1, "browser consent public envelope differs")
+    row = value["intents"][0]
+    require(type(row) is dict and set(row) == {"id", "name", "provider_id", "permission_preset", "scopes", "created_at",
+        "expires_at_epoch", "status", "credential_id"} and row["status"] == "connected"
+        and row["credential_id"] == credential["id"] and row["name"] == credential["name"]
+        and row["provider_id"] == "google" and row["permission_preset"] == "gmail_readonly"
+        and row["scopes"] == ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"]
+        and type(row["expires_at_epoch"]) is int and 0 < row["expires_at_epoch"] < 2**53
+        and type(row["id"]) is str and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", row["id"])
+        and type(row["created_at"]) is str and 1 <= len(row["created_at"]) <= 64
+        and all(32 <= ord(char) < 127 for char in row["created_at"]), "browser consent public binding differs")
 
 
 def emit(value):
@@ -138,7 +161,7 @@ def _create_permission(check, application, credential):
     emit({"type": "ready", "schema": SCHEMA, "applicationId": application["id"],
         "credentialId": credential["id"], "expectedRevision": before["revision"],
         "expectedPolicyHash": before["policy"]["policy_hash"]})
-    posted, documents, catalogs, sequence = False, 0, 0, 0
+    posted, documents, catalogs, intents, sequence = False, 0, 0, 0, 0
     result = proof = None
     html_digest = None
     fd, buffer = sys.stdin.fileno(), b""
@@ -154,13 +177,15 @@ def _create_permission(check, application, credential):
             sequence += 1
             require(sequence <= 16 and time.monotonic() < end, "browser frame budget expired")
             if frame.get("type") == "done":
-                require(set(frame) == {"id", "type"} and posted and proof is not None,
+                require(set(frame) == {"id", "type"} and posted and proof is not None and intents == 1,
                     "browser completed without its single saved grant")
                 proof["catalogGets"] = catalogs
+                proof["intentGets"] = intents
                 emit({"type": "permission", "id": sequence, "permission": proof})
                 return result["access_rule"], result
-            raw = validate_request(frame, expected, posted=posted, documents=documents, catalogs=catalogs)
+            raw = validate_request(frame, expected, posted=posted, documents=documents, catalogs=catalogs, intents=intents)
             if frame["method"] == "POST":
+                require(intents == 1 and catalogs >= 2, "browser consent observer has not completed")
                 current = check.catalog()
                 require(current["revision"] == before["revision"] and current["policy"] == before["policy"],
                     "browser grant state changed before dispatch")
@@ -168,6 +193,9 @@ def _create_permission(check, application, credential):
             status, headers, body = exchange(check, frame, raw)
             if frame["path"] == "/":
                 documents += 1; html_digest = sha(body)
+            elif frame["path"] == INTENTS:
+                validate_intents(body, credential)
+                intents += 1
             elif frame["method"] == "GET":
                 catalogs += 1
             else:
@@ -202,10 +230,11 @@ def validate_joined_result(value):
     sdk, proof, browser = value["sdk"], value["permission"], value["browser"]
     validate_success_result(sdk)  # Legacy SDK evidence and negative controls stay unchanged.
     require(type(proof) is dict and set(proof) == {"schema", "submitted", "requestSha256", "responseSha256", "htmlSha256",
-        "ruleId", "revision", "policyHash", "grantPosts", "catalogGets"} and proof["schema"] == SCHEMA
+        "ruleId", "revision", "policyHash", "grantPosts", "catalogGets", "intentGets"} and proof["schema"] == SCHEMA
         and proof["ruleId"] == sdk["ruleId"] and proof["policyHash"] == sdk["policyHash"]
         and type(proof["revision"]) is int and proof["revision"] == sdk["policyRevisions"]["accepted"] and type(proof["grantPosts"]) is int
-        and proof["grantPosts"] == 1 and type(proof["catalogGets"]) is int and 1 <= proof["catalogGets"] <= 8
+        and proof["grantPosts"] == 1 and type(proof["catalogGets"]) is int and 3 <= proof["catalogGets"] <= 8
+        and type(proof["intentGets"]) is int and proof["intentGets"] == 1
         and all(type(proof[key]) is str and SHA256.fullmatch(proof[key])
             for key in ("requestSha256", "responseSha256", "htmlSha256")), "joined Gmail grant proof differs")
     payload = proof["submitted"]
@@ -220,7 +249,7 @@ def validate_joined_result(value):
         "refusedRequests", "browserClosed", "selectedApplicationId", "selectedCredentialId", "savedRuleId",
         "requestSha256", "responseSha256", "htmlSha256", "steps", "screenshots"}
         and type(browser["postCount"]) is int and browser["postCount"] == 1
-        and type(browser["getCount"]) is int and browser["getCount"] == proof["catalogGets"] + 1
+        and type(browser["getCount"]) is int and browser["getCount"] == proof["catalogGets"] + proof["intentGets"] + 1
         and all(type(browser[key]) is int and browser[key] == 0 for key in ("pageErrors", "consoleErrors", "refusedRequests"))
         and browser["browserClosed"] is True and browser["selectedApplicationId"] == payload["application_id"]
         and browser["selectedCredentialId"] == payload["credential_id"] and browser["savedRuleId"] == proof["ruleId"]

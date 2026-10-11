@@ -145,9 +145,16 @@ CA, wrong inner CA, an unassigned application and a revoked permission each
 failed without any extra provider request. See the
 [joined verification record](../../docs/operator-gmail-job-verification.md#joined-official-sdk-result-2026-10-11-utc).
 
-That run used a local synthetic provider with no external network or real Google
-credentials. It does **not** prove real Google consent, a live Google request,
-public deployment or a joined browser journey. Python's generated Gmail client
+A further run at `d5daef7c` joined the actual browser permission flow to this same
+compiled entrypoint and the deployed application's code. It passed one browser
+grant, eight SDK reads across token expiry, one automatic refresh and all four
+denial controls. See the
+[fresh joined result](../../docs/operator-gmail-job-verification.md#fresh-joined-result-passed).
+The browser made real app API calls; synthetic OAuth consent was programmatic.
+
+Both runs used a local synthetic provider with no external network or real
+Google credentials. They do **not** prove real Google consent, a live Google
+request, public Internet proxy routing or external SSO. Python's generated Gmail client
 was not substituted: its reviewed default `httplib2` transport does
 not provide the required TLS-to-HTTPS-proxy hop, so this example deliberately uses
 the official Go SDK instead.

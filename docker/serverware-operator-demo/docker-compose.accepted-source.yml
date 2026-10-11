@@ -1,5 +1,5 @@
-# Accepted npm-capable, Google-unconfigured demo after the 2026-10-10 rollout.
-# Required order: base + this SINGLE source layer + curated-gate + notifications.
+# Accepted header-hotfixed, Google-unconfigured demo after the 2026-10-11 rollout.
+# Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
 # Equivalent to npm-publish-candidate with its reviewed source fixed below.
 # Never combine source overrides or add the legacy google layer. Preserve the
 # original private environment and explicit notification interpolation settings.
@@ -24,7 +24,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-3724110941888e753bc194459e14170bc2a28916
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-3b17957446e3a2bf7aedb2044e383c293d778a22
         target: /app
         read_only: true
         bind: {create_host_path: false}

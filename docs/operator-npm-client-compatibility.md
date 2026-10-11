@@ -1,19 +1,33 @@
 # Ordinary npm client compatibility
 
-Status: **full install/publish specification; not verified end to end**. The
+Status: **bounded metadata and publishing profiles passed isolated stock-client
+acceptance; full installation remains unverified**. The
 additive [package metadata profile](operator-npm-metadata.md) passed private
 synthetic acceptance with stock npm/pacote on 2026-10-10. It is metadata-only:
 that result does not establish live-deployment acceptance or implement tarball
 reads, default auditing or publication. The remaining gap table below describes the
 legacy `npm.registry` path, not the new metadata-only profile. The original
 2026-10-09 source review did not execute npm, build the gate, start a fixture, or
-contact a registry. Existing example/compiler tests are not an npm install or
-publish acceptance result.
+contact a registry. Existing example/compiler tests are not a runtime result
+for the downloadable `examples/npm-registry/client.mjs` launcher; its separate
+acceptance remains pending.
 
 The separate [package-publishing permission](operator-npm-publish.md) is now
 implemented with one exact package/tag, prerequisite metadata reads and optional
-UTC publishing hours. Its latest 49 genuine Rust tests passed and a normal gate
-binary was built. The third isolated stock run stopped on a synthetic-registry
+UTC publishing hours. [Run twenty](operator-npm-publish.md#run-twenty-complete-isolated-stock-client-flow-passed)
+passed all seven stock-client phases, both scoped and unscoped publications,
+the exact six provider arrivals, time-window/package/placeholder/revocation
+controls and the durable audit chain. That run invokes a dedicated stock-npm
+job, not the downloadable example. It does not establish public npm access,
+installation, tarball downloads or default auditing. The paired retained-state
+and deployment records are linked from the publishing document.
+
+### Historical early publishing attempts
+
+The following failures describe runs three through nine, before run twenty;
+they remain useful diagnostics, not the current publishing acceptance status.
+At that stage, 49 genuine Rust tests had passed and a normal gate
+binary had been built. The third isolated stock run stopped on a synthetic-registry
 HTTP 400 for scoped publication. That condition did not recur in the fourth diagnostic
 run, which completed prerequisite reads, both unscoped and scoped publications,
 and the wrong-package check. Stopped-state evidence shows the outside-window
@@ -46,12 +60,11 @@ time-window 403 is established. The ninth run at `ffd635a0` reproduced that npm
 error while measuring policy-lock waits up to 1,268 ms and subsequent
 loading/checking/copying up to 727 ms. The outside-window metadata read completed;
 publish-route lease issuance does not establish proxy receipt or acceptance.
-Audit timing and lease renewal remain under investigation. No expiry extension,
-retry workaround or live change has been
-made. The failures remain retained and full stock-publishing acceptance is
-still pending, with no production defect
-inferred. This does not implement or prove installation, tarball reads or default
-auditing.
+Audit timing and lease renewal were still under investigation at that checkpoint;
+no expiry extension, retry workaround or live change was used in those runs.
+Their failures remain retained. Later acceptance does not retroactively resolve
+every intermittent failure or establish a general latency guarantee. Installation,
+tarball reads and default auditing remain separate work.
 
 ## User workflow and defaults
 

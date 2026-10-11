@@ -27,6 +27,7 @@ PHASES = ("first", "refreshed", "wrong_outer_ca", "wrong_inner_ca", "wrong_app",
 START, RELEASE = "data_plane.credential.release_started", "data_plane.response.released"
 CONNECT, DENIED = "data_plane.connect.established", "data_plane.connect.denied"
 LEASE = "data_plane.credential_lease.issued"
+REJECTED = "data_plane.credential_lease.rejected"
 SUCCESS = b'{"pages":2,"messages_read":2,"more_pages":false}\n'
 DENIAL = b"Gmail list failed; inspect Serverware audit records and the saved permission (no automatic retry)\n"
 
@@ -109,6 +110,21 @@ def audit_rows(wire):
     return events
 
 
+def reconciliation_row():
+    # Actual control-plane audit shape: this is a no-envelope response to a
+    # stale generation request, not another release or a provider arrival.
+    return {"id": uid(500), "event_hash": sha(500), "event_type": REJECTED, "event": {
+        "outcome": "rejected", "status_code": 409, "reason": "generationAdvancedBeforeEnvelope",
+        "recipient_key_id": "synthetic-recipient", "recipient_nonce_sha256": sha(903),
+        "policy_hash": SCOPE[2], "data_plane_binary_digest": sha(901), "purpose": "dispatchSecret",
+        "expected_credential_version": 1, "expected_metadata_sha256": sha(904),
+        "release_attempt_id": None, "release_binding_digest": None, "release_kind": None,
+        "release_reservation_id": None, "release_request_digest": None, "release_operation_digest": None,
+        "release_quota_claim_count": 0, "principal_id": SCOPE[0], "route_id": SCOPE[1],
+        "credential_id": CREDENTIAL, "requested_max_ttl_seconds": 5, "recipient_attestation_present": False,
+        "credential_count": 0, "credential_ids": [], "issued_at_epoch_ms": None, "expires_at_epoch_ms": None}}
+
+
 def counts(consent, refresh, reads):
     return {key: value for key, value in {
         "authorization_requests": consent, "authorization_codes_issued": consent, "authorization_code_exchanges": consent,
@@ -126,7 +142,7 @@ def success_result(wire):
         "catalogUnchangedAcrossRefresh": True, "realGoogleVerified": False, "browserUiVerified": False,
         "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
         "providerAttempts": 8, "automaticRefreshes": 1, "initialCredentialVersion": 1,
-        "refreshedCredentialVersion": 2, "canonicalRequestVersion": 3,
+        "refreshedCredentialVersion": 2, "canonicalRequestVersion": 3, "reconciliationRejections": 0,
         "dataPlaneBinaryDigest": sha(901), "goExampleSha256": "a" * 64,
         "exampleSourceSha256": {"examples/google-gmail-go/main.go": "b" * 64,
             "examples/google-gmail-go/go.mod": "c" * 64, "examples/google-gmail-go/go.sum": "d" * 64},
@@ -204,7 +220,7 @@ class GmailSdkCheckerTests(unittest.TestCase):
 
     def test_durable_pair_evidence_binds_generations_scope_body_and_unique_attempts(self):
         rows = audit_rows(self.wire)
-        actual = checker.generation_evidence(rows, SCOPE, CREDENTIAL, self.wire)
+        actual = checker.generation_evidence(rows, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
         self.assertEqual((actual["initialCredentialVersion"], actual["refreshedCredentialVersion"],
             actual["canonicalRequestVersion"]), (1, 2, 3))
         self.assertEqual(set(actual["generationAuditEventIds"]),
@@ -212,6 +228,7 @@ class GmailSdkCheckerTests(unittest.TestCase):
         self.assertEqual(rows[-1]["event_type"], LEASE)
         self.assertEqual(rows[-1]["id"], uid(118))
         self.assertNotIn(rows[-1]["id"], actual["generationAuditEventIds"])
+        self.assertEqual(actual["reconciliationRejections"], 0)
         changes = (lambda r: r.remove(next(row for row in r if row["event_type"] == RELEASE)),
             lambda r: r[1]["event"].update(credential_version=1),
             lambda r: r[0]["event"].update(credential_version=True),
@@ -230,12 +247,54 @@ class GmailSdkCheckerTests(unittest.TestCase):
         for index, change in enumerate(changes):
             value = deepcopy(rows); change(value)
             with self.subTest(case=index), self.assertRaises(checker.CheckFailure):
-                checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire)
+                checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
         for field, replacement in (("generation", True), ("requestDigest", self.wire[0]["requestDigest"]),
                 ("responseBodySha256", sha(999))):
             value = deepcopy(self.wire); value[1][field] = replacement
             with self.assertRaises(checker.CheckFailure):
-                checker.generation_evidence(rows, SCOPE, CREDENTIAL, value)
+                checker.generation_evidence(rows, SCOPE, CREDENTIAL, value, expected_binary_sha256=sha(901))
+
+    def test_one_no_envelope_reconciliation_requires_exact_refresh_and_authority(self):
+        original = audit_rows(self.wire)
+        rows = original + [reconciliation_row()]
+        expected = checker.generation_evidence(original, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
+        expected["reconciliationRejections"] = 1
+        self.assertEqual(checker.generation_evidence(rows, SCOPE, CREDENTIAL, self.wire,
+            expected_binary_sha256=sha(901)), expected)
+        self.assertNotIn(rows[-1]["id"], expected["generationAuditEventIds"])
+        # The audit API can present newest-first; never infer causality from
+        # list order instead of joining the single retained 1 -> 2 refresh.
+        self.assertEqual(checker.generation_evidence(list(reversed(rows)), SCOPE, CREDENTIAL, self.wire,
+            expected_binary_sha256=sha(901)), expected)
+        changes = [(field, value) for field, value in (
+            ("reason", "secret-canary"), ("outcome", "issued"), ("status_code", 503), ("status_code", True),
+            ("purpose", "generation"), ("expected_credential_version", 2), ("expected_credential_version", True),
+            ("principal_id", "wrong-principal"), ("route_id", "wrong-route"), ("policy_hash", sha(999)),
+            ("credential_id", uid(999)), ("data_plane_binary_digest", sha(999)),
+            ("expected_metadata_sha256", "secret-canary"), ("recipient_nonce_sha256", "secret-canary"),
+            ("recipient_attestation_present", True), ("recipient_attestation_present", 0),
+            ("credential_count", 1), ("credential_count", False), ("credential_ids", [CREDENTIAL]),
+            ("credential_ids", ()), ("release_quota_claim_count", 1), ("release_quota_claim_count", False))]
+        null_fields = ("release_attempt_id", "release_binding_digest", "release_kind", "release_reservation_id",
+            "release_request_digest", "release_operation_digest", "issued_at_epoch_ms", "expires_at_epoch_ms")
+        changes.extend((field, "secret-canary") for field in null_fields)
+        for field, replacement in changes:
+            value = deepcopy(rows); value[-1]["event"][field] = replacement
+            with self.subTest(field=field, value=replacement), self.assertRaises(checker.CheckFailure) as caught:
+                checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
+            self.assertNotIn("secret-canary", str(caught.exception))
+        for field in null_fields:
+            value = deepcopy(rows); del value[-1]["event"][field]
+            with self.subTest(missing=field), self.assertRaises(checker.CheckFailure):
+                checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
+        second = reconciliation_row(); second.update(id=uid(501), event_hash=sha(501))
+        wrong_id = deepcopy(rows); wrong_id[-1]["id"] = sha(500)
+        without_refresh = [row for row in rows if row["event_type"] != "credential.oauth_refreshed"]
+        for value in (rows + [second], wrong_id, without_refresh):
+            with self.assertRaises(checker.CheckFailure):
+                checker.generation_evidence(value, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(901))
+        with self.assertRaises(checker.CheckFailure):
+            checker.generation_evidence(rows, SCOPE, CREDENTIAL, self.wire, expected_binary_sha256=sha(999))
 
     def test_actual_denial_join_rejects_provider_arrival_before_further_audit_io(self):
         document = self.documents["refreshed"]
@@ -287,8 +346,23 @@ class GmailSdkCheckerTests(unittest.TestCase):
     def test_closed_success_receipt_rejects_changed_claims_counts_pins_and_evidence(self):
         good = success_result(self.wire)
         self.assertTrue(checker.validate_success_result(good))
+        reconciled = deepcopy(good)
+        reconciled["reconciliationRejections"] = 1
+        reconciled["namedAuditInventory"][REJECTED] = 1
+        self.assertTrue(checker.validate_success_result(reconciled))
+        for mutation in (lambda v: v.update(reconciliationRejections=0),
+                lambda v: v["namedAuditInventory"].pop(REJECTED),
+                lambda v: v["namedAuditInventory"].update({REJECTED: 2}),
+                lambda v: v["namedAuditInventory"].update({REJECTED: True}),
+                lambda v: v["negativeControls"][2].update(auditEventType=REJECTED)):
+            value = deepcopy(reconciled); mutation(value)
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_success_result(value)
         changes = (lambda v: v.update(secret="secret-canary"), lambda v: v.pop("auditChainVerified"),
             lambda v: v.update(ok=1), lambda v: v.update(productionReady=True), lambda v: v.update(realGoogleVerified=True),
+            lambda v: v.pop("reconciliationRejections"), lambda v: v.update(reconciliationRejections=True),
+            lambda v: v.update(reconciliationRejections=-1), lambda v: v.update(reconciliationRejections=2),
+            lambda v: v.update(reconciliationRejections=1), lambda v: v["namedAuditInventory"].update({REJECTED: 1}),
             lambda v: v.update(automaticRefreshes=True), lambda v: v.update(providerAttempts=9),
             lambda v: v.update(revokedPolicyHash=v["policyHash"]), lambda v: v.update(goExampleSha256=sha(9)),
             lambda v: v["exampleSourceSha256"].pop("examples/google-gmail-go/go.sum"),

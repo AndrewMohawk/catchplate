@@ -172,6 +172,61 @@ counted as passes in this batch.
 No running app deployment, DNS record or retained pilot state was changed by
 this source/test batch.
 
+### Follow-up verification and remaining implementation seams
+
+The two targeted typed-planner fixtures were subsequently repaired and passed
+together (2/2, 6.794 seconds in the same cached, network-disabled image). The
+revocation test now verifies that the real successor-only operation refuses the
+legacy entry before clock/SQL access, then independently exercises the original
+missing-complete-acquisition denial with actual kernel-generated queries. The
+root-reader comparison supplies one finite epoch/monotonic deadline to every
+read; no read renews it. Neither repair changes a production guard.
+
+The next fail-fast run passed those two and failed the inter-store tamper test
+before its intended callback. Its 4,347,128-byte signed fixture exceeds the
+unchanged 64 MiB / 1,000,000-node cumulative verification limits while encoding
+the payload. Independent existing cost oracles predict 260,493,088 byte-work
+units for the first persistence and 570,170,986 for the joined two-store flow;
+those are predicted work, not a successful execution or memory measurement.
+The affected-only run also failed (9.369 seconds). Its existing tamper and
+rollback assertions remain unchanged. Reducing the fixture's approval scope or
+increasing production ceilings would not establish the required full workflow.
+Raw proof replay, original deadlines and audit effects must survive any work
+reduction. The broader suite remains unverified, not passing.
+
+The identified repeated work is raw decoding in `authority_revocation_wire`,
+decoded-graph recapture and envelope/payload encodings in
+`authority_revocation_plan`, then base64 materialization and repeated SQL-value
+copy/comparison in `authority_store/revocation_retention`. Both stores must keep
+independent genuine replay. The next optimization should reuse only privately
+owned representations inside one invocation, with actual stored-row readback,
+signature/proof verification and currentness checks retained. A cross-call
+successful-result cache or a public prevalidated flag is not an acceptable fix.
+No such optimization or successful full-budget execution is established yet.
+
+Source tracing also rules out an attempt-ID-only reconciliation repair:
+
+1. Due-candidate selection needs authenticated expiry ordering, range/cardinality
+   and primary-row proofs, transactional index maintenance, and explicit empty
+   or remaining-work evidence. The challenge-maintenance implementation is a
+   reference pattern, not a release-table adapter.
+2. The release receipt consumer exists, but a purpose-bound reconciliation
+   producer and admission path do not. Existing WebAuthn evidence admission
+   cannot be relabelled. Real JIT/quota components, current rows and the original
+   cutoff/window must bind the receipt, which must be consumed once.
+3. The operation contract already permits durable budget and traversal writes;
+   the narrower release kernel does not acquire or validate those child changes.
+   Reserved v2 attempts must abort all children atomically; expired dispatched
+   attempts must retain charged uncertainty. Adding table names to the kernel
+   allowlist alone is insufficient.
+4. The measured owner must join candidate acquisition, evidence and all v1/v2
+   mutations with fresh current-root/CAS checks, bounded continuation and outcome
+   recovery after an uncertain commit. Startup needs actual completed maintenance
+   and audit delivery, not a synthetic success or one empty candidate selection.
+
+These are pending source/runtime joins. No production operation was enabled,
+no receipt or writer context was invented, and no live pilot was restarted.
+
 ## Remaining deployment work
 
 This source integration has not been built or exercised. Operators still need

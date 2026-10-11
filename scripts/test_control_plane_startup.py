@@ -1808,18 +1808,50 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                                      for sql, _ in cursor.calls))
 
     def test_actual_public_revocation_read_still_denies_complete_queries_before_proof_or_business_sql(self):
+        from serverware import authority_audit_capacity, authority_contract
         from serverware import authority_query_staging as staging
+        from serverware import authority_transition_registry as registry
 
         fixture, cursor, program, arguments = self.revocation_reader_fixture()
+        # Revocation moved to the retained-evidence successor protocol. Its
+        # genuine pins still match, but the ordinary legacy entrypoint must
+        # refuse before generating queries or consulting even the DB clock.
+        spec = authority_contract.operation_spec(program.operation)
+        self.assertEqual(spec["planningMode"], "typed-successor-planning")
+        self.assertEqual(program.handler, spec["handler"])
+        self.assertEqual(program.kernel.program_id,
+                         authority_contract.transition_program_id(program.operation))
+        self.assertIn(program.operation, registry.SUCCESSOR_PLANNABLE_OPERATIONS)
+        self.assertNotIn(program.operation, registry.LEGACY_PLANNABLE_OPERATIONS)
         sources = staging.StagedQueryProofs(operation=program.operation,
             business_before_roots=arguments["business_before_roots"],
             authorization_before_roots=arguments["authorization_before_roots"],
             query_work=arguments["query_work"])
+        with patch.object(self.planner, "_read_database_now", wraps=self.planner._read_database_now) as clock, \
+                patch.object(self.planner, "_read_bounded_transition_rows",
+                             wraps=self.planner._read_bounded_transition_rows) as reader:
+            with self.assertRaisesRegex(self.planner.AuthorityPlannerError,
+                                        "typed transition query identity changed"):
+                program.read_inputs(cursor, **{name: value for name, value in arguments.items()
+                    if name not in {"business_before_roots", "authorization_before_roots"}}, query_sources=sources)
+        self.assertEqual((clock.call_count, reader.call_count), (0, 0))
+        self.assertEqual(cursor.calls, [])
+
+        # Independently retain the original complete-query denial control at
+        # its actual boundary, without widening the legacy registry. Generate
+        # real source queries from the fixture's verified synthetic assertion;
+        # do not substitute a successful acquisition or fabricate query pins.
+        queries = authority_audit_capacity.add_capacity_query(program.operation,
+            program.kernel.queries_with_evidence(
+                arguments=arguments["request"]["arguments"],
+                database_now=fixture.database_now, request_digest=fixture.request_digest,
+                evidence=arguments["verified_webauthn_evidence"]))
         with self.assertRaisesRegex(self.planner.AuthorityPlannerError,
                                     "complete index query acquisition is not available"):
-            program.read_inputs(cursor, **{name: value for name, value in arguments.items()
-                if name not in {"business_before_roots", "authorization_before_roots"}}, query_sources=sources)
-        self.assertEqual(cursor.calls, [("SELECT pg_catalog.clock_timestamp() AS database_now", None)])
+            self.planner._read_bounded_transition_rows(cursor, operation=program.operation,
+                request=arguments["request"], queries=queries, manifest=arguments["manifest"],
+                trace=arguments["trace"], query_sources=sources, query_work=arguments["query_work"])
+        self.assertEqual(cursor.calls, [])
         self.assertEqual((cursor.primary.calls, cursor.complete.calls), ([], []))
 
     def revocation_producer_fixture(self, **options):
@@ -4976,6 +5008,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assert_revocation_read(fixture, result.selected_rows, result.state)
 
     def test_actual_root_reader_public_parity_and_exact_remaining_work(self):
+        import time
         from serverware import authority_query_read_work as accounting
         import test_authority_revocation_plan as plan_oracle
         import test_webauthn_revocation_work as kernel_oracle
@@ -4992,9 +5025,14 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             + 2 * len(plan_oracle.wire(root["leafCount"])) for root in (*business, *authorization)),
             sum(kernel_oracle.nodes(root) + 4 for root in (*business, *authorization)))
         expected_work = plan_oracle.add(copied, plan_oracle.json_digest_cost(domain, business))
+        # One finite deadline for this complete component comparison; none of
+        # the repeated reads renews the RBAC-currentness allowance.
+        deadline_epoch_ns = time.time_ns() + 30_000_000_000
+        deadline_monotonic_ns = time.monotonic_ns() + 30_000_000_000
         legacy_cursor = _RevocationReadCursor(fixture)
         legacy = self.planner._read_root_set(legacy_cursor, operation=fixture.request["operation"],
-            manifest=arguments["manifest"], trace=self.planner.PlannerTrace(operation=fixture.request["operation"]))
+            manifest=arguments["manifest"], trace=self.planner.PlannerTrace(operation=fixture.request["operation"]),
+            deadline_epoch_ns=deadline_epoch_ns, deadline_monotonic_ns=deadline_monotonic_ns)
         self.assertEqual(legacy, expected_result)
         for prior, deficient in (((0, 0, 0), None), ((7, 101, 13), None),
                                   ((7, 101, 13), 0), ((7, 101, 13), 1), ((7, 101, 13), 2)):
@@ -5011,13 +5049,15 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                                  side_effect=AssertionError("fresh root allowance")):
                 if deficient is None:
                     actual = self.planner._read_root_set(cursor, operation=fixture.request["operation"],
-                        manifest=arguments["manifest"], trace=trace, work=work)
+                        manifest=arguments["manifest"], trace=trace, work=work,
+                        deadline_epoch_ns=deadline_epoch_ns, deadline_monotonic_ns=deadline_monotonic_ns)
                     self.assertEqual(actual, expected_result)
                     self.assertEqual(plan_oracle.units(work.metrics), plan_oracle.add(prior, expected_work))
                 else:
                     with self.assertRaises(accounting.QueryReadWorkError):
                         self.planner._read_root_set(cursor, operation=fixture.request["operation"],
-                            manifest=arguments["manifest"], trace=trace, work=work)
+                            manifest=arguments["manifest"], trace=trace, work=work,
+                            deadline_epoch_ns=deadline_epoch_ns, deadline_monotonic_ns=deadline_monotonic_ns)
                     self.assertGreaterEqual(work.hash_work, prior[0])
                     self.assertGreaterEqual(work.input_bytes, prior[1])
                     self.assertGreaterEqual(work.json_nodes, prior[2])

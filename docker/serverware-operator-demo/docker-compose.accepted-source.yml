@@ -1,4 +1,4 @@
-# Ordinary-app catalog refresh repair; same X/Alchemy proxy, Google unconfigured.
+# Guided Gmail SDK setup and Google audit notifications; Google unconfigured.
 # AWS credentials are storage-only: no signing, grants or ECR publication.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
 # This pair includes the genuinely rebuilt provider and response-media fixes; the historical
@@ -26,7 +26,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-a3333cf7cb5c6171010352674e31b17bd15bbe9f
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-be1dc001ee11ba1494de980dbbf2571b80ef77c0
         target: /app
         read_only: true
         bind: {create_host_path: false}

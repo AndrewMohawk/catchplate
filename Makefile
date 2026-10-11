@@ -621,6 +621,9 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_operator_alchemy_api.py \
 	scripts/test_operator_alchemy_fixture.py \
 	scripts/test_operator_examples_fixture_runner.py \
+	scripts/test_operator_gmail_sdk_fixture.py \
+	scripts/test_operator_gmail_sdk_recipe.py \
+	scripts/test_operator_gmail_sdk_checker.py \
 	scripts/test_agent_trust_import_identity.py \
 	scripts/test_codebase_attestation.py \
 	scripts/test_native_postgres_contract.py \

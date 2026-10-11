@@ -4,6 +4,49 @@
 
 This describes the native pilot, not a browser reload of the operator demo.
 
+## Optimized R98 assembly: launch refused before guest boot
+
+The separately authorized R98 attempt selected SDK
+`bcd9a66c430fb39b5809857e1e9466fa376a3e71` and COMMON
+`27cfb67148cc7d0492137a6d44281730ba00b562`. Its 22 assembly steps completed on
+2026-10-11. The actual payload includes the pinned sealed-content catalog
+(4,872 entries), prepared-static installer and current runtime-layout helper.
+This establishes packaging of the optimizations, not their native execution.
+
+The recorded assembly steps total about eight minutes, before live launch:
+
+| Assembly phase | Observed duration |
+| --- | ---: |
+| Unsigned package staging | 284 seconds |
+| Final input freeze | 74 seconds |
+| Core provisioning | 28 seconds |
+| Source capture | 25 seconds |
+| Preparing the already-built Rust binary | 9 seconds |
+
+These phase durations include their subprocess work; they do not isolate
+hashing time. A separate genuine Rust build completed beforehand in about
+346 seconds. Its exact binary and build evidence were then reused by assembly;
+the nine-second preparation phase is not a new compilation.
+
+The single live launch began at 17:20:24 UTC and failed at
+`open-rbac-host-bridge` before QEMU startup. The selected source contains
+103,817,071 bytes across 5,118 Git files, exceeding the old 96 MiB extracted
+source limit (100,663,296 bytes). Its 107,806,720-byte Git archive remains below
+the separate 110 MiB archive limit. This is a stale bootstrap capacity check,
+not a catalog-hash mismatch or an observed optimized-startup regression.
+
+All three runtime COW disks still match their initial hashes. No registration
+or policy ceremony occurred. The native host reports known cleanup, while the
+outer launcher reports unknown cleanup; both refuse retry. The surviving web
+process is the terminal reporter, not a running native pilot. R98 and its
+single-use markers remain unchanged. A successor requires separate approval;
+no end-to-end startup speedup is claimed yet.
+
+Retained assembly and phase logs:
+`/srv/catchplate-fast/tmp/serverware-pilot-20261011-r98.assembly`.
+The genuine reusable Rust build is retained separately at
+`/srv/catchplate-fast/tmp/serverware-genuine-rust-bcd9a66c.Q2pSZE`.
+
 ## Observed on 2026-10-10
 
 R97 accepted Start at 20:47:53.167 UTC. Its first live log timestamp was

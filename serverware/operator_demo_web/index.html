@@ -22,6 +22,7 @@
       <div id="connect-credential-step">
         <article id="connect-method-choice" class="card"><h2>Choose a provider or set up manually</h2>
           <div class="actions"><button id="connect-google" class="secondary" disabled>Google connection unavailable</button><button id="connect-use-github" class="secondary" disabled>GitHub</button><button id="connect-use-npm" class="secondary" disabled>npm</button><button id="connect-use-x" class="secondary" disabled>X · username lookup</button><button id="connect-use-alchemy" class="secondary" disabled>Alchemy · chain status</button><button id="connect-use-key" class="secondary" disabled>Manual API key</button><button id="connect-use-saved" class="secondary" disabled>Use a saved connection</button></div>
+          <p class="small muted">AWS credentials can be stored separately in <a href="#credentials">Accounts &amp; keys</a> when advertised. ECR publishing and AWS client setup are not available; a manual header key is not a substitute.</p>
           <p id="connect-google-status" class="small muted">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p>
           <p id="connect-github-status" class="small muted">GitHub presets require an enabled destination and their paired proxy implementation. AWS presets are not available here.</p>
           <p id="connect-npm-status" class="small muted">npm metadata lookup is unavailable until this deployment advertises its paired proxy support. No install, publish, tarball downloads or npm audit.</p>
@@ -147,6 +148,38 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
     </section>
     <section id="credentials" class="page" aria-labelledby="credentials-title" hidden>
       <h1 id="credentials-title">Accounts &amp; keys</h1><p class="intro">Your saved provider accounts and API keys, and the applications permitted to use them. To connect an app and set its permission together, use <a href="#connect">Connect an app</a>. Apps never receive the provider secret.</p>
+      <label for="credential-storage-type">What would you like to save?</label>
+      <select id="credential-storage-type" disabled><option value="manual">Manual API key</option><option id="credential-storage-aws-option" value="aws" disabled>AWS credentials — storage only</option></select>
+      <p id="aws-storage-availability" class="small muted">AWS credential storage is unavailable until advertised by this deployment.</p>
+      <form id="aws-credential-form" class="card" autocomplete="off" hidden><fieldset id="aws-credential-fields" disabled>
+        <h2>Save AWS credentials</h2><p class="notice">Stored only — ECR publishing not available yet.</p>
+        <label for="aws-credential-name">Credential name</label><input id="aws-credential-name" maxlength="128" required>
+        <label for="aws-credential-kind">AWS credential kind</label><select id="aws-credential-kind"><option value="long_term">Long-term access key</option><option value="session">Temporary session credentials</option></select>
+        <label for="aws-credential-access-key-id">Access key ID</label><input id="aws-credential-access-key-id" minlength="20" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        <label for="aws-credential-secret-access-key">Secret access key</label><input id="aws-credential-secret-access-key" type="password" minlength="40" maxlength="40" autocomplete="new-password" spellcheck="false" required>
+        <div id="aws-credential-session-fields" hidden>
+          <label for="aws-credential-session-token">Session token</label><input id="aws-credential-session-token" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" disabled>
+          <label for="aws-credential-expires-at">Session expires at (UTC)</label><input id="aws-credential-expires-at" maxlength="20" placeholder="2026-12-31T23:59:59Z" autocomplete="off" spellcheck="false" disabled>
+        </div>
+        <p class="small muted">Enter the complete tuple issued together by AWS. Temporary credentials require both a session token and an exact UTC expiry. No credential discovery or automatic renewal. Access key IDs and secrets are never returned by the inventory; they are cleared on submission, kind changes and navigation. No AWS validation request is made.</p>
+        <button id="aws-credential-save" type="submit">Save AWS credentials</button>
+      </fieldset><p id="aws-credential-status" role="status" aria-live="polite"></p></form>
+      <section id="aws-replace-panel" class="card" aria-labelledby="aws-replace-title" hidden>
+        <h2 id="aws-replace-title">Replace AWS credentials</h2>
+        <p>Replace the entire tuple together. The saved identity is retained; no application permission is granted. This does not revoke the old credentials at AWS.</p>
+        <form id="aws-replace-form" autocomplete="off"><fieldset id="aws-replace-fields" disabled>
+          <label for="aws-replace-kind">New AWS credential kind</label><select id="aws-replace-kind"><option value="long_term">Long-term access key</option><option value="session">Temporary session credentials</option></select>
+          <label for="aws-replace-access-key-id">New access key ID</label><input id="aws-replace-access-key-id" minlength="20" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <label for="aws-replace-secret-access-key">New secret access key</label><input id="aws-replace-secret-access-key" type="password" minlength="40" maxlength="40" autocomplete="new-password" spellcheck="false" required>
+          <div id="aws-replace-session-fields" hidden>
+            <label for="aws-replace-session-token">New session token</label><input id="aws-replace-session-token" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" disabled>
+            <label for="aws-replace-expires-at">New session expires at (UTC)</label><input id="aws-replace-expires-at" maxlength="20" placeholder="2026-12-31T23:59:59Z" autocomplete="off" spellcheck="false" disabled>
+          </div>
+          <p class="small muted">The current access key ID and secrets cannot be retrieved. Values are cleared on submission, cancellation, state changes and navigation. Previously issued requests are not recalled; no AWS validation or renewal is performed.</p>
+          <div class="actions"><button id="aws-replace-submit" type="submit">Replace complete AWS tuple</button><button id="aws-replace-cancel" type="button" class="secondary">Cancel</button></div>
+        </fieldset></form>
+      </section>
+      <p id="aws-replace-status" role="status" aria-live="polite"></p>
 <form id="credential-form" class="card" autocomplete="off"><fieldset id="credential-fields" disabled><label for="credential-name">Credential name</label><input id="credential-name" maxlength="128" placeholder="My test API key" required><label for="credential-auth-type">How the provider expects it</label><select id="credential-auth-type"><option value="bearer">Bearer token (Authorization header)</option><option value="header">API key in a custom header</option></select><div id="credential-header-field" hidden><label for="credential-header-name">Header name</label><input id="credential-header-name" maxlength="128" placeholder="X-API-Key" spellcheck="false"></div><label for="credential-secret">Provider key or token</label><input id="credential-secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" required><p class="small muted">Encrypted by this development server. Cleared from the form when submitted and never returned by the inventory. Saving it does not create a client token or grant access.</p><button id="credential-save" type="submit">Save credential</button></fieldset><p id="credential-form-status" role="status" aria-live="polite"></p></form><article class="card"><h2>Connect a Google account</h2><p id="credential-oauth-status">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p><button id="credential-google-connect" disabled>Google account connection unavailable</button></article><div class="heading"><h2>Saved credentials</h2><button id="credentials-refresh" class="secondary">Refresh</button></div><p class="small muted">Remove access rules before revoking a credential. Local revocation does not revoke the key at its provider.</p><p id="credential-action-status" role="status" aria-live="polite"></p><div id="credentials-list" class="stack"></div>
       <section id="google-reauthorization-panel" class="card" aria-labelledby="google-reauthorization-title" hidden>
         <h2 id="google-reauthorization-title">Reauthorize this Google account</h2>

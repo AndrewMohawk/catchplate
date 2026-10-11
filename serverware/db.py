@@ -63969,6 +63969,27 @@ def _oauth_application_secret(secret, metadata):
         raise ManagedOAuthCredentialError("OAuth token and metadata application ownership differ")
 
 
+def _refuse_generic_aws_credential(kind, metadata=None) -> None:
+    from serverware.aws_credential_boundary import selected
+    if selected(kind, metadata):
+        raise MetadataStoreError("AWS credentials require the operator catalog lifecycle")
+
+
+def _refuse_retained_operator_aws_identity(conn: Any, item_id: str) -> None:
+    """A revoked AWS catalog identity is not an available generic upsert slot."""
+    if metadata_uses_postgres():
+        return  # Operator catalog custody is SQLite-only.
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='operator_catalog_credentials'").fetchone()
+    if exists is not None:
+        retained = conn.execute("SELECT data_json FROM operator_catalog_credentials WHERE id=?",
+            (item_id,)).fetchone()
+        if retained is not None:
+            record = loads(retained["data_json"], {})
+            if isinstance(record, dict):
+                _refuse_generic_aws_credential(record.get("auth_type"), record)
+
+
 def create_credential(
     name: str,
     kind: str,
@@ -63984,6 +64005,7 @@ def create_credential(
     _connection: Any | None = None,
     _application_operation=None,
 ) -> dict[str, Any]:
+    _refuse_generic_aws_credential(kind, metadata)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     operation = (_oauth_application_operation(metadata, _application_operation)
@@ -67272,17 +67294,20 @@ def upsert_credential_with_id(
     secret: str,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    _refuse_generic_aws_credential(kind, metadata)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     load_master_key()
     now = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
+        _refuse_retained_operator_aws_identity(conn, item_id)
         existing = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
         if existing:
             existing_metadata = loads(existing["metadata"], {})
+            _refuse_generic_aws_credential(existing["kind"], existing_metadata)
             if existing["kind"] == "oauth2" or (
                 isinstance(existing_metadata, dict)
                 and existing_metadata.get("oauth") is True
@@ -67380,6 +67405,7 @@ def update_credential(
     *,
     _connection: Any | None = None,
 ) -> dict[str, Any] | None:
+    _refuse_generic_aws_credential(payload.get("kind"), payload.get("metadata"))
     if "secret" in payload and payload["secret"] is not None:
         payload = {**payload, "secret": validate_credential_secret(payload["secret"])}
     if "metadata" in payload:
@@ -67404,6 +67430,7 @@ def update_credential(
                 "credential is unavailable while provider revocation is pending"
             )
         current_metadata = loads(current["metadata"], {})
+        _refuse_generic_aws_credential(current["kind"], current_metadata)
         if (
             current["kind"] == "oauth2" or current_metadata.get("oauth") is True
         ) and any(field in payload for field in ("kind", "secret", "metadata")):
@@ -67465,6 +67492,121 @@ def update_credential(
     return row_to_credential(row) if row else None
 
 
+def _operator_aws_transaction(conn: Any) -> None:
+    from serverware import operator_catalog_schema, operator_demo, operator_publication
+    if (not operator_demo.active() or metadata_uses_postgres()
+            or type(conn) is not sqlite3.Connection or not conn.in_transaction):
+        raise MetadataStoreError("operator AWS transaction refused")
+    operator_publication.assert_held()
+    databases = conn.execute("PRAGMA database_list").fetchall()
+    if ([row[2] for row in databases if row[1] == "main"] != [str(DB_PATH)]
+            or not operator_catalog_schema.active(conn)):
+        raise MetadataStoreError("operator AWS store refused")
+
+
+def create_operator_aws_credential(conn: Any, *, name: str, secret: str) -> dict[str, Any]:
+    """Create only inside the catalog's EX/SQLite transaction; never commit here."""
+    from serverware import operator_catalog_aws as aws
+    _operator_aws_transaction(conn)
+    if (type(name) is not str or not 1 <= len(name) <= 128 or name != name.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+        raise ValueError("AWS credential name refused")
+    metadata = aws.metadata_from_secret(secret, str(uuid.uuid4()))
+    item_id, now = str(uuid.uuid4()), iso_now()
+    _lock_credential_mutation(conn, item_id)
+    version = _next_credential_generation(conn, item_id)
+    encrypted = _envelope_values(item_id, secret, version)
+    conn.execute("INSERT INTO credentials (id,name,kind,encrypted_secret,encrypted_dek,secret_nonce,"
+        "secret_ciphertext,secret_kek_id,credential_version,secret_updated_at,metadata,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (item_id, name, aws.KIND,
+        encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+        encrypted["secret_ciphertext"], encrypted["secret_kek_id"], version,
+        encrypted["secret_updated_at"], dumps(metadata), now, now))
+    return row_to_credential(conn.execute("SELECT * FROM credentials WHERE id=?", (item_id,)).fetchone())
+
+
+def _operator_aws_current(conn: Any, item_id: str):
+    """Validate retained public bindings and generation, without reading ciphertext."""
+    from serverware import operator_catalog_aws as aws, operator_catalog_schema as catalog_schema
+    _operator_aws_transaction(conn)
+    try:
+        if type(item_id) is not str or str(uuid.UUID(item_id)) != item_id:
+            raise ValueError()
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError("operator AWS credential identifier refused") from None
+    _lock_credential_mutation(conn, item_id)
+    current = conn.execute("SELECT id,name,kind,metadata,lifecycle_status,credential_version "
+        "FROM credentials WHERE id=?", (item_id,)).fetchone()
+    retained = conn.execute("SELECT id,ordinal,data_json FROM operator_catalog_credentials WHERE id=?",
+        (item_id,)).fetchone()
+    if current is None or retained is None:
+        return None
+    try:
+        metadata = loads(current["metadata"], {})
+        record = loads(retained["data_json"], {})
+        if (type(record) is not dict or type(metadata) is not dict or "id" in record or "ordinal" in record
+                or current["kind"] != aws.KIND or current["lifecycle_status"] != "active"
+                or record.get("name") != current["name"] or record.get("status") != "active"):
+            raise ValueError()
+        aws.validate_credential({"id": item_id, "ordinal": retained["ordinal"], **record}, metadata)
+        version = current["credential_version"]
+        floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?",
+            (item_id,)).fetchone()
+        if (type(version) is not int or not 1 <= version <= 9_007_199_254_740_991 or floor is None
+                or type(floor["last_version"]) is not int or floor["last_version"] != version):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError, catalog_schema.CatalogIntegrityError):
+        raise MetadataStoreError("operator AWS credential binding refused") from None
+    return current, metadata
+
+
+def replace_operator_aws_credential_if_version(conn: Any, item_id: str, *,
+        expected_version: int, secret: str) -> dict[str, Any] | None:
+    """Replace the whole tuple, always advancing generation; no old decryption."""
+    from serverware import operator_catalog_aws as aws
+    _operator_aws_transaction(conn)
+    if type(expected_version) is not int or not 1 <= expected_version < 9_007_199_254_740_991:
+        raise ValueError("operator AWS replacement review refused")
+    state = _operator_aws_current(conn, item_id)
+    if state is None:
+        return None
+    current, previous_metadata = state
+    if current["credential_version"] != expected_version:
+        return None
+    metadata = aws.metadata_from_secret(secret, previous_metadata["provider_subject"])
+    next_version = expected_version + 1
+    encrypted = _envelope_values(item_id, secret, next_version)
+    changed = conn.execute("UPDATE credentials SET encrypted_secret=?,encrypted_dek=?,secret_nonce=?,"
+        "secret_ciphertext=?,secret_kek_id=?,credential_version=?,secret_updated_at=?,metadata=?,updated_at=? "
+        "WHERE id=? AND credential_version=? AND lifecycle_status='active'", (
+        encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+        encrypted["secret_ciphertext"], encrypted["secret_kek_id"], next_version,
+        encrypted["secret_updated_at"], dumps(metadata), encrypted["secret_updated_at"], item_id,
+        expected_version)).rowcount
+    if changed != 1:
+        raise MetadataStoreError("operator AWS replacement compare-and-swap refused")
+    _record_credential_generation(conn, item_id, next_version)
+    floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?",
+        (item_id,)).fetchone()
+    if floor is None or type(floor["last_version"]) is not int or floor["last_version"] != next_version:
+        raise MetadataStoreError("operator AWS replacement generation update refused")
+    return {"previous_credential_generation": expected_version, "credential_generation": next_version,
+        "key_replaced_at": encrypted["secret_updated_at"]}
+
+
+def delete_operator_aws_credential(conn: Any, item_id: str) -> bool:
+    """Local removal only; retain generation history and caller-owned tombstone/audit."""
+    state = _operator_aws_current(conn, item_id)
+    if state is None:
+        return False
+    current, _ = state
+    changed = conn.execute("DELETE FROM credentials WHERE id=? AND credential_version=? "
+        "AND lifecycle_status='active'", (item_id, current["credential_version"])).rowcount
+    if changed != 1:
+        raise MetadataStoreError("operator AWS revocation compare-and-swap refused")
+    return True
+
+
 def replace_operator_static_credential_secret_if_version(
     conn: Any,
     item_id: str,
@@ -67515,6 +67657,16 @@ def replace_operator_static_credential_secret_if_version(
             if not operator_catalog_schema.validate_static_connection(catalog, metadata):
                 raise ValueError("static connection binding refused")
             metadata_fields.add("connection_type")
+        if current["kind"] == "header":
+            from serverware.policy_bundle import _validate_credential_injection
+            metadata_fields.add("injection_name")
+            header = catalog.get("header_name")
+            _validate_credential_injection("operator-static-replacement",
+                {"type": "header", "name": header, "prefix": ""})
+            stored_header = metadata.get("injection_name")
+            if (type(stored_header) is not str or not stored_header.isascii()
+                    or stored_header.lower() != header.lower()):
+                raise ValueError("static header placement binding refused")
         bearer = current["kind"] == "bearer"
         if (current["kind"] not in {"bearer", "header"}
                 or current["lifecycle_status"] != "active"
@@ -67608,6 +67760,7 @@ def update_credential_secret_if_version(
     revocation_work_id: str | None = None,
     _application_operation=None,
 ) -> tuple[dict[str, Any] | None, bool]:
+    _refuse_generic_aws_credential(None, metadata)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     if expected_version < 1:
@@ -67620,6 +67773,7 @@ def update_credential_secret_if_version(
         ).fetchone()
         if not current:
             return None, False
+        _refuse_generic_aws_credential(current["kind"], loads(current["metadata"], {}))
         if str(current["lifecycle_status"] or "active") != "active":
             return None, False
         current_version = int(current["credential_version"] or 1)
@@ -67925,6 +68079,7 @@ def delete_credential(item_id: str, *, _connection: Any | None = None) -> bool:
         ).fetchone()
         if row is not None:
             metadata = loads(row["metadata"], {})
+            _refuse_generic_aws_credential(row["kind"], metadata)
             if row["kind"] == "oauth2" or metadata.get("oauth") is True:
                 raise ManagedOAuthCredentialError(
                     "managed OAuth credentials must be revoked through the provider disconnect flow"

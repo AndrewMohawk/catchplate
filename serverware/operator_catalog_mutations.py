@@ -21,6 +21,7 @@ from serverware.operator_catalog_inputs import (
     GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput,
     XAppBearerInput, XUsernameRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
+    AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -99,7 +100,7 @@ def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
     """Core generations from the SAME catalog snapshot, never a lease/decrypt."""
     result = {}
     for record in catalog["credentials"]:
-        if record["auth_type"] not in {"bearer", "header"}:
+        if record["auth_type"] not in {"bearer", "header", "aws_sigv4_v1"}:
             continue
         if record["status"] == "revoked":
             result[record["id"]] = None
@@ -133,11 +134,14 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
                 result["key_replaced_at"] = record["key_replaced_at"]
         if "connection_type" in record:
             from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
+            from serverware import operator_catalog_aws
             schema.validate_static_connection(record)
             providers = {operator_catalog_github.CONNECTION: "github",
                 operator_catalog_npm.CONNECTION: "npm", operator_catalog_x.CONNECTION: "x",
-                operator_catalog_alchemy.CONNECTION: "alchemy"}
+                operator_catalog_alchemy.CONNECTION: "alchemy", operator_catalog_aws.CONNECTION: "aws"}
             result.update(connection_type=record["connection_type"], provider_id=providers[record["connection_type"]])
+            if record["connection_type"] == operator_catalog_aws.CONNECTION:
+                result.update(operator_catalog_aws.public_fields(record, now))
     elif collection == "applications":
         count = len(_active_rules(catalog, "application_id", record["id"]))
         revoked = record["status"] == "revoked"
@@ -298,6 +302,39 @@ def create_github_credential(payload: GithubTokenInput, actor_id: str) -> dict:
             "provider_subject": subject, "created_at": db.iso_now(), "status": "active"}
         return _Change(schema.save_resource(conn, "credentials", record, create=True))
     return _mutate(payload, actor_id, "credentials", "credential.github_token_created", change)
+
+
+def create_aws_credential(payload: AwsSigV4CredentialInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_aws as aws
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "credentials")
+        credential = db.create_operator_aws_credential(conn, name=payload.name, secret=aws.encode_secret(payload))
+        metadata = credential["metadata"]
+        record = {"id": credential["id"], "name": payload.name, "auth_type": aws.KIND,
+            "header_name": None, "connection_type": aws.CONNECTION,
+            "provider_subject": metadata["provider_subject"], "credential_kind": metadata["credential_kind"],
+            "expires_at": metadata["expires_at"], "created_at": db.iso_now(), "status": "active"}
+        return _Change(schema.save_resource(conn, "credentials", record, create=True))
+    return _mutate(payload, actor_id, "credentials", "credential.aws_sigv4_created", change)
+
+
+def replace_aws_credential(payload: ReplaceAwsSigV4CredentialInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_aws as aws
+
+    def change(db, conn, catalog):
+        record = _target(catalog, "credentials", payload.id)
+        if not aws.selected(record):
+            raise CatalogConflict()
+        aws.validate_credential(record)
+        receipt = db.replace_operator_aws_credential_if_version(conn, payload.id,
+            expected_version=payload.expected_credential_generation, secret=aws.encode_secret(payload))
+        if receipt is None:
+            raise CatalogConflict()
+        record.update(credential_kind=payload.credential_kind, expires_at=payload.expires_at,
+            key_replaced_at=receipt["key_replaced_at"])
+        return _Change(schema.save_resource(conn, "credentials", record), key_replacement=receipt)
+    return _mutate(payload, actor_id, "credentials", "credential.aws_sigv4_replaced", change)
 
 
 def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) -> dict:
@@ -559,7 +596,10 @@ def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
             raise CatalogConflict()
         if _active_rules(catalog, "credential_id", payload.id):
             raise CatalogConflict()
-        if not db.delete_credential(payload.id, _connection=conn):
+        from serverware import operator_catalog_aws as aws
+        removed = (db.delete_operator_aws_credential(conn, payload.id) if aws.selected(record)
+            else db.delete_credential(payload.id, _connection=conn))
+        if not removed:
             raise CatalogIntegrityError("credential binding disappeared")
         record.update(status="revoked", revoked_at=db.iso_now())
         return _Change(schema.save_resource(conn, "credentials", record))
@@ -614,6 +654,7 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 
 def catalog_status() -> dict:
     from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy, operator_demo
+    from serverware import operator_catalog_aws
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
@@ -645,6 +686,7 @@ def catalog_status() -> dict:
                 "path": "/api/operator-demo/applications/proxy-authentication"},
             "static_key_replacement": {"schema": "serverware.operatorStaticKeyReplacement/v1",
                 "path": "/api/operator-demo/credentials/replace-key", "credential_types": ["bearer", "header"]},
+            "aws_credentials": operator_catalog_aws.capability(),
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
                 "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None,
             "google_oauth": google_oauth,

@@ -38,6 +38,7 @@ function isXCredential(credential) { return credential?.connection_type === 'x_a
 function isXRule(rule) { return rule?.operation_bundle === 'x_username_read_v1'; }
 function isAlchemyCredential(credential) { return credential?.connection_type === 'alchemy_key_v1'; }
 function isAlchemyRule(rule) { return rule?.operation_bundle === 'alchemy_chain_status_read_v1'; }
+function isAwsCredential(credential) { return credential?.auth_type === 'aws_sigv4_v1' || credential?.connection_type === 'aws_sigv4_v1'; }
 function gmailAvailable(catalog, credential) {
   return credential?.status === 'active' && credential.auth_type === 'google_oauth' &&
     credential.permission_preset === 'gmail_readonly' && Boolean(catalog?.capabilities.google_oauth) &&
@@ -92,6 +93,7 @@ function availableCredentialInputModes(catalog) {
 const operatorRequestBodyChoices = Object.freeze({preserve_json_v1: 'Keep JSON request content',
   legacy_fields: 'Restrict JSON fields (empty blocks bodies)'});
 function availableRequestBodyChoices(catalog, credential) {
+  if (isAwsCredential(credential)) return [];
   const advertised = catalog?.capabilities?.request_body_modes;
   return [...(credential && credential.auth_type !== 'google_oauth' && Array.isArray(advertised) &&
     advertised.includes('preserve_json_v1') ? ['preserve_json_v1'] : []), 'legacy_fields'];
@@ -103,6 +105,7 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
   return {request_fields: requestFields, ...(choice === 'preserve_json_v1' ? {request_body_mode: choice} : {})};
 }
 function operatorRuleContentValid(rule, credential) {
+  if (isAwsCredential(credential)) return false; // Stored tuple is not a header credential or a grant.
   if (rule && !isAlchemyRule(rule) && Object.hasOwn(rule, 'chain')) return false;
   if (rule && !isXRule(rule) && Object.hasOwn(rule, 'username')) return false;
   if (rule && !isNpmPublishRule(rule) && ['package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
@@ -123,6 +126,7 @@ function operatorRuleContentValid(rule, credential) {
     !rule.request_fields.length && rule.methods.length === 1 && rule.methods[0] === 'GET';
 }
 function operatorRuleCredentialValid(rule, credential) {
+  if (isAwsCredential(credential)) return false;
   try {
     if (!Object.hasOwn(operatorCredentialInputModes, rule.credential_input) ||
         rule.credential_input === 'insert' && Object.hasOwn(rule, 'placeholder')) return false;
@@ -344,11 +348,13 @@ function projectCatalog(value) {
         !(['active', 'revoked'].includes(item.status) || credentialRecords && item.auth_type === 'google_oauth' && item.status === 'quarantined'))
       throw operatorError('Saved resource metadata is incomplete. Refresh before making changes.');
     return {...pick(item, [...base, ...names]), ...(credentialRecords ?
+      isAwsCredential(item) ? projectAwsCredential(item) :
       item.auth_type === 'google_oauth' ? projectGoogleAccount(item) : projectStaticKeyMetadata(item) : {})};
   });
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   credentials.forEach((credential, index) => {
     const original = value.credentials[index];
+    if (isAwsCredential(original)) return; // Exact non-header tuple projection already validated above.
     if (!Object.hasOwn(original, 'connection_type')) return;
     const provider = original.connection_type === 'github_token_v1' ? 'github' : original.connection_type === 'npm_token_v1' ? 'npm' :
       original.connection_type === 'x_app_bearer_v1' ? 'x' : original.connection_type === 'alchemy_key_v1' ? 'alchemy' : null;
@@ -394,6 +400,7 @@ function projectCatalog(value) {
   capabilities.npm_publish = value.capabilities?.npm_publish == null ? null : projectNpmPublishCapability(value.capabilities.npm_publish);
   capabilities.x = value.capabilities?.x == null ? null : projectXCapability(value.capabilities.x);
   capabilities.alchemy = value.capabilities?.alchemy == null ? null : projectAlchemyCapability(value.capabilities.alchemy);
+  capabilities.aws_credentials = value.capabilities?.aws_credentials == null ? null : projectAwsCapability(value.capabilities.aws_credentials);
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))
     throw operatorError('Google capability metadata is inconsistent. Refresh before making changes.');
   capabilities.google_oauth = capabilities.oauth === true ? projectGoogleCapability(value.capabilities, location.origin) : null;
@@ -473,13 +480,15 @@ function createOperatorWorkspace() {
     let success = false;
     try {
       const pending = api('/api/operator-demo/' + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...body, ...reviewed})});
-      if (Object.hasOwn(body, 'secret')) body.secret = '';
+      for (const name of ['secret', 'access_key_id', 'secret_access_key', 'session_token'])
+        if (Object.hasOwn(body, name)) body[name] = '';
       const result = await pending; await onSuccess(result); success = true;
       element(statusId).textContent = 'Saved. Refreshing the current state and proxy enforcement...';
     } catch (error) {
       requireReview(operatorMessage(error));
       element(statusId).textContent = operatorMessage(error);
-    } finally { if (Object.hasOwn(body, 'secret')) body.secret = ''; }
+    } finally { for (const name of ['secret', 'access_key_id', 'secret_access_key', 'session_token'])
+      if (Object.hasOwn(body, name)) body[name] = ''; }
     await refresh(); state.busy = false; emit(); return success;
   }
   element('mutation-review-confirm').addEventListener('click', () => {

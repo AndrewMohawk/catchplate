@@ -11267,6 +11267,19 @@ verify-ecr-image-preparation:
 	python3 -I -B scripts/test_ecr_artifact_staging.py
 	python3 -I -B scripts/test_prepare_ecr_image_artifact.py
 
+# Local encrypted custody and release refusals, not AWS/proxy publication.
+.PHONY: verify-operator-aws-credentials verify-operator-aws-browser verify-credential-ciphertext-codec
+verify-operator-aws-credentials:
+	$(TEST_PYTHON_RUN) -B scripts/test_operator_catalog_aws.py
+	$(TEST_PYTHON_RUN) -B scripts/test_operator_catalog_aws_api.py
+	$(TEST_PYTHON_RUN) -B scripts/test_operator_aws_release_boundary.py
+
+verify-operator-aws-browser:
+	node scripts/test_operator_aws_browser.cjs
+
+verify-credential-ciphertext-codec:
+	$(TEST_PYTHON_RUN) -B scripts/test_credential_ciphertext_codec.py
+
 verify-control-plane-startup:
 	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
 

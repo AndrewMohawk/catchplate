@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 
 from mitmproxy import http
 
-from serverware import alchemy_rpc_read, db, github_issues, npm_metadata, npm_publish, runtime, x_app_read
+from serverware import alchemy_rpc_read, aws_credential_boundary, db, github_issues, npm_metadata, npm_publish, runtime, x_app_read
 from serverware.adapters import (
     _parse_content_type, alchemy_rpc_read_json_inspection, get_adapter, gmail_read_json_inspection,
     npm_metadata_json_inspection, npm_publish_json_inspection, preflight_request_admission,
@@ -2150,6 +2150,8 @@ def _bounded_credential_header_value(value: str, *, context: str) -> str:
 
 
 def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy, credential: dict[str, Any]) -> str:
+    if aws_credential_boundary.credential_selected(credential):
+        raise ValueError("AWS credentials cannot use generic secret injection")
     injection = credential_policy.injection
     injection_type, _ = _validated_credential_injection_contract(injection)
     if credential.get("kind") == "oauth2" and (

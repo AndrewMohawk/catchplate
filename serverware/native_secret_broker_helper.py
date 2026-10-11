@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from serverware.native_kms_cms import unwrap_broker_kek
-from serverware import native_service_tokens
+from serverware import aws_credential_boundary, native_service_tokens
 from serverware import native_oauth_refresh_owner
 from serverware import native_oauth_cleanup_owner
 from serverware import native_oauth_pending_retirement_owner
@@ -86,12 +86,14 @@ def _decoded(value, maximum, exact=None):
 
 
 def _stored(value, maximum, exact=None):
-    # Existing crypto.py envelopes use PADDED urlsafe base64. Never rewrite
-    # the retained original or confuse it with the private channel's codec.
+    # Ordinary crypto.py envelopes are unpadded; native writers are padded.
+    # Accept only those canonical forms, without rewriting the retained original
+    # or changing the private channel's separate unpadded-only codec.
     _require(type(value) is str and 1 <= len(value) <= ((maximum + 2) // 3) * 4)
-    raw = base64.b64decode(value, altchars=b"-_", validate=True)
-    _require(base64.urlsafe_b64encode(raw).decode("ascii") == value
-        and len(raw) <= maximum and (exact is None or len(raw) == exact))
+    raw = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    canonical = base64.urlsafe_b64encode(raw).decode("ascii")
+    _require(value in (canonical, canonical.rstrip("="))
+        and 1 <= len(raw) <= maximum and (exact is None or len(raw) == exact))
     return raw
 
 
@@ -336,6 +338,10 @@ class _Broker:
         _text(row["secretUpdatedAt"], 256)
         _require(type(row["encryptedDek"]) is str and type(row["secretNonce"]) is str
             and type(row["secretCiphertext"]) is str)
+        _require(type(value["storageMetadata"]) is str)
+        storage = _private_document(value["storageMetadata"].encode("utf-8"), 32 * 1024)
+        _require(not aws_credential_boundary.selected(None, storage)
+            and not aws_credential_boundary.selected(None, value["metadata"]))
         encrypted_dek = row["encryptedDek"].split(":")
         secret_nonce, secret_ciphertext = row["secretNonce"].split(":"), row["secretCiphertext"].split(":")
         _require(len(encrypted_dek) == 3 and len(secret_nonce) == len(secret_ciphertext) == 2
@@ -347,8 +353,7 @@ class _Broker:
         plaintext = AESGCM(dek).decrypt(_stored(secret_nonce[1], 12, 12),
             _stored(secret_ciphertext[1], 1024 * 1024 + 16),
             f"serverware:secret:{credential}:v{version}".encode("utf-8"))
-        _require(1 <= len(plaintext) <= 1024 * 1024 and type(value["storageMetadata"]) is str)
-        storage = _private_document(value["storageMetadata"].encode("utf-8"), 32 * 1024)
+        _require(1 <= len(plaintext) <= 1024 * 1024)
         if value["metadata"].get("oauth") is True or storage.get("oauth") is True:
             # The CP validates account identity and application ownership on
             # the actual encrypted row. Rejoin its exact private metadata to

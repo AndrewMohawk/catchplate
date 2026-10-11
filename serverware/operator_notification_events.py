@@ -62,6 +62,8 @@ _CATALOG = {
     "credential.npm_token_created": "npm token saved",
     "credential.x_app_bearer_created": "X app-only token saved",
     "credential.alchemy_key_created": "Alchemy key saved",
+    "credential.aws_sigv4_created": "AWS credentials saved locally",
+    "credential.aws_sigv4_replaced": "AWS credentials replaced locally",
     "credential.key_replaced": "Provider key replaced",
     "credential.revoked": "Provider key revoked locally",
     "application.created": "Application identity created",

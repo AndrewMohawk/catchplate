@@ -107,6 +107,9 @@ def successful(*, header=False, identical=False, shared=False):
     f = Fixture(header=header, shared=shared)
     from serverware import runtime
     before, core, catalog = f.snapshot(), f.core(), f.catalog()
+    if header:
+        assert json.loads(core["metadata"])["injection_name"] == "X-Api-Key"
+        assert catalog["credentials"][0]["header_name"] == "X-Api-Key"
     previous = core["credential_version"]
     expected = OLD if identical else NEW
     real_helper = f.db.replace_operator_static_credential_secret_if_version
@@ -338,6 +341,52 @@ def helper_integrity():
     return {"binding_and_ledger_refusals": len(mutations), "generation_type_refusals": 6}
 
 
+def header_binding_integrity():
+    f = Fixture(header=True)
+    helper = f.db.replace_operator_static_credential_secret_if_version
+    before = f.snapshot()
+    metadata = json.loads(f.core()["metadata"])
+    record = {key: value for key, value in f.catalog()["credentials"][0].items()
+        if key not in {"id", "ordinal"}}
+    variants = [({key: value for key, value in metadata.items() if key != "injection_name"}, record)]
+    variants += [({**metadata, "injection_name": value}, record)
+        for value in ("X-Different", None, 1, "", "X-Api-Key\r\n", "X-Api-Kéy")]
+    variants.append(({**metadata, "injection_prefix": "undeclared"}, record))
+    variants.append((metadata, {**record, "header_name": "X-Different"}))
+    variants += [({**metadata, "injection_name": value}, {**record, "header_name": value})
+        for value in ("Authorization", "Host", "X-Serverware-Test", "X Bad", "")]
+    for changed_metadata, changed_record in variants:
+        with f.store.operator_publication.exclusive(), closing(f.db.connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE credentials SET metadata=? WHERE id=?",
+                (json.dumps(changed_metadata), f.identifier))
+            conn.execute("UPDATE operator_catalog_credentials SET data_json=? WHERE id=?",
+                (json.dumps(changed_record), f.identifier))
+            altered = (f.core(conn), [tuple(row) for row in conn.execute("SELECT * FROM credential_generations")])
+            changes = conn.total_changes
+            with patch.object(f.db, "decrypt_secret_envelope", side_effect=AssertionError("old key decryption attempted")):
+                refused(lambda: helper(conn, f.identifier, expected_version=1, secret=NEW), f.db.MetadataStoreError)
+            assert conn.total_changes == changes
+            assert (f.core(conn), [tuple(row) for row in conn.execute("SELECT * FROM credential_generations")]) == altered
+            conn.rollback()
+        assert f.snapshot() == before
+    # HTTP field names are case-insensitive, matching the actual release guard;
+    # accepting that identity must not rewrite either retained representation.
+    with f.store.operator_publication.exclusive(), closing(f.db.connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        lower_metadata = {**metadata, "injection_name": "x-api-key"}
+        conn.execute("UPDATE credentials SET metadata=? WHERE id=?", (json.dumps(lower_metadata), f.identifier))
+        with patch.object(f.db, "decrypt_secret_envelope", side_effect=AssertionError("old key decryption attempted")):
+            result = helper(conn, f.identifier, expected_version=1, secret=NEW)
+        assert result["credential_generation"] == 2
+        assert json.loads(f.core(conn)["metadata"]) == lower_metadata
+        assert json.loads(conn.execute("SELECT data_json FROM operator_catalog_credentials WHERE id=?",
+            (f.identifier,)).fetchone()[0])["header_name"] == "X-Api-Key"
+        conn.rollback()
+    assert f.snapshot() == before
+    return {"header_binding_refusals": len(variants), "case_insensitive_target_preserved": True}
+
+
 def postcommit_cache_failure():
     f = Fixture()
     from serverware import runtime
@@ -406,6 +455,7 @@ OPERATIONS = {
     "missing-revoked": missing_and_revoked, "google": google_refused,
     "audit-rollback": audit_rollback, "concurrent": concurrent_single_winner,
     "helper-ownership": helper_ownership, "helper-integrity": helper_integrity,
+    "header-binding": header_binding_integrity,
     "cache-failure": postcommit_cache_failure, "input": closed_input,
     "create-restart": create_for_restart, "reopen": reopen,
 }
@@ -429,6 +479,7 @@ class OperatorCredentialReplacementTests(unittest.TestCase):
     def test_concurrent_same_review_has_exactly_one_winner(self): self.run_worker("concurrent")
     def test_helper_requires_profile_publication_transaction_and_real_store(self): self.run_worker("helper-ownership")
     def test_helper_refuses_disguised_oauth_malformed_metadata_and_generation_drift(self): self.run_worker("helper-integrity")
+    def test_custom_header_binding_refuses_missing_changed_and_forbidden_targets(self): self.run_worker("header-binding")
     def test_cache_failure_cannot_undo_or_repeat_commit(self): self.run_worker("cache-failure")
     def test_input_cannot_change_identity_or_placement(self): self.run_worker("input")
 

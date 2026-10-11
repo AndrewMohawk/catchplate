@@ -17,10 +17,11 @@ const REVIEWED_UPSTREAMS = [[FIXTURE], [FIXTURE, GMAIL],
   [FIXTURE, 'https://api.github.com', 'https://registry.npmjs.org', GMAIL]];
 const GOOGLE_SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
-const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js', 'workspace_alchemy.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
+const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
   'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
-const SCRIPT_ROSTERS = [SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js'].includes(name)),
-  SCRIPTS.filter(name => name !== 'workspace_alchemy.js'), SCRIPTS];
+const SCRIPT_ROSTERS = [SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
+  SCRIPTS.filter(name => !['workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
+  SCRIPTS.filter(name => name !== 'workspace_aws.js'), SCRIPTS];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;

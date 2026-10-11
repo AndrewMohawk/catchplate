@@ -32,7 +32,7 @@ function createConnectView(workspace, applications, proxy) {
   let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
   const catalog = () => workspace.state.catalog;
   const writable = () => Boolean(catalog() && !workspace.state.busy && !workspace.state.uncertain);
-  const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active');
+  const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active' && !isAwsCredential(item));
   const application = () => catalog()?.applications.find(item => item.id === selectedApplication && item.status === 'active');
   const validApp = item => item?.token_status === 'valid' && Number.isSafeInteger(item.token_expires_at_epoch_ms) && item.token_expires_at_epoch_ms > Date.now();
   const matchingRules = () => catalog()?.access_rules.filter(item => item.status === 'active' && item.application_id === selectedApplication && item.credential_id === selectedCredential) || [];
@@ -84,6 +84,7 @@ function createConnectView(workspace, applications, proxy) {
     const item = catalog()[checkpoint.collection].find(item => item.id === checkpoint.id && item.status === 'active');
     if (!item) { message('The exact saved resource cannot be confirmed. Review saved state; no repeat request was sent.'); return; }
     if (checkpoint.collection === 'credentials') {
+      if (isAwsCredential(item)) { checkpoint.message = 'AWS credentials are stored only; no application setup is available.'; return; }
       if (checkpoint.github && !isGithubCredential(item)) {
         message('The saved GitHub connection cannot be confirmed. Refresh saved state; do not submit again.'); return;
       }
@@ -165,7 +166,7 @@ function createConnectView(workspace, applications, proxy) {
     const value = catalog(); if (!value) return;
     if (['key', 'github', 'npm', 'x', 'alchemy'].includes(connectionMethod)) choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
     if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: actionLabels.credential},
-      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active'), [actionLabels.credential])], savedChoice);
+      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active' && !isAwsCredential(item)), [actionLabels.credential])], savedChoice);
     choices('connect-application-choice', [...operatorConnectResourceChoices(value.applications.filter(item => item.status === 'active'), [actionLabels.application]), {id: 'new', name: actionLabels.application}], 'new');
     choices('connect-rule-choice', [{id: 'new', name: actionLabels.rule}, ...operatorConnectResourceChoices(matchingRules(), [actionLabels.rule])], 'new');
     choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
@@ -376,7 +377,7 @@ function createConnectView(workspace, applications, proxy) {
       catalog().capabilities.github.destination_allowed && catalog().allowed_upstreams.includes(operatorGithub.origin) ?
         'GitHub: save one token and grant repository-scoped issue permissions. Requires the paired proxy implementation; this page has not tested GitHub.' :
         'A GitHub token can be saved, but access cannot be granted until the operator approves api.github.com in deployment settings.';
-    element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item => item.status === 'active');
+    element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item => item.status === 'active' && !isAwsCredential(item));
     for (const id of ['connect-actions', 'connect-leave-help', 'connect-compatibility']) element(id).hidden = googleOpen;
     steps.forEach((name, index) => { element('connect-' + name + '-step').hidden = index !== step; });
     element('connect-progress').textContent = (step + 1) + ' of 5 · ' + labels[step];
@@ -427,7 +428,7 @@ function createConnectView(workspace, applications, proxy) {
     if (step !== 0 || !['key', 'github', 'npm', 'saved'].includes(connectionMethod) || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
     const choice = element('connect-credential-choice').value;
     if (connectionMethod === 'saved') {
-      if (!catalog().credentials.some(item => item.id === choice && item.status === 'active')) return;
+      if (!catalog().credentials.some(item => item.id === choice && item.status === 'active' && !isAwsCredential(item))) return;
       savedChoice = choice; selectedCredential = choice; selectedApplication = ''; selectedRule = ''; review = null; goto(1); return;
     }
     if (!workspace.ready('credentials') || connectionMethod === 'github' && !catalog().capabilities.github || connectionMethod === 'npm' && !catalog().capabilities.npm) return;

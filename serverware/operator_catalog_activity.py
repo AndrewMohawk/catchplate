@@ -78,7 +78,7 @@ def _indexes(catalog):
             index[row["id"]] = row
         indexes[collection] = index
     credentials, apps, rules = (indexes[key] for key in indexes)
-    if any(row.get("auth_type") not in {"bearer", "header", "google_oauth"}
+    if any(row.get("auth_type") not in {"bearer", "header", "google_oauth", "aws_sigv4_v1"}
            for row in credentials.values()):
         raise ValueError("catalog evidence identity unavailable")
     principals = [app.get("principal_id") for app in apps.values()]

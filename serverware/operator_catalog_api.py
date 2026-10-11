@@ -23,6 +23,7 @@ CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/credentials/npm-token", "/credentials/x-app-bearer", "/applications", "/applications/revoke",
     "/credentials/alchemy-key",
+    "/credentials/aws-sigv4", "/credentials/aws-sigv4/replace",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username",
     "/access-rules/alchemy-chain-status",
@@ -236,6 +237,16 @@ async def create_x_credential(request: Request, identity: auth.AdminIdentity = D
 @router.post("/credentials/alchemy-key")
 async def create_alchemy_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "AlchemyKeyInput", "create_alchemy_credential", 16384, created=True)
+
+
+@router.post("/credentials/aws-sigv4")
+async def create_aws_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "AwsSigV4CredentialInput", "create_aws_credential", 32768, created=True)
+
+
+@router.post("/credentials/aws-sigv4/replace")
+async def replace_aws_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "ReplaceAwsSigV4CredentialInput", "replace_aws_credential", 32768)
 
 
 @router.post("/applications")

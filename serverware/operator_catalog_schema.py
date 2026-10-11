@@ -194,6 +194,9 @@ def save_resource(conn, collection: str, record: dict, create: bool = False) -> 
 
 def rule_credential_header(rule: dict, credential: dict) -> dict | None:
     """Translate public per-rule input without opening the encrypted credential."""
+    from serverware import operator_catalog_aws
+    if operator_catalog_aws.selected(credential):
+        raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
     mode = rule.get('credential_input', 'insert')
     if mode == 'insert':
         if 'placeholder' in rule:
@@ -253,6 +256,9 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
+    from serverware import operator_catalog_aws
+    if operator_catalog_aws.selected(credential):
+        raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
     request_mode, _ = rule_content_modes(rule)
     from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     if operator_catalog_alchemy.selected(rule):
@@ -282,6 +288,9 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
 def validate_static_connection(record: dict, metadata: dict | None = None) -> bool:
     """Closed dispatch keeps generic credentials unmarked and retained unchanged."""
     from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
+    from serverware import operator_catalog_aws, aws_credential_boundary
+    if operator_catalog_aws.selected(record) or aws_credential_boundary.selected(None, metadata):
+        return operator_catalog_aws.validate_credential(record, metadata)
     if record.get('connection_type') == operator_catalog_alchemy.CONNECTION:
         return operator_catalog_alchemy.validate_credential(record, metadata)
     if record.get('connection_type') == operator_catalog_x.CONNECTION:
@@ -333,7 +342,7 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
         if 'key_replaced_at' in row:
             try:
                 stamp = row['key_replaced_at']
-                if (row.get('auth_type') not in {'bearer', 'header'} or not isinstance(stamp, str)
+                if (row.get('auth_type') not in {'bearer', 'header', 'aws_sigv4_v1'} or not isinstance(stamp, str)
                         or not 1 <= len(stamp) <= 64 or not stamp.isascii()
                         or any(ord(char) < 32 or ord(char) == 127 for char in stamp)
                         or datetime.fromisoformat(stamp).tzinfo is None):
@@ -356,6 +365,16 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
             metadata = json.loads(core['metadata']) if core is not None else None
         except (ValueError, TypeError) as error:
             raise CatalogIntegrityError('active credential metadata refused') from error
+        from serverware import operator_catalog_aws, aws_credential_boundary
+        if (operator_catalog_aws.selected(row) or core is not None
+                and aws_credential_boundary.selected(core['kind'], metadata)):
+            if type(metadata) is not dict:
+                raise CatalogIntegrityError('active AWS credential metadata refused')
+            operator_catalog_aws.validate_credential(row, metadata)
+            if (core is None or core['kind'] != operator_catalog_aws.KIND
+                    or core['name'] != row['name'] or core['lifecycle_status'] != 'active'):
+                raise CatalogIntegrityError('active AWS credential binding refused')
+            continue
         if (row.get('auth_type') not in {'bearer', 'header'} or core is None
                 or core['name'] != row['name'] or core['kind'] != ('bearer' if bearer else 'header')
                 or core['lifecycle_status'] != 'active' or not isinstance(metadata, dict)

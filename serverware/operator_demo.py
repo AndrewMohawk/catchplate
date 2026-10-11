@@ -258,6 +258,8 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/credentials/npm-token",
         "/api/operator-demo/credentials/x-app-bearer",
         "/api/operator-demo/credentials/alchemy-key",
+        "/api/operator-demo/credentials/aws-sigv4",
+        "/api/operator-demo/credentials/aws-sigv4/replace",
         "/api/operator-demo/applications", "/api/operator-demo/applications/revoke",
         "/api/operator-demo/applications/proxy-authentication",
         "/api/operator-demo/applications/rotate-token", "/api/operator-demo/access-rules",

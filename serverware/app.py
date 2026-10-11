@@ -18925,6 +18925,9 @@ def _broker_credential_for_lease(credential_id: str) -> dict[str, Any] | None:
     # This preliminary read contains no secret and cannot trigger legacy
     # refresh. The actual ciphertext is read later under the mutation lock.
     credential = db.get_credential(credential_id, include_secret=False)
+    from serverware.aws_credential_boundary import credential_selected
+    if credential is not None and credential_selected(credential):
+        raise HTTPException(status_code=409, detail="AWS credential dispatch is unavailable")
     if credential is not None and credential.get("kind") == "oauth2":
         raise HTTPException(status_code=503, detail="broker OAuth requires its enrolled current opening")
     return credential
@@ -19201,6 +19204,9 @@ def _credential_metadata_binding_alias(
 def _assert_credential_policy_binding(
     credential: dict[str, Any], credential_policy: Any
 ) -> None:
+    from serverware.aws_credential_boundary import credential_selected
+    if credential_selected(credential):
+        raise HTTPException(status_code=409, detail="AWS credential dispatch is unavailable")
     metadata = credential.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise HTTPException(status_code=503, detail="credential metadata is invalid")
@@ -19316,6 +19322,9 @@ def _assert_credential_policy_binding(
 def _assert_credential_injection_binding(
     credential: dict[str, Any], credential_policy: Any
 ) -> None:
+    from serverware.aws_credential_boundary import credential_selected
+    if credential_selected(credential):
+        raise HTTPException(status_code=409, detail="AWS credential dispatch is unavailable")
     metadata = credential.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise HTTPException(status_code=503, detail="credential metadata is invalid")
@@ -19485,6 +19494,9 @@ def _assert_policy_candidate_credential_bindings(snapshot: Any) -> None:
 def _credential_secret_for_lease(
     credential: dict[str, Any], credential_policy: Any
 ) -> str:
+    from serverware.aws_credential_boundary import credential_selected
+    if credential_selected(credential):
+        raise HTTPException(status_code=409, detail="AWS credential dispatch is unavailable")
     secret = str(credential.get("secret") or "")
     if credential.get("kind") != "oauth2":
         return secret

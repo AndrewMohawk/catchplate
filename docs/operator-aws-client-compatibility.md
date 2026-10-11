@@ -1,7 +1,8 @@
 # AWS ordinary-client compatibility plan
 
 Status: **signing foundation and local exact-image preparation tested;
-proxy publication is not implemented or accepted**. This document proposes a
+storage-only credential management implemented; proxy publication is not
+implemented or accepted**. This document proposes a
 bounded operator-development feature,
 not AWS-wide SDK support, a production credential service, or completion of the
 native pilot. No AWS requests were sent. The checks below exercise local SDK
@@ -60,7 +61,9 @@ explicitly leaves its integration open. The
 distinguish operation bundles from generic header replacement and optional
 content restrictions. Current `CredentialInput` in
 [`operator_catalog_inputs.py`](../serverware/operator_catalog_inputs.py) only
-admits bearer/header secrets; [`policy_engine.py`](../serverware/policy_engine.py)
+admits bearer/header secrets; the separate `AwsSigV4CredentialInput` implements
+[encrypted AWS tuple management](operator-aws-credentials.md), without granting
+AWS access. [`policy_engine.py`](../serverware/policy_engine.py)
 `_secret_for_injection`/`_inject_credential` are not an AWS signing interface.
 
 Default permissions must be narrow, explicit presets, not `service:*` or an IAM
@@ -71,9 +74,9 @@ required YubiKey approval from that original publication journey.
 
 ## Credential custody and signing contract
 
-- Add a versioned AWS credential type: access key ID plus secret access key,
+- Implemented storage-only: a versioned AWS credential type with access key ID plus secret access key,
   optional session token and mandatory expiry when importing temporary access.
-  Keep the complete tuple in the existing encrypted credential store; catalog
+  The complete tuple stays in the existing encrypted credential store; catalog
   responses, audit, browser storage and client downloads must omit it. No new
   vault, ambient host credential-chain lookup or import of bootstrap profiles.
 - Treat imported temporary credentials as expiring, not automatically renewable.
@@ -143,7 +146,8 @@ real registry token to clients or advertise Docker support from this slice.
 
 ## Implementation and acceptance gates
 
-1. Add isolated AWS credential/catalog and ECR policy modules, closed schemas,
+1. The isolated AWS credential/catalog lifecycle is implemented, but it refuses
+   all release and grants. Still add ECR policy modules, closed schemas,
    generation-aware broker material, and matching Python/Rust typed admission.
    Add a dispatch signer with an explicit final-request binding; preserve old
    header-injection policies and refuse unsupported controlled/native consumers.

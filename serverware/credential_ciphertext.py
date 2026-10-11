@@ -44,9 +44,12 @@ def _finite_float(original):
 
 def _encoded(value, *, exact=None, maximum=MAX_CIPHERTEXT_BYTES):
     _require(type(value) is str and 1 <= len(value) <= 4 * ((maximum + 2) // 3))
-    raw = base64.b64decode(value.encode("ascii"), altchars=b"-_", validate=True)
+    # Ordinary crypto.py envelopes are unpadded; native writers are padded.
+    # Padding here is decoder input only: row_projection retains every original.
+    raw = base64.b64decode((value + "=" * (-len(value) % 4)).encode("ascii"), altchars=b"-_", validate=True)
+    canonical = base64.urlsafe_b64encode(raw).decode("ascii")
     _require(1 <= len(raw) <= maximum and (exact is None or len(raw) == exact)
-        and base64.urlsafe_b64encode(raw).decode("ascii") == value)
+        and value in (canonical, canonical.rstrip("=")))
     return raw
 
 

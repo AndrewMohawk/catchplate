@@ -335,12 +335,13 @@ function createStaticKeyReplacementView(workspace) {
 function createCredentialsView(workspace, actions = {}) {
   const form = element('credential-form');
   const replacement = createStaticKeyReplacementView(workspace);
+  const aws = createAwsCredentialsView(workspace);
   element('credential-auth-type').addEventListener('change', () => {
     const custom = element('credential-auth-type').value === 'header';
     element('credential-header-field').hidden = !custom; element('credential-header-name').required = custom;
   });
   form.addEventListener('submit', async event => {
-    event.preventDefault(); if (!workspace.ready('credentials') || !form.reportValidity()) return;
+    event.preventDefault(); if (element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials') || !form.reportValidity()) return;
     const body = {name: element('credential-name').value.trim(), auth_type: element('credential-auth-type').value,
       header_name: element('credential-auth-type').value === 'bearer' ? 'Authorization' : element('credential-header-name').value.trim(),
       secret: element('credential-secret').value};
@@ -350,7 +351,7 @@ function createCredentialsView(workspace, actions = {}) {
   function render() {
     const catalog = workspace.state.catalog;
     replacement.render();
-    element('credential-fields').disabled = !workspace.ready('credentials');
+    element('credential-fields').disabled = element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials');
     if (!catalog) { element('credential-secret').value = ''; return; }
     const currentCards = []; const expiredCards = [];
     const expiredOpen = element('credentials-list').querySelector('[data-expired-app-access]')?.open;
@@ -359,7 +360,10 @@ function createCredentialsView(workspace, actions = {}) {
       const badge = credential.status === 'quarantined' ? 'Quarantined · unusable' : credential.status === 'active' ? 'Saved' : 'Revoked locally';
       const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
         operatorCredentialUseRows(credential, catalog));
+      if (isAwsCredential(credential)) card.dataset.credentialType = 'aws_sigv4_v1';
       if (!google) {
+        if (isAwsCredential(credential)) card.append(textNode('p', operatorAwsNotice +
+          ' AWS validity and permissions have not been tested. No automatic renewal. These credentials cannot be used by applications or generic header rules.', 'small muted'));
         if (isAlchemyCredential(credential)) card.append(textNode('p',
           'Alchemy chain-status reads only. Stored API or access key, never a key-bearing URL. Validity and provider entitlement are not tested here; Serverware does not renew this key.', 'small muted'));
         if (isXCredential(credential)) card.append(textNode('p',
@@ -373,9 +377,9 @@ function createCredentialsView(workspace, actions = {}) {
         card.append(textNode('p', 'Saved assignments are configuration, not proof of a valid app token, provider key, or loaded proxy policy.', 'small muted'));
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');
-        for (const [label, value] of [['Credential ID', credential.id],
+        for (const [label, value] of [['Credential ID', credential.id], ...(isAwsCredential(credential) ? awsCredentialRows(credential) : [
           ['Authentication', isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
-          ['Header name', credential.header_name], ['Active rules', String(credential.active_rule_count)],
+          ['Header name', credential.header_name]]), ['Active rules', String(credential.active_rule_count)],
           ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
         details.append(identity);
         if (Object.hasOwn(credential, 'credential_generation')) {
@@ -394,15 +398,23 @@ function createCredentialsView(workspace, actions = {}) {
         button.addEventListener('click', () => actions.reauthorize(credential.id)); card.append(button);
       }
       if (credential.status === 'active' && !google) {
+        if (awsReplaceAvailable(catalog, credential)) {
+          const replace = textNode('button', 'Replace AWS credentials', 'secondary'); replace.dataset.action = 'replace-aws-credentials';
+          replace.disabled = workspace.state.busy || workspace.state.uncertain;
+          replace.addEventListener('click', () => aws.open(credential.id)); card.append(replace);
+        }
         if (staticKeyReplacementAvailable(catalog, credential)) {
           const replace = textNode('button', 'Replace key', 'secondary'); replace.dataset.action = 'replace-key';
           replace.disabled = workspace.state.busy || workspace.state.uncertain;
           replace.addEventListener('click', () => replacement.open(credential.id)); card.append(replace);
         }
-        const button = textNode('button', 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';
-        button.disabled = workspace.state.busy || workspace.state.uncertain || credential.active_rule_count > 0;
+        const button = textNode('button', isAwsCredential(credential) ? 'Remove AWS credentials' : 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';
+        button.disabled = workspace.state.busy || workspace.state.uncertain || credential.active_rule_count > 0 ||
+          isAwsCredential(credential) && !awsStorageAvailable(catalog);
         button.addEventListener('click', () => {
-          if (!window.confirm(`Revoke locally stored credential "${credential.name}" (${credential.id})? This does not revoke the key at its provider.`)) return;
+          if (isAwsCredential(credential) && !awsStorageAvailable(workspace.state.catalog)) return;
+          if (!window.confirm(isAwsCredential(credential) ? `Remove AWS credentials "${credential.name}" (${credential.id}) from Serverware? This does not revoke them at AWS.` :
+            `Revoke locally stored credential "${credential.name}" (${credential.id})? This does not revoke the key at its provider.`)) return;
           workspace.mutate('credentials/revoke', {id: credential.id}, 'credential-action-status');
         }); card.append(button);
         if (credential.active_rule_count > 0) card.append(textNode('p', 'Revoke the referencing access rules first. Shared application identities are retained.', 'small muted'));
@@ -501,6 +513,7 @@ function createAccessRulesView(workspace) {
     const placeholder = credentialInput === 'replace_exact' ? element('rule-placeholder').value : undefined;
     const credential = catalog.credentials.find(item => item.id === element('rule-credential-id').value);
     try {
+      if (isAwsCredential(credential)) throw new Error();
       if (!availableCredentialInputModes(catalog).includes(credentialInput)) throw new Error();
       clientCredentialInput({credentialInput, placeholder, credential});
     } catch (_) {
@@ -534,7 +547,7 @@ function createAccessRulesView(workspace) {
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isAlchemyCredential(item)), 'Use Connect an app for GitHub, npm, X or Alchemy presets');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Connect an app; AWS storage cannot grant access');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

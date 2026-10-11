@@ -55,7 +55,11 @@ def _request_profile(rule: dict, credential: dict, route: dict) -> None:
 def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=None) -> dict:
     from serverware import operator_demo_store as legacy
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
+    from serverware import operator_catalog_aws
+    aws_ids = {row['id'] for row in catalog['credentials'] if operator_catalog_aws.selected(row)}
     for rule in catalog['access_rules']:
+        if rule.get('credential_id') in aws_ids:
+            raise schema.CatalogIntegrityError('AWS credentials have no access-rule signing profile')
         if operator_catalog_alchemy.selected(rule):
             operator_catalog_alchemy.validate_shape(rule)
         elif operator_catalog_x.selected(rule):

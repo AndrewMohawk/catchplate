@@ -86,8 +86,12 @@ Neither confidential field is written into issuance audit events.
 
 At-rest material must use the actual `envelope:v2` storage marker. Nonces are
 12 bytes, the wrapped DEK is 48 bytes, and the secret ciphertext is at most
-1 MiB plus its 16-byte tag. Encodings are canonical padded URL-safe base64;
-the original versioned strings are not rewritten. No legacy fallback exists.
+1 MiB plus its 16-byte tag. Shared transport readers accept canonical padded
+URL-safe base64 from native writers and canonical unpadded URL-safe base64 from
+the ordinary Python envelope writer. Partial or surplus padding, nonzero unused
+pad bits and other alternate encodings are refused. The original versioned
+strings are not rewritten; native creation/refresh admission codecs and writers
+remain unchanged. No legacy encrypted-secret fallback exists.
 The recipient must authenticate the original credential/version AAD, actual
 assigned KEK and retained request scope before decrypting or using any secret.
 

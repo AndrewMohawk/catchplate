@@ -40,6 +40,7 @@ _OPERATIONS = frozenset({
     "create_gmail_rule", "create_github_rule", "create_npm_rule",
     "create_npm_publish_rule", "create_x_credential", "create_x_rule",
     "create_alchemy_credential", "create_alchemy_rule",
+    "create_aws_credential", "replace_aws_credential",
 })
 _LABELS = frozenset({
     "api_admitted", "payload_validated",

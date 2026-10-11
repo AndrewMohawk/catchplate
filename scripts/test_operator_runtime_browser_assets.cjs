@@ -37,7 +37,8 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 scripts = module.SCRIPT_FILES
 variants = []
-for omitted in ({'workspace_x.js', 'workspace_alchemy.js'}, {'workspace_alchemy.js'}, set()):
+for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'},
+                {'workspace_alchemy.js', 'workspace_aws.js'}, {'workspace_aws.js'}, set()):
     module.SCRIPT_FILES = tuple(name for name in scripts if name not in omitted)
     module.render.cache_clear()
     variants.append({'scripts': module.SCRIPT_FILES,
@@ -125,7 +126,9 @@ function validate(f, route, value) {
 }
 
 const tests = [
-  ['actual documentBytes matches all three closed Python renderer rosters in both checker modes', async () => {
+  ['actual documentBytes matches all four closed Python renderer rosters in both checker modes', async () => {
+    assert.equal(reference.variants.length, 4);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true]);
     for (const variant of reference.variants) {
       for (const managed of [false, true]) {
       const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
@@ -149,6 +152,21 @@ const tests = [
       }
     }
   }],
+  ['AWS is admitted only in its exact current roster and position, not mixed historical rosters', () => {
+    const names = reference.scripts;
+    assert.equal(names[names.indexOf('workspace_alchemy.js') + 1], 'workspace_aws.js');
+    assert.equal(names[names.indexOf('workspace_aws.js') + 1], 'workspace_google.js');
+    for (const changed of [names.filter(name => name !== 'workspace_x.js'),
+      names.filter(name => name !== 'workspace_alchemy.js'),
+      names.filter(name => !['workspace_x.js', 'workspace_alchemy.js'].includes(name)),
+      ['workspace_aws.js', ...names.filter(name => name !== 'workspace_aws.js')],
+      [...names, 'workspace_aws.js']]) {
+      const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + changed.map(JSON.stringify).join(', ') + ')\n'});
+      assert.throws(() => f.render(true), error => error.message === 'renderer_roster_refused');
+      assert.deepEqual(f.reads, ['operator_demo_portal.py'], 'refused roster never reads candidate assets');
+    }
+    assert.equal(forbiddenCalls, 0);
+  }],
   ['missing or reordered modules and any changed response byte fail exact HTML comparison', async () => {
     for (const names of [reference.scripts.filter(name => name !== 'workspace_npm_publish.js'),
       reference.scripts.filter(name => name !== 'workspace_google_configuration.js'),
@@ -166,7 +184,8 @@ const tests = [
     await assert.rejects(f.getActual(changed), error => error.message === 'actual_renderer_mismatch');
   }],
   ['raw-text escapes and missing or duplicated HTML markers still refuse', () => {
-    for (const [name, value] of [['workspace_npm_publish.js', '/* </ScRiPt> */'], ['style.css', '/* </StYlE> */']]) {
+    for (const [name, value] of [['workspace_npm_publish.js', '/* </ScRiPt> */'],
+      ['workspace_aws.js', '/* </ScRiPt> */'], ['style.css', '/* </StYlE> */']]) {
       for (const managed of [false, true]) assert.throws(() => fixture({[name]: value}).render(managed),
         error => error.message === 'renderer_raw_text_terminator');
     }
@@ -178,7 +197,7 @@ const tests = [
     }
   }],
   ['a missing selected asset fails closed without fallback or runtime work', () => {
-    for (const name of ['workspace_npm_publish.js', 'workspace_google_configuration.js']) {
+    for (const name of ['workspace_npm_publish.js', 'workspace_aws.js', 'workspace_google_configuration.js']) {
       const failure = Object.assign(new Error('synthetic missing public asset'), {code: 'ENOENT'});
       for (const managed of [false, true]) assert.throws(() => fixture({[name]: failure}).render(managed),
         error => error === failure);

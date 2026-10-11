@@ -200,6 +200,29 @@ class TargetInput(RevisionInput):
     _canonical_id = field_validator("id")(_identifier)
 
 
+class _AwsSigV4TupleInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    credential_kind: Literal["long_term", "session"]
+    access_key_id: str = Field(min_length=20, max_length=20, repr=False)
+    secret_access_key: str = Field(min_length=40, max_length=40, repr=False)
+    session_token: str | None = Field(min_length=1, max_length=8192, repr=False)
+    expires_at: str | None = Field(min_length=20, max_length=20)
+
+    @model_validator(mode="after")
+    def complete_tuple(self):
+        from serverware.operator_catalog_aws import TUPLE_FIELDS, validate_tuple
+        validate_tuple({key: getattr(self, key) for key in TUPLE_FIELDS})
+        return self
+
+
+class AwsSigV4CredentialInput(NamedInput, _AwsSigV4TupleInput):
+    """Explicit whole tuple, never a generic bearer/header secret."""
+
+
+class ReplaceAwsSigV4CredentialInput(TargetInput, _AwsSigV4TupleInput):
+    expected_credential_generation: int = Field(ge=1, lt=9_007_199_254_740_991)
+
+
 class GoogleDisconnectInput(TargetInput):
     """Explicit review of local impact and Google's wider revocation boundary."""
     confirmed_affected_rule_ids: list[Annotated[str, Field(min_length=36, max_length=36)]] = Field(max_length=64)

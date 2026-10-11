@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 
-from serverware import db
+from serverware import aws_credential_boundary, db
 from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
     ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
@@ -3542,6 +3542,8 @@ def invalidate_secret_leases(credential_id: str | None = None) -> None:
 
 
 def _project_credential_for_data_plane(credential: dict[str, Any]) -> dict[str, Any] | None:
+    if aws_credential_boundary.credential_selected(credential):
+        return None  # Stored tuples are not header secrets or signing grants.
     if credential.get("kind") != "oauth2":
         return credential
 
@@ -3574,7 +3576,13 @@ def get_control_plane_credential(credential_id: str | None) -> dict[str, Any] | 
     """Load full secret material for the control-plane OAuth refresh path only."""
     if not credential_id:
         return None
-    return db.get_credential(credential_id, include_secret=True)
+    current = db.get_credential(credential_id, include_secret=False)
+    if current is None or aws_credential_boundary.credential_selected(current):
+        return None
+    credential = db.get_credential(credential_id, include_secret=True)
+    if credential is not None and aws_credential_boundary.credential_selected(credential):
+        return None
+    return credential
 
 
 def _claim_release_controlled_credential(
@@ -3838,6 +3846,10 @@ def get_credential(
         jit_policy,
     )
     if any(value is not None for value in controlled_context):
+        current = db.get_credential(credential_id, include_secret=False)
+        if current is not None and aws_credential_boundary.credential_selected(current):
+            invalidate_secret_leases(credential_id)
+            return None
         if request_authority is None or expected_release_identity is None:
             raise ReleaseAuthorizationClientError(
                 "controlled credential dispatch requires exact request authority"
@@ -3857,7 +3869,7 @@ def get_credential(
         return _project_credential_for_data_plane(credential)
     start_runtime_workers()
     current = db.get_credential(credential_id)
-    if not current:
+    if not current or aws_credential_boundary.credential_selected(current):
         invalidate_secret_leases(credential_id)
         _inc("credential_lease_misses")
         return None

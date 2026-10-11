@@ -202,7 +202,9 @@ def generation_evidence(events, scope, credential_id, commitments):
     for row in events:
         event, kind = row.get("event", {}), row.get("event_type")
         if kind.startswith("data_plane.") or kind in {"credential.oauth_connected", "credential.oauth_refreshed"}:
-            pattern = SHA256 if kind.startswith("data_plane.") else UUID
+            # Lease issuance is recorded by the app, not ingested from the
+            # gate's hash-identified producer stream (app.py credential lease).
+            pattern = SHA256 if kind.startswith("data_plane.") and kind != LEASE else UUID
             require(pattern.fullmatch(row["id"]), "Gmail SDK audit row namespace differs")
         if kind in {"credential.oauth_connected", "credential.oauth_refreshed", START}:
             require(type(event.get("credential_version")) is int, "Gmail SDK audit generation is not an integer")

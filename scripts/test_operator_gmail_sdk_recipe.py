@@ -164,6 +164,7 @@ class GmailSdkRunnerTests(unittest.TestCase):
         self.rows, self.images = rows_for(self.config)
         self.run = runner.GmailSdkRun(SimpleNamespace())
         self.run.project, self.run.services = self.config["name"], self.config["services"]
+        self.run.deadline = 165.0  # Original keeper anchor90 + precheck75.
         self.saved = {}
         self.run.save = lambda name, value: self.saved.setdefault(name, value)
 
@@ -173,6 +174,7 @@ class GmailSdkRunnerTests(unittest.TestCase):
             if name == "created-ids": return ("\n".join(row["Id"] for row in rows) + "\n").encode()
             if name == "created-inspect": return json.dumps(rows).encode()
             if name == "edge-ready": return b'{"ready":true,"syntheticOnly":true,"headerRewriting":false}'
+            if name == "edge-ready-state-0": return b'{"Status":"running","OOMKilled":false}'
             raise AssertionError("unexpected synthetic inspector command")
         with patch.object(self.run, "command", side_effect=output):
             return self.run.inspect_runtime(self.config, self.images, recipe, keeper_anchor=anchor)
@@ -220,6 +222,91 @@ class GmailSdkRunnerTests(unittest.TestCase):
             self.clock.return_value = 104
             with self.assertRaises(ValueError): self.run.command("late", ["not-executed"], 30)
             self.assertEqual(inherited.call_count, 1)
+
+    def test_edge_delayed_readiness_observes_same_process_and_preserves_original_deadline(self):
+        edge = "e" * 64
+        calls, sleeps = [], []
+        ready = b'{"ready":true,"syntheticOnly":true,"headerRewriting":false}'
+        def output(owner, name, arguments, seconds=30):
+            self.assertIs(owner, self.run)
+            self.assertEqual(arguments[-1], edge)
+            self.assertGreater(seconds, 0)
+            self.assertLessEqual(seconds, 2)
+            calls.append((name, arguments))
+            if arguments[:2] == ["docker", "logs"]:
+                return ready if name == "edge-ready-2" else b""
+            self.assertEqual(arguments, ["docker", "inspect", "--format", "{{json .State}}", edge])
+            return b'{"Status":"running","OOMKilled":false}'
+        def sleep(seconds):
+            self.assertGreater(seconds, 0)
+            self.assertLessEqual(seconds, 0.25)
+            sleeps.append(seconds)
+            self.clock.return_value += seconds
+        with patch.object(runner.Run, "command", autospec=True, side_effect=output), \
+                patch.object(runner.time, "sleep", side_effect=sleep):
+            self.assertIsNone(self.run.wait_edge_ready(edge))
+        self.assertEqual([name for name, _ in calls], ["edge-ready", "edge-ready-state-0",
+            "edge-ready-1", "edge-ready-state-1", "edge-ready-2", "edge-ready-state-2"])
+        self.assertEqual(sleeps, [0.25, 0.25])
+        self.assertEqual(self.run.deadline, 165.0)
+        self.assertEqual(self.clock.return_value, 100.5)
+
+    def test_edge_ready_log_does_not_override_termination_oom_or_malformed_output(self):
+        edge = "e" * 64
+        ready = b'{"ready":true,"syntheticOnly":true,"headerRewriting":false}'
+        for raw, state in ((b"", {"Status": "exited", "OOMKilled": False}),
+                (ready, {"Status": "exited", "OOMKilled": False}),
+                (ready, {"Status": "running", "OOMKilled": True}),
+                (b"{}", None), (b"not-json", None)):
+            calls = []
+            def output(owner, name, arguments, seconds=30):
+                self.assertIs(owner, self.run)
+                self.assertEqual(arguments[-1], edge)
+                calls.append(name)
+                if arguments[:2] == ["docker", "logs"]: return raw
+                self.assertIsNotNone(state, "malformed nonempty logs must fail before another observation")
+                self.assertEqual(arguments, ["docker", "inspect", "--format", "{{json .State}}", edge])
+                return json.dumps(state).encode()
+            with self.subTest(raw=raw, state=state), \
+                    patch.object(runner.Run, "command", autospec=True, side_effect=output), \
+                    patch.object(runner.time, "sleep", side_effect=AssertionError("terminated edge must not wait")), \
+                    self.assertRaises(ValueError):
+                self.run.wait_edge_ready(edge)
+            self.assertEqual(calls, ["edge-ready"] if state is None else ["edge-ready", "edge-ready-state-0"])
+            self.assertEqual(self.run.deadline, 165.0)
+
+    def test_edge_readiness_uses_original_cutoff_including_time_spent_in_final_state_read(self):
+        edge = "e" * 64
+        self.run.deadline = 106.0  # No remaining observation budget after reap reserve.
+        with patch.object(runner.Run, "command", autospec=True) as inherited, self.assertRaises(ValueError):
+            self.run.wait_edge_ready(edge)
+        inherited.assert_not_called()
+        self.assertEqual(self.run.deadline, 106.0)
+        for expire_during_state in (False, True):
+            self.clock.return_value = 100.0
+            self.run.deadline = 107.0
+            calls = []
+            def output(owner, name, arguments, seconds=30):
+                self.assertIs(owner, self.run)
+                self.assertEqual(arguments[-1], edge)
+                self.assertGreater(seconds, 0)
+                self.assertLessEqual(seconds, 101.0 - self.clock.return_value)
+                calls.append(name)
+                if arguments[:2] == ["docker", "logs"]:
+                    return b'{"ready":true,"syntheticOnly":true,"headerRewriting":false}' if expire_during_state else b""
+                self.assertEqual(arguments, ["docker", "inspect", "--format", "{{json .State}}", edge])
+                if expire_during_state: self.clock.return_value = 101.0
+                return b'{"Status":"running","OOMKilled":false}'
+            def sleep(seconds):
+                self.assertLessEqual(seconds, 0.25)
+                self.clock.return_value += seconds
+            with self.subTest(expire_during_state=expire_during_state), \
+                    patch.object(runner.Run, "command", autospec=True, side_effect=output), \
+                    patch.object(runner.time, "sleep", side_effect=sleep), self.assertRaises(ValueError):
+                self.run.wait_edge_ready(edge)
+            self.assertEqual(len(calls), 2 if expire_during_state else 8)
+            self.assertEqual(self.clock.return_value, 101.0)
+            self.assertEqual(self.run.deadline, 107.0)
 
     def test_cleanup_removes_only_owned_ids_and_propagates_listing_failures(self):
         for failure in (None, "cleanup-before-ids", "cleanup-after-ids", "cleanup-networks"):

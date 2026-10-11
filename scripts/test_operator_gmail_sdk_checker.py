@@ -86,7 +86,7 @@ def commitments(document):
 def audit_rows(wire):
     events = []
     def append(kind, event):
-        events.append({"id": sha(100 + len(events)) if kind.startswith("data_plane.") else uid(100 + len(events)),
+        events.append({"id": sha(100 + len(events)) if kind in {START, RELEASE} else uid(100 + len(events)),
             "event_hash": sha(100 + len(events)),
             "event_type": kind, "event": event})
     append("credential.oauth_connected", {"credential_id": CREDENTIAL, "credential_version": 1})
@@ -101,6 +101,11 @@ def audit_rows(wire):
         append(START, {**common, "outcome": "release_started"})
         append(RELEASE, {**common, "outcome": "released", "upstream_status": 200,
             "response_body_sha256": row["responseBodySha256"], "response_body_bytes": row["responseBodyBytes"]})
+    # Unlike gate-submitted start/terminal rows, this data_plane event is
+    # recorded by the control plane and has a UUID. It is not a release pair.
+    append(LEASE, {"principal_id": SCOPE[0], "route_id": SCOPE[1], "policy_hash": SCOPE[2],
+        "credential_id": CREDENTIAL, "purpose": "dispatchSecret", "expected_credential_version": 1,
+        "data_plane_binary_digest": sha(901), "status_code": 200, "outcome": "issued"})
     return events
 
 
@@ -204,7 +209,11 @@ class GmailSdkCheckerTests(unittest.TestCase):
             actual["canonicalRequestVersion"]), (1, 2, 3))
         self.assertEqual(set(actual["generationAuditEventIds"]),
             {rows[index]["id"] for index in (0, 1, 2, 4, 6, 8, 10, 12, 14, 16)})
-        changes = (lambda r: r.pop(), lambda r: r[1]["event"].update(credential_version=1),
+        self.assertEqual(rows[-1]["event_type"], LEASE)
+        self.assertEqual(rows[-1]["id"], uid(118))
+        self.assertNotIn(rows[-1]["id"], actual["generationAuditEventIds"])
+        changes = (lambda r: r.remove(next(row for row in r if row["event_type"] == RELEASE)),
+            lambda r: r[1]["event"].update(credential_version=1),
             lambda r: r[0]["event"].update(credential_version=True),
             lambda r: r[1]["event"].update(previous_credential_version=True),
             lambda r: r[1]["event"].update(refresh_token_rotated=False),
@@ -216,7 +225,8 @@ class GmailSdkCheckerTests(unittest.TestCase):
             lambda r: r[3]["event"].update(outcome="blocked"),
             lambda r: r[3]["event"].update(attempt_id=sha(999)),
             lambda r: r[3].update(id=r[2]["id"]), lambda r: r[2].update(id=uid(999)),
-            lambda r: r[0].update(id=sha(999)), lambda r: r[2].update(event_hash="secret-canary"))
+            lambda r: r[0].update(id=sha(999)), lambda r: r[-1].update(id=sha(999)),
+            lambda r: r[2].update(event_hash="secret-canary"))
         for index, change in enumerate(changes):
             value = deepcopy(rows); change(value)
             with self.subTest(case=index), self.assertRaises(checker.CheckFailure):

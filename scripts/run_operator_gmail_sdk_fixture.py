@@ -76,6 +76,31 @@ class GmailSdkRun(Run):
             errors.append("verification")
         return clean, errors
 
+    def wait_edge_ready(self, edge):
+        """Observe this existing process; never restart it or extend its clock."""
+        until = time.monotonic() + 10
+        if self.deadline is not None:
+            until = min(until, self.deadline - 6)
+        expected = {"ready": True, "syntheticOnly": True, "headerRewriting": False}
+        for attempt in range(40):
+            remaining = until - time.monotonic()
+            require(remaining > 0, "Gmail SDK edge readiness deadline expired")
+            label = "edge-ready" if attempt == 0 else "edge-ready-" + str(attempt)
+            raw = self.command(label, ["docker", "logs", edge], min(2, remaining))
+            if raw.strip():
+                require(json.loads(raw) == expected, "Gmail SDK edge readiness differs")
+            remaining = until - time.monotonic()
+            require(remaining > 0, "Gmail SDK edge readiness deadline expired")
+            state = json.loads(self.command("edge-ready-state-" + str(attempt),
+                ["docker", "inspect", "--format", "{{json .State}}", edge], min(2, remaining)))
+            require(state["Status"] == "running" and not state["OOMKilled"],
+                "Gmail SDK edge terminated before readiness")
+            require(time.monotonic() < until, "Gmail SDK edge readiness deadline expired")
+            if raw.strip():
+                return
+            time.sleep(min(0.25, max(0, until - time.monotonic())))
+        raise ValueError("Gmail SDK edge readiness observation bound exceeded")
+
     def inspect_runtime(self, config, image_ids, recipe, *, keeper_anchor):
         rows = self.container_rows("created")
         require(len(rows) == 6 and {row["Config"]["Labels"]["com.docker.compose.service"]
@@ -110,8 +135,7 @@ class GmailSdkRun(Run):
         require(time.monotonic() - keeper_anchor < recipe.PRECHECK_SECONDS)
         self.save("container-observations.json", observations)
         edge = next(row["Id"] for row in rows if row["Config"]["Labels"]["com.docker.compose.service"] == "edge")
-        require(json.loads(self.command("edge-ready", ["docker", "logs", edge], 3)) ==
-            {"ready": True, "syntheticOnly": True, "headerRewriting": False})
+        self.wait_edge_ready(edge)
         return next(row["Id"] for row in rows if row["Config"]["Labels"]["com.docker.compose.service"] == "check")
 
     def execute(self):

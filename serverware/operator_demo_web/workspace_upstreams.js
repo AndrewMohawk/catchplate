@@ -2,7 +2,7 @@
 // Preparing or cancelling never changes process settings or restarts anything.
 const upstreamSetupPath = '/api/operator-demo/proxy/upstreams';
 const upstreamOperationKey = 'serverware.operator.upstreams.operation.v1';
-const upstreamReasons = Object.freeze({fixture: 'Retained demo fixture', active_rule: 'Active permission',
+const upstreamReasons = Object.freeze({fixture: 'Retained diagnostic fixture', active_rule: 'Active permission',
   retained_policy: 'Retained signed policy', google_profile: 'Configured Google profile'});
 const upstreamObject = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
@@ -54,7 +54,7 @@ function upstreamDelta(review, text) {
   const origins = text.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
   const before = review.old_settings.allowed_upstreams;
   if (!upstreamOrigins(origins, before.includes('https://demo-upstream:8443')))
-    throw operatorError('Enter 1–16 unique canonical HTTPS origins, one per line: lowercase host, no path, slash, port, IP address or credentials. Keep the existing demo fixture exactly as shown.');
+    throw operatorError('Enter 1–16 unique canonical HTTPS origins, one per line: lowercase host, no path, slash, port, IP address or credentials. Keep the existing diagnostic fixture exactly as shown.');
   const added = origins.filter(origin => !before.includes(origin));
   const removed = before.filter(origin => !origins.includes(origin));
   if (!added.length && !removed.length) throw operatorError('Change at least one destination. Reordering the same list is not a configuration change.');

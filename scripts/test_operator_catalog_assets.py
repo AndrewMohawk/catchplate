@@ -86,6 +86,26 @@ class OperatorCatalogAssets(unittest.TestCase):
             self.assertEqual(index[name][0], 'section')
             self.assertTrue(any(tag == 'a' and attrs.get('href') == '#' + name for tag, attrs, _ in items))
 
+    def test_one_instance_presentation_keeps_security_status_and_optional_diagnostics(self):
+        document = operator_demo_portal.render()
+        index = {attrs['id']: (tag, attrs) for tag, attrs, _ in self.elements() if 'id' in attrs}
+        for previous in ('Explore synthetic demo', 'Connect a real service',
+                'Separate operator-development profile', 'My test API key'):
+            self.assertNotIn(previous, document)
+        self.assertIn('Your Serverware instance', document)
+        self.assertIn('Development deployment', document)
+        self.assertIn('not hardware-verified or production-ready', document)
+        self.assertEqual(index['overview-diagnostics'][0], 'details')
+        self.assertNotIn('open', index['overview-diagnostics'][1])
+        self.assertIn('Diagnostics (optional)', document)
+        self.assertEqual(index['overview-try-demo'][1]['type'], 'button')
+        self.assertEqual(index['overview-try-demo'][1]['aria-expanded'], 'false')
+        self.assertIn('hidden', index['overview-demo-panel'][1])
+        self.assertEqual(index['overview-connect-service'][1]['href'], '#connect')
+        for name in ('credential-name', 'connect-credential-name'):
+            self.assertEqual(index[name][1]['placeholder'], 'My API key')
+            self.assertNotIn('value', index[name][1])
+
     def test_credential_form_has_no_endpoint_application_or_response_requirements(self):
         fields = {attrs['id']: (tag, attrs) for tag, attrs, form in self.elements()
             if form == 'credential-form' and tag in {'input', 'select', 'textarea'} and 'id' in attrs}

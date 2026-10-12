@@ -24,7 +24,8 @@ const savedRule = (changes = {}) => rule({credential_input: 'replace_exact', pla
   response_mode: 'unfiltered_json', response_fields: [], ...changes});
 const SOURCE_FILES = ['scripts/test_operator_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
-    'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js']
+    'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js',
+    'workspace_upstreams.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js']
     .map(name => 'serverware/operator_demo_web/' + name)];
 let artifacts;
 
@@ -118,6 +119,15 @@ async function setup(page, app = IDS.application, selectedRule = IDS.rule) {
 async function screenshot(page, name) {
   if (artifacts) await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true});
 }
+async function inspectDiagnostics(page) {
+  const disclosure = page.locator('#overview-diagnostics');
+  assert.equal(await disclosure.evaluate(node => node.open), false, 'diagnostics starts closed');
+  assert(await page.locator('#overview-try-demo').isHidden());
+  await disclosure.locator(':scope > summary').click();
+  assert(await page.locator('#overview-demo-panel').isHidden(), 'opening diagnostics sends no check');
+  await page.locator('#overview-try-demo').click();
+  await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
+}
 async function chooseSavedRule(page, id = IDS.rule) {
   await page.locator('#connect-rule-choice').selectOption(id); await review(page);
   assert.match(await page.locator('#connect-grant').innerText(), /use.*saved rule/i); await grant(page);
@@ -125,7 +135,7 @@ async function chooseSavedRule(page, id = IDS.rule) {
 function changePolicy(state) { state.revision++; state.active = state.loaded = digest(++state.sequence); }
 
 const tests = [
-  ['Overview is the honest starting point and connects a real service only by deliberate choice', browser => fixture(browser,
+  ['one Serverware overview retains honest instance status and connects an app only by deliberate choice', browser => fixture(browser,
     supplied({rules: [savedRule()]}), async (page, state) => {
       await ready(page); await page.locator('#overview').waitFor({state: 'visible'});
       assert.equal(await page.locator('.page:visible').count(), 1);
@@ -134,8 +144,27 @@ const tests = [
       assert.equal(await page.locator('nav a[href="#access-rules"]').innerText(), 'Permissions');
       assert.match(await page.locator('#overview-policy').innerText(), /proxy.*loaded.*saved policy/i);
       assert.match(await page.locator('#overview').innerText(), /not proof.*upstream.*succeeded/i);
-      assert(await page.locator('#overview-try-demo').isEnabled());
+      assert.equal(await page.locator('#overview-title').innerText(), 'Your Serverware instance');
+      assert.equal(await page.locator('#instance-environment').innerText(), 'Development deployment');
+      assert.match(await page.locator('#instance-security-status').innerText(), /Local encrypted keys.*not hardware-verified or production-ready/);
+      assert.doesNotMatch(await page.locator('#overview').innerText(), /Explore synthetic demo|Connect a real service|local demo API/);
+      assert.doesNotMatch(await page.locator('footer').innerText(), /Separate operator-development/);
+      assert.equal(await page.locator('#overview-connect-service').innerText(), 'Connect an app');
+      assert.equal(await page.locator('#overview-diagnostics > summary').innerText(), 'Diagnostics (optional)');
+      assert.equal(await page.locator('#overview-diagnostics').evaluate(node => node.open), false);
+      assert(await page.locator('#overview-try-demo').isHidden());
       assert(await page.locator('#overview-demo-panel').isHidden());
+      for (const id of ['credential-name', 'connect-credential-name']) {
+        assert.equal(await page.locator('#' + id).getAttribute('placeholder'), 'My API key');
+        assert.equal(await page.locator('#' + id).inputValue(), '');
+      }
+      assert.equal(state.posts.length, 0);
+      assert(!state.requests.some(item => item.path === '/echo' || item.path === '/ca.pem'));
+      await screenshot(page, 'serverware-instance-overview-desktop');
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await screenshot(page, 'serverware-instance-overview-mobile');
+      await page.setViewportSize({width: 1280, height: 960});
       await page.locator('#overview-connect-service').click(); await step(page, 'credential');
       assert.match(await page.locator('#connect-progress').innerText(), /account or api key/i);
       assert(await page.locator('#connect-google').isDisabled());
@@ -174,12 +203,11 @@ const tests = [
       assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), retained);
       assert.equal(state.posts.length, 0);
     })],
-  ['synthetic-demo disclosure does not mistake friendly names for a saved demo permission', browser => fixture(browser,
+  ['optional diagnostics do not mistake friendly names for a saved synthetic permission', browser => fixture(browser,
     supplied({allowedUpstreams: [UPSTREAM, SYNTHETIC_ORIGIN], credentials: [credential({name: 'Demo starter key'})],
       applications: [application({name: 'Demo starter application'})], rules: [savedRule({name: 'Demo GET echo'}),
         savedRule({id: OTHER_RULE, name: 'Another demo name', upstream_url: UPSTREAM + '/echo'})]}), async (page, state) => {
-      await ready(page); await page.locator('#overview-try-demo').click();
-      await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
+      await ready(page); await inspectDiagnostics(page);
       assert.equal(await page.locator('[data-demo-rule-id]').count(), 0);
       const status = await page.locator('#overview-demo-status').innerText();
       assert.match(status, /no.*saved|not.*configured|not.*found/i);
@@ -258,8 +286,7 @@ const tests = [
         savedRule({id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Non-demo method',
           upstream_url: SYNTHETIC_ORIGIN + '/echo', methods: ['DELETE']})]}), async (page, state) => {
       const before = JSON.stringify([state.credentials, state.applications, state.rules]);
-      await ready(page); await page.locator('#overview-try-demo').click();
-      await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
+      await ready(page); await inspectDiagnostics(page);
       assert(await page.locator('#overview').isVisible(), 'opening a list never silently selects a client');
       assert.equal(await page.locator('#overview-demo-connect').count(), 0, 'saved permissions keep their explicit selection path');
       assert.deepEqual((await page.locator('[data-demo-rule-id]').evaluateAll(items => items.map(item => item.dataset.demoRuleId))).sort(),
@@ -491,7 +518,11 @@ const tests = [
       await view(page, 'connect'); await step(page, 'credential');
       assert.equal(await page.locator('#connect-google-status [data-google-settings-link]').count(), 1, 'rerender replaces the link rather than duplicating it');
       await useCredential(page); await useApplication(page); assert(await page.locator('#connect-review').isDisabled());
-      assert.equal(state.posts.length, 0); assert(!state.requests.some(item => /oauth|google/.test(item.path)));
+      assert.equal(state.posts.length, 0);
+      // Opening Proxy setup performs only X's disabled-profile discovery GET.
+      // It must not start Google consent or submit any provider configuration.
+      assert.deepEqual(state.requests.filter(item => /oauth|google/.test(item.path)),
+        [{path: '/api/operator-demo/oauth/x/configuration/v1', query: '', method: 'GET'}]);
     })],
   ['capability withdrawal preserves the refused choice instead of changing the requested access', browser => fixture(browser, supplied(), async (page, state) => {
     await pair(page); await draft(page); await review(page); state.credentialInputModes = ['insert']; state.responseModes = ['projected_json'];

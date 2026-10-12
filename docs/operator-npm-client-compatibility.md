@@ -142,6 +142,40 @@ Upstream evidence: [registry-scoped npmrc authentication](https://docs.npmjs.com
 [default compression offer](https://raw.githubusercontent.com/npm/cli/v11.8.0/node_modules/minipass-fetch/lib/request.js),
 and [npm's compressed audit request](https://raw.githubusercontent.com/npm/cli/v11.8.0/workspaces/arborist/lib/audit-report.js).
 
+## October 12: stock install/ci protocol check
+
+The actual cached npm **11.8.0** CLI passed a loopback-only protocol check in
+**3.775 seconds**, using Node 25.5.0, Arborist 9.1.10 and pacote 21.0.4. The
+[maintained check](../scripts/test_operator_npm_install_protocol.cjs) ran in a
+network-disabled, read-only container with disposable synthetic packages and
+no provider credential. This is **not proxy, publication or deployment
+acceptance**.
+
+| Phase | Actual requests | Result |
+| --- | --- | --- |
+| Cold `npm install` | Two metadata GETs, two tarball GETs, one bulk-audit POST | Both packages installed and their harmless exports consumed; audit succeeded. |
+| Cold-cache `npm ci` | Two tarball GETs, one bulk-audit POST; no metadata GETs | Same package bytes and integrity, unchanged lockfile, old `node_modules` sentinel removed; audit succeeded. |
+| Failed-audit control | Same five requests as install; audit replies 400 | npm still exits 0, but reports `audited: 0`; the success classifier rejects it. |
+
+The successful summaries each report `audited: 3` (including the project root)
+and two dependency packages. Every audit POST used `Content-Encoding: gzip`
+with an explicit matching `Content-Length: 69`; none used Transfer-Encoding.
+Tarball requests additionally used `pacote-integrity`. These are observations
+of the pinned client and fixed fixture, not universal size or framing claims.
+Default audit remained enabled and was not overridden. Installed manifests,
+module bytes, SRI, resolved URLs and lockfile stability were checked independently.
+
+All 13 observed arrivals were admitted by the fixture. The container exited 0,
+was removed, and input inventories were unchanged. Private receipts are in
+`npm-install-wire.NyceWbOY/run/` under the workspace evidence directory;
+`observation.json` records the client/source pins and per-request commitments.
+The executed suite SHA-256 is
+`48299fd4470df44ca5b4409e8496a8d94c2db1680fdfb4bc83bc5e2a5d11ce7b`.
+
+This rules out two shortcuts for the remaining proxy implementation: requiring
+a metadata read before every tarball would break cold `ci`, and treating npm's
+exit status alone as installation acceptance would miss a failed audit path.
+
 ## Remaining installation work
 
 Use an additive versioned typed installation bundle; its final signed/API names

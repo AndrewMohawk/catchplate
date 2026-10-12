@@ -18,6 +18,7 @@ import threading
 import time
 
 from scripts import operator_google_fixture as base
+from scripts import operator_gmail_sdk_profiles as profiles
 
 
 GO_VERSION = "1.23.12"
@@ -77,16 +78,22 @@ ROW_KEYS = frozenset(("ordinal", "case", "method", "path", "rawQuery", "hostMatc
     "responseBodySha256", "responseBodyBytes"))
 
 
-def recognized_case(target):
-    return next((name for name, spec in TARGETS.items()
+def selected_targets(sdk_pair=False):
+    base.require(type(sdk_pair) is bool)
+    return profiles.targets(TARGETS) if sdk_pair else TARGETS
+
+
+def recognized_case(target, sdk_pair=False):
+    return next((name for name, spec in selected_targets(sdk_pair).items()
         if target == spec["path"] + "?" + spec["raw_query"]), None)
 
 
-def request_commitment(case):
+def request_commitment(case, sdk_pair=False):
     """Provider-boundary public commitment, NOT the gate authorization digest."""
-    spec = TARGETS[case]
+    spec = selected_targets(sdk_pair)[case]
     public = {"schema": REQUEST_SCHEMA, "method": "GET", "authority": "gmail.googleapis.com",
-        "path": spec["path"], "rawQuery": spec["raw_query"], "headers": PROVIDER_HEADERS,
+        "path": spec["path"], "rawQuery": spec["raw_query"],
+        "headers": profiles.provider_headers(case) if sdk_pair else PROVIDER_HEADERS,
         "bodySha256": EMPTY_SHA256, "bodyBytes": 0}
     return "sha256:" + hashlib.sha256(_json_bytes(public)).hexdigest()
 
@@ -100,17 +107,22 @@ def _is_gmail_arrival(handler):
     return is_gmail_host or handler.path.startswith("/gmail")
 
 
-def _header_matches(handler):
+def _header_matches(handler, case=None, sdk_pair=False):
+    if sdk_pair and case is None:
+        return False
+    expected = profiles.provider_headers(case) if sdk_pair else PROVIDER_HEADERS
     names = [name.lower() for name, _ in handler.headers.items()]
-    allowed = set(PROVIDER_HEADERS) | {"authorization", "connection", "content-length"}
+    allowed = set(expected) | {"authorization", "connection", "content-length"}
     return (len(names) == len(set(names)) and set(names) <= allowed
-        and all(handler.headers.get_all(name, []) == [value] for name, value in PROVIDER_HEADERS.items())
+        and all(handler.headers.get_all(name, []) == [value] for name, value in expected.items())
         and handler.headers.get_all("Connection", []) in ([], ["close"]))
 
 
 class GmailSdkFixture(base.GoogleFixture):
-    def __init__(self, work_dir=base.PKI):
+    def __init__(self, work_dir=base.PKI, *, sdk_pair=False):
         super().__init__(work_dir)
+        base.require(type(sdk_pair) is bool)
+        self.sdk_pair = sdk_pair
         self._sdk_attempts = []
         self._sdk_request = threading.local()
 
@@ -139,11 +151,11 @@ class GmailSdkFixture(base.GoogleFixture):
         # Count before method, target, header and credential admission. Rows are
         # capped, while the counter keeps exposing excess arrivals; no reset API.
         self._expire()
-        case = recognized_case(handler.path)
-        spec = TARGETS.get(case)
+        case = recognized_case(handler.path, self.sdk_pair)
+        spec = selected_targets(self.sdk_pair).get(case)
         method = handler.command if handler.command in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"} else "OTHER"
         host_matches = handler.headers.get_all("Host", []) == ["gmail.googleapis.com"]
-        headers_match = _header_matches(handler)
+        headers_match = _header_matches(handler, case, self.sdk_pair)
         framing_match = (handler.headers.get_all("Content-Length", []) in ([], ["0"])
             and not handler.headers.get_all("Transfer-Encoding", []))
         with self._lock:
@@ -156,11 +168,11 @@ class GmailSdkFixture(base.GoogleFixture):
             attempt = {"ordinal": ordinal, "case": case, "method": method,
                 "path": spec["path"] if spec else None, "rawQuery": spec["raw_query"] if spec else None,
                 "hostMatches": host_matches, "headersMatch": headers_match, "framingMatch": framing_match,
-                "requestHeaders": dict(PROVIDER_HEADERS) if headers_match else None,
+                "requestHeaders": (profiles.provider_headers(case) if self.sdk_pair else dict(PROVIDER_HEADERS)) if headers_match else None,
                 # Empty body is the HTTP framing claim, not a socket EOF claim.
                 "requestBodySha256": EMPTY_SHA256 if framing_match else None,
                 "requestBodyBytes": 0 if framing_match else None,
-                "requestCommitment": request_commitment(case) if case and method == "GET"
+                "requestCommitment": request_commitment(case, self.sdk_pair) if case and method == "GET"
                     and host_matches and headers_match and framing_match else None,
                 "authorized": False, "status": None, "tokenGeneration": generation, "tokenState": token_state,
                 "timestampEpochMs": time.time_ns() // 1_000_000,
@@ -204,16 +216,16 @@ class GmailSdkFixture(base.GoogleFixture):
             self._send_json(handler, 400, {"error": "fixture_sdk_request_refused"})
             return
         case = attempt["case"]
-        operation = "gmail.messages.list" if case.startswith("list_") else "gmail.message.get"
+        operation = "gmail.messages.list" if case.rsplit(":", 1)[-1].startswith("list_") else "gmail.message.get"
         if self._authorized_grant(handler, provider="google",
                 required_scope="https://www.googleapis.com/auth/gmail.readonly", operation=operation) is None:
             return
-        self._send_json(handler, 200, json.loads(TARGETS[case]["body"]))
+        self._send_json(handler, 200, json.loads(selected_targets(self.sdk_pair)[case]["body"]))
 
     def observations(self):
         with self._lock:
             result = super().observations()
-            result["gmailSdk"] = {"schema": SDK_SCHEMA, "maxAttempts": MAX_ATTEMPTS,
+            result["gmailSdk"] = {"schema": profiles.OBSERVATION_SCHEMA if self.sdk_pair else SDK_SCHEMA, "maxAttempts": MAX_ATTEMPTS,
                 "attempts": deepcopy(self._sdk_attempts)}
             self.assert_no_token_values(json.dumps(result))
             return result
@@ -222,13 +234,14 @@ class GmailSdkFixture(base.GoogleFixture):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lifetime-seconds", type=int, default=240)
+    parser.add_argument("--sdk-pair", action="store_true")
     args = parser.parse_args()
     base.require(120 <= args.lifetime_seconds <= 300)
     base.assert_isolated_network()
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
-    fixture = GmailSdkFixture()
+    fixture = GmailSdkFixture(sdk_pair=args.sdk_pair)
     front = base._BoundedServer(("127.0.0.1", 443), base._ControlFront, base.server_context(base.PKI))
     thread = threading.Thread(target=front.serve_forever, daemon=True)
     try:

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""One bounded, isolated official-Go-Gmail-SDK acceptance, never a deployment.
+"""One bounded, isolated official Gmail SDK acceptance, never a deployment.
 
 Requires a clean exact source checkout and prebuilt, explicitly pinned gate and
-Go example. No build/download/retry or Python SDK overlay. The opt-in browser
+Go example, or an explicit closed pair of existing Node/Python SDK payloads.
+No build/download/retry. The opt-in Go browser
 uses cached host Chromium and an exact checker-container stdio bridge. Each
 invocation claims a new private root; failed state and bounded logs are retained.
 """
@@ -214,13 +215,17 @@ class GmailSdkRun(Run):
             require(self.command("source-commit", ["git", "rev-parse", "HEAD"], 10).decode().strip() == args.commit)
             require(not self.command("source-status", ["git", "status", "--porcelain=v1"], 10).strip())
             recipe = importlib.import_module("scripts.prepare_operator_gmail_sdk_fixture")
-            for path, expected in ((args.binary, args.expected_binary_sha256), (args.go, args.expected_go_sha256),
-                    (args.initializer, recipe.base.INITIALIZER_SHA256)):
+            paired = getattr(args, "sdk_pair", False)
+            dependencies = recipe.verify_paired_inputs(args) if paired else None
+            pins = [(args.binary, args.expected_binary_sha256), (args.initializer, recipe.base.INITIALIZER_SHA256)]
+            if not paired:
+                pins.append((args.go, args.expected_go_sha256))
+            for path, expected in pins:
                 require(path.is_file() and not path.is_symlink() and path.stat().st_mode & 4
                     and recipe.base.digest(path) == expected)
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root, args.go,
                 expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
-                browser_permission=getattr(args, "browser_permission", False))
+                browser_permission=getattr(args, "browser_permission", False), **recipe.pair_kwargs(args))
             self.project, self.services = config["name"], config["services"]
             if getattr(args, "browser_permission", False):
                 self.browser_preflight(recipe)
@@ -240,12 +245,17 @@ class GmailSdkRun(Run):
                 json.dump(config, output, sort_keys=True, indent=2); output.write("\n")
                 output.flush(); os.fsync(output.fileno())
             compose = ["docker", "compose", "-f", str(compose_path), "-p", self.project]
-            self.save("run-inputs.json", {"sourceCommit": args.commit,
+            inputs = {"sourceCommit": args.commit,
                 "binarySha256": args.expected_binary_sha256, "goSha256": args.expected_go_sha256,
                 "initializerSha256": recipe.base.INITIALIZER_SHA256, "composeSha256": recipe.base.digest(compose_path),
                 "project": self.project, "images": image_ids, "initialAccessTokenSeconds": 90,
                 "keeperLifetimeSeconds": recipe.KEEPER_SECONDS, "checkerSeconds": recipe.CHECKER_SECONDS,
-                "syntheticOnly": True, "realGoogleVerified": False, "productionReady": False})
+                "syntheticOnly": True, "realGoogleVerified": False, "productionReady": False}
+            if paired:
+                inputs.pop("goSha256")
+                inputs.update(nodeSha256=recipe.profiles.NODE_SHA256, sdkDependenciesSha256=args.expected_dependencies_sha256)
+                self.save("sdk-dependencies.json", dependencies)
+            self.save("run-inputs.json", inputs)
             phase = "initialize"
             self.command(phase, compose + ["--profile", "prepare", "run", "--rm", "--no-deps", "--pull", "never", "initialize"], 35)
             phase = "network"
@@ -288,9 +298,19 @@ class GmailSdkRun(Run):
                 self.command("checker-start", ["docker", "start", checker], 10)
                 exit_code = int(self.command("checker-wait", ["docker", "wait", checker], 190))
                 raw = self.command("checker-result", ["docker", "logs", checker], 5)
-                importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(json.loads(raw))
+                result = json.loads(raw)
+                importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(result)
+                require(result["schema"] == (recipe.profiles.CHECK_SCHEMA if paired else "serverware.privateGmailSdkCheck/v1"))
+                if paired:
+                    require(result["sdkDependenciesSha256"] == args.expected_dependencies_sha256
+                        and result["nodeExampleSha256"] == recipe.profiles.NODE_SHA256)
             terminal = json.loads(self.command("checker-state", ["docker", "inspect", "--format", "{{json .State}}", checker], 5))
             require(exit_code == 0 and terminal["Status"] == "exited" and terminal["ExitCode"] == 0 and not terminal["OOMKilled"])
+            if paired:
+                require(recipe.verify_paired_inputs(args) == dependencies, "paired dependencies changed during fixture")
+            require(all(recipe.base.digest(path) == expected for path, expected in pins), "fixture binary input changed")
+            require(self.command("source-commit-after", ["git", "rev-parse", "HEAD"], 10).decode().strip() == args.commit
+                and not self.command("source-status-after", ["git", "status", "--porcelain=v1"], 10).strip(), "fixture source changed")
             success, phase = True, "complete"
         except (Exception, KeyboardInterrupt) as error:
             failure = failure_site(error, args.source)
@@ -308,12 +328,17 @@ class GmailSdkRun(Run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("source", "job-root", "evidence", "binary", "go", "initializer"):
+    for name in ("source", "job-root", "evidence", "binary", "initializer"):
         parser.add_argument("--" + name, type=absolute_path, required=True)
     parser.add_argument("--commit", required=True)
-    for name in ("expected-binary-sha256", "expected-go-sha256"):
+    for name in ("expected-binary-sha256",):
         parser.add_argument("--" + name, type=sha256, required=True)
     parser.add_argument("--browser-permission", action="store_true")
+    parser.add_argument("--sdk-pair", action="store_true")
+    for name in ("go", "node", "node-modules", "python-runtime", "python-packages"):
+        parser.add_argument("--" + name, type=absolute_path)
+    for name in ("expected-go-sha256", "expected-dependencies-sha256"):
+        parser.add_argument("--" + name, type=sha256)
     args = parser.parse_args()
     # One fixed local daemon reaches inherited helpers and every child command.
     for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION"):

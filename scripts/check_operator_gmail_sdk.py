@@ -28,6 +28,7 @@ if __package__ in (None, ""):
 
 from scripts import check_operator_google_refresh as base
 from scripts import operator_gmail_sdk_fixture as fixture
+from scripts import operator_gmail_sdk_profiles as profiles
 from scripts.operator_gmail_sdk_fixture_network import BROWSER_PROXY_ADDRESS, BROWSER_PROXY_URL
 from scripts.check_operator_catalog import COLLECTIONS, claim_fixture, features
 from scripts.check_operator_demo import CheckFailure, SHA256, require, token_file
@@ -66,6 +67,27 @@ TRUST_FILES = {"inner": Path("/client-trust/inner-ca.pem"), "outer": Path("/clie
     "combined": Path("/client-trust/combined-ca.pem")}
 
 
+def selected_cases(sdk_pair=False):
+    require(type(sdk_pair) is bool, "Gmail SDK selection differs")
+    return profiles.PAIR_CASES if sdk_pair else CASES
+
+
+def selected_stages(sdk_pair=False):
+    selected_cases(sdk_pair)
+    return {name: (consent, refresh, count * (2 if sdk_pair else 1))
+        for name, (consent, refresh, count) in STAGES.items()}
+
+
+def selected_phases(sdk_pair=False):
+    selected_cases(sdk_pair)
+    return profiles.PHASES if sdk_pair else PHASES
+
+
+def base_phase(phase, sdk_pair=False):
+    require(phase in selected_phases(sdk_pair), "Gmail SDK phase differs")
+    return profiles.split_phase(phase)[1] if sdk_pair else phase
+
+
 def fixture_proxy(browser_permission):
     require(type(browser_permission) is bool, "Gmail SDK browser mode differs")
     return (BROWSER_PROXY_URL, BROWSER_PROXY_ADDRESS) if browser_permission else (PROXY, "127.0.0.1")
@@ -79,13 +101,16 @@ def digest(value):
     return "sha256:" + hashlib.sha256(value if isinstance(value, bytes) else encoded(value)).hexdigest()
 
 
-def validate_row(row, ordinal, generation):
-    require(type(ordinal) is int and 1 <= ordinal <= 8 and type(generation) is int and generation == 1 + (ordinal - 1) // 4,
+def validate_row(row, ordinal, generation, *, sdk_pair=False):
+    cases = selected_cases(sdk_pair)
+    require(type(ordinal) is int and 1 <= ordinal <= 2 * len(cases) and type(generation) is int and generation == 1 + (ordinal - 1) // len(cases),
         "Gmail SDK row position differs")
-    case = CASES[(ordinal - 1) % 4]
-    spec = fixture.TARGETS[case]
+    case = cases[(ordinal - 1) % len(cases)]
+    spec = fixture.selected_targets(sdk_pair)[case]
     provider_headers = {"accept": "*/*", "host": "gmail.googleapis.com", "user-agent": "google-api-go-client/0.5",
         "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"}
+    if sdk_pair:
+        provider_headers = profiles.provider_headers(case)
     public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET", "authority": "gmail.googleapis.com",
         "path": spec["path"], "rawQuery": spec["raw_query"], "headers": provider_headers,
         "bodySha256": digest(b""), "bodyBytes": 0}
@@ -105,11 +130,14 @@ def validate_row(row, ordinal, generation):
     return True
 
 
-def observations(document, stage):
-    require(stage in STAGES and type(document) is dict and set(document) == {"schema", "counts", "events", "active", "bounds",
+def observations(document, stage, *, sdk_pair=False):
+    stages, cases = selected_stages(sdk_pair), selected_cases(sdk_pair)
+    # Per-client checkpoints still bind every preceding accepted arrival.
+    partial = stage in {"node_first", "node_refreshed"} and sdk_pair
+    require((stage in stages or partial) and type(document) is dict and set(document) == {"schema", "counts", "events", "active", "bounds",
         "tokenLifetimes", "initialAccessExpiresAtEpochMs", "initialAccessExpired", "gmailSdk"}
         and document["schema"] == "serverware.privateGoogleObservations/v1", "Gmail SDK observations unavailable")
-    consent, refresh, resources = STAGES[stage]
+    consent, refresh, resources = (1, int(stage == "node_refreshed"), 12 if stage == "node_refreshed" else 4) if partial else stages[stage]
     counts = document["counts"]
     require(type(counts) is dict and set(counts) == {"google", "x"} and counts["x"] == {} and type(counts["google"]) is dict,
         "Gmail SDK provider count shape differs")
@@ -131,7 +159,7 @@ def observations(document, stage):
     inventory = {"authorization_validated": consent, "authorization_code_issued": consent, "authorization_code_exchanged": consent,
         "identity_returned": consent, "tokens_issued": consent + refresh, "refresh_token_rotated": refresh,
         "resource_received": resources, "resource_authorized": resources}
-    require(type(events) is list and len(events) <= 24 and all(type(row) is dict and row.get("provider") == "google"
+    require(type(events) is list and len(events) <= (40 if sdk_pair else 24) and all(type(row) is dict and row.get("provider") == "google"
         and type(row.get("sequence")) is int and row["sequence"] == i + 1
         and type(row.get("timestamp_epoch_ms")) is int and row["timestamp_epoch_ms"] > 0 for i, row in enumerate(events))
         and Counter(row.get("type") for row in events) == Counter({k: v for k, v in inventory.items() if v}),
@@ -152,17 +180,17 @@ def observations(document, stage):
         == (["authorization_code"] if consent else []) + (["refresh_token"] if refresh else []), "Gmail SDK issuance order differs")
     sdk = document["gmailSdk"]
     require(type(sdk) is dict and set(sdk) == {"schema", "maxAttempts", "attempts"}
-        and sdk["schema"] == "serverware.privateGmailSdkObservations/v1" and type(sdk["maxAttempts"]) is int
+        and sdk["schema"] == (profiles.OBSERVATION_SCHEMA if sdk_pair else "serverware.privateGmailSdkObservations/v1") and type(sdk["maxAttempts"]) is int
         and sdk["maxAttempts"] == 32 and type(sdk["attempts"]) is list and len(sdk["attempts"]) == resources,
         "Gmail SDK finite receiver differs")
     expiry = document["initialAccessExpiresAtEpochMs"]
     require((type(expiry) is int and expiry > 0) if consent else expiry is None, "Gmail SDK original expiry unavailable")
-    require(document["initialAccessExpired"] is (stage in {"expired", "refreshed"}), "Gmail SDK actual expiry not reached")
+    require(document["initialAccessExpired"] is (stage in {"expired", "refreshed", "node_refreshed"}), "Gmail SDK actual expiry not reached")
     authorized = [r for r in events if r["type"] == "resource_authorized"]
     received = [r for r in events if r["type"] == "resource_received"]
     for i, row in enumerate(sdk["attempts"]):
-        generation = 1 + i // 4
-        validate_row(row, i + 1, generation)
+        generation = 1 + i // len(cases)
+        validate_row(row, i + 1, generation, sdk_pair=sdk_pair)
         event = authorized[i]
         require(type(event.get("token_generation")) is int and event["token_generation"] == generation
             and event.get("operation") == ("gmail.messages.list" if i % 4 in (0, 2) else "gmail.message.get")
@@ -177,11 +205,11 @@ def observations(document, stage):
         "refreshCompletedAtExpiry": bool(refresh) if stage == "expired" else None}
 
 
-def request_commitments(row, *, scope, credential_id, generation):
-    validate_row(row, row.get("ordinal"), generation)
+def request_commitments(row, *, scope, credential_id, generation, sdk_pair=False):
+    validate_row(row, row.get("ordinal"), generation, sdk_pair=sdk_pair)
     require(len(scope) == 3 and SHA256.fullmatch(scope[2]) and UUID.fullmatch(credential_id), "Gmail SDK canonical scope differs")
     operation = {"operation": "gmail.messages.list", "gmailUser": "me"}
-    if row["case"].startswith("message_"):
+    if row["case"].rsplit(":", 1)[-1].startswith("message_"):
         operation = {"operation": "gmail.message.get", "gmailUser": "me", "messageId": row["path"].rsplit("/", 1)[1]}
     canonical = {"v": 3, "principal": scope[0], "client_ip": "127.0.0.1", "route_id": scope[1],
         "credential_ref": credential_id, "credential_version": str(generation), "policy_hash": scope[2],
@@ -193,6 +221,8 @@ def request_commitments(row, *, scope, credential_id, generation):
             "headers": {"host": "gmail.googleapis.com", "user-agent": "google-api-go-client/0.5",
                 "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"},
             "body_sha256": digest(b""), "discard_headers": ["accept-encoding"]}, "operation": operation}
+    if sdk_pair:
+        canonical["request"]["headers"] = profiles.provider_headers(row["case"])
     return digest(canonical), digest({k: v for k, v in canonical.items() if k not in {"v", "client_ip"}})
 
 
@@ -227,7 +257,7 @@ def _audit_ordered(events, pairs):
     return all(precedes(earlier, later) for earlier, later in pairs)
 
 
-def grant_publication_reload_failures(events, scope, credential_id, *, grant):
+def grant_publication_reload_failures(events, scope, credential_id, *, grant, sdk_pair=False):
     """One known failed dev-attestation observation before the saved grant loads."""
     failures = [row for row in events if row["event_type"] == RELOAD_FAILED]
     require(len(failures) <= 1, "Gmail SDK repeated grant publication reload failure")
@@ -260,7 +290,8 @@ def grant_publication_reload_failures(events, scope, credential_id, *, grant):
         and after["event"]["policy_sequence"] == grant["policy_sequence"],
         "Gmail SDK reload failure is outside the exact saved grant transition")
     releases = [r for r in events if r["event_type"] in {START, RELEASE}]
-    require(Counter(r["event_type"] for r in releases) == Counter({START: 8, RELEASE: 8})
+    count = 2 * len(selected_cases(sdk_pair))
+    require(Counter(r["event_type"] for r in releases) == Counter({START: count, RELEASE: count})
         and _audit_ordered(events, [(before, row), (row, after), *((after, r) for r in releases)]),
         "Gmail SDK reload failure is not before reads and between grant and reload")
     return 1
@@ -321,19 +352,21 @@ def revocation_publication_rejections(events, rejections, scope, credential_id, 
     return 1
 
 
-def generation_evidence(events, scope, credential_id, commitments, *, expected_binary_sha256, revocation=None):
+def generation_evidence(events, scope, credential_id, commitments, *, expected_binary_sha256, revocation=None, sdk_pair=False):
+    cases = selected_cases(sdk_pair)
+    count = 2 * len(cases)
     features.audit_cutoff(events)  # Includes unique row IDs and valid chain hashes.
     require(type(expected_binary_sha256) is str and SHA256.fullmatch(expected_binary_sha256),
         "Gmail SDK expected gate binary digest differs")
-    require(type(commitments) is list and len(commitments) == 8 and all(type(r) is dict and set(r) == REQUEST_KEYS for r in commitments),
+    require(type(commitments) is list and len(commitments) == count and all(type(r) is dict and set(r) == REQUEST_KEYS for r in commitments),
         "Gmail SDK commitment inventory differs")
     for i, row in enumerate(commitments):
-        require(row["case"] == CASES[i % 4] and type(row["generation"]) is int and row["generation"] == 1 + i // 4
+        require(row["case"] == cases[i % len(cases)] and type(row["generation"]) is int and row["generation"] == 1 + i // len(cases)
             and all(type(row[k]) is str and SHA256.fullmatch(row[k]) for k in ("requestDigest", "operationDigest", "responseBodySha256"))
-            and row["responseBodySha256"] == digest(fixture.TARGETS[row["case"]]["body"])
-            and type(row["responseBodyBytes"]) is int and row["responseBodyBytes"] == len(fixture.TARGETS[row["case"]]["body"]),
+            and row["responseBodySha256"] == digest(fixture.selected_targets(sdk_pair)[row["case"]]["body"])
+            and type(row["responseBodyBytes"]) is int and row["responseBodyBytes"] == len(fixture.selected_targets(sdk_pair)[row["case"]]["body"]),
             "Gmail SDK typed commitment differs")
-    require(len({r["requestDigest"] for r in commitments}) == len({r["operationDigest"] for r in commitments}) == 8,
+    require(len({r["requestDigest"] for r in commitments}) == len({r["operationDigest"] for r in commitments}) == count,
         "Gmail SDK canonical commitments reused")
     for row in events:
         event, kind = row.get("event", {}), row.get("event_type")
@@ -347,13 +380,13 @@ def generation_evidence(events, scope, credential_id, commitments, *, expected_b
         if kind == "credential.oauth_refreshed":
             require(type(event.get("previous_credential_version")) is int and event.get("refresh_token_rotated") is True,
                 "Gmail SDK previous generation or rotation differs")
-    actual, pairs = features.release_attempt_pairs(events, Counter({scope: 8}))
-    require(actual == Counter({scope: 8}) and len(pairs) == 8, "Gmail SDK durable request pair inventory differs")
+    actual, pairs = features.release_attempt_pairs(events, Counter({scope: count}))
+    require(actual == Counter({scope: count}) and len(pairs) == count, "Gmail SDK durable request pair inventory differs")
     connected = [row for row in events if row["event_type"] == "credential.oauth_connected"]
     refreshed = [row for row in events if row["event_type"] == "credential.oauth_refreshed"]
     starts = [row for row in events if row["event_type"] == START]
     terminals = [row for row in events if row["event_type"] == RELEASE]
-    require(len(connected) == len(refreshed) == 1 and len(starts) == len(terminals) == 8,
+    require(len(connected) == len(refreshed) == 1 and len(starts) == len(terminals) == count,
         "Gmail SDK durable generation inventory differs")
     require(connected[0]["event"].get("credential_id") == credential_id
         and connected[0]["event"]["credential_version"] == 1, "Gmail SDK initial persisted generation differs")
@@ -363,7 +396,7 @@ def generation_evidence(events, scope, credential_id, commitments, *, expected_b
     expected = {(item["requestDigest"], item["operationDigest"]): item for item in commitments}
     observed = set()
     starts_by_attempt = {row["event"].get("attempt_id"): row for row in starts}
-    require(len(starts_by_attempt) == 8, "Gmail SDK release-start identities collide")
+    require(len(starts_by_attempt) == count, "Gmail SDK release-start identities collide")
     for row in terminals:
         event = row["event"]
         key = (event.get("request_digest"), event.get("operation_digest"))
@@ -412,17 +445,19 @@ def generation_evidence(events, scope, credential_id, commitments, *, expected_b
         "reconciliationRejections": len(rejections), "revocationPublicationRejections": publication_count}
 
 
-def validate_client_result(phase, code, out, err):
-    require(phase in PHASES and type(code) is int and type(out) is bytes and type(err) is bytes,
+def validate_client_result(phase, code, out, err, *, sdk_pair=False):
+    selected = base_phase(phase, sdk_pair)
+    require(type(code) is int and type(out) is bytes and type(err) is bytes,
         "Gmail SDK process result shape differs")
-    positive = phase in {"first", "refreshed"}
-    require((code == 0 and out == SUCCESS and err == b"") if positive else (code == 1 and out == b"" and err == DENIAL),
+    positive = selected in {"first", "refreshed"}
+    denial = profiles.FAILURES[profiles.split_phase(phase)[0]] if sdk_pair else DENIAL
+    require((code == 0 and out == SUCCESS and err == b"") if positive else (code == 1 and out == b"" and err == denial),
         "Gmail SDK exact count summary or fixed failure differs")
     return {"phase": phase, "exitCode": code, "summary": dict(SUMMARY) if positive else None}
 
 
-def validate_no_arrivals(before, after):
-    observations(before, "refreshed"); observations(after, "refreshed")
+def validate_no_arrivals(before, after, *, sdk_pair=False):
+    observations(before, "refreshed", sdk_pair=sdk_pair); observations(after, "refreshed", sdk_pair=sdk_pair)
     require(before == after, "denied Gmail SDK attempt changed provider observations")
     return True
 
@@ -440,11 +475,12 @@ def client_environment(application, token, phase):
         "SERVERWARE_PROXY_TOKEN": token, "SERVERWARE_CA_FILE": str(inner), "SERVERWARE_PROXY_CA_FILE": str(outer)}
 
 
-def run_example(environment, seconds):
+def run_example(environment, seconds, *, command=COMMAND):
+    require(command in (COMMAND, *profiles.COMMANDS.values()), "Gmail SDK fixed entrypoint differs")
     require(0 < seconds <= 30 and set(environment) == {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID",
         "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"}, "Gmail SDK process boundary differs")
     deadline = time.monotonic() + seconds
-    process = subprocess.Popen(COMMAND, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=environment, close_fds=True, start_new_session=True)
     output = {"out": bytearray(), "err": bytearray()}
     try:
@@ -525,9 +561,13 @@ def require_rule(rule, application_id, credential_id):
 
 class GmailSdkCheck(base.GoogleRefreshCheck):
     audit_drained = OrdinaryClientCheck.audit_drained
+    sdk_pair = False
 
     def __init__(self, args):
         self.phase = "startup"
+        self.sdk_pair = getattr(args, "sdk_pair", False)
+        selected_cases(self.sdk_pair)
+        require(not (self.sdk_pair and getattr(args, "browser_permission", False)), "paired browser mode refused")
         super().__init__(args)
         expected_url, expected_address = fixture_proxy(getattr(args, "browser_permission", False))
         require(args.proxy_url == expected_url and self.control.address == self.management.address == "127.0.0.1"
@@ -535,17 +575,32 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             "Gmail SDK fixed local peer differs")
         self.completed, self.denials, self.cutoffs = [], [], []
         self.pins = {}
-        for path, maximum in [(Path(COMMAND[0]), 64 * 1024**2),
-                *[(Path("/app") / name, 512 * 1024) for name in SOURCE_FILES],
+        sources = profiles.SOURCES if self.sdk_pair else SOURCE_FILES
+        binary = Path("/node" if self.sdk_pair else COMMAND[0])
+        for path, maximum in [(binary, 128 * 1024**2 if self.sdk_pair else 64 * 1024**2),
+                *[(Path("/app") / name, 512 * 1024) for name in sources],
                 *[(path, 131072) for path in TRUST_FILES.values()]]:
             self.pins[path] = (maximum, read_pin(path, maximum))
-        require(hashlib.sha256(self.pins[Path(COMMAND[0])][1][1]).hexdigest() == args.expected_go_sha256,
+        require(hashlib.sha256(self.pins[binary][1][1]).hexdigest()
+            == (profiles.NODE_SHA256 if self.sdk_pair else args.expected_go_sha256),
             "Gmail SDK compiled binary pin differs")
         trust = {name: self.pins[path][1][1] for name, path in TRUST_FILES.items()}
         require(trust["inner"] != trust["outer"] and trust["combined"] == trust["outer"] + trust["inner"]
             and all(b"PRIVATE KEY" not in raw and b"BEGIN CERTIFICATE" in raw for raw in trust.values()),
             "Gmail SDK distinct per-hop public roots differ")
-        self.source_hashes = {name: hashlib.sha256(self.pins[Path("/app") / name][1][1]).hexdigest() for name in SOURCE_FILES}
+        self.source_hashes = {name: hashlib.sha256(self.pins[Path("/app") / name][1][1]).hexdigest() for name in sources}
+        self.current_dependencies()
+
+    def current_dependencies(self):
+        # Hash the complete immutable payload only at entry and exit, not per request.
+        if self.sdk_pair:
+            from scripts import prepare_operator_gmail_sdk_fixture as recipe
+            value = recipe.paired_dependencies(Path("/app") / profiles.NODE_MODULES,
+                Path("/example-python"), Path(profiles.PYTHON_PACKAGES))
+            require(recipe.dependencies_sha256(value) == self.args.expected_dependencies_sha256,
+                "Gmail SDK paired dependencies changed")
+            require(hashlib.sha256(read_pin(Path("/usr/lib/x86_64-linux-gnu/libatomic.so.1"), 1024**2)[1]).hexdigest()
+                == recipe.LIBATOMIC_SHA256, "Gmail SDK runtime library differs")
 
     def current_files(self):
         require(all(read_pin(path, maximum) == pinned for path, (maximum, pinned) in self.pins.items()),
@@ -554,7 +609,7 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
     def observe(self, stage, *, retain=True):
         status, document = self.json_request(self.upstream, base.fixture.OBSERVATIONS_PATH, context=self.upstream_ca)
         require(status == 200, "Gmail SDK provider observations failed")
-        safe = observations(document, stage)
+        safe = observations(document, stage, sdk_pair=self.sdk_pair)
         if self.provider_observations:
             original = self.provider_observations[1]["initialAccessExpiresAtEpochMs"] if len(self.provider_observations) > 1 else None
             require(original is None or safe["initialAccessExpiresAtEpochMs"] == original, "Gmail SDK original expiry changed")
@@ -575,28 +630,38 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             environment = copied_phase_environment(getattr(self, "browser_client_environment", None),
                 application=application["id"], token=token, phase=phase)
         else:
-            environment = client_environment(application["id"], token, phase)
+            environment = client_environment(application["id"], token, base_phase(phase, self.sdk_pair))
         # The joined browser path uses actual copied fields; only the explicit
         # existing denial controls change that environment. No shell is evaluated.
-        result = run_example(environment, min(30, self.deadline - time.monotonic()))
+        options = {"command": profiles.COMMANDS[profiles.split_phase(phase)[0]]} if self.sdk_pair else {}
+        result = run_example(environment, min(30, self.deadline - time.monotonic()), **options)
         self.current_files(); self.clean(result[1]); self.clean(result[2])
-        self.completed.append(validate_client_result(phase, *result))
+        self.completed.append(validate_client_result(phase, *result, sdk_pair=self.sdk_pair))
 
     def accept(self, document):
         rows = document["gmailSdk"]["attempts"]
         require(len(rows) == len(self.wire_commitments) + 4, "Gmail SDK batch did not add exactly four requests")
         for row in rows[len(self.wire_commitments):]:
             generation = row["tokenGeneration"]
-            request, operation = request_commitments(row, scope=self.scope, credential_id=self.credential_id, generation=generation)
+            request, operation = request_commitments(row, scope=self.scope, credential_id=self.credential_id,
+                generation=generation, sdk_pair=self.sdk_pair)
             self.wire_commitments.append({"case": row["case"], "generation": generation, "requestDigest": request,
                 "operationDigest": operation, "responseBodySha256": row["responseBodySha256"], "responseBodyBytes": row["responseBodyBytes"]})
             self.successes.append(self.scope)
 
+    def accept_batch(self, phase, application, token):
+        for client in (profiles.CLIENTS if self.sdk_pair else (None,)):
+            self.client(client + ":" + phase if client else phase, application, token)
+            partial = client == "node"
+            document = self.observe("node_" + phase if partial else phase, retain=not partial)
+            self.accept(document)
+        return document
+
     def deny(self, phase, application, token, baseline_provider):
         before = features.audit_cutoff(self.settled_audit())
         self.client(phase, application, token)
-        validate_no_arrivals(baseline_provider, self.observe("refreshed", retain=False))
-        kind = NEGATIVE_KINDS[phase]
+        validate_no_arrivals(baseline_provider, self.observe("refreshed", retain=False), sdk_pair=self.sdk_pair)
+        kind = NEGATIVE_KINDS[base_phase(phase, self.sdk_pair)]
         while True:
             events = self.audit(); cutoff = features.audit_cutoff(events)
             require(all(cutoff.get(k) == v for k, v in before.items()), "Gmail SDK denial audit prefix changed")
@@ -618,10 +683,15 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
                         "Gmail SDK TLS or application denial audit differs")
             if counts[kind] == int(kind is not None) and self.audit_drained():
                 self.cutoffs.append(cutoff)
-                self.denials.append({"phase": phase, "providerAttemptsBefore": 8, "providerAttemptsAfter": 8,
+                count = 2 * len(selected_cases(self.sdk_pair))
+                self.denials.append({"phase": phase, "providerAttemptsBefore": count, "providerAttemptsAfter": count,
                     "auditEventType": kind, "auditEventId": next((r["id"] for r in rows if r["event_type"] == kind), None)})
                 return
             time.sleep(min(0.1, self.timeout()))
+
+    def deny_batch(self, phase, application, token, provider):
+        for client in (profiles.CLIENTS if self.sdk_pair else (None,)):
+            self.deny(client + ":" + phase if client else phase, application, token, provider)
 
     def run(self):
         self.health(); self.admin_token = token_file(self.args.admin_token_file)
@@ -662,7 +732,7 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             and self.resource(pinned, "applications", unassigned["id"]).get("access_status") == "unassigned",
             "Gmail SDK exact account/app/grant inventory differs")
         self.scope = (app["principal_id"], rule["route_id"], self.policy_hash)
-        self.client("first", app, self.client_token); first = self.observe("first"); self.accept(first); self.unchanged(pinned)
+        first = self.accept_batch("first", app, self.client_token); self.unchanged(pinned)
         expiry = first["initialAccessExpiresAtEpochMs"]
         remaining = (expiry + 1000 - time.time_ns() // 1_000_000) / 1000
         require(0 < remaining <= 91 and self.deadline - time.monotonic() > remaining + 25,
@@ -671,14 +741,14 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
         while time.monotonic() < until:
             time.sleep(max(0, min(1, until - time.monotonic(), self.timeout())))
         self.observe("expired"); self.unchanged(pinned)
-        self.client("refreshed", app, self.client_token); provider = self.observe("refreshed"); self.accept(provider)
+        provider = self.accept_batch("refreshed", app, self.client_token)
         self.unchanged(pinned)
         features.verify_audit(self)
         generation_evidence(self.settled_audit(), self.scope, credential["id"], self.wire_commitments,
-            expected_binary_sha256=self.args.expected_binary_sha256)
-        self.deny("wrong_outer_ca", app, self.client_token, provider)
-        self.deny("wrong_inner_ca", app, self.client_token, provider)
-        self.deny("wrong_app", unassigned, wrong_token, provider); self.unchanged(pinned)
+            expected_binary_sha256=self.args.expected_binary_sha256, sdk_pair=self.sdk_pair)
+        self.deny_batch("wrong_outer_ca", app, self.client_token, provider)
+        self.deny_batch("wrong_inner_ca", app, self.client_token, provider)
+        self.deny_batch("wrong_app", unassigned, wrong_token, provider); self.unchanged(pinned)
         self.phase = "revoke"
         self.mutate("/access-rules/revoke", {"id": rule["id"]}, collection="access_rules", result_key="access_rule",
             event="operator_catalog.access_rule.revoked", authority_changed=True)
@@ -689,13 +759,13 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             and self.resource(revoked, "credentials", credential["id"])["status"] == "active"
             and self.resource(revoked, "applications", app["id"])["token_status"] == "valid",
             "Gmail SDK controlled revocation or retained account/app differs")
-        self.deny("revoked", app, self.client_token, provider); self.unchanged(revoked)
+        self.deny_batch("revoked", app, self.client_token, provider); self.unchanged(revoked)
         audit_ids, attempts = features.verify_audit(self); events = self.settled_audit()
         generations = generation_evidence(events, self.scope, credential["id"], self.wire_commitments,
-            expected_binary_sha256=self.args.expected_binary_sha256,
+            expected_binary_sha256=self.args.expected_binary_sha256, sdk_pair=self.sdk_pair,
             revocation={"rule_id": rule["id"], "application_id": app["id"], "revision": revoked["revision"],
                 "policy_sequence": revoked["policy"]["sequence"], "policy_hash": revoked["policy"]["policy_hash"]})
-        grant_failures = grant_publication_reload_failures(events, self.scope, credential["id"],
+        grant_failures = grant_publication_reload_failures(events, self.scope, credential["id"], sdk_pair=self.sdk_pair,
             grant={"rule_id": rule["id"], "application_id": app["id"], "revision": pinned["revision"],
                 "policy_sequence": pinned["policy"]["sequence"], "previous_policy_hash": initial["policy"]["policy_hash"]})
         cutoff = features.audit_cutoff(events)
@@ -703,11 +773,12 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             "Gmail SDK audit history changed")
         named = Counter(r["event_type"] for r in events if r["id"] not in baseline and
             (r["event_type"].startswith("data_plane.") or r["event_type"] in {"credential.oauth_connected", "credential.oauth_refreshed"}))
-        validate_no_arrivals(provider, self.observe("refreshed", retain=False)); self.current_files()
+        validate_no_arrivals(provider, self.observe("refreshed", retain=False), sdk_pair=self.sdk_pair)
+        self.current_files(); self.current_dependencies()
         result = {"schema": SCHEMA, "ok": True, "syntheticOnly": True, "realGoogleVerified": False,
             "browserUiVerified": False, "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
             "actualExampleEntrypoint": True, "auditChainVerified": True, "separateOuterInnerTrust": True,
-            "catalogUnchangedAcrossRefresh": True, "providerAttempts": 8, "automaticRefreshes": 1,
+            "catalogUnchangedAcrossRefresh": True, "providerAttempts": 2 * len(selected_cases(self.sdk_pair)), "automaticRefreshes": 1,
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "goExampleSha256": self.args.expected_go_sha256,
             "exampleSourceSha256": self.source_hashes, "credentialId": credential["id"],
             "applicationIds": [app["id"], unassigned["id"]], "ruleId": rule["id"], "policyHash": self.scope[2],
@@ -716,6 +787,10 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             "completed": self.completed, "providerObservations": self.provider_observations, "requests": self.wire_commitments,
             "negativeControls": self.denials, "durableAuditEventIds": audit_ids, "auditAttemptIds": attempts,
             "namedAuditInventory": dict(sorted(named.items())), "grantPublicationReloadFailures": grant_failures, **generations}
+        if self.sdk_pair:
+            result.pop("goExampleSha256")
+            result.update(schema=profiles.CHECK_SCHEMA, nodeExampleSha256=profiles.NODE_SHA256,
+                sdkDependenciesSha256=self.args.expected_dependencies_sha256)
         validate_success_result(result); serialized = encoded(result); self.clean(serialized)
         require(all(value.encode() not in serialized for value in self.transient_values), "Gmail SDK OAuth flow material escaped")
         return result
@@ -723,6 +798,10 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
 
 def validate_success_result(value):
     """Closed pure runner predicate; actual one-shot exit zero is also required."""
+    require(type(value) is dict and value.get("schema") in (SCHEMA, profiles.CHECK_SCHEMA), "Gmail SDK result schema differs")
+    paired = value["schema"] == profiles.CHECK_SCHEMA
+    cases, phases, stages = selected_cases(paired), selected_phases(paired), selected_stages(paired)
+    count, clients = 2 * len(cases), 2 if paired else 1
     true_flags = {"ok", "syntheticOnly", "actualExampleEntrypoint", "auditChainVerified", "separateOuterInnerTrust", "catalogUnchangedAcrossRefresh"}
     false_flags = {"realGoogleVerified", "browserUiVerified", "productionReady", "hardwareVerified", "publicDnsVerified"}
     fields = true_flags | false_flags | {"schema", "providerAttempts", "automaticRefreshes", "dataPlaneBinaryDigest", "goExampleSha256",
@@ -731,9 +810,11 @@ def validate_success_result(value):
         "durableAuditEventIds", "auditAttemptIds", "namedAuditInventory", "initialCredentialVersion", "refreshedCredentialVersion",
         "canonicalRequestVersion", "generationAuditEventIds", "reconciliationRejections", "revocationPublicationRejections",
         "grantPublicationReloadFailures"}
-    require(type(value) is dict and set(value) == fields and value["schema"] == SCHEMA
+    if paired:
+        fields = fields - {"goExampleSha256"} | {"nodeExampleSha256", "sdkDependenciesSha256"}
+    require(set(value) == fields
         and all(value[k] is True for k in true_flags) and all(value[k] is False for k in false_flags), "Gmail SDK result shape differs")
-    for key, expected in {"providerAttempts": 8, "automaticRefreshes": 1, "initialCredentialVersion": 1,
+    for key, expected in {"providerAttempts": count, "automaticRefreshes": 1, "initialCredentialVersion": 1,
             "refreshedCredentialVersion": 2, "canonicalRequestVersion": 3}.items():
         require(type(value[key]) is int and value[key] == expected, "Gmail SDK result count differs")
     require(type(value["reconciliationRejections"]) is int and value["reconciliationRejections"] in (0, 1),
@@ -743,9 +824,14 @@ def validate_success_result(value):
     require(type(value["grantPublicationReloadFailures"]) is int and value["grantPublicationReloadFailures"] in (0, 1),
         "Gmail SDK grant publication reload failure count differs")
     require(all(type(value[k]) is str and SHA256.fullmatch(value[k]) for k in ("dataPlaneBinaryDigest", "policyHash", "revokedPolicyHash"))
-        and value["policyHash"] != value["revokedPolicyHash"] and type(value["goExampleSha256"]) is str and HEX.fullmatch(value["goExampleSha256"])
-        and type(value["exampleSourceSha256"]) is dict and set(value["exampleSourceSha256"]) == set(SOURCE_FILES)
+        and value["policyHash"] != value["revokedPolicyHash"]
+        and type(value["nodeExampleSha256" if paired else "goExampleSha256"]) is str
+        and HEX.fullmatch(value["nodeExampleSha256" if paired else "goExampleSha256"])
+        and type(value["exampleSourceSha256"]) is dict and set(value["exampleSourceSha256"]) == set(profiles.SOURCES if paired else SOURCE_FILES)
         and all(type(v) is str and HEX.fullmatch(v) for v in value["exampleSourceSha256"].values()), "Gmail SDK artifact pins differ")
+    if paired:
+        require(value["nodeExampleSha256"] == profiles.NODE_SHA256 and type(value["sdkDependenciesSha256"]) is str
+            and HEX.fullmatch(value["sdkDependenciesSha256"]), "Gmail SDK paired artifact pins differ")
     require(type(value["applicationIds"]) is list and len(value["applicationIds"]) == 2
         and len(set(value["applicationIds"])) == 2 and all(type(v) is str and UUID.fullmatch(v)
             for v in [value["credentialId"], value["ruleId"], *value["applicationIds"]]), "Gmail SDK retained identities differ")
@@ -755,66 +841,68 @@ def validate_success_result(value):
         and value["originalAccessExpiresAtEpochMs"] > 0 and type(value["refreshCompletedAtExpiry"]) is bool,
         "Gmail SDK original clock or revision evidence differs")
     completed = value["completed"]
-    require(type(completed) is list and len(completed) == len(PHASES), "Gmail SDK process inventory differs")
-    for phase, row in zip(PHASES, completed):
+    require(type(completed) is list and len(completed) == len(phases), "Gmail SDK process inventory differs")
+    for phase, row in zip(phases, completed):
+        positive = base_phase(phase, paired) in {"first", "refreshed"}
         require(type(row) is dict and set(row) == {"phase", "exitCode", "summary"} and row["phase"] == phase
-            and type(row["exitCode"]) is int and row["exitCode"] == (0 if phase in {"first", "refreshed"} else 1)
-            and row["summary"] == (SUMMARY if phase in {"first", "refreshed"} else None)
+            and type(row["exitCode"]) is int and row["exitCode"] == (0 if positive else 1)
+            and row["summary"] == (SUMMARY if positive else None)
             and (row["summary"] is None or type(row["summary"].get("pages")) is int
                 and type(row["summary"].get("messages_read")) is int and row["summary"].get("more_pages") is False),
             "Gmail SDK actual client result differs")
     observations_list = value["providerObservations"]
     require(type(observations_list) is list and len(observations_list) == 5, "Gmail SDK checkpoint inventory differs")
-    for stage, row in zip(STAGES, observations_list):
-        consent, refreshed, count = STAGES[stage]
+    for stage, row in zip(stages, observations_list):
+        consent, refreshed, resources = stages[stage]
         require(type(row) is dict and set(row) == {"stage", "counts", "initialAccessExpiresAtEpochMs", "initialAccessExpired",
             "resourceGenerations", "cases", "refreshCompletedAtExpiry"} and row["stage"] == stage
             and row["initialAccessExpiresAtEpochMs"] == (value["originalAccessExpiresAtEpochMs"] if consent else None)
             and row["initialAccessExpired"] is (stage in {"expired", "refreshed"})
-            and row["resourceGenerations"] == [1 + i // 4 for i in range(count)]
-            and all(type(v) is int for v in row["resourceGenerations"]) and row["cases"] == [CASES[i % 4] for i in range(count)],
+            and row["resourceGenerations"] == [1 + i // len(cases) for i in range(resources)]
+            and all(type(v) is int for v in row["resourceGenerations"]) and row["cases"] == [cases[i % len(cases)] for i in range(resources)],
             "Gmail SDK checkpoint expiry or generations differ")
         require(row["refreshCompletedAtExpiry"] is (value["refreshCompletedAtExpiry"] if stage == "expired" else None),
             "Gmail SDK expiry refresh projection differs")
         refreshed = int(value["refreshCompletedAtExpiry"]) if stage == "expired" else refreshed
         expected = {"authorization_requests": consent, "authorization_codes_issued": consent, "authorization_code_exchanges": consent,
             "token_requests": consent + refreshed, "token_responses": consent + refreshed, "refresh_exchanges": refreshed,
-            "identity_requests": consent, "resource_requests": count, "resource_attempts": count,
-            "resource_gmail.messages.list": count // 2, "resource_gmail.message.get": count // 2}
+            "identity_requests": consent, "resource_requests": resources, "resource_attempts": resources,
+            "resource_gmail.messages.list": resources // 2, "resource_gmail.message.get": resources // 2}
         require(type(row["counts"]) is dict and all(type(v) is int for v in row["counts"].values())
             and row["counts"] == {k: v for k, v in expected.items() if v}, "Gmail SDK checkpoint exchange counts differ")
     requests = value["requests"]
-    require(type(requests) is list and len(requests) == 8, "Gmail SDK request evidence unavailable")
+    require(type(requests) is list and len(requests) == count, "Gmail SDK request evidence unavailable")
     for i, row in enumerate(requests):
-        require(type(row) is dict and set(row) == REQUEST_KEYS and row["case"] == CASES[i % 4]
-            and type(row["generation"]) is int and row["generation"] == 1 + i // 4
+        require(type(row) is dict and set(row) == REQUEST_KEYS and row["case"] == cases[i % len(cases)]
+            and type(row["generation"]) is int and row["generation"] == 1 + i // len(cases)
             and all(type(row[k]) is str and SHA256.fullmatch(row[k]) for k in ("requestDigest", "operationDigest", "responseBodySha256"))
-            and row["responseBodySha256"] == digest(fixture.TARGETS[row["case"]]["body"])
-            and type(row["responseBodyBytes"]) is int and row["responseBodyBytes"] == len(fixture.TARGETS[row["case"]]["body"]),
+            and row["responseBodySha256"] == digest(fixture.selected_targets(paired)[row["case"]]["body"])
+            and type(row["responseBodyBytes"]) is int and row["responseBodyBytes"] == len(fixture.selected_targets(paired)[row["case"]]["body"]),
             "Gmail SDK response commitment differs")
-    require(len({r["requestDigest"] for r in requests}) == len({r["operationDigest"] for r in requests}) == 8,
+    require(len({r["requestDigest"] for r in requests}) == len({r["operationDigest"] for r in requests}) == count,
         "Gmail SDK result reused a request commitment")
     denials = value["negativeControls"]
-    require(type(denials) is list and len(denials) == 4, "Gmail SDK negative inventory differs")
+    require(type(denials) is list and len(denials) == 4 * clients, "Gmail SDK negative inventory differs")
     denial_ids = []
-    for phase, row in zip(PHASES[2:], denials):
-        kind = NEGATIVE_KINDS[phase]
+    for phase, row in zip(phases[2 * clients:], denials):
+        kind = NEGATIVE_KINDS[base_phase(phase, paired)]
         require(type(row) is dict and set(row) == {"phase", "providerAttemptsBefore", "providerAttemptsAfter", "auditEventType", "auditEventId"}
-            and row["phase"] == phase and row["auditEventType"] == kind and all(type(row[k]) is int and row[k] == 8
+            and row["phase"] == phase and row["auditEventType"] == kind and all(type(row[k]) is int and row[k] == count
                 for k in ("providerAttemptsBefore", "providerAttemptsAfter")), "Gmail SDK denial arrival evidence differs")
         require(row["auditEventId"] is None if kind is None else type(row["auditEventId"]) is str
             and SHA256.fullmatch(row["auditEventId"]), "Gmail SDK denial audit identity differs")
         if kind is not None:
             denial_ids.append(row["auditEventId"])
-    require(len(set(denial_ids)) == 3, "Gmail SDK denial audit identities collide")
-    for key, length, hash_count in (("durableAuditEventIds", 20, 16), ("auditAttemptIds", 8, 8), ("generationAuditEventIds", 10, 8)):
+    require(len(set(denial_ids)) == 3 * clients, "Gmail SDK denial audit identities collide")
+    for key, length, hash_count in (("durableAuditEventIds", 2 * count + 4, 2 * count),
+            ("auditAttemptIds", count, count), ("generationAuditEventIds", count + 2, count)):
         rows = value[key]
         require(type(rows) is list and len(rows) == length
             and all(type(v) is str and (SHA256.fullmatch(v) or UUID.fullmatch(v)) for v in rows)
             and len(set(rows)) == length and sum(bool(SHA256.fullmatch(v)) for v in rows) == hash_count,
             "Gmail SDK durable evidence identities differ")
     inventory = value["namedAuditInventory"]
-    expected = {START: 8, RELEASE: 8, CONNECT: 9, DENIED: 2, RELOAD: 2,
+    expected = {START: count, RELEASE: count, CONNECT: count + clients, DENIED: 2 * clients, RELOAD: 2,
         "credential.oauth_connected": 1, "credential.oauth_refreshed": 1}
     rejected_count = value["reconciliationRejections"] + value["revocationPublicationRejections"]
     if rejected_count:
@@ -835,16 +923,23 @@ def run_checks(args):
             and args.proxy_url == fixture_proxy(getattr(args, "browser_permission", False))[0]
             and args.ca_file == TRUST_FILES["inner"] and args.proxy_ca_file == TRUST_FILES["outer"]
             and args.combined_ca_file == TRUST_FILES["combined"], "Gmail SDK fixed endpoint or trust path differs")
+        paired = getattr(args, "sdk_pair", False)
+        selected_cases(paired)
+        require(not (paired and getattr(args, "browser_permission", False)), "paired browser mode refused")
+        require((args.expected_go_sha256 is None and type(args.expected_dependencies_sha256) is str
+            and HEX.fullmatch(args.expected_dependencies_sha256)) if paired else
+            (type(args.expected_go_sha256) is str and HEX.fullmatch(args.expected_go_sha256)
+                and getattr(args, "expected_dependencies_sha256", None) is None), "Gmail SDK selected artifact pin differs")
         require(type(args.expected_binary_sha256) is str and SHA256.fullmatch(args.expected_binary_sha256)
-            and type(args.expected_go_sha256) is str and HEX.fullmatch(args.expected_go_sha256)
             and type(args.timeout_seconds) is int and 120 <= args.timeout_seconds <= 180, "Gmail SDK artifact pin or deadline differs")
         base.fixture.assert_isolated_network(); base.read_google_marker(args.google_fixture_marker_file)
         claim_fixture(args.fixture_marker_file, args.run_claim_file)
         check = GmailSdkCheck(args)
         return check.run()
     except Exception as error:
-        phase = check.phase if check is not None and check.phase in ("startup", "revoke", "browser_permission", *PHASES) else "startup"
-        return {"schema": SCHEMA, "ok": False, "syntheticOnly": True, "realGoogleVerified": False,
+        paired = getattr(args, "sdk_pair", False) is True
+        phase = check.phase if check is not None and check.phase in ("startup", "revoke", "browser_permission", *selected_phases(paired)) else "startup"
+        return {"schema": profiles.CHECK_SCHEMA if paired else SCHEMA, "ok": False, "syntheticOnly": True, "realGoogleVerified": False,
             "productionReady": False, "phase": phase,
             "failureSite": failure_site(error, Path(__file__).resolve().parents[1]),
             "error": "acceptance_check_failed" if isinstance(error, CheckFailure) else "acceptance_internal_failure"}
@@ -852,14 +947,17 @@ def run_checks(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("control-base", "management-base", "proxy-url", "operator-origin", "expected-binary-sha256", "expected-go-sha256"):
+    for name in ("control-base", "management-base", "proxy-url", "operator-origin", "expected-binary-sha256"):
         parser.add_argument("--" + name, required=True)
+    for name in ("expected-go-sha256", "expected-dependencies-sha256"):
+        parser.add_argument("--" + name)
     for name in ("ca-file", "upstream-ca-file", "admin-token-file", "fixture-marker-file", "google-fixture-marker-file", "run-claim-file", "proxy-ca-file", "combined-ca-file"):
         parser.add_argument("--" + name, required=True, type=Path)
     for name in ("control-ca-file", "management-ca-file"):
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--browser-permission", action="store_true")
+    parser.add_argument("--sdk-pair", action="store_true")
     args = parser.parse_args()
     def expired(_signum, _frame):
         raise CheckFailure("Gmail SDK process deadline exceeded")

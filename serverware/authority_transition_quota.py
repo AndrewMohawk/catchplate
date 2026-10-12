@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from serverware import authority_transition_core as core
+from serverware import authority_jit_request as jit_request
 
 
 QUOTA_TRANSITION_OPERATIONS = frozenset(
@@ -1772,28 +1773,7 @@ class _JitRequestKernel:
         "ensure_jit_approval_request",
     )
 
-    _FIELDS = frozenset(
-        {
-            "route_id",
-            "method",
-            "url_commitment",
-            "principal_id",
-            "credential_id",
-            "credential_version",
-            "policy_hash",
-            "request_digest",
-            "operation_digest",
-            "canonical_request_digest",
-            "canonical_request_opaque_id",
-            "redacted_display_digest",
-            "redacted_display_opaque_id",
-            "pending_ttl_seconds",
-            "grant_ttl_seconds",
-            "grant_max_uses",
-            "approver_policy",
-            "approver_policy_digest",
-        }
-    )
+    _FIELDS = jit_request.FIELDS
 
     def queries(
         self,
@@ -1803,8 +1783,7 @@ class _JitRequestKernel:
         request_digest: str,
     ) -> tuple[core.BoundedQuery, ...]:
         del database_now
-        _digest(request_digest, "JIT request envelope")
-        _exact_arguments(arguments, required=self._FIELDS)
+        arguments = jit_request.normalize(arguments, request_digest=request_digest)
         item_id = core.deterministic_uuid(
             operation=self.operation,
             request_digest=request_digest,
@@ -1873,80 +1852,82 @@ class _JitRequestKernel:
         self,
         context: core.KernelContext,
     ) -> core.KernelTransition:
-        _exact_arguments(context.arguments, required=self._FIELDS)
+        arguments = jit_request.normalize(
+            context.arguments, request_digest=context.request_digest,
+        )
         route_id = _text(
-            context.arguments["route_id"],
+            arguments["route_id"],
             "JIT route",
             maximum_bytes=512,
         )
         method = _text(
-            context.arguments["method"],
+            arguments["method"],
             "JIT method",
             maximum_bytes=32,
         ).upper()
-        if method != context.arguments["method"]:
+        if method != arguments["method"]:
             raise core.TransitionKernelError(
                 "JIT method is not canonical uppercase"
             )
         url_commitment = _digest(
-            context.arguments["url_commitment"],
+            arguments["url_commitment"],
             "JIT URL commitment",
         )
         principal_id = _text(
-            context.arguments["principal_id"],
+            arguments["principal_id"],
             "JIT principal",
             maximum_bytes=512,
         )
         credential_id = _text(
-            context.arguments["credential_id"],
+            arguments["credential_id"],
             "JIT credential",
             maximum_bytes=512,
             allow_empty=True,
         )
         credential_version = _integer(
-            context.arguments["credential_version"],
+            arguments["credential_version"],
             "JIT credential version",
         )
         policy_hash = _digest(
-            context.arguments["policy_hash"],
+            arguments["policy_hash"],
             "JIT policy",
         )
         bound_request_digest = _digest(
-            context.arguments["request_digest"],
+            arguments["request_digest"],
             "JIT bound request",
         )
         operation_digest = _optional_digest(
-            context.arguments["operation_digest"],
+            arguments["operation_digest"],
             "JIT operation",
         )
         canonical_digest = _digest(
-            context.arguments["canonical_request_digest"],
+            arguments["canonical_request_digest"],
             "JIT canonical request plaintext",
         )
         display_digest = _digest(
-            context.arguments["redacted_display_digest"],
+            arguments["redacted_display_digest"],
             "JIT redacted display plaintext",
         )
         pending_ttl = _integer(
-            context.arguments["pending_ttl_seconds"],
+            arguments["pending_ttl_seconds"],
             "JIT pending TTL",
             minimum=1,
             maximum=3600,
         )
         grant_ttl = _integer(
-            context.arguments["grant_ttl_seconds"],
+            arguments["grant_ttl_seconds"],
             "JIT grant TTL",
             minimum=1,
             maximum=3600,
         )
         grant_max_uses = _integer(
-            context.arguments["grant_max_uses"],
+            arguments["grant_max_uses"],
             "JIT grant uses",
             minimum=1,
             maximum=1_000_000,
         )
         approver_policy, approver_policy_json = _canonical_mapping(
-            context.arguments["approver_policy"],
+            arguments["approver_policy"],
             "JIT approver policy",
         )
         if (
@@ -1961,7 +1942,7 @@ class _JitRequestKernel:
                 "JIT approver policy is not closed"
             )
         approver_policy_digest = _digest(
-            context.arguments["approver_policy_digest"],
+            arguments["approver_policy_digest"],
             "JIT approver policy digest",
         )
         if approver_policy_digest != core.framed_digest(
@@ -1977,12 +1958,12 @@ class _JitRequestKernel:
             purpose="jit-approval-request",
         )
         canonical_id = _text(
-            context.arguments["canonical_request_opaque_id"],
+            arguments["canonical_request_opaque_id"],
             "JIT canonical request opaque value",
             maximum_bytes=256,
         )
         display_id = _text(
-            context.arguments["redacted_display_opaque_id"],
+            arguments["redacted_display_opaque_id"],
             "JIT display opaque value",
             maximum_bytes=256,
         )

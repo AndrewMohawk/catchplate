@@ -29,6 +29,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-verifier-read verify-authority-planner-writer
 .PHONY: verify-authority-webauthn-receipts verify-authority-webauthn-receipts-postgres
 .PHONY: verify-authority-jit-approval verify-authority-jit-approval-postgres
+.PHONY: verify-authority-jit-request
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
 .PHONY: verify-portal-registration-capture
@@ -11367,6 +11368,9 @@ verify-authority-webauthn-receipts-postgres:
 
 # Actual request/kernel and signed synthetic assertion controls; no pilot,
 # provider traffic, build or database startup is performed by these targets.
+verify-authority-jit-request:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_request.py
+
 verify-authority-jit-approval:
 	python3 scripts/test_authority_approver_policy.py
 	python3 -I -B scripts/test_authority_webauthn_reader_projection.py

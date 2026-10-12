@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""JIT ingress components only: no custody, approval insertion or admission.
+
+The installed DB facade is intercepted at its dispatch boundary by a terminal
+sentinel, never a successful writer response. Normalization, business-intent
+and authorization digests, and the actual query/transition kernel are real.
+The local signature tests immutable bytes, not a trusted authority envelope.
+No database, transport, provider, native pilot or opaque receipt is created.
+"""
+from __future__ import annotations
+
+import copy
+from datetime import datetime, timezone
+import hashlib
+import inspect
+import json
+from pathlib import Path
+import sys
+import unittest
+from unittest.mock import patch
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+
+def no_network(event, _args):
+    if event.startswith("socket."):
+        raise AssertionError("JIT ingress component tests forbid sockets and DNS")
+
+
+if __name__ == "__main__":
+    sys.addaudithook(no_network)
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from serverware import authority_contract as contract
+from serverware import authority_jit_request as ingress
+from serverware import authority_service as service
+from serverware import authority_transition_core as core
+from serverware import authority_transition_quota as quota
+from serverware import db
+
+NOW = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+PUBLIC_FIELDS = frozenset({"route_id", "method", "url", "principal_id",
+    "credential_id", "credential_version", "policy_hash", "request_digest",
+    "operation_digest", "canonical_request", "redacted_display",
+    "pending_ttl_seconds", "grant_ttl_seconds", "grant_max_uses",
+    "required_approver_roles", "allowed_approver_ids", "require_approver_webauthn",
+    "approval_threshold", "approver_credential_policy"})
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True,
+        separators=(",", ":")).encode("ascii")
+
+
+def sha(raw):
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def framed(domain, value):
+    raw = canonical(value)
+    return sha(domain.encode("ascii") + b"\0" + len(raw).to_bytes(8, "big") + raw)
+
+
+def identity(request_digest, purpose):
+    raw = hashlib.sha256(canonical({
+        "schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+        "operation": "jit.request", "requestDigest": request_digest,
+        "purpose": purpose})).digest()
+    return str(uuid.UUID(bytes=raw[:16], version=5))
+
+
+def policy():
+    return {"schema": "serverware.jitApproverPolicy/v1",
+        "requiredRoles": ["approver"], "roleMatch": "any",
+        "allowedApproverIds": ["oidc:alpha", "oidc:beta"],
+        "allowAnyApproverId": False, "requireWebAuthn": True, "threshold": 2,
+        "credentialPolicy": {
+            "allowedCredentialRecordIds": [],
+            "allowedAuthenticatorClasses": ["hardware", "yubikey"],
+            "allowedAaguids": [], "requireAttestationTrusted": True,
+            "requiredTrustBundleDigest": None, "minimumTrustBundleSequence": None,
+            "rpId": "synthetic.invalid", "origins": ["https://synthetic.invalid"],
+            "requireUserPresence": True, "requireUserVerification": True,
+            "counterPolicy": "strict-or-zero", "maxAssertionAgeSeconds": 30}}
+
+
+def public_arguments():
+    # The actual production route helper fills the explicit RP/origin fields.
+    # Only its local configuration inputs are synthetic; no trust is admitted.
+    with patch.object(db, "WEBAUTHN_RP_ID", "synthetic.invalid"), \
+            patch.object(db, "WEBAUTHN_ORIGIN", "https://synthetic.invalid"):
+        approvers = db.jit_approver_policy_arguments({"approvers": {
+            "users": ["oidc:beta", "oidc:alpha"], "quorum": 2,
+            "authn": {"maxAssertionAgeSeconds": 30}}})
+    return {"route_id": "route:synthetic", "method": "PUT",
+        "url": "https://registry.npmjs.org/@fixture%2fpackage",
+        "principal_id": "agent:synthetic", "credential_id": "credential:synthetic",
+        "credential_version": 7, "policy_hash": "sha256:" + "1" * 64,
+        "request_digest": "sha256:" + "2" * 64,
+        "operation_digest": "sha256:" + "3" * 64,
+        "canonical_request": {"request": {"method": "PUT", "body_sha256": "sha256:" + "4" * 64},
+            "operation": {"packageName": "@fixture/package", "packageVersion": "1.0.0"}},
+        "redacted_display": {"package": "@fixture/package", "label": "caf\u00e9", "nested": {
+            "$authorityType": "bytes", "base64Url": "literal-json-not-a-typed-argument"}},
+        "pending_ttl_seconds": 300, "grant_ttl_seconds": 30, "grant_max_uses": 1,
+        **approvers}
+
+
+class DispatchReached(Exception):
+    pass
+
+
+def dispatch_input(values):
+    captured = []
+
+    def stop(operation, document):
+        captured.append((operation, copy.deepcopy(document)))
+        raise DispatchReached
+
+    with patch.object(db, "dispatch_policy_authority_operation", side_effect=stop), \
+            patch.object(db, "connect", side_effect=AssertionError("unexpected database access")):
+        try:
+            db.ensure_jit_approval_request(**values)
+        except DispatchReached:
+            pass
+        else:
+            raise AssertionError("installed facade did not reach the dispatch boundary")
+    if len(captured) != 1:
+        raise AssertionError("dispatch count changed")
+    return captured[0]
+
+
+def arguments():
+    _operation, document = dispatch_input(public_arguments())
+    raw = document["arguments"]
+    return raw, service._synthesize_business_arguments("jit.request", raw), \
+        service._controlled_writer_request_digest("jit.request", raw)
+
+
+class JitRequestIngressTests(unittest.TestCase):
+    def normalize(self, value, digest):
+        return ingress.normalize(value, request_digest=digest)
+
+    def refused(self, value, digest):
+        with self.assertRaises(core.TransitionKernelError):
+            self.normalize(value, digest)
+
+    def test_installed_facade_signature_marshaling_and_default_fields(self):
+        values = public_arguments()
+        before = copy.deepcopy(values)
+        operation, document = dispatch_input(values)
+        self.assertEqual(operation, "jit.request")
+        self.assertEqual(set(document), {"schema", "handler", "operationManifestDigest", "arguments"})
+        self.assertEqual(document["schema"], "serverware.policyAuthorityControlledWriterInput/v1")
+        self.assertEqual(document["handler"], "ensure_jit_approval_request")
+        self.assertEqual(document["operationManifestDigest"], contract.OPERATION_MANIFEST_DIGEST)
+        self.assertEqual(set(inspect.signature(db.ensure_jit_approval_request).parameters), PUBLIC_FIELDS)
+        raw = document["arguments"]
+        self.assertEqual(set(raw), PUBLIC_FIELDS)
+        self.assertEqual(raw["required_approver_roles"], {"$authorityType": "set", "items": ["approver"]})
+        self.assertEqual(raw["allowed_approver_ids"], {"$authorityType": "set", "items": ["oidc:alpha", "oidc:beta"]})
+        for key in PUBLIC_FIELDS - {"required_approver_roles", "allowed_approver_ids"}:
+            self.assertEqual(raw[key], values[key])
+        self.assertEqual(values, before)
+        for key in ("required_approver_roles", "allowed_approver_ids", "require_approver_webauthn",
+                "approval_threshold", "approver_credential_policy"):
+            values.pop(key)
+        defaults = dispatch_input(values)[1]["arguments"]
+        self.assertIsNone(defaults["required_approver_roles"])
+        self.assertIsNone(defaults["allowed_approver_ids"])
+        self.assertIs(defaults["require_approver_webauthn"], False)
+        self.assertEqual(defaults["approval_threshold"], 1)
+        self.assertIsNone(defaults["approver_credential_policy"])
+        self.refused(service._synthesize_business_arguments("jit.request", defaults),
+            service._controlled_writer_request_digest("jit.request", defaults))
+        for extra in ({"businessIntent": {}}, {"_connection": object()}, {"url_commitment": "sha256:" + "5" * 64}):
+            with self.subTest(extra=tuple(extra)), patch.object(db, "dispatch_policy_authority_operation") as send:
+                with self.assertRaises(db.MetadataStoreError):
+                    db.ensure_jit_approval_request(**public_arguments(), **extra)
+                send.assert_not_called()
+
+    def test_actual_route_policy_parity_and_independent_commitment_projection(self):
+        raw, value, digest = arguments()
+        expected_policy = policy()
+        public = public_arguments()
+        with patch.object(db, "WEBAUTHN_RP_ID", "synthetic.invalid"), \
+                patch.object(db, "WEBAUTHN_ORIGIN", "https://synthetic.invalid"):
+            self.assertEqual(db._normalize_jit_approver_policy(
+                required_roles=public["required_approver_roles"], allowed_approver_ids=public["allowed_approver_ids"],
+                require_webauthn=True, threshold=2, credential_policy=public["approver_credential_policy"]), expected_policy)
+        projected = self.normalize(value, digest)
+        removed = {"url", "canonical_request", "redacted_display", "required_approver_roles",
+            "allowed_approver_ids", "require_approver_webauthn", "approval_threshold", "approver_credential_policy"}
+        expected = {key: copy.deepcopy(item) for key, item in value.items() if key not in removed}
+        expected.update(url_commitment=sha(raw["url"].encode("utf-8")),
+            canonical_request_digest=sha(canonical(raw["canonical_request"])),
+            redacted_display_digest=sha(canonical(raw["redacted_display"])),
+            canonical_request_opaque_id=identity(digest, "jit-canonical-request"),
+            redacted_display_opaque_id=identity(digest, "jit-redacted-display"),
+            approver_policy=expected_policy, approver_policy_digest=framed("serverware.jitApproverPolicy/v1", expected_policy))
+        self.assertEqual(projected, expected)
+        self.assertNotEqual(projected["canonical_request_opaque_id"], projected["redacted_display_opaque_id"])
+        changed_raw = copy.deepcopy(raw)
+        changed_raw["approver_credential_policy"]["requireAttestationTrusted"] = False
+        changed = self.normalize(service._synthesize_business_arguments("jit.request", changed_raw), digest)
+        self.assertEqual(changed["approver_policy"], {**expected_policy, "credentialPolicy": {
+            **expected_policy["credentialPolicy"], "requireAttestationTrusted": False}})
+        with patch.object(db, "WEBAUTHN_RP_ID", "synthetic.invalid"), \
+                patch.object(db, "WEBAUTHN_ORIGIN", "https://synthetic.invalid"):
+            self.assertEqual(changed["approver_policy"], db._normalize_jit_approver_policy(
+                required_roles=public["required_approver_roles"], allowed_approver_ids=public["allowed_approver_ids"],
+                require_webauthn=True, threshold=2, credential_policy=changed_raw["approver_credential_policy"]))
+
+    def test_original_authorization_bytes_and_intent_are_not_rewritten(self):
+        raw, value, digest = arguments()
+        original = copy.deepcopy(value)
+        envelope = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": "jit.request",
+            "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
+            "arguments": value}
+        self.assertEqual(digest, framed("serverware.policyAuthorityV9Request/v1", envelope))
+        signer = Ed25519PrivateKey.generate()
+        signature = signer.sign(canonical(envelope))
+        projected = self.normalize(value, digest)
+        self.assertEqual(value, original)
+        self.assertEqual(projected["businessIntent"], original["businessIntent"])
+        self.assertEqual(projected["businessIntent"]["arguments"], raw)
+        signer.public_key().verify(signature, canonical(envelope))
+        with self.assertRaises(InvalidSignature):
+            signer.public_key().verify(signature, canonical({**envelope, "arguments": projected}))
+        for key, replacement in (("url", raw["url"] + "?changed=1"),
+                ("canonical_request", {"changed": True}), ("redacted_display", {"changed": True}),
+                ("grant_max_uses", 2)):
+            changed = copy.deepcopy(value)
+            changed[key] = replacement
+            self.refused(changed, digest)
+        changed = copy.deepcopy(value)
+        changed["businessIntent"]["arguments"]["method"] = "GET"
+        self.refused(changed, digest)
+
+    def test_deterministic_ids_follow_original_envelope_not_inner_request_digest(self):
+        raw, value, digest = arguments()
+        first = self.normalize(value, digest)
+        self.assertEqual(first, self.normalize(dict(reversed(list(value.items()))), digest))
+        alternate_digest = "sha256:" + "a" * 64
+        second = self.normalize(value, alternate_digest)
+        changed_fields = {key for key in first if first[key] != second[key]}
+        self.assertEqual(changed_fields, {"canonical_request_opaque_id", "redacted_display_opaque_id"})
+        self.assertEqual(second["canonical_request_opaque_id"], identity(alternate_digest, "jit-canonical-request"))
+        self.assertNotEqual(first["canonical_request_opaque_id"], identity(raw["request_digest"], "jit-canonical-request"))
+        changed_raw = {**raw, "url": raw["url"] + "?changed=1"}
+        changed_digest = service._controlled_writer_request_digest("jit.request", changed_raw)
+        self.assertNotEqual(changed_digest, digest)
+        changed = self.normalize(service._synthesize_business_arguments("jit.request", changed_raw), changed_digest)
+        self.assertNotEqual(first["canonical_request_opaque_id"], changed["canonical_request_opaque_id"])
+
+    def test_closed_fields_and_exact_scalar_types_refuse(self):
+        raw, value, digest = arguments()
+        for key in value:
+            changed = copy.deepcopy(value)
+            changed.pop(key)
+            with self.subTest(missing=key):
+                self.refused(changed, digest)
+        for key in ("canonical_request_opaque_id", "url_commitment", "approver_policy", "extra"):
+            with self.subTest(extra=key):
+                self.refused({**value, key: "caller-selected"}, digest)
+        bad = (("method", "put"), ("route_id", ""), ("credential_version", True),
+            ("credential_version", -1), ("pending_ttl_seconds", 0), ("pending_ttl_seconds", 3601),
+            ("grant_ttl_seconds", 1.0), ("grant_ttl_seconds", 3601), ("grant_max_uses", True),
+            ("grant_max_uses", 1_000_001), ("approval_threshold", True), ("approval_threshold", 3),
+            ("require_approver_webauthn", 1), ("policy_hash", "sha256:" + "A" * 64),
+            ("canonical_request", []), ("redacted_display", None), ("url", ""))
+        for key, replacement in bad:
+            changed = {**raw, key: replacement}
+            with self.subTest(field=key, value=replacement):
+                self.refused(service._synthesize_business_arguments("jit.request", changed), digest)
+        for malformed in (None, True, "0" * 64, "sha256:" + "A" * 64):
+            with self.subTest(digest=malformed):
+                self.refused(value, malformed)
+
+    def test_policy_marshaling_explicit_identity_and_document_bounds(self):
+        raw, _value, digest = arguments()
+        changes = []
+        for field in ("rpId", "origins"):
+            changed = copy.deepcopy(raw)
+            changed["approver_credential_policy"].pop(field)
+            changes.append(changed)
+        for field, invalid in (("rpId", ""), ("origins", []), ("maxAssertionAgeSeconds", 31),
+                ("requireUserVerification", False), ("requireAttestationTrusted", 1), ("unknown", True)):
+            changed = copy.deepcopy(raw)
+            changed["approver_credential_policy"][field] = invalid
+            changes.append(changed)
+        for field, invalid in (("required_approver_roles", ["approver"]),
+                ("required_approver_roles", {"$authorityType": "set", "items": ["approver", "approver"]}),
+                ("allowed_approver_ids", {"$authorityType": "set", "items": ["oidc:beta", "oidc:alpha"]}),
+                ("allowed_approver_ids", {"$authorityType": "tuple", "items": ["oidc:alpha", "oidc:beta"]})):
+            changes.append({**raw, field: invalid})
+        changes.append({**raw, "redacted_display": {"oversized": "x" * (64 * 1024)}})
+        changes.append({**raw, "canonical_request": {"padding": "x" * (33 * 1024)},
+            "redacted_display": {"padding": "y" * (33 * 1024)}})
+        deep = {"leaf": "value"}
+        for _ in range(18):
+            deep = {"nested": deep}
+        changes.append({**raw, "canonical_request": deep})
+        for number, changed in enumerate(changes):
+            with self.subTest(control=number):
+                self.refused(service._synthesize_business_arguments("jit.request", changed), digest)
+        below = {**raw, "canonical_request": {"padding": "x" * (15 * 1024)},
+            "redacted_display": {"padding": "y" * (15 * 1024)}}
+        self.normalize(service._synthesize_business_arguments("jit.request", below), digest)
+        self.assertEqual(ingress.MAX_PAYLOAD_BYTES, 65536)
+        boundary = {**raw, "redacted_display": {"padding": ""}}
+        base_size = sum(len((boundary[key] or "").encode("utf-8")) for key in (
+            "route_id", "method", "url", "principal_id", "credential_id", "policy_hash",
+            "request_digest", "operation_digest")) + len(canonical(boundary["canonical_request"])) \
+            + len(canonical(boundary["redacted_display"])) + len(canonical(policy()))
+        boundary["redacted_display"]["padding"] = "x" * (65536 - base_size)
+        self.normalize(service._synthesize_business_arguments("jit.request", boundary), digest)
+        boundary["redacted_display"]["padding"] += "x"
+        self.refused(service._synthesize_business_arguments("jit.request", boundary), digest)
+
+    def test_real_query_plan_is_deterministic_and_binds_derived_custody_ids(self):
+        _raw, value, digest = arguments()
+        before = copy.deepcopy(value)
+        kernel = quota.KERNELS["jit.request"]
+        first = kernel.queries(arguments=value, database_now=NOW, request_digest=digest)
+        self.assertEqual(first, kernel.queries(arguments=value, database_now=NOW, request_digest=digest))
+        self.assertEqual(value, before)
+        self.assertEqual([query.table for query in first], ["approval_requests", "routes",
+            "policy_authority_opaque_values", "policy_authority_external_evidence_receipts",
+            "policy_authority_opaque_values", "policy_authority_external_evidence_receipts",
+            "policy_authority_bounded_aggregate_states", "metadata_audit_outbox"])
+        self.assertEqual(first[0].absent_key, {"id": identity(digest, "jit-approval-request")})
+        self.assertEqual(first[1].absent_key, {"id": "route:synthetic"})
+        self.assertEqual(first[2].absent_key, {"opaque_id": identity(digest, "jit-canonical-request")})
+        self.assertEqual(first[4].absent_key, {"opaque_id": identity(digest, "jit-redacted-display")})
+        self.assertTrue(all(query.maximum_rows == 1 for query in first))
+        self.assertLessEqual({query.table for query in first}, set(contract.operation_spec("jit.request")["reads"]))
+        self.assertIn("key-custody-seal/v1", contract.operation_spec("jit.request")["externalEvidenceTypes"])
+
+    def test_valid_public_input_still_refuses_missing_custody_without_mutations(self):
+        _raw, value, digest = arguments()
+        before = copy.deepcopy(value)
+        context = core.KernelContext(operation="jit.request", arguments=value, selected_rows=(),
+            database_now=NOW, request_digest=digest)
+        with patch.object(core, "mutation", side_effect=AssertionError("mutation preceded custody")) as mutation:
+            with self.assertRaisesRegex(core.TransitionKernelError,
+                    "^authority transition exact row is absent or ambiguous$"):
+                quota.KERNELS["jit.request"].transition(context)
+            mutation.assert_not_called()
+        self.assertEqual(context.arguments, before)
+        self.assertEqual(context.selected_rows, ())
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

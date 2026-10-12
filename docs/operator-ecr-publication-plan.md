@@ -150,11 +150,52 @@ attempt is changed by this source repair. Updating an existing installed writer
 also requires its exact function/manifest repair path; the ordinary app must
 not silently reinstall authority functions on page load.
 
+### Real request ingress, not a pre-created approval
+
+The public `ensure_jit_approval_request` facade sends a URL, two JSON documents
+and individual approver-policy arguments. The request kernel previously
+required caller-supplied commitments, opaque IDs and a combined policy instead.
+`authority_jit_request.py` now projects the actual marshaled public arguments
+into those kernel inputs. The original signed arguments and business intent
+remain unchanged. Opaque IDs are deterministic, purpose-separated selections
+derived from the authority request envelope; they are not custody receipts.
+
+All three production callers supply the complete policy through
+`db.jit_approver_policy_arguments`. The pure projection requires explicit RP and
+origin fields instead of consulting mutable environment configuration. Its
+policy shape validation does not replace the existing configured-RP, current
+trust or assertion checks. Incomplete legacy policy arguments are refused.
+
+This fixes an ingress-shape defect, **not the cold approval workflow**. Genuine
+purpose-fixed sealing and authenticated opaque-value registration are still
+missing. The stored ciphertext and review reader also need a matched opening
+contract, and request/review capacity needs authenticated cold initialization.
+Missing custody remains a refusal; the tests must not manufacture admission or
+seed a pending approval and call that request-to-review acceptance.
+
+The focused ingress target is `make verify-authority-jit-request`. It exercises
+the real facade through dispatch capture, original request binding, pure
+projection and actual query selection. It does not execute a successful writer
+transaction, review, hardware approval, provider call or deployment. Main's
+authority changes still require the separately reviewed retained-v9 migration;
+the working ordinary app remains on its compatible UI-only release.
+
+The focused October 12 ingress run passed **32 tests**: eight ingress, eleven
+registry, ten policy-projection and three existing decision-component tests.
+It used the retained Python 3.11.15 engineering image with network disabled,
+read-only source and bounded resources; no build or download ran. All 15 pinned
+source files were unchanged afterward and the disposable container was removed.
+The first launcher attempt could not read its mounted private evidence directory
+and ran no tests; mounting only the nonsecret runner file corrected that harness
+permission issue. Both attempts are retained under
+`serverware-operator-workspace-evidence/jit-request-ingress.dXd2u4HI`. No database
+was started or accessed and no successful cold approval is claimed.
+
 The focused receipt checks require no pilot or build:
 
 ```sh
 make verify-authority-webauthn-receipts
-# Actual request/kernel and policy-domain component controls:
+# Actual decision-kernel and policy-domain component controls:
 make verify-authority-jit-approval
 # For an already prepared disposable local Unix-socket PostgreSQL fixture:
 SERVERWARE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-webauthn-receipts-postgres

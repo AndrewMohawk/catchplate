@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract  # noqa: E402
+from serverware import authority_jit_request  # noqa: E402
 from serverware import authority_transition_core as core  # noqa: E402
 from serverware import authority_transition_policy  # noqa: E402
 from serverware import authority_transition_quota  # noqa: E402
@@ -227,20 +228,20 @@ class JitRequestDependencyContractTests(unittest.TestCase):
                       "requiredTrustBundleDigest": None, "minimumTrustBundleSequence": None,
                       "rpId": "fixture.test", "origins": ["https://fixture.test"],
                       "requireUserPresence": True, "requireUserVerification": True,
-                      "counterPolicy": "strict-or-zero", "maxAssertionAgeSeconds": 60,
+                      "counterPolicy": "strict-or-zero", "maxAssertionAgeSeconds": 30,
                   }}
         digest = "sha256:" + "1" * 64
         arguments = {
-            "route_id": "route:fixture", "method": "GET", "url_commitment": digest,
+            "route_id": "route:fixture", "method": "GET", "url": "https://fixture.test/resource",
             "principal_id": "principal:fixture", "credential_id": "", "credential_version": 0,
             "policy_hash": digest, "request_digest": digest, "operation_digest": None,
-            "canonical_request_digest": digest, "canonical_request_opaque_id": "canonical-value",
-            "redacted_display_digest": digest, "redacted_display_opaque_id": "display-value",
+            "canonical_request": {"request": {"method": "GET"}},
+            "redacted_display": {"summary": "synthetic dependency fixture"},
             "pending_ttl_seconds": 60, "grant_ttl_seconds": 30, "grant_max_uses": 1,
-            "approver_policy": policy,
-            "approver_policy_digest": core.framed_digest(
-                "serverware.jitApproverPolicy/v1", core.canonical_bytes(policy)
-            ),
+            "required_approver_roles": {"$authorityType": "set", "items": ["approver"]},
+            "allowed_approver_ids": {"$authorityType": "set", "items": ["reviewer"]},
+            "require_approver_webauthn": True, "approval_threshold": 1,
+            "approver_credential_policy": policy["credentialPolicy"],
         }
         arguments["businessIntent"] = authority_contract.synthesize_business_intent("jit.request", arguments)
         return arguments
@@ -262,6 +263,11 @@ class JitRequestDependencyContractTests(unittest.TestCase):
                                  request_digest="sha256:" + "2" * 64)
         self.assertIn("routes", {query.table for query in queries})
         self.assertLessEqual({query.table for query in queries}, set(spec["reads"]))
+        projected = authority_jit_request.normalize(self._arguments(), request_digest="sha256:" + "2" * 64)
+        self.assertEqual([query.absent_key for query in queries
+            if query.table == "policy_authority_opaque_values"], [
+                {"opaque_id": projected["canonical_request_opaque_id"]},
+                {"opaque_id": projected["redacted_display_opaque_id"]}])
 
     def test_real_jit_approver_policy_guards_remain_before_missing_custody_denial(self) -> None:
         kernel = authority_transition_quota.KERNELS["jit.request"]
@@ -279,14 +285,17 @@ class JitRequestDependencyContractTests(unittest.TestCase):
         with self.assertRaisesRegex(core.TransitionKernelError,
                                     "^authority transition exact row is absent or ambiguous$"):
             kernel.transition(context(arguments))
-        for field, value in (("requireWebAuthn", False), ("threshold", 0), ("threshold", True)):
-            changed = {**arguments, "approver_policy": {**arguments["approver_policy"], field: value}}
+        for field, value in (("require_approver_webauthn", False), ("approval_threshold", 0), ("approval_threshold", True)):
+            changed = {key: item for key, item in arguments.items() if key != "businessIntent"}
+            changed[field] = value
+            changed["businessIntent"] = authority_contract.synthesize_business_intent("jit.request", changed)
             with self.subTest(field=field, value=value), self.assertRaisesRegex(
-                core.TransitionKernelError, "^JIT approver policy is not closed$"
+                core.TransitionKernelError, "^JIT request facade projection is invalid$"
             ):
                 kernel.transition(context(changed))
+        # Precomputed caller commitments are no longer a public facade field.
         changed = {**arguments, "approver_policy_digest": "sha256:" + "3" * 64}
-        with self.assertRaisesRegex(core.TransitionKernelError, "^JIT approver policy digest differs$"):
+        with self.assertRaisesRegex(core.TransitionKernelError, "^JIT request arguments are not the exact facade fields$"):
             kernel.transition(context(changed))
 
 

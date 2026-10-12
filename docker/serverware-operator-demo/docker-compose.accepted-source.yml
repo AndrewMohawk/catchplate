@@ -1,4 +1,4 @@
-# Paired withheld-response/audit update on retained-compatible authority; Google unconfigured.
+# Ordinary setup guidance on retained-compatible authority; Google unconfigured.
 # Do not deploy unrelated authority-contract changes without a reviewed migration.
 # AWS credentials are storage-only: no signing, grants or ECR publication.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
@@ -27,7 +27,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-71d4227fe3ccc91cdad829d07ab016e64e5d5cc7
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-a30c645ef06711a4acf605c3f01f4b129d10b0f6
         target: /app
         read_only: true
         bind: {create_host_path: false}

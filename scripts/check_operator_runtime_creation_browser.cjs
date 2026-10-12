@@ -5,8 +5,8 @@
 // Usage: node THIS FULL_APP_ID SOURCE_COMMIT FRESH_PRIVATE_OUTPUT_DIRECTORY
 // --self-test is pure: no browser/process execution, filesystem, or live imports.
 const {createHash, randomBytes} = require('node:crypto');
-const APP = 'd51b343ecc06773fc1c6b728cbd5a5f4ff44593167c067259263ae10b30f18aa';
-const COMMIT = '71d4227fe3ccc91cdad829d07ab016e64e5d5cc7';
+const APP = 'e55a00276cfea38d01ebea858177de182773a228c336a117aad41fdd3c84088a';
+const COMMIT = 'a30c645ef06711a4acf605c3f01f4b129d10b0f6';
 const PUBLIC = 'https://serverware-demo.example.com', PREFIX = '/api/operator-demo/';
 const COLLECTIONS = ['credentials', 'applications', 'access_rules'];
 const KINDS = ['credential', 'application', 'rule'], ROUTES = ['credentials', 'applications', 'access-rules'];
@@ -310,6 +310,14 @@ async function run(args) {
       await navigate(ROUTES[index]);
       const refresh = index === 2 ? 'rules-refresh' : ROUTES[index] + '-refresh';
       await page.locator('#' + refresh).click(); await page.waitForLoadState('networkidle');
+      if (index === 0) {
+        const card = page.locator('#credentials-list [data-resource-id="' + row.id + '"]');
+        const group = card.locator('xpath=ancestor::details[@data-expired-app-access][1]');
+        need(await group.count() <= 1, 'credential_group_ambiguous');
+        if (await group.count() === 1 && !await group.evaluate(node => node.open))
+          await group.locator(':scope > summary').click();
+        await card.waitFor({state: 'visible'});
+      }
       dialogExpected = index === 2 ? `Revoke rule "${row.name}" (${row.id})? The application and saved credential remain. New requests are denied after the proxy loads the updated policy; already-dispatched requests cannot be recalled.` :
         index === 1 ? `Revoke application "${row.name}" (${row.id}) and its 0 active access rules? Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.` :
         `Revoke locally stored credential "${row.name}" (${row.id})? This does not revoke the key at its provider.`;

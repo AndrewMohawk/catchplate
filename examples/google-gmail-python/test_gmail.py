@@ -1,0 +1,329 @@
+"""Real official SDK + Requests, synthetic send boundary; never contact Google.
+
+TLS checks use real certificates and in-memory handshakes. These tests do not
+claim a Serverware lease, proxy acceptance, consent or deployed integration.
+"""
+import base64
+from datetime import datetime, timedelta, timezone
+import io
+import json
+import logging
+import os
+from pathlib import Path
+import ssl
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+import requests
+from requests.adapters import HTTPAdapter
+
+import gmail as example
+
+
+def no_network(event, _):
+    if event.startswith("socket."):
+        raise AssertionError("Offline Gmail test attempted socket access")
+
+
+sys.addaudithook(no_network)
+APP = "12345678-1234-4234-8234-123456789abc"
+TOKEN = base64.urlsafe_b64encode(b"synthetic-application-token-0001").decode().rstrip("=")
+
+
+def certificate(path, name):
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(name)]), critical=False)
+        .sign(key, hashes.SHA256()))
+    pem, private = path / (name + ".pem"), path / (name + ".key")
+    pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    private.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    return pem, private
+
+
+def handshake(client_context, cert, key, name):
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(cert, key)
+    ci, co, si, so = (ssl.MemoryBIO() for _ in range(4))
+    client = client_context.wrap_bio(ci, co, server_hostname=name)
+    server = server_context.wrap_bio(si, so, server_side=True)
+    done = [False, False]
+    for _ in range(12):
+        for index, side in enumerate((client, server)):
+            if not done[index]:
+                try:
+                    side.do_handshake()
+                    done[index] = True
+                except ssl.SSLWantReadError:
+                    pass
+        for source, target in ((co, si), (so, ci)):
+            if source.pending:
+                target.write(source.read())
+        if all(done):
+            return
+    raise AssertionError("TLS handshake did not terminate")
+
+
+def response(request, *, value=None, status=200, raw=None, headers=None):
+    result = requests.Response()
+    result.status_code, result.request, result.url = status, request, request.url
+    result.headers["Content-Type"] = "application/json"
+    result.headers.update(headers or {})
+    class Raw(io.BytesIO):
+        def release_conn(self): self.close()
+    result.raw = Raw(json.dumps(value if value is not None else {}).encode() if raw is None else raw)
+    return result
+
+
+class GmailTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="gmail-sdk-offline-")
+        self.addCleanup(self.temp.cleanup)
+        path = Path(self.temp.name)
+        self.inner, self.inner_key = certificate(path, "gmail.googleapis.com")
+        self.outer, self.outer_key = certificate(path, "proxy.example.test")
+        self.env = {"SERVERWARE_PROXY_URL": "https://proxy.example.test:8443", "SERVERWARE_APP_ID": APP,
+            "SERVERWARE_PROXY_TOKEN": TOKEN, "SERVERWARE_CA_FILE": str(self.inner),
+            "SERVERWARE_PROXY_CA_FILE": str(self.outer)}
+
+    def run_job(self, send):
+        with patch.object(HTTPAdapter, "send", send), example.configured_http(self.env) as http:
+            return example.read_mail(http)
+
+    def test_installed_pins_and_exact_lock(self):
+        example.check_versions()
+        from importlib.metadata import version
+        requirements = Path(__file__).with_name("requirements.txt").read_text().splitlines()
+        rows = [row.split("==") for row in requirements if row and not row.startswith("#")]
+        self.assertEqual(len(rows), 22)
+        for name, expected in rows:
+            self.assertEqual(version(name), expected)
+
+    def test_closed_configuration_and_clean_child_environment(self):
+        ambient = {**self.env, "HTTPS_PROXY": "http://wrong", "NO_PROXY": "*", "HOME": "/wrong",
+            "NETRC": "/wrong", "SSLKEYLOGFILE": "/wrong", "PYTHONPATH": "/wrong",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/wrong", "GOOGLE_API_USE_CLIENT_CERTIFICATE": "true",
+            "REQUESTS_CA_BUNDLE": "/wrong"}
+        original = dict(ambient)
+        self.assertEqual(example.child_environment(ambient), self.env)
+        self.assertEqual(ambient, original)
+        for key, bad in (("SERVERWARE_PROXY_URL", "http://proxy.example"),
+                ("SERVERWARE_PROXY_URL", "https://u:p@proxy.example"),
+                ("SERVERWARE_PROXY_URL", "https://proxy.example/path"),
+                ("SERVERWARE_PROXY_URL", "https://proxy.example?"),
+                ("SERVERWARE_PROXY_URL", "https://proxy.example#"),
+                ("SERVERWARE_PROXY_URL", "https://gmail.googleapis.com"),
+                ("SERVERWARE_PROXY_URL", "https://127.0.0.1"),
+                ("SERVERWARE_PROXY_URL", "https://Proxy.example"),
+                ("SERVERWARE_PROXY_URL", "https://proxy.example:0"),
+                ("SERVERWARE_PROXY_URL", "https://proxy.example:65536"),
+                ("SERVERWARE_APP_ID", "not-uuid"), ("SERVERWARE_PROXY_TOKEN", TOKEN + "="),
+                ("SERVERWARE_PROXY_TOKEN", "B" * 43), ("SERVERWARE_CA_FILE", "relative"),
+                ("SERVERWARE_PROXY_CA_FILE", "")):
+            with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
+                example.settings({**self.env, key: bad})
+
+    def test_actual_sdk_pagination_get_ids_and_no_mail_output(self):
+        calls = []
+        token = "page+one/é="
+        def send(adapter, request, **options):
+            calls.append((request, options, adapter.max_retries.total))
+            parts = urlsplit(request.url)
+            query = parse_qs(parts.query)
+            if parts.path == example.LIST_PATH:
+                value = ({"messages": [{"id": "message-1"}], "nextPageToken": token} if "pageToken" not in query
+                    else {"messages": [{"id": "message-2"}], "resultSizeEstimate": 1})
+            else:
+                value = {"id": parts.path.rsplit("/", 1)[-1], "snippet": "PRIVATE-MAIL-CANARY",
+                    "payload": {"headers": [{"name": "Subject", "value": "PRIVATE-MAIL-CANARY"}]}}
+            return response(request, value=value)
+        with patch("google.auth.default", side_effect=AssertionError("ADC")), \
+                patch("requests.sessions.get_netrc_auth", side_effect=AssertionError("netrc")), \
+                patch("requests.sessions.get_environ_proxies", side_effect=AssertionError("ambient proxy")):
+            result = self.run_job(send)
+        self.assertEqual(result, {"pages": 2, "messages_read": 2, "more_pages": False})
+        self.assertEqual(len(calls), 4)
+        for request, options, retries in calls:
+            self.assertEqual((request.method, request.body), ("GET", None))
+            self.assertEqual(request.headers["Authorization"], "Bearer " + example.PLACEHOLDER)
+            self.assertEqual(request.headers["Accept-Encoding"], "identity")
+            self.assertEqual(request.headers["Content-Length"], "0")
+            self.assertNotIn("Proxy-Authorization", request.headers)
+            self.assertNotIn(TOKEN, repr(dict(request.headers)))
+            self.assertEqual(options["proxies"], {"https": example.settings(self.env)})
+            self.assertEqual(options["verify"], str(self.inner))
+            self.assertEqual(options["timeout"], (5, 10))
+            self.assertEqual(retries, 0)
+            self.assertTrue(options["stream"])
+        self.assertEqual(parse_qs(urlsplit(calls[0][0].url).query), {"maxResults": ["5"], "labelIds": ["INBOX"], "alt": ["json"]})
+        self.assertEqual(parse_qs(urlsplit(calls[1][0].url).query), {"format": ["metadata"], "metadataHeaders": ["From", "Subject", "Date"], "alt": ["json"]})
+        self.assertEqual(parse_qs(urlsplit(calls[2][0].url).query)["pageToken"], [token])
+
+    def test_maximum_two_pages_and_ten_returned_ids(self):
+        calls = []
+        def send(adapter, request, **options):
+            calls.append(request)
+            parts = urlsplit(request.url)
+            if parts.path == example.LIST_PATH:
+                page = "b" if "pageToken" in parts.query else "a"
+                value = {"messages": [{"id": page + str(i)} for i in range(5)], "nextPageToken": page}
+            else: value = {"id": parts.path.rsplit("/", 1)[-1]}
+            return response(request, value=value)
+        self.assertEqual(self.run_job(send), {"pages": 2, "messages_read": 10, "more_pages": True})
+        self.assertEqual(len(calls), 12)
+
+    def test_empty_inbox_and_invalid_list_replies(self):
+        self.assertEqual(self.run_job(lambda adapter, request, **kw: response(request)),
+            {"pages": 1, "messages_read": 0, "more_pages": False})
+        for value in ({"messages": None}, {"messages": [{"id": "../escape"}]},
+                {"messages": [{"id": "same"}, {"id": "same"}]},
+                {"messages": [{"id": str(i)} for i in range(6)]},
+                {"nextPageToken": 1}, {"nextPageToken": "bad\\token"}, {"nextPageToken": "x" * 4097}):
+            calls = []
+            def send(adapter, request, **kw):
+                calls.append(request)
+                return response(request, value=value)
+            with self.subTest(value=value), self.assertRaises(ValueError): self.run_job(send)
+            self.assertEqual(len(calls), 1)
+
+    def test_cycles_id_mismatch_and_long_get_never_becomes_post(self):
+        for mode in ("cycle", "duplicate", "mismatch", "long"):
+            calls = []
+            def send(adapter, request, **kw):
+                calls.append(request)
+                if urlsplit(request.url).path != example.LIST_PATH:
+                    value = {"id": "wrong" if mode == "mismatch" else "a"}
+                else:
+                    value = {"nextPageToken": "x" * 2050 if mode == "long" else "next"}
+                    if mode in {"duplicate", "mismatch"}: value["messages"] = [{"id": "a"}]
+                return response(request, value=value)
+            with self.subTest(mode=mode), self.assertRaises(ValueError): self.run_job(send)
+            self.assertTrue(all(call.method == "GET" for call in calls))
+            self.assertLessEqual(len(calls), 3)
+
+    def test_http_errors_redirects_and_transport_failures_never_retry(self):
+        for status in (201, 204, 301, 302, 307, 401, 403, 409, 429, 500, 502, 503):
+            calls = []
+            def send(adapter, request, **kw):
+                calls.append(request)
+                return response(request, status=status, headers={"Location": "https://other.example/"}, raw=b"PRIVATE-CANARY")
+            with self.subTest(status=status), self.assertRaises(ValueError): self.run_job(send)
+            self.assertEqual(len(calls), 1)
+        for error in (requests.Timeout("PRIVATE-CANARY"), requests.ConnectionError("PRIVATE-CANARY")):
+            with patch.object(HTTPAdapter, "send", side_effect=error) as send, example.configured_http(self.env) as http:
+                with self.assertRaises(type(error)): example.read_mail(http)
+                self.assertEqual(send.call_count, 1)
+
+    def test_response_bounds_json_ambiguity_and_closure(self):
+        for raw, headers in ((b'{}', {"Content-Encoding": "gzip"}), (b'{}', {"Content-Type": "text/html"}),
+                (b'{}', {"Content-Length": "02"}), (b'{}', {"Content-Length": "3"}),
+                (b'{}', {"Content-Length": "1048577"}), (b'x' * 1048577, {}),
+                (b'{"messages":[],"messages":[]}', {}), (b'{} {}', {}), (b'{"x":NaN}', {}),
+                (b'[]', {}), (b'{"error":{"message":"PRIVATE-CANARY"}}', {})):
+            responses = []
+            def send(adapter, request, **kw):
+                value = response(request, raw=raw, headers=headers)
+                responses.append(value)
+                return value
+            with self.subTest(headers=headers, size=len(raw)), self.assertRaises(ValueError): self.run_job(send)
+            self.assertEqual(len(responses), 1)
+            self.assertTrue(responses[0].raw.closed)
+
+    def test_transport_destination_method_count_deadline_and_auth_guards(self):
+        valid = {"authorization": "Bearer " + example.PLACEHOLDER, "accept-encoding": "identity"}
+        cases = [(("https://evil.example/",), {}), ((example.ORIGIN + example.LIST_PATH,), {"method": "POST"}),
+            ((example.ORIGIN + example.LIST_PATH,), {"body": ""}),
+            ((example.ORIGIN + example.LIST_PATH,), {"headers": {**valid, "Proxy-Authorization": "secret"}}),
+            ((example.ORIGIN + example.LIST_PATH,), {"headers": {**valid, "authorization": "Bearer secret"}})]
+        with example.configured_http(self.env) as http, patch.object(http.session, "request") as send:
+            for args, kwargs in cases:
+                with self.assertRaises(ValueError): http.request(*args, **{"headers": valid, **kwargs})
+            http.attempts = 12
+            with self.assertRaises(ValueError): http.request(example.ORIGIN + example.LIST_PATH, headers=valid)
+            http.attempts, http.deadline = 0, 0
+            with self.assertRaises(ValueError): http.request(example.ORIGIN + example.LIST_PATH, headers=valid)
+            send.assert_not_called()
+
+    def test_separate_ca_roles_and_actual_basic_proxy_manager(self):
+        outer = example.outer_context(str(self.outer))
+        inner = ssl.create_default_context(cafile=self.inner)
+        handshake(outer, self.outer, self.outer_key, "proxy.example.test")
+        handshake(inner, self.inner, self.inner_key, "gmail.googleapis.com")
+        for context, cert, key, host in ((inner, self.outer, self.outer_key, "proxy.example.test"),
+                (outer, self.inner, self.inner_key, "gmail.googleapis.com"),
+                (inner, self.inner, self.inner_key, "wrong.example.test")):
+            with self.assertRaises(ssl.SSLError): handshake(context, cert, key, host)
+        adapter = example.ProxyAdapter(outer)
+        self.addCleanup(adapter.close)
+        manager = adapter.proxy_manager_for(example.settings(self.env))
+        self.assertIs(manager.proxy_ssl_context, outer)
+        self.assertEqual(manager.proxy_headers, {"Proxy-Authorization": "Basic " + base64.b64encode((APP + ":" + TOKEN).encode()).decode()})
+        self.assertFalse(manager.connection_pool_kw["_proxy_config"].use_forwarding_for_https)
+        with self.assertRaises(ValueError): example.ProxyAdapter(ssl._create_unverified_context())
+        self.inner.write_bytes(self.inner_key.read_bytes())
+        with self.assertRaises(ValueError): example.public_ca(str(self.inner))
+
+    def test_redacted_cli_error_and_mail_free_summary(self):
+        previous = logging.root.manager.disable
+        self.addCleanup(logging.disable, previous)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(example, "launch", side_effect=ValueError("PRIVATE-CANARY " + TOKEN)), \
+                patch("sys.stdout", out), patch("sys.stderr", err):
+            self.assertEqual(example.main([]), 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), example.FAILURE + "\n")
+        for value in ({"pages": True, "messages_read": 0, "more_pages": False},
+                {"pages": 1, "messages_read": 6, "more_pages": False},
+                {"pages": 1, "messages_read": 0, "more_pages": True},
+                {"pages": 1, "messages_read": 0, "more_pages": False, "mail": "PRIVATE-CANARY"}):
+            with self.assertRaises(ValueError): example.summary(value)
+
+    def test_parent_deadline_child_isolation_and_failure_output_refusal(self):
+        good = {"pages": 1, "messages_read": 0, "more_pages": False}
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, json.dumps(good).encode(), b"")) as run:
+            self.assertEqual(example.launch({**self.env, "HOME": "/wrong", "GOOGLE_APPLICATION_CREDENTIALS": "/wrong"}), good)
+            args, options = run.call_args
+            self.assertEqual(args[0][1:3], ["-I", "-B"])
+            self.assertEqual(options["env"], self.env)
+            self.assertEqual(options["timeout"], 120)
+            self.assertIs(options["stdin"], subprocess.DEVNULL)
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, b"PRIVATE-CANARY", b"PRIVATE-CANARY")):
+            with self.assertRaisesRegex(ValueError, "^Gmail child failed$"): example.launch(self.env)
+
+    def test_direct_child_refuses_ambient_key_logging_and_credentials(self):
+        previous = logging.root.manager.disable
+        self.addCleanup(logging.disable, previous)
+        for key in ("SSLKEYLOGFILE", "GOOGLE_APPLICATION_CREDENTIALS", "HTTPS_PROXY", "NETRC", "HOME", "LC_CTYPE"):
+            out, err = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {**self.env, key: "PRIVATE-CANARY"}, clear=True), \
+                    patch.object(example, "configured_http") as configure, \
+                    patch("sys.stdout", out), patch("sys.stderr", err):
+                self.assertEqual(example.main(["--child"]), 1)
+                configure.assert_not_called()
+            self.assertEqual(out.getvalue(), "")
+            self.assertEqual(err.getvalue(), example.FAILURE + "\n")
+        out, err = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {**self.env, "LC_CTYPE": "C.UTF-8"}, clear=True), \
+                patch.object(HTTPAdapter, "send", lambda adapter, request, **kw: response(request)), \
+                patch("sys.stdout", out), patch("sys.stderr", err):
+            self.assertEqual(example.main(["--child"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), {"pages": 1, "messages_read": 0, "more_pages": False})
+        self.assertEqual(err.getvalue(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

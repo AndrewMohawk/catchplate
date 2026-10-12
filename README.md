@@ -14,16 +14,20 @@ This is for ordinary application authentication as well as agentic workflows.
 The application asks to use an API; it does not need possession of that API's
 long-lived credential.
 
-## Try the development console
+## Use Serverware
 
-The persistent [operator demo](https://serverware-demo.example.com/)
-uses the homelab login. It is already running: opening it does not start a
-native pilot, compile the proxy or require a verification ceremony. Start with
-**Connect an app** for your own account or key, or **Explore synthetic demo** to inspect saved
-permissions for the local `/echo` API and their actual allowed methods. Opening
-client setup does not execute a request or renew a token. A synthetic connection
-check tests the proxy flow, not a real GitHub, Google, AWS or npm account. Use
-only made-up keys for this fixture, never a real provider secret.
+Open the running [Serverware instance](https://serverware.example.com/)
+with the homelab login. This is the product instance to use and demonstrate,
+not a separate disposable demo. Opening it does not start a native pilot,
+compile the proxy or require a verification ceremony. Start with **Connect an
+app** for your account or key, then choose the application's permission.
+Opening client setup does not execute a request or renew a token.
+
+The canonical entrypoint currently redirects to the existing console hostname;
+the state-preserving canonical-origin cutover is still pending. The new source
+UI has one connection workflow, with synthetic checks only under optional
+**Diagnostics**. These checks are not real provider integrations; use made-up
+keys only for the diagnostic fixture. Existing saved resources are not reset.
 
 There are three separate things to configure:
 
@@ -32,8 +36,7 @@ There are three separate things to configure:
 - **Application:** the worker gets its own Serverware app access token, not the
   provider secret. Save that token when it is shown once.
 - **Permission:** choose what that app may do with that account or key. For
-  example, “Demo worker may check the demo API,” or, on a configured deployment,
-  “Issue triage may read issues and comments in this GitHub repository.”
+  example, “Issue triage may read issues and comments in this GitHub repository.”
 
 **Connect an app** guides you through those choices. **Proxy setup** provides
 the proxy address, public CA download and client instructions; **Audit log**
@@ -42,7 +45,7 @@ no request/response field lists unless you want optional content restrictions.
 Existing restricted permissions retain their restrictions. An optional dummy
 header is a public replacement marker, not either of the two secrets above.
 
-Follow the [operator demo walkthrough](docs/operator-demo.md). Its latest
+Follow the [instance walkthrough](docs/operator-demo.md). Its latest
 retained deployment verification covers the synthetic upstream and a GitHub
 public read through the LAN proxy, not authenticated provider-account access or
 an Internet-reachable proxy. Public proxy DNS still needs its separately reviewed
@@ -54,15 +57,14 @@ settings or grant application access. See [verification and current limits](docs
 and the [operator workflow requirements](docs/operator-workspace-requirements.md).
 The [whole-project acceptance tracker](docs/project-completion.md) separates
 immediate ordinary-app work, requested provider features and the six independent
-production gates; none is silently dropped by the demo's progress.
-The older [fixed sandbox](https://serverware-sandbox.example.com/) remains
-separate and is not the credential-management demo.
+production gates; none is silently dropped by presentation changes.
+Historical sandbox and pilot deployments are not alternative product entrypoints.
+The current instance uses local encrypted custody and a development security
+profile, not verified hardware-backed production custody. One product does not
+mean a weaker approval substitute: protected approval features must use their
+required authority. Existing production gates and historical evidence remain.
 
-Neither development environment establishes native-pilot, hardware or production acceptance.
-The production status and historical pilot evidence below are separate from
-this persistent testing environment.
-
-### Real-service setup is separate from the synthetic demo
+### Connect the services your applications use
 
 Provider examples describe useful jobs, not preconnected accounts. Availability
 depends on the deployment's advertised capabilities and approved destinations.
@@ -70,13 +72,13 @@ depends on the deployment's advertised capabilities and approved destinations.
 | Job | Current operator-workspace boundary |
 | --- | --- |
 | Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Node/Python/Go proxy fixtures passed with static/PAT credentials; the new App-through-Rust SDK run and real GitHub acceptance remain open. [Contract](docs/operator-github-client-compatibility.md). |
-| Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. No real Google journey is established by the synthetic demo. |
+| Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. Historical Go proxy acceptance does not cover the upgraded Go graph or new Node/Python examples, whose joined acceptance remains pending. |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
-| Publish an npm package | Named-package publishing preset and downloadable stock npm example; all 21 isolated cases passed. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |
-| Install npm dependencies or run a cold `npm ci` | Separate, exact-package permission including transitive dependencies. Stock npm installation, cold `ci` and default advisory requests passed against an isolated registry; the paired app/proxy is deployed. Internet CONNECT and real registry access remain unverified. [Verification](docs/operator-npm-install.md). |
+| Publish an npm package | Named-package publishing preset and downloadable stock npm example; historical isolated cases passed. The upgraded npm 11.20.0 graph still needs joined proxy verification. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |
+| Install npm dependencies or run a cold `npm ci` | Separate, exact-package permission including transitive dependencies. The historical paired app/proxy is deployed; npm 11.20.0 passes stock CLI protocol controls but needs its own joined proxy run. Internet CONNECT and real registry access remain unverified. [Verification](docs/operator-npm-install.md). |
 | Look up an X username | App-bearer preset for one exact username; Node/Python/Go examples passed against an isolated provider. This is not account-authorized posting. [Verification](docs/operator-x-username-verification.md). |
 | Post text to X using a connected account | Typed OAuth posting contract and Node/Python/Go examples implemented in source; account connection, quota execution and end-to-end integration remain unfinished. Not available in the console. [Boundary](docs/operator-x-posting.md). |
-| Read an Ethereum chain through Alchemy | Key-based, selected-chain RPC preset with Node/Python/Go examples; isolated proxy acceptance passed, not real-provider entitlement or blockchain writes. [Verification](docs/operator-alchemy-verification.md). |
+| Read an Ethereum chain through Alchemy | Key-based, selected-chain RPC preset with Node/Python/Go examples. Historical isolated proxy acceptance does not establish acceptance for the newly patched Python/Go graphs; real-provider entitlement and blockchain writes remain unverified. [Verification](docs/operator-alchemy-verification.md). |
 | Publish an image to AWS ECR | [Planned operator/client workflow](docs/operator-aws-client-compatibility.md), not an available AWS preset. |
 | Send a Slack message or arbitrary webhook | Illustrative use case, not a verified provider preset. A custom-header JSON API is not support for every webhook authentication or response format. |
 
@@ -90,20 +92,20 @@ default-off operator-development source now includes a read-only native phase
 bridge with exact owner/source and original-expiry checks; legacy approval/JIT
 alerts remain suppressed. The isolated browser-to-application-to-TLS workflow
 passes, including independent saves, explicit tests and selected audit delivery.
-The demo now enables the feature with four unconfigured destinations. The latest
+The running instance enables the feature with four unconfigured destinations. The latest
 paired rollout verified its read-only browser flow, retained data and empty
 app-only custody; outbound TLS was verified at the earlier notification rollout.
 Real receiver delivery and deployed save/test remain unverified.
 The native relay is not running: configuration does not establish a live YubiKey
 action or physical-key acceptance, or grant proxied webhook permissions.
 
-## Design examples, not demo defaults
+## Example workflows
 
 The following diagrams explain intended production workflows. The npm preset
 supports named-package publishing with optional daily UTC publishing hours in
 the guided operator form. Hours restrict publication only; prerequisite package
 metadata reads remain allowed at any time. AWS/ECR image approval remains
-unimplemented in the operator demo; its signing helper alone is not a working
+unimplemented in the running instance; its signing helper alone is not a working
 integration.
 
 For example, an application or CI job can publish an updated version of

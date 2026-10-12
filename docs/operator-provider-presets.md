@@ -1,5 +1,17 @@
 # X and Alchemy operator presets
 
+## Current operator deployment
+
+The [retained operator deployment](../docker/serverware-operator-demo/README.md)
+includes these adapters and client recipes in its app/Rust pair. Their provider
+origins remain disabled until the operator explicitly configures them. Including
+the code is not provider activation, a verified live credential or a successful
+provider request. The following verification record describes the earlier
+isolated checkpoints; its deployment caveats apply to those checkpoints, not
+to whether the implementation is present in the current retained release.
+
+## Isolated implementation verification
+
 Status: **X and Alchemy isolated SDK-through-proxy acceptance passed.**
 X has a separate adapter, catalog/API, guided UI and pinned Node/Python/Go
 examples. All three actual entrypoints passed using

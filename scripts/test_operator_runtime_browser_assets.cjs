@@ -127,6 +127,22 @@ function validate(f, route, value) {
 }
 
 const tests = [
+  ['subprocess failure diagnostics contain only fixed categories, never private messages or output', () => {
+    const f = fixture();
+    f.context.failure = {code: 'EAGAIN', signal: 'SIGKILL', killed: true,
+      message: 'private-message-canary', stderr: 'private-stderr-canary'};
+    const result = JSON.parse(f.run('JSON.stringify(subprocessFailure("/usr/bin/docker", failure, "private-stdout-canary"))'));
+    assert.deepEqual(result, {executable: 'docker', code: 'EAGAIN', signal: 'SIGKILL', killed: true, bridge_refused: false});
+    f.context.failure = {code: 'private-code-canary', signal: 'private-signal-canary', killed: 'true'};
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(subprocessFailure("private-path-canary", failure, ""))')),
+      {executable: 'other', code: 'other', signal: null, killed: false, bridge_refused: false});
+    f.context.failure = {code: 2};
+    f.context.fixtureOutput = '{"ok":false,"reason":"runtime_readonly_bridge_refused"}\n';
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(subprocessFailure("/usr/bin/docker", failure, fixtureOutput))')),
+      {executable: 'docker', code: 2, signal: null, killed: false, bridge_refused: true});
+    assert.equal(f.run('subprocessFailure("/usr/bin/docker", failure, undefined).bridge_refused'), false);
+    assert.equal(forbiddenCalls, 0);
+  }],
   ['actual documentBytes matches all five closed Python renderer rosters in both checker modes', async () => {
     assert.equal(reference.variants.length, 5);
     assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true]);

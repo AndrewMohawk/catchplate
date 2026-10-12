@@ -82,12 +82,28 @@ function applicationBadge(application, catalog, now = Date.now()) {
   return revoked ? loaded ? 'Revoked · enforced' : 'Revoked · enforcement pending' : expired ? 'Token expired' :
     access === 'unassigned' ? 'No access rules' : loaded && access === 'active' ? 'Active' : 'Access pending';
 }
+function subprocessFailure(binary, error, stdout) {
+  // Public diagnostic categories only: never retain argv, stderr, raw response
+  // bytes or exception messages, which may contain secrets.
+  return {
+    executable: binary === '/usr/bin/docker' ? 'docker' : 'other',
+    code: Number.isInteger(error.code) ? error.code :
+      ['EAGAIN', 'ENOMEM', 'ENOENT', 'EACCES'].includes(error.code) ? error.code : 'other',
+    signal: ['SIGKILL', 'SIGTERM', 'SIGABRT', 'SIGSEGV'].includes(error.signal) ? error.signal : null,
+    killed: error.killed === true,
+    bridge_refused: typeof stdout === 'string' && stdout.trim() === '{"ok":false,"reason":"runtime_readonly_bridge_refused"}'
+  };
+}
 function command(binary, args, input = '', timeout = 25000) {
   need(!stopped, 'run_stopped');
   return new Promise((resolve, reject) => {
     const child = execFile(binary, args, {timeout, killSignal: 'SIGKILL', maxBuffer: 3 * 1024 * 1024,
       encoding: 'utf8', env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}}, (error, stdout) => {
-      children.delete(child); error ? reject(new Refusal('bounded_subprocess_refused')) : resolve(stdout);
+      children.delete(child);
+      if (error) {
+        receipt.subprocess_failure = subprocessFailure(binary, error, stdout);
+        reject(new Refusal('bounded_subprocess_refused'));
+      } else resolve(stdout);
     });
     children.add(child); child.stdin.on('error', () => {}); child.stdin.end(input);
   });

@@ -11,6 +11,9 @@ mod native_canary_runtime;
 mod response_v2;
 mod buffered_response;
 mod response_metadata;
+mod post_dispatch_outcome;
+#[cfg(test)]
+mod post_dispatch_outcome_tests;
 mod gmail_read;
 mod github_issues;
 mod npm_metadata;
@@ -23600,6 +23603,33 @@ enum UpstreamSendError {
     DispatchBarrier(String),
     RequestBuild(String),
     Request(String),
+    PostDispatch {
+        dispatch: post_dispatch_outcome::Dispatch,
+        upstream_status: Option<u16>,
+        detail: String,
+    },
+}
+
+impl UpstreamSendError {
+    fn observed_dispatch(&self) -> Option<post_dispatch_outcome::Dispatch> {
+        match self {
+            Self::Request(_) => Some(post_dispatch_outcome::Dispatch::Attempted),
+            Self::PostDispatch { dispatch, .. } => Some(*dispatch),
+            _ => None,
+        }
+    }
+
+    fn observed_status(&self) -> Option<u16> {
+        match self {
+            Self::PostDispatch { upstream_status, .. } => *upstream_status,
+            _ => None,
+        }
+    }
+
+    fn with_observed_status(&self, mut payload: Value) -> Value {
+        if let Some(status) = self.observed_status() { payload["upstream_status"] = json!(status); }
+        payload
+    }
 }
 
 struct TransientProviderRequest {
@@ -23878,19 +23908,26 @@ where
                 })),
             ),
         };
+        // Once execute has been called, a later local authority/evidence failure
+        // cannot truthfully be terminalized as a request that was never sent.
+        let dispatch = if result.is_ok() {
+            post_dispatch_outcome::Dispatch::ResponseReceived
+        } else { post_dispatch_outcome::Dispatch::Attempted };
+        let upstream_status = result.as_ref().ok().map(|response| response.status().as_u16());
+        let post_dispatch_error = |detail| UpstreamSendError::PostDispatch { dispatch, upstream_status, detail };
         if let Some(permit) = shadow_dispatch_permit {
             permit.commit_provider_send(effect_state, &effect_result_sha256)
-                .map_err(UpstreamSendError::DispatchBarrier)?;
+                .map_err(post_dispatch_error)?;
         } else if let Some(permit) = synthetic_dispatch_permit {
             // This is an actual local send, not a manufactured custody commit.
             permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
-                .map_err(UpstreamSendError::DispatchBarrier)?;
+                .map_err(post_dispatch_error)?;
         } else if let Some(permit) = operator_dispatch_permit {
             // Operator demo is likewise a real send without native custody.
             permit.validate(&authority._snapshot.hash, &final_upstream_request_commitment)
-                .map_err(UpstreamSendError::DispatchBarrier)?;
+                .map_err(post_dispatch_error)?;
         } else {
-            return Err(UpstreamSendError::DispatchBarrier(
+            return Err(post_dispatch_error(
                 "provider-send effect permit is unavailable".to_string(),
             ));
         }
@@ -39835,7 +39872,7 @@ fn classify_gmail_metadata_child_send_error(
     ledger: &GmailMetadataChildAuthorizationLedger,
     shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
 ) -> GmailMetadataChildResult {
-    let terminal_phase = if matches!(&error, UpstreamSendError::Request(_)) {
+    let terminal_phase = if error.observed_dispatch().is_some() {
         GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown
     } else {
         GmailMetadataChildAuthorizationPhase::Failed
@@ -39857,13 +39894,15 @@ fn gmail_metadata_child_send_error_result(
     request_digest: String,
     error: UpstreamSendError,
 ) -> GmailMetadataChildResult {
+    let dispatch = error.observed_dispatch();
     let error_sha256 = match &error {
         UpstreamSendError::CredentialAuthority(detail) => {
             sha256_prefixed(detail.as_bytes())
         }
         UpstreamSendError::DispatchBarrier(detail)
         | UpstreamSendError::RequestBuild(detail)
-        | UpstreamSendError::Request(detail) => {
+        | UpstreamSendError::Request(detail)
+        | UpstreamSendError::PostDispatch { detail, .. } => {
             sha256_prefixed(detail.as_bytes())
         }
     };
@@ -39897,10 +39936,15 @@ fn gmail_metadata_child_send_error_result(
                     "blocked_request_build",
                 ),
             },
-        UpstreamSendError::Request(_) => GmailMetadataChildResult::Indeterminate {
+        UpstreamSendError::Request(_) | UpstreamSendError::PostDispatch { .. } => GmailMetadataChildResult::Indeterminate {
                 payload: json!({
                     "error":"gmail_metadata_fetch_provider_outcome_unknown",
-                    "providerOperationMayHaveCommitted":true,
+                    "upstreamDispatch":match dispatch {
+                        Some(post_dispatch_outcome::Dispatch::ResponseReceived) => "response_received",
+                        _ => "attempted",
+                    },
+                    "providerOutcome":"unknown",
+                    "providerOperationMayHaveCommitted":false,
                     "retryProviderRequest":false,
                     "upstreamErrorSha256":error_sha256,
                 }),
@@ -42947,10 +42991,6 @@ fn apply_gmail_allowed_fields(payload: &mut Value, response_config: &Value, is_l
     }
 }
 
-fn response_violation(payload: Value) -> Vec<u8> {
-    json_status_response(StatusCode::BAD_GATEWAY, payload)
-}
-
 fn decision_route_context<'a>(
     snapshot: &'a Snapshot,
     decision: &Value,
@@ -43048,7 +43088,7 @@ fn release_forward_response(
         &body,
         response_secret_guard,
     ) {
-        return block_forward_response(state, decision, method, url, status, payload).into();
+        return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
     }
     enqueue_audit(
         state,
@@ -43148,6 +43188,7 @@ fn validate_forward_release_material(
 
 fn block_forward_response(
     state: &GateState,
+    snapshot: &Snapshot,
     decision: &Value,
     method: &str,
     url: &Url,
@@ -43185,13 +43226,17 @@ fn block_forward_response(
             method,
             url,
             "blocked",
-            json!({
+            post_dispatch_outcome::annotate(snapshot, decision, method, url,
+                post_dispatch_outcome::Dispatch::ResponseReceived, json!({
                 "upstream_status":status.as_u16(),
                 "response_validation":response_validation,
-            }),
+            })),
         ),
     );
-    response_violation(payload)
+    let mut payload = payload;
+    payload["upstream_status"] = json!(status.as_u16());
+    post_dispatch_outcome::response(snapshot, decision, method, url,
+        post_dispatch_outcome::Dispatch::ResponseReceived, StatusCode::BAD_GATEWAY, payload)
 }
 
 fn response_policy_for_decision(
@@ -44932,7 +44977,7 @@ fn validate_policy_json_response(
                 json!({"ok":true,"mode":alchemy_rpc_read::MODE,"body_bytes_preserved":true,
                     "allowed_fields_redacted":false,"adapter":alchemy_rpc_read::ADAPTER}),
             ),
-            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
     }
     if adapter_type == x_app_read::ADAPTER {
@@ -44943,7 +44988,7 @@ fn validate_policy_json_response(
                 json!({"ok":true,"mode":x_app_read::MODE,"body_bytes_preserved":true,
                     "allowed_fields_redacted":false,"adapter":x_app_read::ADAPTER}),
             ),
-            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
     }
     if adapter_type == npm_publish::ADAPTER {
@@ -44954,7 +44999,7 @@ fn validate_policy_json_response(
                 json!({"ok":true,"mode":npm_publish::MODE,"body_bytes_preserved":true,
                     "allowed_fields_redacted":false,"adapter":npm_publish::ADAPTER}),
             ),
-            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
     }
     if adapter_type == npm_metadata::ADAPTER {
@@ -44965,7 +45010,7 @@ fn validate_policy_json_response(
                 json!({"ok":true,"mode":npm_metadata::MODE,"body_bytes_preserved":true,
                     "allowed_fields_redacted":false,"adapter":npm_metadata::ADAPTER}),
             ),
-            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
     }
     if adapter_type == gmail_read::ADAPTER {
@@ -44976,13 +45021,13 @@ fn validate_policy_json_response(
                 json!({"ok":true,"mode":gmail_read::MODE,"body_bytes_preserved":true,
                     "allowed_fields_redacted":false,"adapter":gmail_read::ADAPTER,"age_policy":"unrestricted"}),
             ),
-            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
     }
     if let Some(payload) =
         credential_response_projection_error(credential_bearing, response_config, adapter_type)
     {
-        return block_forward_response(state, decision, method, url, status, payload).into();
+        return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
     }
     let mode = effective_response_mode(adapter_type, Some(response_config)).unwrap_or("any");
     if buffered_response::supported_mode(mode) {
@@ -45004,12 +45049,13 @@ fn validate_policy_json_response(
                     binding_validation,
                 ),
             ),
-            Err(payload) => block_forward_response(state, decision, method, url, status, payload).into(),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
     }
     if !matches!(mode, "any" | "headersOnly" | "json") {
         return block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45040,6 +45086,7 @@ fn validate_policy_json_response(
     if mode == "json" && paths.is_empty() {
         return block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45072,6 +45119,7 @@ fn validate_policy_json_response(
         Err(_) => {
             return block_forward_response(
                 state,
+                snapshot,
                 decision,
                 method,
                 url,
@@ -45105,6 +45153,7 @@ fn validate_policy_json_response(
         ),
         Err(_) => block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45133,7 +45182,7 @@ fn validate_forward_response(
         match validate_response_release_context(state, snapshot, decision, method, url) {
             Ok(route_match) => route_match,
             Err(payload) => {
-                return block_forward_response(state, decision, method, url, status, payload).into()
+                return block_forward_response(state, snapshot, decision, method, url, status, payload).into()
             }
         };
     let base_response_config = route_match
@@ -45144,7 +45193,7 @@ fn validate_forward_response(
     let response_config = match response_config_for_status(base_response_config, status) {
         Ok(config) => config,
         Err(payload) => {
-            return block_forward_response(state, decision, method, url, status, payload).into()
+            return block_forward_response(state, snapshot, decision, method, url, status, payload).into()
         }
     };
     let credential_bearing = route_match
@@ -45157,11 +45206,12 @@ fn validate_forward_response(
         &response_config,
         &route_match.route.adapter_type,
     ) {
-        return block_forward_response(state, decision, method, url, status, payload).into();
+        return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
     }
     let Some(max_body) = response_config.get("maxBodyBytes").and_then(Value::as_u64) else {
         return block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45173,6 +45223,7 @@ fn validate_forward_response(
     if body.len() as u64 > max_body {
         return block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45190,7 +45241,7 @@ fn validate_forward_response(
             &body,
             operation.unwrap_or(&Value::Null),
         ) {
-            return block_forward_response(state, decision, method, url, status, payload).into();
+            return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
         }
     }
     if status.is_success() {
@@ -45203,6 +45254,7 @@ fn validate_forward_response(
         ) {
             return block_forward_response(
                 state,
+                snapshot,
                 decision,
                 method,
                 url,
@@ -45218,6 +45270,7 @@ fn validate_forward_response(
             {
                 return block_forward_response(
                     state,
+                    snapshot,
                     decision,
                     method,
                     url,
@@ -45283,7 +45336,7 @@ fn validate_forward_response(
             operation,
             Some("responseDateWindow"),
         ) {
-            return block_forward_response(state, decision, method, url, status, payload).into();
+            return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
         }
         return release_forward_response(
             state,
@@ -45304,6 +45357,7 @@ fn validate_forward_response(
         Err(_) => {
             return block_forward_response(
                 state,
+                snapshot,
                 decision,
                 method,
                 url,
@@ -45321,6 +45375,7 @@ fn validate_forward_response(
             let Some(execution) = gmail_metadata_fanout else {
                 return block_forward_response(
                     state,
+                    snapshot,
                     decision,
                     method,
                     url,
@@ -45341,20 +45396,21 @@ fn validate_forward_response(
                 config,
                 execution,
             ) {
-                return block_forward_response(state, decision, method, url, status, payload).into();
+                return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
             }
         }
     }
     if validate_internal_date {
         if !is_list_response {
             if let Err(payload) = validate_gmail_internal_date(&payload, days) {
-                return block_forward_response(state, decision, method, url, status, payload).into();
+                return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
             }
         } else if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
             for item in messages {
                 let Some(object) = item.as_object_mut() else {
                     return block_forward_response(
                         state,
+                        snapshot,
                         decision,
                         method,
                         url,
@@ -45371,6 +45427,7 @@ fn validate_forward_response(
                 {
                     return block_forward_response(
                         state,
+                        snapshot,
                         decision,
                         method,
                         url,
@@ -45384,7 +45441,7 @@ fn validate_forward_response(
                     days,
                     cutoff_ms,
                 ) {
-                    return block_forward_response(state, decision, method, url, status, payload)
+                    return block_forward_response(state, snapshot, decision, method, url, status, payload)
                         .into();
                 }
                 if let Some(mut replaced) = object.insert(
@@ -45401,6 +45458,7 @@ fn validate_forward_response(
         Err(_) => {
             return block_forward_response(
                 state,
+                snapshot,
                 decision,
                 method,
                 url,
@@ -45418,6 +45476,7 @@ fn validate_forward_response(
     ) {
         return block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45432,7 +45491,7 @@ fn validate_forward_response(
         operation,
         Some("responseJson"),
     ) {
-        return block_forward_response(state, decision, method, url, status, payload).into();
+        return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
     }
     if let Err(payload) = validate_response_constraints_for_type(
         route_match.route,
@@ -45440,7 +45499,7 @@ fn validate_forward_response(
         operation,
         Some("responseDateWindow"),
     ) {
-        return block_forward_response(state, decision, method, url, status, payload).into();
+        return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
     }
     let redacted = apply_gmail_allowed_fields(&mut payload, &response_config, is_list_response);
     match serde_json::to_vec(&*payload) {
@@ -45457,7 +45516,7 @@ fn validate_forward_response(
                 &bytes,
                 response_secret_guard,
             ) {
-                return block_forward_response(state, decision, method, url, status, payload).into();
+                return block_forward_response(state, snapshot, decision, method, url, status, payload).into();
             }
             if is_list_response {
                 if let Some(output) = gmail_proof_commit_output {
@@ -45488,6 +45547,7 @@ fn validate_forward_response(
         }
         Err(_) => block_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
@@ -45771,7 +45831,7 @@ fn finalize_upstream_response(
         None => None,
     };
     if let Some(payload) = metadata_v2_error {
-        let blocked = block_forward_response(state, decision, request_method, upstream_url, status, payload);
+        let blocked = block_forward_response(state, snapshot, decision, request_method, upstream_url, status, payload);
         finish_shadow_parsed_response_unavailable(snapshot, &mut shadow_response_attempt, &blocked,
             policy_core::PolicyShadowTerminalReason::ResponsePolicyRejected);
         return ForwardResult::buffered(blocked);
@@ -45790,6 +45850,7 @@ fn finalize_upstream_response(
             let _diagnostic_reason: &str = $reason;
             let blocked = block_forward_response(
                 state,
+                snapshot,
                 decision,
                 request_method,
                 upstream_url,
@@ -46015,11 +46076,13 @@ fn finalize_upstream_response(
                                 request_method,
                                 upstream_url,
                                 "denied",
-                                json!({
+                                post_dispatch_outcome::annotate(snapshot, decision, request_method, upstream_url,
+                                    post_dispatch_outcome::Dispatch::ResponseReceived, json!({
                                     "stage":"stream_response",
                                     "error":"streaming_response_proof_unavailable",
                                     "reason":failure_code,
-                                }),
+                                    "upstream_status":status.as_u16(),
+                                })),
                             ),
                         );
                     }
@@ -46031,11 +46094,13 @@ fn finalize_upstream_response(
                             request_method,
                             upstream_url,
                             "blocked",
-                            json!({
+                            post_dispatch_outcome::annotate(snapshot, decision, request_method, upstream_url,
+                                post_dispatch_outcome::Dispatch::ResponseReceived, json!({
                                 "stage":"stream_response",
                                 "error":"stream_response_failed",
                                 "reason":failure_code,
-                            }),
+                                "upstream_status":status.as_u16(),
+                            })),
                         ),
                     );
                     return ForwardResult::Streamed;
@@ -46090,6 +46155,7 @@ fn finalize_upstream_response(
                 }
                 let blocked = block_forward_response(
                     state,
+                    snapshot,
                     decision,
                     request_method,
                     upstream_url,
@@ -46119,6 +46185,7 @@ fn finalize_upstream_response(
                             }
                             let blocked = block_forward_response(
                                 state,
+                                snapshot,
                                 decision,
                                 request_method,
                                 upstream_url,
@@ -46152,6 +46219,7 @@ fn finalize_upstream_response(
                 }
                 let blocked = block_forward_response(
                     state,
+                    snapshot,
                     decision,
                     request_method,
                     upstream_url,
@@ -46237,6 +46305,7 @@ fn finalize_upstream_response(
             body.zeroize();
             ForwardResult::buffered(block_forward_response(
                 state,
+                snapshot,
                 decision,
                 request_method,
                 upstream_url,
@@ -46267,12 +46336,15 @@ fn finalize_upstream_response(
                     request_method,
                     upstream_url,
                     "blocked",
-                    json!({"stage":"upstream_body","error":"upstream_body_failed"}),
+                    post_dispatch_outcome::annotate(snapshot, decision, request_method, upstream_url,
+                        post_dispatch_outcome::Dispatch::ResponseReceived,
+                        json!({"stage":"upstream_body","error":"upstream_body_failed","upstream_status":status.as_u16()})),
                 ),
             );
-            ForwardResult::buffered(json_status_response(
-                StatusCode::BAD_GATEWAY,
-                json!({"error":"upstream_body_failed"}),
+            ForwardResult::buffered(post_dispatch_outcome::response(
+                snapshot, decision, request_method, upstream_url,
+                post_dispatch_outcome::Dispatch::ResponseReceived, StatusCode::BAD_GATEWAY,
+                json!({"error":"upstream_body_failed","upstream_status":status.as_u16()}),
             ))
         }
     }
@@ -47353,10 +47425,15 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 json!({"error":"upstream_request_failed"}),
             ));
         }
-        Err(UpstreamSendError::Request(_)) => {
-            if let Some(observation) = response_observation.as_deref_mut() {
-                observation.upstream_attempt = "started-no-response";
-                observation.response_path = "upstream-attempt-outcome-unknown";
+        Err(error @ (UpstreamSendError::Request(_) | UpstreamSendError::PostDispatch { .. })) => {
+            let dispatch = error.observed_dispatch().expect("post-send error");
+            let proof_response_unavailable = response_proof_requested
+                && matches!(dispatch, post_dispatch_outcome::Dispatch::ResponseReceived);
+            if !proof_response_unavailable {
+                if let Some(observation) = response_observation.as_deref_mut() {
+                    observation.upstream_attempt = "started-no-response";
+                    observation.response_path = "upstream-attempt-outcome-unknown";
+                }
             }
             enqueue_audit(
                 state,
@@ -47366,12 +47443,14 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                     &request_method,
                     &upstream_url,
                     "blocked",
-                    json!({"stage":"upstream_request","error":"upstream_request_failed"}),
+                    post_dispatch_outcome::annotate(snapshot, &decision, &request_method, &upstream_url,
+                        dispatch, error.with_observed_status(json!({"stage":"upstream_request","error":"upstream_request_failed"}))),
                 ),
             );
             let response = json_status_response(
                 StatusCode::CONFLICT,
-                provider_operation_outcome_unknown(),
+                post_dispatch_outcome::annotate(snapshot, &decision, &request_method, &upstream_url,
+                    dispatch, error.with_observed_status(provider_operation_outcome_unknown())),
             );
             finalize_shadow_post_dispatch_unknown(
                 snapshot,
@@ -47381,9 +47460,17 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 policy_core::PolicyShadowTerminalReason::UpstreamOutcomeUnknown,
             );
             shadow_finalization = None;
+            if proof_response_unavailable {
+                // Post-send permit failure discarded the unvalidated response.
+                // No header observation may precede the finalizer's metadata /
+                // secret scan, and status alone cannot stand in for that proof.
+                // The outer Streamed arm closes without attaching or signing.
+                return ForwardResult::Streamed;
+            }
             buffered!(response);
         }
     };
+    let received_status = response.status().as_u16();
     if !gmail_metadata_list {
         if let Some(release) = release_authorization.as_mut() {
             if !release.requires_response_evidence() {
@@ -47476,6 +47563,12 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                         }
                         _ => StatusCode::SERVICE_UNAVAILABLE,
                     };
+                    if payload["error"] == "durable_policy_response_denied" {
+                        let mut payload = payload;
+                        payload["upstream_status"] = json!(received_status);
+                        buffered!(post_dispatch_outcome::response(snapshot, &decision, &request_method, &upstream_url,
+                            post_dispatch_outcome::Dispatch::ResponseReceived, status, payload));
+                    }
                     buffered!(json_status_response(status, payload));
                 }
             };
@@ -47493,9 +47586,10 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                     ));
                 }
                 Ok(false) => {
-                    buffered!(json_status_response(
-                        StatusCode::BAD_GATEWAY,
-                        json!({"error":"release_authorization_response_denied"}),
+                    buffered!(post_dispatch_outcome::response(
+                        snapshot, &decision, &request_method, &upstream_url,
+                        post_dispatch_outcome::Dispatch::ResponseReceived, StatusCode::BAD_GATEWAY,
+                        json!({"error":"release_authorization_response_denied","upstream_status":received_status}),
                     ));
                 }
                 Ok(true) => {}
@@ -48112,7 +48206,8 @@ fn forward_absolute_streaming_request_to(
                 json!({"error":"upstream_request_failed"}),
             ));
         }
-        Err(UpstreamSendError::Request(_)) => {
+        Err(error @ (UpstreamSendError::Request(_) | UpstreamSendError::PostDispatch { .. })) => {
+            let dispatch = error.observed_dispatch().expect("post-send error");
             let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
             let (mutated_body_sha256, mutated_body_bytes) = output_stats
                 .as_ref()
@@ -48126,7 +48221,8 @@ fn forward_absolute_streaming_request_to(
                     &request_method,
                     &upstream_url,
                     "blocked",
-                    json!({
+                    post_dispatch_outcome::annotate(snapshot, &decision, &request_method, &upstream_url,
+                        dispatch, error.with_observed_status(json!({
                         "stage":"upstream_request",
                         "error":"upstream_request_failed",
                         "request_body_mode":request_policy.mode,
@@ -48137,12 +48233,13 @@ fn forward_absolute_streaming_request_to(
                         "mutated_request_body_bytes":mutated_body_bytes,
                         "request_body_mutated":json_stream_redacts_body(&request_policy.mode),
                         "content_length":content_length,
-                    }),
+                    }))),
                 ),
             );
             let response = json_status_response(
                 StatusCode::CONFLICT,
-                provider_operation_outcome_unknown()
+                post_dispatch_outcome::annotate(snapshot, &decision, &request_method, &upstream_url,
+                    dispatch, error.with_observed_status(provider_operation_outcome_unknown()))
             );
             finalize_shadow_post_dispatch_unknown(
                 snapshot,
@@ -48173,7 +48270,8 @@ fn forward_absolute_streaming_request_to(
                 &request_method,
                 &upstream_url,
                 "blocked",
-                json!({
+                post_dispatch_outcome::annotate(snapshot, &decision, &request_method, &upstream_url,
+                    post_dispatch_outcome::Dispatch::ResponseReceived, json!({
                     "stage":"request_stream",
                     "error":"request_stream_incomplete",
                     "request_body_mode":request_policy.mode,
@@ -48181,12 +48279,14 @@ fn forward_absolute_streaming_request_to(
                     "body_sha256":body_sha256,
                     "request_body_bytes":body_bytes,
                     "content_length":content_length,
-                }),
+                    "upstream_status":response.status().as_u16(),
+                })),
             ),
         );
-        write_buffered!(json_status_response(
-            StatusCode::BAD_GATEWAY,
-            json!({"error":"request_stream_incomplete","contentLength":content_length,"streamedBytes":body_bytes}),
+        write_buffered!(post_dispatch_outcome::response(
+            snapshot, &decision, &request_method, &upstream_url,
+            post_dispatch_outcome::Dispatch::ResponseReceived, StatusCode::BAD_GATEWAY,
+            json!({"error":"request_stream_incomplete","contentLength":content_length,"streamedBytes":body_bytes,"upstream_status":response.status().as_u16()}),
         ));
     }
     enqueue_audit(state, "data_plane.request.streamed", {
@@ -48677,13 +48777,15 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
     let sender_thread = thread::spawn(move || {
         ready_sender.send(()).map_err(|_| {
             (
-                false,
+                None,
+                None,
                 "upstream sender readiness channel closed".to_string(),
             )
         })?;
         let send_deadlines = start_receiver.recv().map_err(|_| {
             (
-                false,
+                None,
+                None,
                 "upstream sender was cancelled before dispatch".to_string(),
             )
         })?;
@@ -48714,14 +48816,15 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             },
         )
         .map_err(|error| match error {
-            UpstreamSendError::CredentialAuthority(error) => (true, error.to_string()),
+            UpstreamSendError::CredentialAuthority(error) => (None, None, error.to_string()),
             UpstreamSendError::DispatchBarrier(_) => {
-                (true, "dispatch_barrier_unavailable".to_string())
+                (None, None, "dispatch_barrier_unavailable".to_string())
             }
             UpstreamSendError::RequestBuild(_) => {
-                (true, "upstream_request_build_failed".to_string())
+                (None, None, "upstream_request_build_failed".to_string())
             }
-            UpstreamSendError::Request(_) => (false, "upstream_request_failed".to_string()),
+            error @ (UpstreamSendError::Request(_) | UpstreamSendError::PostDispatch { .. }) =>
+                (error.observed_dispatch(), error.observed_status(), "upstream_request_failed".to_string()),
         })
     });
     if ready_receiver.recv().is_err() {
@@ -48800,12 +48903,14 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         body_sender,
         stats.clone(),
     );
-    let response_result = sender_thread
-        .join()
-        .map_err(|_| (false, "upstream request thread panicked".to_string()))
-        .and_then(|result| result);
+    // A panic may occur before or after execute. Preserve terminal uncertainty
+    // without asserting a positive dispatch observation or a not-forwarded result.
+    let (response_result, sender_panicked) = match sender_thread.join() {
+        Ok(result) => (result, false),
+        Err(_) => (Err((None, None, "upstream request thread panicked".to_string())), true),
+    };
     let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
-    let (response, response_error, provider_operation_may_have_committed) = match response_result {
+    let (response, response_error, observed_dispatch, upstream_status) = match response_result {
         Ok(response) => {
             if let Some(release) = release_authorization.as_mut() {
                 if release.complete_forwarded().is_err() {
@@ -48815,10 +48920,11 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     ));
                 }
             }
-            (Some(response), None, false)
+            let status = response.status().as_u16();
+            (Some(response), None, Some(post_dispatch_outcome::Dispatch::ResponseReceived), Some(status))
         }
-        Err((authority_rejected, err)) => {
-            if authority_rejected {
+        Err((dispatch, status, err)) => {
+            if dispatch.is_none() && !sender_panicked {
                 if let Some(release) = release_authorization.as_mut() {
                     if release.complete_not_forwarded().is_err() {
                         write_buffered!(json_status_response(
@@ -48828,8 +48934,24 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     }
                 }
             }
-            (None, Some(err), !authority_rejected)
+            (None, Some(err), dispatch, status)
         }
+    };
+    let observed_payload = |mut payload: Value| {
+        if let Some(dispatch) = observed_dispatch {
+            if let Some(status) = upstream_status { payload["upstream_status"] = json!(status); }
+            post_dispatch_outcome::annotate(snapshot, &decision, &request_method, &upstream_url, dispatch, payload)
+        } else if sender_panicked {
+            post_dispatch_outcome::annotate_unknown(snapshot, &decision, &request_method, &upstream_url, payload)
+        } else { payload }
+    };
+    let observed_response = |status, payload| {
+        if let Some(dispatch) = observed_dispatch {
+            post_dispatch_outcome::response(snapshot, &decision, &request_method, &upstream_url,
+                dispatch, status, observed_payload(payload))
+        } else if sender_panicked {
+            json_status_response(StatusCode::CONFLICT, observed_payload(payload))
+        } else { json_status_response(status, payload) }
     };
     if pump_result.is_err() {
         enqueue_audit(
@@ -48840,7 +48962,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                 &request_method,
                 &upstream_url,
                 "blocked",
-                json!({
+                observed_payload(json!({
                     "stage":"request_stream",
                     "error":"request_stream_failed",
                     "request_body_mode":request_policy.mode,
@@ -48849,10 +48971,10 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     "body_sha256":body_sha256,
                     "request_body_bytes":body_bytes,
                     "content_length":content_length,
-                }),
+                })),
             ),
         );
-        write_buffered!(json_status_response(
+        write_buffered!(observed_response(
             StatusCode::BAD_GATEWAY,
             json!({"error":"request_stream_failed","contentLength":content_length,"streamedBytes":body_bytes}),
         ));
@@ -48866,7 +48988,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                 &request_method,
                 &upstream_url,
                 "blocked",
-                json!({
+                observed_payload(json!({
                     "stage":"request_stream",
                     "error":"request_stream_incomplete",
                     "request_body_mode":request_policy.mode,
@@ -48875,10 +48997,10 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     "body_sha256":body_sha256,
                     "request_body_bytes":body_bytes,
                     "content_length":content_length,
-                }),
+                })),
             ),
         );
-        write_buffered!(json_status_response(
+        write_buffered!(observed_response(
             StatusCode::BAD_GATEWAY,
             json!({"error":"request_stream_incomplete","contentLength":content_length,"streamedBytes":body_bytes}),
         ));
@@ -48900,7 +49022,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     &request_method,
                     &upstream_url,
                     "blocked",
-                    json!({
+                    observed_payload(json!({
                         "stage":"upstream_request",
                         "error":"upstream_request_failed",
                         "request_body_mode":request_policy.mode,
@@ -48912,10 +49034,10 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                         "mutated_request_body_bytes":mutated_body_bytes,
                         "request_body_mutated":json_stream_redacts_body(&request_policy.mode),
                         "content_length":content_length,
-                    }),
+                    })),
                 ),
             );
-            let (status, payload) = if provider_operation_may_have_committed {
+            let (status, payload) = if observed_dispatch.is_some() || sender_panicked {
                 (StatusCode::CONFLICT, provider_operation_outcome_unknown())
             } else {
                 (
@@ -48923,8 +49045,8 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     json!({"error":"upstream_request_failed"}),
                 )
             };
-            let response = json_status_response(status, payload);
-            if provider_operation_may_have_committed {
+            let response = observed_response(status, payload);
+            if observed_dispatch.is_some() || sender_panicked {
                 finalize_shadow_post_dispatch_unknown(
                     snapshot,
                     shadow_finalization.as_ref(),
@@ -54407,6 +54529,9 @@ mod tests {
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation",
             "operation":{"operation":"test.read"},
+            "canonical_request":{"request":{
+                "method":"GET","scheme":"https","authority":"example.test","path":"/resource"
+            }},
         });
         let url = Url::parse("https://example.test/resource").expect("test upstream URL");
         let response = test_reqwest_response(raw_response);
@@ -54486,6 +54611,9 @@ mod tests {
                 "packageVersion":"1.2.3",
                 "tarballIntegrity":"sha512:test"
             },
+            "canonical_request":{"request":{
+                "method":"PUT","scheme":"https","authority":"registry.npmjs.org","path":"/resource"
+            }},
         });
         let url = Url::parse("https://registry.npmjs.org/resource").expect("public npm URL");
         let response = test_reqwest_response(raw_response);
@@ -69006,6 +69134,7 @@ mod tests {
             "operation_digest":expected_operation_digest,
             "attempt_id":attempt_id.clone(),
             "flow_id":sha256_prefixed(b"gmail-parent-flow"),
+            "operation":operation,
             "rewrite":{},
             "injection":{
                 "credential_ref":"credential:test",
@@ -69202,7 +69331,7 @@ mod tests {
         let mut snapshot = (*test_snapshot(1)).clone();
         snapshot.routes[0].adapter_type = "gmail.v1".to_string();
         snapshot.routes[0].scheme = "https".to_string();
-        snapshot.routes[0].host = "gmail.example.test".to_string();
+        snapshot.routes[0].host = "gmail.googleapis.com".to_string();
         snapshot.routes[0].port = 443;
         snapshot.routes[0].paths = vec![
             compile_template("/gmail/v1/users/{user}/messages")
@@ -69217,7 +69346,7 @@ mod tests {
                 injection: json!({"type":"bearer"}),
             },
         );
-        let parent = Url::parse("https://gmail.example.test/gmail/v1/users/me/messages")
+        let parent = Url::parse("https://gmail.googleapis.com/gmail/v1/users/me/messages")
             .expect("Gmail parent URL");
         let decision = gmail_allowed_parent_decision(&snapshot, &parent, &json!({"type":"bearer"}));
         let child =
@@ -69281,7 +69410,9 @@ mod tests {
             payload["error"],
             "gmail_metadata_fetch_provider_outcome_unknown"
         );
-        assert_eq!(payload["providerOperationMayHaveCommitted"], true);
+        assert_eq!(payload["providerOperationMayHaveCommitted"], false);
+        assert_eq!(payload["upstreamDispatch"], "attempted");
+        assert_eq!(payload["providerOutcome"], "unknown");
         assert_eq!(payload["retryProviderRequest"], false);
         assert_eq!(record["outcome"], "provider_outcome_unknown");
         assert!(!record.to_string().contains("dropped"));
@@ -79190,7 +79321,7 @@ mod tests {
                 "Content-Type: application/json\r\n",
                 body,
             ));
-            assert!(denied.starts_with("HTTP/1.1 502"), "{denied}");
+            assert!(denied.starts_with("HTTP/1.1 409"), "{denied}");
             assert!(
                 denied.contains("npm_public_publish_receipt_success_denied"),
                 "{denied}"
@@ -79205,7 +79336,7 @@ mod tests {
             r#"{"published":true,"published":false}"#,
         ));
         assert!(
-            duplicate_boolean.starts_with("HTTP/1.1 502"),
+            duplicate_boolean.starts_with("HTTP/1.1 409"),
             "{duplicate_boolean}"
         );
         assert!(
@@ -79218,7 +79349,7 @@ mod tests {
             "Content-Type: application/json\r\n",
             "[]",
         ));
-        assert!(non_object.starts_with("HTTP/1.1 502"), "{non_object}");
+        assert!(non_object.starts_with("HTTP/1.1 409"), "{non_object}");
         assert!(
             non_object.contains("npm_public_publish_receipt_object_required"),
             "{non_object}"
@@ -79229,9 +79360,9 @@ mod tests {
             "Content-Type: application/json\r\n",
             "{}",
         ));
-        assert!(status_202.starts_with("HTTP/1.1 502"), "{status_202}");
+        assert!(status_202.starts_with("HTTP/1.1 409"), "{status_202}");
         assert!(
-            status_202.contains("npm_public_publish_receipt_status_denied"),
+            status_202.contains("response_envelope_status_denied"),
             "{status_202}"
         );
 
@@ -79248,7 +79379,7 @@ mod tests {
         ] {
             let denied =
                 finalize_public_npm_test_upstream_response(raw_response("200 OK", headers, "{}"));
-            assert!(denied.starts_with("HTTP/1.1 502"), "{denied}");
+            assert!(denied.starts_with("HTTP/1.1 409"), "{denied}");
             assert!(denied.contains(expected_error), "{denied}");
         }
     }

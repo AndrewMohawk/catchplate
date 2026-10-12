@@ -20,6 +20,10 @@ ATTEMPT = "sha256:" + "d" * 64
 SCOPE = ("new-principal", "new-route", POLICY)
 EXPECTED_PIN = "sha256:" + "f" * 64
 OTHER_PIN = "sha256:" + "e" * 64
+WITHHELD_REQUEST = "sha256:" + "1" * 64
+WITHHELD_ATTEMPT = "sha256:" + "2" * 64
+MARKERS = {"upstreamDispatch": "response_received", "providerOutcome": "unknown",
+    "retryProviderRequest": False, "providerOperationMayHaveCommitted": True}
 
 
 def catalog():
@@ -71,6 +75,82 @@ def audit_fixture():
     rows.extend({"id": case, "event_type": smoke.DENIED, "event": {"route_id": SCOPE[1], "method": "POST",
         "outcome": "denied", "error": reason}} for case, reason in smoke.ERRORS.items())
     return rows, positive
+
+
+def withheld_response():
+    return {"error": "response_credential_reflection", "upstream_status": 200, **MARKERS}
+
+
+def withheld_audit_fixture():
+    rows, positive = audit_fixture()
+    withheld = smoke.response_evidence("withheld", 409, [], smoke.json.dumps(withheld_response()).encode(), POLICY)
+    origin = b"https://demo-upstream:8443"
+    event = dict(zip(("principal_id", "route_id", "policy_hash"), SCOPE), method="POST",
+        body_sha256=smoke.sha(smoke.BODY), request_digest=WITHHELD_REQUEST, operation_digest=OPERATION,
+        attempt_id=WITHHELD_ATTEMPT, flow_id=WITHHELD_ATTEMPT,
+        url={"origin_sha256": smoke.sha(origin), "origin_bytes": len(origin),
+            "path_sha256": smoke.sha(b"/echo"), "path_bytes": 5, "query_keys": []})
+    rows.extend([
+        {"id": "withheld-start", "event_type": smoke.START, "event": {**event, "outcome": "release_started"}},
+        {"id": "withheld-block", "event_type": smoke.BLOCK, "event": {**event, "outcome": "blocked",
+            "upstream_status": 200, "response_validation": {"ok": False, "error": "response_credential_reflection"}, **MARKERS}},
+        {"id": "connect3", "event_type": smoke.CONNECT, "event": {"principal_id": SCOPE[0],
+            "policy_hash": POLICY, "method": "CONNECT", "target": smoke.AUTHORITY, "outcome": "established"}},
+    ])
+    return rows, positive, withheld
+
+
+def run_fixture(enabled, *, withheld_error=None, withheld_arrivals=1):
+    """Exercise actual run ordering; every external boundary is synthetic."""
+    check = smoke.LiveSmoke.__new__(smoke.LiveSmoke)
+    check.check_withheld_response = enabled
+    check.args = SimpleNamespace(expected_binary_sha256=EXPECTED_PIN, admin_token_file=Path("/not-read"))
+    check.run_id, check.results, check.feature_observations, check.token_retained = "synthetic-run", [], [], False
+    check.plans = [{"name": "synthetic-run-" + kind} for _, _, kind in smoke.CREATIONS]
+    check.additions = {key: [] for key in smoke.COLLECTIONS}
+    check.credential, check.client_token = "synthetic-test-secret", None
+    check.clean = Mock()
+    check.health, check.drained, check.audit = Mock(), Mock(return_value=True), Mock(return_value=[])
+    initial = observed_catalog()
+    current = deepcopy(initial)
+    check.catalog = Mock(return_value=initial)
+    check.wait_catalog_loaded = Mock(side_effect=lambda label: (initial if label == "live_baseline_loaded" else current, None))
+    check.warm_cas_snapshot = Mock(side_effect=lambda: deepcopy(current))
+    check.verify_audit = Mock(return_value={"syntheticAuditBoundary": True})
+    calls, arrivals = [], [0]
+    check.counts = Mock(side_effect=lambda: (100 + arrivals[0], arrivals[0]))
+
+    def mutate(route, payload, **kwargs):
+        calls.append(("mutation", route))
+        collection = kwargs["collection"]
+        record = {**payload, "id": "new-" + collection, "status": "active"}
+        if collection == "applications": record["principal_id"] = SCOPE[0]
+        if collection == "access_rules": record["route_id"] = SCOPE[1]
+        current[collection].append(record)
+        current["revision"] += 1
+        if collection == "access_rules": current["policy"]["sequence"] += 1
+        if collection == "credentials":
+            current["observed_activity"]["accounts"].append({"credential_id": record["id"],
+                "last_successful_response": None, "last_refresh_success": None,
+                "last_refresh_failure": None, "last_refresh_outcome": "unobserved"})
+        check.additions[collection].append(record["id"])
+        return record, "synthetic-client-token" if collection == "applications" else None, {}
+
+    def dispatch(dummy, *, withheld=False):
+        calls.append(("dispatch", "withheld" if withheld else dummy))
+        if withheld:
+            arrivals[0] += withheld_arrivals
+            if withheld_error is not None: raise withheld_error
+            return 409, [], smoke.json.dumps(withheld_response()).encode()
+        if dummy != smoke.DUMMY:
+            code = smoke.ERRORS["missing" if dummy is None else "wrong"]
+            return 403, [], smoke.json.dumps({"allowed": False, "action": "deny", "payload": {"error": code}}).encode()
+        arrivals[0] += 1
+        _, headers, body = response()
+        return 200, headers, body
+
+    check.mutate, check.dispatch = Mock(side_effect=mutate), Mock(side_effect=dispatch)
+    return check, calls, current
 
 
 class LiveSmokeTests(unittest.TestCase):
@@ -237,6 +317,7 @@ class LiveSmokeTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertEqual(counts[smoke.CONNECT], 3)
         self.assertEqual(attempts, [ATTEMPT])
+        self.assertNotIn(smoke.BLOCK, counts)  # Default receipt inventory remains unchanged.
         self.assertFalse(smoke.scoped_audit(rows[:-1], SCOPE, positive)[0])
 
     def test_audit_rejects_wrong_commitment_extra_release_or_block(self):
@@ -367,6 +448,112 @@ class LiveSmokeTests(unittest.TestCase):
         self.assertTrue(opened.call_args_list[0].args[1] & smoke.os.O_EXCL)
         self.assertTrue(opened.call_args_list[0].args[1] & smoke.os.O_NOFOLLOW)
         self.assertEqual([item.args[0] for item in synced.call_args_list], [7, 8])
+
+    def test_withheld_rule_is_explicit_and_changes_only_owned_query_keys(self):
+        original = smoke.access_rule_values("rule", "app", "credential")
+        selected = smoke.access_rule_values("rule", "app", "credential", check_withheld_response=True)
+        self.assertEqual(selected, {**original, "query_keys": ["expectedAuthorizationSha256", "reflectCredential"]})
+        for value in (1, 0, None, "true"):
+            with self.subTest(value=value), self.assertRaises(smoke.CheckFailure):
+                smoke.access_rule_values("rule", "app", "credential", check_withheld_response=value)
+
+    def test_withheld_wire_requires_exact_conflict_and_typed_unknown_outcome(self):
+        value = withheld_response()
+        observed = smoke.response_evidence("withheld", 409, [], smoke.json.dumps(value).encode(), POLICY)
+        self.assertEqual({key: observed[key] for key in MARKERS}, MARKERS)
+        for status in (200, 403, 502, 503):
+            with self.subTest(status=status), self.assertRaises(smoke.CheckFailure):
+                smoke.response_evidence("withheld", status, [], smoke.json.dumps(value).encode(), POLICY)
+        changes = [(key, None) for key in value] + [("upstreamDispatch", "attempted"),
+            ("providerOutcome", "committed"), ("retryProviderRequest", 0),
+            ("providerOperationMayHaveCommitted", 1), ("upstream_status", 201),
+            ("error", "other"), ("extra", "synthetic-secret-canary")]
+        for key, wrong in changes:
+            with self.subTest(key=key, wrong=wrong), self.assertRaises(smoke.CheckFailure):
+                smoke.response_evidence("withheld", 409, [], smoke.json.dumps({**value, key: wrong}).encode(), POLICY)
+        duplicate = (smoke.json.dumps(value)[:-1] + ',"retryProviderRequest":false}').encode()
+        with self.assertRaises(smoke.CheckFailure):
+            smoke.response_evidence("withheld", 409, [], duplicate, POLICY)
+
+    def test_withheld_audit_requires_second_distinct_complete_pair(self):
+        rows, positive, withheld = withheld_audit_fixture()
+        complete, counts, _, attempts = smoke.scoped_audit(rows, SCOPE, positive, withheld)
+        self.assertTrue(complete)
+        self.assertEqual((counts[smoke.CONNECT], counts[smoke.DENIED], counts[smoke.START],
+            counts[smoke.RELEASE], counts[smoke.BLOCK]), (4, 2, 2, 1, 1))
+        self.assertEqual(attempts, sorted([ATTEMPT, WITHHELD_ATTEMPT]))
+        with self.assertRaises(smoke.CheckFailure): smoke.scoped_audit(rows, SCOPE, positive)
+        for missing in ("withheld-start", "withheld-block", "connect3"):
+            self.assertFalse(smoke.scoped_audit([row for row in rows if row["id"] != missing], SCOPE, positive, withheld)[0])
+
+    def test_withheld_audit_rejects_marker_coercion_wrong_scope_or_extra_effect(self):
+        changes = [(key, None) for key in MARKERS] + [("retryProviderRequest", 0),
+            ("providerOperationMayHaveCommitted", 1), ("upstreamDispatch", "attempted"),
+            ("providerOutcome", "committed"), ("upstream_status", 201), ("outcome", "released"),
+            ("request_digest", REQUEST), ("operation_digest", EXPECTED_PIN), ("attempt_id", ATTEMPT),
+            ("flow_id", ATTEMPT), ("policy_hash", EXPECTED_PIN), ("body_sha256", EXPECTED_PIN),
+            ("url", {}), ("response_validation", {"ok": False, "error": "other"}),
+            ("response_validation", {"ok": 0, "error": "response_credential_reflection"})]
+        for key, wrong in changes:
+            rows, positive, withheld = withheld_audit_fixture()
+            rows[-2]["event"][key] = wrong
+            with self.subTest(key=key, wrong=wrong), self.assertRaises(smoke.CheckFailure):
+                smoke.scoped_audit(rows, SCOPE, positive, withheld)
+        for kind in (smoke.START, smoke.BLOCK, smoke.RELEASE):
+            rows, positive, withheld = withheld_audit_fixture()
+            duplicate = deepcopy(next(row for row in rows if row["event_type"] == kind))
+            duplicate["id"] = "extra-effect"
+            rows.append(duplicate)
+            with self.subTest(kind=kind), self.assertRaises(smoke.CheckFailure):
+                smoke.scoped_audit(rows, SCOPE, positive, withheld)
+
+    def test_actual_run_keeps_default_order_and_adds_only_one_final_opt_in_request(self):
+        for enabled in (False, True):
+            check, calls, current = run_fixture(enabled)
+            with self.subTest(enabled=enabled), patch.object(smoke, "token_file", return_value="synthetic-admin"), \
+                    patch.object(smoke.features, "audit_cutoff", return_value={}), \
+                    patch.object(smoke.features, "record_negative_phase") as negatives:
+                result = check.run()
+            expected = [("mutation", route) for route, _, _ in smoke.CREATIONS]
+            expected += [("dispatch", dummy) for _, dummy in smoke.CASES]
+            if enabled: expected.append(("dispatch", "withheld"))
+            self.assertEqual(calls, expected)
+            self.assertEqual(negatives.call_count, 2)
+            self.assertEqual((result["upstreamDispatches"], result["responsesReleased"], result["responsesBlocked"]),
+                (1 + int(enabled), 1, int(enabled)))
+            self.assertEqual("withheldResponseCheckRequested" in result, enabled)
+            self.assertEqual(current["revision"], 19)
+            self.assertEqual(current["policy"]["sequence"], 8)
+            self.assertEqual(check.mutate.call_count, 3)
+            check.verify_audit.assert_called_once()
+
+    def test_withheld_failure_is_not_retried_or_claimed_successful(self):
+        original = TimeoutError("synthetic transport failure")
+        check, calls, _ = run_fixture(True, withheld_error=original)
+        with patch.object(smoke, "token_file", return_value="synthetic-admin"), \
+                patch.object(smoke.features, "audit_cutoff", return_value={}), \
+                patch.object(smoke.features, "record_negative_phase"), self.assertRaises(TimeoutError) as caught:
+            check.run()
+        self.assertIs(caught.exception, original)
+        self.assertEqual(check.dispatch.call_count, 4)
+        check.verify_audit.assert_not_called()
+        receipt = check.receipt(False)
+        self.assertIs(receipt["ok"], False)
+        self.assertIs(receipt["withheldResponseCheckRequested"], True)
+        self.assertNotIn("responsesBlocked", receipt)
+        self.assertEqual(receipt["requestObservations"][-1], {"case": "withheld",
+            "upstreamCountBefore": 101, "runCountBefore": 1, "upstreamCountAfter": 102, "runCountAfter": 2})
+        self.assertEqual(calls[-1], ("dispatch", "withheld"))
+
+    def test_withheld_count_must_increase_by_exactly_one(self):
+        for count in (0, 2):
+            check, _, _ = run_fixture(True, withheld_arrivals=count)
+            with self.subTest(count=count), patch.object(smoke, "token_file", return_value="synthetic-admin"), \
+                    patch.object(smoke.features, "audit_cutoff", return_value={}), \
+                    patch.object(smoke.features, "record_negative_phase"), self.assertRaises(smoke.CheckFailure):
+                check.run()
+            self.assertEqual(check.dispatch.call_count, 4)
+            check.verify_audit.assert_not_called()
 
 
 if __name__ == "__main__":

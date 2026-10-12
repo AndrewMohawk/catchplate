@@ -71,6 +71,52 @@ commitment before the existing dispatch barrier. Do not change approval digest
 versions, consume-on-forward rules, deadlines or retry semantics. An ambiguous
 upstream outcome never authorizes an automatic request retry.
 
+## A withheld response is not a denied request
+
+The Rust forwarding path distinguishes refusal before a send from failure after
+a provider send was attempted. A provider may complete a write before its reply
+fails JSON, header, credential-reflection or other response checks. Withholding
+that reply must not imply that repeating the write is safe.
+
+The ordinary forwarding and response-withholding failures covered here retain
+their fixed error category and add these bounded fields to the client error
+and its audit event, where each is available:
+
+| Field | Meaning |
+| --- | --- |
+| `upstreamDispatch` | `response_received` means provider response headers arrived; `attempted` means a send was attempted without an accepted response. Neither proves application-level completion. |
+| `providerOutcome` | `unknown`: Serverware has not established the operation's completion. |
+| `providerOperationMayHaveCommitted` | True for potential writes; false only for a recognized read. False is not a promise that retrying will succeed. |
+| `retryProviderRequest` | False: no automatic request replay is authorized. |
+
+These potential-write failures use HTTP 409, including a rejected or incomplete reply.
+Recognized reads retain the original response-validation status. This avoids
+the installed npm client's default retry of a buffered publish PUT on HTTP 502;
+JSON warning fields alone do not control SDK retry behavior. It is not a
+universal guarantee about arbitrary clients. Keep the examples' explicit retry
+controls and inspect the provider before deliberately repeating a write.
+
+Failures of a final permit check **after** the send remain post-dispatch
+failures; they must not be treated as never forwarded or refunded on that basis.
+Pre-send request construction, authorization and dispatch-barrier refusals do
+not acquire a post-dispatch marker. A release-start audit record alone does not
+establish that a send occurred. Existing audit rows without the new fields are
+not retroactively reclassified, and the UI does not infer completion from an
+HTTP 2xx status or a generic `response.blocked` event.
+
+The refused provider body and headers remain withheld, including reflected
+credentials. Existing response proof, durable completion and release barriers
+remain in force. A streaming failure records the uncertainty in audit; it must
+not append an invented replacement JSON response to an already-started stream.
+Specialized proof-unavailable and exact-completion-recovery paths keep their
+existing refusal semantics (including HTTP 503 or a closed connection); this
+change does not replace every post-send error. If response headers arrived but
+the post-send permit check failed before header sanitization, an observation
+proof is unavailable: close that proof-requesting connection rather than hash
+unsanitized headers or sign a fabricated observation. A sender-thread panic is
+also uncertain, but does not establish the positive `upstreamDispatch` marker.
+This source contract does not establish deployment or real-provider acceptance.
+
 ## Response profile and 204
 
 The new success profile has exactly `mode`, `bodyFormat`, `maxBodyBytes`,

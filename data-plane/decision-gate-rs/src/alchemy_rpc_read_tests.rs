@@ -327,10 +327,15 @@ fn upstream(status:u16,extra:&str,body:&[u8])->reqwest::blocking::Response {
 }
 
 fn decision(snapshot:&Snapshot) -> Value {
-    json!({"principal_id":"agent:test","route_id":"route:test","policy_hash":snapshot.hash,
-        "snapshot_epoch":snapshot.epoch,"request_digest":"sha256:synthetic-request","operation_digest":"sha256:synthetic-operation",
-        "operation":operation(json!(1)),"canonical_request":{"request":{
-            "method":"POST","scheme":"https","authority":host(CHAIN).unwrap(),"path":PATH}}})
+    // Finalizer-only synthetic allow context, with the actual adapter's whole
+    // canonical request/operation and digests (not credential acquisition).
+    let (operation, canonical) = admitted(request(), snapshot).unwrap();
+    json!({"action":"allow","allowed":true,"adapter":ADAPTER,
+        "principal_id":"agent:test","route_id":"route:test","policy_hash":snapshot.hash,
+        "snapshot_epoch":snapshot.epoch,
+        "request_digest":canonical_request_digest_profile(&canonical,ReleaseProfile::Legacy),
+        "operation_digest":operation_digest_profile(&canonical,ReleaseProfile::Legacy),
+        "operation":operation,"canonical_request":canonical})
 }
 
 fn finalized(snapshot:&Arc<Snapshot>,state:&GateState,decision:&Value,response:reqwest::blocking::Response,

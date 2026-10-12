@@ -368,6 +368,24 @@ function createProxyView(workspace, applications) {
   }
   workspace.subscribe(render); return {render, select, mount};
 }
+function auditProviderOutcome(record) {
+  if (!record || record.event_type !== 'data_plane.response.blocked') return null;
+  const event = record.event;
+  const marked = event && typeof event === 'object' && !Array.isArray(event) &&
+    ['outcome', 'upstreamDispatch', 'providerOutcome', 'retryProviderRequest', 'providerOperationMayHaveCommitted']
+      .every(key => Object.hasOwn(event, key)) && event.outcome === 'blocked' &&
+    ['response_received', 'attempted'].includes(event.upstreamDispatch) && event.providerOutcome === 'unknown' &&
+    event.retryProviderRequest === false && typeof event.providerOperationMayHaveCommitted === 'boolean';
+  // Neither an HTTP status nor a release-started record establishes dispatch
+  // or completion. Only this complete producer marker supports the warning.
+  if (!marked) return {kind: 'unknown', warning: false,
+    text: 'This event does not establish whether the provider received the request.'};
+  const prefix = event.upstreamDispatch === 'response_received' ? 'Provider response withheld.' : 'Provider dispatch was attempted.';
+  return event.providerOperationMayHaveCommitted ? {kind: 'write_unconfirmed', warning: true,
+    text: prefix + ' This write may have completed. Check the provider before retrying; do not retry automatically.'} :
+    {kind: 'completion_unconfirmed', warning: false,
+      text: prefix + ' Provider completion is unconfirmed; do not retry automatically.'};
+}
 function createAuditView(workspace) {
   let loaded = false; let cursor = null; let count = 0; let epoch = 0; let selection = '';
   async function load(append = false) {
@@ -386,6 +404,11 @@ function createAuditView(workspace) {
       if (result.ok !== true || !Array.isArray(result.items)) throw operatorError('The audit response was incomplete.');
       for (const event of result.items) {
         const card = textNode('article', undefined, 'card event-card'); card.append(textNode('h3', event.event_type || 'Recorded event'), textNode('time', event.created_at || 'Time not reported'));
+        const outcome = auditProviderOutcome(event);
+        if (outcome) {
+          const note = textNode('p', outcome.text, outcome.warning ? 'warning' : 'small muted');
+          note.dataset.auditProviderOutcome = outcome.kind; card.append(note);
+        }
         const details = textNode('details'); details.append(textNode('summary', 'Event details'), textNode('pre', JSON.stringify(event, null, 2))); card.append(details); element('audit-list').append(card);
       }
       count += result.items.length; cursor = result.has_more && typeof result.next_cursor === 'string' ? result.next_cursor : null; loaded = true;

@@ -30,8 +30,8 @@ def document(origins=None):
         "policy": {"policy_hash": PIN, "sequence": 3}}
 
 
-def checker(raw=None, *, omitted=False):
-    args = SimpleNamespace() if omitted else SimpleNamespace(expected_upstreams=raw)
+def checker(raw=None, *, omitted=False, withheld=False):
+    args = SimpleNamespace() if omitted else SimpleNamespace(expected_upstreams=raw, check_withheld_response=withheld)
     # Only skip endpoint construction. Catalog and roster validation are actual.
     with patch.object(smoke.OperatorCatalogCheck, "__init__", return_value=None):
         return smoke.LiveSmoke(args)
@@ -153,6 +153,103 @@ class LiveSmokeConfigurationTests(unittest.TestCase):
                 self.assertEqual(smoke.main(), 0)
                 self.assertEqual(run.call_args.args[0].expected_upstreams, raw)
                 self.assertEqual(run.call_args.args[0].expected_binary_sha256, PIN)
+                self.assertIs(run.call_args.args[0].check_withheld_response, False)
+
+    def test_cli_withheld_opt_in_and_non_boolean_refusal_before_construction(self):
+        argv = ["check_operator_live_smoke.py", "--execute", "--check-withheld-response",
+            "--admin-token-file", "/not-read/admin", "--ca-file", "/not-read/ca",
+            "--upstream-ca-file", "/not-read/upstream-ca", "--run-claim-file", "/not-read/.operator-live-smoke.claim",
+            "--expected-binary-sha256", PIN]
+        with patch.object(sys, "argv", argv), patch.object(smoke, "run_checks", return_value={"ok": True}) as run, \
+                patch.object(smoke.signal, "signal"), patch.object(smoke.signal, "setitimer"), \
+                patch.object(sys, "stdout", new=StringIO()):
+            self.assertEqual(smoke.main(), 0)
+            self.assertIs(run.call_args.args[0].check_withheld_response, True)
+        for value in (1, 0, None, "true"):
+            args = SimpleNamespace(execute=True, timeout_seconds=120, expected_binary_sha256=PIN,
+                check_withheld_response=value)
+            with self.subTest(value=value), patch.object(smoke, "LiveSmoke") as constructor, \
+                    patch.object(smoke, "private_output") as claim:
+                result = smoke.run_checks(args)
+                self.assertIs(result["ok"], False)
+                constructor.assert_not_called()
+                claim.assert_not_called()
+            with patch.object(smoke.OperatorCatalogCheck, "__init__") as base, self.assertRaises(smoke.CheckFailure):
+                smoke.LiveSmoke(args)
+            base.assert_not_called()
+
+    def test_withheld_request_is_fixed_opt_in_and_preserves_actual_body_and_tls_boundary(self):
+        check = checker(json.dumps(FOUR), withheld=True)
+        check.run_id, check.credential, check.client_token = "synthetic-run", "inert-provider-secret", "inert-app-token"
+        check.ca, check.timeout = object(), lambda: 1.0
+        raw, tls = Mock(), Mock()
+        check.tunnel = Mock(return_value=raw)
+        tls.sendall.side_effect = SendBoundary
+
+        class InterceptedTLS:
+            def __init__(self, received_raw, ca, timeout):
+                if received_raw is not raw or ca is not check.ca or timeout is not check.timeout:
+                    raise AssertionError("TLS boundary changed")
+            def __enter__(self): return tls
+            def __exit__(self, *_args): return False
+
+        with patch.object(smoke, "TunnelTLS", InterceptedTLS), \
+                patch.object(smoke.http.client, "HTTPResponse") as response:
+            with self.assertRaises(SendBoundary): check.dispatch(smoke.DUMMY, withheld=True)
+            response.assert_not_called()
+        sent = tls.sendall.call_args.args[0]
+        headers, body = sent.split(b"\r\n\r\n", 1)
+        self.assertEqual(headers.decode("ascii").split("\r\n"), [
+            "POST /echo?reflectCredential=1 HTTP/1.1", "Host: demo-upstream:8443", "Connection: close",
+            "User-Agent: serverware-test-run/synthetic-run", "Accept: application/json",
+            "Content-Type: application/json", "Content-Length: " + str(len(smoke.BODY)),
+            "Authorization: " + smoke.DUMMY])
+        self.assertEqual(body, smoke.BODY)
+        self.assertNotIn(check.credential.encode(), sent)
+        self.assertNotIn(check.client_token.encode(), sent)
+        raw.close.assert_called_once()
+        for enabled, dummy, selected in ((False, smoke.DUMMY, True), (True, None, True),
+                (True, smoke.DUMMY + "_WRONG", True), (True, smoke.DUMMY, 1)):
+            check.check_withheld_response = enabled
+            check.tunnel.reset_mock()
+            with self.subTest(enabled=enabled, dummy=dummy, selected=selected), self.assertRaises(smoke.CheckFailure):
+                check.dispatch(dummy, withheld=selected)
+            check.tunnel.assert_not_called()
+
+    def test_actual_dispatch_checks_raw_and_decoded_withheld_response_for_secret_leaks(self):
+        check = checker(withheld=True)
+        check.run_id, check.credential, check.client_token = "synthetic-run", "inert-provider-canary", "inert-app-token"
+        check.admin_token, check.wrong_token, check.issued_tokens = None, "inert-wrong-token", []
+        check.ca, check.timeout = object(), lambda: 1.0
+        raw, tls = Mock(), Mock()
+        check.tunnel = Mock(return_value=raw)
+        good = {"error": "response_credential_reflection", "upstream_status": 200,
+            "upstreamDispatch": "response_received", "providerOutcome": "unknown",
+            "retryProviderRequest": False, "providerOperationMayHaveCommitted": True}
+        encoded = '"' + ''.join('\\u%04x' % ord(character) for character in check.credential) + '"'
+        bodies = [json.dumps(good).encode(), json.dumps({**good, "leak": check.credential}).encode(),
+            (json.dumps(good)[:-1] + ',"leak":' + encoded + '}').encode()]
+
+        class InterceptedTLS:
+            def __init__(self, *_args): pass
+            def __enter__(self): return tls
+            def __exit__(self, *_args): return False
+
+        for index, body in enumerate(bodies):
+            response = Mock(status=409)
+            response.read.return_value = body
+            response.getheaders.return_value = [("Content-Type", "application/json")]
+            with self.subTest(index=index), patch.object(smoke, "TunnelTLS", InterceptedTLS), \
+                    patch.object(smoke.http.client, "HTTPResponse", return_value=response):
+                if index == 0:
+                    status, headers, returned = check.dispatch(smoke.DUMMY, withheld=True)
+                    self.assertEqual(returned, body)
+                    smoke.response_evidence("withheld", status, headers, returned, PIN)
+                else:
+                    with self.assertRaises(smoke.CheckFailure): check.dispatch(smoke.DUMMY, withheld=True)
+            response.close.assert_called_once()
+        self.assertEqual(check.tunnel.call_count, 3)
+        self.assertEqual(raw.close.call_count, 3)
 
     def test_explicit_provider_roster_never_changes_fixture_rule_or_encoded_request(self):
         check = checker(json.dumps(FOUR))

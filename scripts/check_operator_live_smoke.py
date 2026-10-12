@@ -6,6 +6,8 @@ The old /echo fixture proves injection, not independent request/response byte
 preservation or 204. A successful V2 audit claim does not close that gap.
 Never retries POSTs or proxy requests. Uses the legitimate local administrator
 API and the actual HTTPS proxy hostname with normal system certificate trust.
+An explicit withheld-response check adds one fixed synthetic reflection POST;
+it proves response withholding, not that a provider write committed.
 """
 from __future__ import annotations
 
@@ -49,6 +51,9 @@ RESPONSE_VALIDATION_MODE = RESPONSE_MODES[RESPONSE_MODE]
 DUMMY = "Bearer SERVERWARE_LIVE_SMOKE_DUMMY"
 BODY = b'{"live_smoke":true,"nested":{"kept":"synthetic"}}'
 CASES = (("missing", None), ("wrong", DUMMY + "_WRONG"), ("positive", DUMMY))
+WITHHELD_TARGET = "/echo?reflectCredential=1"
+WITHHELD_MARKERS = {"upstreamDispatch": "response_received", "providerOutcome": "unknown",
+    "retryProviderRequest": False, "providerOperationMayHaveCommitted": True}
 CREATIONS = (("/credentials", "credentials", "credential"),
              ("/applications", "applications", "application"),
              ("/access-rules", "access_rules", "access_rule"))
@@ -126,13 +131,15 @@ def preflight_catalog(snapshot):
         require(len({row["id"] for row in rows}) == len(rows), "existing catalog resource identity is duplicated")
 
 
-def access_rule_values(name, application_id, credential_id):
+def access_rule_values(name, application_id, credential_id, *, check_withheld_response=False):
     """The sole new rule is explicitly V2; there is no legacy-mode fallback."""
+    require(type(check_withheld_response) is bool, "withheld-response selection must be explicit boolean")
     return {"name": name, "application_id": application_id, "credential_id": credential_id,
         "upstream_url": "https://" + AUTHORITY + "/echo", "methods": ["POST"], "request_fields": [], "response_fields": [],
         "request_body_mode": "preserve_json_v1", "response_mode": RESPONSE_MODE,
         "credential_input": "replace_exact", "placeholder": DUMMY,
-        "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]}
+        "query_keys": ["expectedAuthorizationSha256"] + (["reflectCredential"] if check_withheld_response else []),
+        "allowed_headers": ["accept", "user-agent"]}
 
 
 def require_rule_contract(rule, expected):
@@ -214,6 +221,16 @@ def require_catalog_unchanged(before, after, message):
 
 def response_evidence(case, status, headers, body, policy_hash):
     document = json.loads(body)
+    if case == "withheld":
+        require(status == 409 and isinstance(document, dict)
+                and set(document) == {"error", "upstream_status"} | WITHHELD_MARKERS.keys()
+                and len(json.loads(body, object_pairs_hook=lambda pairs: pairs)) == len(document)
+                and document["error"] == "response_credential_reflection"
+                and type(document["upstream_status"]) is int and document["upstream_status"] == 200,
+                "live withheld response did not report its exact post-dispatch conflict")
+        require_withheld_markers(document)
+        return {"case": case, "status": status, "responseMode": RESPONSE_MODE,
+            "error": document["error"], "upstreamStatus": 200, **WITHHELD_MARKERS}
     if case in ERRORS:
         require(status == 403 and isinstance(document, dict) and document.get("allowed") is False
                 and document.get("action") == "deny" and document.get("payload", {}).get("error") == ERRORS[case],
@@ -240,14 +257,28 @@ def response_evidence(case, status, headers, body, policy_hash):
             "responseBodyBytes": len(body), **commitments}
 
 
-def scoped_audit(events, scope, positive):
+def require_withheld_markers(value):
+    require(all(type(value.get(key)) is type(expected) and value[key] == expected
+                for key, expected in WITHHELD_MARKERS.items()), "live withheld outcome markers differ")
+
+
+def scoped_audit(events, scope, positive, withheld=None):
     require(positive.get("responseMode") == RESPONSE_MODE, "live response selection differs from V2")
+    if withheld is not None:
+        require(withheld.get("case") == "withheld" and withheld.get("status") == 409
+                and withheld.get("error") == "response_credential_reflection"
+                and withheld.get("responseMode") == RESPONSE_MODE, "live withheld observation is incomplete")
+        require_withheld_markers(withheld)
+    extra = int(withheld is not None)
+    positive_commitments = (positive["requestDigest"], positive["operationDigest"])
     counts, pairs, reasons, retained = Counter(), {}, Counter(), []
     for row in events:
         event, kind = row.get("event", {}), row.get("event_type")
         if event.get("principal_id") != scope[0] and event.get("route_id") != scope[1]:
             continue
-        require(kind in {CONNECT, DENIED, START, RELEASE, LEASE}, "unexpected audit event for live smoke scope")
+        require(kind in {CONNECT, DENIED, START, RELEASE, LEASE} | ({BLOCK} if extra else set()),
+                "unexpected audit event for live smoke scope")
+        require(isinstance(row.get("id"), str) and row["id"] not in retained, "live audit row identity repeated")
         counts[kind] += 1
         retained.append(row["id"])
         if kind == CONNECT:
@@ -262,30 +293,53 @@ def scoped_audit(events, scope, positive):
                     and event.get("outcome") == "issued" and event.get("status_code") == 200, "live lease audit differs")
         else:
             require(tuple(event.get(key) for key in ("principal_id", "route_id", "policy_hash")) == tuple(scope)
-                    and event.get("method") == "POST" and event.get("body_sha256") == sha(BODY)
-                    and event.get("request_digest") == positive["requestDigest"]
-                    and event.get("operation_digest") == positive["operationDigest"], "live release audit request commitment differs")
+                    and event.get("method") == "POST" and event.get("body_sha256") == sha(BODY),
+                    "live release audit request commitment differs")
+            commitments = tuple(event.get(key) for key in ("request_digest", "operation_digest"))
+            require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments),
+                    "live release audit request commitment missing")
+            is_positive = commitments == positive_commitments
+            require(is_positive or extra and commitments[0] != positive_commitments[0],
+                    "live release audit request commitment differs")
+            if not is_positive:
+                origin = ("https://" + AUTHORITY).encode("ascii")
+                require(event.get("url") == {"origin_sha256": sha(origin), "origin_bytes": len(origin),
+                    "path_sha256": sha(b"/echo"), "path_bytes": 5, "query_keys": []},
+                    "live withheld audit target differs")
             attempt = event.get("attempt_id")
             require(isinstance(attempt, str) and SHA256.fullmatch(attempt) and event.get("flow_id") == attempt,
                     "live release audit attempt identity differs")
-            pair = pairs.setdefault(attempt, {})
-            require(kind not in pair, "live release audit event repeated")
-            pair[kind] = row["id"]
+            pair = pairs.setdefault(attempt, {"commitments": commitments, "events": {}})
+            require(pair["commitments"] == commitments and kind not in pair["events"],
+                    "live release audit event repeated or commitment changed")
+            pair["events"][kind] = row["id"]
             if kind == START:
                 require(event.get("outcome") == "release_started", "live release start outcome differs")
-            else:
+            elif kind == RELEASE:
                 validation = event.get("response_validation", {})
-                require(event.get("outcome") == "released" and event.get("upstream_status") == 200
+                require(is_positive and event.get("outcome") == "released" and event.get("upstream_status") == 200
                         and event.get("response_body_sha256") == positive["responseBodySha256"]
                         and event.get("response_body_bytes") == positive["responseBodyBytes"]
                         and validation.get("ok") is True and validation.get("mode") == RESPONSE_VALIDATION_MODE
                         and validation.get("body_bytes_preserved") is True, "live V2 response audit differs")
-    require(counts[CONNECT] <= 3 and counts[DENIED] <= 2 and counts[START] <= 1 and counts[RELEASE] <= 1
-            and counts[LEASE] <= 2 and len(pairs) <= 1 and all(value <= 1 for value in reasons.values()),
+            else:
+                validation = event.get("response_validation", {})
+                require(not is_positive and event.get("outcome") == "blocked"
+                        and type(event.get("upstream_status")) is int and event["upstream_status"] == 200
+                        and validation == {"ok": False, "error": "response_credential_reflection"}
+                        and validation.get("ok") is False,
+                        "live withheld response audit differs")
+                require_withheld_markers(event)
+    require(counts[CONNECT] <= 3 + extra and counts[DENIED] <= 2 and counts[START] <= 1 + extra
+            and counts[RELEASE] <= 1 and counts.get(BLOCK, 0) <= extra and counts[LEASE] <= 2 * (1 + extra)
+            and len(pairs) <= 1 + extra and all(value <= 1 for value in reasons.values())
+            and len({pair["commitments"][0] for pair in pairs.values()}) == len(pairs),
             "live smoke audit exceeds request budget")
-    complete = (counts[CONNECT] == 3 and counts[DENIED] == 2 and counts[START] == counts[RELEASE] == 1
-                and set(reasons) == set(ERRORS.values()) and len(pairs) == 1
-                and set(next(iter(pairs.values()))) == {START, RELEASE})
+    complete = (counts[CONNECT] == 3 + extra and counts[DENIED] == 2 and counts[START] == 1 + extra
+                and counts[RELEASE] == 1 and counts.get(BLOCK, 0) == extra
+                and set(reasons) == set(ERRORS.values()) and len(pairs) == 1 + extra
+                and all(set(pair["events"]) == {START, RELEASE if pair["commitments"] == positive_commitments else BLOCK}
+                        for pair in pairs.values()))
     return complete, counts, sorted(retained), sorted(pairs)
 
 
@@ -298,6 +352,8 @@ class LiveSmoke(OperatorCatalogCheck):
         return OperatorCatalogCheck._optional_ca(path, endpoint)
 
     def __init__(self, args):
+        self.check_withheld_response = getattr(args, "check_withheld_response", False)
+        require(type(self.check_withheld_response) is bool, "withheld-response selection must be explicit boolean")
         self.expected_upstreams = parse_expected_upstreams(getattr(args, "expected_upstreams", None))
         super().__init__(args)
         self.run_id = "serverware-live-smoke-" + uuid.uuid4().hex
@@ -347,8 +403,11 @@ class LiveSmoke(OperatorCatalogCheck):
                 and value["count"] >= run_count >= 0, "live fixture request counters unavailable")
         return value["count"], run_count
 
-    def dispatch(self, placeholder):
-        target = "/echo?" + urlencode({"expectedAuthorizationSha256": sha(("Bearer " + self.credential).encode("ascii"))})
+    def dispatch(self, placeholder, *, withheld=False):
+        require(type(withheld) is bool and (not withheld or
+            self.check_withheld_response is True and placeholder == DUMMY), "live withheld dispatch was not selected")
+        target = WITHHELD_TARGET if withheld else "/echo?" + urlencode({
+            "expectedAuthorizationSha256": sha(("Bearer " + self.credential).encode("ascii"))})
         raw = self.tunnel(self.client_token)
         try:
             with TunnelTLS(raw, self.ca, self.timeout) as tls:
@@ -380,13 +439,14 @@ class LiveSmoke(OperatorCatalogCheck):
         return all(counters[key] == 0 for key in DRAIN_COUNTERS)
 
     def verify_audit(self, baseline, scope, lease_scope):
-        positive = self.feature_observations[-1]
+        positive = self.feature_observations[2]
+        withheld = self.feature_observations[3] if self.check_withheld_response else None
         while True:
             events = self.audit()
             cutoff = features.audit_cutoff(events)
             require(all(cutoff.get(key) == value for key, value in baseline.items()), "retained audit baseline changed or aged out")
             new = [row for row in events if row["id"] not in baseline]
-            complete, counts, ids, attempts = scoped_audit(new, scope, positive)
+            complete, counts, ids, attempts = scoped_audit(new, scope, positive, withheld)
             mutation_rows = [row for row in new if (row.get("event_type"), row.get("event", {}).get("resource_id"),
                 row.get("event", {}).get("policy_hash")) in self.mutations]
             mutations = {(row["event_type"], row["event"]["resource_id"], row["event"]["policy_hash"]): row["id"]
@@ -397,8 +457,8 @@ class LiveSmoke(OperatorCatalogCheck):
                     require(all(row["event"].get(key) == value for key, value in lease_scope.items() if key != "purpose"),
                             "live smoke lease credential or binary binding differs")
             leases = [row for row in new if features.issued_lease(row, lease_scope)]
-            require(len(leases) <= 1, "live smoke issued more than one dispatch lease")
-            if complete and set(self.mutations) <= mutations.keys() and len(leases) == 1 and self.drained():
+            require(len(leases) <= 1 + int(self.check_withheld_response), "live smoke exceeded its dispatch lease budget")
+            if complete and set(self.mutations) <= mutations.keys() and len(leases) >= 1 and self.drained():
                 ids.extend(mutations[key] for key in self.mutations)
                 break
             self.drained()
@@ -434,7 +494,8 @@ class LiveSmoke(OperatorCatalogCheck):
             collection="credentials", result_key="credential", event="operator_catalog.credential.created", creates=True)
         application, token, _ = self.mutate("/applications", {"name": self.plans[1]["name"], "token_lifetime_seconds": 3600},
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
-        rule_values = access_rule_values(self.plans[2]["name"], application["id"], credential["id"])
+        rule_values = access_rule_values(self.plans[2]["name"], application["id"], credential["id"],
+            check_withheld_response=self.check_withheld_response)
         rule, _, _ = self.mutate("/access-rules", rule_values, collection="access_rules", result_key="access_rule",
             event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
         require_rule_contract(rule, rule_values)
@@ -448,25 +509,27 @@ class LiveSmoke(OperatorCatalogCheck):
         scope = (application["principal_id"], rule["route_id"], self.policy_hash)
         lease_scope = dict(zip(("principal_id", "route_id", "policy_hash"), scope), purpose="dispatchSecret",
                            credential_id=credential["id"], data_plane_binary_digest=self.args.expected_binary_sha256)
-        for case, dummy in CASES:
+        cases = CASES + ((("withheld", DUMMY),) if self.check_withheld_response else ())
+        for case, dummy in cases:
             current = self.warm_cas_snapshot()
             require_catalog_unchanged(snapshot, current, "live catalog drifted before smoke request")
             before = self.counts()
-            expected_before = (global_before, 0)
+            expected_before = (global_before + int(case == "withheld"), int(case == "withheld"))
             require(before == expected_before, "unexpected upstream traffic before live smoke request")
             observation = {"case": case, "upstreamCountBefore": before[0], "runCountBefore": before[1]}
             self.feature_observations.append(observation)
             try:
-                response = self.dispatch(dummy)
+                response = self.dispatch(dummy, withheld=True) if case == "withheld" else self.dispatch(dummy)
             finally:
                 after = self.counts()
                 observation.update(upstreamCountAfter=after[0], runCountAfter=after[1])
-            expected_delta = int(case == "positive")
+            expected_delta = int(case in {"positive", "withheld"})
             require(after == (before[0] + expected_delta, before[1] + expected_delta), "live smoke dispatch count differs")
             observation.update(response_evidence(case, *response, self.policy_hash))
             if case in ERRORS:
                 features.record_negative_phase(self, ERRORS[case], lease_scope)
-        require(self.counts() == (global_before + 1, 1), "live smoke total dispatch budget differs")
+        dispatches = 1 + int(self.check_withheld_response)
+        require(self.counts() == (global_before + dispatches, dispatches), "live smoke total dispatch budget differs")
         evidence = self.verify_audit(audit_before, scope, lease_scope)
         final = self.warm_cas_snapshot()
         require_catalog_unchanged(snapshot, final, "live catalog changed during smoke")
@@ -474,7 +537,10 @@ class LiveSmoke(OperatorCatalogCheck):
         self.results.extend(["existing_catalog_preserved_three_synthetic_resources_added",
             "public_https_proxy_and_interception_tls_verified", "two_placeholder_denials_without_dispatch",
             "one_post_credential_injection_and_v2_durable_audit_join"])
-        return {**self.receipt(True), **evidence, "upstreamDispatches": 1, "responsesReleased": 1, "responsesBlocked": 0}
+        if self.check_withheld_response:
+            self.results.append("one_post_response_withheld_409_unknown_outcome_and_durable_audit_join")
+        return {**self.receipt(True), **evidence, "upstreamDispatches": dispatches,
+            "responsesReleased": 1, "responsesBlocked": int(self.check_withheld_response)}
 
     def receipt(self, ok):
         result = {"ok": ok, "schema": "serverware.operatorLiveSmoke/v1", "runId": self.run_id,
@@ -484,6 +550,8 @@ class LiveSmoke(OperatorCatalogCheck):
             "browserTransactionVerified": False, "externalDnsVerified": False, "productionReady": False,
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "responseMode": RESPONSE_MODE,
             "auditResponseMode": RESPONSE_VALIDATION_MODE, "proxyUrl": PROXY}
+        if getattr(self, "check_withheld_response", False):
+            result["withheldResponseCheckRequested"] = True
         self.clean(json.dumps(result, sort_keys=True).encode("utf-8"))
         return result
 
@@ -495,6 +563,8 @@ def run_checks(args):
         require(isinstance(pin, str) and SHA256.fullmatch(pin), "explicit expected binary SHA256 required")
         require(args.execute is True and type(args.timeout_seconds) is int and 10 <= args.timeout_seconds <= 120,
                 "explicit live execution and bounded timeout required")
+        require(type(getattr(args, "check_withheld_response", False)) is bool,
+                "withheld-response selection must be explicit boolean")
         parse_expected_upstreams(getattr(args, "expected_upstreams", None))
         require(args.run_claim_file.name == ".operator-live-smoke.claim", "live smoke claim filename differs")
         args.control_base, args.management_base = "http://172.16.249.19:3000", "http://172.16.249.20:9091"
@@ -515,6 +585,8 @@ def run_checks(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="Consume this one-shot live smoke authorization")
+    parser.add_argument("--check-withheld-response", action="store_true",
+        help="Add one fixed synthetic reflection POST; require a 409 and its exact blocked-response audit")
     for name in ("admin-token-file", "ca-file", "upstream-ca-file", "run-claim-file"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-binary-sha256", required=True,

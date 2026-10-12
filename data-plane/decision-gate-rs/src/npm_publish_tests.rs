@@ -363,7 +363,7 @@ fn npm_publish_dispatch_barrier_cannot_rearm_expired_window_or_contact_target() 
     assert!(reached,"the deadline must still be live at the initial send check");
     let result_kind=match &result {Ok(_)=>"response",Err(UpstreamSendError::CredentialAuthority(_))=>"credential-authority",
         Err(UpstreamSendError::DispatchBarrier(_))=>"dispatch-barrier",Err(UpstreamSendError::RequestBuild(_))=>"request-build",
-        Err(UpstreamSendError::Request(_))=>"request"};
+        Err(UpstreamSendError::Request(_))=>"request",Err(UpstreamSendError::PostDispatch{..})=>"post-dispatch"};
     assert!(matches!(result,Err(UpstreamSendError::CredentialAuthority("upstream_send_authority_expired"))),
         "expected original deadline refusal, got {result_kind}");
     assert_eq!(listener.accept().expect_err("expired after barrier: no target connection").kind(),io::ErrorKind::WouldBlock);
@@ -408,6 +408,6 @@ fn npm_publish_real_finalizer_keeps_whole_json_and_blocks_metadata_encoding_refl
         "Content-Type: application/json\r\nSet-Cookie: forbidden=1\r\n",
         "Content-Type: application/json\r\nContent-Type: application/json\r\n",
         "Content-Type: application/vnd.npm.install-v1+json\r\n"] {
-        let wire=finalize(201,headers,b"{}"); assert_eq!(parse_buffered_response(&wire).unwrap().status,502);
+        let wire=finalize(201,headers,b"{}"); assert_eq!(parse_buffered_response(&wire).unwrap().status,409);
         assert!(!String::from_utf8_lossy(&wire).contains("synthetic-secret")); }
 }

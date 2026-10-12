@@ -57,7 +57,7 @@ class Node {
   get textContent() { return this._text + this.children.map(child => typeof child === 'string' ? child : child.textContent).join(''); }
   set textContent(value) { this._text = value; this.children = []; }
   append(...children) { this.children.push(...children); }
-  addEventListener(name, callback) { this.events[name] = callback; }
+  addEventListener(name, callback) { (this.events[name] ||= []).push(callback); }
   querySelectorAll() { return []; }
   insertBefore(node, before) { this.inserted = {node: node.id, before: before.id}; }
   set innerHTML(_) { throw new Error('HTML injection forbidden'); }
@@ -69,9 +69,9 @@ function fixture(options = {}) {
   const node = id => { const value = nodes.get(id) || created.find(item => item.id === id); assert(value, 'Real element must exist'); return value; };
   node('mutation-review').hidden = true;
   const reference = {operation_id: ID, kind: options.kind || 'prepare'};
-  const stored = options.empty ? null : options.malformed ? '{' : JSON.stringify(reference);
+  const stored = Object.hasOwn(options, 'stored') ? options.stored : options.empty ? null : options.malformed ? '{' : JSON.stringify(reference);
   const storage = new Map(stored === null ? [] : [[KEY, stored]]); const writes = []; const calls = []; const forbidden = [];
-  const state = {operation: operation(), status: 200, badOperation: false};
+  const state = {operation: clone(options.operation || operation()), status: 200, badOperation: false, discoveryTransform: null, removeFailure: false};
   const location = {origin: ORIGIN, protocol: 'https:', hash: '#overview'};
   const deny = name => () => { forbidden.push(name); throw new Error('Forbidden fixture effect'); };
   const context = vm.createContext({URL, Date, TextEncoder, location, element: node,
@@ -79,7 +79,7 @@ function fixture(options = {}) {
       createElement() { const value = new Node(''); created.push(value); return value; }},
     sessionStorage: {getItem(key) { if (options.unreadable) throw new Error(PRIVATE); return storage.get(key) ?? null; },
       setItem(key, value) { writes.push({key, value}); storage.set(key, value); },
-      removeItem(key) { writes.push({key, removed: true}); storage.delete(key); }},
+      removeItem(key) { if (state.removeFailure) throw new Error(PRIVATE); writes.push({key, removed: true}); storage.delete(key); }},
     localStorage: {getItem: deny('localStorage'), setItem: deny('localStorage')},
     crypto: {randomUUID: deny('new-operation')}, setTimeout: deny('timer'), clearTimeout() {},
     AbortSignal: {timeout(value) { assert.equal(value, 30000); return {}; }},
@@ -90,7 +90,8 @@ function fixture(options = {}) {
         assert(path === PATH || path === PATH + '/' + ID);
       } catch (error) { forbidden.push('unexpected-request'); throw error; }
       calls.push({path, method: init.method});
-      const body = state.status !== 200 ? {detail: PRIVATE} : path === PATH ? discovery(state.operation) :
+      const body = state.status !== 200 ? {detail: PRIVATE} : path === PATH ?
+        state.discoveryTransform ? state.discoveryTransform(discovery(state.operation)) : discovery(state.operation) :
         state.badOperation ? {...state.operation, operation_id: OWNER} : state.operation;
       return Promise.resolve({ok: state.status === 200, status: state.status,
         headers: {get: () => 'application/json'}, async text() { return JSON.stringify(body); }});
@@ -110,14 +111,14 @@ function fixture(options = {}) {
   if (options.xHold) workspace.setConsentHold(true, 'x-provider-configuration');
   context.workspaceFixture = workspace;
   const view = vm.runInContext('createGoogleConfigurationView(workspaceFixture)', context, {timeout: 1000});
-  const event = (id, type = 'click') => {
-    const target = node(id); assert.equal(typeof target.events[type], 'function');
-    return target.events[type]({preventDefault() {}, currentTarget: target});
+  const event = async (id, type = 'click') => {
+    const target = node(id); assert(Array.isArray(target.events[type]));
+    for (const callback of target.events[type]) await callback({preventDefault() {}, currentTarget: target});
   };
   const navigate = active => { location.hash = active ? '#proxy' : '#overview'; return view.show(active); };
-  const clean = () => {
-    assert.equal(node('google-configuration-client-secret').value, ''); assert.deepEqual(writes, []);
-    assert.deepEqual(forbidden, []); assert.equal(storage.get(KEY) ?? null, stored);
+  const clean = ({retired = false, storedValue = stored} = {}) => {
+    assert.equal(node('google-configuration-client-secret').value, ''); assert.deepEqual(writes, retired ? [{key: KEY, removed: true}] : []);
+    assert.deepEqual(forbidden, []); assert.equal(storage.get(KEY) ?? null, retired ? null : storedValue);
     for (const value of [...nodes.values(), ...created].map(item => item.textContent)) assert(!value.includes(PRIVATE) && !value.includes(SECRET));
     assert(calls.every(call => call.method === 'GET'));
   };
@@ -152,21 +153,26 @@ const tests = [
       assert.equal(f.storage.get(KEY), JSON.stringify(f.reference)); f.clean();
     }
   }],
-  ['terminal GET releases own hold but needs explicit catalogue review acknowledgement', async () => {
+  ['terminal GET retires only after explicit acknowledgement and second Overview load has no repeated hold', async () => {
     for (const status of ['cancelled', 'activated']) {
       const f = fixture({kind: 'cancel'}); await f.navigate(true); f.state.operation = operation(status);
       await f.event('google-configuration-check'); assert.equal(f.workspace.state.busy, false);
       assert.equal(f.node('google-configuration-recovery-hint').hidden, true);
       assert.equal(f.workspace.state.uncertain, true); assert.equal(f.workspace.ready('credentials'), false);
       assert.match(f.node('google-configuration-operation-status').textContent, status === 'cancelled' ? /Cancelled/ : /Activation is recorded/);
+      assert.equal(f.storage.get(KEY), JSON.stringify(f.reference), 'A terminal GET alone never retires recovery');
       assert.equal(f.node('mutation-review-confirm').disabled, false, 'Fresh catalogue permits explicit acknowledgement');
       await f.event('mutation-review-confirm'); assert.equal(f.workspace.state.uncertain, false);
-      assert.equal(f.workspace.ready('credentials'), true); assert.equal(f.calls.length, 2); f.clean();
+      assert.equal(f.workspace.ready('credentials'), true); assert.equal(f.calls.length, 2); f.clean({retired: true});
+      const reloaded = fixture({stored: f.storage.get(KEY) ?? null, operation: f.state.operation});
+      assert.equal(reloaded.workspace.state.uncertain, false); assert.equal(reloaded.workspace.state.busy, false);
+      assert.equal(reloaded.workspace.ready('credentials'), true); assert.equal(reloaded.node('mutation-review').hidden, true);
+      assert.deepEqual(reloaded.calls, []); reloaded.clean();
     }
   }],
   ['missing or mismatched operation never removes reference or authorizes replay', async () => {
-    for (const malformed of [false, true]) {
-      const f = fixture(); f.state.status = malformed ? 200 : 404; f.state.badOperation = malformed; await f.navigate(true);
+    for (const code of [200, 404, 503]) {
+      const f = fixture(); f.state.status = code; f.state.badOperation = code === 200; await f.navigate(true);
       await f.event('google-configuration-check'); assert.equal(f.workspace.state.busy, true);
       assert.equal(f.workspace.state.uncertain, true); assert.equal(f.node('google-configuration-prepare').disabled, true);
       await f.event('google-configuration-form', 'submit'); assert.equal(f.calls.length, 1); f.clean();
@@ -196,9 +202,46 @@ const tests = [
       assert.equal(f.node('google-configuration-recovery-hint').hidden, true);
       assert.equal(f.workspace.state.busy, true); assert.equal(f.workspace.ready('credentials'), false);
       await f.event('mutation-review-confirm'); assert.equal(f.workspace.state.uncertain, true);
+      assert.equal(f.storage.get(KEY), JSON.stringify(f.reference), 'Another owner prevents retirement as well as writes');
       f.workspace.setConsentHold(false, 'x-provider-configuration'); assert.equal(f.workspace.state.busy, false);
-      await f.event('mutation-review-confirm'); assert.equal(f.workspace.ready('credentials'), true); f.clean();
+      await f.event('mutation-review-confirm'); assert.equal(f.workspace.ready('credentials'), true); f.clean({retired: true});
     }
+  }],
+  ['pending status and current catalog or configuration drift never retire the retained locator', async () => {
+    const pending = fixture(); await pending.navigate(true); await pending.event('google-configuration-check');
+    await pending.event('mutation-review-confirm'); pending.clean();
+    for (const change of ['catalog', 'settings', 'owner', 'profile', 'selection']) {
+      const f = fixture(); f.state.operation = operation('activated'); await f.navigate(true);
+      if (change !== 'catalog') f.state.discoveryTransform = value => {
+        if (change === 'settings') value.effective_settings_digest = hash('e');
+        if (change === 'owner') value.operation.custody_ref.owner_id = ID;
+        if (change === 'profile') value.operation.profile_binding_digest = value.operation.activation_receipt.profile_binding_digest = hash('e');
+        if (change === 'selection') value.operation = null;
+        return value;
+      };
+      await f.event('google-configuration-check');
+      if (change === 'catalog') { f.workspace.state.catalog.revision++; f.workspace.emit(); }
+      await f.event('mutation-review-confirm'); assert.equal(f.calls.length, 2); f.clean();
+    }
+  }],
+  ['changed retained locator or failed storage removal reestablishes recovery without clearing another reference', async () => {
+    for (const changed of [false, true]) {
+      const f = fixture(); f.state.operation = operation('cancelled'); await f.navigate(true); await f.event('google-configuration-check');
+      const replacement = JSON.stringify({operation_id: OWNER, kind: 'prepare'});
+      if (changed) f.storage.set(KEY, replacement); else f.state.removeFailure = true;
+      await f.event('mutation-review-confirm');
+      assert.equal(f.workspace.state.uncertain, true); assert.equal(f.workspace.state.busy, true);
+      assert.equal(f.workspace.ready('credentials'), false); assert.equal(f.node('mutation-review').hidden, false);
+      assert.equal(f.calls.length, 2); f.clean(changed ? {storedValue: replacement} : {});
+    }
+  }],
+  ['reviewing already activated selected settings does not create a persistent interrupted-operation reference', async () => {
+    const f = fixture({empty: true, operation: operation('activated')}); await f.navigate(true);
+    await f.event('google-configuration-review');
+    assert.deepEqual(f.calls, [{path: PATH, method: 'GET'}]);
+    assert.equal(f.workspace.state.uncertain, false); assert.equal(f.workspace.state.busy, false);
+    assert.match(f.node('google-configuration-operation-status').textContent, /Activation is recorded/);
+    assert.equal(f.node('google-configuration-operation-reference').textContent, ID); f.clean();
   }],
 ];
 

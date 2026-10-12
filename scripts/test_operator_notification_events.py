@@ -191,6 +191,109 @@ class EventTests(unittest.TestCase):
             with self.reader() as conn:
                 self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
 
+    def provider_record(self, provider):
+        if provider == "github":
+            return ("operator_catalog.credential.github_app_created", str(uuid.uuid4()),
+                {"resource_type": "credential", "resource_id": str(uuid.uuid4()), "revision": 2,
+                    "policy_hash": DIGEST, "policy_sequence": 1})
+        operation = str(uuid.uuid4())
+        return ("operator_catalog.x_oauth.configuration_saved", "operator-x-configuration:" + operation,
+            {"operation_id": operation, "actor_id": CANARY, "config_version": 1,
+                "reviewed_revision": 2, "committed_revision": 3, "policy_hash": DIGEST,
+                "profile_binding_digest": "sha256:" + "b" * 64, "created_at": CREATED})
+
+    def test_closed_provider_configuration_projections_are_audit_only(self):
+        expected = []
+        for provider in ("github", "x"):
+            kind, identifier, body = self.provider_record(provider)
+            self.assertIn(kind, events.AUDIT_EVENT_TYPES)
+            self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
+            self.append(kind, body, identifier=identifier, actor_type="admin")
+            details = {"actor_type": "admin", "provider": provider, "policy_hash": DIGEST}
+            if provider == "github":
+                details.update(resource_type="credential", resource_id=body["resource_id"],
+                    revision=2, policy_sequence=1)
+            else:
+                details.update(operation_id=body["operation_id"], config_version=1,
+                    reviewed_revision=2, committed_revision=3)
+            expected.append(details)
+        batch, cursor = self.read()
+        self.assertEqual(cursor.rowid, 2)
+        self.assertEqual([item.audit_payload["details"] for item in batch], expected)
+        with self.reader(forbid_secrets=True) as conn:
+            for item in batch:
+                self.assertIsNone(item.action_payload)
+                self.assertEqual(item.audit_payload["channel"], "audit_log")
+                self.assertEqual(item.audit_payload["projection"], "approved_fields")
+                self.assertEqual(item.audit_payload["review_path"], "/#audit")
+                self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+                self.assertFalse(events.action_is_current(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+                self.assertNotIn(CANARY, json.dumps(item.audit_payload))
+                self.assertNotIn("profile_binding_digest", json.dumps(item.audit_payload))
+        self.assertEqual(self.read(cursor), ((), cursor))  # Committed cursor replay produces no duplicate.
+
+    def test_provider_configuration_requires_exact_producer_ids_actors_and_bodies(self):
+        count = 0
+        for provider in ("github", "x"):
+            kind, identifier, body = self.provider_record(provider)
+            wrong_ids = ("sha256:" + ("a" if provider == "github" else "b") * 64,
+                "operator-google-reauthorized:" + str(uuid.uuid4()))
+            if provider == "x":
+                wrong_ids += (str(uuid.uuid4()), "operator-x-configuration:" + str(uuid.uuid4()),
+                    identifier + ":saved")
+            for wrong in wrong_ids:
+                self.append(kind, body, identifier=wrong, actor_type="admin")
+                count += 1
+            for wrong_actor in ("system", "proxy"):
+                _, identifier, body = self.provider_record(provider)
+                self.append(kind, body, identifier=identifier, actor_type=wrong_actor)
+                count += 1
+            _, identifier, body = self.provider_record(provider)
+            invalid = [{}, {**body, "client_secret": CANARY}, {**body, "policy_hash": CANARY}]
+            invalid.extend({key: value for key, value in body.items() if key != omitted} for omitted in body)
+            if provider == "github":
+                invalid.extend({**body, **change} for change in ({"resource_type": "application"},
+                    {"resource_id": CANARY}, {"revision": True}, {"revision": 0}, {"policy_sequence": True}))
+            else:
+                invalid.extend({**body, **change} for change in ({"actor_id": "another-administrator"},
+                    {"config_version": True}, {"config_version": 2}, {"reviewed_revision": True},
+                    {"reviewed_revision": 0}, {"committed_revision": True}, {"committed_revision": 4},
+                    {"profile_binding_digest": CANARY}, {"created_at": "2026-02-30T12:00:00Z"}))
+            for value in invalid:
+                # Give every fixture a unique row ID while preserving the X body/ID join.
+                identifier = str(uuid.uuid4())
+                if provider == "x":
+                    if "operation_id" in value:
+                        value = {**value, "operation_id": identifier}
+                    identifier = "operator-x-configuration:" + identifier
+                self.append(kind, value, identifier=identifier, actor_type="admin")
+                count += 1
+            for raw in ('{"policy_hash":1,"policy_hash":2}', '{"private":NaN}', "[1]", "{"):
+                _, identifier, _ = self.provider_record(provider)
+                self.append(kind, raw=raw, identifier=identifier, actor_type="admin")
+                count += 1
+        batch, cursor = self.read(limit=64)
+        self.assertEqual(batch, ())  # No metadata-only fallback for a corrupt producer body.
+        self.assertEqual(cursor.rowid, count)
+
+    def test_provider_configuration_final_recheck_rejects_changed_source_or_projection(self):
+        for provider in ("github", "x"):
+            kind, identifier, body = self.provider_record(provider)
+            self.append(kind, body, identifier=identifier, actor_type="admin")
+        batch, _ = self.read()
+        self.assertEqual(len(batch), 2)
+        for item in batch:
+            changed = json.loads(json.dumps(item.audit_payload))
+            changed["details"]["provider"] = "other"
+            with self.reader() as conn:
+                self.assertFalse(events.payload_matches_source(conn, changed, now_epoch_ms=NOW_MS))
+            # Retain the old chain/hash intentionally: recheck must validate the actual body too.
+            self.writer.execute("UPDATE audit_events SET event_json=? WHERE id=?",
+                (json.dumps({"secret": CANARY}), item.event_id))
+            self.writer.commit()
+            with self.reader() as conn:
+                self.assertFalse(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+
     def test_setup_writer_ids_remain_audit_only_without_private_configuration(self):
         expected = []
         # Both production _append helpers use this exact ID/type pairing. These

@@ -195,6 +195,18 @@ async function fixture(browser, options, exercise) {
     };
     await controls.context.route(ORIGIN + PATH, handler);
     await controls.context.route(ORIGIN + PATH + '/**', handler);
+    // MAIN's optional X panel performs one read-only feature discovery when
+    // Proxy opens. Model the default-disabled route, never an X save or action.
+    let xDiscoveryReads = 0;
+    await controls.context.route(ORIGIN + '/api/operator-demo/oauth/x/configuration/v1', async route => {
+      try {
+        const request = route.request();
+        assert.equal(request.method(), 'GET'); assert(!request.postDataBuffer()?.length);
+        assert.equal(request.url(), ORIGIN + '/api/operator-demo/oauth/x/configuration/v1'); assert(++xDiscoveryReads <= 8);
+        state.expectedFailures.add('/api/operator-demo/oauth/x/configuration/v1');
+        await answer(route, {detail: 'X configuration is not supported by this deployment'}, 404);
+      } catch (_) { state.errors.push('Google fixture attempted a non-observation X request'); await route.abort(); }
+    });
     await controls.context.route(ORIGIN + '/api/operator-demo/oauth/google/intents', async route => {
       try {
         assert.equal(route.request().method(), 'GET'); assert(!route.request().postDataBuffer()?.length);
@@ -481,7 +493,7 @@ const tests = [
     assert(await node(page, 'prepare').isDisabled()); assert(await node(page, 'cancel').isDisabled());
     assert.equal(await noMaterial(page), null); assert.equal(observed.prepares.length + observed.cancels.length, 0);
   })],
-  ['Overview exposes retained Google recovery; exact terminal GET releases only its hold before explicit confirmation', async browser => {
+  ['Overview recovery retires a verified terminal reference only after confirmation and stays resolved after reload', async (browser, directory) => {
     for (const status of ['cancelled', 'activated']) await fixture(browser, {}, async (page, state, observed) => {
       await prepare(page); const reference = await noMaterial(page);
       assert.deepEqual(reference, {operation_id: observed.operation.operation_id, kind: 'prepare'});
@@ -509,6 +521,7 @@ const tests = [
       assert(await page.locator('#credential-save').isDisabled());
       assert(await page.locator('#mutation-review').isVisible());
       assert.equal(observed.requests.length, beforeReload);
+      await screenshot(page, directory, 'google-recovery-' + status + '-overview-desktop');
       await page.setViewportSize({width: 390, height: 844});
       assert(await node(page, 'recovery-link').isVisible());
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -546,7 +559,23 @@ const tests = [
         'successful explicit confirmation proves the Google hold was released');
       assert.equal(observed.requests.length, afterCheck, 'confirmation is local, not a replay or second recovery request');
       assert.equal(observed.prepares.length, 1); assert.equal(observed.cancels.length, 0);
-      assert.deepEqual(await noMaterial(page), reference);
+      assert.equal(await noMaterial(page), null, 'explicit acknowledgement retires only the verified terminal locator');
+      await view(page, 'overview');
+      activeStep = 'completed-google-recovery-second-overview-reload';
+      await page.reload({waitUntil: 'networkidle'}); await ready(page);
+      assert.equal(await page.title(), 'Overview - Serverware operator workspace');
+      assert(await page.locator('#mutation-review').isHidden());
+      assert.equal(await node(page, 'recovery-hint').count(), 0, 'completed recovery must not become a fresh hold');
+      assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === false));
+      assert(!await page.locator('#credential-save').isDisabled());
+      assert.equal(await noMaterial(page), null); assert.equal(observed.requests.length, afterCheck);
+      assert.equal(observed.prepares.length, 1); assert.equal(observed.cancels.length, 0);
+      await screenshot(page, directory, 'completed-google-' + status + '-overview-mobile');
+      if (status === 'activated') {
+        await view(page, 'proxy'); await node(page, 'review').click(); await settled(page);
+        assert.match(await node(page, 'operation-status').innerText(), /Activation is recorded/);
+        assert.equal(await noMaterial(page), null, 'reviewing saved settings must not re-create persistent recovery');
+      }
     });
   }],
 ];

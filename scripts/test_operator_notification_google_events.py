@@ -87,8 +87,8 @@ class GoogleEventTests(unittest.TestCase):
     def one(self, identifier):
         return next(item for item in self.read()[0] if item.event_id == identifier)
 
-    def test_exact_64_filters_and_unchanged_action_sources(self):
-        self.assertEqual(len(events.AUDIT_EVENT_TYPES), 64)
+    def test_current_audit_roster_and_unchanged_action_sources(self):
+        self.assertEqual(len(events.AUDIT_EVENT_TYPES), 67)
         self.assertTrue(set(KINDS) <= set(events.AUDIT_EVENT_TYPES))
         self.assertFalse(set(KINDS) & set(events.ACTION_EVENT_TYPES))
         self.assertEqual(set(events.ACTION_EVENT_TYPES), {"approval.requested", "control_plane.approval.requested",

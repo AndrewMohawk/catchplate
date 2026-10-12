@@ -190,7 +190,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
+            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
@@ -200,13 +200,52 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertIn('reauthorizationUuid(id)', recovery)
         configuration = scripts['workspace_google_configuration.js']
         self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', configuration),
-                         ['googleConfigurationKey, JSON.stringify(next', 'googleConfigurationKey, JSON.stringify(priorReference'])
+                         ['googleConfigurationKey, raw', 'googleConfigurationKey, priorRaw'])
+        self.assertIn('const raw = JSON.stringify(next); sessionStorage.setItem(googleConfigurationKey, raw);', configuration)
+        self.assertIn('reference = next; retainedRaw = raw; receipt = null;', configuration)
+        self.assertIn('if (!googleConfigurationReference(parsed)) throw new Error(); reference = parsed; retainedRaw = raw;', configuration)
+        self.assertIn("const selected = {operation_id: discovery.operation.operation_id, kind: 'prepare'};", configuration)
+        self.assertIn('const priorRaw = retainedRaw;', configuration)
+        self.assertIn('if (priorRaw !== null) sessionStorage.setItem(googleConfigurationKey, priorRaw);', configuration)
         self.assertIn("googleConfigurationKey = 'serverware.operator.google.configuration.operation.v2'", configuration)
         self.assertIn("upstreamObject(value, ['operation_id', 'kind']) && upstreamUUID(value.operation_id)", configuration)
         self.assertIn("['prepare', 'cancel'].includes(value.kind)", configuration)
         self.assertIn('if (!retain({operation_id: payload.operation_id, kind}))', configuration)
         self.assertLess(configuration.index('if (!retain({operation_id: payload.operation_id, kind}))'),
                         configuration.index("const pending = request(googleConfigurationPath +"))
+        # X first-save recovery stores the UUID string alone, not its client
+        # settings, receipt or secret. Close every storage access and both
+        # producer paths; this is not a general exception for the new asset.
+        def assert_x_public_reference(source):
+            self.assertEqual(re.findall(r'\bsessionStorage\.([A-Za-z]+)\(([^)]*)\)', source),
+                             [('getItem', 'xConfigurationKey'), ('setItem', 'xConfigurationKey, id'),
+                              ('removeItem', 'xConfigurationKey')])
+            self.assertEqual(len(re.findall(r'\bsessionStorage\b', source)), 3)
+            self.assertIn("xConfigurationKey = 'serverware.operator.x.configuration.operation.v1'", source)
+            self.assertIn('if (saved !== null) { if (!upstreamUUID(saved)) throw new Error(); operationId = saved; }', source)
+            self.assertEqual(re.findall(r'\bretain\(([^()]*)\)', source),
+                             ['id', 'next.operation.operation_id', 'payload.operation_id'])
+            self.assertIn('const next = projectXConfiguration(await request(xConfigurationPath));', source)
+            self.assertIn('payload = {operation_id: crypto.randomUUID(),', source)
+            self.assertLess(source.index('if (!retain(payload.operation_id))'),
+                            source.index('const pending = request(xConfigurationPath, payload);'))
+
+        x_configuration = scripts['workspace_x_configuration.js']
+        assert_x_public_reference(x_configuration)
+        for original, replacement in (
+                ('sessionStorage.setItem(xConfigurationKey, id)',
+                 'sessionStorage.setItem(xConfigurationKey, JSON.stringify(payload))'),
+                ('retain(payload.operation_id)', 'retain(payload.client_secret)'),
+                ('if (!upstreamUUID(saved))', 'if (!saved)'),
+                ('sessionStorage.setItem(xConfigurationKey, id)',
+                 "sessionStorage['setItem'](xConfigurationKey, id)")):
+            with self.subTest(x_storage_boundary=original):
+                altered = x_configuration.replace(original, replacement)
+                self.assertNotEqual(altered, x_configuration)
+                with self.assertRaises(AssertionError):
+                    assert_x_public_reference(altered)
+        with self.assertRaises(AssertionError):
+            assert_x_public_reference(x_configuration + '\nsessionStorage.setItem(xConfigurationKey, secret);')
         # Notifications stores a different closed public recovery reference
         # before its one POST. Real browser fixtures check the exact stored
         # fields, secret clearing, uncertainty, 404 retention and no replay.

@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const {readFile, mkdtemp, stat} = require('node:fs/promises');
+const {readFile, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const {fixture: baseFixture, ready, view, credential, application, rule, NOW} = require('./test_operator_catalog_browser.cjs');
 
@@ -24,6 +24,13 @@ tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_t
 assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
 summaries=ast.literal_eval(assignments["_SUMMARIES"])
 summaries.update(ast.literal_eval(assignments["_GOOGLE_SUMMARIES"]))
+x_saved=ast.literal_eval(assignments["_X_CONFIGURATION_SAVED"])
+assert x_saved=="operator_catalog.x_oauth.configuration_saved"
+x_entries=[n for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Subscript)
+    and isinstance(n.targets[0].value,ast.Name) and n.targets[0].value.id=="_SUMMARIES"
+    and isinstance(n.targets[0].slice,ast.Name) and n.targets[0].slice.id=="_X_CONFIGURATION_SAVED"]
+assert len(x_entries)==1 and type(ast.literal_eval(x_entries[0].value)) is str
+summaries[x_saved]=ast.literal_eval(x_entries[0].value)
 catalog=ast.literal_eval(assignments["_CATALOG"])
 native=ast.literal_eval(assignments["NATIVE_EVENT_TYPES"])
 known={"_SUMMARIES":[*summaries,*["operator_catalog."+key for key in catalog]],"NATIVE_EVENT_TYPES":list(native)}
@@ -41,7 +48,7 @@ def event_list(node):
         return values
     raise ValueError("unsupported event enum expression")
 result={"action_required":event_list(assignments["ACTION_EVENT_TYPES"]),"audit_log":event_list(assignments["AUDIT_EVENT_TYPES"])}
-assert all(len(values)<=(65 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
+assert all(len(values)<=(67 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
 print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
@@ -249,24 +256,29 @@ const tests = [
       }
       assert.equal(observed.posts.length, 0); await screenshot(page, 'four-independent-notification-slots');
     })],
-  ['65 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
+  ['67 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
     async (page, observed) => {
       await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
-      assert.equal(await target.locator('[name="event_types"]').count(), 65);
+      assert.equal(await target.locator('[name="event_types"]').count(), 67);
       assert.equal(await target.locator('[name="event_types"]:checked').count(), 1);
       await target.locator('details').locator('summary').click();
       for (const checkbox of await target.locator('[name="event_types"]').all()) await checkbox.check();
-      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /65\/64 selected/);
+      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /67\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
       // Bypassing a disabled submit button still hits the same bounded guard.
       await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
       assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
       assert.deepEqual(observed.snapshot.slots, before);
-      await target.locator('[name="event_types"]').first().uncheck();
+      for (const checkbox of (await target.locator('[name="event_types"]').all()).slice(0, 2)) await checkbox.uncheck();
+      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /65\/64 selected/);
+      assert(await target.locator('[data-notification-save]').isDisabled());
+      await target.locator('[name="event_types"]').nth(2).uncheck();
       assert(await target.locator('[data-notification-save]').isEnabled());
       await submit(page, target); assert.equal(observed.posts.length, 1);
       assert.equal(observed.posts[0].body.event_types.length, 64);
       assert(observed.posts[0].body.event_types.includes('operator_catalog.access_rule.npm_install_created'));
+      assert(observed.posts[0].body.event_types.includes('operator_catalog.credential.github_app_created'));
+      assert(observed.posts[0].body.event_types.includes('operator_catalog.x_oauth.configuration_saved'));
     })],
   ['explicit saves use each slot revision and leave all other destinations and application resources unchanged', browser => fixture(browser, {},
     async (page, observed) => {
@@ -460,8 +472,10 @@ const tests = [
         assert.equal(await target.locator('[name="url"]').inputValue(), '');
       }
       assert.doesNotMatch(await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText(), /HTTP status:/);
-      assert.equal(EVENTS.audit_log.length, 65); assert.equal(EVENTS.action_required.length, 5);
+      assert.equal(EVENTS.audit_log.length, 67); assert.equal(EVENTS.action_required.length, 5);
       assert(EVENTS.audit_log.includes('operator_catalog.access_rule.npm_install_created'));
+      assert(EVENTS.audit_log.includes('operator_catalog.credential.github_app_created'));
+      assert(EVENTS.audit_log.includes('operator_catalog.x_oauth.configuration_saved'));
       assert.equal(JSON.stringify(observed.snapshot), before); assert.equal(observed.posts.length, 0);
       await screenshot(page, 'notification-slot-failure-details');
     })],
@@ -521,8 +535,7 @@ async function main() {
   assert.equal(process.argv.length, 2, 'notification fixtures accept no live target or credentials');
   assert(tests.length > 0, 'fixture cases must be finalized before execution');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
-  assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'notifications-browser-synthetic-'));
+  artifacts = await mkdtemp('/tmp/serverware-notifications-browser-');
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic notification fixtures; no actual destinations'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true,

@@ -147,19 +147,21 @@ def all_filters():
     f = cleanup.Fixture()
     from serverware import operator_notification_store as store, operator_notification_events as events
     from serverware import operator_notification_transport as transport, operator_notifications as notifications
-    install_event = "operator_catalog.access_rule.npm_install_created"
+    added_events = {"operator_catalog.access_rule.npm_install_created",
+        "operator_catalog.credential.github_app_created", "operator_catalog.x_oauth.configuration_saved"}
     advertised = list(events.AUDIT_EVENT_TYPES)
-    assert len(advertised) == 65 and install_event in advertised
-    selected = [kind for kind in advertised if kind != install_event]
+    assert len(advertised) == 67 and added_events <= set(advertised)
+    selected = [kind for kind in advertised if kind not in added_events]
     assert len(selected) == 64
     payload = {"operation_id": str(uuid.uuid4()), "slot": "audit_log.webhook", "expected_revision": 0,
         "label": "Original 64 supported audit events", "enabled": True, "event_types": selected, "max_attempts": 1,
         "url_action": "replace", "url": "https://receiver.example.test/synthetic-private-notification-token"}
     assert len(json.dumps(payload).encode()) < 16384
     model = store.SaveInput(**payload)
-    assert store.SaveInput(**{**payload, "event_types": [install_event]}).event_types == [install_event]
+    for kind in added_events:
+        assert store.SaveInput(**{**payload, "event_types": [kind]}).event_types == [kind]
     try:
-        store.SaveInput(**{**payload, "event_types": advertised})
+        store.SaveInput(**{**payload, "event_types": advertised[:65]})
     except ValueError:
         pass
     else:

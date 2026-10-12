@@ -95,13 +95,13 @@ function projectGoogleConfiguration(value) {
 function createGoogleConfigurationView(workspace) {
   const panel = element('google-configuration-panel');
   element('proxy').insertBefore(panel, element('proxy-setup-content'));
-  let discovery = null; let reference = null; let receipt = null;
+  let discovery = null; let reference = null; let receipt = null; let retainedRaw = null;
   let visible = false; let busy = false; let storageBlocked = false; let recoveryHint = null;
   const holdOwner = 'google-provider-configuration';
   try {
     const raw = sessionStorage.getItem(googleConfigurationKey);
     if (raw !== null) { if (raw.length > 128) throw new Error(); const parsed = JSON.parse(raw);
-      if (!googleConfigurationReference(parsed)) throw new Error(); reference = parsed; }
+      if (!googleConfigurationReference(parsed)) throw new Error(); reference = parsed; retainedRaw = raw; }
   } catch (_) { storageBlocked = true; }
   const clearSecret = () => { element('google-configuration-client-secret').value = ''; };
   const say = value => { element('google-configuration-status').textContent = value; };
@@ -118,8 +118,34 @@ function createGoogleConfigurationView(workspace) {
       secret === secret.trim() && !/[\u0000\r\n]/.test(secret) && new TextEncoder().encode(secret).length <= 4096;
   }
   function retain(next) {
-    try { sessionStorage.setItem(googleConfigurationKey, JSON.stringify(next)); reference = next; receipt = null; return true; }
+    try { const raw = JSON.stringify(next); sessionStorage.setItem(googleConfigurationKey, raw);
+      reference = next; retainedRaw = raw; receipt = null; return true; }
     catch (_) { storageBlocked = true; return false; }
+  }
+  function terminalCurrent() {
+    if (!reference || !receipt || !current() || receipt.operation_id !== reference.operation_id ||
+      receipt.revision > discovery.revision || receipt.policy_hash !== discovery.policy_hash ||
+      receipt.public_url !== discovery.public_url || receipt.redirect_uri !== discovery.redirect_uri) return false;
+    if (receipt.status === 'cancelled') return discovery.state === 'unconfigured' && discovery.operation === null &&
+      discovery.effective_settings_digest === receipt.expected_settings_digest && operatorExact(discovery.effective_settings, receipt.old_settings);
+    return receipt.status === 'activated' && discovery.state === 'activated' && operatorExact(discovery.operation, receipt) &&
+      discovery.effective_settings_digest === receipt.activation_receipt.settings_digest && operatorExact(discovery.effective_settings, receipt.target_settings);
+  }
+  function acknowledgeTerminal() {
+    // The core's earlier click listener must have accepted this explicit review
+    // acknowledgement. Never release another owner's hold or infer a terminal
+    // result from discovery alone. Keep the verified history visible in memory.
+    if (busy || storageBlocked || workspace.state.busy || workspace.state.uncertain || retainedRaw === null || !terminalCurrent()) return;
+    try {
+      if (sessionStorage.getItem(googleConfigurationKey) !== retainedRaw || !operatorExact(JSON.parse(retainedRaw), reference)) throw new Error();
+      sessionStorage.removeItem(googleConfigurationKey);
+      if (sessionStorage.getItem(googleConfigurationKey) !== null) throw new Error();
+      retainedRaw = null;
+    } catch (_) {
+      storageBlocked = true;
+      workspace.requireReview('Google provider recovery could not retire its exact completed reference safely. Review Google recovery status; do not repeat the request.');
+    }
+    update();
   }
   function update() {
     if (recoveryHint) recoveryHint.hidden = !storageBlocked && !unresolved();
@@ -199,7 +225,14 @@ function createGoogleConfigurationView(workspace) {
     // Adopt only the explicitly selected actor-owned operation, never a latest
     // historical row, and never replace an unresolved tab reference.
     if (!reference && discovery.operation) {
-      if (retain({operation_id: discovery.operation.operation_id, kind: 'prepare'})) receipt = discovery.operation;
+      const selected = {operation_id: discovery.operation.operation_id, kind: 'prepare'};
+      if (discovery.operation.status === 'pending') {
+        if (retain(selected)) receipt = discovery.operation;
+      } else {
+        // Reviewing already-activated settings is not an interrupted mutation.
+        // Do not recreate a persistent recovery hold on the next page load.
+        reference = selected; receipt = discovery.operation;
+      }
     }
     await workspace.refresh();
   }
@@ -210,11 +243,11 @@ function createGoogleConfigurationView(workspace) {
     catch (error) { clearSecret(); discovery = null; say(operatorMessage(error)); }
     finally { busy = false; update(); }
   }
-  function retireRejected(priorReference, priorReceipt) {
+  function retireRejected(priorReference, priorReceipt, priorRaw) {
     try {
-      if (priorReference) sessionStorage.setItem(googleConfigurationKey, JSON.stringify(priorReference));
+      if (priorRaw !== null) sessionStorage.setItem(googleConfigurationKey, priorRaw);
       else sessionStorage.removeItem(googleConfigurationKey);
-      reference = priorReference; receipt = priorReceipt;
+      reference = priorReference; receipt = priorReceipt; retainedRaw = priorRaw;
     } catch (_) { storageBlocked = true; }
   }
   async function submit(kind) {
@@ -223,7 +256,7 @@ function createGoogleConfigurationView(workspace) {
       (receipt?.status !== 'pending' || reference?.kind !== 'prepare' || unresolved() || discovery.operation?.operation_id !== reference.operation_id)) {
       clearSecret(); render(); return;
     }
-    const priorReference = reference; const priorReceipt = receipt; const reviewed = discovery;
+    const priorReference = reference; const priorReceipt = receipt; const priorRaw = retainedRaw; const reviewed = discovery;
     let payload = null;
     try {
       payload = kind === 'prepare' ? {operation_id: crypto.randomUUID(), client_id: element('google-configuration-client-id').value,
@@ -251,7 +284,7 @@ function createGoogleConfigurationView(workspace) {
       await loadDiscovery(); say(operationText());
     } catch (error) {
       discovery = null;
-      if (error.googleConfigurationRejectedInput) retireRejected(priorReference, priorReceipt);
+      if (error.googleConfigurationRejectedInput) retireRejected(priorReference, priorReceipt, priorRaw);
       say(operatorMessage(error));
     } finally { if (payload && Object.hasOwn(payload, 'client_secret')) payload.client_secret = ''; payload = null; clearSecret(); busy = false; update(); }
   }
@@ -284,6 +317,7 @@ function createGoogleConfigurationView(workspace) {
   for (const id of ['google-configuration-client-id', 'google-configuration-client-secret']) element(id).addEventListener('input', render);
   element('google-configuration-check').addEventListener('click', check);
   element('google-configuration-cancel').addEventListener('click', cancel);
+  element('mutation-review-confirm').addEventListener('click', acknowledgeTerminal);
   window.addEventListener('pagehide', clearSecret);
   if (reference || storageBlocked) {
     const message = storageBlocked ?

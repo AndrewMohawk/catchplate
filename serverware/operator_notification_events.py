@@ -59,6 +59,7 @@ _SUMMARIES = {
 _CATALOG = {
     "credential.created": "Provider key saved",
     "credential.github_token_created": "GitHub token saved",
+    "credential.github_app_created": "GitHub App connection saved",
     "credential.npm_token_created": "npm token saved",
     "credential.x_app_bearer_created": "X app-only token saved",
     "credential.alchemy_key_created": "Alchemy key saved",
@@ -86,6 +87,10 @@ _CATALOG = {
     "google_setup.activated": "Google provider configuration activated",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
+_GITHUB_APP_CREATED = "operator_catalog.credential.github_app_created"
+_X_CONFIGURATION_SAVED = "operator_catalog.x_oauth.configuration_saved"
+_X_CONFIGURATION_PREFIX = "operator-x-configuration:"
+_SUMMARIES[_X_CONFIGURATION_SAVED] = "X application configuration saved; account consent is separate"
 # Ordinary Google lifecycle history, never a live action-required source. Keep
 # intent/exchange bookkeeping and internal schema admission out of the filters.
 _GOOGLE_SUMMARIES = {
@@ -180,6 +185,11 @@ def _setup_operation(identifier, event_type):
 
 
 def _event_identifier(identifier, event_type):
+    if event_type == _X_CONFIGURATION_SAVED:
+        return (isinstance(identifier, str) and identifier.startswith(_X_CONFIGURATION_PREFIX)
+            and _uuid(identifier[len(_X_CONFIGURATION_PREFIX):]))
+    if event_type == _GITHUB_APP_CREATED:
+        return _uuid(identifier)
     if event_type in _SETUP_IDS:
         return _setup_operation(identifier, event_type) is not None
     if event_type in _GOOGLE_IDS:
@@ -340,6 +350,35 @@ def _details(row, event):
     if _integer(event.get("upstream_status"), 100, 599):
         result["upstream_status"] = event["upstream_status"]
     return result
+
+
+def _provider_configuration_details(row, event):
+    """Exact committed producer records, not provider readiness or actions.
+
+    Do not fall back to metadata-only delivery for these two closed producers.
+    Raw profiles, App keys, client IDs and secrets are never copied here.
+    """
+    _require(type(event) is dict and row["actor_type"] == "admin"
+        and _text(row["actor_id"], 256))
+    if row["event_type"] == _GITHUB_APP_CREATED:
+        _require(set(event) == {"resource_type", "resource_id", "revision", "policy_hash", "policy_sequence"}
+            and event["resource_type"] == "credential" and _uuid(event["resource_id"])
+            and _integer(event["revision"], 1) and _integer(event["policy_sequence"], 1)
+            and _hash(event["policy_hash"]))
+        return {**_details(row, event), "provider": "github"}
+    _require(row["event_type"] == _X_CONFIGURATION_SAVED
+        and set(event) == {"operation_id", "actor_id", "config_version", "reviewed_revision",
+            "committed_revision", "policy_hash", "profile_binding_digest", "created_at"}
+        and row["event_id"] == _X_CONFIGURATION_PREFIX + str(event["operation_id"])
+        and _uuid(event["operation_id"]) and event["actor_id"] == row["actor_id"]
+        and _integer(event["config_version"], 1, 1)
+        and _integer(event["reviewed_revision"], 1, _MAX_INT - 2)
+        and _integer(event["committed_revision"], 2)
+        and event["committed_revision"] == event["reviewed_revision"] + 1
+        and _hash(event["policy_hash"]) and _hash(event["profile_binding_digest"]))
+    _epoch(event["created_at"])
+    return {**_details(row, event), "provider": "x", **{key: event[key]
+        for key in ("config_version", "reviewed_revision", "committed_revision")}}
 
 
 def _google_details(row, event):
@@ -612,7 +651,10 @@ def _approval(conn, row, event, now):
 
 
 def _audit_projection(row, event):
-    details = _google_details(row, event) if row["event_type"] in _GOOGLE_SUMMARIES else _details(row, event)
+    if row["event_type"] in {_GITHUB_APP_CREATED, _X_CONFIGURATION_SAVED}:
+        details = _provider_configuration_details(row, event)
+    else:
+        details = _google_details(row, event) if row["event_type"] in _GOOGLE_SUMMARIES else _details(row, event)
     audit = _envelope(row, "audit_log", _SUMMARIES[row["event_type"]], details)
     audit["projection"] = "metadata_only" if event is None else "approved_fields"
     return audit

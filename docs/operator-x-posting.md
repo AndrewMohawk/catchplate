@@ -102,14 +102,35 @@ schemas. The library's 207 recorded inputs were byte-identical and included
 neither schema, but Cargo reinvoked it; that stage previously took about 286
 seconds. All 223 third-party dependency artifacts remained fresh.
 
-Future build snapshots should preserve prior modification times only for files
-whose bytes, type and mode are independently verified identical, before freezing
-the new snapshot. Changed/new inputs must remain newer than cached dependency
-records. Reverify the exact Git tree afterward; never alter old snapshots,
-shared hardlinks, Cargo fingerprints or a running compiler's inputs. The existing
-read-only deployment-snapshot verifier is not a build-preparation tool. This
-procedure has not yet been integrated into it or measured as an optimization.
-None of these developer builds or source inventories runs on ordinary page load.
+The new `scripts/prepare_operator_build_snapshot.py` is the build-preparation
+helper for that copy step. It reads and verifies exact committed Git objects,
+independently checks the entire predecessor tree, and preserves modification
+times only for identical file bytes, type and mode in new inodes. It accepts the
+retained archive's conventional `0664/0775` modes as well as canonical and
+read-only modes; reused files keep their full prior mode. Added/deleted paths
+disable all timestamp reuse. Changed/new files are strictly newer than the
+caller-supplied, verified upper bound over cached dependency/build timestamps,
+the captured clock and all predecessor file timestamps.
+
+The interface requires an exact full commit ID and a new absent absolute output
+directory. Reuse additionally requires `--predecessor`, its exact
+`--predecessor-revision` and `--fresh-after-epoch-ns`. The helper never reads a
+cache or proves it usable: receipts explicitly report `cacheVerified: false`
+and `readOnlyFrozen: false`. The caller still verifies compiler/cache identity
+and pins/freezes the output before running a compiler. Failures may leave the
+new incomplete output for inspection, but never overwrite the predecessor.
+
+Do not change Cargo fingerprints, use shared hardlinks or edit running compiler
+inputs. The existing read-only deployment-snapshot verifier remains unchanged;
+it is not a build-preparation tool. Integration with the retained one-shot build
+wrappers and a measured Cargo speedup are still pending. None of these developer
+builds or source inventories runs on ordinary page load.
+
+All eight synthetic Git/filesystem groups passed in 1.799 seconds. They cover
+unchanged timestamp/mode preservation without hardlinks, changed/new/deleted
+inputs, dirty working files, archive attributes, replacement objects, unsafe
+paths/modes/links, bounds and timestamp readback. They do not benchmark Cargo or
+verify a retained cache. No real build source, cache or deployment was changed.
 
 ## Remaining work before enabling the preset
 
@@ -128,6 +149,78 @@ verification stops there; the component results above do not bridge that gap.
    including denied requests, uncertain writes, quota boundaries and audit.
 5. With operator-supplied provider configuration and consent, verify the real X
    journey separately. Public proxy DNS repair remains a separate approval.
+
+### Ordinary X account ownership contract
+
+The operator journey is **configure the X application once → connect an account
+→ give one application permission to post**. Configuration, account consent and
+posting readiness are separate states. App-only username lookup stays separate;
+it must never be relabelled as a user account or a posting permission.
+
+The proposed configuration preset is `x_text_post_v1`. The server fixes its four
+scopes, confidential-client authentication, provider endpoints and callback
+`/api/oauth/callback/x`. The administrator supplies only the client ID and a
+write-only client secret, alongside the normal operation/revision/policy guards.
+A public profile describes configuration; neither its digest nor a validated
+input object proves ownership, activation or permission to contact X.
+
+The public profile/input validator and explicit-key encryption primitives are
+implemented in `operator_x_oauth_profile.py` and `operator_x_provider_custody.py`.
+Nine profile and nine real-AES envelope tests passed in the retained application
+dependency image, together with all 29 existing Google custody controls. Source
+was read-only and container networking disabled. These modules create no key or
+table, select no active configuration, and do not contact a provider. The existing
+Google module is unchanged. Write-only serialization omits the client secret;
+future HTTP handlers must still suppress raw Pydantic structured errors because
+their default diagnostic objects can include submitted input.
+
+`operator_x_oauth_protocol.py` additionally builds private request descriptions
+and classifies supplied token, identity and revocation responses. All ten
+synthetic protocol groups passed under the same offline/read-only conditions.
+It implements form-encoded confidential-client Basic authentication, S256,
+bounded duplicate-aware JSON and valid chunked-response metadata. Malformed or
+mixed token/error replies retain private raw material; omitted scopes or a
+missing returned refresh token remain uncertain under this conservative preset,
+not rejection or permission to reuse the old token. It assumes no unconditional
+refresh-token rotation guarantee.
+
+These are codecs, not a transport or lifecycle owner. Request reconstruction
+checks client/phase consistency, but a parsed success or denial is not proof of
+provider contact, verified account ownership or permission to retire cleanup.
+The future owner must provide the authenticated, bounded no-redirect transport
+and durable material retention. Revocation recognizes bounded empty HTTP 200
+and exact JSON `{"revoked":true}` acknowledgments; neither proves propagation.
+The latter shape is supported by X's [official TypeScript OAuth client](https://github.com/xdevplatform/twitter-api-typescript-sdk/blob/main/src/OAuth2User.ts),
+while endpoint and confidential-client behavior follow the [X OAuth flow guide](https://docs.x.com/fundamentals/authentication/oauth-2-0/user-access-token).
+
+The next integration must join these actual owners:
+
+| Boundary | Required owner and durable result |
+| --- | --- |
+| Configure | Explicit ordinary-development admission, provider-disjoint retained configuration/custody, exact selected version, audit and paired activation. No browser-triggered restart. |
+| Consent | Actor-owned X intent, browser-bound one-use state and S256 PKCE, exact profile/revision checks, and retained cleanup capacity before exchanging a code. |
+| Connect | Verify `/2/users/me`; atomically join encrypted token, credential generation, X catalog identity, completed intent, cleanup disposition and audit. No implicit app grant. |
+| Refresh | Retain issued material before validation; atomically join replacement generation and audit. Preserve uncertain outcomes and original-client cleanup custody; do not automatically replay after a CAS conflict. |
+| Disconnect | Fence credential and dependent permissions locally, publish reduced policy, then perform provider cleanup outside publication/DB locks. Report local denial separately from provider acknowledgment. |
+
+Stable numeric user ID is authority; `@username` is display metadata. Keep the
+current core X client binding (`x_app_id`) and any new public configuration
+binding consistent through explicit validation. Do not send X intent tags into
+Google's `profile_for_refresh`, adopt untagged legacy X credentials, enable the
+generic OAuth routes, or remove native/enrolled-writer refusals.
+
+Google's existing custody table has a global configuration-version key and its
+reader validates the entire retained version roster. X must not add rows to it.
+Any future X tables need their own `operator_x_provider_custody` namespace, and
+shared-key first initialization must check both providers' retained history.
+Decryption alone does not select the active profile/version. Client replacement
+must remain refused until original-client cleanup ownership is implemented.
+
+Neither X consent nor posting capability should appear ready merely because a
+profile parses or the app is healthy. Posting additionally requires the actual
+matching proxy binary, loaded policy and selected configuration. Account-wide
+quota remains unavailable until its real shared backend is connected; a local
+counter or relaxed PostgreSQL authority check is not a substitute.
 
 Provider references: [Create Post](https://docs.x.com/x-api/posts/create-post)
 and [OAuth authorization code flow](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code).

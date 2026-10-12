@@ -21,8 +21,11 @@ mod x_app_read;
 mod alchemy_rpc_read;
 mod npm_publish;
 mod npm_install;
+mod npm_install_connect_encoding;
 #[cfg(test)]
 mod npm_install_ingress_tests;
+#[cfg(test)]
+mod npm_install_connect_tests;
 mod provider_query;
 mod request_query_compat;
 mod proxy_basic_transport;
@@ -50129,6 +50132,22 @@ fn read_request_head_with_intake_from<R: Read>(
     reader: &mut R, client_ip: Option<String>, allow_ordered_intake: bool,
     allow_npm_audit_gzip: bool,
 ) -> Result<RequestHead, String> {
+    read_request_head_with_encoding_options_from(reader, client_ip, allow_ordered_intake,
+        allow_npm_audit_gzip, false)
+}
+
+fn read_operator_outer_request_head_from<R: Read>(
+    reader: &mut R, client_ip: Option<String>, allow_ordered_intake: bool,
+    allow_npm_connect_gzip: bool,
+) -> Result<RequestHead, String> {
+    read_request_head_with_encoding_options_from(reader, client_ip, allow_ordered_intake,
+        false, allow_npm_connect_gzip)
+}
+
+fn read_request_head_with_encoding_options_from<R: Read>(
+    reader: &mut R, client_ip: Option<String>, allow_ordered_intake: bool,
+    allow_npm_audit_gzip: bool, allow_npm_connect_gzip: bool,
+) -> Result<RequestHead, String> {
     let initial_capacity = MAX_REQUEST_HEADER_BYTES.min(16 * 1024).saturating_add(4096);
     let mut buffer = Zeroizing::new(Vec::with_capacity(initial_capacity));
     let mut chunk = Zeroizing::new([0u8; 4096]);
@@ -50236,7 +50255,12 @@ fn read_request_head_with_intake_from<R: Read>(
     if headers.contains_key("transfer-encoding") {
         return Err("transfer-encoding request bodies are not supported".to_string());
     }
-    if !(allow_npm_audit_gzip && headers.get("content-encoding").map(String::as_str) == Some("gzip")) {
+    let bodyless_npm_connect = allow_npm_connect_gzip
+        && npm_install_connect_encoding::permits_head(&method, &target, &headers,
+            content_length, has_content_length, &buffer[header_end..]);
+    if !bodyless_npm_connect
+        && !(allow_npm_audit_gzip && headers.get("content-encoding").map(String::as_str) == Some("gzip"))
+    {
         validate_identity_request_content_encoding(&headers)?;
     }
     for nominated in connection_nominated_headers(&headers) {
@@ -50731,6 +50755,18 @@ fn handle_connect_request(
             return;
         }
     };
+    if let Err(error) = npm_install_connect_encoding::require_authenticated(
+        &state, &snapshot, &request, &connect_authentication,
+    ) {
+        enqueue_audit(&state, "data_plane.connect.denied", json!({
+            "component":"serverware-decision-gate-rs", "method":"CONNECT",
+            "target":connect_target, "outcome":"denied", "stage":"content_encoding",
+            "error":error, "client_ip":client_ip, "policy_hash":snapshot.hash,
+        }));
+        let _ = stream.write_all(&http_response("403 Forbidden", json!({"error":error})));
+        let _ = stream.flush();
+        return;
+    }
     let connection_identity_sha256 = trusted_mtls_evidence
         .as_ref()
         .map(TrustedMtlsEvidence::identity_digest);
@@ -51444,7 +51480,13 @@ fn handle_gate_connection(
         return;
     }
     let ordered_intake = !management_listener && provider_query::allows_ordered_intake(&intake_snapshot, None);
-    let mut head = match read_request_head_with_ordered_query_from(&mut stream, client_ip.clone(), ordered_intake) {
+    let npm_connect_gzip = matches!(&proxy_ingress, ProxyIngressConfig::OperatorDemoTlsEdge)
+        && npm_install_connect_encoding::allows_intake(
+            &state, &intake_snapshot, management_listener,
+        );
+    let mut head = match read_operator_outer_request_head_from(
+        &mut stream, client_ip.clone(), ordered_intake, npm_connect_gzip,
+    ) {
         Ok(head) => head,
         Err(err) => {
             let response = request_head_error_response(&err);

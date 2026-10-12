@@ -21,9 +21,13 @@ One catalog permission signs three `npm.install.v1` routes:
 
 Supported provider errors are bounded to 64 KiB. Audit request bodies are at
 most 64 KiB compressed and 256 KiB decoded, with a strict duplicate-free
-package/version map. Only authenticated CONNECT requests matching the signed
-audit route can use gzip; ordinary and management request intake remain
-identity-only. Original compressed bytes, content encoding and content length
+package/version map. Inner gzip requests require an authenticated CONNECT and
+the signed audit route; other inner requests and management intake remain
+identity-only. The ordinary TLS edge separately tolerates npm's copied gzip
+header on an exact, bodyless registry CONNECT, only with a current app token
+and that app's validated audit grant before opening the tunnel. This does not
+admit an encoded CONNECT body or change native intake.
+Original compressed bytes, content encoding and content length
 are bound into the canonical request and checked against the built upstream
 request. Concatenated/trailing gzip members and invalid checksums are refused.
 
@@ -83,6 +87,17 @@ The original fixed error envelope did not identify which client stage failed;
 that evidence does not establish a cause. All failed runs remain preserved with
 completed cleanup. Full stock-npm acceptance is still required. The ordinary
 live app is unchanged by these source commits.
+The diagnostic run (`npm-install-acceptance.qjwx36xS`) again passed install and
+identified `E400` from stock npm during cold `ci`. A separate loopback-only
+wire probe observed three bodyless outer CONNECTs carrying `Content-Encoding:
+gzip`, with no Content-Length or Transfer-Encoding. Pinned npm's cached proxy
+agent copies the first origin request's headers into CONNECT; cold `ci` starts
+with the gzip advisory request, while install starts with metadata. The default
+outer parser rejects that encoding before authentication. The wire probe's
+overall result remains failed because it recorded a socket error after the
+deliberate 400 responses; its header observations are not proxy acceptance.
+The source correction is limited to that bodyless CONNECT case. Its compiled
+regressions and a complete stock-client rerun are still required before deployment.
 Public proxy DNS repair and real npm
 account entitlement remain separate unverified requirements. No pilot is needed
 to open or use the persistent operator app.

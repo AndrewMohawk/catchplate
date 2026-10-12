@@ -1,0 +1,13 @@
+{
+  "name": "serverware-x-post-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "start": "node client.mjs",
+    "test": "node --test client.test.mjs",
+    "test:sdk": "node --test client.sdk.test.mjs"
+  },
+  "dependencies": { "@xdevplatform/xdk": "0.6.6", "undici": "8.11.2" }
+}

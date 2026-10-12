@@ -39,6 +39,16 @@ pub(super) fn execute(state: &GateState, task: &CredentialLeaseRenewalTask) -> R
         );
     }
 
+    // Ordinary static secrets are acquired on demand by request preparation.
+    // A background secret flight can lose its generation's freshness while
+    // waiting for publication, then pass that unrelated failure to a foreground
+    // follower. Keep metadata warm, but let the request own its exact secret
+    // acquisition and original deadline. Also cover tasks queued before this
+    // eligibility check; neither a flight nor a publication permit is acquired.
+    if task.key.purpose == CredentialLeasePurpose::DispatchSecret {
+        return Ok(());
+    }
+
     // Queue time is already part of this task's one original budget. Clamp it
     // to the independently admitted finite application identity, never reset it
     // when a worker, singleflight leader, or publication lane is acquired.

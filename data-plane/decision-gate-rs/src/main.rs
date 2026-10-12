@@ -24285,6 +24285,14 @@ fn active_credential_lease_background_candidates(
         return Vec::new();
     }
     credential_lease_background_candidates(state, snapshot, renew_before)
+        .into_iter()
+        .filter(|candidate| {
+            candidate.purpose != CredentialLeasePurpose::DispatchSecret
+                || !matches!(operator_static_preparation::admitted(
+                    state, snapshot, &candidate.scope, None, None,
+                ), Ok(true))
+        })
+        .collect()
 }
 
 fn credential_lease_hot_scope_count(state: &GateState, snapshot: &Arc<Snapshot>) -> usize {

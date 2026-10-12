@@ -318,21 +318,81 @@ fn background_renewal_after_lane_fresh_and_cold_rechecks_share_exact_result() {
 
 #[test]
 fn background_renewal_signed_static_due_scope_acquires_exactly_once() {
-    for purpose in [CredentialLeasePurpose::GenerationMetadata, CredentialLeasePurpose::DispatchSecret] {
-        let fixture = RenewalFixture::new(Arc::new(|_| {}));
-        let work = fixture.due(purpose);
-        let server = fixture.server(Arc::clone(&fixture.authority), vec!["GET", "POST"]);
-        execute(&fixture.state, &work).unwrap();
-        let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["purpose"], serde_json::to_value(purpose).unwrap());
-        assert_eq!(credential_lease_background_renewal_status(&fixture.state, &fixture.snapshot,
-            &fixture.scope, purpose), CredentialLeaseRenewalStatus::Fresh);
-        assert_eq!(fixture.state.credential_lease_refresh_success.load(Ordering::Relaxed), 1);
-        assert_eq!(fixture.state.credential_lease_refresh_failed.load(Ordering::Relaxed), 0);
-        assert!(fixture.state.credential_lease_flights.lock().unwrap().is_empty());
-        assert_eq!(fixture.listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    let fixture = RenewalFixture::new(Arc::new(|_| {}));
+    let purpose = CredentialLeasePurpose::GenerationMetadata;
+    let work = fixture.due(purpose);
+    let server = fixture.server(Arc::clone(&fixture.authority), vec!["GET", "POST"]);
+    execute(&fixture.state, &work).unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["purpose"], serde_json::to_value(purpose).unwrap());
+    assert_eq!(credential_lease_background_renewal_status(&fixture.state, &fixture.snapshot,
+        &fixture.scope, purpose), CredentialLeaseRenewalStatus::Fresh);
+    assert_eq!(fixture.state.credential_lease_refresh_success.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.state.credential_lease_refresh_failed.load(Ordering::Relaxed), 0);
+    assert!(fixture.state.credential_lease_flights.lock().unwrap().is_empty());
+    assert_eq!(fixture.listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+}
+
+#[test]
+fn background_renewal_static_secret_never_queues_or_hands_an_expired_flight_to_foreground() {
+    let fixture = RenewalFixture::new(Arc::new(|_| {
+        panic!("on-demand static secrets must not enter the background publication lane");
+    }));
+    let work = fixture.due(CredentialLeasePurpose::DispatchSecret);
+    let original_deadline = work.deadline;
+    let original = fixture.state.credential_generations.lock().unwrap()[&fixture.scope].clone();
+    let writer = fs::OpenOptions::new().read(true).write(true)
+        .open(fixture.scratch.0.join(LOCK_NAME)).unwrap();
+    assert_eq!(unsafe { libc::flock(writer.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0);
+
+    // The coordinator excludes this otherwise-due task, and the worker also
+    // refuses to elect a stale queued secret task before any publication wait.
+    assert!(active_credential_lease_background_candidates(&fixture.state, &fixture.snapshot,
+        CREDENTIAL_LEASE_RENEW_BEFORE).is_empty());
+    execute(&fixture.state, &work).unwrap();
+    assert_eq!(work.deadline, original_deadline);
+    no_effects(&fixture.state, &fixture.listener);
+    {
+        let mut values = fixture.state.credential_generations.lock().unwrap();
+        let retained = values.get_mut(&fixture.scope).unwrap();
+        assert_eq!(retained.expires_at_epoch_ms, original.expires_at_epoch_ms);
+        assert_eq!(retained.expires_at_monotonic, original.expires_at_monotonic);
+        // Deterministically model expiry during the held publication interval;
+        // only shorten both clocks, never change the version or extend a lease.
+        retained.expires_at_epoch_ms = now_epoch_ms();
+        retained.expires_at_monotonic = Instant::now();
     }
+    assert_eq!(credential_lease_background_renewal_status(&fixture.state, &fixture.snapshot,
+        &fixture.scope, CredentialLeasePurpose::DispatchSecret), CredentialLeaseRenewalStatus::Ineligible);
+    execute(&fixture.state, &work).unwrap();
+    let candidates = active_credential_lease_background_candidates(&fixture.state, &fixture.snapshot,
+        CREDENTIAL_LEASE_RENEW_BEFORE);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].scope, fixture.scope);
+    assert_eq!(candidates[0].purpose, CredentialLeasePurpose::GenerationMetadata);
+    no_effects(&fixture.state, &fixture.listener);
+    assert_eq!(unsafe { libc::flock(writer.as_raw_fd(), libc::LOCK_UN) }, 0);
+
+    // The foreground now owns both actual signed/encrypted acquisitions. It
+    // cannot inherit a failed background secret flight or renew this deadline.
+    let server = fixture.server(Arc::clone(&fixture.authority), vec!["POST", "POST"]);
+    let info = preparation::prepare_on_deadline(&fixture.state, &fixture.snapshot,
+        &fixture.scope, original_deadline).unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["purpose"], "generationMetadata");
+    assert_eq!(requests[1]["purpose"], "dispatchSecret");
+    assert_eq!(requests[1]["expectedCredentialVersion"], original.version);
+    assert_eq!(requests[1]["expectedMetadataSha256"], original.metadata_sha256);
+    assert_eq!(info.version, original.version);
+    assert_eq!(info.metadata, original.metadata);
+    assert!(info.secret_available);
+    assert_eq!(work.deadline, original_deadline);
+    assert_eq!(fixture.state.credential_lease_refresh_success.load(Ordering::Relaxed), 2);
+    assert_eq!(fixture.state.credential_lease_refresh_failed.load(Ordering::Relaxed), 0);
+    assert!(fixture.state.credential_lease_flights.lock().unwrap().is_empty());
+    assert_eq!(fixture.listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
 }
 
 #[test]
@@ -375,7 +435,7 @@ fn background_renewal_publisher_first_reloads_without_retargeting_or_hot_transfe
 #[test]
 fn background_renewal_publication_wait_keeps_original_deadline_and_cache() {
     let fixture = RenewalFixture::new(Arc::new(|_| {}));
-    let mut work = fixture.due(CredentialLeasePurpose::DispatchSecret);
+    let mut work = fixture.due(CredentialLeasePurpose::GenerationMetadata);
     work.deadline = Instant::now() + Duration::from_millis(80);
     let writer = fs::OpenOptions::new().read(true).write(true)
         .open(fixture.scratch.0.join(LOCK_NAME)).unwrap();

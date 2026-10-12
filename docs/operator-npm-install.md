@@ -49,7 +49,19 @@ distinct durable audit attempts, and all prior denial controls. A successful
 mocked check or compilation is not that acceptance result.
 
 Current candidate status: focused Python, catalog, Node and fixture-oracle
-checks passed; actual compiled-proxy acceptance is pending. The ordinary live
-app is unchanged by these source commits. Public proxy DNS repair and real npm
+checks and 96 compiled Rust controls passed. The first real stock-npm run
+stopped at the third publication with a credential-preparation 503, before
+installation. Its state and cleanup receipts are preserved in
+`npm-install-acceptance.Jg4Pc6mt`; it is not a successful acceptance result.
+
+The repair candidate keeps ordinary static credential metadata warm in the
+background but obtains secrets on demand in the foreground. This prevents a
+request from joining a background secret-renewal flight that can become
+ineligible while waiting for publication. Existing five-second leases, exact
+generation checks, request deadlines and native/Google behavior are unchanged.
+Closed diagnostic categories distinguish these failures without logging
+credentials. Compiled regression and stock-npm acceptance of this repair are
+still required. The ordinary live app is unchanged by these source commits.
+Public proxy DNS repair and real npm
 account entitlement remain separate unverified requirements. No pilot is needed
 to open or use the persistent operator app.

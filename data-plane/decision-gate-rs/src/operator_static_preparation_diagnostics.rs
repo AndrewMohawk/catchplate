@@ -36,6 +36,9 @@ fn error_code(error: &str) -> &'static str {
     match error {
         "operator static credential preparation unavailable" => "static_preparation_unavailable",
         "credential lease singleflight timed out" => "singleflight_timeout",
+        "operator background credential renewal unavailable" => "background_renewal_unavailable",
+        "operator publication coordination refused" => "publication_coordination_refused",
+        "operator publication coordination deadline expired" => "publication_coordination_deadline",
         "custody I/O deadline exceeded during native credential original operation"
         | "custody I/O deadline exceeded during credential original request" => "operation_deadline",
         "currentness drain exceeded its original deadline; no acknowledgement" => "cache_admission_deadline",
@@ -61,11 +64,14 @@ fn error_code(error: &str) -> &'static str {
         "credential generation cache capacity exhausted" => "generation_cache_capacity",
         "credential lease cache capacity exhausted" => "secret_cache_capacity",
         "credential secret lease generation is stale or invalid" => "secret_generation_stale",
+        "dispatch secret fetch credential generation is stale or invalid" => "dispatch_generation_stale_before_fetch",
+        "operator static release generation changed before secret fetch" => "static_release_generation_pin_changed",
         "credential secret lease has no cached generation"
         | "dispatch secret fetch requires a cached credential generation" => "generation_cache_missing",
         "credential generation or metadata changed during secret fetch" => "generation_changed_during_secret_fetch",
         "credential lease version regression rejected" => "version_regression",
         "credential metadata changed without a version increment" => "metadata_changed_same_version",
+        "credential lease semantics changed without a version increment" => "lease_semantics_changed_same_version",
         "credential provider metadata does not match signed policy"
         | "credential subject metadata does not match signed policy"
         | "runtime route credential binding is inconsistent"

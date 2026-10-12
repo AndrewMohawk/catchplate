@@ -44,6 +44,7 @@ mod operator_demo;
 mod operator_google_profile;
 mod operator_google_managed;
 mod operator_google_reconciliation;
+mod operator_google_preparation;
 mod operator_static_preparation;
 mod operator_background_renewal;
 mod operator_static_preparation_diagnostics;
@@ -25104,6 +25105,20 @@ fn record_required_credential_release_start_for_scope(
     scope: &CredentialLeaseScope,
     version: u64,
 ) -> bool {
+    record_required_credential_release_start_for_scope_on_deadline(
+        state, decision, method, url, scope, version, None,
+    )
+}
+
+fn record_required_credential_release_start_for_scope_on_deadline(
+    state: &GateState,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    scope: &CredentialLeaseScope,
+    version: u64,
+    deadline: Option<Instant>,
+) -> bool {
     if !audit_enabled(state) {
         state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
         return false;
@@ -25131,7 +25146,7 @@ fn record_required_credential_release_start_for_scope(
         }
     };
     let batch = [audit_event];
-    match post_audit_batch(state, &batch) {
+    match post_audit_batch_on_deadline(state, &batch, deadline) {
         Ok(()) => {
             if state.measured_audit.is_none() { state.audit_sent.fetch_add(1, Ordering::Relaxed); }
             true
@@ -25291,6 +25306,20 @@ fn release_audit_batch_reservations(state: &GateState, batch: &[AuditEvent]) {
 }
 
 fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), AuditPostError> {
+    post_audit_batch_on_deadline(state, batch, None)
+}
+
+fn post_audit_batch_on_deadline(
+    state: &GateState, batch: &[AuditEvent], deadline: Option<Instant>,
+) -> Result<(), AuditPostError> {
+    if deadline.is_some() {
+        if state.measured_audit.is_some() || state.is_production
+            || !state.policy_shadow.is_operator_demo()
+            || state.response_proof_signer.release_profile() != ReleaseProfile::Legacy
+            || state.operator_audit_publication.is_none()
+        { return Err(AuditPostError::not_sent("bounded audit requires ordinary publication ownership")); }
+        check_credential_operation_deadline(deadline).map_err(AuditPostError::not_sent)?;
+    }
     if state.measured_audit.is_some() {
         return native_audit_owner::deliver(state,batch,false).map_err(AuditPostError::other);
     }
@@ -25301,11 +25330,20 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
         serde_json::to_vec(&json!({"events": batch}))
             .map_err(|_| AuditPostError::not_sent("serialize audit batch"))?,
     );
-    post_serialized_legacy_audit_batch(state, &body, batch.len())
+    match deadline {
+        Some(deadline) => post_serialized_legacy_audit_batch_on_deadline(state, &body, batch.len(), Some(deadline)),
+        None => post_serialized_legacy_audit_batch(state, &body, batch.len()),
+    }
 }
 
 fn post_serialized_legacy_audit_batch(
     state: &GateState, body: &[u8], event_count: usize,
+) -> Result<(), AuditPostError> {
+    post_serialized_legacy_audit_batch_on_deadline(state, body, event_count, None)
+}
+
+fn post_serialized_legacy_audit_batch_on_deadline(
+    state: &GateState, body: &[u8], event_count: usize, original_deadline: Option<Instant>,
 ) -> Result<(), AuditPostError> {
     use audit_post_diagnostics::Stage;
     let mut diagnostic = audit_post_diagnostics::Attempt::new(state, event_count);
@@ -25340,7 +25378,10 @@ fn post_serialized_legacy_audit_batch(
     })?;
     let body_len = body.len();
     let batch_digest = sha256_prefixed(body);
-    let publication = operator_audit_publication::acquire(state).map_err(|_| {
+    let publication = match original_deadline {
+        Some(deadline) => operator_audit_publication::acquire_on_deadline(state, deadline),
+        None => operator_audit_publication::acquire(state),
+    }.map_err(|_| {
         diagnostic.failure(Stage::Preflight,
             AuditPostError::not_sent("operator audit publication coordination refused"))
     })?;
@@ -35741,6 +35782,7 @@ fn decide_internal_for_forward<'a>(
         req,
         authenticated_principal_id,
         None,
+        None,
     )
 }
 
@@ -35750,6 +35792,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
     req: DecisionRequest,
     authenticated_principal_id: Option<&str>,
     shadow_admission: Option<ShadowAdmission>,
+    google_preparation: Option<&mut operator_google_preparation::Request>,
 ) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
     let shadow_admission = shadow_admission.unwrap_or_else(|| {
         state.policy_shadow.capture_for_gate(state,
@@ -35763,7 +35806,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
     });
     let shadow_finalization = shadow_admission.finalization_handle();
     let mut release_authorization = None;
-    let decision = decide_internal_with_mode_and_shadow(
+    let decision = decide_internal_with_mode_and_shadow_and_google(
         state,
         snapshot,
         req,
@@ -35771,6 +35814,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
         false,
         Some(&mut release_authorization),
         Some(shadow_admission),
+        google_preparation,
         #[cfg(test)]
         None,
     );
@@ -35820,8 +35864,26 @@ fn decide_internal_with_mode_and_shadow<'a>(
     req: DecisionRequest,
     authenticated_principal_id: Option<&str>,
     preview: bool,
+    accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
+    precomputed_shadow_admission: Option<ShadowAdmission>,
+    #[cfg(test)] decision_at_epoch_ms_override: Option<u128>,
+) -> Value {
+    decide_internal_with_mode_and_shadow_and_google(
+        state, snapshot, req, authenticated_principal_id, preview,
+        accepted_release_output, precomputed_shadow_admission, None,
+        #[cfg(test)] decision_at_epoch_ms_override,
+    )
+}
+
+fn decide_internal_with_mode_and_shadow_and_google<'a>(
+    state: &'a GateState,
+    snapshot: &Arc<Snapshot>,
+    req: DecisionRequest,
+    authenticated_principal_id: Option<&str>,
+    preview: bool,
     mut accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
     precomputed_shadow_admission: Option<ShadowAdmission>,
+    mut google_preparation: Option<&mut operator_google_preparation::Request>,
     #[cfg(test)] decision_at_epoch_ms_override: Option<u128>,
 ) -> Value {
     let started = Instant::now();
@@ -36420,11 +36482,16 @@ fn decide_internal_with_mode_and_shadow<'a>(
                 snapshot,
                 ActiveMutableEffectKind::CredentialLease,
                 scope,
-                || match operator_static_preparation::prepare_if_admitted(
-                    state, snapshot, scope, proof_requested || req.client_request_digest.is_some(),
-                )? {
-                    Some(info) => Ok(info),
-                    None => ensure_scoped_credential_lease(state, snapshot, scope, None),
+                || {
+                    if let Some(info) = operator_static_preparation::prepare_if_admitted(
+                        state, snapshot, scope, proof_requested || req.client_request_digest.is_some(),
+                    )? { return Ok(info); }
+                    if let Some(owner) = google_preparation.as_deref_mut() {
+                        if let Some(info) = owner.acquire_if_admitted(
+                            state, snapshot, scope, proof_requested || req.client_request_digest.is_some(),
+                        )? { return Ok(info); }
+                    }
+                    ensure_scoped_credential_lease(state, snapshot, scope, None)
                 },
             )
         } else if let Some(info) = preadmission_credential_info {
@@ -46966,6 +47033,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     // Starts before the decision's preparation budget, so post-audit static
     // acquisition cannot restart or expand the existing fifteen-second bound.
     let operator_release_deadline = Instant::now() + CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT;
+    let mut google_preparation = operator_google_preparation::Request::new(operator_release_deadline);
     let mut shadow_finalization = shadow_admission
         .as_ref()
         .and_then(ShadowAdmission::finalization_handle);
@@ -47047,6 +47115,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         decision_request,
         authenticated_principal_id,
         Some(shadow_admission),
+        if v2_proof_requested || shadow_finalization.is_some() { None }
+            else { Some(&mut google_preparation) },
     );
     if shadow_finalization.is_some() {
         shadow_active_decision = Some(decision.clone());
@@ -47387,9 +47457,17 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 operator_release_audited = true;
                 Ok(lease)
             }
-            Ok(None) => credential_lease_for_release(
-                state, snapshot, &decision, credential_ref, credential_version,
-            ),
+            Ok(None) => match google_preparation.prepare_release_if_admitted(
+                state, snapshot, &decision, &request.method, &upstream_url,
+                v2_proof_requested || response_proof_requested || client_request_digest.is_some()
+                    || release_authorization.is_some() || route_streaming || shadow_finalization.is_some(),
+            ) {
+                Ok(Some(lease)) => { operator_release_audited = true; Ok(lease) }
+                Ok(None) => credential_lease_for_release(
+                    state, snapshot, &decision, credential_ref, credential_version,
+                ),
+                Err(_) => Err("operator_google_release_unavailable"),
+            },
             Err(_) => Err("operator_static_release_unavailable"),
         };
         let lease = match selected_lease {
@@ -48093,6 +48171,7 @@ fn forward_absolute_streaming_request_to(
         decision_request,
         authenticated_principal_id,
         Some(shadow_admission),
+        None,
     );
     if shadow_finalization.is_some() {
         shadow_active_decision = Some(decision.clone());
@@ -48756,6 +48835,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         decision_request,
         authenticated_principal_id,
         Some(shadow_admission),
+        None,
     );
     if shadow_finalization.is_some() {
         shadow_active_decision = Some(decision.clone());

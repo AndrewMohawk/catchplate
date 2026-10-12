@@ -309,8 +309,23 @@ pub(super) fn require_local_verifier(source: &PolicyTrustRootSource) -> Result<(
 }
 
 pub(super) fn acquire(state: &GateState) -> Result<Option<Permit<'_>>, String> {
+    acquire_audit(state, None)
+}
+
+/// Only an admitted ordinary request may shorten the existing audit lane's
+/// five-second budget. This does not select a new/native publication owner.
+pub(super) fn acquire_on_deadline(
+    state: &GateState, original_deadline: Instant,
+) -> Result<Option<Permit<'_>>, String> {
+    if state.response_proof_signer.release_profile() != super::ReleaseProfile::Legacy {
+        return Err(refused());
+    }
+    acquire_audit(state, Some(original_deadline))
+}
+
+fn acquire_audit(state: &GateState, original_deadline: Option<Instant>) -> Result<Option<Permit<'_>>, String> {
     if !selected(state)? {
-        return Ok(None);
+        return if original_deadline.is_some() { Err(refused()) } else { Ok(None) };
     }
     let owner = state
         .operator_audit_publication
@@ -319,7 +334,8 @@ pub(super) fn acquire(state: &GateState) -> Result<Option<Permit<'_>>, String> {
     if owner.policy_path != Path::new(&state.policy_path) {
         return Err(refused());
     }
-    owner.acquire(deadline()).map(Some)
+    let local = deadline();
+    owner.acquire(original_deadline.map_or(local, |original| original.min(local))).map(Some)
 }
 
 /// Only an elected background credential leader may use this lane. Waiting for

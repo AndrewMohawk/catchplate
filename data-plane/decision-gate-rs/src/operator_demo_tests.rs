@@ -5,6 +5,8 @@
 mod publication_integration;
 #[path = "operator_google_reconciliation_tests.rs"]
 mod google_reconciliation;
+#[path = "operator_google_release_tests.rs"]
+mod google_release;
 #[path = "operator_static_preparation_tests.rs"]
 mod static_preparation;
 

@@ -108,7 +108,7 @@ def validate_row(row, ordinal, generation, *, sdk_pair=False):
     case = cases[(ordinal - 1) % len(cases)]
     spec = fixture.selected_targets(sdk_pair)[case]
     provider_headers = {"accept": "*/*", "host": "gmail.googleapis.com", "user-agent": "google-api-go-client/0.5",
-        "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"}
+        "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"}
     if sdk_pair:
         provider_headers = profiles.provider_headers(case)
     public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET", "authority": "gmail.googleapis.com",
@@ -219,7 +219,7 @@ def request_commitments(row, *, scope, credential_id, generation, sdk_pair=False
             # The SDK sends no Accept. The receiver's reqwest-added */* is NOT
             # original ingress and must not enter the signed request digest.
             "headers": {"host": "gmail.googleapis.com", "user-agent": "google-api-go-client/0.5",
-                "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"},
+                "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"},
             "body_sha256": digest(b""), "discard_headers": ["accept-encoding"]}, "operation": operation}
     if sdk_pair:
         canonical["request"]["headers"] = profiles.provider_headers(row["case"])

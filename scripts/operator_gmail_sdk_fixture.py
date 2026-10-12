@@ -21,10 +21,10 @@ from scripts import operator_google_fixture as base
 from scripts import operator_gmail_sdk_profiles as profiles
 
 
-GO_VERSION = "1.23.12"
-SDK_VERSION = "0.230.0"
+GO_VERSION = "1.26.9"
+SDK_VERSION = "0.264.0"
 SDK_HEADERS = {"user-agent": "google-api-go-client/0.5",
-    "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"}
+    "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"}
 # The SDK sends no Accept. The unchanged gate's reqwest 0.12.28 ClientBuilder
 # adds this default upstream. It MUST NOT be added to the SDK canonical-v3
 # request oracle merely because it is observed at the provider boundary.

@@ -71,7 +71,7 @@ def canonical(index, generation):
             "query": [list(pair) for pair in parse_qsl(query, keep_blank_values=True)],
             "query_mode": "orderedFormV1", "query_wire": query,
             "headers": {"host": "gmail.googleapis.com", "user-agent": "google-api-go-client/0.5",
-                "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"},
+                "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"},
             "body_sha256": receiver.digest(b""), "discard_headers": ["accept-encoding"]}, "operation": operation}
 
 
@@ -243,6 +243,27 @@ class GmailSdkCheckerTests(unittest.TestCase):
             row = deepcopy(rows[0]); row[field] = value
             with self.subTest(field=field), self.assertRaises(checker.CheckFailure):
                 checker.request_commitments(row, scope=SCOPE, credential_id=CREDENTIAL, generation=1)
+
+    def test_supported_go_fingerprint_rejects_old_mixed_and_extra_headers(self):
+        original = self.documents["refreshed"]["gmailSdk"]["attempts"][0]
+        for name, value in (("x-goog-api-client", "gl-go/1.23.12 gdcl/0.230.0"),
+                ("x-goog-api-client", "gl-go/1.23.12 gdcl/0.264.0"),
+                ("x-goog-api-client", "gl-go/1.26.9 gdcl/0.230.0"),
+                ("x-goog-api-client", "gl-go/1.26.9 gdcl/0.264.0 extra/1"),
+                ("x-extra-sdk", "extra/1")):
+            row = deepcopy(original)
+            row["requestHeaders"][name] = value
+            # Recompute the altered record's public commitment: rejection must
+            # bind the exact supported wire, not merely detect a stale hash.
+            public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET",
+                "authority": "gmail.googleapis.com", "path": row["path"], "rawQuery": row["rawQuery"],
+                "headers": row["requestHeaders"], "bodySha256": receiver.digest(b""), "bodyBytes": 0}
+            row["requestCommitment"] = receiver.digest(receiver.encoded(public))
+            with self.subTest(name=name, value=value), self.assertRaises(checker.CheckFailure):
+                checker.request_commitments(row, scope=SCOPE, credential_id=CREDENTIAL, generation=1)
+            wrong = canonical(0, 1)
+            wrong["request"]["headers"][name] = value
+            self.assertNotEqual(receiver.digest(receiver.encoded(wrong)), self.wire[0]["requestDigest"])
 
     def test_provider_checkpoints_require_original_expiry_typed_generations_and_counts(self):
         for stage, document in self.documents.items():

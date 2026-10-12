@@ -26,7 +26,7 @@ META = "alt=json&format=metadata&metadataHeaders=From&metadataHeaders=Subject&me
 TARGETS = (PATH + "?" + LIST, PATH + "/msg_1?" + META,
            PATH + "?" + NEXT, PATH + "/msg-2?" + META)
 PUBLIC_HEADERS = {"accept": "*/*", "host": "gmail.googleapis.com",
-    "user-agent": "google-api-go-client/0.5", "x-goog-api-client": "gl-go/1.23.12 gdcl/0.230.0"}
+    "user-agent": "google-api-go-client/0.5", "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"}
 SCOPES = ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"]
 EPOCH_MS = 1_800_000_000_000
 ROW_KEYS = {"ordinal", "case", "method", "path", "rawQuery", "hostMatches", "headersMatch",
@@ -191,7 +191,7 @@ class GmailSdkFixtureTests(unittest.TestCase):
 
     def test_public_header_values_and_optional_zero_framing_are_exact(self):
         for name, value in (("Accept", "application/json"), ("User-Agent", "google-api-go-client/0.6"),
-                ("X-Goog-Api-Client", "gl-go/1.23.12 gdcl/0.231.0"), ("Connection", "keep-alive"),
+                ("X-Goog-Api-Client", "gl-go/1.26.9 gdcl/0.265.0"), ("Connection", "keep-alive"),
                 ("Content-Length", "00"), ("Host", "gmail.googleapis.com:443")):
             with self.subTest(name=name), captured() as provider, clock(0):
                 tokens = authorize(provider)
@@ -205,6 +205,25 @@ class GmailSdkFixtureTests(unittest.TestCase):
             del handler.headers["Connection"]
             handler.headers["Content-Length"] = "0"
             self.assertEqual(send(provider, handler)[0], 200)
+
+    def test_supported_go_fingerprint_refuses_old_mixed_and_extra_headers(self):
+        self.assertEqual((fixture.GO_VERSION, fixture.SDK_VERSION), ("1.26.9", "0.264.0"))
+        self.assertEqual(fixture.PROVIDER_HEADERS, PUBLIC_HEADERS)
+        for name, value in (("X-Goog-Api-Client", "gl-go/1.23.12 gdcl/0.230.0"),
+                ("X-Goog-Api-Client", "gl-go/1.23.12 gdcl/0.264.0"),
+                ("X-Goog-Api-Client", "gl-go/1.26.9 gdcl/0.230.0"),
+                ("X-Goog-Api-Client", "gl-go/1.26.9 gdcl/0.264.0 extra/1"),
+                ("X-Extra-SDK", "extra/1")):
+            with self.subTest(name=name, value=value), captured() as provider, clock(0):
+                tokens = authorize(provider)
+                handler = request(token=tokens["access_token"])
+                del handler.headers[name]
+                handler.headers[name] = value
+                self.assertEqual(send(provider, handler)[0], 400)
+                row = provider.observations()["gmailSdk"]["attempts"][0]
+                self.assertFalse(row["headersMatch"])
+                self.assertFalse(row["authorized"])
+                self.assertIsNone(row["requestCommitment"])
 
     def test_missing_unknown_ambiguous_credentials_are_counted_not_exported(self):
         for token, duplicate, state in ((None, False, "missing"), ("secret-canary", False, "unknown"),

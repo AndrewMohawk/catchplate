@@ -173,6 +173,17 @@ fn npm_install_connect_missing_wrong_expired_and_revoked_authentication_refuse()
         } else if let Some(ProxyAuthorizationPolicy::BearerToken {expires_at_ms,..}) =
             changed.principals[0].proxy_authorization.as_mut() {
             *expires_at_ms=None;
+            // Basic transport already requires a finite expiry, even when
+            // this request presents Bearer. Preserve that earlier refusal.
+            let invalid_basic=Arc::new(changed.clone());
+            assert_eq!(connect_preflight(&invalid_basic,request.client_ip.as_deref(),
+                &request.target,&request.headers,None)["allowed"],false);
+            assert!(ConnectAuthentication::capture_with_mtls(&invalid_basic,PRINCIPAL,
+                request.client_ip.as_deref(),&request.headers,None).is_err());
+            if let Some(ProxyAuthorizationPolicy::BearerToken {basic_transport,..}) =
+                changed.principals[0].proxy_authorization.as_mut() {
+                *basic_transport=None;
+            }
         }
         // Deliberately weakened current compiled input, not valid operator
         // Profile admission: preserve the original owner while testing that
@@ -183,6 +194,7 @@ fn npm_install_connect_missing_wrong_expired_and_revoked_authentication_refuse()
         assert_eq!(connect_preflight(&changed,request.client_ip.as_deref(),&request.target,&request.headers,None)["allowed"],true);
         let captured=ConnectAuthentication::capture_with_mtls(&changed,PRINCIPAL,
             request.client_ip.as_deref(),&request.headers,None).unwrap();
+        captured.revalidate(&changed).unwrap();
         assert!(encoding::require_authenticated(&state,&changed,&request,&captured).is_err());
     }
 }

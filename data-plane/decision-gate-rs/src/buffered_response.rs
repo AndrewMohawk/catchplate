@@ -131,6 +131,12 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if adapter_type == crate::x_post::ADAPTER {
+        return crate::x_post::validate_envelope(mode, constraints);
+    }
+    if mode == Some(crate::x_post::MODE) {
+        return Err("xPostJsonV1 requires its explicit OAuth posting adapter".into());
+    }
     if adapter_type == crate::npm_install::ADAPTER {
         return crate::npm_install::validate_envelope(mode, constraints);
     }

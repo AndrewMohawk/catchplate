@@ -95,6 +95,8 @@ def _declared(route):
         names = {"npm.publish"}
     elif kind == "x.app_read.v1":
         names = {"x.username.read"}
+    elif kind == "x.post.v1":
+        names = {"tweets.write"}
     elif kind == "alchemy.rpc_read.v1":
         names = {"alchemy.rpc.read"}
     else:
@@ -122,6 +124,8 @@ def _builtin(kind, name):
         return "publish" if name == "npm.publish" else None
     if kind == "x.app_read.v1":
         return "read" if name == "x.username.read" else None
+    if kind == "x.post.v1":
+        return "write" if name == "tweets.write" else None
     if kind == "alchemy.rpc_read.v1":
         return "read" if name == "alchemy.rpc.read" else None
     return None

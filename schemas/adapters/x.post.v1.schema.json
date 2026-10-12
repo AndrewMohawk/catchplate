@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/x.post.v1.schema.json",
+  "title": "Serverware closed X OAuth text posting v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["credentialBinding", "request", "response"],
+  "$defs": {
+    "identity": {"type": "string", "minLength": 1, "maxLength": 512},
+    "accountQuota": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "max", "calendarWindow", "windowSemantics", "store", "key"],
+      "properties": {
+        "id": {"const": "x-post-account-utc-day-v1"}, "type": {"const": "rateLimit"},
+        "max": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+        "calendarWindow": {"const": "utcDay"}, "windowSemantics": {"const": "calendarUTC"},
+        "store": {"const": "shared"},
+        "key": {"const": {"scope": ["operation"], "operationFields": ["providerAccount"]}}
+      }
+    }
+  },
+  "properties": {
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "clientIds", "requiredScopes"],
+      "properties": {
+        "credentialType": {"const": "oauth2"}, "provider": {"const": "x"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/identity"}},
+        "clientIds": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/identity"}},
+        "requiredScopes": {"const": ["offline.access", "tweet.read", "tweet.write", "users.read"]}
+      }
+    },
+    "request": {"const": {
+      "allowedHeaders": ["accept", "accept-language", "content-type", "sec-fetch-mode", "user-agent"],
+      "discardHeaders": ["accept-encoding"], "allowedQueryKeys": [],
+      "allowedMediaTypes": ["application/json"], "maxBodyBytes": 32768, "valueRules": []
+    }},
+    "response": {"const": {
+      "mode": "xPostJsonV1", "maxBodyBytes": 1048576,
+      "contentTypes": ["application/json"], "allowedHeaders": [],
+      "error": {"mode": "xPostJsonV1", "maxBodyBytes": 65536,
+        "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}
+    }}
+  }
+}

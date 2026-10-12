@@ -52,7 +52,30 @@ observed HTTP 201 and decimal post ID, not submitted text or a provider response
 dump. Offline SDK tests use synthetic transports; they are not real TLS,
 credential-injection, consent or posting acceptance.
 
+## Offline verification
+
+The actual SDK examples passed 19 Node tests, 14 Python groups and 10 Go groups.
+They cover exact serialization, explicit confirmation, TLS configuration,
+bounded outputs, wrong statuses and refusal to replay uncertain writes. No
+provider or proxy requests were made. Go additionally inspects and preserves
+response bytes because its SDK omits the provider's optional `errors` field.
+
+All 11 Python core groups passed in the retained application dependency image,
+with network disabled and read-only source. These use the actual compiler,
+schemas, metadata validator and parsed-field response functions, not the Python
+forwarding transport: its existing credential-replacement refusal is unchanged.
+The 13 X-read and 15 npm-metadata regression groups also passed. The attempted
+GitHub suite stopped before test discovery because that image lacks `mitmproxy`;
+it is not counted as a pass. No dependencies were installed for these checks.
+
 ## Remaining work before enabling the preset
+
+The intended story is: connect an X account in the console, give an application
+a posting permission, send its ordinary SDK request through the proxy, and
+inspect the durable audit result. The first unimplemented boundary is account
+connection: `operator_catalog_schema.py` admits `google_oauth` but no X OAuth
+credential type, and `operator_demo.py` does not admit an X callback. Full-flow
+verification stops there; the component results above do not bridge that gap.
 
 1. Join administrator X OAuth setup, genuine account consent, verified identity,
    encrypted custody and managed refresh to the ordinary operator lifecycle.

@@ -735,7 +735,7 @@
         },
         "bodyPresence": {"enum": ["required", "forbidden", "jsonOrEmpty204V1"]},
         "unlistedHeaderPolicy": {"const": "discardUnselectedV1"},
-        "contentTypePolicy": {"enum": ["githubJsonUtf8V1", "npmJsonUtf8V1", "npmInstallContentV1", "xAppReadJsonUtf8V1", "alchemyRpcReadJsonUtf8V1"]},
+        "contentTypePolicy": {"enum": ["githubJsonUtf8V1", "npmJsonUtf8V1", "npmInstallContentV1", "xAppReadJsonUtf8V1", "xPostJsonUtf8V1", "alchemyRpcReadJsonUtf8V1"]},
         "allowedResponseHeaderNames": {
           "type": "array",
           "maxItems": 32,
@@ -1506,6 +1506,13 @@
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
+                  "type": {"const": "x.post.v1"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/x.post.v1.schema.json"}
+                }
+              },
+              {
+                "type": "object", "required": ["type", "config"], "additionalProperties": false,
+                "properties": {
                   "type": {"const": "alchemy.rpc_read.v1"},
                   "config": {"$ref": "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json"}
                 }
@@ -1743,12 +1750,12 @@
               "properties": {"adapter": {
                 "required": ["type", "config"],
                 "properties": {
-                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1", "npm.install.v1", "npm.publish.v1", "x.app_read.v1", "alchemy.rpc_read.v1"]},
+                  "type": {"enum": ["generic.rest", "gmail.read.v1", "npm.metadata.v1", "npm.install.v1", "npm.publish.v1", "x.app_read.v1", "x.post.v1", "alchemy.rpc_read.v1"]},
                   "config": {
                     "required": ["response"],
                     "properties": {"response": {
                       "required": ["mode"],
-                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1", "npmInstallMetadataJsonV1", "npmInstallTarballV1", "npmInstallAuditJsonV1", "npmPublishJsonV1", "xAppReadJsonV1", "alchemyRpcReadJsonV1"]}}
+                      "properties": {"mode": {"enum": ["bufferedJsonOrEmpty204V2", "gmailReadJsonV1", "npmMetadataJsonV1", "npmInstallMetadataJsonV1", "npmInstallTarballV1", "npmInstallAuditJsonV1", "npmPublishJsonV1", "xAppReadJsonV1", "xPostJsonV1", "alchemyRpcReadJsonV1"]}}
                     }}
                   }
                 }
@@ -1853,9 +1860,23 @@
                           "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmInstallContentV1"}
                         }}
                       }}},
-                      "else": {"properties": {"constraints": {"items": {
-                        "not": {"required": ["contentTypePolicy"]}
-                      }}}}
+                      "else": {
+                        "if": {"required": ["adapter"], "properties": {"adapter": {
+                          "required": ["type"], "properties": {"type": {"const": "x.post.v1"}}
+                        }}},
+                        "then": {"required": ["constraints"], "properties": {"constraints": {
+                          "minItems": 1, "maxItems": 2,
+                          "contains": {"required": ["type", "contentTypePolicy"], "properties": {
+                            "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "xPostJsonUtf8V1"}
+                          }}, "minContains": 1, "maxContains": 1,
+                          "items": {"if": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                            "then": {"required": ["contentTypePolicy"], "properties": {"contentTypePolicy": {"const": "xPostJsonUtf8V1"}}},
+                            "else": {"$ref": "https://serverware.local/schemas/adapters/x.post.v1.schema.json#/$defs/accountQuota"}}
+                        }}},
+                        "else": {"properties": {"constraints": {"items": {
+                          "not": {"required": ["contentTypePolicy"]}
+                        }}}}
+                      }
                     }
                   }
                 }
@@ -1867,7 +1888,7 @@
               "properties": {
                 "adapter": {
                   "required": ["type"],
-                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.install.v1", "npm.publish.v1", "x.app_read.v1", "alchemy.rpc_read.v1"]}}
+                  "properties": {"type": {"enum": ["gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.install.v1", "npm.publish.v1", "x.app_read.v1", "x.post.v1", "alchemy.rpc_read.v1"]}}
                 }
               },
               "required": ["adapter"]

@@ -63,6 +63,7 @@ fn builtin(kind: &str, name: &str) -> Result<&'static str, String> {
         ("gmail.v1", "gmail.message.get") => "read",
         ("gmail.v1", "gmail.messages.list") => "search",
         ("x.v2", "tweets.write") => "write",
+        ("x.post.v1", "tweets.write") => "write",
         ("x.v2", "search.read") => "search",
         ("x.v2", operation) if X_V2_READ_OPERATION_PATHS.iter().any(|(name, _)| *name == operation) => "read",
         ("npm.registry", "npm.read") => "read", ("npm.registry", "npm.publish") => "publish",

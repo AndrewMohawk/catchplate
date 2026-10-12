@@ -15,11 +15,11 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 
 from mitmproxy import http
 
-from serverware import alchemy_rpc_read, aws_credential_boundary, db, github_issues, npm_install, npm_metadata, npm_publish, runtime, x_app_read
+from serverware import alchemy_rpc_read, aws_credential_boundary, db, github_issues, npm_install, npm_metadata, npm_publish, runtime, x_app_read, x_post
 from serverware.adapters import (
     _parse_content_type, alchemy_rpc_read_json_inspection, get_adapter, gmail_read_json_inspection,
     npm_install_response_inspection, npm_metadata_json_inspection, npm_publish_json_inspection, preflight_request_admission,
-    x_app_read_json_inspection,
+    x_app_read_json_inspection, x_post_json_inspection,
 )
 from serverware.constraints import (
     _request_value_predicate_matches,
@@ -634,7 +634,7 @@ def _validate_response_content_encoding(
     route = flow.metadata.get("serverware_route")
     if route and (route.adapter_config.get("response") or {}).get("mode") in {
             BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
-            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE,
+            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, x_post.MODE, alchemy_rpc_read.MODE,
             *npm_install.RESPONSE_MODES.values()}:
         try:
             _v2_response_header_entries(flow, route)
@@ -4644,7 +4644,7 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
     """Inspect decoded content before release, without changing dispatched bytes."""
     mode = (route.adapter_config.get("response") or {}).get("mode")
     if mode not in {GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE,
-            x_app_read.MODE, alchemy_rpc_read.MODE, *npm_install.RESPONSE_MODES.values()}:
+            x_app_read.MODE, x_post.MODE, alchemy_rpc_read.MODE, *npm_install.RESPONSE_MODES.values()}:
         return PolicyDecision(True)
     guard = guard if guard is not None else getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
     if route.credential_ref and not isinstance(guard, _ResponseCredentialGuard):
@@ -4654,12 +4654,16 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
     try:
         raw = flow.response.raw_content
         inspect_json = (alchemy_rpc_read_json_inspection if mode == alchemy_rpc_read.MODE
+            else x_post_json_inspection if mode == x_post.MODE
             else x_app_read_json_inspection if mode == x_app_read.MODE
             else npm_publish_json_inspection if mode == npm_publish.MODE
             else npm_metadata_json_inspection if mode == npm_metadata.MODE else gmail_read_json_inspection)
         if route.adapter_type == npm_install.ADAPTER:
             npm_install.validate_route(route)
             _, inspection = npm_install_response_inspection(raw, route.adapter_config["mode"], flow.response.status_code)
+        elif mode == x_post.MODE:
+            _, inspection = inspect_json(raw,
+                x_post.MAX_RESPONSE_BYTES if flow.response.status_code == 201 else x_post.MAX_ERROR_BYTES)
         else:
             _, inspection = inspect_json(raw,
                 1048576 if mode not in {npm_publish.MODE, alchemy_rpc_read.MODE}
@@ -4672,6 +4676,7 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
             {"error": "npm_install_response_invalid" if route.adapter_type == npm_install.ADAPTER
                 else "alchemy_rpc_read_response_invalid" if mode == alchemy_rpc_read.MODE
                 else "x_app_read_response_invalid" if mode == x_app_read.MODE
+                else "x_post_response_invalid" if mode == x_post.MODE
                 else "npm_publish_response_invalid" if mode == npm_publish.MODE
                 else "npm_metadata_response_invalid" if mode == npm_metadata.MODE else "gmail_read_response_invalid"})
     finally:
@@ -4737,7 +4742,7 @@ def _evaluate_response_envelope(
         )
     v2 = response_cfg.get("mode") in {
         BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
-        npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE,
+        npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, x_post.MODE, alchemy_rpc_read.MODE,
         *npm_install.RESPONSE_MODES.values()}
     inspection_decision = _typed_json_response_inspection(flow, route, credential_guard)
     if not inspection_decision.allowed:
@@ -4873,6 +4878,12 @@ def _evaluate_response_envelope(
                 and content_types == x_app_read.CONTENT_TYPES
                 and len(physical_content_types) == 1
                 and x_app_read.is_json_content_type(physical_content_types[0]))
+            typed_content_type = typed_content_type or (route.adapter_type == x_post.ADAPTER
+                and response_cfg.get("mode") == x_post.MODE
+                and constraint["contentTypePolicy"] == x_post.CONTENT_TYPE_POLICY
+                and content_types == x_post.CONTENT_TYPES
+                and len(physical_content_types) == 1
+                and x_post.is_json_content_type(physical_content_types[0]))
             typed_content_type = typed_content_type or (route.adapter_type == alchemy_rpc_read.ADAPTER
                 and response_cfg.get("mode") == alchemy_rpc_read.MODE
                 and constraint["contentTypePolicy"] == alchemy_rpc_read.CONTENT_TYPE_POLICY

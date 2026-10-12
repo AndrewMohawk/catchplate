@@ -94,9 +94,17 @@ fn npm_install_default_and_management_intake_remain_identity_only() {
     assert!(forged.npm_install_audit_body.is_none());
     assert!(admitted_request_content_encoding(&forged).is_err());
     let state = test_gate_state(Arc::clone(&snapshot));
-    assert_eq!(decide(&state,forged)["error"],"request_content_encoding_denied");
+    let denied = decide(&state,forged);
+    assert_eq!(denied["action"],"deny");
+    assert_eq!(denied["allowed"],false);
+    assert_eq!(denied["status_code"],415);
+    assert_eq!(denied["payload"]["error"],"request_content_encoding_denied");
     let owner = reviewed_buffered_decision_request(&snapshot,&input,Some(PRINCIPAL),None).unwrap();
-    assert_eq!(decide(&state,owner)["error"],"request_content_encoding_denied");
+    let denied = decide(&state,owner);
+    assert_eq!(denied["action"],"deny");
+    assert_eq!(denied["allowed"],false);
+    assert_eq!(denied["status_code"],415);
+    assert_eq!(denied["payload"]["error"],"request_content_encoding_denied");
 }
 
 #[test]
@@ -261,5 +269,5 @@ fn npm_install_connect_source_wiring_keeps_identity_before_body_and_dns() {
         .split("fn prepare_upstream_for_buffered_forward(").next().unwrap();
     assert!(prepare.find("npm_install::AuditBody::from_wire").unwrap() < prepare.find("prepare_upstream(state").unwrap());
     let send = source.split("fn forward_absolute_request_inner_with_prepared").nth(1).unwrap();
-    assert!(send.contains("validate_npm_install_built_audit(owner, route, &decision, built)?"));
+    assert!(send.contains("validate_npm_install_built_audit(owner, route, &decision, built)\n                    .map_err(|_| \"npm_install_audit_built_request_invalid\")?"));
 }

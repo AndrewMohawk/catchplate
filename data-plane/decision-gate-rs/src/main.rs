@@ -66684,13 +66684,13 @@ mod tests {
             .expect("decision function terminator")
             .0;
         let validation = decision
-            .find("validate_identity_request_content_encoding(&req.headers)")
+            .find("admitted_request_content_encoding(&req)")
             .expect("initial Content-Encoding validation");
         let operation = decision
             .find("validate_adapter(&req, &forwarded_headers, &url, &route_match)")
             .expect("active adapter operation admission");
         let strip = decision
-            .find("strip_identity_request_content_encoding(&req.headers)")
+            .find("admitted_request_encoding_headers(&req, &req.headers)")
             .expect("deferred Content-Encoding strip");
         let semantics = decision
             .find("evaluate_request_constraints(")

@@ -27,7 +27,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-bad0fc6f02471103b9f47001e079db2102e237d2
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-1cb06583662c0d00ddb0c0ff461a104621f22f44
         target: /app
         read_only: true
         bind: {create_host_path: false}

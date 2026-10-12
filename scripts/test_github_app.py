@@ -10,10 +10,12 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from email.message import Message
+import http.client
 import io
 import json
 import os
 from pathlib import Path
+import ssl
 import sys
 import unittest
 from unittest.mock import patch
@@ -332,7 +334,22 @@ class GithubAppTests(unittest.TestCase):
         redirect = next(h for h in handlers if isinstance(h, http_client._NoRedirectHandler))
         self.assertIsNone(redirect.redirect_request(None, None, 301, "", {}, "https://other.invalid"))
         https = next(h for h in handlers if isinstance(h, urllib.request.HTTPSHandler))
-        self.assertIsNone(https._context)  # urllib's default verifies certificates and hostnames.
+        # Python 3.11 defers the default context to HTTPSConnection; 3.12
+        # constructs it in HTTPSHandler. Check the effective TLS policy, not
+        # that version-specific storage detail. No connection is opened.
+        request = urllib.request.Request(app.ORIGIN + "/app")
+        with patch.object(https, "do_open") as do_open:
+            https.https_open(request)
+        connection_type, passed_request = do_open.call_args.args
+        self.assertIs(connection_type, http.client.HTTPSConnection)
+        self.assertIs(passed_request, request)
+        connection = connection_type(request.host, **do_open.call_args.kwargs)
+        try:
+            self.assertIsNone(connection.sock)
+            self.assertEqual(connection._context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertIs(connection._context.check_hostname, True)
+        finally:
+            connection.close()
         self.assertEqual(opener.addheaders, [])
 
 

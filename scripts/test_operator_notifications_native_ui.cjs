@@ -27,7 +27,7 @@ const context = vm.createContext({Date: Clock, URL, operatorError: message => Ob
   fetch: () => { networkCalls++; throw new Error('No network permitted'); }});
 const source = readFileSync(resolve(__dirname, '../serverware/operator_demo_web/workspace_notifications.js'), 'utf8');
 vm.runInContext(source, context, {timeout: 1000});
-const api = vm.runInContext('({valid:notificationNativeValid, present:notificationNativePresentation, project:projectNotificationStatus, render:createNotificationNativeObservation})', context);
+const api = vm.runInContext('({valid:notificationNativeValid, present:notificationNativePresentation, project:projectNotificationStatus, render:createNotificationNativeObservation, delivery:notificationDeliveryMessage})', context);
 
 function native(state = 'not_configured', changes = {}) {
   return {configured: state !== 'not_configured', source_available: ['waiting', 'observed'].includes(state), observation_only: true,
@@ -52,7 +52,65 @@ function status(value = native()) {
 function node(panel, key) { const match = panel.children.find(item => Object.hasOwn(item.dataset, key)); assert(match, key); return match; }
 function allNodes(root) { return [root, ...root.children.flatMap(allNodes)]; }
 function reject(change) { const candidate = native('observed'); change(candidate); assert.equal(api.valid(candidate), false); assert.throws(() => api.project(status(candidate))); }
+function delivery(changes = {}) {
+  const value = status();
+  Object.assign(value.slots[0], {revision: 1, label: 'Action Slack', enabled: true, secret_present: true,
+    last_delivery: {delivery_id: '77777777-7777-4777-8777-777777777777', status: 'failed', attempts: 1,
+      code: null, http_status: null, created_at_epoch_ms: NOW, updated_at_epoch_ms: NOW, ...changes}});
+  return api.project(value).slots[0].last_delivery;
+}
 const tests = [
+  ['all retained delivery reason codes have fixed useful explanations without changing the outcome', () => {
+    const cases = [
+      ['dns_unavailable', /hostname could not be resolved/], ['dns_timeout', /DNS lookup timed out/],
+      ['connect_unavailable', /could not be reached/], ['connect_timeout', /connection timed out/],
+      ['tls_unavailable', /verified HTTPS connection/], ['tls_timeout', /HTTPS handshake timed out/],
+      ['destination_invalid', /not supported by this adapter/], ['egress_denied', /deployment egress policy/],
+      ['payload_invalid', /message could not be prepared/], ['transport_unavailable', /final checks were unavailable/],
+      ['deadline_exceeded', /delivery time limit elapsed/], ['dispatch_cancelled', /check prevented sending/],
+      ['http_rejected', /non-success HTTP status/], ['acknowledgement_invalid', /acknowledgement contract/],
+      ['delivery_unknown', /Check the destination for this message/], ['configuration_changed', /not redirected/],
+      ['action_no_longer_current', /source action is no longer current/], ['action_expired', /cannot renew/],
+      ['action_source_unavailable', /source action could not be validated/], ['native_source_unavailable', /does not establish hardware readiness/]
+    ];
+    for (const [code, explanation] of cases) {
+      const value = Object.freeze(delivery({code})); const before = JSON.stringify(value);
+      const message = api.delivery(value);
+      assert.match(message, /^Delivery failed\./); assert.match(message, /Attempts: 1\./);
+      assert(message.includes('Last result: ' + code + '.')); assert.match(message, explanation);
+      assert.equal(JSON.stringify(value), before); assert.doesNotMatch(message, /HTTP status:/);
+    }
+    const queued = api.delivery(delivery({status: 'queued', code: 'dns_timeout'}));
+    assert.match(queued, /^Delivery queued; not yet acknowledged\./); assert.doesNotMatch(queued, /Synthetic test/);
+    assert.equal(api.delivery(null), 'No delivery receipt for this slot.');
+  }],
+  ['unknown delivery codes are never reflected and malformed metadata fails projection', () => {
+    for (const code of ['private_destination_token_must_not_render', 'constructor', '__proto__']) {
+      const message = api.delivery(delivery({code}));
+      assert.match(message, /Delivery detail unavailable\./); assert(!message.includes(code));
+    }
+    for (const code of ['https://secret.example.test/private', '<script>private</script>', 'RAW_RESPONSE', true])
+      assert.throws(() => delivery({code}));
+    for (const http_status of [true, '403', 199, 600, 200.5, Number.NaN]) assert.throws(() => delivery({http_status}));
+    const missing = api.delivery(delivery()); assert.match(missing, /^Delivery failed\./);
+    assert.doesNotMatch(missing, /Last result:|HTTP status:|undefined|null/);
+  }],
+  ['HTTP success and conflicting codes never promote failed or unknown delivery to acknowledgement', () => {
+    const failed = api.delivery(delivery({code: 'acknowledgement_invalid', http_status: 200}));
+    assert.match(failed, /^Delivery failed\./); assert.match(failed, /HTTP status: 200\./);
+    assert.match(failed, /HTTP success alone is not acknowledgement/); assert.doesNotMatch(failed, /Destination acknowledged/);
+    for (const code of ['delivery_unknown', 'acknowledged', 'connect_unavailable', 'unknown_private_reason']) {
+      const message = api.delivery(delivery({status: 'outcome_unknown', code, http_status: 200}));
+      assert.match(message, /^Delivery outcome unknown\./); assert.match(message, /may have received it; no automatic replay/);
+      assert.match(message, /HTTP status: 200\./); assert.doesNotMatch(message, /Destination acknowledged|Last result: acknowledged|explicitly testing again/);
+    }
+    const acknowledged = api.delivery(delivery({status: 'acknowledged', code: 'acknowledged', http_status: 204}));
+    assert.match(acknowledged, /^Destination acknowledged delivery\./);
+    assert.match(acknowledged, /not human approval or action completion/); assert.match(acknowledged, /HTTP status: 204\./);
+    assert.match(api.delivery(delivery({status: 'suppressed', code: 'configuration_changed'})), /^Delivery suppressed because its saved configuration or source action is no longer current\./);
+    assert.match(api.delivery(delivery({status: 'expired', code: 'action_expired'})), /^Delivery expired\./);
+    assert.equal(networkCalls, 0); assert.equal(timers.size, 0);
+  }],
   ['configuration and last successful read never imply an action', () => {
     for (const state of ['not_configured', 'not_observed', 'waiting', 'unavailable']) {
       const value = native(state); assert(api.valid(value)); assert.equal(api.project(status(value)).capabilities.native_hardware.last_observation.state, state);
@@ -179,4 +237,4 @@ const tests = [
 
 for (const [name, test] of tests) { test(); console.log('PASS ' + name); }
 assert.equal(timers.size, 0); assert.equal(networkCalls, 0);
-console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'pure native notification UI DTO and inert DOM checks; no browser, network, owner or hardware'}));
+console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'pure notification delivery and native observation UI DTO and inert DOM checks; no browser, network, owner or hardware'}));

@@ -172,6 +172,43 @@ function notificationOutcome(status) {
     expired: 'Delivery expired. Its original action deadline was not extended.',
     suppressed: 'Delivery suppressed because its saved configuration or source action is no longer current.'}[status];
 }
+const notificationDeliveryReasons = Object.freeze({
+  dns_unavailable: 'The destination hostname could not be resolved. Check the saved destination and service DNS access.',
+  dns_timeout: 'The destination DNS lookup timed out. Check service DNS access.',
+  connect_unavailable: 'The destination could not be reached. Check receiver availability and outbound connectivity.',
+  connect_timeout: 'The connection timed out. Check receiver availability and outbound connectivity.',
+  tls_unavailable: 'A verified HTTPS connection could not be established. Check the receiver certificate and service trust settings.',
+  tls_timeout: 'The HTTPS handshake timed out. Check receiver availability.',
+  destination_invalid: 'The saved destination is not supported by this adapter. Review its URL in the receiver settings.',
+  egress_denied: 'The destination is blocked by the deployment egress policy. Ask the deployment operator to review permitted destinations.',
+  payload_invalid: 'The notification message could not be prepared. Check service health.',
+  transport_unavailable: 'Delivery preparation or its final checks were unavailable. Refresh status and check service health.',
+  deadline_exceeded: 'The delivery time limit elapsed. Check service health and receiver availability.',
+  dispatch_cancelled: 'A final configuration or source check prevented sending. Refresh status before taking another action.',
+  http_rejected: 'The receiver returned a non-success HTTP status. Check the destination settings and receiver access requirements.',
+  acknowledgement_invalid: 'The receiver response did not meet this adapter\'s acknowledgement contract. HTTP success alone is not acknowledgement.',
+  delivery_unknown: 'Check the destination for this message before deciding whether to send another explicit test.',
+  configuration_changed: 'The saved slot changed; the queued message was not redirected to its replacement.',
+  action_no_longer_current: 'The source action is no longer current. Review its current state.',
+  action_expired: 'The original action window ended. This notification cannot renew it.',
+  action_source_unavailable: 'The source action could not be validated. Refresh status and check the source service.',
+  native_source_unavailable: 'The native action source could not be validated. A delivery test does not establish hardware readiness.'
+});
+function notificationDeliveryMessage(delivery) {
+  if (delivery === null) return 'No delivery receipt for this slot.';
+  // Only called with a projected slot. Never reflect an unrecognized code or
+  // promote the recorded outcome from a code or an HTTP status alone.
+  let message = (delivery.status === 'queued' ? 'Delivery queued; not yet acknowledged.' : notificationOutcome(delivery.status)) +
+    ' Attempts: ' + delivery.attempts + '.';
+  if (delivery.code !== null) {
+    if (Object.hasOwn(notificationDeliveryReasons, delivery.code))
+      message += ' Last result: ' + delivery.code + '. ' + notificationDeliveryReasons[delivery.code];
+    else if (delivery.code === 'acknowledged' && delivery.status === 'acknowledged') message += ' Last result: acknowledged.';
+    else message += ' Delivery detail unavailable.';
+  }
+  if (delivery.http_status !== null) message += ' HTTP status: ' + delivery.http_status + '.';
+  return message;
+}
 function createNotificationsView(workspace) {
   const prefix = '/api/operator-demo/notifications';
   let status = null; let busy = false; let visible = false; let opened = false;
@@ -255,7 +292,8 @@ function createNotificationsView(workspace) {
       (slot.enabled ? 'Enabled for selected events.' : 'Disabled.') + ' Destination URL ' + (slot.secret_present ? 'stored; never returned.' : 'not stored.'));
     state.dataset.slotStatus = ''; form.append(state);
     const revision = textNode('p', 'Saved revision: ' + slot.revision, 'small muted'); revision.dataset.slotRevision = ''; form.append(revision);
-    form.append(textNode('p', slot.last_delivery ? notificationOutcome(slot.last_delivery.status) + ' Attempts: ' + slot.last_delivery.attempts + '.' : 'No delivery receipt for this slot.', 'small'));
+    const delivery = textNode('p', notificationDeliveryMessage(slot.last_delivery), 'small');
+    delivery.dataset.notificationDelivery = ''; form.append(delivery);
     const fields = textNode('fieldset'); fields.dataset.notificationFields = ''; form.append(fields);
     const label = field(form, fields, 'label', 'Destination label'); label.maxLength = 80; label.required = true; label.value = slot.label;
     const enabledLabel = textNode('label'); const enabled = textNode('input'); enabled.type = 'checkbox'; enabled.name = 'enabled'; enabled.checked = slot.enabled;

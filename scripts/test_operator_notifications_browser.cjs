@@ -16,13 +16,14 @@ const STATES = ['queued', 'sending', 'acknowledged', 'failed', 'outcome_unknown'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PRIVATE = ['https://notify.example.test/synthetic-private-destination',
   'https://hooks.slack.com/services/T00000000/B00000000/SYNTHETIC_NOT_A_REAL_WEBHOOK',
-  'synthetic-private-error-MUST-NOT-RENDER'];
+  'synthetic-private-error-MUST-NOT-RENDER', 'private_delivery_detail_must_not_render'];
 const clone = value => JSON.parse(JSON.stringify(value));
 const EVENTS = JSON.parse(execFileSync('python3', ['-I', '-B', '-c',
   `import ast,json,pathlib
 tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_text())
 assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
 summaries=ast.literal_eval(assignments["_SUMMARIES"])
+summaries.update(ast.literal_eval(assignments["_GOOGLE_SUMMARIES"]))
 catalog=ast.literal_eval(assignments["_CATALOG"])
 native=ast.literal_eval(assignments["NATIVE_EVENT_TYPES"])
 known={"_SUMMARIES":[*summaries,*["operator_catalog."+key for key in catalog]],"NATIVE_EVENT_TYPES":list(native)}
@@ -412,6 +413,69 @@ const tests = [
       await submit(page); await writesDisabled(page);
       assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
       assert.match(await page.locator('#notification-operation-status').innerText(), /reference.*(?:read|stored)|duplicate/is); await clean(page);
+    })],
+  ['each action and audit destination renders its own safe failure reason and HTTP status without changing settings', browser => fixture(browser,
+    {status: {slots: SLOTS.map((name, index) => slot(name, {last_delivery: delivery([
+      {status: 'failed', attempts: 1, code: 'http_rejected', http_status: 403},
+      {status: 'failed', attempts: 2, code: 'tls_unavailable'},
+      {status: 'failed', attempts: 1, code: 'acknowledgement_invalid', http_status: 200},
+      {status: 'outcome_unknown', attempts: 1, code: 'delivery_unknown', http_status: 502}
+    ][index])}))}}, async (page, observed) => {
+      const before = JSON.stringify(observed.snapshot); await open(page);
+      const expected = [
+        [/^Delivery failed\./, /Last result: http_rejected\./, /HTTP status: 403\./, /receiver access requirements/],
+        [/^Delivery failed\./, /Last result: tls_unavailable\./, /receiver certificate and service trust/],
+        [/^Delivery failed\./, /Last result: acknowledgement_invalid\./, /HTTP status: 200\./, /HTTP success alone is not acknowledgement/],
+        [/^Delivery outcome unknown\./, /Last result: delivery_unknown\./, /HTTP status: 502\./, /may have received it; no automatic replay/]
+      ];
+      const codes = ['http_rejected', 'tls_unavailable', 'acknowledgement_invalid', 'delivery_unknown'];
+      for (const [index, name] of SLOTS.entries()) {
+        const target = form(page, name); const text = await target.locator('[data-notification-delivery]').innerText();
+        for (const pattern of expected[index]) assert.match(text, pattern);
+        assert.doesNotMatch(text, /Destination acknowledged/);
+        for (const [other, code] of codes.entries()) if (index !== other) assert(!text.includes(code), 'details never cross slots');
+        assert.equal(await target.locator('[name="label"]').inputValue(), observed.snapshot.slots[index].label);
+        assert(await target.locator('[name="enabled"]').isChecked());
+        assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(items => items.map(item => item.value)),
+          observed.snapshot.slots[index].event_types);
+        assert.equal(await target.locator('[name="url"]').inputValue(), '');
+      }
+      assert.doesNotMatch(await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText(), /HTTP status:/);
+      assert.equal(EVENTS.audit_log.length, 64); assert.equal(EVENTS.action_required.length, 5);
+      assert.equal(JSON.stringify(observed.snapshot), before); assert.equal(observed.posts.length, 0);
+      await screenshot(page, 'notification-slot-failure-details');
+    })],
+  ['unknown delivery details stay private and GET refresh never replays an uncertain message', browser => fixture(browser,
+    {status: {slots: SLOTS.map((name, index) => slot(name, {last_delivery: delivery([
+      {status: 'failed', attempts: 1, code: PRIVATE[3], http_status: 503},
+      {status: 'outcome_unknown', attempts: 1, code: 'acknowledged', http_status: 200},
+      {status: 'failed', attempts: 1},
+      {status: 'queued', attempts: 1, code: 'dns_timeout'}
+    ][index])}))}}, async (page, observed) => {
+      await open(page);
+      const first = await form(page, SLOTS[0]).locator('[data-notification-delivery]').innerText();
+      assert.match(first, /Delivery detail unavailable\./); assert.match(first, /HTTP status: 503\./); assert(!first.includes(PRIVATE[3]));
+      const uncertain = await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText();
+      assert.match(uncertain, /^Delivery outcome unknown\./); assert.match(uncertain, /may have received it; no automatic replay/);
+      assert.match(uncertain, /HTTP status: 200\./); assert.doesNotMatch(uncertain, /Destination acknowledged|Last result: acknowledged|explicitly testing again/);
+      assert.doesNotMatch(await form(page, SLOTS[2]).locator('[data-notification-delivery]').innerText(), /Last result:|HTTP status:|undefined|null/);
+      const queued = await form(page, SLOTS[3]).locator('[data-notification-delivery]').innerText();
+      assert.match(queued, /^Delivery queued; not yet acknowledged\./); assert.match(queued, /Last result: dns_timeout\./);
+      const settings = observed.snapshot.slots.map(({last_delivery, ...saved}) => clone(saved));
+      Object.assign(observed.snapshot.slots[0].last_delivery, {code: 'http_rejected', http_status: 429});
+      Object.assign(observed.snapshot.slots[1].last_delivery, {code: 'delivery_unknown', http_status: null});
+      const response = page.waitForResponse(item => item.url().endsWith(PATH) && item.request().method() === 'GET');
+      await page.locator('#notifications-refresh').click(); await response; await settled(page);
+      await page.waitForFunction(() => document.querySelector('[data-notification-slot="action_required.slack"] [data-notification-delivery]')?.textContent.includes('HTTP status: 429.'));
+      assert.match(await form(page, SLOTS[0]).locator('[data-notification-delivery]').innerText(), /Last result: http_rejected\./);
+      const refreshed = await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText();
+      assert.match(refreshed, /Last result: delivery_unknown\./); assert.match(refreshed, /no automatic replay/);
+      assert.doesNotMatch(refreshed, /HTTP status:|Destination acknowledged/);
+      assert.deepEqual(observed.snapshot.slots.map(({last_delivery, ...saved}) => saved), settings);
+      assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null); await clean(page);
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await screenshot(page, 'notification-failure-details-mobile');
     })],
   ['backlog and terminal delivery statuses remain distinct from successful action or hardware completion', browser => fixture(browser,
     {status: {backlog: {pending_source_events: 47, queue_capacity: 256, retained_capacity: 10000},

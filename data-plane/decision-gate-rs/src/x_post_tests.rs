@@ -198,6 +198,11 @@ fn x_post_account_quota_keys_and_whole_policy_conflicts() {
     let mut generic=crate::tests::generic_policy_route("json",json!(1024));
     generic["id"]=json!("generic:overlap"); generic["credentialRef"]=json!(CREDENTIAL);
     generic["match"]["host"]=json!(HOST); generic["match"]["paths"]=json!(["/2/{name}"]);
+    generic["adapter"]["config"]["request"]["allowedHeaders"]=json!(["content-type"]);
+    generic["adapter"]["config"]["request"]["allowedMediaTypes"]=json!(["application/json"]);
+    generic["adapter"]["config"]["request"]["allowedFields"]=json!(["text"]);
+    generic["constraints"]=json!([{"id":"generic:text","type":"jsonBody",
+        "allowedFields":["text"],"requiredFields":["text"],"fields":{"text":{"type":"string"}}}]);
     let mut generic_policy=policy_with_route(generic);
     generic_policy["credentials"]=json!([raw_credential()]);
     generic_policy["routes"][0]["adapter"]["config"]["credentialBinding"]=config()["credentialBinding"].clone();

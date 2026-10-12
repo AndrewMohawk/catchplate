@@ -104,9 +104,12 @@ intercepted App/PAT browser groups passed, including desktop/mobile replacement,
 private-draft clearing and manual recovery. The initial backend/browser attempts
 found test-only header-casing, synthetic-token collision and collapsed-disclosure
 assertions; those failures remain recorded. These checks did not contact GitHub,
-run a stock SDK through Rust or deploy the feature. See the separate
-[joined verification record](operator-github-app-verification.md) for that later
-boundary; existing App creation/renewal evidence is not replacement acceptance.
+run a stock SDK through Rust or deploy the feature. The later
+[joined verification](operator-github-app-verification.md) passed at `7b253a11`:
+all eighteen Node/Python/Go commands had expected outcomes, including key A to B
+replacement through both assigned applications and nine scope/revocation denials.
+That isolated synthetic-provider result does not establish real GitHub access
+or deploy this capability to the running instance.
 
 ## Stock client recipe
 

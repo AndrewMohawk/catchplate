@@ -48,6 +48,9 @@ class Node {
   append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   get firstElementChild() { return this.children[0]; }
+  // Connect reads HTMLSelectElement.options when updating provider choices.
+  // Resolve the current option descendants; other inert elements do not gain it.
+  get options() { return this.tag === 'select' ? this.descendants().filter(node => node.tag === 'option') : undefined; }
   after() {}
   setAttribute(name, value) { this.attrs[name] = String(value); }
   removeAttribute(name) { delete this.attrs[name]; }
@@ -125,6 +128,17 @@ async function existingPair(f) {
   await f.event('connect-application-form', 'submit');
 }
 const tests = [
+  ['inert select options reflect parsed and replaced option descendants only', () => {
+    const dom = inertDom(); const select = dom.getElementById('connect-github-type');
+    assert.deepEqual(select.options.map(option => option.value), ['github_token_v1', 'github_app_v1']);
+    const group = new Node('optgroup'); const nested = new Node('option', {value: 'fixture-nested'});
+    group.append(nested); select.append(group);
+    assert.deepEqual(select.options.map(option => option.value), ['github_token_v1', 'github_app_v1', 'fixture-nested']);
+    assert.equal(select.options[2], nested);
+    select.replaceChildren(new Node('option', {value: 'fixture-replacement'}));
+    assert.deepEqual(select.options.map(option => option.value), ['fixture-replacement']);
+    assert.equal(new Node('div').options, undefined);
+  }],
   ['exact capability and public catalog projection never retain secret fields', () => {
     const raw = rawCatalog({credentials: [npmCredential({secret: PRIVATE, token: PRIVATE})]});
     const value = project(raw); assert.equal(value.credentials[0].provider_id, 'npm');

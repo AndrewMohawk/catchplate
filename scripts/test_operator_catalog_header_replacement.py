@@ -69,6 +69,44 @@ def create_rule(db, store, schema, inputs, mutations, application, credential, *
     return mutations.create_rule(inputs.RuleInput(**payload), workspace.common._ACTOR)
 
 
+def observed_catalog(config, store, mutations, digest):
+    """Keep the real health reader/parser; substitute only its HTTP transport."""
+    trace = []
+
+    class Connection:
+        status = 200
+
+        def __init__(self, host, port, *, timeout):
+            assert (host, port, timeout) == ("127.0.0.1", 9091, 1)
+            trace.append("open")
+
+        def request(self, method, path, *, headers):
+            store.operator_publication.assert_not_held()
+            assert (method, path, headers) == ("GET", "/healthz", {"Connection": "close"})
+            trace.append("request")
+            if digest is None:
+                raise OSError("synthetic health unavailable")
+
+        def getresponse(self):
+            trace.append("response")
+            return self
+
+        def read(self, limit):
+            assert limit == 131073
+            trace.append("read")
+            return json.dumps({"ok": True, "policy_hash": digest}).encode()
+
+        def close(self):
+            trace.append("close")
+
+    with patch.object(config, "DECISION_GATE_BASE", "http://127.0.0.1:9091"), \
+            patch.object(store.http.client, "HTTPConnection", Connection):
+        result = mutations.catalog_status()
+    assert trace == (["open", "request", "close"] if digest is None else
+        ["open", "request", "response", "read", "close"]), "catalog must perform one bounded health read"
+    return result
+
+
 def shared_credential_modes():
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
     credential = workspace.create_credential(db, store, schema, inputs, mutations)["credential"]
@@ -77,10 +115,12 @@ def shared_credential_modes():
     core = workspace.rows(db, "credentials")
     generation = workspace.rows(db, "credential_generations")
     insertion = create_rule(db, store, schema, inputs, mutations, first, credential)
-    with patch.object(store, "loaded_policy_hash", return_value=None):
+    with patch.object(store, "loaded_gate_status",
+            side_effect=AssertionError("mutation attempted optional gate observation")) as observation:
         replacement = create_rule(db, store, schema, inputs, mutations, second, credential,
             name="Replacement rule", credential_input="replace_exact", placeholder=PLACEHOLDER,
             response_mode="unfiltered_json", response_fields=[])
+    observation.assert_not_called()
     assert insertion["access_rule"]["credential_input"] == "insert"
     assert "placeholder" not in insertion["access_rule"]
     assert replacement["access_rule"]["credential_input"] == "replace_exact"
@@ -117,12 +157,24 @@ def shared_credential_modes():
                 pass
             else:
                 raise AssertionError("retained invalid placeholder state accepted")
-    with patch.object(store, "loaded_policy_hash", return_value=compiled.hash):
-        status = mutations.catalog_status()
+    before, policy_bytes = workspace.snapshot(db, catalog=True), config.POLICY_BUNDLE_PATH.read_bytes()
+    for digest in (None, "sha256:" + "f" * 64):
+        pending = observed_catalog(config, store, mutations, digest)
+        assert pending["policy"]["activation"] == "pending"
+        assert pending["policy"]["loaded_policy_hash"] == digest
+        assert all(rule["enforcement"] == "pending" for rule in pending["access_rules"])
+    status = observed_catalog(config, store, mutations, compiled.hash)
     assert status["capabilities"]["credential_input_modes"] == ["insert", "replace_exact"]
     assert status["policy"]["activation"] == "active"
+    assert status["policy"]["loaded_policy_hash"] == compiled.hash
+    assert all(rule["enforcement"] == "active" for rule in status["access_rules"])
+    assert [(rule["credential_input"], rule.get("placeholder")) for rule in status["access_rules"]] == [
+        ("insert", None), ("replace_exact", PLACEHOLDER)]
+    assert workspace.snapshot(db, catalog=True) == before
+    assert config.POLICY_BUNDLE_PATH.read_bytes() == policy_bytes
     assert workspace.common._PROVIDER_SECRET not in json.dumps(status)
-    return {"one_credential_two_modes": True, "no_secret_copy_or_rotation": True}
+    return {"one_credential_two_modes": True, "no_secret_copy_or_rotation": True,
+        "fresh_health_observations": 3, "pending_health_controls": 2}
 
 
 def custom_header_and_collision():
@@ -171,8 +223,8 @@ def migration_restart():
     store.initialize()
     assert workspace.snapshot(db, catalog=True) == persisted
     assert config.POLICY_BUNDLE_PATH.read_bytes() == policy_bytes
-    with patch.object(store, "loaded_policy_hash", return_value=None):
-        status = mutations.catalog_status()
+    status = observed_catalog(config, store, mutations, None)
+    assert status["policy"]["activation"] == "pending"
     assert [rule["credential_input"] for rule in status["access_rules"]] == ["insert", "insert", "replace_exact"]
     assert all("placeholder" not in rule for rule in status["access_rules"][:2])
     return {"old_policy_rules_unchanged": 2, "restart_unchanged": True}

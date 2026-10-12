@@ -3,7 +3,8 @@
 
 Prepared for bounded network-none execution with read-only source. Each child
 uses the existing real SQLite/encryption/signing fixture and merged compiler.
-Only loaded-gate observation is stubbed. The Google fixture supplies synthetic
+Only the health HTTP transport is synthetic; its bounded reader remains real.
+The Google fixture supplies synthetic
 already-verified account metadata; it does not prove consent or refresh.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ from unittest.mock import patch
 import test_operator_catalog_google as google_tests
 import test_operator_catalog_response_modes as modes
 import test_operator_workspace_store as workspace
+from test_operator_catalog_header_replacement import observed_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 MODE = "unfiltered_json_or_empty_v2"
@@ -61,8 +63,11 @@ def create_rule(db, store, schema, inputs, mutations, application, credential, *
         "application_id": application["id"], "credential_id": credential["id"],
         "upstream_url": "https://api.example.com/v1/full-" + mode,
         "response_mode": mode, "response_fields": []}
-    with patch.object(store, "loaded_policy_hash", return_value=None):
-        return mutations.create_rule(inputs.RuleInput(**values), workspace.common._ACTOR)
+    with patch.object(store, "loaded_gate_status",
+            side_effect=AssertionError("mutation attempted optional gate observation")) as observation:
+        result = mutations.create_rule(inputs.RuleInput(**values), workspace.common._ACTOR)
+    observation.assert_not_called()
+    return result
 
 
 def input_contract():
@@ -120,16 +125,27 @@ def persisted_profile():
             refused(lambda: schema.validate_bindings(conn, invalid), schema.CatalogIntegrityError)
         refused(lambda: policy.render(invalid, state["sequence"], state["initial_hash"]),
             schema.CatalogIntegrityError)
-    with patch.object(store, "loaded_policy_hash", return_value=state["policy_hash"]):
-        status = mutations.catalog_status()
+    wrong_hash = state["policy_hash"][:-1] + ("0" if state["policy_hash"][-1] != "0" else "1")
+    for digest in (None, wrong_hash):
+        pending = observed_catalog(config, store, mutations, digest)
+        assert pending["policy"]["activation"] == "pending"
+        assert pending["policy"]["loaded_policy_hash"] == digest
+        assert pending["access_rules"][0]["enforcement"] == "pending"
+        assert pending["access_rules"][0]["response_mode"] == MODE
+    status = observed_catalog(config, store, mutations, state["policy_hash"])
     assert status["capabilities"]["response_modes"] == CAPABILITIES
     assert status["capabilities"]["request_body_modes"] == ["preserve_json_v1"]
     assert status["access_rules"][0]["response_mode"] == MODE
     assert status["policy"]["activation"] == "active"
+    assert status["policy"]["loaded_policy_hash"] == state["policy_hash"]
+    assert status["access_rules"][0]["enforcement"] == "active"
+    assert workspace.snapshot(db, catalog=True) == before
+    assert config.POLICY_BUNDLE_PATH.read_bytes() == raw
     store.initialize()
     assert workspace.snapshot(db, catalog=True) == before
     assert config.POLICY_BUNDLE_PATH.read_bytes() == raw
-    return {"paired_profile": True, "no_output_headers": True, "restart_unchanged": True}
+    return {"paired_profile": True, "no_output_headers": True, "restart_unchanged": True,
+        "fresh_health_observations": 3, "pending_health_controls": 2}
 
 
 def old_retention():

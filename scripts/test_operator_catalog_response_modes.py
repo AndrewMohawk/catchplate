@@ -3,6 +3,7 @@
 
 Run with read-only source in a bounded network-none container. Uses actual
 SQLite/encryption/signing and the merged compiler; no gate or provider runs.
+Only the health HTTP transport is synthetic; its bounded reader remains real.
 These checks do not establish deployed gate compatibility or proxy transport.
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ import unittest
 from unittest.mock import patch
 
 import test_operator_workspace_store as workspace
+from test_operator_catalog_header_replacement import observed_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,8 +73,10 @@ def compiled_contract():
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
     credential = workspace.create_credential(db, store, schema, inputs, mutations)["credential"]
     application = workspace.create_application(db, store, schema, inputs, mutations)["application"]
-    with patch.object(store, "loaded_policy_hash", return_value=None):
+    with patch.object(store, "loaded_gate_status",
+            side_effect=AssertionError("mutation attempted optional gate observation")) as observation:
         result = _new_rule(db, store, schema, inputs, mutations, application, credential)
+    observation.assert_not_called()
     assert result["policy"]["activation"] == "pending"
     assert result["access_rule"]["response_mode"] == "unfiltered_json"
     assert result["access_rule"]["response_fields"] == []
@@ -107,13 +111,26 @@ def compiled_contract():
             pass
         else:
             raise AssertionError("invalid stored mode was silently rendered")
-    with patch.object(store, "loaded_policy_hash", return_value=state["policy_hash"]):
-        status = mutations.catalog_status()
+    before, raw = workspace.snapshot(db, catalog=True), config.POLICY_BUNDLE_PATH.read_bytes()
+    wrong_hash = state["policy_hash"][:-1] + ("0" if state["policy_hash"][-1] != "0" else "1")
+    for digest in (None, wrong_hash):
+        pending = observed_catalog(config, store, mutations, digest)
+        assert pending["policy"]["activation"] == "pending"
+        assert pending["policy"]["loaded_policy_hash"] == digest
+        assert pending["access_rules"][0]["enforcement"] == "pending"
+        assert pending["access_rules"][0]["response_mode"] == "unfiltered_json"
+    status = observed_catalog(config, store, mutations, state["policy_hash"])
     assert status["capabilities"]["response_modes"] == [
         "projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1", "unfiltered_json_or_empty_v2"]
     assert status["capabilities"]["request_body_modes"] == ["preserve_json_v1"]
     assert status["policy"]["activation"] == "active"
-    return {"paired_profile": True, "request_unchanged": True, "invalid_stored_modes_refused": 3}
+    assert status["policy"]["loaded_policy_hash"] == state["policy_hash"]
+    assert status["access_rules"][0]["enforcement"] == "active"
+    assert status["access_rules"][0]["response_mode"] == "unfiltered_json"
+    assert workspace.snapshot(db, catalog=True) == before
+    assert config.POLICY_BUNDLE_PATH.read_bytes() == raw
+    return {"paired_profile": True, "request_unchanged": True, "invalid_stored_modes_refused": 3,
+        "fresh_health_observations": 3, "pending_health_controls": 2}
 
 
 def migration_compatibility():
@@ -137,9 +154,11 @@ def migration_compatibility():
     store.initialize()
     assert workspace.snapshot(db, catalog=True) == persisted
     assert config.POLICY_BUNDLE_PATH.read_bytes() == policy_bytes
-    with patch.object(store, "loaded_policy_hash", return_value=None):
-        status = mutations.catalog_status()
+    status = observed_catalog(config, store, mutations, None)
+    assert status["policy"]["activation"] == "pending"
     assert [rule["response_mode"] for rule in status["access_rules"]] == ["projected_json", "projected_json", "unfiltered_json"]
+    assert workspace.snapshot(db, catalog=True) == persisted
+    assert config.POLICY_BUNDLE_PATH.read_bytes() == policy_bytes
     return {"legacy_profiles_preserved": 2, "restart_unchanged": True}
 
 

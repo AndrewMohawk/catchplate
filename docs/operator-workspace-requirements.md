@@ -513,13 +513,20 @@ name. ECR additionally needs its actual authentication and multi-request image
 publication protocol; a generic JSON route and static header insertion do not
 implement that integration.
 
-The actual downloadable npm project now passes its complete isolated workflow
-through the real proxy: default read-only metadata, scoped/unscoped manifest
+The downloadable npm project's earlier isolated metadata/publishing workflow
+passed through the real proxy: default read-only metadata, scoped/unscoped manifest
 reads and publications, six request denials, eight unassigned/revoked CONNECT
 denials, trust failures and local publication guards. Its 21-case acceptance
 joins stored tarball bytes and the persisted audit chain; it does not imply
 public npm access, installation, CI execution or live-demo acceptance. See
 [the exact npm example evidence](operator-npm-example-acceptance.md).
+
+The subsequent, separate [npm installation acceptance](operator-npm-install.md)
+passed stock installation, cold `ci`, transitive dependency bytes and default
+advisory requests across 25 commands. Its paired app/proxy is deployed; a live
+LAN proxy smoke passed separately. Neither result establishes public-Internet
+CONNECT, real npm credentials or a real registry publication. The guided publish
+preset also offers optional daily UTC hours; no time window is added by default.
 
 Judge the simplified demo by two complete jobs: a normal client replaces its
 configured dummy authentication with **zero response-configuration interactions**,

@@ -70,6 +70,7 @@ depends on the deployment's advertised capabilities and approved destinations.
 | Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. No real Google journey is established by the synthetic demo. |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
 | Publish an npm package | Named-package publishing preset and downloadable stock npm example; all 21 isolated cases passed. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |
+| Install npm dependencies or run a cold `npm ci` | Separate, exact-package permission including transitive dependencies. Stock npm installation, cold `ci` and default advisory requests passed against an isolated registry; the paired app/proxy is deployed. Internet CONNECT and real registry access remain unverified. [Verification](docs/operator-npm-install.md). |
 | Look up an X username | App-bearer preset for one exact username; Node/Python/Go examples passed against an isolated provider. This is not account-authorized posting. [Verification](docs/operator-x-username-verification.md). |
 | Read an Ethereum chain through Alchemy | Key-based, selected-chain RPC preset with Node/Python/Go examples; isolated proxy acceptance passed, not real-provider entitlement or blockchain writes. [Verification](docs/operator-alchemy-verification.md). |
 | Publish an image to AWS ECR | [Planned operator/client workflow](docs/operator-aws-client-compatibility.md), not an available AWS preset. |
@@ -95,9 +96,11 @@ action or physical-key acceptance, or grant proxied webhook permissions.
 ## Design examples, not demo defaults
 
 The following diagrams explain intended production workflows. The npm preset
-supports named-package publishing, but the illustrated time-window option is
-not yet a guided operator setting. AWS/ECR image approval remains unimplemented
-in the operator demo; its signing helper alone is not a working integration.
+supports named-package publishing with optional daily UTC publishing hours in
+the guided operator form. Hours restrict publication only; prerequisite package
+metadata reads remain allowed at any time. AWS/ECR image approval remains
+unimplemented in the operator demo; its signing helper alone is not a working
+integration.
 
 For example, an application or CI job can publish an updated version of
 `@acme/widgets` with `npm publish`, while policy permits that package's releases

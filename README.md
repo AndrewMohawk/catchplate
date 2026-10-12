@@ -23,11 +23,12 @@ compile the proxy or require a verification ceremony. Start with **Connect an
 app** for your account or key, then choose the application's permission.
 Opening client setup does not execute a request or renew a token.
 
-The canonical entrypoint currently redirects to the existing console hostname;
-the state-preserving canonical-origin cutover is still pending. The new source
-UI has one connection workflow, with synthetic checks only under optional
+The canonical entrypoint serves this persistent instance directly. The old
+demo hostname is authenticated navigation compatibility, not another app.
+The UI has one connection workflow, with synthetic checks only under optional
 **Diagnostics**. These checks are not real provider integrations; use made-up
-keys only for the diagnostic fixture. Existing saved resources are not reset.
+keys only for the diagnostic fixture. The October 12 cutover preserved existing
+saved resources, policy, CA and custody; see the [deployment record](docs/operator-canonical-origin.md).
 
 There are three separate things to configure:
 

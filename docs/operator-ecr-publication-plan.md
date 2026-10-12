@@ -262,8 +262,11 @@ key/channel identity, clamps the original deadlines, and burns each request befo
 encryption or output. Failed or uncertain output poisons the owner. It has no
 review/open command. The broker's private dispatcher now connects the seal-only
 owner to the actually provisioned helper key and completed service-token phase.
-The Rust RPC, signing path and writer are still missing; its unsigned output is
-not admitted evidence. The [private channel contract](native-broker-runtime-image.md#private-jit-sealing-channel)
+The retained Rust owner now connects an internal private preparation seam to
+that actual broker exchange, preserving original private numeric bytes and
+checking the complete returned pair and identity bindings. The authenticated
+Rust RPC, signing path and writer are still missing; the private `Prepared` and
+its unsigned output are not admitted evidence. The [private channel contract](native-broker-runtime-image.md#private-jit-sealing-channel)
 records the package and process-test boundaries.
 
 The focused run resolved 31 test groups across two snapshots: four metadata-history,

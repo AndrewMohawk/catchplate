@@ -158,8 +158,40 @@ read-only source mounts. All 20 recorded source/test hashes remained unchanged;
 no test rerun, image build, service restart or pilot was needed. The process
 suite used the source helper, not the full measured SquashFS/native runtime.
 
+The retained Rust broker now has an internal preparation seam using its actual
+process exchange. Cold configuration joins the successfully decrypted service
+token's original instance, policy and binary scope with the live runtime CA,
+identity and KEK. A private, non-Clone `Prepared` is created only after that
+exchange and the final identity, response and original-window checks. This
+value contains ciphertext and unsigned bindings, not admitted native evidence.
+Private number spellings are preserved rather than round-tripped through Rust
+JSON numbers; the URL-containing wrapper and display have separate commitments.
+An independent parent seal deadline is frozen before sending and can only
+shorten. A stalled wall clock cannot renew it. This does not reconstruct the
+helper's unexported per-operation BOOTTIME sample or continue that already
+completed operation; any future proof protocol needing that exact child bound
+must explicitly carry and verify it.
+
+`make verify-native-jit-rust-fixture` exercises two actual Python FD3 children
+and can export their synthetic canonical originals with `--emit-fixture`.
+`make verify-native-jit-rust-contract` requires that exported file through
+`SERVERWARE_TEST_JIT_RUST_FIXTURE`. Its Rust tests check correlation against the
+recorded receipt clocks; they do not instantiate the measured Rust broker owner
+or manufacture a `Prepared`. Cached/vendored dependencies suffice for this
+offline library-only build; neither target starts the app or a pilot.
+
+The October 12 cross-language run passed three Python fixture groups (two
+actual FD3 children, 1.638 seconds) and all nine Rust correlation/deadline groups
+(0.06 seconds). The offline library harness compiled in 1 minute 42 seconds,
+reusing cached dependencies. Two runner-only precompile failures are retained:
+a file-size limit incorrectly applied to cache copying, then an incompatible
+one-file Docker logging setting. Neither started Cargo; both were corrected
+without changing test inputs or rebuilding the live proxy. The successful run
+used the same pinned fixture and unchanged source hashes, with no test retry.
+Evidence: `../serverware-operator-workspace-evidence/jit-rust-broker.BZSBgu4J/`.
+
 This connection does not make a working approval workflow: the authenticated
-confidential native caller, private Rust preparation, distinct fresh proof,
+confidential native caller, distinct fresh proof,
 independent authority verification, atomic writer custody and authorized review
 opening are still required. The ordinary deployment is unchanged.
 

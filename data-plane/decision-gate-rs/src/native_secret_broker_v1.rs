@@ -16,6 +16,7 @@ mod reconnect;
 mod succession;
 mod static_credential;
 mod static_credential_rotation;
+pub(crate) mod jit_review;
 #[path = "native_verifier/json.rs"]
 mod json;
 
@@ -202,6 +203,7 @@ impl PendingBroker {
         Ok(Owner { process: self.process, deadline: self.deadline,
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
             secret_kek_id: self.config.secret_kek_id, service_phase_closed: false,
+            service_token_scope: None, credential_phase_started: false, jit_configuration: None,
             poisoned: false, _quote: quote, serving: None, refresh_configuration: None, exchange_configuration: None, setup_configuration: None, reconnect_configuration: None, succession_configuration: None,
             cleanup_configuration: None, pending_retirement_configuration: None, capture_retirement_configuration: None, static_configuration: None, static_rotation_configuration: None,
             historical_configuration_sha256: None, historical_original: None, _historical_quotes: Vec::new() })
@@ -213,6 +215,8 @@ impl PendingBroker {
 pub struct Owner {
     process: process::Process, deadline: u64, owner_ca: [u8; 32], secret_kek_id: String,
     service_phase_closed: bool, poisoned: bool, _quote: RuntimeKeyQuoteV1,
+    service_token_scope: Option<ServiceTokenScope>, credential_phase_started: bool,
+    jit_configuration: Option<jit_review::Configured>,
     serving: Option<Arc<native_serving_privileges::Owner>>,
     refresh_configuration: Option<crate::native_oauth_refresh_v1::Configuration>,
     cleanup_configuration: Option<crate::native_oauth_cleanup_v1::Configuration>,
@@ -227,6 +231,12 @@ pub struct Owner {
     succession_configuration: Option<(crate::native_oauth_succession_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     static_configuration: Option<(crate::native_static_credential_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     static_rotation_configuration: Option<(crate::native_static_credential_rotation_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
+}
+
+// Only the successful service-token exchange records these actual public
+// originals. A closed/attempted phase alone is not evidence of completion.
+struct ServiceTokenScope {
+    instance_id: String, policy_hash: String, binary_digest: String,
 }
 
 /// Privileged image/child setup only. The helper is already unprivileged; no
@@ -309,6 +319,7 @@ impl Owner {
 
     pub fn open_credential(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
         work: CredentialWork<'_>, deadline: u64) -> Result<Zeroizing<String>, String> {
+        self.credential_phase_started = true;
         self.service_phase_closed = true;
         let deadline = deadline.min(self.deadline).min(identity.deadline());
         let result = (|| {

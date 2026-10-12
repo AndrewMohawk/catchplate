@@ -34,6 +34,7 @@ SHELL := /bin/sh
 .PHONY: verify-approval-history-metadata verify-native-jit-review-material verify-native-jit-review-owner
 .PHONY: verify-native-broker-package-closure verify-static-credential-provenance-values
 .PHONY: verify-native-jit-broker-channel
+.PHONY: verify-native-jit-rust-fixture verify-native-jit-rust-contract
 .PHONY: verify-operator-live-smoke-config
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
@@ -5757,6 +5758,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/shadow_key_delivery.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/shadow_key_process.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/process.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/jit_review.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/jit_review_originals.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/jit_review_tests.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/service_tokens.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/refresh.rs \
 				data-plane/decision-gate-rs/src/native_oauth_refresh_v1.rs \
@@ -11416,6 +11420,17 @@ verify-native-broker-package-closure:
 # exercises real FD3/local crypto without granting native/KMS authority.
 verify-native-jit-broker-channel:
 	python3 -I -B scripts/test_native_jit_broker_channel.py
+
+# Same isolated UID/GID 65534 process lane as the FD3 suite above. The script's
+# --emit-fixture option additionally exports synthetic cross-language originals.
+verify-native-jit-rust-fixture:
+	python3 -I -B scripts/test_native_jit_rust_contract.py
+
+# Requires the emitted fixture and an isolated cached/vendored Rust toolchain.
+# This compiles library tests only; it is not a proxy release build or pilot.
+verify-native-jit-rust-contract:
+	test -n "$${SERVERWARE_TEST_JIT_RUST_FIXTURE:-}" && test -f "$${SERVERWARE_TEST_JIT_RUST_FIXTURE}"
+	cargo test --release --frozen --offline --manifest-path data-plane/decision-gate-rs/Cargo.toml --lib native_secret_broker_v1::jit_review:: -- --test-threads=1
 
 verify-static-credential-provenance-values:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -I -B scripts/test_static_credential_provenance_values.py

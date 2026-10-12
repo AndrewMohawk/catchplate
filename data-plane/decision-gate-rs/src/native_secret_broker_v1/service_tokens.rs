@@ -193,6 +193,10 @@ impl Owner {
             original.tokens.validate(expected)?;
             identity.verify_policy_commitment(policy, deadline)?;
             self.check(deadline)?;
+            self.service_token_scope = Some(ServiceTokenScope {
+                instance_id: expected.instance_id.clone(), policy_hash: expected.policy_hash.clone(),
+                binary_digest: expected.data_plane_binary_digest.clone(),
+            });
             Ok(original.tokens)
         })();
         if result.is_err() { self.poisoned = true; self.process.terminate(); }

@@ -3,13 +3,15 @@
 // Actual app responses through an internal GET-only bridge. No external SSO,
 // provider, proxy, CA, notification delivery, restart or mutation acceptance.
 // Usage: node scripts/check_operator_runtime_browser.cjs FULL_APP_ID SOURCE_COMMIT FRESH_OUTPUT_DIRECTORY
-//   [--managed-google-unconfigured] [--expected-upstreams JSON_ARRAY] [--expected-catalog-revision INTEGER]
+//   [--managed-google-unconfigured] [--expected-upstreams JSON_ARRAY] [--expected-catalog-revision INTEGER] [--canonical-origin]
 const {readFileSync, realpathSync, mkdirSync, writeFileSync} = require('node:fs');
 const {join, dirname, resolve, isAbsolute} = require('node:path');
 const {createHash} = require('node:crypto');
 const {execFile} = require('node:child_process');
 const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
-const ROOT = resolve(__dirname, '..'), PUBLIC = 'https://serverware-demo.example.com';
+const ROOT = resolve(__dirname, '..'), LEGACY_PUBLIC = 'https://serverware-demo.example.com';
+const CANONICAL_PUBLIC = 'https://serverware.example.com';
+let PUBLIC = LEGACY_PUBLIC;
 const CATALOG = '/api/operator-demo/catalog', NOTIFICATIONS = '/api/operator-demo/notifications', UPSTREAMS = '/api/operator-demo/proxy/upstreams';
 const PATHS = ['/', CATALOG, NOTIFICATIONS, UPSTREAMS], FIXTURE = 'https://demo-upstream:8443';
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2', GMAIL = 'https://gmail.googleapis.com';
@@ -41,17 +43,18 @@ const children = new Set(), before = {}, seen = {};
 const receipt = {schema: 'serverware.operatorRuntimeReadonlyBrowser/v1', ok: false, gets: [], screenshots: [], refused_requests: 0,
   page_errors: 0, console_errors: 0, boundary: 'Actual internal app HTML/APIs only. No external SSO, provider, proxy, CA, delivery or mutation acceptance.'};
 function parseRuntimeOptions(args) {
-  need(Array.isArray(args) && args.length >= 3 && args.length <= 8 && args.every(value => typeof value === 'string'),
+  need(Array.isArray(args) && args.length >= 3 && args.length <= 9 && args.every(value => typeof value === 'string'),
     'usage_full_app_id_commit_fresh_output');
   const selected = {appId: args[0], commit: args[1], output: args[2], managedGoogle: false,
-    expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false};
+    expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: LEGACY_PUBLIC};
   const used = new Set();
   for (let index = 3; index < args.length; index++) {
     const flag = args[index];
-    need(['--managed-google-unconfigured', '--expected-upstreams', '--expected-catalog-revision'].includes(flag) && !used.has(flag),
+    need(['--managed-google-unconfigured', '--expected-upstreams', '--expected-catalog-revision', '--canonical-origin'].includes(flag) && !used.has(flag),
       'runtime_option_refused');
     used.add(flag);
     if (flag === '--managed-google-unconfigured') selected.managedGoogle = true;
+    else if (flag === '--canonical-origin') selected.publicOrigin = CANONICAL_PUBLIC;
     else {
       const value = args[++index];
       need(typeof value === 'string' && value.length <= 1024, 'runtime_option_value_refused');
@@ -286,6 +289,7 @@ async function verifyXConfigurationDisabled(page) {
 }
 async function run() {
   const selected = parseRuntimeOptions(process.argv.slice(2));
+  PUBLIC = new URL(selected.publicOrigin).origin;
   ({appId, commit, output, managedGoogle, expectedUpstreams, expectedRevision} = selected);
   need(/^[0-9a-f]{64}$/.test(appId) && /^[0-9a-f]{40}$/.test(commit) && isAbsolute(output) && resolve(output) === output &&
     realpathSync(dirname(output)) === dirname(output), 'exact_parameters_required');
@@ -343,7 +347,7 @@ async function run() {
   page.on('dialog', dialog => { receipt.refused_requests++; dialog.dismiss().catch(() => {}); });
   page.on('popup', popup => { receipt.refused_requests++; popup.close().catch(() => {}); });
   page.on('worker', () => receipt.refused_requests++); context.on('serviceworker', () => receipt.refused_requests++);
-  await page.goto(PUBLIC + '/', {waitUntil: 'networkidle'});
+  await page.goto(new URL('/', PUBLIC).href, {waitUntil: 'networkidle'});
   await page.waitForFunction(() => !document.getElementById('credential-fields').disabled && document.getElementById('load-error').hidden);
   need(await page.title() === 'Overview - Serverware operator workspace' && seen[CATALOG] === 1, 'landing_failed');
   phase = 'proxy';

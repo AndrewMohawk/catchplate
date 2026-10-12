@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import stat
@@ -13,6 +14,53 @@ from scripts import operator_runtime_readonly_bridge as bridge
 
 
 class RuntimeReadonlyBridgeTests(unittest.TestCase):
+    def test_public_origin_defaults_old_and_uses_exact_admitted_environment_for_headers(self):
+        for configured, expected in ((None, "https://serverware-demo.example.com"),
+                ("https://serverware-demo.example.com", "https://serverware-demo.example.com"),
+                ("https://serverware.example.com", "https://serverware.example.com")):
+            with self.subTest(origin=configured), patch.dict(os.environ, {} if configured is None else
+                    {"SERVERWARE_PUBLIC_URL": configured}, clear=True):
+                self.assertEqual(bridge.public_origin(), expected)
+                result, connection, _ = self.fake_get()
+                self.assertTrue(result["ok"])
+                args, kwargs = connection.request.call_args
+                self.assertEqual(args, ("GET", bridge.X_CONFIGURATION))
+                self.assertEqual(kwargs["headers"]["Origin"], expected)
+                self.assertEqual(kwargs["headers"]["Host"], expected.removeprefix("https://"))
+                self.assertNotIn("TEST-ONLY-ADMIN", json.dumps(result))
+
+    def test_unrecognized_public_origin_refuses_before_token_and_socket_access(self):
+        invalid = ("", "http://serverware.example.com", "https://serverware.example.com/",
+            "https://serverware.example.com:443", "https://serverware.example.com.evil.invalid",
+            "https://user@serverware.example.com", "https://serverware.example.com?x=1",
+            " https://serverware.example.com", "https://SERVERWARE.example.com")
+        with patch.object(bridge.os, "open") as opened, patch.object(bridge.http.client, "HTTPConnection") as connected:
+            for origin in invalid:
+                with self.subTest(origin=origin), patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": origin}, clear=True):
+                    with self.assertRaises(ValueError):
+                        bridge.get({"op": "get", "path": "/api/operator-demo/catalog"})
+            opened.assert_not_called()
+            connected.assert_not_called()
+
+    def test_main_refuses_unrecognized_origin_before_source_or_get_dispatch(self):
+        for origin in (None, "https://unreviewed.invalid"):
+            output = io.StringIO()
+            environment = {"SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_ADMIN_TOKEN_FILE": bridge.TOKEN_FILE,
+                "SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED": "1"}
+            if origin is not None:
+                environment["SERVERWARE_PUBLIC_URL"] = origin
+            with self.subTest(origin=origin), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(bridge.sys, "argv", ["bridge", '{"op":"source"}']), \
+                    patch.object(bridge.sys, "stdout", output), patch.object(bridge.signal, "signal"), \
+                    patch.object(bridge.signal, "alarm"), patch.object(bridge, "source") as source, \
+                    patch.object(bridge, "get") as get:
+                with self.assertRaises(SystemExit) as caught:
+                    bridge.main()
+                self.assertEqual(caught.exception.code, 2)
+                source.assert_not_called()
+                get.assert_not_called()
+            self.assertEqual(output.getvalue(), '{"ok":false,"reason":"runtime_readonly_bridge_refused"}\n')
+
     def x_command(self):
         return {"op": "get", "path": bridge.X_CONFIGURATION, "x_configuration_disabled": True}
 

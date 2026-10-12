@@ -59,7 +59,7 @@ function forbidden() { forbiddenCalls++; throw new Error('pure asset test attemp
 
 function fixture(overrides = {}) {
   const reads = [];
-  const context = vm.createContext({Buffer, structuredClone, Date: class extends Date { static now() { return NOW; } }, __dirname, __filename: CHECKER,
+  const context = vm.createContext({Buffer, structuredClone, URL, Date: class extends Date { static now() { return NOW; } }, __dirname, __filename: CHECKER,
     fixtureRoot: ROOT, fixtureReply: null, fixtureRequests: [],
     require(name) {
       if (name === 'node:path') return path;
@@ -466,7 +466,7 @@ const tests = [
     const f = fixture(), base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
     const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
     assert.deepEqual(parse(base), {appId: base[0], commit: base[1], output: base[2], managedGoogle: false,
-      expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false});
+      expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: PUBLIC});
     assert.equal(parse([...base, '--managed-google-unconfigured']).managedGoogle, true);
     for (const origins of UPSTREAM_LISTS) {
       const result = parse([...base, '--expected-catalog-revision', '39', '--expected-upstreams', JSON.stringify(origins),
@@ -485,6 +485,33 @@ const tests = [
       ['--managed-google-unconfigured', '--managed-google-unconfigured'],
       ['--expected-catalog-revision', '39', '--expected-catalog-revision', '40']])
       assert.throws(() => parse([...base, ...suffix]));
+    assert.equal(f.context.fixtureRequests.length, 0);
+  }],
+  ['canonical origin is a closed explicit opt-in with unchanged paths and renderer proof', () => {
+    const canonical = 'https://serverware.example.com', base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
+    const {f, catalog, upstreams, google} = reviewed();
+    const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
+    assert.equal(parse(base).publicOrigin, PUBLIC);
+    assert.equal(parse([...base, '--canonical-origin']).publicOrigin, canonical);
+    const all = [...base, '--managed-google-unconfigured', '--expected-upstreams', JSON.stringify(UPSTREAM_LISTS[2]),
+      '--expected-catalog-revision', '39', '--canonical-origin'];
+    assert.equal(parse(all).publicOrigin, canonical);
+    for (const suffix of [['--canonical-origin', '--canonical-origin'], ['--canonical-origin', canonical],
+      ['--canonical-origin=https://serverware.example.com'], ['--public-origin', canonical],
+      ['--canonical-origin', 'https://unreviewed.invalid']]) assert.throws(() => parse([...base, ...suffix]));
+    parse(all);
+    f.run('PUBLIC = new URL(parseRuntimeOptions(args).publicOrigin).origin');
+    assert.equal(f.run('new URL("/", PUBLIC).href'), canonical + '/');
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(paths())')), ['/', CATALOG,
+      '/api/operator-demo/notifications', UPSTREAMS, GOOGLE]);
+    assert(f.render(true).equals(expected));
+    validate(f, CATALOG, catalog);
+    validate(f, UPSTREAMS, upstreams);
+    assert.throws(() => validate(f, GOOGLE, google));
+    for (const value of [google, google.review]) {
+      value.public_url = canonical; value.redirect_uri = canonical + '/api/oauth/callback/google';
+    }
+    validate(f, GOOGLE, google);
     assert.equal(f.context.fixtureRequests.length, 0);
   }],
   ['reviewed catalog admits coherent mixed application states and exact badge labels only', () => {

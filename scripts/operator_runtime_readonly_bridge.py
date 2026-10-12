@@ -15,6 +15,7 @@ import stat
 import sys
 
 PUBLIC = "https://serverware-demo.example.com"
+CANONICAL_PUBLIC = "https://serverware.example.com"
 TOKEN_FILE = "/run/secrets/serverware/admin.token"
 PATHS = {"/", "/api/operator-demo/catalog", "/api/operator-demo/notifications", "/api/operator-demo/proxy/upstreams"}
 GOOGLE_CONFIGURATION = "/api/operator-demo/oauth/google/configuration/v2"
@@ -28,6 +29,13 @@ PRIVATE = {"secret", "client_token", "access_token", "refresh_token", "id_token"
 def require(value):
     if not value:
         raise ValueError("refused")
+
+
+def public_origin():
+    """Only the two reviewed deployment origins; no arbitrary header input."""
+    value = os.environ.get("SERVERWARE_PUBLIC_URL", PUBLIC)
+    require(value in {PUBLIC, CANONICAL_PUBLIC})
+    return value
 
 
 def public_json(body, token):
@@ -87,6 +95,7 @@ def get_path(command):
 
 def get(command):
     path = get_path(command)
+    origin = public_origin()
     descriptor = os.open(TOKEN_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         info = os.fstat(descriptor)
@@ -99,7 +108,7 @@ def get(command):
     connection = http.client.HTTPConnection("127.0.0.1", 3000, timeout=5)
     try:
         media = "text/html" if path == "/" else "application/json"
-        connection.request("GET", path, headers={"Host": "serverware-demo.example.com", "Origin": PUBLIC,
+        connection.request("GET", path, headers={"Host": origin.removeprefix("https://"), "Origin": origin,
             "X-Serverware-Admin-Token": token, "Accept-Encoding": "identity", "Accept": media, "Connection": "close"})
         response = connection.getresponse()
         headers = response.getheaders()
@@ -135,8 +144,10 @@ def main():
     try:
         require(len(sys.argv) == 2 and len(sys.argv[1]) <= 1024)
         command = json.loads(sys.argv[1])
+        require("SERVERWARE_PUBLIC_URL" in os.environ)
+        public_origin()  # Refuse an unknown deployment before source/token/socket access.
         require(isinstance(command, dict) and os.environ.get("SERVERWARE_OPERATOR_DEMO") == "1" and
-                os.environ.get("SERVERWARE_PUBLIC_URL") == PUBLIC and os.environ.get("SERVERWARE_ADMIN_TOKEN_FILE") == TOKEN_FILE and
+                os.environ.get("SERVERWARE_ADMIN_TOKEN_FILE") == TOKEN_FILE and
                 "SERVERWARE_ADMIN_TOKEN" not in os.environ and os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == "1" and
                 "SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ)
         print(json.dumps(source(command) if command.get("op") == "source" else get(command), separators=(",", ":")))

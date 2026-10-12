@@ -222,7 +222,7 @@ def request_commitments(row, *, scope, credential_id, generation, sdk_pair=False
                 "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"},
             "body_sha256": digest(b""), "discard_headers": ["accept-encoding"]}, "operation": operation}
     if sdk_pair:
-        canonical["request"]["headers"] = profiles.provider_headers(row["case"])
+        canonical["request"]["headers"] = profiles.canonical_headers(row["case"])
     return digest(canonical), digest({k: v for k, v in canonical.items() if k not in {"v", "client_ip"}})
 
 
@@ -445,6 +445,20 @@ def generation_evidence(events, scope, credential_id, commitments, *, expected_b
         "reconciliationRejections": len(rejections), "revocationPublicationRejections": publication_count}
 
 
+def client_result_observation(phase, code, out, err, *, sdk_pair=False):
+    """Failure-only metadata from a returned child tuple; never retain output."""
+    if (type(sdk_pair) is not bool or type(phase) is not str
+            or phase not in (profiles.PHASES if sdk_pair else PHASES)
+            or type(code) is not int or not -255 <= code <= 255
+            or type(out) is not bytes or type(err) is not bytes
+            or len(out) > 1024 or len(err) > 1024):
+        return None
+    denial = profiles.FAILURES[profiles.split_phase(phase)[0]] if sdk_pair else DENIAL
+    return {"phase": phase, "exitCode": code, "stdoutBytes": len(out), "stderrBytes": len(err),
+        "exactSuccess": code == 0 and out == SUCCESS and err == b"",
+        "exactDenial": code == 1 and out == b"" and err == denial}
+
+
 def validate_client_result(phase, code, out, err, *, sdk_pair=False):
     selected = base_phase(phase, sdk_pair)
     require(type(code) is int and type(out) is bytes and type(err) is bytes,
@@ -624,7 +638,7 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
         return events
 
     def client(self, phase, application, token):
-        self.phase = phase; self.current_files()
+        self.phase = phase; self.client_result = None; self.current_files()
         if getattr(self.args, "browser_permission", False):
             from scripts.operator_gmail_sdk_browser import copied_phase_environment
             environment = copied_phase_environment(getattr(self, "browser_client_environment", None),
@@ -635,6 +649,7 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
         # existing denial controls change that environment. No shell is evaluated.
         options = {"command": profiles.COMMANDS[profiles.split_phase(phase)[0]]} if self.sdk_pair else {}
         result = run_example(environment, min(30, self.deadline - time.monotonic()), **options)
+        self.client_result = client_result_observation(phase, *result, sdk_pair=self.sdk_pair)
         self.current_files(); self.clean(result[1]); self.clean(result[2])
         self.completed.append(validate_client_result(phase, *result, sdk_pair=self.sdk_pair))
 
@@ -939,8 +954,11 @@ def run_checks(args):
     except Exception as error:
         paired = getattr(args, "sdk_pair", False) is True
         phase = check.phase if check is not None and check.phase in ("startup", "revoke", "browser_permission", *selected_phases(paired)) else "startup"
+        observation = getattr(check, "client_result", None)
+        if type(observation) is not dict or observation.get("phase") != phase:
+            observation = None
         return {"schema": profiles.CHECK_SCHEMA if paired else SCHEMA, "ok": False, "syntheticOnly": True, "realGoogleVerified": False,
-            "productionReady": False, "phase": phase,
+            "productionReady": False, "phase": phase, "clientResult": observation,
             "failureSite": failure_site(error, Path(__file__).resolve().parents[1]),
             "error": "acceptance_check_failed" if isinstance(error, CheckFailure) else "acceptance_internal_failure"}
 

@@ -57,10 +57,19 @@ def provider_headers(case):
     client, _, operation = case.partition(":")
     if client not in CLIENTS or operation not in CASES:
         raise ValueError("unknown paired Gmail case")
-    # HttpRequest.execute/Requests sends an explicit empty Content-Length;
-    # Rust retains that framing in canonical_forwarded_request_headers.
-    return {"host": "gmail.googleapis.com", **SDK_HEADERS[client],
-        **({"content-length": "0"} if client == "python" else {})}
+    # The gate removes caller framing before reqwest sends this bodyless GET.
+    # Provider semantic headers therefore exclude Python's ingress CL0.
+    return {"host": "gmail.googleapis.com", **SDK_HEADERS[client]}
+
+
+def canonical_headers(case):
+    headers = provider_headers(case)
+    # Stock HttpRequest.execute/Requests sends an explicit Content-Length: 0.
+    # canonical_forwarded_request_headers retains that original framing even
+    # though it is absent from the physical provider request.
+    if case.startswith("python:"):
+        headers["content-length"] = "0"
+    return headers
 
 
 def split_phase(value):

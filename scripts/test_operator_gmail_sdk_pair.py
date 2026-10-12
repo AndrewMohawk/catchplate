@@ -53,7 +53,6 @@ def request(client, index, token):
     for name in receiver.PUBLIC_HEADERS:
         if name != "host": del value.headers[name]
     for name, item in HEADERS[client].items(): value.headers[name] = item
-    if client == "python": value.headers["Content-Length"] = "0"
     return value
 
 
@@ -156,7 +155,8 @@ class PairedGmailTests(unittest.TestCase):
             for index, case in enumerate(CASES):
                 self.assertEqual(check.fixture.recognized_case(target(client, index), True), client + ":" + case)
                 self.assertIsNone(check.fixture.recognized_case(target(client, index)))
-                self.assertEqual(profiles.provider_headers(client + ":" + case), {"host": "gmail.googleapis.com", **HEADERS[client],
+                self.assertEqual(profiles.provider_headers(client + ":" + case), {"host": "gmail.googleapis.com", **HEADERS[client]})
+                self.assertEqual(profiles.canonical_headers(client + ":" + case), {"host": "gmail.googleapis.com", **HEADERS[client],
                     **({"content-length": "0"} if client == "python" else {})})
         for invalid in ("node", "python:publish", "go:first", True):
             with self.assertRaises((ValueError, check.CheckFailure)):
@@ -193,6 +193,69 @@ class PairedGmailTests(unittest.TestCase):
         bad["requestHeaders"]["accept"] = "*/*"
         with self.assertRaises(check.CheckFailure):
             check.request_commitments(bad, scope=old.SCOPE, credential_id=old.CREDENTIAL, generation=1, sdk_pair=True)
+
+    def test_python_provider_omits_length_but_canonical_preserves_ingress_zero(self):
+        for index in range(4):
+            row = self.docs["first"]["gmailSdk"]["attempts"][4 + index]
+            expected_headers = {"host": "gmail.googleapis.com", **HEADERS["python"]}
+            self.assertEqual(row["requestHeaders"], expected_headers)
+            self.assertNotIn("content-length", row["requestHeaders"])
+            path, query = target("python", index).split("?", 1)
+            public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET",
+                "authority": "gmail.googleapis.com", "path": path, "rawQuery": query,
+                "headers": expected_headers, "bodySha256": receiver.digest(b""), "bodyBytes": 0}
+            self.assertEqual(row["requestCommitment"], receiver.digest(receiver.encoded(public)))
+            expected = canonical("python", index, 1)
+            self.assertEqual(expected["request"]["headers"]["content-length"], "0")
+            actual = check.request_commitments(row, scope=old.SCOPE, credential_id=old.CREDENTIAL,
+                generation=1, sdk_pair=True)
+            without_length = deepcopy(expected)
+            del without_length["request"]["headers"]["content-length"]
+            self.assertNotEqual(actual[0], receiver.digest(receiver.encoded(without_length)))
+            self.assertNotEqual(actual[1], receiver.digest(receiver.encoded(
+                {k: v for k, v in without_length.items() if k not in {"v", "client_ip"}})))
+            # Recompute the public hash: refusal must not rely on a stale hash.
+            bad = deepcopy(row)
+            bad["requestHeaders"]["content-length"] = "0"
+            public["headers"] = bad["requestHeaders"]
+            bad["requestCommitment"] = receiver.digest(receiver.encoded(public))
+            with self.assertRaises(check.CheckFailure):
+                check.request_commitments(bad, scope=old.SCOPE, credential_id=old.CREDENTIAL,
+                    generation=1, sdk_pair=True)
+        wrong_wire = deepcopy(self.wire)
+        missing = canonical("python", 0, 1)
+        del missing["request"]["headers"]["content-length"]
+        wrong_wire[4].update(requestDigest=receiver.digest(receiver.encoded(missing)),
+            operationDigest=receiver.digest(receiver.encoded(
+                {k: v for k, v in missing.items() if k not in {"v", "client_ip"}})))
+        with self.assertRaises(check.CheckFailure):
+            check.generation_evidence(old.audit_rows(wrong_wire), old.SCOPE, old.CREDENTIAL, self.wire,
+                expected_binary_sha256=old.sha(901), sdk_pair=True)
+
+    def test_python_provider_empty_get_framing_remains_closed(self):
+        variants = ((), (("Content-Length", "0"),), (("Content-Length", "1"),),
+            (("Content-Length", "00"),), (("Content-Length", "0"), ("Content-Length", "0")),
+            (("Transfer-Encoding", "chunked"),), (("Content-Length", "0"), ("Transfer-Encoding", "chunked")))
+        for additions in variants:
+            with self.subTest(headers=additions), captured() as provider, receiver.clock(0):
+                tokens = receiver.authorize(provider)
+                handler = request("python", 0, tokens["access_token"])
+                self.assertEqual(handler.headers.get_all("Content-Length", []), [])
+                for name, value in additions:
+                    handler.headers[name] = value
+                accepted = additions in ((), (("Content-Length", "0"),))
+                self.assertEqual(receiver.send(provider, handler)[0], 200 if accepted else 400)
+                observed = provider.observations()
+                row = observed["gmailSdk"]["attempts"][0]
+                self.assertEqual(row["authorized"], accepted)
+                self.assertEqual(row["framingMatch"], accepted)
+                self.assertEqual(observed["counts"]["google"]["resource_attempts"], 1)
+                if accepted:
+                    self.assertEqual(row["requestHeaders"], {"host": "gmail.googleapis.com", **HEADERS["python"]})
+                    self.assertIsNotNone(row["requestCommitment"])
+                else:
+                    self.assertIsNone(row["requestCommitment"])
+                    self.assertEqual(observed["counts"]["google"].get("resource_requests", 0), 0)
 
     def test_generation_pairs_same_scope_one_refresh_no_retry(self):
         rows = old.audit_rows(self.wire)
@@ -231,6 +294,93 @@ class PairedGmailTests(unittest.TestCase):
                 with self.assertRaises(check.CheckFailure):
                     check.validate_client_result(phase, 1, b"", b"arbitrary failure", sdk_pair=True)
         self.assertEqual(len(instance.completed), 12)
+
+    def test_child_result_observation_is_closed_bounded_and_output_free(self):
+        for phase in PHASES:
+            client = phase.split(":")[0]
+            for result, success, denial in (((0, old.SUCCESS, b""), True, False),
+                    ((1, b"", profiles.FAILURES[client]), False, True),
+                    ((-15, b"secret-canary", b"private-provider-value"), False, False)):
+                value = check.client_result_observation(phase, *result, sdk_pair=True)
+                self.assertEqual(value, {"phase": phase, "exitCode": result[0],
+                    "stdoutBytes": len(result[1]), "stderrBytes": len(result[2]),
+                    "exactSuccess": success, "exactDenial": denial})
+                self.assertNotIn(b"secret-canary", receiver.encoded(value))
+                self.assertNotIn(b"private-provider-value", receiver.encoded(value))
+        self.assertTrue(check.client_result_observation("first", 0, old.SUCCESS, b"")["exactSuccess"])
+        self.assertTrue(check.client_result_observation("revoked", 1, b"", old.DENIAL)["exactDenial"])
+        for phase, code, out, err, paired in (("python:first", True, b"", b"", True),
+                ("python:first", 256, b"", b"", True), ("python:first", -256, b"", b"", True),
+                ("python:first", 1, b"a" * 1025, b"", True), ("python:first", 1, b"", b"a" * 1025, True),
+                ("python:first", 1, "secret-canary", b"", True), ("python:first", 1, b"", None, True),
+                ("secret-canary", 1, b"", b"", True), ("first", 1, b"", b"", 0)):
+            self.assertIsNone(check.client_result_observation(phase, code, out, err, sdk_pair=paired))
+
+    def test_client_failure_keeps_original_order_exception_and_never_replays(self):
+        instance = check.GmailSdkCheck.__new__(check.GmailSdkCheck)
+        instance.sdk_pair, instance.args = True, SimpleNamespace(browser_permission=False)
+        instance.completed, instance.deadline = ["already-completed"], time.monotonic() + 29
+        calls, errors = [], []
+        instance.current_files = lambda: calls.append("files")
+        instance.clean = lambda raw: calls.append("clean")
+        original_validator = check.validate_client_result
+        def validate(*args, **kwargs):
+            calls.append("validate")
+            try:
+                return original_validator(*args, **kwargs)
+            except check.CheckFailure as error:
+                errors.append(error)
+                raise
+        def launch(*args, **kwargs):
+            calls.append("run")
+            return 1, b"", profiles.FAILURES["python"]
+        with patch.object(check, "run_example", side_effect=launch) as process, \
+                patch.object(check, "validate_client_result", side_effect=validate), \
+                self.assertRaises(check.CheckFailure) as caught:
+            instance.client("python:first", {"id": old.uid(2)}, "a" * 43)
+        self.assertIs(caught.exception, errors[0])
+        process.assert_called_once()
+        self.assertEqual(calls, ["files", "run", "files", "clean", "clean", "validate"])
+        self.assertEqual(instance.completed, ["already-completed"])
+        self.assertTrue(instance.client_result["exactDenial"])
+        calls.clear()
+        original_failure = RuntimeError("secret-canary")
+        with patch.object(check, "run_example", side_effect=original_failure) as process, \
+                self.assertRaises(RuntimeError) as caught:
+            instance.client("python:refreshed", {"id": old.uid(2)}, "a" * 43)
+        self.assertIs(caught.exception, original_failure)
+        self.assertEqual(calls, ["files"])
+        self.assertIsNone(instance.client_result)
+        self.assertEqual(instance.completed, ["already-completed"])
+        process.assert_called_once()
+
+    def test_failure_receipt_reports_only_current_returned_child_observation(self):
+        args = SimpleNamespace(control_base=check.base.fixture.CONTROL_ORIGIN,
+            operator_origin=check.base.fixture.CONTROL_ORIGIN, management_base="http://127.0.0.1:9091",
+            proxy_url=check.PROXY, ca_file=check.TRUST_FILES["inner"], proxy_ca_file=check.TRUST_FILES["outer"],
+            combined_ca_file=check.TRUST_FILES["combined"], sdk_pair=True, browser_permission=False,
+            expected_go_sha256=None, expected_dependencies_sha256="a" * 64,
+            expected_binary_sha256=old.sha(901), timeout_seconds=180,
+            google_fixture_marker_file=Path("/unused-google"), fixture_marker_file=Path("/unused-fixture"),
+            run_claim_file=Path("/unused-claim"))
+        observation = check.client_result_observation("python:first", 1, b"secret-canary", b"private-value", sdk_pair=True)
+        for phase, saved, expected in (("python:first", observation, observation),
+                ("node:refreshed", observation, None), ("revoke", observation, None), ("python:first", None, None)):
+            error = check.CheckFailure("secret-canary")
+            instance = SimpleNamespace(phase=phase, client_result=saved, run=Mock(side_effect=error))
+            with patch.object(check.base.fixture, "assert_isolated_network"), \
+                    patch.object(check.base, "read_google_marker"), patch.object(check, "claim_fixture"), \
+                    patch.object(check, "GmailSdkCheck", return_value=instance), \
+                    patch.object(check, "failure_site", wraps=check.failure_site) as site:
+                result = check.run_checks(args)
+            self.assertEqual(result["clientResult"], expected)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["phase"], phase)
+            self.assertEqual(result["error"], "acceptance_check_failed")
+            self.assertIs(site.call_args.args[0], error)
+            self.assertNotIn(b"secret-canary", receiver.encoded(result))
+            self.assertNotIn(b"private-value", receiver.encoded(result))
+            instance.run.assert_called_once()
 
     def test_runtime_batch_order_keeps_only_five_original_checkpoints(self):
         instance = check.GmailSdkCheck.__new__(check.GmailSdkCheck)

@@ -357,6 +357,44 @@ _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
 _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _SIGNED_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _CONTROL_PLANE_REQUEST_MAX_BYTES = 2 * 1024 * 1024
+# Reviewed existing operator routes whose handlers own authentication followed
+# by operator_catalog_api._payload's exact byte limit and total deadline. This
+# is deliberately a literal roster, not a prefix or a live router-derived set:
+# adding a route does not silently exempt it from generic request buffering.
+_OPERATOR_CATALOG_BODY_POST_PATHS = frozenset({
+    "/api/operator-demo/credentials",
+    "/api/operator-demo/credentials/revoke",
+    "/api/operator-demo/credentials/replace-key",
+    "/api/operator-demo/credentials/github-token",
+    "/api/operator-demo/credentials/github-app",
+    "/api/operator-demo/credentials/npm-token",
+    "/api/operator-demo/credentials/x-app-bearer",
+    "/api/operator-demo/credentials/alchemy-key",
+    "/api/operator-demo/credentials/aws-sigv4",
+    "/api/operator-demo/credentials/aws-sigv4/replace",
+    "/api/operator-demo/applications",
+    "/api/operator-demo/applications/revoke",
+    "/api/operator-demo/applications/rotate-token",
+    "/api/operator-demo/applications/proxy-authentication",
+    "/api/operator-demo/access-rules",
+    "/api/operator-demo/access-rules/revoke",
+    "/api/operator-demo/access-rules/gmail-read",
+    "/api/operator-demo/access-rules/github",
+    "/api/operator-demo/access-rules/npm-metadata",
+    "/api/operator-demo/access-rules/npm-publish",
+    "/api/operator-demo/access-rules/npm-install",
+    "/api/operator-demo/access-rules/x-username",
+    "/api/operator-demo/access-rules/alchemy-chain-status",
+    "/api/operator-demo/oauth/google/disconnect",
+    "/api/operator-demo/oauth/google/reauthorize",
+    "/api/operator-demo/oauth/google/reauthorization-storage",
+    "/api/operator-demo/oauth/google/setup",
+    "/api/operator-demo/oauth/google/setup/cancel",
+    "/api/operator-demo/proxy/upstreams",
+    "/api/operator-demo/proxy/upstreams/cancel",
+    "/api/operator-demo/notifications/settings",
+    "/api/operator-demo/notifications/test",
+})
 _REGISTRATION_PREPARATION_PATHS = frozenset({
     "/api/webauthn/register/prepare",
     "/api/auth/session/webauthn/register/prepare",
@@ -546,6 +584,11 @@ async def csrf_middleware(request: Request, call_next):
     return response
 
 
+def _operator_catalog_body_is_route_owned(method, path, *, operator_active: bool) -> bool:
+    return (operator_active is True and method == "POST" and type(path) is str
+        and path in _OPERATOR_CATALOG_BODY_POST_PATHS)
+
+
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import development_sandbox
@@ -554,9 +597,17 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         return JSONResponse(status_code=403, content={"detail":
             "This persistent sandbox has a fixed synthetic policy; production setup, provider and configuration writes are unavailable."})
     from serverware import operator_demo
-    if operator_demo.active() and not operator_demo.request_allowed(request.method, request.url.path):
+    operator_active = operator_demo.active()
+    if operator_active and not operator_demo.request_allowed(request.method, request.url.path):
         return JSONResponse(status_code=403, content={"detail":
             "This operator demo allows only scoped local connections; production and native authority mutations are unavailable."})
+    if _operator_catalog_body_is_route_owned(request.method, request.scope.get("path"),
+            operator_active=operator_active):
+        # Keep CSRF/admin/role/Origin admission ahead of the sole bounded body
+        # parser. The signed outer ASGI wrapper still applies common security
+        # response headers. The native-only footer below never selects these
+        # exact catalog paths; all other middleware behavior is unchanged.
+        return await call_next(request)
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
     from serverware import portal_session_activation_confirmation_routes as confirmation_routes

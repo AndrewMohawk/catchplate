@@ -148,10 +148,28 @@ and one live-branch port guard-placement error were corrected before the final
 successful runs. Test sources are under `scripts/test_github_app*.py` and
 `scripts/test_operator_*github*.{py,cjs,mjs}`.
 
-Deployment and a real installed GitHub App remain separate acceptance steps at
-this source checkpoint. No real repository operation or new App-through-Rust
-SDK run is claimed. The historical checkpoints below used a static-token
-fixture; they do not prove the new App lifecycle.
+The ordinary demo now runs immutable source
+`bf33afce290aba279033c4c1f78c486312516632`, deployed through the canonical workspace's
+retained five-layer Compose configuration. Only the app source mount changed;
+the accepted Rust binary remains
+`7101d7e367ecaa398bf057a6cb12f24497670625dd0b0d4ca843f6a0ab6f4da6`.
+Stopped-copy comparison preserved the schema, retained non-audit rows, CA and
+custody, and all 472 audit records. Catalog revision 81, policy sequence 31 and
+all 20 public rows in each resource collection remained unchanged.
+
+A read-only browser check consumed actual deployed HTML and API responses via
+the private authenticated relay: 11 GETs, desktop and 390-pixel layouts, both
+GitHub credential choices, permission selectors and private-draft clearing passed
+with no browser errors or resource mutations. Both external console URLs still
+redirect unauthenticated users to SSO. This does not establish external SSO
+completion, a saved real App or provider contact.
+
+Private rollout receipts and preserved state live under
+`serverware-operator-workspace-evidence/github-app-connection.Jenpesvt/`.
+Real GitHub authentication, a real repository operation and a new App-through-Rust
+SDK run remain unverified. The public proxy's outstanding DNS decision was not
+changed by this feature. Historical SDK checkpoints below used a static-token
+fixture and do not prove the new App lifecycle.
 
 ## Checked-in Node, Python and Go examples
 

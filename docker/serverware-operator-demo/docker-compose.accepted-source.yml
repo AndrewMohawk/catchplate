@@ -1,4 +1,4 @@
-# Ordinary setup guidance on retained-compatible authority; Google unconfigured.
+# Ordinary GitHub App/PAT setup on retained-compatible authority; Google unconfigured.
 # Do not deploy unrelated authority-contract changes without a reviewed migration.
 # AWS credentials are storage-only: no signing, grants or ECR publication.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
@@ -27,7 +27,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-1cb06583662c0d00ddb0c0ff461a104621f22f44
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-bf33afce290aba279033c4c1f78c486312516632
         target: /app
         read_only: true
         bind: {create_host_path: false}

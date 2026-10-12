@@ -363,6 +363,7 @@ pub(crate) struct AdmittedRequestFacts {
     body_sha256: Option<String>,
     forwarded_body_length: Option<u64>,
     forwarded_body_utf8_valid: Option<bool>,
+    npm_install_audit_body: Option<super::npm_install::AuditBody>,
     client_request_digest: Option<String>,
 }
 
@@ -407,6 +408,15 @@ impl AdmittedRequestFacts {
             return Err("shadow request headers exceed byte bound".to_string());
         }
         let body = raw_body.unwrap_or_else(|| request.body.as_bytes());
+        if super::admitted_request_content_encoding(request).is_err() {
+            return Err("shadow request encoding lacks its original owner".into());
+        }
+        if let Some(owner) = &request.npm_install_audit_body {
+            if ingress != ShadowIngressKind::ForwardedHttp || authenticated_principal_id.is_none() || !owner.matches_wire(body)
+                || super::admitted_request_content_encoding(request).is_err() {
+                return Err("shadow npm install audit owner differs from original bytes".into());
+            }
+        }
         if body.len() > SHADOW_MAX_FACT_BODY_BYTES {
             return Err("shadow request body exceeds capture bound".to_string());
         }
@@ -465,6 +475,7 @@ impl AdmittedRequestFacts {
             body_sha256: request.body_sha256.clone(),
             forwarded_body_length: request.forwarded_body_length,
             forwarded_body_utf8_valid: request.forwarded_body_utf8_valid,
+            npm_install_audit_body: request.npm_install_audit_body.clone(),
             client_request_digest: request.client_request_digest.clone(),
         };
         facts.capture_nanos = observation_originals::elapsed(capture_started);
@@ -472,11 +483,16 @@ impl AdmittedRequestFacts {
     }
 
     fn to_decision_request(&self) -> Result<DecisionRequest, String> {
-        let body = match std::str::from_utf8(&self.body) {
+        let body = if let Some(owner) = &self.npm_install_audit_body {
+            if !owner.matches_wire(&self.body) {
+                return Err("captured npm install audit owner differs from original bytes".into());
+            }
+            owner.decoded_text().to_owned()
+        } else { match std::str::from_utf8(&self.body) {
             Ok(body) => body.to_string(),
             Err(_) if self.forwarded_body_utf8_valid == Some(false) => String::new(),
             Err(_) => return Err("captured request body UTF-8 state is inconsistent".to_string()),
-        };
+        } };
         Ok(DecisionRequest {
             client_ip: self.client_ip.clone(),
             method: self.method.clone(),
@@ -486,6 +502,7 @@ impl AdmittedRequestFacts {
             body_sha256: self.body_sha256.clone(),
             forwarded_body_length: self.forwarded_body_length,
             forwarded_body_utf8_valid: self.forwarded_body_utf8_valid,
+            npm_install_audit_body: self.npm_install_audit_body.clone(),
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: self.client_request_digest.clone(),
@@ -507,6 +524,8 @@ impl AdmittedRequestFacts {
                     .sum::<usize>(),
             )
             .saturating_add(self.body.len())
+            .saturating_add(self.npm_install_audit_body.as_ref()
+                .map_or(0, |owner| owner.wire().len().saturating_add(owner.decoded_text().len())))
             .saturating_add(self.body_sha256.as_ref().map(String::len).unwrap_or(0))
             .saturating_add(
                 self.client_request_digest
@@ -515,6 +534,16 @@ impl AdmittedRequestFacts {
                     .unwrap_or(0),
             )
     }
+}
+
+// No authority is constructed: this test seam only exercises private fact
+// copying and reconstruction with the same production validation on both ends.
+#[cfg(test)]
+pub(crate) fn npm_install_retained_request_for_test(
+    request: &DecisionRequest, principal: Option<&str>, raw: &[u8],
+) -> Result<DecisionRequest, String> {
+    AdmittedRequestFacts::capture(request, principal, ShadowIngressKind::ForwardedHttp, 1, Some(raw))?
+        .to_decision_request()
 }
 
 impl Drop for AdmittedRequestFacts {
@@ -1523,7 +1552,9 @@ fn evaluate_policy_plan_request(
             400,
         );
     }
-    if validate_identity_request_content_encoding(&request.headers).is_err() {
+    if super::admitted_request_content_encoding(&request).is_err()
+        || (request.npm_install_audit_body.is_some()
+            && (authenticated_principal_id.is_none() || ingress != ShadowIngressKind::ForwardedHttp)) {
         return denied(
             snapshot,
             json!({"error":"request_content_encoding_denied","status_code":415}),
@@ -1606,6 +1637,13 @@ fn evaluate_policy_plan_request(
     }
     let identity_stripped = strip_principal_required_headers(&request.headers, principal);
     replace_string_map(&mut request.headers, identity_stripped);
+    if route.adapter_type == super::npm_install::ADAPTER {
+        if let Err(code) = super::credential_header_replacement::remove_for_route(
+            compiled, route, principal, &mut request.headers,
+        ) {
+            return denied(snapshot, json!({"error":code,"status_code":403}), 403);
+        }
+    }
     let retained = match discard_declared_request_headers(&request.headers, &route.discard_headers)
     {
         Ok(headers) => headers,
@@ -1619,7 +1657,7 @@ fn evaluate_policy_plan_request(
     };
     replace_string_map(&mut request.headers, retained);
     let normalized_headers = lower_headers(&request.headers);
-    if path_validation.has_encoded_slash && route.adapter_type != "npm.registry" {
+    if path_validation.has_encoded_slash && !matches!(route.adapter_type.as_str(), "npm.registry" | super::npm_install::ADAPTER) {
         return denied(
             snapshot,
             json!({"error":"encoded_path_separator_denied","status_code":400}),
@@ -1656,8 +1694,8 @@ fn evaluate_policy_plan_request(
             )
         }
     };
-    let mut forwarded_headers = match canonical_forwarded_request_headers(
-        &request.headers,
+    let mut forwarded_headers = match super::canonical_admitted_request_headers(
+        &request,
         &url,
         body_length,
         &injection,
@@ -1749,7 +1787,7 @@ fn evaluate_policy_plan_request(
     if let Err(payload) = validate_response_binding_sources(route, &operation) {
         return dispatch_observation::matched_denial(denied(snapshot, payload, 403)?, principal, route, &operation);
     }
-    forwarded_headers = match strip_identity_request_content_encoding(&forwarded_headers) {
+    forwarded_headers = match super::admitted_request_encoding_headers(&request, &forwarded_headers) {
         Ok(headers) => headers,
         Err(_) => return indeterminate(snapshot, "forwarded content encoding drifted"),
     };
@@ -12586,6 +12624,7 @@ mod query_explicit_time_tests {
             body_sha256: None,
             forwarded_body_length: None,
             forwarded_body_utf8_valid: None,
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -12696,6 +12735,7 @@ mod principal_explicit_time_tests {
             body_sha256: None,
             forwarded_body_length: None,
             forwarded_body_utf8_valid: None,
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,

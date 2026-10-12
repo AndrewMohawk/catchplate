@@ -135,6 +135,10 @@ class NpmMetadataRuleInput(NamedInput):
         return validate_packages(value)
 
 
+class NpmInstallRuleInput(NpmMetadataRuleInput):
+    operation_bundle: Literal["npm_install_v1"]
+
+
 class NpmPublishingWindow(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     start: str = Field(min_length=5, max_length=5)

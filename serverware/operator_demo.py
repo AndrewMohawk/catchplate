@@ -267,6 +267,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/access-rules/github",
         "/api/operator-demo/access-rules/npm-metadata",
         "/api/operator-demo/access-rules/npm-publish",
+        "/api/operator-demo/access-rules/npm-install",
         "/api/operator-demo/access-rules/x-username",
         "/api/operator-demo/access-rules/alchemy-chain-status",
         "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",

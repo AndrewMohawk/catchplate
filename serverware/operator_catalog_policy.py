@@ -56,11 +56,14 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
     from serverware import operator_demo_store as legacy
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     from serverware import operator_catalog_aws
+    from serverware import operator_catalog_npm_install
     aws_ids = {row['id'] for row in catalog['credentials'] if operator_catalog_aws.selected(row)}
     for rule in catalog['access_rules']:
         if rule.get('credential_id') in aws_ids:
             raise schema.CatalogIntegrityError('AWS credentials have no access-rule signing profile')
-        if operator_catalog_alchemy.selected(rule):
+        if operator_catalog_npm_install.selected(rule):
+            operator_catalog_npm_install.validate_shape(rule)
+        elif operator_catalog_alchemy.selected(rule):
             operator_catalog_alchemy.validate_shape(rule)
         elif operator_catalog_x.selected(rule):
             operator_catalog_x.validate_shape(rule)
@@ -109,7 +112,9 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             operator_catalog_google.validate_rule(rule, credential, profile=metadata_profile)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
-        if operator_catalog_alchemy.selected(rule):
+        if operator_catalog_npm_install.selected(rule):
+            emitted = operator_catalog_npm_install.render_routes(rule, credential, application['principal_id'])
+        elif operator_catalog_alchemy.selected(rule):
             route = operator_catalog_alchemy.render_route(rule, credential, application['principal_id'])
         elif operator_catalog_x.selected(rule):
             route = operator_catalog_x.render_route(rule, credential, application['principal_id'])
@@ -125,7 +130,7 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             _request_profile(rule, credential, route)
             _response_profile(rule, route)
         replacement = schema.rule_credential_header(rule, credential)
-        if not operator_catalog_npm_publish.selected(rule):
+        if not (operator_catalog_npm_publish.selected(rule) or operator_catalog_npm_install.selected(rule)):
             emitted = [route]
         for item in emitted:
             if replacement is not None:

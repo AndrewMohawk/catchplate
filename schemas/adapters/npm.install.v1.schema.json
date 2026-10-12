@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/npm.install.v1.schema.json",
+  "title": "Serverware closed npm install reads v1",
+  "$comment": "Each signed mode has an exact request and response profile. Compiler additionally binds sorted packages, fixed registry authority, replacement, paths and envelopes. Gzip inspection never grants extraction or archive safety.",
+  "type": "object", "additionalProperties": false,
+  "required": ["credentialBinding", "packages", "mode", "request", "response"],
+  "$defs": {
+    "packageName": {"type": "string", "minLength": 1, "maxLength": 214,
+      "pattern": "^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$"}
+  },
+  "properties": {
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "properties": {
+        "credentialType": {"const": "static"}, "provider": {"const": "operator-demo"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "secretClass": {"const": "bearerToken"}
+      }
+    },
+    "packages": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/packageName"}},
+    "mode": {"enum": ["metadata", "tarball", "audit"]},
+    "request": {"type": "object"}, "response": {"type": "object"}
+  },
+  "oneOf": [
+    {"properties": {
+      "mode": {"const": "metadata"},
+      "request": {"const": {
+        "allowedHeaders": ["accept", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope", "pacote-pkg-id", "pacote-req-type", "pacote-version", "user-agent"],
+        "discardHeaders": ["accept-encoding", "npm-session"], "allowedQueryKeys": [],
+        "allowedMediaTypes": [], "maxBodyBytes": 0, "valueRules": []
+      }},
+      "response": {"const": {
+        "mode": "npmInstallMetadataJsonV1", "maxBodyBytes": 1048576,
+        "contentTypes": ["application/json", "application/vnd.npm.install-v1+json"], "allowedHeaders": [],
+        "error": {"mode": "npmInstallMetadataJsonV1", "maxBodyBytes": 65536,
+          "contentTypes": ["application/json", "application/vnd.npm.install-v1+json"], "allowedHeaders": [], "onInvalid": "block"}
+      }}
+    }},
+    {"properties": {
+      "mode": {"const": "tarball"},
+      "request": {"const": {
+        "allowedHeaders": ["accept", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope", "pacote-integrity", "pacote-pkg-id", "pacote-req-type", "pacote-version", "user-agent"],
+        "discardHeaders": ["accept-encoding", "npm-session"], "allowedQueryKeys": [],
+        "allowedMediaTypes": [], "maxBodyBytes": 0, "valueRules": []
+      }},
+      "response": {"const": {
+        "mode": "npmInstallTarballV1", "maxBodyBytes": 8388608,
+        "contentTypes": ["application/octet-stream"], "allowedHeaders": [],
+        "error": {"mode": "npmInstallTarballV1", "maxBodyBytes": 65536,
+          "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}
+      }}
+    }},
+    {"properties": {
+      "mode": {"const": "audit"},
+      "request": {"const": {
+        "allowedHeaders": ["accept", "content-type", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope", "user-agent"],
+        "discardHeaders": ["accept-encoding", "npm-session"], "allowedQueryKeys": [],
+        "allowedMediaTypes": ["application/json"], "maxBodyBytes": 65536, "valueRules": []
+      }},
+      "response": {"const": {
+        "mode": "npmInstallAuditJsonV1", "maxBodyBytes": 1048576,
+        "contentTypes": ["application/json"], "allowedHeaders": [],
+        "error": {"mode": "npmInstallAuditJsonV1", "maxBodyBytes": 65536,
+          "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}
+      }}
+    }}
+  ]
+}

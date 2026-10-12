@@ -22,11 +22,91 @@ function npmAvailable(catalog, credential) {
 function npmNewRuleAvailable(catalog, applicationId) {
   return !catalog?.access_rules.some(rule => {
     if (rule.status !== 'active' || rule.application_id !== applicationId) return false;
-    if (isNpmRule(rule)) return true;
+    if (isNpmRule(rule) || isNpmInstallRule(rule)) return true;
     if (!rule.methods?.includes('GET')) return false;
     try { const target = new URL(rule.upstream_url); return target.origin === operatorNpm.origin && /^\/[^/]+$/.test(target.pathname); }
     catch (_) { return true; }
   });
+}
+
+// Installation is an additive typed bundle, never inferred from metadata access.
+const operatorNpmInstall = Object.freeze({bundle: 'npm_install_v1', response: 'npm_install_v1',
+  headers: ['accept', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-scope',
+    'pacote-integrity', 'pacote-pkg-id', 'pacote-req-type', 'pacote-version', 'user-agent']});
+function npmInstallCapabilityDescriptor() {
+  return {schema: 'serverware.operatorNpmInstall/v1', connection_type: operatorNpm.connection,
+    create_rule_path: '/api/operator-demo/access-rules/npm-install', registry_origin: operatorNpm.origin,
+    destination_allowed: true, operation_bundles: [operatorNpmInstall.bundle], sdk_auth_token: operatorNpm.token,
+    placeholder: operatorNpm.placeholder, response_mode: operatorNpmInstall.response, source_pair_required: true,
+    max_active_rules_per_application: 1, max_packages: 64, modes: ['metadata', 'tarball', 'audit'],
+    dependencies_require_explicit_grant: true};
+}
+function projectNpmInstallCapability(value) {
+  return operatorExact(value, npmInstallCapabilityDescriptor()) ? npmInstallCapabilityDescriptor() : null;
+}
+function npmInstallAvailable(catalog, credential) {
+  return isNpmCredential(credential) && credential.status === 'active' &&
+    Boolean(projectNpmInstallCapability(catalog?.capabilities?.npm_install)) && catalog.allowed_upstreams.includes(operatorNpm.origin);
+}
+function npmInstallNewRuleAvailable(catalog, applicationId) {
+  return !catalog?.access_rules.some(rule => {
+    if (rule.status !== 'active' || rule.application_id !== applicationId) return false;
+    try { return new URL(rule.upstream_url).origin === operatorNpm.origin; }
+    catch (_) { return true; }
+  });
+}
+function npmInstallRuleFields(packages) {
+  if (!npmPackagesValid(packages)) throw operatorError('List every intended npm package and dependency explicitly (1–64 exact names).');
+  return {operation_bundle: operatorNpmInstall.bundle, packages: [...packages], upstream_url: operatorNpm.origin + '/',
+    methods: ['GET', 'POST'], request_fields: [], response_fields: [], query_keys: [], allowed_headers: [...operatorNpmInstall.headers],
+    response_mode: operatorNpmInstall.response, credential_input: 'replace_exact', placeholder: operatorNpm.placeholder};
+}
+function npmInstallRuleValid(rule, credential) {
+  try {
+    return isNpmCredential(credential) && credential.provider_id === 'npm' && credential.auth_type === 'bearer' &&
+      credential.header_name === 'Authorization' &&
+      !['query_mode', 'request_body_mode', 'age_policy', 'repository', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key)) &&
+      Object.entries(npmInstallRuleFields(rule.packages)).every(([key, value]) => operatorExact(rule[key], value));
+  } catch (_) { return false; }
+}
+function npmInstallRulePayload(rule) {
+  npmInstallRuleFields(rule.packages);
+  return {name: rule.name, application_id: rule.application_id, credential_id: rule.credential_id,
+    operation_bundle: operatorNpmInstall.bundle, packages: [...rule.packages]};
+}
+function npmInstallRuleRestrictions(rule) {
+  return [['Permission', 'Install packages and run npm audit'], ['Registry', operatorNpm.origin],
+    ['Explicit package and dependency allowlist', rule.packages.join(', ')],
+    ['Allowed use', 'Metadata GET, package tarball GET and fixed bulk advisory POST for these exact packages only.'],
+    ['Excluded use', 'No publish, arbitrary registry writes, URLs, git dependencies or automatic dependency grants.'],
+    ['Local client', 'Use the reviewed install/ci example with lifecycle scripts disabled; default audit remains enabled.'],
+    ['Verification', 'Permission and client setup only. Stock-client proxy verification and provider access are not proven by this page.']];
+}
+function renderNpmInstallCompatibility(id) {
+  element(id).replaceChildren(...npmInstallRuleRestrictions({packages: ['every intended package, including each dependency']})
+    .map(([label, value]) => textNode('p', label + ': ' + value, 'small muted')));
+}
+function buildNpmInstallClientRecipe({proxyUrl, applicationId, proxyAuthentication, packages, caPath = './serverware-ca.pem'}) {
+  const proxy = new URL(proxyUrl);
+  if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(applicationId) ||
+      proxyAuthentication !== 'basic_and_bearer_v1' || !npmPackagesValid(packages) ||
+      typeof caPath !== 'string' || caPath.length > 512 || /[\u0000-\u001f\u007f]/.test(caPath))
+    throw new Error('An exact npm installation permission and standard proxy login are required');
+  const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
+  return ['# From the reviewed examples/npm-registry project; no command runs in this page.',
+    '# Explicitly permitted package names (including dependencies): ' + packages.join(', '),
+    '# Set SERVERWARE_PROXY_TOKEN privately to this app token, never a provider token.',
+    '# Set SERVERWARE_NPM_PACKAGE and SERVERWARE_NPM_VERSION to the intended exact package/version.',
+    '# Set SERVERWARE_NPM_PROJECT to an absolute reviewed source directory (package.json).',
+    '# Set SERVERWARE_NPM_OUTPUT to a new absolute directory that does not exist; output is retained.',
+    '# ci additionally requires the original package-lock.json v3. Only manifests/lock are copied.',
+    'export SERVERWARE_PROXY_URL=' + quote(proxyUrl), 'export SERVERWARE_APP_ID=' + quote(applicationId),
+    'export SERVERWARE_CA_FILE=' + quote(caPath || './serverware-ca.pem'),
+    '# Both TLS legs stay verified. The public npm dummy is supplied by the example.',
+    '# Lifecycle scripts are disabled; default npm audit remains on. Never hide an audit failure.',
+    'node client.mjs install', '# Or explicitly use the reviewed lockfile instead:', '# node client.mjs ci',
+    '# No package or provider entitlement was verified by generating this recipe.'].join('\n');
 }
 function npmPackagesValid(packages) {
   return Array.isArray(packages) && packages.length >= 1 && packages.length <= 64 &&

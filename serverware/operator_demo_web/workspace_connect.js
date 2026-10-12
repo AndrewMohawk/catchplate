@@ -38,6 +38,8 @@ function createConnectView(workspace, applications, proxy) {
   const matchingRules = () => catalog()?.access_rules.filter(item => item.status === 'active' && item.application_id === selectedApplication && item.credential_id === selectedCredential) || [];
   const metadataGrantAvailable = () => npmNewRuleAvailable(catalog(), selectedApplication) &&
     !catalog()?.access_rules.some(item => item.status === 'active' && item.application_id === selectedApplication && isNpmPublishRule(item));
+  const publishGrantAvailable = () => npmPublishNewRuleAvailable(catalog(), selectedApplication) &&
+    !catalog()?.access_rules.some(item => item.status === 'active' && item.application_id === selectedApplication && isNpmInstallRule(item));
   const message = text => { element('connect-status').textContent = text; };
   renderOperatorCompatibility('connect-compatibility-content');
   const accountSummary = textNode('div'); accountSummary.id = 'connect-google-account-summary';
@@ -134,6 +136,10 @@ function createConnectView(workspace, applications, proxy) {
           !operatorExact(githubRulePayload(item), githubRulePayload(review.rule)))) {
         message('The saved GitHub permission does not match the reviewed repository and operation. Refresh; no repeat request was sent.'); return;
       }
+      if (isNpmInstallRule(review?.rule) && (!npmInstallRuleValid(item, credential()) ||
+          !operatorExact(npmInstallRulePayload(item), npmInstallRulePayload(review.rule)))) {
+        message('The saved installation permission does not match the reviewed dependency allowlist. Refresh; no repeat request was sent.'); return;
+      }
       if (isNpmRule(review?.rule) && (!npmRuleValid(item, credential()) ||
           !operatorExact(npmRulePayload(item), npmRulePayload(review.rule)))) {
         message('The saved npm permission does not match the reviewed packages. Refresh; no repeat request was sent.'); return;
@@ -195,6 +201,7 @@ function createConnectView(workspace, applications, proxy) {
       const x = isXCredential(credential());
       const alchemy = isAlchemyCredential(credential());
       const npmChoices = npm ? [...(npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : []),
+        ...(npmInstallAvailable(value, credential()) ? [{id: operatorNpmInstall.bundle, name: 'Install packages and run npm audit'}] : []),
         ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
       choices('connect-operation', alchemy ? alchemyAvailable(value, credential()) ? [{id: operatorAlchemy.bundle, name: 'Read chain status'}] : [] : x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
         [operatorGithub.read, operatorGithub.write].map(id => ({id, name: githubPermissionName(id)})) : [] :
@@ -221,6 +228,7 @@ function createConnectView(workspace, applications, proxy) {
     const github = newRule && (isGithubCredential(credential()) || isGithubRule({operation_bundle: element('connect-operation').value}));
     const npm = newRule && (isNpmCredential(credential()) || isNpmRule({operation_bundle: element('connect-operation').value}));
     const npmPublish = npm && isNpmPublishRule({operation_bundle: element('connect-operation').value});
+    const npmInstall = npm && isNpmInstallRule({operation_bundle: element('connect-operation').value});
     const x = newRule && (isXCredential(credential()) || isXRule({operation_bundle: element('connect-operation').value}));
     const alchemy = newRule && (isAlchemyCredential(credential()) || isAlchemyRule({operation_bundle: element('connect-operation').value}));
     const providerPreset = github || npm || x || alchemy;
@@ -282,14 +290,22 @@ function createConnectView(workspace, applications, proxy) {
       'X username lookup is unavailable: the exact preset and approved api.x.com destination are required. No fallback permission is sent.' :
       'Look up this one exact username. GET only, with no query or body. Fixed public dummy authentication; no response-field setup. No posting, search, user OAuth or provider verification.';
     fields('connect-npm-packages-group', npm && !npmPublish);
+    element('connect-npm-packages-label').textContent = npmInstall ? 'Every package and dependency this app may install' : 'Package names this app may read';
+    element('connect-npm-packages-help').textContent = npmInstall ?
+      'Include all direct, transitive, optional and peer packages the job may fetch or audit. One exact name per line, 1–64 total. No automatic dependency discovery or grant. Review your manifests and lockfile; omit nothing required by the job.' :
+      'One exact package name per line, 1–64 unique names. Scoped names use @scope/name. No wildcard, version suffix, URL or dependency-wide access.';
     fields('connect-npm-publish-group', npmPublish);
     fields('connect-npm-publish-window', npmPublish && element('connect-npm-publish-hours').value === 'window');
     element('connect-npm-publish-summary').textContent = !npmPublish ? '' : !npmPublishAvailable(catalog(), credential()) ?
       'Publishing is not advertised or registry.npmjs.org is not approved. No fallback permission is sent.' :
-      !npmPublishNewRuleAvailable(catalog(), selectedApplication) ?
+      !publishGrantAvailable() ?
         'This app already has an npm permission or overlapping registry GET/PUT rule. Reuse it or explicitly revoke the conflict before granting publishing.' :
         'Publish new versions of one exact package with the selected tag. Optional hours are daily UTC, not local time; no overnight interval or 24:00.';
-    element('connect-npm-summary').textContent = !npmAvailable(catalog(), credential()) ?
+    element('connect-npm-summary').textContent = npmInstall ? !npmInstallAvailable(catalog(), credential()) ?
+      'Installation is unavailable until the live paired gate supports it and registry.npmjs.org is approved. No fallback grant is sent.' :
+      !npmInstallNewRuleAvailable(catalog(), selectedApplication) ?
+        'This application already has a registry permission. Explicitly revoke the conflict before granting installation; existing grants are never upgraded.' :
+        'Metadata and tarball reads plus the fixed bulk npm audit request, for this exact package/dependency allowlist. No publishing. Use the reviewed example with lifecycle scripts disabled. This page has not verified a stock-client job.' : !npmAvailable(catalog(), credential()) ?
       'npm metadata lookup is unavailable: this deployment must advertise the preset and approve registry.npmjs.org. No fallback or grant is sent.' :
       !metadataGrantAvailable() ?
       'This application already has an npm permission or overlapping registry GET rule. Reuse its saved permission or review and explicitly revoke the conflicting rule before a new grant. Nothing is changed automatically.' :
@@ -325,7 +341,8 @@ function createConnectView(workspace, applications, proxy) {
       !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
       alchemy && !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ||
-      npm && (npmPublish ? !npmPublishAvailable(catalog(), credential()) || !npmPublishNewRuleAvailable(catalog(), selectedApplication) :
+      npm && (npmInstall ? !npmInstallAvailable(catalog(), credential()) || !npmInstallNewRuleAvailable(catalog(), selectedApplication) :
+        npmPublish ? !npmPublishAvailable(catalog(), credential()) || !publishGrantAvailable() :
         !npmAvailable(catalog(), credential()) || !metadataGrantAvailable()));
   }
   function reviewCurrent() {
@@ -391,7 +408,8 @@ function createConnectView(workspace, applications, proxy) {
       'X app-only username lookup is not advertised by this deployment. No generic fallback or provider request is sent.' : !xDestinationAvailable(catalog()) ?
       'X username lookup needs the exact api.x.com destination approved in Proxy setup first. This page will not add it or restart services.' :
       'X: save an app-only bearer token, choose an app and allow one exact username lookup. No posting or user OAuth. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement.';
-    element('connect-npm-status').textContent = catalog()?.capabilities.npm_publish ?
+    element('connect-npm-status').textContent = catalog()?.capabilities.npm_install ?
+      'npm: installation is a separate explicit package/dependency allowlist, with metadata, tarballs and bulk audit. Existing metadata or publishing permissions are unchanged. No stock-client job or provider access is verified here.' : catalog()?.capabilities.npm_publish ?
       catalog().capabilities.npm_publish.destination_allowed && catalog().allowed_upstreams.includes(operatorNpm.origin) ?
         'npm: choose Read package metadata or Publish package for explicit package access. Publishing can be limited to daily UTC hours. This page has not tested the provider.' :
         'An npm token can be saved, but publishing cannot be granted until registry.npmjs.org is approved in Proxy setup.' :
@@ -496,8 +514,15 @@ function createConnectView(workspace, applications, proxy) {
       return rule;
     }
     if (isNpmCredential(credential())) {
+      if (isNpmInstallRule({operation_bundle: element('connect-operation').value})) {
+        if (!npmInstallNewRuleAvailable(catalog(), selectedApplication)) throw operatorError('An active registry permission conflicts. Revoke it explicitly before granting installation.');
+        const rule = {...npmInstallRuleFields(npmPackageInput(element('connect-npm-packages').value)), name: 'Install packages and run npm audit',
+          application_id: selectedApplication, credential_id: selectedCredential};
+        if (!supported(rule)) throw operatorError('Installation or this exact dependency allowlist is unavailable. No grant was sent.');
+        return rule;
+      }
       if (isNpmPublishRule({operation_bundle: element('connect-operation').value})) {
-        if (!npmPublishNewRuleAvailable(catalog(), selectedApplication)) throw operatorError('An existing npm permission or overlapping registry GET/PUT rule conflicts. Reuse it or explicitly revoke it before a new grant.');
+        if (!publishGrantAvailable()) throw operatorError('An existing npm permission or overlapping registry rule conflicts. Reuse it or explicitly revoke it before a new grant.');
         const hours = element('connect-npm-publish-hours').value;
         if (!['any', 'window'].includes(hours)) throw operatorError('Choose any time or explicit daily UTC publishing hours.');
         const rule = {...npmPublishRuleFields(element('connect-npm-publish-package').value.trim(),
@@ -574,8 +599,8 @@ function createConnectView(workspace, applications, proxy) {
       selectedRule = review.rule.id; goto(4); return;
     }
     if (!workspace.ready('access_rules')) return;
-    await workspace.mutate(isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
-      isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
+    await workspace.mutate(isNpmInstallRule(review.rule) ? 'access-rules/npm-install' : isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
+      isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
   for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-gmail-client', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain'])

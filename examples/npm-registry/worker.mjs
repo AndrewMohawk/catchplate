@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { configuration, requireValue, pacoteOptions, npmArguments, reviewedTarball,
   reviewedManifest, metadataSummary, publishSummary, failure } from './core.mjs';
+import { isInstallation, reviewedProject, installationSummary } from './core.mjs';
 
 export async function perform(config, paths, { pacote, spawn, node, env, readFile }) {
   if (config.operation === 'manifest') {
@@ -13,6 +14,12 @@ export async function perform(config, paths, { pacote, spawn, node, env, readFil
       pacoteOptions(config, paths.cache)));
   }
   let bytes;
+  let initialLock, projectManifest;
+  if (isInstallation(config.operation)) {
+    initialLock = config.operation === 'ci' ? readFile(join(paths.project, 'package-lock.json')) : null;
+    projectManifest = readFile(join(paths.project, 'package.json'));
+    reviewedProject(config, projectManifest, initialLock);
+  }
   if (config.operation === 'publish') {
     bytes = reviewedTarball(config, readFile(paths.tarball));
     // Stock local-file inspection only, no URL, scripts or dependency installation.
@@ -20,10 +27,18 @@ export async function perform(config, paths, { pacote, spawn, node, env, readFil
     reviewedManifest(config, await pacote.manifest(paths.tarball,
       { cache: paths.cache, tufCache: paths.cache + '/tuf', offline: true, ignoreScripts: true }));
   }
-  const result = spawn(node, npmArguments(config, paths), { cwd: paths.root, env,
-    timeout: 12000, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' });
+  const result = spawn(node, npmArguments(config, paths), { cwd: isInstallation(config.operation) ? paths.project : paths.root, env,
+    timeout: isInstallation(config.operation) ? 55000 : 12000,
+    killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' });
   requireValue(!result.error && result.signal === null && result.status === 0 && result.stderr === '');
   const value = JSON.parse(result.stdout);
+  if (isInstallation(config.operation)) {
+    const lock = readFile(join(paths.project, 'package-lock.json'));
+    if (initialLock) requireValue(lock.equals(initialLock));
+    requireValue(readFile(join(paths.project, 'package.json')).equals(projectManifest));
+    return installationSummary(config, value,
+      readFile(join(paths.project, 'node_modules', config.packageName, 'package.json')), lock, projectManifest);
+  }
   return config.operation === 'publish' ? publishSummary(config, value, bytes) : metadataSummary(config, value);
 }
 
@@ -40,8 +55,9 @@ async function main() {
     const load = createRequire(import.meta.url);
     const paths = { root, cache: join(root, 'cache'), tarball: join(root, 'reviewed-package.tgz'),
       npmCli: join(directory, 'node_modules/npm/bin/npm-cli.js'),
-      npmrc: join(root, 'user.npmrc'), globalrc: join(root, 'global.npmrc') };
-    timer = setTimeout(() => process.exit(70), 14000);
+      npmrc: join(root, 'user.npmrc'), globalrc: join(root, 'global.npmrc'),
+      ...(isInstallation(operation) ? { project: config.output } : {}) };
+    timer = setTimeout(() => process.exit(70), isInstallation(operation) ? 60000 : 14000);
     const result = await perform(config, paths, { pacote: load('pacote'), spawn: spawnSync,
       node: process.execPath, env: process.env, readFile: readFileSync });
     console.log(JSON.stringify(result));

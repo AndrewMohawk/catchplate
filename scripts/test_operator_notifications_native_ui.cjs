@@ -60,6 +60,22 @@ function delivery(changes = {}) {
   return api.project(value).slots[0].last_delivery;
 }
 const tests = [
+  ['65 advertised audit types never widen the 64-filter destination limit or select anything', () => {
+    const value = status();
+    const types = [...Array.from({length: 64}, (_, index) => 'fixture.event_' + String(index).padStart(2, '0')),
+      'operator_catalog.access_rule.npm_install_created'].sort();
+    value.capabilities.audit_log.event_types = types;
+    const before = JSON.stringify(value);
+    assert.equal(api.project(value), value); assert.equal(JSON.stringify(value), before);
+    assert(value.slots.every(slot => slot.event_types.length === 0));
+    Object.assign(value.slots[2], {revision: 1, label: 'Audit destination', enabled: true, secret_present: true,
+      event_types: types.slice(0, 64)});
+    assert.equal(api.project(value).slots[2].event_types.length, 64);
+    value.slots[2].event_types = types; assert.throws(() => api.project(value));
+    value.slots[2].event_types = [];
+    value.capabilities.audit_log.event_types = [...types, 'zz.extra']; assert.throws(() => api.project(value));
+    assert.equal(networkCalls, 0);
+  }],
   ['all retained delivery reason codes have fixed useful explanations without changing the outcome', () => {
     const cases = [
       ['dns_unavailable', /hostname could not be resolved/], ['dns_timeout', /DNS lookup timed out/],

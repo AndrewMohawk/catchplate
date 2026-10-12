@@ -131,6 +131,12 @@ pub(crate) fn validate_envelope_pairing(
     mode: Option<&str>,
     constraints: &[Value],
 ) -> Result<(), String> {
+    if adapter_type == crate::npm_install::ADAPTER {
+        return crate::npm_install::validate_envelope(mode, constraints);
+    }
+    if mode.is_some_and(crate::npm_install::supported_response_mode) {
+        return Err("npm install response modes require their explicit npm install adapter".into());
+    }
     if adapter_type == crate::alchemy_rpc_read::ADAPTER {
         return crate::alchemy_rpc_read::validate_envelope(mode, constraints);
     }

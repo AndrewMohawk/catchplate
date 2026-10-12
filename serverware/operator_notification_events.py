@@ -74,6 +74,7 @@ _CATALOG = {
     "access_rule.github_created": "GitHub application permission saved",
     "access_rule.npm_metadata_created": "npm package metadata permission saved",
     "access_rule.npm_publish_created": "npm package publishing permission saved",
+    "access_rule.npm_install_created": "npm installation permission saved",
     "access_rule.x_username_created": "X username lookup permission saved",
     "access_rule.alchemy_chain_status_created": "Alchemy chain status permission saved",
     "access_rule.revoked": "Application permission revoked",

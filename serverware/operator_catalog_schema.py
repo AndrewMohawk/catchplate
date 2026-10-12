@@ -218,6 +218,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
+    from serverware import operator_catalog_npm_install
+    if operator_catalog_npm_install.selected(rule):
+        operator_catalog_npm_install.validate_shape(rule)
+        return None, operator_catalog_npm_install.RESPONSE_MODE
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     if operator_catalog_alchemy.selected(rule):
         operator_catalog_alchemy.validate_shape(rule)
@@ -260,6 +264,10 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     if operator_catalog_aws.selected(credential):
         raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
     request_mode, _ = rule_content_modes(rule)
+    from serverware import operator_catalog_npm_install
+    if operator_catalog_npm_install.selected(rule):
+        operator_catalog_npm_install.validate_rule(rule, credential)
+        return None
     from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     if operator_catalog_alchemy.selected(rule):
         operator_catalog_alchemy.validate_rule(rule, credential)
@@ -405,6 +413,8 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
             raise CatalogIntegrityError('active rule has an inactive parent')
     from serverware import operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     operator_catalog_npm_publish.validate_route_coexistence(catalog['access_rules'])
+    from serverware import operator_catalog_npm_install
+    operator_catalog_npm_install.validate_route_coexistence(catalog['access_rules'])
     operator_catalog_x.validate_route_coexistence(catalog['access_rules'])
     operator_catalog_alchemy.validate_route_coexistence(catalog['access_rules'])
 

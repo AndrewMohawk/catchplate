@@ -34,6 +34,7 @@ function isGithubRule(rule) { return ['github_issues_read_v1', 'github_issues_wr
 function isNpmCredential(credential) { return credential?.connection_type === 'npm_token_v1'; }
 function isNpmRule(rule) { return rule?.operation_bundle === 'npm_metadata_read_v1'; }
 function isNpmPublishRule(rule) { return rule?.operation_bundle === 'npm_publish_v1'; }
+function isNpmInstallRule(rule) { return rule?.operation_bundle === 'npm_install_v1'; }
 function isXCredential(credential) { return credential?.connection_type === 'x_app_bearer_v1'; }
 function isXRule(rule) { return rule?.operation_bundle === 'x_username_read_v1'; }
 function isAlchemyCredential(credential) { return credential?.connection_type === 'alchemy_key_v1'; }
@@ -113,6 +114,7 @@ function operatorRuleContentValid(rule, credential) {
     isAlchemyRule(rule) ? alchemyRuleValid(rule, credential) :
     isXRule(rule) ? xRuleValid(rule, credential) :
     isNpmPublishRule(rule) ? npmPublishRuleValid(rule, credential) :
+    isNpmInstallRule(rule) ? npmInstallRuleValid(rule, credential) :
     isNpmRule(rule) ? npmRuleValid(rule, credential) :
     typeof isGithubRule === 'function' && isGithubRule(rule) && githubRuleValid(rule, credential);
   if (['github_token_v1', 'npm_token_v1', 'x_app_bearer_v1', 'alchemy_key_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
@@ -141,6 +143,8 @@ function operatorRuleCredentialValid(rule, credential) {
 function operatorRuleSupported(rule, catalog) {
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
+  if (isNpmInstallRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
+    npmInstallRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && npmInstallAvailable(catalog, credential));
   if (isAlchemyRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
     alchemyRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && alchemyAvailable(catalog, credential, rule.chain));
   if (isXRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
@@ -385,9 +389,12 @@ function projectCatalog(value) {
         rule.status === 'active' && (credential.status !== 'active' || application.status !== 'active'))
       throw operatorError('Saved rule content modes or resource references are inconsistent. Changes are disabled.');
   }
-  const npmApplications = accessRules.filter(rule => rule.status === 'active' && (isNpmRule(rule) || isNpmPublishRule(rule))).map(rule => rule.application_id);
+  const npmApplications = accessRules.filter(rule => rule.status === 'active' && (isNpmRule(rule) || isNpmPublishRule(rule) || isNpmInstallRule(rule))).map(rule => rule.application_id);
   if (new Set(npmApplications).size !== npmApplications.length)
     throw operatorError('More than one active npm permission belongs to an application. Changes are disabled.');
+  for (const rule of accessRules.filter(item => item.status === 'active' && isNpmInstallRule(item)))
+    if (!npmInstallNewRuleAvailable({access_rules: accessRules.filter(item => item !== rule)}, rule.application_id))
+      throw operatorError('npm installation conflicts with another registry permission. Changes are disabled.');
   const quarantinedAccounts = new Set(credentials.filter(item => item.status === 'quarantined').map(item => item.id));
   if (accessRules.some(rule => rule.status === 'active' && quarantinedAccounts.has(rule.credential_id)))
     throw operatorError('Saved Google account and access-rule states disagree. Changes are disabled.');
@@ -398,6 +405,7 @@ function projectCatalog(value) {
   capabilities.github = value.capabilities?.github == null ? null : projectGithubCapability(value.capabilities.github);
   capabilities.npm = value.capabilities?.npm == null ? null : projectNpmCapability(value.capabilities.npm);
   capabilities.npm_publish = value.capabilities?.npm_publish == null ? null : projectNpmPublishCapability(value.capabilities.npm_publish);
+  capabilities.npm_install = value.capabilities?.npm_install == null ? null : projectNpmInstallCapability(value.capabilities.npm_install);
   capabilities.x = value.capabilities?.x == null ? null : projectXCapability(value.capabilities.x);
   capabilities.alchemy = value.capabilities?.alchemy == null ? null : projectAlchemyCapability(value.capabilities.alchemy);
   capabilities.aws_credentials = value.capabilities?.aws_credentials == null ? null : projectAwsCapability(value.capabilities.aws_credentials);

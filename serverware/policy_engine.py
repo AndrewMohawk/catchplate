@@ -15,10 +15,10 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlunsplit
 
 from mitmproxy import http
 
-from serverware import alchemy_rpc_read, aws_credential_boundary, db, github_issues, npm_metadata, npm_publish, runtime, x_app_read
+from serverware import alchemy_rpc_read, aws_credential_boundary, db, github_issues, npm_install, npm_metadata, npm_publish, runtime, x_app_read
 from serverware.adapters import (
     _parse_content_type, alchemy_rpc_read_json_inspection, get_adapter, gmail_read_json_inspection,
-    npm_metadata_json_inspection, npm_publish_json_inspection, preflight_request_admission,
+    npm_install_response_inspection, npm_metadata_json_inspection, npm_publish_json_inspection, preflight_request_admission,
     x_app_read_json_inspection,
 )
 from serverware.constraints import (
@@ -340,13 +340,18 @@ def _verified_mtls_evidence(flow: http.HTTPFlow) -> dict[str, Any] | None:
     return evidence
 
 
-def _request_body(flow: http.HTTPFlow) -> bytes:
+def _request_body(flow: http.HTTPFlow, route: RoutePolicy | None = None) -> bytes:
     try:
         raw = flow.request.raw_content
     except Exception as exc:
         raise ValueError("request body bytes are unavailable") from exc
     if not isinstance(raw, bytes):
         raise ValueError("request body is not buffered bytes")
+    if route is not None and route.adapter_type == npm_install.ADAPTER and route.adapter_config.get("mode") == "audit":
+        npm_install.validate_route(route)
+        npm_install.validate_request(flow.request.method, flow.request.pretty_url, raw,
+            packages=route.adapter_config["packages"], mode="audit", headers=_normalized_request_headers(flow))
+        return raw  # No generic HTTP decoder; canonical commitment is gzip wire bytes.
     get_content = getattr(flow.request, "get_content", None)
     if not callable(get_content):
         raise ValueError("request body access is unavailable")
@@ -359,8 +364,8 @@ def _request_body(flow: http.HTTPFlow) -> bytes:
     return raw
 
 
-def _body_sha256(flow: http.HTTPFlow) -> str:
-    return "sha256:" + hashlib.sha256(_request_body(flow)).hexdigest()
+def _body_sha256(flow: http.HTTPFlow, route: RoutePolicy | None = None) -> str:
+    return "sha256:" + hashlib.sha256(_request_body(flow, route)).hexdigest()
 
 
 def _strict_query_pairs(raw_query: str) -> list[tuple[str, str]]:
@@ -629,7 +634,8 @@ def _validate_response_content_encoding(
     route = flow.metadata.get("serverware_route")
     if route and (route.adapter_config.get("response") or {}).get("mode") in {
             BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
-            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE}:
+            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE,
+            *npm_install.RESPONSE_MODES.values()}:
         try:
             _v2_response_header_entries(flow, route)
         except HeaderCompatibilityError as error:
@@ -866,7 +872,7 @@ def _canonical_forwarded_request_headers(
         and name != RESPONSE_PROOF_NONCE_HEADER
     }
     forwarded["host"] = _canonical_authority(flow.request.pretty_url, route)
-    body_length = len(_request_body(flow))
+    body_length = len(_request_body(flow, route))
     configured_length = headers.get("content-length")
     if configured_length is not None:
         try:
@@ -1363,7 +1369,7 @@ def _canonical_request(
         "path": parts.path or "/",
         "query": query,
         "headers": forwarded_headers,
-        "body_sha256": _body_sha256(flow),
+        "body_sha256": _body_sha256(flow, route),
     }
     version = 1
     if form_query is not None:
@@ -1451,12 +1457,16 @@ def _strip_identity_headers(flow: http.HTTPFlow, principal: PrincipalPolicy) -> 
 def _strip_identity_content_encoding(
     flow: http.HTTPFlow,
     expected_content_encoding: str | None,
+    route: RoutePolicy | None = None,
 ) -> None:
     headers = _normalized_request_headers(flow)
     content_encoding = headers.get("content-encoding")
     if content_encoding != expected_content_encoding:
         raise ValueError("request Content-Encoding changed after raw admission")
     if content_encoding is None:
+        return
+    if route is not None and route.adapter_type == npm_install.ADAPTER and route.adapter_config.get("mode") == "audit":
+        _request_body(flow, route)  # Revalidate exact framing and bounded body; preserve gzip header.
         return
     if content_encoding != "identity":
         raise ValueError("request Content-Encoding changed after raw admission")
@@ -1560,7 +1570,7 @@ def _provider_request_matches_canonical(
             and query == expected_query
             and _canonical_forwarded_request_headers(flow, credential_policy, route=route)
             == request.get("headers")
-            and _body_sha256(flow) == request.get("body_sha256")
+            and _body_sha256(flow, route) == request.get("body_sha256")
         )
     except (KeyError, TypeError, ValueError):
         return False
@@ -2880,6 +2890,19 @@ def _npm_metadata_scoped_target(flow: http.HTTPFlow, route: RoutePolicy) -> bool
         return False
 
 
+def _npm_install_scoped_target(flow: http.HTTPFlow, route: RoutePolicy) -> bool:
+    if route.adapter_type != npm_install.ADAPTER or route.adapter_config.get("mode") != "metadata":
+        return False
+    try:
+        npm_install.validate_route(route)
+        operation = npm_install.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, packages=route.adapter_config["packages"], mode="metadata",
+            headers=_normalized_request_headers(flow))
+        return operation["package"].startswith("@")
+    except (TypeError, ValueError, UnicodeError):
+        return False
+
+
 def _npm_publish_scoped_target(flow: http.HTTPFlow, route: RoutePolicy) -> bool:
     """Only the signed publish package capture may carry its canonical escaped slash."""
     if route.adapter_type != npm_publish.ADAPTER:
@@ -3019,6 +3042,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         )
     if (path_has_encoded_slash and route.adapter_type != "npm.registry"
             and not _npm_metadata_scoped_target(flow, route)
+            and not _npm_install_scoped_target(flow, route)
             and not _npm_publish_scoped_target(flow, route)):
         decision = PolicyDecision(
             False,
@@ -3292,6 +3316,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         rewritten_path_has_encoded_slash
         and route.adapter_type != "npm.registry"
         and not _npm_metadata_scoped_target(flow, route)
+        and not _npm_install_scoped_target(flow, route)
         and not _npm_publish_scoped_target(flow, route)
     ):
         return pre_reserve_denial(
@@ -3509,6 +3534,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         _strip_identity_content_encoding(
             flow,
             preflight_headers.get("content-encoding"),
+            route,
         )
         forwarded_headers = _canonical_forwarded_request_headers(
             flow,
@@ -4618,7 +4644,7 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
     """Inspect decoded content before release, without changing dispatched bytes."""
     mode = (route.adapter_config.get("response") or {}).get("mode")
     if mode not in {GMAIL_READ_RESPONSE_MODE, npm_metadata.MODE, npm_publish.MODE,
-            x_app_read.MODE, alchemy_rpc_read.MODE}:
+            x_app_read.MODE, alchemy_rpc_read.MODE, *npm_install.RESPONSE_MODES.values()}:
         return PolicyDecision(True)
     guard = guard if guard is not None else getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
     if route.credential_ref and not isinstance(guard, _ResponseCredentialGuard):
@@ -4631,15 +4657,20 @@ def _typed_json_response_inspection(flow: http.HTTPFlow, route: RoutePolicy,
             else x_app_read_json_inspection if mode == x_app_read.MODE
             else npm_publish_json_inspection if mode == npm_publish.MODE
             else npm_metadata_json_inspection if mode == npm_metadata.MODE else gmail_read_json_inspection)
-        _, inspection = inspect_json(raw,
-            1048576 if mode not in {npm_publish.MODE, alchemy_rpc_read.MODE}
-            and flow.response.status_code == 200 else 65536)
+        if route.adapter_type == npm_install.ADAPTER:
+            npm_install.validate_route(route)
+            _, inspection = npm_install_response_inspection(raw, route.adapter_config["mode"], flow.response.status_code)
+        else:
+            _, inspection = inspect_json(raw,
+                1048576 if mode not in {npm_publish.MODE, alchemy_rpc_read.MODE}
+                and flow.response.status_code == 200 else 65536)
         if guard and (guard.detects(raw) or guard.detects(inspection)):
             return PolicyDecision(False, "response credential reflection denied", 502,
                 {"error": "response_credential_reflection"})
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return PolicyDecision(False, "typed JSON response inspection refused", 502,
-            {"error": "alchemy_rpc_read_response_invalid" if mode == alchemy_rpc_read.MODE
+            {"error": "npm_install_response_invalid" if route.adapter_type == npm_install.ADAPTER
+                else "alchemy_rpc_read_response_invalid" if mode == alchemy_rpc_read.MODE
                 else "x_app_read_response_invalid" if mode == x_app_read.MODE
                 else "npm_publish_response_invalid" if mode == npm_publish.MODE
                 else "npm_metadata_response_invalid" if mode == npm_metadata.MODE else "gmail_read_response_invalid"})
@@ -4706,7 +4737,8 @@ def _evaluate_response_envelope(
         )
     v2 = response_cfg.get("mode") in {
         BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
-        npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE}
+        npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE,
+        *npm_install.RESPONSE_MODES.values()}
     inspection_decision = _typed_json_response_inspection(flow, route, credential_guard)
     if not inspection_decision.allowed:
         return inspection_decision
@@ -4817,7 +4849,13 @@ def _evaluate_response_envelope(
                     },
                 )
         elif "contentTypePolicy" in constraint:
-            typed_content_type = (route.adapter_type == npm_metadata.ADAPTER
+            typed_content_type = (route.adapter_type == npm_install.ADAPTER
+                and response_cfg.get("mode") == npm_install.RESPONSE_MODES.get(route.adapter_config.get("mode"))
+                and constraint["contentTypePolicy"] == npm_install.CONTENT_TYPE_POLICY
+                and content_types == npm_install.response_envelope(constraint["id"], route.adapter_config["mode"])["contentTypes"]
+                and len(physical_content_types) == 1
+                and npm_install.is_content_type(route.adapter_config["mode"], flow.response.status_code, physical_content_types[0]))
+            typed_content_type = typed_content_type or (route.adapter_type == npm_metadata.ADAPTER
                 and response_cfg.get("mode") == npm_metadata.MODE
                 and constraint["contentTypePolicy"] == npm_metadata.CONTENT_TYPE_POLICY
                 and content_types == npm_metadata.CONTENT_TYPES

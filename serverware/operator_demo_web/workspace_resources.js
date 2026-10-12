@@ -43,6 +43,7 @@ function operatorResponseSummary(rule) {
 function renderOperatorCompatibility(id, rule = {}) {
   if (isAlchemyRule(rule)) { renderAlchemyCompatibility(id); return; }
   if (isXRule(rule)) { renderXCompatibility(id); return; }
+  if (isNpmInstallRule(rule)) { renderNpmInstallCompatibility(id); return; }
   if (isNpmPublishRule(rule)) { renderNpmPublishCompatibility(id); return; }
   if (isNpmRule(rule)) { renderNpmCompatibility(id); return; }
   if (isGithubRule(rule)) { renderGithubCompatibility(id, rule); return; }
@@ -93,6 +94,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
 function operatorRuleRestrictions(rule) {
   if (isAlchemyRule(rule)) return alchemyRuleRestrictions(rule);
   if (isXRule(rule)) return xRuleRestrictions(rule);
+  if (isNpmInstallRule(rule)) return npmInstallRuleRestrictions(rule);
   if (isNpmPublishRule(rule)) return npmPublishRuleRestrictions(rule);
   if (isNpmRule(rule)) return npmRuleRestrictions(rule);
   if (isGithubRule(rule)) return githubRuleRestrictions(rule);
@@ -371,7 +373,8 @@ function createCredentialsView(workspace, actions = {}) {
         if (isGithubCredential(credential)) card.append(textNode('p',
           'GitHub issue presets only. Stored token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
         if (isNpmCredential(credential)) card.append(textNode('p',
-          catalog.capabilities.npm_publish ?
+          catalog.capabilities.npm_install ?
+            'Saved npm token. Explicit installation permissions require every package and dependency in their allowlist. Metadata and publishing permissions remain separate; provider validity is untested and this token is not renewed.' : catalog.capabilities.npm_publish ?
             'Saved npm token. Each app needs a separate metadata or publishing permission. Package access and token validity are not tested here; Serverware does not renew this token.' :
             'npm metadata lookup only. Stored token; package access and token validity are not tested here. No install, publish, tarballs or npm audit. Serverware does not renew this token.', 'small muted'));
         card.append(textNode('p', 'Saved assignments are configuration, not proof of a valid app token, provider key, or loaded proxy policy.', 'small muted'));

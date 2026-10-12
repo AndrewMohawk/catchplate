@@ -75,6 +75,22 @@ def _declared(route):
         names = {"npm." + name for name in config["operations"]}
     elif kind == "npm.metadata.v1":
         names = {"npm.metadata.read"}
+    elif kind == "npm.install.v1":
+        from serverware import npm_install
+        try:
+            npm_install.validate_authority(config, adapter=kind, host=route["match"].get("host"),
+                credential_ref=route.get("credentialRef"), jit=route.get("jit"),
+                methods=frozenset(route["match"].get("methods", [])), paths=paths,
+                constraints=route.get("constraints", []))
+        except (TypeError, ValueError):
+            require(False)
+        require(route["match"].get("scheme") == "https" and route["match"].get("host") == npm_install.HOST
+            and type(route["match"].get("port")) is int and route["match"]["port"] == 443
+            and route["match"].get("methods") == (["POST"] if config["mode"] == "audit" else ["GET"])
+            and paths == npm_install.route_paths(config["mode"])
+            and route.get("credentialHeader") == npm_install.REPLACEMENT
+            and "jit" not in route and "responseObservation" not in route)
+        names = {npm_install.OPERATIONS[config["mode"]]}
     elif kind == "npm.publish.v1":
         names = {"npm.publish"}
     elif kind == "x.app_read.v1":
@@ -100,6 +116,8 @@ def _builtin(kind, name):
             "npm.distTagWrite": "write", "npm.metadataWrite": "write", "npm.tokenWrite": "administrative"}.get(name)
     if kind == "npm.metadata.v1":
         return "read" if name == "npm.metadata.read" else None
+    if kind == "npm.install.v1":
+        return "read" if name in {"npm.install.metadata.read", "npm.install.tarball.read", "npm.install.audit.read"} else None
     if kind == "npm.publish.v1":
         return "publish" if name == "npm.publish" else None
     if kind == "x.app_read.v1":

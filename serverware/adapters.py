@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
-from serverware import alchemy_rpc_read, db, github_issues, http_client, npm_metadata, npm_publish, runtime, x_app_read
+from serverware import alchemy_rpc_read, db, github_issues, http_client, npm_install, npm_metadata, npm_publish, runtime, x_app_read
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     BUFFERED_JSON_OR_EMPTY_204_RESPONSE_MODE,
@@ -199,6 +199,12 @@ def gmail_read_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray
 
 def npm_metadata_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
     return _bounded_json_inspection(raw, maximum)
+
+
+def npm_install_response_inspection(raw: bytes, mode: str, status: int) -> tuple[Any, bytearray]:
+    if mode == "tarball" and status == 200:
+        return None, npm_install.bounded_gzip(raw, npm_install.MAX_TARBALL_BYTES, npm_install.MAX_TARBALL_DECODED_BYTES)
+    return _bounded_json_inspection(raw, npm_install.MAX_JSON_BYTES if status == 200 else npm_install.MAX_ERROR_BYTES)
 
 
 def npm_publish_json_inspection(raw: bytes, maximum: int) -> tuple[Any, bytearray]:
@@ -419,7 +425,17 @@ def preflight_request_admission(
         )
 
     content_encoding = normalized_headers.get("content-encoding")
-    if content_encoding is not None and content_encoding != "identity":
+    npm_audit = False
+    if getattr(route, "adapter_type", None) == npm_install.ADAPTER and route.adapter_config.get("mode") == "audit":
+        try:
+            npm_install.validate_route(route)
+            npm_install.validate_request(flow.request.method, flow.request.pretty_url, body,
+                packages=route.adapter_config["packages"], mode="audit", headers=normalized_headers)
+            npm_audit = True
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return PolicyDecision(False, "npm audit request contract refused", 403,
+                {"error": "npm_install_request_denied"})
+    if content_encoding is not None and content_encoding != "identity" and not npm_audit:
         return PolicyDecision(
             allowed=False,
             status_code=415,
@@ -489,6 +505,11 @@ def preflight_request_admission(
                 },
             )
 
+    if npm_audit:
+        # The closed adapter already performed bounded gzip/JSON inspection.
+        # Do not invoke an HTTP object's unbounded implicit decoder or replace
+        # the original compressed bytes with decoded validation material.
+        return PolicyDecision(allowed=True)
     get_content = getattr(flow.request, "get_content", None)
     if not callable(get_content):
         return PolicyDecision(
@@ -1352,7 +1373,8 @@ class ApiAdapter:
     def _response_metadata_error(flow: Any, route: Any) -> PolicyDecision | None:
         if (route.adapter_config.get("response") or {}).get("mode") not in {
             BUFFERED_JSON_OR_EMPTY_204_V2_RESPONSE_MODE, GMAIL_READ_RESPONSE_MODE,
-            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE
+            npm_metadata.MODE, npm_publish.MODE, x_app_read.MODE, alchemy_rpc_read.MODE,
+            *npm_install.RESPONSE_MODES.values()
         }:
             return None
         try:
@@ -3475,6 +3497,103 @@ class AlchemyRpcReadAdapter(ApiAdapter):
         return PolicyDecision(allowed=True)
 
 
+class NpmInstallAdapter(ApiAdapter):
+    """Read-only package closure; compressed bytes are never rewritten."""
+    id = npm_install.ADAPTER
+
+    @staticmethod
+    def _denied(error: str, status: int = 403) -> PolicyDecision:
+        return PolicyDecision(False, "npm install contract refused", status, {"error": error})
+
+    def _operation(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, Any]:
+        npm_install.validate_route(route)
+        mode = route.adapter_config["mode"]
+        headers = {}
+        for name in [*npm_install.REQUEST_HEADERS[mode], "content-type", "content-encoding", "content-length", "transfer-encoding"]:
+            values = self._response_header_values(flow.request.headers, name)
+            if len(values) > 1:
+                raise ValueError("npm install duplicate header refused")
+            if values:
+                headers[name] = values[0]
+        operation = npm_install.validate_request(flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content, packages=route.adapter_config["packages"], mode=mode, headers=headers)
+        path = npm_install.target_parts(flow.request.pretty_url, mode).path
+        if mode == "metadata":
+            expected = {"package": path[1:]}
+        elif mode == "audit":
+            expected = {}
+        else:
+            pieces = path[1:].split("/")
+            expected = ({"package": pieces[0], "filename": pieces[2]} if len(pieces) == 3 else
+                {"scope": pieces[0], "package": pieces[1], "filename": pieces[3]})
+        if params != expected:
+            raise ValueError("npm install capture refused")
+        return operation
+
+    def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        try:
+            self._operation(flow, route, params)
+            return self._validate_provider_request_profile(flow, route)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_install_request_denied")
+
+    def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, Any]:
+        return self._operation(flow, route, params)
+
+    def _response_contract(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if not flow.response:
+            return self._denied("npm_install_response_missing", 502)
+        try:
+            self._operation(flow, route, params)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_install_response_policy_invalid", 502)
+        error = self._response_metadata_error(flow, route)
+        if error is not None:
+            return error
+        status, mode = flow.response.status_code, route.adapter_config["mode"]
+        if type(status) is not int or status not in npm_install.STATUSES:
+            return self._denied("npm_install_response_status_denied", 502)
+        media = self._response_header_values(flow.response.headers, "content-type")
+        if len(media) != 1 or not npm_install.is_content_type(mode, status, media[0]):
+            return self._denied("npm_install_response_content_type_denied", 502)
+        encodings = self._response_header_values(flow.response.headers, "content-encoding")
+        if encodings not in ([], ["identity"]):
+            return self._denied("npm_install_response_encoding_denied", 502)
+        maximum = (npm_install.MAX_TARBALL_BYTES if mode == "tarball" else npm_install.MAX_JSON_BYTES) if status == 200 else npm_install.MAX_ERROR_BYTES
+        if not isinstance(flow.response.raw_content, bytes) or not 1 <= len(flow.response.raw_content) <= maximum:
+            return self._denied("npm_install_response_body_denied", 502)
+        return PolicyDecision(allowed=True)
+
+    def prepare_response(self, flow: Any, route: Any, params: dict[str, str], *,
+            authorization_factory: Callable[[], tuple[str, float]] | None = None) -> PolicyDecision:
+        return self._response_contract(flow, route, params)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        result = self._response_contract(flow, route, params)
+        if not result.allowed:
+            return result
+        mode, status = route.adapter_config["mode"], flow.response.status_code
+        inspection = bytearray()
+        try:
+            payload, inspection = npm_install_response_inspection(flow.response.raw_content, mode, status)
+            if mode != "tarball" or status != 200:
+                npm_install.validate_response(payload, mode=mode, status=status, operation=self._operation(flow, route, params))
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return self._denied("npm_install_response_invalid", 502)
+        finally:
+            inspection[:] = b"\x00" * len(inspection)
+        profile = route.adapter_config["response"]
+        if status != 200:
+            profile = profile["error"]
+        media = self._response_header_values(flow.response.headers, "content-type")[0].split(";", 1)[0].lower()
+        self._normalize_response_headers(flow, profile, npm_install.RESPONSE_MODES[mode])
+        flow.response.headers["Content-Type"] = media
+        return PolicyDecision(allowed=True)
+
+
 class NpmMetadataAdapter(ApiAdapter):
     """Exact allowlisted metadata GETs; no implicit install or write authority."""
     id = npm_metadata.ADAPTER
@@ -4387,6 +4506,7 @@ ADAPTERS: dict[str, ApiAdapter] = {
     alchemy_rpc_read.ADAPTER: AlchemyRpcReadAdapter(),
     "npm.registry": NpmRegistryAdapter(),
     npm_metadata.ADAPTER: NpmMetadataAdapter(),
+    npm_install.ADAPTER: NpmInstallAdapter(),
     npm_publish.ADAPTER: NpmPublishAdapter(),
 }
 

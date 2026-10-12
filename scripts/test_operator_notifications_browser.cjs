@@ -41,7 +41,7 @@ def event_list(node):
         return values
     raise ValueError("unsupported event enum expression")
 result={"action_required":event_list(assignments["ACTION_EVENT_TYPES"]),"audit_log":event_list(assignments["AUDIT_EVENT_TYPES"])}
-assert all(len(values)<=64 and len(values)==len(set(values)) for values in result.values())
+assert all(len(values)<=(65 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
 print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
@@ -249,6 +249,25 @@ const tests = [
       }
       assert.equal(observed.posts.length, 0); await screenshot(page, 'four-independent-notification-slots');
     })],
+  ['65 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
+    async (page, observed) => {
+      await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
+      assert.equal(await target.locator('[name="event_types"]').count(), 65);
+      assert.equal(await target.locator('[name="event_types"]:checked').count(), 1);
+      await target.locator('details').locator('summary').click();
+      for (const checkbox of await target.locator('[name="event_types"]').all()) await checkbox.check();
+      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /65\/64 selected/);
+      assert(await target.locator('[data-notification-save]').isDisabled());
+      // Bypassing a disabled submit button still hits the same bounded guard.
+      await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
+      assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
+      assert.deepEqual(observed.snapshot.slots, before);
+      await target.locator('[name="event_types"]').first().uncheck();
+      assert(await target.locator('[data-notification-save]').isEnabled());
+      await submit(page, target); assert.equal(observed.posts.length, 1);
+      assert.equal(observed.posts[0].body.event_types.length, 64);
+      assert(observed.posts[0].body.event_types.includes('operator_catalog.access_rule.npm_install_created'));
+    })],
   ['explicit saves use each slot revision and leave all other destinations and application resources unchanged', browser => fixture(browser, {},
     async (page, observed) => {
       await open(page);
@@ -441,7 +460,8 @@ const tests = [
         assert.equal(await target.locator('[name="url"]').inputValue(), '');
       }
       assert.doesNotMatch(await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText(), /HTTP status:/);
-      assert.equal(EVENTS.audit_log.length, 64); assert.equal(EVENTS.action_required.length, 5);
+      assert.equal(EVENTS.audit_log.length, 65); assert.equal(EVENTS.action_required.length, 5);
+      assert(EVENTS.audit_log.includes('operator_catalog.access_rule.npm_install_created'));
       assert.equal(JSON.stringify(observed.snapshot), before); assert.equal(observed.posts.length, 0);
       await screenshot(page, 'notification-slot-failure-details');
     })],

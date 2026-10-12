@@ -189,6 +189,39 @@ class OperatorCatalogActivityTests(unittest.TestCase):
         self.assertEqual(self.account(result)["last_refresh_outcome"], "unobserved")
         self.assert_unobserved(result)
 
+    def test_install_three_aliases_require_exact_methods_and_never_infer_package_completion(self):
+        record = {"id": RULE, "route_id": "operator." + RULE, "name": "Install explicit closure",
+            "application_id": APPLICATION, "credential_id": CREDENTIAL, "status": "active",
+            "operation_bundle": "npm_install_v1", "packages": ["fixture-package"],
+            "upstream_url": "https://registry.npmjs.org/", "methods": ["GET", "POST"],
+            "request_fields": [], "response_fields": [], "query_keys": [],
+            "allowed_headers": ["accept", "content-type", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope",
+                "pacote-integrity", "pacote-pkg-id", "pacote-req-type", "pacote-version", "user-agent"],
+            "response_mode": "npm_install_v1", "credential_input": "replace_exact",
+            "placeholder": "Bearer serverware-npm-placeholder-v1"}
+        self.f.catalog["access_rules"][0] = record
+        self.f.catalog["credentials"][0]["auth_type"] = "bearer"
+        for suffix, method in (("", "GET"), (".tarball", "GET"), (".audit", "POST")):
+            for admitted in (True, False):
+                with self.subTest(suffix=suffix, admitted=admitted):
+                    self.f.clear()
+                    actual = method if admitted else "PUT"
+                    _, terminal = self.f.pair(route=record["route_id"] + suffix,
+                        start_changes={"method": actual}, release_changes={"method": actual})
+                    result = self.f.project()
+                    if admitted:
+                        evidence = self.account(result)["last_successful_response"]
+                        self.assertEqual(evidence["event_id"], terminal)
+                        self.assertEqual(evidence["rule_id"], RULE)
+                        self.assertFalse(result["window"]["incomplete"])
+                        self.assertNotIn("installed", evidence)
+                    else:
+                        self.assert_unobserved(result)
+                        self.assertEqual(result["window"]["unmatched_responses"], 1)
+        self.f.clear()
+        self.f.pair(route=record["route_id"] + ".other")
+        self.assert_unobserved(self.f.project())
+
     def test_refresh_success_failure_use_recorded_time_then_rowid(self):
         failed = self.f.add(FAILURE, refresh(3), when=NOW - 1000)
         success = self.f.add(REFRESH, refresh(3), when=NOW - 2000)

@@ -225,6 +225,7 @@ fn ordinary_compat_real_adapter_preserves_body_commitment_and_scope_guards() {
         client_ip: None, method: "POST".into(), url: "https://example.test/resource".into(),
         headers: BTreeMap::new(), body: String::new(), body_sha256: None,
         forwarded_body_length: None, forwarded_body_utf8_valid: Some(true),
+        npm_install_audit_body: None,
         credential_metadata: BTreeMap::new(), gmail_proofs: Vec::new(), client_request_digest: None,
     };
     for body in ["", " {\"unlisted\": [1.00, true]} "] {

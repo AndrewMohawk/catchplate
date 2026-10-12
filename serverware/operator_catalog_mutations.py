@@ -18,7 +18,7 @@ from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
-    GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput,
+    GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
     XAppBearerInput, XUsernameRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
     AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput,
@@ -96,18 +96,18 @@ def _policy_observation(state: dict, *, publication_failed: bool = False) -> dic
         if not publication_failed and loaded is not None and loaded == current == state["policy_hash"] else "pending"}
 
 
-def _catalog_observation(state: dict) -> tuple[dict, bool, bool]:
+def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool]:
     """One bounded gate read for this catalog response, never a shared cache.
 
     Managed mode retains its before/after configuration and binary checks.
-    The final local read fences both capability displays to the serialized
+    The final local read fences capability displays to the serialized
     catalog's policy, not merely to whichever newer policy the gate reports.
     Mutation receipts and admission keep their separate fresh observers.
     """
     loaded, current = None, None
-    x_available, alchemy_available = False, False
+    x_available, alchemy_available, npm_install_available = False, False, False
     try:
-        from serverware import operator_catalog_x, operator_catalog_alchemy
+        from serverware import operator_catalog_x, operator_catalog_alchemy, operator_catalog_npm_install
         from serverware import operator_google_managed_config as managed
         from serverware import operator_publication as publication
         publication.assert_not_held()
@@ -117,22 +117,24 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool]:
             if observed["ready"] is True:
                 loaded = observed["loaded_policy_hash"]
                 x_available, alchemy_available = observed["x_available"], observed["alchemy_available"]
+                npm_install_available = observed["npm_install_available"]
         else:
             observed = store.loaded_gate_status()
             if type(observed) is dict and observed.get("ok") is True:
                 loaded = observed["policy_hash"]
                 x_available = operator_catalog_x.gate_descriptor_matches(observed.get("operator_x_app_read"))
                 alchemy_available = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
+                npm_install_available = operator_catalog_npm_install.gate_descriptor_matches(observed.get("operator_npm_install"))
         # Starts only after HTTP and any managed snapshots have closed.
         with store._require().metadata_connection() as conn:
             current = _state(conn)["policy_hash"]
     except Exception:
         current = None
-        x_available, alchemy_available = False, False
+        x_available, alchemy_available, npm_install_available = False, False, False
     active = loaded is not None and loaded == current == state["policy_hash"]
     return ({"policy_hash": state["policy_hash"], "sequence": state["sequence"],
         "loaded_policy_hash": loaded, "activation": "active" if active else "pending"},
-        active and x_available, active and alchemy_available)
+        active and x_available, active and alchemy_available, active and npm_install_available)
 
 
 def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
@@ -207,7 +209,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
         if "request_body_mode" in record:
             result["request_body_mode"] = record["request_body_mode"]
         from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
-        if operator_catalog_alchemy.selected(record):
+        from serverware import operator_catalog_npm_install
+        if operator_catalog_npm_install.selected(record):
+            result.update(operator_catalog_npm_install.public_fields(record))
+        elif operator_catalog_alchemy.selected(record):
             result.update(operator_catalog_alchemy.public_fields(record))
         elif operator_catalog_x.selected(record):
             result.update(operator_catalog_x.public_fields(record))
@@ -416,7 +421,7 @@ def create_application(payload: ApplicationInput, actor_id: str) -> dict:
 
 
 def create_rule(payload: RuleInput, actor_id: str) -> dict:
-    from serverware import operator_demo, operator_catalog_npm_publish
+    from serverware import operator_demo, operator_catalog_npm_publish, operator_catalog_npm_install
     upstream, _ = operator_demo.origin(payload.upstream_url, target=True)
     if upstream not in operator_demo.settings()["allowed_upstreams"]:
         raise ValueError("destination is not deployment-allowlisted")
@@ -438,6 +443,7 @@ def create_rule(payload: RuleInput, actor_id: str) -> dict:
             raise ValueError("rule content or credential input is incompatible with the selected credential") from None
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
         operator_catalog_npm_publish.admit_rule(record, catalog)
+        operator_catalog_npm_install.admit_rule(record, catalog)
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
     return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
 
@@ -598,6 +604,8 @@ def create_npm_rule(payload: NpmMetadataRuleInput, actor_id: str) -> dict:
         except CatalogIntegrityError:
             raise ValueError("npm metadata preset requires an npm token connection") from None
         operator_catalog_npm_publish.admit_rule(record, catalog)
+        from serverware import operator_catalog_npm_install
+        operator_catalog_npm_install.admit_rule(record, catalog)
         identifier = str(uuid.uuid4())
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
@@ -620,10 +628,33 @@ def create_npm_publish_rule(payload: NpmPublishRuleInput, actor_id: str) -> dict
         except CatalogIntegrityError:
             raise ValueError("npm publish preset requires an npm token connection") from None
         npm.admit_rule(record, catalog)
+        from serverware import operator_catalog_npm_install
+        operator_catalog_npm_install.admit_rule(record, catalog)
         identifier = str(uuid.uuid4())
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
     return _mutate(payload, actor_id, "access_rules", "access_rule.npm_publish_created", change)
+
+
+def create_npm_install_rule(payload: NpmInstallRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_npm_install as npm
+    npm.require_available(payload.expected_policy_hash)
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        record = npm.record_fields(payload)
+        npm.admit_rule(record, catalog)
+        try:
+            npm.validate_rule(record, credential)
+            schema.rule_credential_header(record, credential)
+        except CatalogIntegrityError:
+            raise ValueError("npm install preset requires an npm token connection") from None
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.npm_install_created", change)
 
 
 def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
@@ -709,8 +740,9 @@ def catalog_status() -> dict:
             "active_max": MAX_ACTIVE_RESOURCES, "retained_max": MAX_RETAINED_RESOURCES} for collection in _RESULT_KEYS}
         observed_activity = operator_catalog_activity.project(
             conn, catalog, observed_at_epoch_ms=time.time_ns() // 1_000_000)
-    observation, x_available, alchemy_available = _catalog_observation(state)
+    observation, x_available, alchemy_available, npm_install_available = _catalog_observation(state)
     now, settings = time.time_ns() // 1_000_000, operator_demo.settings()
+    from serverware import operator_catalog_npm_install
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
@@ -736,6 +768,8 @@ def catalog_status() -> dict:
             "alchemy": operator_catalog_alchemy._capability() if alchemy_available else None,
             "npm": operator_catalog_npm.capability(),
             "npm_publish": operator_catalog_npm_publish.capability(),
+            "npm_install": operator_catalog_npm_install._capability() if npm_install_available
+                and operator_catalog_npm_install.ORIGIN in settings["allowed_upstreams"] else None,
             "operation_bundles": operation_bundles,
             "request_body_modes": ["preserve_json_v1"],
             "credential_input_modes": ["insert", "replace_exact"],

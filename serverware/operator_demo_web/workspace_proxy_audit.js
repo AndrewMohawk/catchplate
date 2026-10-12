@@ -22,6 +22,7 @@ function operatorExampleProjects(rule, catalog) {
       guide('npm metadata guide', 'operator-npm-metadata.md')];
     case 'npm_publish_v1': return [project('npm registry project', 'npm-registry'),
       guide('npm publishing guide', 'operator-npm-publish.md')];
+    case 'npm_install_v1': return [project('npm install/ci project (verification pending)', 'npm-registry')];
     case 'x_username_read_v1': return [project('Node.js', 'x-username-node'),
       project('Python', 'x-username-python'), project('Go', 'x-username-go'),
       {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
@@ -91,6 +92,7 @@ function createProxyView(workspace, applications) {
     const github = isGithubRule(rule);
     const npm = isNpmRule(rule);
     const npmPublish = isNpmPublishRule(rule);
+    const npmInstall = isNpmInstallRule(rule);
     const x = isXRule(rule);
     const alchemy = isAlchemyRule(rule);
     const alchemySelection = alchemy ? application?.id + ':' + rule.id : '';
@@ -104,16 +106,17 @@ function createProxyView(workspace, applications) {
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github || npm || npmPublish || x || alchemy || gmailSdk; element('proxy-method').disabled = github || npm || npmPublish || x || alchemy || gmailSdk;
-    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || x || alchemy || gmailSdk;
+    element('proxy-method').hidden = github || npm || npmPublish || npmInstall || x || alchemy || gmailSdk; element('proxy-method').disabled = github || npm || npmPublish || npmInstall || x || alchemy || gmailSdk;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || npmInstall || x || alchemy || gmailSdk;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail || gmailSdk;
     element('gmail-sdk-client-controls').hidden = !gmailSdk;
     const messageRead = gmail && !gmailSdk && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official Go SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = alchemy ?
+    element('client-template-title').textContent = npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official Go SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = npmInstall ?
+      'Review the exact dependency allowlist and local manifests before running the linked npm example. Installation writes only to your deliberately selected new output directory; lifecycle scripts stay disabled and default audit stays enabled. This page does not execute or verify the job.' : alchemy ?
       'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here and this page does not prove provider entitlement.' : x ?
       'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
@@ -150,7 +153,7 @@ function createProxyView(workspace, applications) {
     }
     let dummyHeader; let proxy;
     const proxyAuthentication = applicationProxyAuthentication(application);
-    if ((npm || npmPublish) && proxyAuthentication !== 'basic_and_bearer_v1') {
+    if ((npm || npmPublish || npmInstall) && proxyAuthentication !== 'basic_and_bearer_v1') {
       element('client-command').textContent = 'The stock npm client needs standard username/password proxy login.';
       element('client-guidance').textContent = 'Use Applications to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
       return;
@@ -164,7 +167,8 @@ function createProxyView(workspace, applications) {
       proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = alchemy ? buildAlchemyClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+      command = npmInstall ? buildNpmInstallClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id,
+        proxyAuthentication, packages: rule.packages, caPath: element('ca-path').value}) : alchemy ? buildAlchemyClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         chain: rule.chain, method: element('alchemy-client-method').value, caPath: element('ca-path').value,
         proxyCaPath: element('alchemy-proxy-ca-path').value}) : npmPublish ? buildNpmPublishClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         packageName: rule.package, tag: rule.tag, publishingWindow: rule.publishing_window, caPath: element('ca-path').value}) :
@@ -196,6 +200,14 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (npmInstall) {
+      element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. ' :
+        'Wait for exact policy activation and resolve uncertain changes. ') +
+        'Allowlisted packages and dependencies: ' + rule.packages.join(', ') + '. Metadata and tarball reads plus fixed bulk audit only; no publishing or automatic dependency grants. ' +
+        'Use node client.mjs install or ci from the linked example with the required reviewed project and new output directory. Keep output for inspection on failure; do not mistake npm exit 0 for a successful audit. ' +
+        'Stock-client proxy verification and real provider access are not established by this setup.';
+      return;
+    }
     if (gmailSdk) {
       element('client-guidance').textContent = (ready ?
         'The exact saved policy is loaded and the application token is not expired. ' :
@@ -279,7 +291,8 @@ function createProxyView(workspace, applications) {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = !element('gmail-sdk-client-controls').hidden ?
+      element('client-copy-status').textContent = isNpmInstallRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
+        'Copied the npm install/ci example setup. Set the reviewed project/output paths and app token privately; no job was executed.' : !element('gmail-sdk-client-controls').hidden ?
         'Copied the Bash recipe for the existing Go Gmail job. Set the application token privately and use the reviewed built example; no Google token, build or request is included in this copy action.' : !element('alchemy-client-controls').hidden ?
         'Copied the fixed Alchemy JSON-RPC read template. Set the Serverware app token locally, never the provider key. No request was executed by this page.' : !element('npm-publish-client-controls').hidden ?
         'Copied npmrc settings and the separate publishing command. Review the local package before running it; this page sent no publish request.' : !element('npm-client-controls').hidden ?
@@ -342,6 +355,13 @@ function createProxyView(workspace, applications) {
         package: element('npm-client-package').value, sdk_auth_token: operatorNpm.token, strict_ssl: true,
         extra_ca_file: config.ca_file, fresh_cache_required: true, automatic_retries: 0, metadata_only: true};
       config.note += ' npm view/pacote.manifest metadata only; no install, publish, tarballs or npm audit. Use NODE_EXTRA_CA_CERTS before Node startup; retain default roots and TLS verification. The public npm dummy is not the provider token.';
+    }
+    if (isNpmInstallRule(rule)) {
+      config.operation_bundle = rule.operation_bundle; config.packages = [...rule.packages];
+      config.client_recipe = {entrypoint: 'examples/npm-registry/client.mjs', operations: ['install', 'ci'],
+        sdk_auth_token: operatorNpm.token, strict_ssl: true, lifecycle_scripts: false, audit: true,
+        required_environment: ['SERVERWARE_NPM_PACKAGE', 'SERVERWARE_NPM_VERSION', 'SERVERWARE_NPM_PROJECT', 'SERVERWARE_NPM_OUTPUT']};
+      config.note += ' All dependencies require an explicit package grant. Set an absolute reviewed source project and a new output directory; installation output remains for inspection. This page has not verified a stock npm install/ci job.';
     }
     if (isNpmPublishRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.package = rule.package; config.tag = rule.tag;

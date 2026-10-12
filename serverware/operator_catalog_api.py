@@ -26,7 +26,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials/aws-sigv4", "/credentials/aws-sigv4/replace",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username",
-    "/access-rules/alchemy-chain-status",
+    "/access-rules/alchemy-chain-status", "/access-rules/npm-install",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
     "/proxy/upstreams", "/proxy/upstreams/cancel",
@@ -297,6 +297,11 @@ async def create_npm_rule(request: Request, identity: auth.AdminIdentity = Depen
 @router.post("/access-rules/npm-publish")
 async def create_npm_publish_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "NpmPublishRuleInput", "create_npm_publish_rule", 4096, created=True)
+
+
+@router.post("/access-rules/npm-install")
+async def create_npm_install_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "NpmInstallRuleInput", "create_npm_install_rule", 16384, created=True)
 
 
 @router.post("/access-rules/x-username")

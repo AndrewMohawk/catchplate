@@ -147,20 +147,30 @@ def all_filters():
     f = cleanup.Fixture()
     from serverware import operator_notification_store as store, operator_notification_events as events
     from serverware import operator_notification_transport as transport, operator_notifications as notifications
-    selected = list(events.AUDIT_EVENT_TYPES)
+    install_event = "operator_catalog.access_rule.npm_install_created"
+    advertised = list(events.AUDIT_EVENT_TYPES)
+    assert len(advertised) == 65 and install_event in advertised
+    selected = [kind for kind in advertised if kind != install_event]
     assert len(selected) == 64
     payload = {"operation_id": str(uuid.uuid4()), "slot": "audit_log.webhook", "expected_revision": 0,
-        "label": "All supported audit events", "enabled": True, "event_types": selected, "max_attempts": 1,
+        "label": "Original 64 supported audit events", "enabled": True, "event_types": selected, "max_attempts": 1,
         "url_action": "replace", "url": "https://receiver.example.test/synthetic-private-notification-token"}
     assert len(json.dumps(payload).encode()) < 16384
     model = store.SaveInput(**payload)
+    assert store.SaveInput(**{**payload, "event_types": [install_event]}).event_types == [install_event]
+    try:
+        store.SaveInput(**{**payload, "event_types": advertised})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("65 event filters widened the destination selection cap")
     with patch.object(transport, "deliver", side_effect=AssertionError("settings save attempted delivery")), \
             patch.object(transport, "_resolve", side_effect=AssertionError("settings save attempted DNS")):
         saved = store.save(model, consent.workspace.common._ACTOR)
         assert saved["status"] == "saved" and saved["slot_state"]["event_types"] == selected
         assert store.operation_status(payload["operation_id"], consent.workspace.common._ACTOR) == saved
         public = notifications.status()
-    assert public["capabilities"]["audit_log"]["event_types"] == selected
+    assert public["capabilities"]["audit_log"]["event_types"] == advertised
     slot = next(item for item in public["slots"] if item["slot"] == payload["slot"])
     assert slot["event_types"] == selected and slot["revision"] == 1
     assert all(item["revision"] == 0 for item in public["slots"] if item["slot"] != payload["slot"])

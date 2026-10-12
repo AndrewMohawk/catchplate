@@ -9,8 +9,8 @@ function notificationObject(value, keys) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) &&
     Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 }
-function notificationTypes(value) {
-  return Array.isArray(value) && value.length <= 64 && value.every((item, i) =>
+function notificationTypes(value, maximum = 64) {
+  return Array.isArray(value) && value.length <= maximum && value.every((item, i) =>
     typeof item === 'string' && /^[a-z][a-z0-9_.]{0,127}$/.test(item) && (!i || value[i - 1] < item));
 }
 const notificationNativePhases = Object.freeze({prepare_available: 'Preparation available', security_key_available: 'Security-key phase available',
@@ -129,7 +129,7 @@ function projectNotificationStatus(value) {
       !notificationNativeValid(caps.native_hardware) ||
       !['source_note', 'test_note'].every(key => typeof caps[key] === 'string' && caps[key].length <= 512) ||
       !['action_required', 'audit_log'].every(channel => notificationObject(caps[channel], ['source_available', 'event_types']) &&
-        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types)) ||
+        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? 65 : 64)) ||
       !value.available && (caps.action_required.source_available || caps.native_hardware.source_available) ||
       caps.native_hardware.source_available && !caps.action_required.source_available || caps.audit_log.source_available !== value.available ||
       !value.slots.every(slot => slot.event_types.every(type => caps[slot.channel].event_types.includes(type)))) bad();
@@ -250,7 +250,9 @@ function createNotificationsView(workspace) {
       const action = form.elements.namedItem('url_action').value;
       const input = form.elements.namedItem('url'); input.disabled = !canWrite() || action !== 'replace'; input.required = action === 'replace';
       form.querySelector('[data-notification-url-group]').hidden = action !== 'replace';
-      form.querySelector('[data-notification-events-summary]').textContent = 'Event filters (' + form.querySelectorAll('[name="event_types"]:checked').length + ' selected)';
+      const selectedEvents = form.querySelectorAll('[name="event_types"]:checked').length;
+      form.querySelector('[data-notification-events-summary]').textContent = 'Event filters (' + selectedEvents + '/64 selected)';
+      form.querySelector('[data-notification-save]').disabled = !canWrite() || selectedEvents > 64;
       form.querySelector('[data-notification-test]').disabled = !canWrite() || !slot || !slot.enabled || !slot.secret_present || !slot.revision || draftChanged(form, slot) ||
         ['queued', 'sending'].includes(slot.last_delivery?.status);
     }
@@ -308,7 +310,7 @@ function createNotificationsView(workspace) {
     const url = field(form, group, 'url', 'Webhook URL'); url.type = 'password'; url.maxLength = 4096; url.autocomplete = 'new-password'; url.spellcheck = false;
     group.append(textNode('p', 'Write-only HTTPS destination. Never paste it into an application permission. Cleared on submission and when leaving this page.', 'small muted'));
     const events = textNode('details'); const eventSummary = textNode('summary'); eventSummary.dataset.notificationEventsSummary = ''; events.append(eventSummary);
-    events.append(textNode('p', 'Only selected event types are delivered. An empty selection delivers no source events; synthetic tests remain separate.', 'small muted'));
+    events.append(textNode('p', 'Choose at most 64 event types for this destination. Only selected event types are delivered. An empty selection delivers no source events; synthetic tests remain separate.', 'small muted'));
     for (const type of status.capabilities[slot.channel].event_types) {
       const item = textNode('label'); const checkbox = textNode('input'); checkbox.type = 'checkbox'; checkbox.name = 'event_types'; checkbox.value = type;
       checkbox.checked = slot.event_types.includes(type); item.append(checkbox, document.createTextNode(' ' + type)); events.append(item);
@@ -374,6 +376,9 @@ function createNotificationsView(workspace) {
         event_types: [...form.querySelectorAll('[name="event_types"]:checked')].map(input => input.value).sort(),
         max_attempts: Number(form.elements.namedItem('max_attempts').value), url_action: urlAction,
         ...(urlAction === 'replace' ? {url: form.elements.namedItem('url').value} : {})};
+      if (!notificationTypes(body.event_types)) {
+        say('Choose at most 64 event types for this destination. Nothing was submitted.'); return;
+      }
       if (!/^[\x20-\x7e]{1,80}$/.test(body.label) || urlAction === 'clear' && body.enabled ||
           urlAction === 'replace' && !body.url || urlAction === 'keep' && !slot.secret_present || slot.revision === 0 && urlAction !== 'replace') {
         say('Enter a printable destination label and a replacement URL for a new slot. Disable the slot before removing its URL. Nothing was submitted.'); return;

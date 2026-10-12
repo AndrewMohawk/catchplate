@@ -67,6 +67,7 @@ fn builtin(kind: &str, name: &str) -> Result<&'static str, String> {
         ("x.v2", operation) if X_V2_READ_OPERATION_PATHS.iter().any(|(name, _)| *name == operation) => "read",
         ("npm.registry", "npm.read") => "read", ("npm.registry", "npm.publish") => "publish",
         ("npm.metadata.v1", "npm.metadata.read") => "read",
+        ("npm.install.v1", "npm.install.metadata.read" | "npm.install.tarball.read" | "npm.install.audit.read") => "read",
         ("x.app_read.v1", "x.username.read") => "read",
         ("alchemy.rpc_read.v1", "alchemy.rpc.read") => "read",
         ("npm.publish.v1", "npm.publish") => "publish",

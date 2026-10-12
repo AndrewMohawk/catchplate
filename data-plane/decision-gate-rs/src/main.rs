@@ -20,6 +20,9 @@ mod npm_metadata;
 mod x_app_read;
 mod alchemy_rpc_read;
 mod npm_publish;
+mod npm_install;
+#[cfg(test)]
+mod npm_install_ingress_tests;
 mod provider_query;
 mod request_query_compat;
 mod proxy_basic_transport;
@@ -466,7 +469,7 @@ const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
 const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
-const SUPPORTED_ADAPTER_TYPES: [&str; 9] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "x.app_read.v1", "alchemy.rpc_read.v1"];
+const SUPPORTED_ADAPTER_TYPES: [&str; 10] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "npm.install.v1", "x.app_read.v1", "alchemy.rpc_read.v1"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
 const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
 const NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS: [&str; 2] = ["ok", "published"];
@@ -1541,6 +1544,10 @@ struct DecisionRequest {
     forwarded_body_length: Option<u64>,
     #[serde(skip)]
     forwarded_body_utf8_valid: Option<bool>,
+    // Only actual reviewed gzip bytes can construct this owner. JSON preview
+    // callers cannot supply either a decoded-body assertion or an owner.
+    #[serde(skip)]
+    npm_install_audit_body: Option<npm_install::AuditBody>,
     #[serde(default, rename = "credentialMetadata")]
     credential_metadata: BTreeMap<String, BTreeMap<String, Value>>,
     #[serde(skip)]
@@ -8732,7 +8739,7 @@ fn validate_provider_request_admission(
 ) -> Result<(), Value> {
     if !matches!(
         route.adapter_type.as_str(),
-        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1" | "alchemy.rpc_read.v1"
+        "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "npm.install.v1" | "x.app_read.v1" | "alchemy.rpc_read.v1"
     ) {
         return Ok(());
     }
@@ -8767,6 +8774,9 @@ fn validate_provider_request_admission(
     }
     if route.adapter_type == npm_publish::ADAPTER {
         npm_publish::validate_request(req, url, route)?;
+    }
+    if route.adapter_type == npm_install::ADAPTER {
+        npm_install::validate_request(req, url, route)?;
     }
 
     let allowed_headers = profile
@@ -9041,6 +9051,9 @@ fn operation_field_catalog(
     let fields_for = |operation: &str| -> Option<HashSet<String>> {
         let fields: &[&str] = match (adapter_type, operation) {
             (npm_metadata::ADAPTER, "npm.metadata.read") => &["operation", "package"],
+            (npm_install::ADAPTER, "npm.install.metadata.read") => &["operation", "package"],
+            (npm_install::ADAPTER, "npm.install.tarball.read") => &["operation", "package", "version"],
+            (npm_install::ADAPTER, "npm.install.audit.read") => &["operation", "packages", "packageVersions"],
             (x_app_read::ADAPTER, x_app_read::OPERATION) => &["operation", "username"],
             (alchemy_rpc_read::ADAPTER, alchemy_rpc_read::OPERATION) => &["operation", "chain", "method", "requestId"],
             (npm_publish::ADAPTER, "npm.publish") => &["operation", "packageName", "packageVersion",
@@ -9591,7 +9604,7 @@ fn validate_response_envelope_constraint(
     constraint: &Map<String, Value>,
 ) -> Result<(), String> {
     if constraint.get("contentTypePolicy").is_some_and(|value|
-        !matches!(value.as_str(), Some(github_issues::CONTENT_TYPE_POLICY | npm_metadata::CONTENT_TYPE_POLICY | x_app_read::CONTENT_TYPE_POLICY | alchemy_rpc_read::CONTENT_TYPE_POLICY))) {
+        !matches!(value.as_str(), Some(github_issues::CONTENT_TYPE_POLICY | npm_metadata::CONTENT_TYPE_POLICY | npm_install::CONTENT_TYPE_POLICY | x_app_read::CONTENT_TYPE_POLICY | alchemy_rpc_read::CONTENT_TYPE_POLICY))) {
         return Err("responseEnvelope contentTypePolicy is invalid".into());
     }
     let statuses = constraint
@@ -10626,6 +10639,7 @@ fn provider_request_profile(
         x_app_read::ADAPTER => x_app_read::request_profile(),
         alchemy_rpc_read::ADAPTER => alchemy_rpc_read::request_profile(),
         npm_publish::ADAPTER => npm_publish::request_profile(),
+        npm_install::ADAPTER => npm_install::request_profile(mode.ok_or("npm install mode missing")?)?,
         gmail_read::ADAPTER => gmail_read::request_profile(false),
         "gmail.v1" => ProviderRequestProfile {
             allowed_headers: GMAIL_V1_REQUEST_HEADERS,
@@ -11205,6 +11219,18 @@ fn declared_policy_operations(
     paths: &[Value],
 ) -> Result<HashSet<String>, String> {
     let operations = match adapter_type {
+        npm_install::ADAPTER => {
+            let (expected, operation) = match adapter_config.get("mode").and_then(Value::as_str) {
+                Some("metadata") => (json!(["/{package}" ]), "npm.install.metadata.read"),
+                Some("tarball") => (json!(["/{package}/-/{filename}", "/{scope}/{package}/-/{filename}"]), "npm.install.tarball.read"),
+                Some("audit") => (json!(["/-/npm/v1/security/advisories/bulk"]), "npm.install.audit.read"),
+                _ => return Err("npm install mode missing".into()),
+            };
+            if paths != expected.as_array().expect("fixed paths") {
+                return Err("npm install requires its exact mode paths".into());
+            }
+            HashSet::from([operation.to_owned()])
+        }
         alchemy_rpc_read::ADAPTER => {
             if adapter_config.get("chain").and_then(Value::as_str).and_then(alchemy_rpc_read::host).is_none()
                 || paths != [json!(alchemy_rpc_read::PATH)] {
@@ -11474,7 +11500,7 @@ fn validate_route_credential_binding(
     {
         return Err("gmail.read.v1 requires verified Google OAuth bearer access-token injection".into());
     }
-    if matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER)
+    if matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER | npm_install::ADAPTER)
         && (credential.kind() != "static" || credential.provider != "operator-demo"
             || credential.injection.get("type").and_then(Value::as_str) != Some("bearer")
             || credential.injection.get("header").and_then(Value::as_str) != Some("Authorization")
@@ -11978,7 +12004,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
-        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "x.app_read.v1" | "alchemy.rpc_read.v1") {
+        if matches!(adapter_type, "gmail.v1" | "gmail.read.v1" | "x.v2" | "npm.registry" | "npm.metadata.v1" | "npm.publish.v1" | "npm.install.v1" | "x.app_read.v1" | "alchemy.rpc_read.v1") {
             validate_provider_request_profile_config(route_id, adapter_type, adapter_config)?;
         }
         let request_config = adapter_config
@@ -12057,7 +12083,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         let constraints = combined_constraints.as_slice();
         if constraints.iter().any(|constraint| constraint.get("contentTypePolicy").is_some())
             && !github_issues::marked(&Value::Object(adapter_config.clone()))
-            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER | alchemy_rpc_read::ADAPTER) {
+            && !matches!(adapter_type, npm_metadata::ADAPTER | npm_publish::ADAPTER | npm_install::ADAPTER | x_app_read::ADAPTER | alchemy_rpc_read::ADAPTER) {
             return Err("contentTypePolicy requires a closed provider profile".into());
         }
         if adapter_type == npm_metadata::ADAPTER {
@@ -12071,6 +12097,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         }
         if adapter_type == npm_publish::ADAPTER {
             npm_publish::validate_policy(route)?;
+        }
+        if adapter_type == npm_install::ADAPTER {
+            npm_install::validate_policy(route)?;
         }
         if github_issues::marked(&Value::Object(adapter_config.clone())) {
             if adapter_type != "generic.rest" {
@@ -12189,6 +12218,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 || (adapter_type == x_app_read::ADAPTER && response_mode == x_app_read::MODE)
                 || (adapter_type == alchemy_rpc_read::ADAPTER && response_mode == alchemy_rpc_read::MODE)
                 || (adapter_type == npm_publish::ADAPTER && response_mode == npm_publish::MODE)
+                || (adapter_type == npm_install::ADAPTER && npm_install::supported_response_mode(response_mode))
                 || (adapter_type == "generic.rest"
                     && (STREAMING_RESPONSE_MODES.contains(&response_mode)
                         || buffered_response::supported_mode(response_mode)))
@@ -12210,7 +12240,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     &format!("route {route_id} {adapter_type} success response"),
                 )?;
             }
-            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER | x_app_read::ADAPTER | alchemy_rpc_read::ADAPTER) {
+            if matches!(adapter_type, gmail_read::ADAPTER | npm_metadata::ADAPTER | npm_publish::ADAPTER | npm_install::ADAPTER | x_app_read::ADAPTER | alchemy_rpc_read::ADAPTER) {
                 // The closed typed contract above owns whole-JSON release;
                 // it is not admitted through generic REST's profile guard.
             } else if buffered_response::supported_mode(response_mode) {
@@ -14559,6 +14589,9 @@ fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static st
         "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json" => {
             Some(("adapter_npm_publish_v1", include_str!("../../../schemas/adapters/npm.publish.v1.schema.json")))
         }
+        "https://serverware.local/schemas/adapters/npm.install.v1.schema.json" => {
+            Some(("adapter_npm_install_v1", include_str!("../../../schemas/adapters/npm.install.v1.schema.json")))
+        }
         "https://serverware.local/schemas/adapters/x.v2.schema.json" => {
             Some(("adapter_x_v2", include_str!("../../../schemas/adapters/x.v2.schema.json")))
         }
@@ -14626,6 +14659,7 @@ fn closed_embedded_policy_schema() -> Result<Value, String> {
         "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json",
         "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
         "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
+        "https://serverware.local/schemas/adapters/npm.install.v1.schema.json",
         "https://serverware.local/schemas/adapters/x.v2.schema.json",
     ];
     for adapter_id in adapters {
@@ -16438,6 +16472,74 @@ fn validate_identity_request_content_encoding(
     Ok(())
 }
 
+fn npm_install_audit_intake(snapshot: &Snapshot, principal: &str) -> bool {
+    snapshot.routes.iter().any(|route| route.adapter_type == npm_install::ADAPTER
+        && route.adapter_config["mode"] == "audit"
+        && route.principals.iter().any(|value| value == principal || value == "*")
+        && npm_install::validate_route(route).is_ok())
+}
+
+// A provisional gzip header is syntax, not authorization. Only a revalidated
+// CONNECT principal's exact signed audit route can admit its body bytes.
+fn admit_npm_install_encoding_head(
+    snapshot: &Snapshot, principal: Option<&str>, head: &RequestHead,
+) -> Result<bool, String> {
+    if validate_identity_request_content_encoding(&head.headers).is_ok() { return Ok(false); }
+    let principal = principal.ok_or("npm install gzip requires CONNECT identity")?;
+    if head.headers.get("content-encoding").map(String::as_str) != Some("gzip") {
+        return Err("npm install content encoding refused".into());
+    }
+    let (_, url) = parse_validated_absolute_target(&head.target)?;
+    let matched = snapshot.match_route(principal, &head.method, &url)
+        .ok_or("npm install audit route missing")?;
+    npm_install::admit_audit_head(matched.route, &head.method, &url, &head.headers,
+        head.content_length).map_err(|_| "npm install audit head refused".to_owned())?;
+    if !head.has_content_length { return Err("npm install audit length missing".into()); }
+    Ok(true)
+}
+
+fn admitted_request_content_encoding(req: &DecisionRequest) -> Result<(), String> {
+    if let Some(owner) = &req.npm_install_audit_body {
+        if req.headers.get("content-encoding").map(String::as_str) != Some("gzip")
+            || req.body != owner.decoded_text()
+            || req.body_sha256.as_deref() != Some(body_sha_bytes(owner.wire()).as_str())
+            || req.forwarded_body_length != Some(owner.wire().len() as u64)
+            || req.forwarded_body_utf8_valid != Some(std::str::from_utf8(owner.wire()).is_ok()) {
+            return Err("npm install audit wire binding changed".into());
+        }
+        return Ok(());
+    }
+    validate_identity_request_content_encoding(&req.headers)
+}
+
+fn admitted_request_encoding_headers(req: &DecisionRequest, headers: &BTreeMap<String, String>)
+    -> Result<BTreeMap<String, String>, String> {
+    admitted_request_content_encoding(req)?;
+    if req.npm_install_audit_body.is_some() {
+        if headers.get("content-encoding").map(String::as_str) != Some("gzip") {
+            return Err("npm install audit encoding changed".into());
+        }
+        return Ok(headers.clone());
+    }
+    strip_identity_request_content_encoding(headers)
+}
+
+fn validate_npm_install_built_audit(
+    owner: &npm_install::AuditBody, route: &Route, decision: &Value,
+    built: &reqwest::blocking::Request,
+) -> Result<(), String> {
+    let wire = built.body().and_then(reqwest::blocking::Body::as_bytes)
+        .ok_or("npm install audit built body missing")?;
+    if route.adapter_type != npm_install::ADAPTER || route.adapter_config["mode"] != "audit"
+        || !owner.matches_wire(wire)
+        || built.headers().get("content-encoding").and_then(|value| value.to_str().ok()) != Some("gzip")
+        || built.headers().get("content-length").and_then(|value| value.to_str().ok()) != Some(wire.len().to_string().as_str())
+        || decision["canonical_request"]["request"]["headers"]["content-encoding"] != "gzip" {
+        return Err("npm install audit built request changed".into());
+    }
+    validate_buffered_body_binding(decision, wire)
+}
+
 fn discarded_request_header_evidence(
     headers: &BTreeMap<String, String>,
     discard_headers: &[String],
@@ -16530,6 +16632,17 @@ fn canonical_forwarded_request_headers(
         forwarded.insert("content-length".to_string(), body_length.to_string());
     }
     Ok(forwarded)
+}
+
+fn canonical_admitted_request_headers(
+    request: &DecisionRequest, url: &Url, body_length: Option<u64>, injection: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    admitted_request_content_encoding(request)?;
+    let mut headers = canonical_forwarded_request_headers(&request.headers, url, body_length, injection)?;
+    if request.npm_install_audit_body.is_some() {
+        headers.insert("content-encoding".into(), "gzip".into());
+    }
+    Ok(headers)
 }
 
 fn canonical_client_proof_headers(
@@ -24571,6 +24684,7 @@ fn reuse_idle_upstream_connections(route: &Route, method: &str) -> bool {
         && !route_response_mode(route).is_some_and(buffered_response::json_or_empty_204_mode)
         && route.adapter_type != gmail_read::ADAPTER
         && route.adapter_type != npm_metadata::ADAPTER
+        && route.adapter_type != npm_install::ADAPTER
         && route.adapter_type != x_app_read::ADAPTER
 }
 
@@ -24730,7 +24844,20 @@ fn prepare_upstream_for_forward_body(
         alchemy_rpc_read::ADAPTER => Some(alchemy_rpc_read::REQUEST_BYTES),
         _ => None,
     };
-    let body = if let Some(limit) = typed_body_limit {
+    let audit_owner = if route.adapter_type == npm_install::ADAPTER
+        && route.adapter_config["mode"] == "audit" {
+        if authenticated_principal_id.is_none()
+            || admit_npm_install_encoding_head(snapshot, authenticated_principal_id, request) != Ok(true) {
+            return Ok(None);
+        }
+        let Some(bytes) = buffered_body.filter(|bytes| bytes.len() == request.content_length)
+            else { return Ok(None); };
+        let Ok(owner) = npm_install::AuditBody::from_wire(bytes) else { return Ok(None); };
+        Some(owner)
+    } else { None };
+    let body = if let Some(owner) = &audit_owner {
+        owner.decoded_text().to_owned()
+    } else if let Some(limit) = typed_body_limit {
         let Some(bytes) = buffered_body.filter(|bytes| bytes.len() == request.content_length
             && bytes.len() as u64 <= limit) else { return Ok(None); };
         let Ok(text) = std::str::from_utf8(bytes) else { return Ok(None); };
@@ -24742,9 +24869,10 @@ fn prepare_upstream_for_forward_body(
         url: target_url.to_string(),
         headers: retained_headers,
         body,
-        body_sha256: None,
+        body_sha256: audit_owner.as_ref().map(|owner| body_sha_bytes(owner.wire())),
         forwarded_body_length: Some(forwarded_body_length),
-        forwarded_body_utf8_valid: None,
+        forwarded_body_utf8_valid: audit_owner.as_ref().map(|owner| std::str::from_utf8(owner.wire()).is_ok()),
+        npm_install_audit_body: audit_owner,
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
         client_request_digest: None,
@@ -31494,6 +31622,7 @@ fn validate_adapter_with_gmail_proof_mode(
         x_app_read::ADAPTER => x_app_read::normalize_request(req, url, route_match),
         alchemy_rpc_read::ADAPTER => alchemy_rpc_read::normalize_request(req, url, route_match),
         npm_publish::ADAPTER => npm_publish::normalize_request(req, url, route_match),
+        npm_install::ADAPTER => npm_install::normalize_request(req, url, route_match),
         gmail_read::ADAPTER => gmail_read::normalize_request(req, forwarded_headers, url, route),
         "generic.rest" => {
             provider_query::validate_github_request(req, forwarded_headers, url, route)?;
@@ -31805,7 +31934,7 @@ fn prepare_request_operation_context(
         })
     })?;
     let forwarded_headers =
-        canonical_forwarded_request_headers(&req.headers, url, body_length, injection).map_err(
+        canonical_admitted_request_headers(req, url, body_length, injection).map_err(
             |_| {
                 json!({
                     "error":"invalid_forwarding_headers",
@@ -35154,6 +35283,7 @@ fn enforce_response_envelope(
             // not an admitted signed contentTypePolicy value.
             Some(gmail_read::MODE) => normalized_provider_request_media_type(value).as_deref() != Some("application/json"),
             Some(npm_metadata::CONTENT_TYPE_POLICY) => !npm_metadata::is_json_content_type(value),
+            Some(npm_install::CONTENT_TYPE_POLICY) => !npm_install::is_content_type(value),
             Some(x_app_read::CONTENT_TYPE_POLICY) => !x_app_read::is_json_content_type(value),
             Some(alchemy_rpc_read::CONTENT_TYPE_POLICY) => !alchemy_rpc_read::is_json_content_type(value),
             _ => true,
@@ -35287,6 +35417,8 @@ fn validate_response_envelopes(
         npm_metadata::validate_route(route).map(|()| Some(npm_metadata::CONTENT_TYPE_POLICY))
     } else if route.adapter_type == npm_publish::ADAPTER {
         npm_publish::validate_route(route).map(|()| Some(npm_publish::CONTENT_TYPE_POLICY))
+    } else if route.adapter_type == npm_install::ADAPTER {
+        npm_install::validate_route(route).map(|()| Some(npm_install::CONTENT_TYPE_POLICY))
     } else {
         github_issues::media_policy_for_route(route)
             .map(|selected| selected.then_some(github_issues::CONTENT_TYPE_POLICY))
@@ -35722,7 +35854,8 @@ fn decide_internal_with_mode_and_shadow<'a>(
         );
     }
     let mut req = req;
-    if validate_identity_request_content_encoding(&req.headers).is_err() {
+    if admitted_request_content_encoding(&req).is_err()
+        || (req.npm_install_audit_body.is_some() && (preview || authenticated_principal_id.is_none())) {
         return deny(
             415,
             "request content encoding denied",
@@ -35872,7 +36005,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         discarded_request_header_evidence(&req.headers, &route.discard_headers);
     replace_string_map(&mut req.headers, retained_headers);
     let headers = lower_headers(&req.headers);
-    if path_validation.has_encoded_slash && !matches!(route.adapter_type.as_str(), "npm.registry" | npm_metadata::ADAPTER | npm_publish::ADAPTER) {
+    if path_validation.has_encoded_slash && !matches!(route.adapter_type.as_str(), "npm.registry" | npm_metadata::ADAPTER | npm_publish::ADAPTER | npm_install::ADAPTER) {
         return deny(
             400,
             "encoded path separator is not allowed for this adapter",
@@ -35980,7 +36113,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     let mut forwarded_headers =
-        match canonical_forwarded_request_headers(&req.headers, &url, body_length, &injection) {
+        match canonical_admitted_request_headers(&req, &url, body_length, &injection) {
             Ok(headers) => headers,
             Err(_) => {
                 return deny_for_route(
@@ -36142,7 +36275,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             .unwrap_or("response binding source denied").to_string();
         return deny_for_route(status, &reason, payload, route, started);
     }
-    let identity_encoded_headers = match strip_identity_request_content_encoding(&req.headers) {
+    let identity_encoded_headers = match admitted_request_encoding_headers(&req, &req.headers) {
         Ok(headers) => headers,
         Err(_) => {
             return deny_for_route(
@@ -36155,7 +36288,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
         }
     };
     replace_string_map(&mut req.headers, identity_encoded_headers);
-    forwarded_headers = match strip_identity_request_content_encoding(&forwarded_headers) {
+    forwarded_headers = match admitted_request_encoding_headers(&req, &forwarded_headers) {
         Ok(headers) => headers,
         Err(_) => {
             return deny_for_route(
@@ -38084,6 +38217,24 @@ fn filtered_forward_headers(
         let value = HeaderValue::from_str(&value)
             .map_err(|_| "forwarding_header_value_invalid".to_string())?;
         forwarded.insert(name, value);
+    }
+    Ok(forwarded)
+}
+
+fn filtered_reviewed_forward_headers(
+    headers: &BTreeMap<String, String>, injection: &Value, discard_headers: &[String],
+    audit: Option<&npm_install::AuditBody>,
+) -> Result<HeaderMap, String> {
+    let mut forwarded = filtered_forward_headers(headers, injection, discard_headers)?;
+    if let Some(owner) = audit {
+        let length = owner.wire().len().to_string();
+        if headers.get("content-encoding").map(String::as_str) != Some("gzip")
+            || headers.get("content-length") != Some(&length) {
+            return Err("npm install audit forwarding framing changed".into());
+        }
+        forwarded.insert("content-encoding", HeaderValue::from_static("gzip"));
+        forwarded.insert("content-length", HeaderValue::from_str(&length)
+            .map_err(|_| "npm install audit forwarding length invalid")?);
     }
     Ok(forwarded)
 }
@@ -43339,6 +43490,9 @@ fn route_response_mode(route: &Route) -> Option<&str> {
 }
 
 fn validate_route_response_release_mode(route: &Route) -> Result<(), String> {
+    if route.adapter_type == npm_install::ADAPTER {
+        return npm_install::validate_route(route);
+    }
     if route.adapter_type == alchemy_rpc_read::ADAPTER {
         return alchemy_rpc_read::validate_route(route);
     }
@@ -43624,6 +43778,16 @@ fn validate_selected_json_response_content_type(
     upstream_headers: &HeaderMap,
     adapter_type: &str,
 ) -> Result<(), Value> {
+    if adapter_type == npm_install::ADAPTER {
+        let mut values = upstream_headers.get_all("content-type").iter();
+        let value = values.next().ok_or_else(|| json!({"error":"response_json_content_type_missing"}))?;
+        if values.next().is_some() {
+            return Err(json!({"error":"response_json_content_type_duplicate"}));
+        }
+        let text = value.to_str().map_err(|_| json!({"error":"response_json_content_type_malformed"}))?;
+        if npm_install::is_content_type(text) { return Ok(()); }
+        return Err(json!({"error":"response_json_content_type_mismatch"}));
+    }
     if !matches!(effective_response_mode(adapter_type, Some(response_config)),
         Some("json" | "bufferedPassthrough" | "bufferedJsonOrEmpty204V1" | "bufferedJsonOrEmpty204V2" | "gmailReadJsonV1" | "npmMetadataJsonV1" | "npmPublishJsonV1" | "xAppReadJsonV1" | "alchemyRpcReadJsonV1")) {
         return Ok(());
@@ -44968,6 +45132,18 @@ fn validate_policy_json_response(
     binding_validation: &Value,
     response_secret_guard: &ResponseSecretGuard,
 ) -> SensitiveResponseBytes {
+    if adapter_type == npm_install::ADAPTER {
+        let inspected = decision_route_context(snapshot, decision, method, url)
+            .and_then(|matched| npm_install::inspect_response(url, status, content_type,
+                response_config, body, response_secret_guard, &matched.route.adapter_config, &decision["operation"]));
+        return match inspected {
+            Ok(bytes) => release_forward_response(state, snapshot, decision, method, url, status,
+                content_type.and_then(npm_install::response_content_type), released_headers, bytes,
+                response_secret_guard, json!({"ok":true,"mode":response_config["mode"],"body_bytes_preserved":true,
+                    "allowed_fields_redacted":false,"adapter":npm_install::ADAPTER})),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
+        };
+    }
     if adapter_type == alchemy_rpc_read::ADAPTER {
         return match alchemy_rpc_read::inspect_response(url, status, content_type, response_config,
             &decision["operation"], body, response_secret_guard) {
@@ -46390,10 +46566,46 @@ fn buffered_forward_decision_request(
         body_sha256: Some(body_sha_bytes(&request.body)),
         forwarded_body_length: Some(request.body.len() as u64),
         forwarded_body_utf8_valid: Some(std::str::from_utf8(&request.body).is_ok()),
+        npm_install_audit_body: None,
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
         client_request_digest: client_request_digest.map(ToString::to_string),
     }
+}
+
+fn reviewed_buffered_decision_request(
+    snapshot: &Snapshot, request: &IncomingRequest, principal: Option<&str>,
+    client_request_digest: Option<&str>,
+) -> Result<DecisionRequest, String> {
+    if validate_identity_request_content_encoding(&request.headers).is_ok() {
+        return Ok(buffered_forward_decision_request(request, client_request_digest));
+    }
+    let head = RequestHead {
+        method: request.method.clone(), target: request.target.clone(), http_version: "HTTP/1.1".into(),
+        headers: request.headers.clone(), raw_headers_digest: None, raw_header_count: 0,
+        content_length: request.body.len(), has_content_length: request.headers.contains_key("content-length"),
+        prefetched_body: Vec::new(), client_ip: request.client_ip.clone(),
+    };
+    if !admit_npm_install_encoding_head(snapshot, principal, &head)? {
+        return Err("npm install audit encoding unavailable".into());
+    }
+    let owner = npm_install::AuditBody::from_wire(&request.body)
+        .map_err(|_| "npm install audit body refused".to_owned())?;
+    let result = DecisionRequest {
+        client_ip: request.client_ip.clone(), method: request.method.clone(), url: request.target.clone(),
+        headers: request.headers.clone(), body: owner.decoded_text().to_owned(),
+        body_sha256: Some(body_sha_bytes(&request.body)),
+        forwarded_body_length: Some(request.body.len() as u64),
+        forwarded_body_utf8_valid: Some(std::str::from_utf8(&request.body).is_ok()),
+        npm_install_audit_body: Some(owner), credential_metadata: BTreeMap::new(),
+        gmail_proofs: Vec::new(), client_request_digest: client_request_digest.map(str::to_owned),
+    };
+    let (_, url) = parse_validated_absolute_target(&request.target)?;
+    let route = snapshot.match_route(principal.ok_or("npm install principal missing")?, &request.method, &url)
+        .ok_or("npm install route missing")?;
+    npm_install::validate_request(&result, &url, route.route)
+        .map_err(|_| "npm install audit request refused".to_owned())?;
+    Ok(result)
 }
 
 fn finalize_shadow_local_response(
@@ -46751,9 +46963,16 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         buffered!(json_status_response(StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"response_metadata_v2_proof_unsupported"})));
     }
-    let decision_request = precomputed_decision_request.unwrap_or_else(|| {
-        buffered_forward_decision_request(&request, client_request_digest)
-    });
+    let decision_request = match precomputed_decision_request {
+        Some(value) => value,
+        None => match reviewed_buffered_decision_request(snapshot, &request,
+            authenticated_principal_id, client_request_digest) {
+            Ok(value) => value,
+            Err(_) => buffered!(json_status_response(StatusCode::BAD_REQUEST,
+                json!({"error":"request_content_encoding_denied"}))),
+        },
+    };
+    let reviewed_audit_body = decision_request.npm_install_audit_body.clone();
     let shadow_admission = shadow_admission.unwrap_or_else(|| {
         state.policy_shadow.capture_for_gate(state,
             snapshot,
@@ -46825,7 +47044,12 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             json!({"error":"test_post_decision_forwarder_failure","branch":"buffered"}),
         ));
     }
-    let identity_encoded_headers = match strip_identity_request_content_encoding(&request.headers) {
+    let identity_encoded_headers = match if let Some(owner) = &reviewed_audit_body {
+        if owner.matches_wire(&request.body)
+            && request.headers.get("content-encoding").map(String::as_str) == Some("gzip") {
+            Ok(request.headers.clone())
+        } else { Err("npm install audit original changed".to_owned()) }
+    } else { strip_identity_request_content_encoding(&request.headers) } {
         Ok(headers) => headers,
         Err(_) => buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -46984,10 +47208,11 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         .get("injection")
         .and_then(|value| value.get("plan"))
         .unwrap_or(&Value::Null);
-    let headers = match filtered_forward_headers(
+    let headers = match filtered_reviewed_forward_headers(
         &request.headers,
         injection_plan,
         &discard_headers,
+        reviewed_audit_body.as_ref(),
     ) {
         Ok(headers) => headers,
         Err(_) => buffered!(json_status_response(
@@ -47340,6 +47565,9 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             if provider_query::ordered_query(route) {
                 provider_query::validate_built_request(&decision["canonical_request"], route, &upstream_url, built)?;
             }
+            if let Some(owner) = &reviewed_audit_body {
+                validate_npm_install_built_audit(owner, route, &decision, built)?;
+            }
             if route.adapter_config.pointer("/request/bodyMode").and_then(Value::as_str) == Some(buffered_request::MODE) {
                 buffered_request::validate_built_body(&decision, built)
             } else { Ok(()) }
@@ -47638,8 +47866,12 @@ fn forward_absolute_request_inner<'a>(
             )));
         }
     };
-    let decision_request =
-        buffered_forward_decision_request(&request, client_request_digest);
+    let decision_request = match reviewed_buffered_decision_request(snapshot, &request,
+        authenticated_principal_id, client_request_digest) {
+        Ok(value) => value,
+        Err(_) => return ForwardResult::buffered(json_status_response(StatusCode::BAD_REQUEST,
+            json!({"error":"request_content_encoding_denied"}))),
+    };
     let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &decision_request,
@@ -47768,6 +48000,7 @@ fn forward_absolute_streaming_request_to(
         body_sha256: Some(sha256_prefixed(b"")),
         forwarded_body_length: Some(request.content_length as u64),
         forwarded_body_utf8_valid: Some(true),
+        npm_install_audit_body: None,
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
         client_request_digest: None,
@@ -48430,6 +48663,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         body_sha256: Some(sha256_prefixed(b"")),
         forwarded_body_length: Some(request.content_length as u64),
         forwarded_body_utf8_valid: Some(true),
+        npm_install_audit_body: None,
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
         client_request_digest: None,
@@ -49241,8 +49475,16 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     } else {
         None
     };
-    let decision_request =
-        buffered_forward_decision_request(&request, client_request_digest.as_deref());
+    let decision_request = match reviewed_buffered_decision_request(snapshot, &request,
+        authenticated_principal_id, client_request_digest.as_deref()) {
+        Ok(value) => value,
+        Err(_) => {
+            let response = json_status_response(StatusCode::BAD_REQUEST,
+                json!({"error":"request_content_encoding_denied"}));
+            let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            return false;
+        }
+    };
     let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &decision_request,
@@ -49870,19 +50112,29 @@ fn read_request_head_with_ordered_query_from<R: Read>(
     client_ip: Option<String>,
     allow_ordered_intake: bool,
 ) -> Result<RequestHead, String> {
+    read_request_head_with_intake_from(reader, client_ip, allow_ordered_intake, false)
+}
+
+fn read_request_head_with_intake_from<R: Read>(
+    reader: &mut R, client_ip: Option<String>, allow_ordered_intake: bool,
+    allow_npm_audit_gzip: bool,
+) -> Result<RequestHead, String> {
     let initial_capacity = MAX_REQUEST_HEADER_BYTES.min(16 * 1024).saturating_add(4096);
     let mut buffer = Zeroizing::new(Vec::with_capacity(initial_capacity));
     let mut chunk = Zeroizing::new([0u8; 4096]);
     let header_end;
     loop {
         let read = reader
-            .read(&mut *chunk)
+            .read(if allow_npm_audit_gzip { &mut chunk[..1] } else { &mut *chunk })
             .map_err(|_| "request_head_read_failed".to_string())?;
         if read == 0 {
             return Err("connection closed before headers".to_string());
         }
         buffer.extend_from_slice(&chunk[..read]);
-        if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+        let terminator = if allow_npm_audit_gzip {
+            buffer.ends_with(b"\r\n\r\n").then(|| buffer.len() - 4)
+        } else { buffer.windows(4).position(|window| window == b"\r\n\r\n") };
+        if let Some(index) = terminator {
             header_end = index + 4;
             if header_end > MAX_REQUEST_HEADER_BYTES {
                 return Err("headers too large".to_string());
@@ -49974,7 +50226,9 @@ fn read_request_head_with_ordered_query_from<R: Read>(
     if headers.contains_key("transfer-encoding") {
         return Err("transfer-encoding request bodies are not supported".to_string());
     }
-    validate_identity_request_content_encoding(&headers)?;
+    if !(allow_npm_audit_gzip && headers.get("content-encoding").map(String::as_str) == Some("gzip")) {
+        validate_identity_request_content_encoding(&headers)?;
+    }
     for nominated in connection_nominated_headers(&headers) {
         if headers.contains_key(&nominated) {
             return Err("connection_nominated_header_present".to_string());
@@ -50568,7 +50822,9 @@ fn handle_connect_request(
         let intake_snapshot = current_snapshot(&state);
         let ordered_intake = provider_query::allows_ordered_intake(&intake_snapshot,
             Some(connect_authentication.principal_id.as_str()));
-        let head = match read_request_head_with_ordered_query_from(&mut ConnectOperationIo(&mut tls), client_ip.clone(), ordered_intake) {
+        let gzip_intake = npm_install_audit_intake(&intake_snapshot, &connect_authentication.principal_id);
+        let head = match read_request_head_with_intake_from(&mut ConnectOperationIo(&mut tls),
+            client_ip.clone(), ordered_intake, gzip_intake) {
             Ok(head) => head,
             Err(err) if err == "connection closed before headers" => break,
             Err(err) => {
@@ -50763,6 +51019,14 @@ fn handle_connect_request(
                 head.client_ip.as_deref(), &head.headers, Some(connect_authentication.principal_id.as_str()))) {
             Ok(target) => {
                 head.target = target;
+                if admit_npm_install_encoding_head(&request_snapshot,
+                    Some(&connect_authentication.principal_id), &head).is_err() {
+                    let response = override_response_connection(json_status_response(StatusCode::BAD_REQUEST,
+                        json!({"error":"request_content_encoding_denied"})), false);
+                    let _ = tls.write_all(&response);
+                    let _ = tls.flush();
+                    break;
+                }
                 match request_streaming_preflight(
                     &request_snapshot,
                     &head,
@@ -50936,6 +51200,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
             "policy_trust_root_source":state.policy_trust_root_source.label(),
             "operator_x_app_read":x_app_read::gate_capability(),
             "operator_alchemy_rpc_read":alchemy_rpc_read::gate_capability(),
+            "operator_npm_install":npm_install::gate_capability(),
             "attested_response_context":snapshot.attested_response_context,
             "data_plane_binary_digest":state.binary_digest,
             "routes":snapshot.routes.len(),
@@ -56339,6 +56604,7 @@ mod tests {
             body_sha256: Some(sha256_prefixed(b"")),
             forwarded_body_length: Some(0),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -60640,6 +60906,7 @@ mod tests {
                 body_sha256: Some(sha256_prefixed(b"")),
                 forwarded_body_length: Some(0),
                 forwarded_body_utf8_valid: Some(true),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: None,
@@ -60986,6 +61253,7 @@ mod tests {
             body_sha256: Some(sha256_prefixed(b"")),
             forwarded_body_length: Some(0),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -61196,6 +61464,7 @@ mod tests {
             body_sha256: None,
             forwarded_body_length: Some(body.len() as u64),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -61443,6 +61712,7 @@ mod tests {
             body_sha256: Some(sha256_prefixed(body.as_bytes())),
             forwarded_body_length,
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -61729,6 +61999,7 @@ mod tests {
             body_sha256: Some(sha256_prefixed(b"")),
             forwarded_body_length: Some(0),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -64135,6 +64406,7 @@ mod tests {
                 body_sha256: Some(sha256_prefixed(b"")),
                 forwarded_body_length: Some(0),
                 forwarded_body_utf8_valid: Some(true),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: None,
@@ -64175,6 +64447,7 @@ mod tests {
                 body_sha256: Some(sha256_prefixed(b"")),
                 forwarded_body_length: Some(0),
                 forwarded_body_utf8_valid: Some(true),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: None,
@@ -64613,6 +64886,7 @@ mod tests {
             body_sha256: Some(sha256_prefixed(b"")),
             forwarded_body_length: Some(0),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -64761,6 +65035,7 @@ mod tests {
             ),
             forwarded_body_length: Some(0),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -64888,6 +65163,7 @@ mod tests {
             ),
             forwarded_body_length: Some(0),
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -66667,6 +66943,7 @@ mod tests {
             body_sha256: None,
             forwarded_body_length: None,
             forwarded_body_utf8_valid: Some(true),
+            npm_install_audit_body: None,
             credential_metadata: BTreeMap::new(),
             gmail_proofs: Vec::new(),
             client_request_digest: None,
@@ -66713,6 +66990,7 @@ mod tests {
                 body_sha256: Some(sha256_prefixed(b"")),
                 forwarded_body_length: Some(0),
                 forwarded_body_utf8_valid: Some(true),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: None,
@@ -66814,6 +67092,7 @@ mod tests {
                 body_sha256: None,
                 forwarded_body_length: Some(body.len() as u64),
                 forwarded_body_utf8_valid: Some(utf8_valid),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: None,
@@ -68055,6 +68334,7 @@ mod tests {
                     body_sha256: Some(sha256_prefixed(body.as_bytes())),
                     forwarded_body_length: Some(body.len() as u64),
                     forwarded_body_utf8_valid: Some(true),
+                    npm_install_audit_body: None,
                     credential_metadata: BTreeMap::new(),
                     gmail_proofs: Vec::new(),
                     client_request_digest: None,
@@ -68106,6 +68386,7 @@ mod tests {
                     body_sha256: Some(sha256_prefixed(b"opaque")),
                     forwarded_body_length: Some(6),
                     forwarded_body_utf8_valid: Some(true),
+                    npm_install_audit_body: None,
                     credential_metadata: BTreeMap::new(),
                     gmail_proofs: Vec::new(),
                     client_request_digest: None,
@@ -76992,6 +77273,7 @@ mod tests {
                 body_sha256: Some(sha256_prefixed(b"")),
                 forwarded_body_length: Some(0),
                 forwarded_body_utf8_valid: Some(true),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: Some(expected.clone()),
@@ -78900,6 +79182,7 @@ mod tests {
                 body_sha256: None,
                 forwarded_body_length: Some(0),
                 forwarded_body_utf8_valid: Some(true),
+                npm_install_audit_body: None,
                 credential_metadata: BTreeMap::new(),
                 gmail_proofs: Vec::new(),
                 client_request_digest: None,

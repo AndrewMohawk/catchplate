@@ -35,6 +35,11 @@ ADMIN = "synthetic-body-routing-administrator"
 SECRET = "synthetic-body-routing-private-credential"
 RESULT = "BODY_ROUTING_RESULT "
 NETWORK_ATTEMPTS = []
+GOOGLE_CONFIGURATION = "/api/operator-demo/oauth/google/configuration/v2"
+X_CONFIGURATION = "/api/operator-demo/oauth/x/configuration/v1"
+GOOGLE_START = "/api/operator-demo/oauth/google/start"
+PROVIDER_POST_LIMITS = {GOOGLE_CONFIGURATION: 8192, GOOGLE_CONFIGURATION + "/cancel": 2048,
+    X_CONFIGURATION: 8192, GOOGLE_START: 2048}
 
 
 def classification():
@@ -127,14 +132,82 @@ class BodyTransport(FullASGI):
         return status, json.loads(body), delivered
 
 
-async def connected_story():
+async def provider_body_controls(app, application, api, config, db, mode):
+    """Real configured admission; refused streams never reach a service effect."""
+    routes = [route for route in application._fastapi_app.routes
+        if getattr(route, "path", None) == GOOGLE_START and "POST" in route.methods]
+    require(len(routes) == 1 and routes[0].endpoint is application.operator_google_start,
+        "actual Google start registration")
+    dependency = inspect.signature(routes[0].endpoint).parameters["identity"].default.dependency
+    require(dependency is application._operator_google_admin
+        and [name for _, name in calls(dependency)] == ["_admin_identity"]
+        and application._operator_catalog_api is api, "Google start actual administrator wrapper")
+    sequence = calls(routes[0].endpoint)
+    require(next(line for line, name in sequence if name == "_admit")
+        < next(line for line, name in sequence if name == "_payload")
+        < next(line for line, name in sequence if name == "_blocking"), "Google start body/effect order")
+    with closing(db.connect()) as connection:
+        before = tuple(connection.iterdump())
+    policy = config.POLICY_BUNDLE_PATH.read_bytes()
+    active = ({path: bound for path, bound in PROVIDER_POST_LIMITS.items() if path != GOOGLE_START}
+        if mode == "managed" else {GOOGLE_START: 2048})
+    budgets = []
+
+    def short_timeout(seconds):
+        budgets.append(seconds)
+        require(seconds == 30, "production parser timeout changed")
+        return asyncio.timeout(0.02)
+
+    with patch.object(api, "_payload", wraps=api._payload) as parser:
+        for path, bound in active.items():
+            for options, expected in (({"authenticate": False}, 401),
+                    ({"origin": "https://foreign.example.com"}, 403)):
+                count = parser.await_count
+                status, _, delivered = await app.post(path=path, stall=True, **options)
+                require(status == expected and delivered == 0 and parser.await_count == count,
+                    "provider admission did not precede body parser")
+            for options, expected in (({"declared": bound + 1, "stall": True}, 413),
+                    ({"chunks": (b" " * bound, b"x")}, 413),
+                    ({"chunks": (b"{",), "delay": 0.005}, 422)):
+                count = parser.await_count
+                status, _, _ = await app.post(path=path, **options)
+                require(status == expected and parser.await_count == count + 1,
+                    "provider route exact parser bound")
+            count = parser.await_count
+            with patch.object(api, "asyncio", SimpleNamespace(timeout=short_timeout)):
+                status, body, _ = await app.post(path=path, chunks=(b"{",), stall=True)
+            require(status == 408 and body == {"detail": "operator catalog request body timed out"}
+                and parser.await_count == count + 1, "provider original parser deadline")
+        # A roster entry is not feature admission. The real cold selection
+        # continues to refuse disabled configurations/unconfigured consent.
+        for path in PROVIDER_POST_LIMITS.keys() - active.keys():
+            count = parser.await_count
+            status, _, delivered = await app.post(path=path, stall=True)
+            require(status == (403 if path == GOOGLE_START else 404) and delivered == 0
+                and parser.await_count == count, "disabled provider crossed its admission gate")
+    require(budgets == [30] * len(active), "one deadline per provider request")
+    with closing(db.connect()) as connection:
+        require(tuple(connection.iterdump()) == before, "provider refusal changed SQLite state")
+    require(config.POLICY_BUNDLE_PATH.read_bytes() == policy and not NETWORK_ATTEMPTS,
+        "provider refusal changed authority or contacted network")
+    for name in ("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR", "SERVERWARE_OPERATOR_X_CUSTODY_DIR"):
+        if name in os.environ:
+            require(not list(Path(os.environ[name]).iterdir()), "refused body initialized provider custody")
+    return {"full_asgi": True, "provider_mode": mode, "bounded_routes": len(active),
+        "admission_first": True, "security_headers": True, "unchanged_state": True, "network_attempts": 0}
+
+
+async def connected_story(mode):
     require(ROOT == Path("/app"), "isolated read-only app source required")
     interfaces = {line.split(":", 1)[0].strip() for line in Path("/proc/net/dev").read_text().splitlines()
         if ":" in line}
     require(interfaces == {"lo"}, "network-none required")
     os.umask(0o077)
     sys.addaudithook(no_network)
-    Path(os.environ["SERVERWARE_DATA_DIR"]).mkdir(mode=0o700)
+    Path(os.environ["SERVERWARE_DATA_DIR"]).mkdir(mode=0o700, exist_ok=True)
+    if mode == "managed":
+        from serverware import operator_google_managed_config
+        operator_google_managed_config.bootstrap()
     from serverware import operator_demo
     operator_demo.activate()
     from serverware.control_plane_startup import validate_control_plane_startup
@@ -145,6 +218,8 @@ async def connected_story():
     app = BodyTransport(application.app, ADMIN)
     await app.start()
     try:
+        if mode != "ordinary":
+            return await provider_body_controls(app, application, api, config, db, mode)
         before = workspace.snapshot(db, catalog=True)
         catalog = workspace.catalog(db, schema)
         policy, high_water = config.POLICY_BUNDLE_PATH.read_bytes(), store.get_policy_high_water()
@@ -182,7 +257,7 @@ async def connected_story():
             count = parser.await_count
             for path, expected in (("/api/operator-demo/credentials/new-unreviewed", 403),
                     ("/api/authority/control-plane/custody", 403),
-                    ("/api/operator-demo/oauth/x/configuration/v1", 413)):
+                    ("/api/operator-demo/connections", 413)):
                 status, _, delivered = await app.post(path=path, declared=2 * 1024**2 + 1, stall=True)
                 require(status == expected and delivered == 0 and parser.await_count == count,
                     "unreviewed or authority route changed body owner")
@@ -222,13 +297,14 @@ async def connected_story():
 class OperatorCatalogBodyRoutingTests(unittest.TestCase):
     def test_exact_registered_roster_and_actual_endpoint_guards(self):
         from serverware import operator_catalog_api as api, operator_notification_api as notifications
+        from serverware import operator_google_configuration_api as google, operator_x_configuration_api as x
         roster, _ = classification()
-        self.assertEqual(len(roster), 32)
-        self.assertEqual(roster, api.MUTATION_PATHS)
-        routes = [route for router in (api.router, notifications.router) for route in router.routes
+        self.assertEqual(len(roster), 36)
+        self.assertEqual(roster, api.MUTATION_PATHS | PROVIDER_POST_LIMITS.keys())
+        routes = [route for router in (api.router, notifications.router, google.router, x.router) for route in router.routes
             if "POST" in route.methods]
-        self.assertEqual(len(routes), 32)
-        self.assertEqual({route.path for route in routes}, roster)
+        self.assertEqual(len(routes), 35)
+        self.assertEqual({route.path for route in routes}, roster - {GOOGLE_START})
         for route in routes:
             with self.subTest(path=route.path):
                 params = inspect.signature(route.endpoint).parameters
@@ -244,6 +320,11 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
                 self.assertEqual(len(payload), 1)
                 self.assertLess(admit[0], payload[0])
                 self.assertFalse(any(name in {"body", "json", "stream"} for _, name in sequence))
+        for module in (google, x):
+            self.assertIs(module.admission, api)
+            tree = ast.parse(textwrap.dedent(inspect.getsource(module._admit)))
+            first = tree.body[0].body[0].value
+            self.assertEqual(ast.unparse(first), "admission._admit(request, mutation=mutation)")
 
     def test_classifier_is_closed_to_method_path_and_active_profile(self):
         roster, owns = classification()
@@ -256,21 +337,33 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
             for suffix in ("/", "/new", "?x=1"):
                 self.assertFalse(owns("POST", path + suffix, operator_active=True))
         for path in (None, b"/api/operator-demo/credentials", "/api/operator-demo/%63redentials",
-                "/api/operator-demo/oauth/google/configuration/v2", "/api/operator-demo/oauth/x/configuration/v1",
-                "/api/operator-demo/oauth/google/start", "/api/authority/control-plane/custody",
+                "/api/operator-demo/oauth/google/configuration/v3", "/api/operator-demo/oauth/x/configuration/v2",
+                "/api/operator-demo/oauth/x/start", "/api/authority/control-plane/custody",
                 "/api/webauthn/register/prepare", "/api/operator-demo/catalog"):
             self.assertFalse(owns("POST", path, operator_active=True))
 
-    def test_real_cold_full_asgi_admission_stream_and_commit(self):
+    def run_story(self, mode):
         with patch.dict(os.environ, {"TMPDIR": "/tmp"}):
-            workspace.common.OperatorDemoPersistenceTests.setUp(self)
+            if mode == "managed":
+                from test_operator_google_managed_config import ManagedGoogleConfigurationTests
+                ManagedGoogleConfigurationTests.setUp(self)
+                x_directory = Path(self.scratch.name) / "x-custody"
+                x_directory.mkdir(mode=0o700)
+                self.environment.update(SERVERWARE_OPERATOR_MANAGED_X_ENABLED="1",
+                    SERVERWARE_OPERATOR_X_CUSTODY_DIR=str(x_directory))
+            elif mode == "google":
+                from test_operator_google_consent import OperatorGoogleConsentTests
+                OperatorGoogleConsentTests.setUp(self)
+                self.environment["SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI"] = ORIGIN + "/api/oauth/callback/google"
+            else:
+                workspace.common.OperatorDemoPersistenceTests.setUp(self)
         self.environment.update(SERVERWARE_PUBLIC_URL=ORIGIN, SERVERWARE_ADMIN_TOKEN=ADMIN,
             SERVERWARE_ADMIN_USER="body-routing-test", SERVERWARE_ADMIN_ROLES="admin",
             SERVERWARE_DECISION_GATE_BASE="", TMPDIR="/tmp")
         for key in tuple(self.environment):
             if key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}:
                 self.environment.pop(key)
-        result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker"],
+        result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", mode],
             cwd=ROOT, env=self.environment, capture_output=True, text=True, timeout=110)
         self.assertNotIn(SECRET, result.stdout + result.stderr)
         self.assertNotIn(ADMIN, result.stdout + result.stderr)
@@ -278,16 +371,29 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
             if line.startswith(RESULT)]
         self.assertEqual(len(receipts), 1, "missing closed worker receipt")
         self.assertEqual(result.returncode, 0, json.dumps(receipts[0], sort_keys=True))
-        self.assertEqual(receipts[0], {"full_asgi": True, "single_parser": True, "bounded_timeout": True,
+        return receipts[0]
+
+    def test_real_cold_full_asgi_admission_stream_and_commit(self):
+        self.assertEqual(self.run_story("ordinary"), {"full_asgi": True, "single_parser": True, "bounded_timeout": True,
             "admission_first": True, "security_headers": True, "revision_delta": 1,
             "save_audits": 1, "encrypted_readback": True, "network_attempts": 0})
 
+    def test_managed_google_and_x_configuration_bodies_are_route_owned(self):
+        self.assertEqual(self.run_story("managed"), {"full_asgi": True, "provider_mode": "managed",
+            "bounded_routes": 3, "admission_first": True, "security_headers": True,
+            "unchanged_state": True, "network_attempts": 0})
+
+    def test_configured_google_start_body_is_route_owned(self):
+        self.assertEqual(self.run_story("google"), {"full_asgi": True, "provider_mode": "google",
+            "bounded_routes": 1, "admission_first": True, "security_headers": True,
+            "unchanged_state": True, "network_attempts": 0})
+
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--worker"]:
+    if len(sys.argv) == 3 and sys.argv[1] == "--worker" and sys.argv[2] in {"ordinary", "managed", "google"}:
         signal.alarm(105)
         try:
-            receipt = asyncio.run(connected_story())
+            receipt = asyncio.run(connected_story(sys.argv[2]))
         except BaseException as error:
             receipt = {"failed": True, "frames": [[Path(frame.filename).name, frame.name, frame.lineno]
                 for frame in traceback.extract_tb(error.__traceback__)[-10:]],

@@ -1,4 +1,5 @@
-# Guided Gmail SDK setup and Google audit notifications; Google unconfigured.
+# UI-only Gmail SDK handoff on retained-compatible authority; Google unconfigured.
+# Do not deploy unrelated authority-contract changes without a reviewed migration.
 # AWS credentials are storage-only: no signing, grants or ECR publication.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
 # This pair includes the genuinely rebuilt provider and response-media fixes; the historical
@@ -26,7 +27,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-be1dc001ee11ba1494de980dbbf2571b80ef77c0
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-0810c0f9f85e42061dbbca71100b58a70ba2a5b4
         target: /app
         read_only: true
         bind: {create_host_path: false}

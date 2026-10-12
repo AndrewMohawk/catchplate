@@ -52,7 +52,31 @@ transitive dependency, unchanged `ci` lock bytes, original gzip commitments,
 distinct durable audit attempts, and all prior denial controls. A successful
 mocked check or compilation is not that acceptance result.
 
-Current candidate status: focused Python, catalog, Node and fixture-oracle
+### October 12 acceptance and deployment
+
+The compatible `bad0fc6f` app and normal Rust binary `7101d7e3` are deployed.
+All 135 selected Rust regressions passed. Eight inert UI groups and four
+rendered desktop/mobile groups also passed; those UI groups use intercepted
+synthetic requests, not a live provider.
+
+The complete stock npm 11.8.0 run passed against the isolated registry in
+152.922 seconds: 25 commands, nine successes and 16 expected failures. It
+verified installed and transitive package bytes, cold `ci`, unchanged lock
+bytes, default advisory success, detection of npm's swallowed advisory failure,
+and all 63 expected durable audit events. Cleanup completed. Evidence is
+`npm-install-acceptance.4xSfV4C1`; the earlier failures below remain preserved.
+
+The deployed pair separately passed the actual internal-app browser check and
+a live LAN HTTPS proxy request with durable audit verification. Temporary live
+test resources were revoked without changing existing rows. No pilot was
+started, and ordinary page loads require no build or source-tree rehash.
+Public-Internet CONNECT and real npm account entitlement are not established
+by the isolated registry test. The public proxy still needs the separately
+approved exact-host DNS/updater change.
+
+### Preserved investigation history
+
+The initial candidate's focused Python, catalog, Node and fixture-oracle
 checks and 125 compiled Rust controls passed. The first real stock-npm run
 stopped at the third publication with a credential-preparation 503, before
 installation. Its state and cleanup receipts are preserved in
@@ -85,8 +109,8 @@ published bytes, the transitive dependency, generated lock and default audit.
 It then failed at cold `ci`, before any additional upstream request was recorded.
 The original fixed error envelope did not identify which client stage failed;
 that evidence does not establish a cause. All failed runs remain preserved with
-completed cleanup. Full stock-npm acceptance is still required. The ordinary
-live app is unchanged by these source commits.
+completed cleanup. At that checkpoint, full stock-npm acceptance was still
+required and the ordinary live app had not changed.
 The diagnostic run (`npm-install-acceptance.qjwx36xS`) again passed install and
 identified `E400` from stock npm during cold `ci`. A separate loopback-only
 wire probe observed three bodyless outer CONNECTs carrying `Content-Encoding:
@@ -97,7 +121,7 @@ outer parser rejects that encoding before authentication. The wire probe's
 overall result remains failed because it recorded a socket error after the
 deliberate 400 responses; its header observations are not proxy acceptance.
 The source correction is limited to that bodyless CONNECT case. Its compiled
-regressions and a complete stock-client rerun are still required before deployment.
+regressions and complete stock-client rerun subsequently passed as recorded above.
 Public proxy DNS repair and real npm
 account entitlement remain separate unverified requirements. No pilot is needed
 to open or use the persistent operator app.

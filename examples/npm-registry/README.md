@@ -81,10 +81,11 @@ not prereleases, arbitrary specs, URLs, aliases or Git/file requests.
 
 ## Install a reviewed project
 
-**Implementation candidate, not deployed acceptance:** installation requires the
-new matching app/proxy capability. A successful mocked test or CLI exit alone
-does not prove that a deployment supports it. Metadata and publish permissions
-do not authorize downloads or audit requests.
+Installation requires the matching app/proxy capability. The October 12
+compatible deployment includes it, and stock install and cold `ci` passed
+against an isolated registry; see [the verification record](../../docs/operator-npm-install.md).
+That does not establish public proxy reachability or your npm account's access.
+Metadata and publish permissions do not authorize downloads or audit requests.
 
 Use a separate installation application and whitelist every required package,
 including transitive dependencies. No dependency is automatically authorized
@@ -238,6 +239,14 @@ node --input-type=module -e "import { verifyVersions } from './client.mjs'; veri
 This checks installed package metadata, not a registry request.
 
 ## Isolated proxy verification
+
+On 2026-10-12 UTC, the expanded stock npm 11.8.0 scenario passed 25 commands
+against an isolated synthetic registry: nine successful commands and 16
+expected failures. It verified installation, transitive package bytes, cold
+`ci`, an unchanged lock, advisory success/failure handling and 63 durable audit
+events. The tested app/proxy pair is deployed; live LAN proxy and audit checks
+passed separately. This is not real npm entitlement or Internet CONNECT proof.
+See [the installation record](../../docs/operator-npm-install.md).
 
 On 2026-10-11 UTC, the then-current launcher and worker passed all 21 integration
 cases through the actual Serverware application, Rust gate and HTTPS proxy

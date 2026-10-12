@@ -2,7 +2,7 @@
 // It accepts public metadata and never accepts a provider secret or client token.
 const CLIENT_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 function credentialHeaderTarget(credential) {
-  const bearer = ['bearer', 'google_oauth'].includes(credential?.auth_type);
+  const bearer = ['bearer', 'google_oauth', 'x_oauth'].includes(credential?.auth_type);
   const name = bearer && credential.header_name === 'Authorization' ? 'Authorization' :
     credential?.auth_type === 'header' ? credential.header_name : null;
   if (typeof name !== 'string' || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(name))
@@ -56,8 +56,8 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
 if (typeof module !== 'undefined' && module.exports) module.exports = {buildCurlCommand, clientCredentialInput, credentialHeaderTarget};
 else {
   const workspace = createOperatorWorkspace();
-  let reauthorization;
-  createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id)}); createAccessRulesView(workspace);
+  let reauthorization; let xAccounts;
+  createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id), disconnectX: id => xAccounts.disconnect(id)}); createAccessRulesView(workspace);
   const applications = createApplicationsView(workspace);
   reauthorization = createGoogleReauthorizationView(workspace, applications);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
@@ -66,6 +66,7 @@ else {
   const xConfiguration = createXConfigurationView(workspace);
   const connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
+  xAccounts = createXAccountsView(workspace, applications, connect);
   createGoogleView(workspace, applications, connect);
   function navigate() {
     let view = location.hash.slice(1) || 'overview';

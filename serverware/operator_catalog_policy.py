@@ -56,12 +56,15 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
     from serverware import operator_demo_store as legacy
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     from serverware import operator_catalog_aws
+    from serverware import operator_catalog_x_oauth, operator_catalog_x_post
     from serverware import operator_catalog_npm_install
     aws_ids = {row['id'] for row in catalog['credentials'] if operator_catalog_aws.selected(row)}
     for rule in catalog['access_rules']:
         if rule.get('credential_id') in aws_ids:
             raise schema.CatalogIntegrityError('AWS credentials have no access-rule signing profile')
-        if operator_catalog_npm_install.selected(rule):
+        if operator_catalog_x_post.selected(rule):
+            operator_catalog_x_post.validate_shape(rule)
+        elif operator_catalog_npm_install.selected(rule):
             operator_catalog_npm_install.validate_shape(rule)
         elif operator_catalog_alchemy.selected(rule):
             operator_catalog_alchemy.validate_shape(rule)
@@ -92,7 +95,10 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             'token_expires_at_epoch_ms': application['token_expires_at_epoch_ms'],
             'auth_type': credential['auth_type'], 'header_name': credential['header_name']}
         google = credential['auth_type'] == 'google_oauth'
-        if google:
+        x_account = operator_catalog_x_oauth.selected(credential)
+        if x_account:
+            operator_catalog_x_post.validate_rule(rule, credential)
+        if google or x_account:
             # Reuse only the established envelope; replace the complete static
             # binding below with the verified account's OAuth contract.
             flat['auth_type'] = 'bearer'
@@ -112,7 +118,11 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             operator_catalog_google.validate_rule(rule, credential, profile=metadata_profile)
             credential_policies[credential['id']] = operator_catalog_google.credential_policy(credential)
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
-        if operator_catalog_npm_install.selected(rule):
+        if x_account:
+            credential_policies[credential['id']] = operator_catalog_x_oauth.credential_policy(credential)
+        if operator_catalog_x_post.selected(rule):
+            route = operator_catalog_x_post.render_route(rule, credential, application['principal_id'])
+        elif operator_catalog_npm_install.selected(rule):
             emitted = operator_catalog_npm_install.render_routes(rule, credential, application['principal_id'])
         elif operator_catalog_alchemy.selected(rule):
             route = operator_catalog_alchemy.render_route(rule, credential, application['principal_id'])

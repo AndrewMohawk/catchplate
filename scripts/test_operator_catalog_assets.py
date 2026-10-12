@@ -210,7 +210,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
+            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
@@ -266,6 +266,34 @@ class OperatorCatalogAssets(unittest.TestCase):
                     assert_x_public_reference(altered)
         with self.assertRaises(AssertionError):
             assert_x_public_reference(x_configuration + '\nsessionStorage.setItem(xConfigurationKey, secret);')
+        # Account consent/disconnect has its own raw public UUID reference.
+        # Both producers are closed: validated callback UUID or generated UUID
+        # retained before a POST. No OAuth state, URL, code or body is stored.
+        def assert_x_account_reference(source):
+            self.assertEqual(re.findall(r'\bsessionStorage\.setItem\(([^)]*)\)', source),
+                             ['xAccountStorageKey, operationId', 'xAccountStorageKey, id'])
+            accesses = re.findall(r'\bsessionStorage\.([A-Za-z]+)\(([^)]*)\)', source)
+            self.assertEqual(len(re.findall(r'\bsessionStorage\b', source)), len(accesses))
+            self.assertTrue(all(method in {'getItem', 'setItem', 'removeItem'} and
+                                arguments.split(',')[0] == 'xAccountStorageKey' for method, arguments in accesses))
+            self.assertIn("xAccountStorageKey = 'serverware.operator.x.account.operation.v1'", source)
+            self.assertIn('if (!upstreamUUID(saved)) throw new Error(); operationId = saved;', source)
+            self.assertIn('callbackIds.length !== 1 || !upstreamUUID(callbackIds[0])', source)
+            self.assertIn('operationId = callbackIds[0];', source)
+            self.assertIn('if (!upstreamUUID(id) || operationId)', source)
+            self.assertEqual(source.count('retain(crypto.randomUUID());'), 2)
+            self.assertLess(source.index('retain(crypto.randomUUID());'), source.index('workspace.api(paths.start_path,'))
+            self.assertLess(source.rindex('retain(crypto.randomUUID());'), source.index('workspace.api(paths.disconnect_path,'))
+            self.assertIn('sessionStorage.getItem(xAccountStorageKey) !== operationId', source)
+        x_accounts = scripts['workspace_x_accounts.js']
+        assert_x_account_reference(x_accounts)
+        for original, replacement in (
+                ('sessionStorage.setItem(xAccountStorageKey, id)', 'sessionStorage.setItem(xAccountStorageKey, authorization)'),
+                ('!upstreamUUID(callbackIds[0])', '!callbackIds[0]'),
+                ('retain(crypto.randomUUID());', 'retain(secret);')):
+            with self.subTest(x_account_storage_boundary=original):
+                with self.assertRaises(AssertionError):
+                    assert_x_account_reference(x_accounts.replace(original, replacement))
         # Notifications stores a different closed public recovery reference
         # before its one POST. Real browser fixtures check the exact stored
         # fields, secret clearing, uncertainty, 404 retention and no replay.

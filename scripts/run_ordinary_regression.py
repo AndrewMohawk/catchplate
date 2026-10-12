@@ -57,6 +57,13 @@ SUITES = (
     Suite("backend", "test_operator_github_app_key_replacement.py"),
     Suite("backend", "test_operator_github_app_lease.py"),
     Suite("backend", "test_github_app_secret_boundary.py"),
+    Suite("backend", "test_operator_x_accounts_api.py"),
+    Suite("backend", "test_operator_x_transport.py"),
+    Suite("backend", "test_operator_x_refresh.py"),
+    Suite("backend", "test_operator_x_lease_reconciliation.py"),
+    Suite("backend", "test_operator_x_lease_boundary.py"),
+    Suite("backend", "test_operator_x_secret_boundary.py"),
+    Suite("backend", "test_operator_x_readiness.py"),
     Suite("notifications", "test_operator_notification_events.py"),
     Suite("notifications", "test_operator_notification_google_events.py"),
     Suite("notifications", "test_operator_notification_google_integration.py"),
@@ -66,6 +73,8 @@ SUITES = (
     Suite("ui_contract", "test_operator_npm_publish_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_npm_install_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_github_app_ui.mjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_x_accounts_ui.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_x_configuration_ui.mjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_runtime_browser_assets.cjs", "node", seconds=60),
 )
 
@@ -171,6 +180,10 @@ def node_completion(script, raw):
         "test_operator_npm_install_ui.cjs": common,
         "test_operator_github_app_ui.mjs": {"ok": True, "network": False, "browser": False, "provider": False,
             "scope": "actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance"},
+        "test_operator_x_accounts_ui.cjs": {"ok": True, "browser": False, "network": False,
+            "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"},
+        "test_operator_x_configuration_ui.mjs": {"ok": True, "browser": False, "network": False,
+            "scope": "actual JS with inert DOM and independent synthetic API DTOs; not backend, browser or provider acceptance"},
     }
     def unique(pairs):
         value = {}

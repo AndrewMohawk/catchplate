@@ -28,6 +28,9 @@ function operatorExampleProjects(rule, catalog) {
       {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
         href: source + 'blob/' + branch + 'examples/x-username-node/workflow.example.yml'},
       guide('X preset scope and compatibility', 'operator-provider-presets.md')];
+    case 'x_text_post_v1': return [project('Node.js posting example', 'x-post-node'),
+      project('Python posting example', 'x-post-python'), project('Go posting example', 'x-post-go'),
+      guide('X posting scope and verification', 'operator-x-posting.md')];
     case 'alchemy_chain_status_read_v1': return [project('Node.js', 'alchemy-chain-status-node'),
       project('Python', 'alchemy-chain-status-python'), project('Go', 'alchemy-chain-status-go'),
       {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
@@ -46,7 +49,8 @@ function renderOperatorExampleProjects(rule, catalog) {
   const panel = element('client-examples'); const links = element('client-example-links');
   const projects = operatorExampleProjects(rule, catalog);
   links.replaceChildren(); panel.hidden = projects.length === 0;
-  element('client-example-note').textContent = !projects.length ? '' : isAlchemyRule(rule) ?
+  element('client-example-note').textContent = !projects.length ? '' : isXPostRule(rule) ?
+    'Public source only, separate from your private client config. See each README for verification status. This page has not run a posting SDK, tested your X account or verified provider entitlement.' : isAlchemyRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
@@ -80,6 +84,7 @@ function createProxyView(workspace, applications) {
     element('npm-client-controls').hidden = true;
     element('npm-publish-client-controls').hidden = true;
     element('alchemy-client-controls').hidden = true;
+    element('x-post-client-controls').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -96,6 +101,8 @@ function createProxyView(workspace, applications) {
     const npmPublish = isNpmPublishRule(rule);
     const npmInstall = isNpmInstallRule(rule);
     const x = isXRule(rule);
+    const xPost = isXPostRule(rule);
+    element('x-post-client-controls').hidden = !xPost;
     const alchemy = isAlchemyRule(rule);
     const alchemySelection = alchemy ? application?.id + ':' + rule.id : '';
     if (alchemySelection !== alchemyContext) { element('alchemy-client-method').value = 'eth_chainId'; alchemyContext = alchemySelection; }
@@ -108,16 +115,17 @@ function createProxyView(workspace, applications) {
     if (githubSelection !== githubContext) { element('github-client-operation').value = 'read'; githubContext = githubSelection; }
     element('github-client-controls').hidden = !github;
     element('github-client-operation').querySelector('option[value="create"]').disabled = rule?.operation_bundle !== operatorGithub.write;
-    element('proxy-method').hidden = github || npm || npmPublish || npmInstall || x || alchemy || gmailSdk; element('proxy-method').disabled = github || npm || npmPublish || npmInstall || x || alchemy || gmailSdk;
-    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || npmInstall || x || alchemy || gmailSdk;
+    element('proxy-method').hidden = github || npm || npmPublish || npmInstall || x || xPost || alchemy || gmailSdk; element('proxy-method').disabled = github || npm || npmPublish || npmInstall || x || xPost || alchemy || gmailSdk;
+    document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || npmInstall || x || xPost || alchemy || gmailSdk;
     const context = gmail ? application?.id + ':' + rule.id : '';
     if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
     element('gmail-client-controls').hidden = !gmail || gmailSdk;
     element('gmail-sdk-client-controls').hidden = !gmailSdk;
     const messageRead = gmail && !gmailSdk && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official Go SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = npmInstall ?
+    element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official Go SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = xPost ?
+      'This recipe publishes only when you explicitly run it locally with reviewed text and post-once confirmation. No daily quota is enforced. This page sends no post; never automatically retry an uncertain reply.' : npmInstall ?
       'Review the exact dependency allowlist and local manifests before running the linked npm example. Installation writes only to your deliberately selected new output directory; lifecycle scripts stay disabled and default audit stays enabled. This page does not execute or verify the job.' : alchemy ?
       'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here and this page does not prove provider entitlement.' : x ?
       'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
@@ -155,8 +163,8 @@ function createProxyView(workspace, applications) {
     }
     let dummyHeader; let proxy;
     const proxyAuthentication = applicationProxyAuthentication(application);
-    if ((npm || npmPublish || npmInstall) && proxyAuthentication !== 'basic_and_bearer_v1') {
-      element('client-command').textContent = 'The stock npm client needs standard username/password proxy login.';
+    if ((npm || npmPublish || npmInstall || xPost) && proxyAuthentication !== 'basic_and_bearer_v1') {
+      element('client-command').textContent = xPost ? 'The X SDK example needs standard username/password proxy login.' : 'The stock npm client needs standard username/password proxy login.';
       element('client-guidance').textContent = 'Use Applications to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
       return;
     }
@@ -169,7 +177,8 @@ function createProxyView(workspace, applications) {
       proxy = new URL(catalog.proxy_url);
       if (proxy.protocol !== 'https:' || proxy.username || proxy.password || proxy.pathname !== '/' || proxy.search || proxy.hash ||
           !proxy.hostname.includes('.') || proxy.hostname === '127.0.0.1' || proxy.hostname.endsWith('.local') || proxy.hostname.endsWith('.localhost')) throw new Error();
-      command = npmInstall ? buildNpmInstallClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id,
+      command = xPost ? buildXPostClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
+        caPath: element('ca-path').value, proxyCaPath: element('x-post-proxy-ca-path').value}) : npmInstall ? buildNpmInstallClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id,
         proxyAuthentication, packages: rule.packages, caPath: element('ca-path').value}) : alchemy ? buildAlchemyClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
         chain: rule.chain, method: element('alchemy-client-method').value, caPath: element('ca-path').value,
         proxyCaPath: element('alchemy-proxy-ca-path').value}) : npmPublish ? buildNpmPublishClientRecipe({proxyUrl: catalog.proxy_url, applicationId: application.id, proxyAuthentication,
@@ -202,6 +211,11 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (xPost) {
+      element('client-guidance').textContent = (ready ? 'The exact policy is loaded; no post has been sent or tested. ' : 'Wait for the exact policy and resolve uncertain changes. ') +
+        'Use the reviewed examples/x-post-node project with your Serverware app token and locally supplied text. The client uses a public dummy; no X access or refresh token is shared. No daily posting quota, media, replies, quotes or threads. Keep both TLS checks enabled. Inspect Audit log and the account after any uncertain outcome; do not replay automatically.';
+      return;
+    }
     if (npmInstall) {
       element('client-guidance').textContent = (ready ? 'The saved policy is loaded and the app token is not expired. ' :
         'Wait for exact policy activation and resolve uncertain changes. ') +
@@ -287,13 +301,15 @@ function createProxyView(workspace, applications) {
   element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
   element('gmail-proxy-ca-path').addEventListener('input', render);
+  element('x-post-proxy-ca-path').addEventListener('input', render);
   element('github-proxy-ca-path').addEventListener('input', render);
   element('alchemy-proxy-ca-path').addEventListener('input', render);
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = isNpmInstallRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
+      element('client-copy-status').textContent = !element('x-post-client-controls').hidden ?
+        'Copied the X posting SDK recipe. Supply text and the app token locally; no post was sent. Do not automatically repeat an uncertain result.' : isNpmInstallRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
         'Copied the npm install/ci example setup. Set the reviewed project/output paths and app token privately; no job was executed.' : !element('gmail-sdk-client-controls').hidden ?
         'Copied the Bash recipe for the existing Go Gmail job. Set the application token privately and use the reviewed built example; no Google token, build or request is included in this copy action.' : !element('alchemy-client-controls').hidden ?
         'Copied the fixed Alchemy JSON-RPC read template. Set the Serverware app token locally, never the provider key. No request was executed by this page.' : !element('npm-publish-client-controls').hidden ?
@@ -320,6 +336,14 @@ function createProxyView(workspace, applications) {
       {proxy_authentication: 'basic_and_bearer_v1', proxy_username: application.id, proxy_password: token});
     else config.proxy_authorization = 'Bearer ' + token;
     if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
+    if (isXPostRule(rule)) {
+      config.operation_bundle = rule.operation_bundle;
+      config.client_recipe = {entrypoint: 'examples/x-post-node/client.mjs', automatic_retries: 0,
+        required_local_environment: ['SERVERWARE_X_POST_TEXT', 'SERVERWARE_X_POST_CONFIRM'],
+        confirmation_value: 'post-once', sdk_auth_token: operatorXPost.token};
+      config.proxy_ca_file = element('x-post-proxy-ca-path').value || null;
+      config.note += ' Contains only the Serverware app token, not X credentials or post content. Text-only posting has no daily quota. This file is not executable; an uncertain post must never be automatically replayed.';
+    }
     if (isAlchemyRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.chain = rule.chain;
       config.rpc_methods = [...operatorAlchemy.rpcMethods];

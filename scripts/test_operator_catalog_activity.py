@@ -251,6 +251,61 @@ class OperatorCatalogActivityTests(unittest.TestCase):
             self.f.add(REFRESH, refresh(), **{field: value})
             self.assertIsNone(self.account(self.f.project())["last_refresh_success"])
 
+    def x_refresh_fixture(self):
+        intent, work = str(uuid.UUID(int=71)), str(uuid.UUID(int=72))
+        self.f.catalog["credentials"][0].update(auth_type="x_oauth", operator_x_account={
+            "schema": "serverware.operatorXAccountBinding/v1", "intent_id": intent})
+        return {"operation_id": intent, "provider": "x", "credential_id": CREDENTIAL,
+            "work_id": work, "previous_credential_generation": 1,
+            "credential_generation": 2, "revision": 9}
+
+    def test_x_refresh_success_joins_real_producer_shape_to_retained_intent(self):
+        event = self.x_refresh_fixture()
+        identifier = str(uuid.UUID(int=73))
+        self.f.add("operator_catalog.x_oauth.account_refreshed", event,
+            id=identifier, actor_type="admin", actor_id="synthetic-consent-admin")
+        result = self.f.project()
+        self.assertEqual(self.account(result)["last_refresh_success"], {"event_id": identifier,
+            "recorded_at_epoch_ms": NOW - 1000, "credential_version": 2})
+        self.assertEqual(self.account(result)["last_refresh_outcome"], "success")
+        self.assertIsNone(self.account(result)["last_refresh_failure"])
+        self.assertNotIn(event["work_id"], json.dumps(result))
+        self.assertNotIn(event["operation_id"], json.dumps(result))
+
+    def test_x_refresh_rejects_crossed_intent_actor_generation_and_private_extras(self):
+        event = self.x_refresh_fixture()
+        cases = [{"operation_id": str(uuid.UUID(int=74))}, {"credential_id": OTHER_CREDENTIAL},
+            {"provider": "google"}, {"work_id": "not-a-uuid"}, {"credential_generation": True},
+            {"credential_generation": 3}, {"previous_credential_generation": 2},
+            {"revision": True}, {"access_token": SECRET}, {"reason": SECRET}]
+        for change in cases:
+            with self.subTest(change=change):
+                self.f.clear()
+                self.f.add("operator_catalog.x_oauth.account_refreshed", {**event, **change},
+                    id=str(uuid.UUID(int=73)), actor_type="admin", actor_id="synthetic-consent-admin")
+                result = self.f.project()
+                self.assertIsNone(self.account(result)["last_refresh_success"])
+                self.assertEqual(result["window"]["invalid_events"], 1)
+                self.assertNotIn(SECRET, json.dumps(result))
+        for changes in ({"actor_type": "system"}, {"id": digest(73)}):
+            self.f.clear()
+            self.f.add("operator_catalog.x_oauth.account_refreshed", event,
+                **{"id": str(uuid.UUID(int=73)), "actor_type": "admin",
+                    "actor_id": "synthetic-consent-admin", **changes})
+            self.assertIsNone(self.account(self.f.project())["last_refresh_success"])
+
+    def test_x_uncertain_operation_and_google_refresh_never_invent_failure(self):
+        event = self.x_refresh_fixture()
+        self.f.add("operator_catalog.x_oauth.operation_uncertain", {"operation_id": event["operation_id"],
+            "provider": "x", "credential_id": CREDENTIAL, "work_id": event["work_id"],
+            "reason": "refresh_failed"}, actor_type="admin", actor_id="synthetic-consent-admin")
+        self.f.add(FAILURE, refresh(provider="x"))
+        self.f.add(REFRESH, refresh())
+        account = self.account(self.f.project())
+        self.assertIsNone(account["last_refresh_success"])
+        self.assertIsNone(account["last_refresh_failure"])
+        self.assertEqual(account["last_refresh_outcome"], "unobserved")
+
     def test_joined_response_supports_oauth_and_retained_static_credentials(self):
         for credential, principal, route, app, rule in (
             (CREDENTIAL, "agent:one", "route:one", APPLICATION, RULE),

@@ -3,7 +3,7 @@
 function operatorConnectResourceChoices(items, reserved = []) {
   const actionLabels = reserved.map(value => value.replace(/\s+/g, ' ').trim());
   const options = items.map(item => ({id: item.id, name: (item.name +
-    (item.auth_type === 'google_oauth' ? ' · ' + item.provider_account : '')).replace(/\s+/g, ' ').trim()}));
+    (['google_oauth', 'x_oauth'].includes(item.auth_type) ? ' · ' + item.provider_account : '')).replace(/\s+/g, ' ').trim()}));
   let result = options.map(item => {
     const peers = options.filter(other => other.id !== item.id && other.name === item.name);
     if (!peers.length && !actionLabels.includes(item.name)) return item;
@@ -161,6 +161,10 @@ function createConnectView(workspace, applications, proxy) {
           !operatorExact(xRulePayload(item), xRulePayload(review.rule)))) {
         checkpoint.message = 'The saved X permission does not match the reviewed username and connection. Inspect saved state; no repeat request was sent.'; return;
       }
+      if (isXPostRule(review?.rule) && (!xPostRuleValid(item, credential()) ||
+          !operatorExact(xPostRulePayload(item), xPostRulePayload(review.rule)))) {
+        checkpoint.message = 'The saved X posting permission does not match the reviewed account. Inspect saved state; no repeat request was sent.'; return;
+      }
       if (isAlchemyRule(review?.rule) && (!alchemyRuleValid(item, credential()) ||
           !operatorExact(alchemyRulePayload(item), alchemyRulePayload(review.rule)))) {
         checkpoint.message = 'The saved Alchemy permission does not match the reviewed chain and connection. Inspect saved state; no repeat request was sent.'; return;
@@ -172,7 +176,7 @@ function createConnectView(workspace, applications, proxy) {
   function receipt(result, collection, key, providerName, providerKind) {
     if (!result[key] || typeof result[key].id !== 'string' || !Number.isSafeInteger(result.revision))
       throw operatorError('The saved resource receipt was incomplete. Review saved state; do not repeat automatically.');
-    const xMutation = providerName !== undefined && providerKind === 'x' || collection === 'access_rules' && isXRule(review?.rule);
+    const xMutation = providerName !== undefined && providerKind === 'x' || collection === 'access_rules' && (isXRule(review?.rule) || isXPostRule(review?.rule));
     const alchemyMutation = providerName !== undefined && providerKind === 'alchemy' || collection === 'access_rules' && isAlchemyRule(review?.rule);
     const githubAppMutation = providerKind === 'github_app' || collection === 'access_rules' && isGithubAppCredential(credential());
     if ((xMutation || alchemyMutation || githubAppMutation) && (result.revision < 1 || result.revision <= catalog().revision || result[key].status !== 'active' ||
@@ -185,6 +189,9 @@ function createConnectView(workspace, applications, proxy) {
     if (collection === 'access_rules' && isXRule(review?.rule) && (!xRuleValid(result[key], credential()) ||
         !operatorExact(xRulePayload(result[key]), xRulePayload(review.rule))))
       throw operatorError('The X permission receipt did not match the reviewed username. Inspect saved state; do not repeat automatically.');
+    if (collection === 'access_rules' && isXPostRule(review?.rule) && (!xPostRuleValid(result[key], credential()) ||
+        !operatorExact(xPostRulePayload(result[key]), xPostRulePayload(review.rule))))
+      throw operatorError('The X posting receipt did not match the reviewed account. Inspect saved state; do not repeat automatically.');
     if (collection === 'access_rules' && isAlchemyRule(review?.rule) && (!alchemyRuleValid(result[key], credential()) ||
         !operatorExact(alchemyRulePayload(result[key]), alchemyRulePayload(review.rule))))
       throw operatorError('The Alchemy permission receipt did not match the reviewed chain. Inspect saved state; do not repeat automatically.');
@@ -214,14 +221,15 @@ function createConnectView(workspace, applications, proxy) {
       const github = isGithubCredential(credential());
       const npm = isNpmCredential(credential());
       const x = isXCredential(credential());
+      const xPost = isXOAuthCredential(credential());
       const alchemy = isAlchemyCredential(credential());
       const npmChoices = npm ? [...(npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : []),
         ...(npmInstallAvailable(value, credential()) ? [{id: operatorNpmInstall.bundle, name: 'Install packages and run npm audit'}] : []),
         ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
-      choices('connect-operation', alchemy ? alchemyAvailable(value, credential()) ? [{id: operatorAlchemy.bundle, name: 'Read chain status'}] : [] : x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
+      choices('connect-operation', xPost ? xPostAvailable(value, credential()) ? [{id: operatorXPost.bundle, name: 'Publish text as this X account'}] : [] : alchemy ? alchemyAvailable(value, credential()) ? [{id: operatorAlchemy.bundle, name: 'Read chain status'}] : [] : x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
         githubPermissionBundles(credential()).map(id => ({id, name: githubPermissionName(id)})) : [] :
         [...(bundle ? [{id: operatorGmail.bundle, name: 'Read Gmail'}] : []),
-          {id: 'exact', name: 'Advanced: one exact endpoint'}], alchemy ? operatorAlchemy.bundle : x ? operatorX.bundle : npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
+          {id: 'exact', name: 'Advanced: one exact endpoint'}], xPost ? operatorXPost.bundle : alchemy ? operatorAlchemy.bundle : x ? operatorX.bundle : npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
       if (alchemy) {
         const select = element('connect-alchemy-chain'); const previous = select.value;
         const empty = textNode('option', 'Choose an approved chain'); empty.value = '';
@@ -245,8 +253,9 @@ function createConnectView(workspace, applications, proxy) {
     const npmPublish = npm && isNpmPublishRule({operation_bundle: element('connect-operation').value});
     const npmInstall = npm && isNpmInstallRule({operation_bundle: element('connect-operation').value});
     const x = newRule && (isXCredential(credential()) || isXRule({operation_bundle: element('connect-operation').value}));
+    const xPost = newRule && isXOAuthCredential(credential());
     const alchemy = newRule && (isAlchemyCredential(credential()) || isAlchemyRule({operation_bundle: element('connect-operation').value}));
-    const providerPreset = github || npm || x || alchemy;
+    const providerPreset = github || npm || x || xPost || alchemy;
     fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential && !['x', 'alchemy'].includes(connectionMethod));
     fields('connect-x-new', connectionMethod === 'x');
     fields('connect-alchemy-new', connectionMethod === 'alchemy');
@@ -290,7 +299,7 @@ function createConnectView(workspace, applications, proxy) {
     renderBasicCompatibility('connect', catalog(), credential());
     // Apply these last: nested legacy field renderers must not re-enable hidden
     // required controls. Switching permissions never clears the exact-rule draft.
-    element('connect-operation-group').hidden = x || alchemy || !newRule || credential()?.auth_type !== 'google_oauth' && !gmail && !providerPreset;
+    element('connect-operation-group').hidden = x || xPost || alchemy || !newRule || credential()?.auth_type !== 'google_oauth' && !gmail && !providerPreset;
     fields('connect-exact-destination', newRule && !gmail && !providerPreset);
     element('connect-credential-input-group').hidden = !newRule || providerPreset || gmailSdk;
     if (!newRule || providerPreset || gmailSdk) for (const input of element('connect-credential-input-group').querySelectorAll('input,select,textarea')) input.disabled = true;
@@ -309,6 +318,10 @@ function createConnectView(workspace, applications, proxy) {
       'Repository fixed by this GitHub App connection. You may grant only its saved permission or less. No response-field setup is needed.' :
       'This is the exact named repository you authorize, not a discovered or verified account relationship. The saved token must already have the required GitHub permission. No response-field setup is needed.';
     fields('connect-x-username-group', x);
+    fields('connect-x-post-group', xPost);
+    element('connect-x-post-summary').textContent = !xPost ? '' : !xPostAvailable(catalog(), credential()) ?
+      'Posting is unavailable until this account, the approved destination and the current paired gate support the exact permission. No fallback grant is sent.' :
+      'Publish text as ' + credential().provider_account + '. Text only; no media, replies, quotes or threads. Daily quotas are unavailable: this permission has no daily limit. Supply text only in your local client.';
     fields('connect-alchemy-chain-group', alchemy);
     element('connect-alchemy-summary').textContent = !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ?
       'Choose an approved mainnet or Sepolia chain. The exact preset and its separately approved origin are required. No destination is added and no fallback permission is sent.' :
@@ -367,6 +380,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) ||
       !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
+      xPost && !xPostAvailable(catalog(), credential()) ||
       alchemy && !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ||
       npm && (npmInstall ? !npmInstallAvailable(catalog(), credential()) || !npmInstallNewRuleAvailable(catalog(), selectedApplication) :
         npmPublish ? !npmPublishAvailable(catalog(), credential()) || !publishGrantAvailable() :
@@ -376,6 +390,7 @@ function createConnectView(workspace, applications, proxy) {
     return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule) &&
       (review.gmailClient !== 'sdk' || !gmailSdkProblem() && operatorExact(review.rule, gmailSdkRule())) &&
       (!isXRule(review.rule) || xCredentialReceiptMatches(credential(), review.xCredential)) &&
+      (!isXPostRule(review.rule) || operatorExact(xAccountIdentity(credential()), review.xAccount)) &&
       (!isGithubAppCredential(credential()) || githubAppCredentialReceiptMatches(credential(), review.githubAppCredential)) &&
       (!isAlchemyRule(review.rule) || alchemyCredentialReceiptMatches(credential(), review.alchemyCredential));
   }
@@ -404,6 +419,7 @@ function createConnectView(workspace, applications, proxy) {
         'Google account: quarantined and unavailable for use. Provider revocation is not proven. This setup does not start consent or cleanup.' :
         'Google account: saved metadata only. This setup has not tested consent, token refresh or a Google request. ' +
           (catalog()?.capabilities.google_oauth ? 'Use Connect Google for a separate, explicit consent flow.' : 'Google account connection remains disabled here.') :
+        isXOAuthCredential(provider) ? 'X account: saved consent identity. This page has not tested current provider entitlement or sent a post. Token refresh health requires observed evidence, not just a saved account.' :
         isGithubAppCredential(provider) ? 'GitHub App: saved installation and repository binding. Installation-token renewal is automatic; this page has not tested current refresh health or run a client.' :
         'Provider key: stored, not tested here.') +
       ' Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.';
@@ -551,6 +567,13 @@ function createConnectView(workspace, applications, proxy) {
     render();
   });
   function draftRule() {
+    if (isXOAuthCredential(credential())) {
+      if (element('connect-operation').value !== operatorXPost.bundle) throw operatorError('Choose the advertised X text-post permission. No fallback grant was sent.');
+      const rule = {...xPostRuleFields(), name: 'Publish text · ' + credential().provider_account,
+        application_id: selectedApplication, credential_id: selectedCredential};
+      if (!supported(rule)) throw operatorError('The connected account or paired X posting permission is unavailable. No grant was sent.');
+      return rule;
+    }
     if (isAlchemyCredential(credential())) {
       if (element('connect-operation').value !== operatorAlchemy.bundle) throw operatorError('Choose the advertised Alchemy chain-status permission. No fallback grant was sent.');
       const chain = element('connect-alchemy-chain').value;
@@ -644,6 +667,7 @@ function createConnectView(workspace, applications, proxy) {
       review = {existing, rule: JSON.parse(JSON.stringify(rule)), revision: catalog().revision, policyHash: catalog().policy.policy_hash};
       if (!existing && isGmailRule(rule)) review.gmailClient = element('connect-gmail-client').value;
       if (isXRule(rule)) review.xCredential = xCredentialReceipt(credential(), credential().name);
+      if (isXPostRule(rule)) review.xAccount = xAccountIdentity(credential());
       if (isAlchemyRule(rule)) review.alchemyCredential = alchemyCredentialReceipt(credential(), credential().name);
       if (isGithubAppCredential(credential())) review.githubAppCredential = githubAppCredentialReceipt(credential(), {name: credential().name, ...credential().github_app});
       message('Review the exact effective permissions before continuing.'); goto(3);
@@ -656,8 +680,8 @@ function createConnectView(workspace, applications, proxy) {
       selectedRule = review.rule.id; goto(4); return;
     }
     if (!workspace.ready('access_rules')) return;
-    await workspace.mutate(isNpmInstallRule(review.rule) ? 'access-rules/npm-install' : isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
-      isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
+    await workspace.mutate(isXPostRule(review.rule) ? 'access-rules/x-post' : isNpmInstallRule(review.rule) ? 'access-rules/npm-install' : isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
+      isXPostRule(review.rule) ? xPostRulePayload(review.rule) : isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
   for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-gmail-client', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain'])
@@ -735,6 +759,13 @@ function createConnectView(workspace, applications, proxy) {
     resetDraft(); selectedCredential = id; connectionMethod = 'saved'; savedChoice = id;
     element('connect-credential-choice').value = ''; renderInputs(); element('connect-credential-choice').value = id;
     message('Saved Google account selected. Choose an application; no access has been granted.'); goto(1); return true;
+  }, selectXAccountCredential(id) {
+    const item = catalog()?.credentials.find(value => value.id === id && value.status === 'active' && isXOAuthCredential(value));
+    if (!item || !writable() || checkpoint) return false;
+    resetDraft(); selectedCredential = id; connectionMethod = 'saved'; savedChoice = id;
+    element('connect-credential-choice').value = ''; renderInputs(); element('connect-credential-choice').value = id;
+    message('Saved X account selected. Choose an application; no posting permission has been granted.');
+    location.hash = 'connect'; goto(1); return true;
   }, show(active) {
     open = active;
     if (!active) { element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; }

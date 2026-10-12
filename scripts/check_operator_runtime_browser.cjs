@@ -26,9 +26,11 @@ const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js',
   'workspace_resources.js', 'workspace_applications.js', 'workspace_gmail_sdk.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_google_configuration.js', 'app.js'];
 const PRE_GMAIL_SCRIPTS = SCRIPTS.filter(name => name !== 'workspace_gmail_sdk.js');
 const X_CONFIGURATION_SCRIPTS = [...SCRIPTS.slice(0, -1), 'workspace_x_configuration.js', 'app.js'];
+const X_ACCOUNTS_SCRIPTS = X_CONFIGURATION_SCRIPTS.flatMap(name => name === 'workspace_x.js' ?
+  [name, 'workspace_x_accounts.js', 'workspace_x_post.js'] : [name]);
 const SCRIPT_ROSTERS = [PRE_GMAIL_SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
   PRE_GMAIL_SCRIPTS.filter(name => !['workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
-  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS, X_CONFIGURATION_SCRIPTS];
+  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS, X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;

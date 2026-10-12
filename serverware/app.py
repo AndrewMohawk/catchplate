@@ -351,6 +351,7 @@ _CREDENTIAL_LEASE_REQUEST_MAX_BYTES = 96 * 1024
 _CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES = 64 * 1024
 _STATIC_CURRENTNESS_REQUEST_MAX_BYTES = 128 * 1024
 _CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY = "serverware.credential-lease-original"
+_OPERATOR_X_LEASE_DEADLINE_SCOPE_KEY = "serverware.operator-x-lease-deadline"
 _CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY = "serverware.credential-currentness-original"
 _RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES = 512 * 1024
 _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
@@ -385,6 +386,7 @@ _OPERATOR_CATALOG_BODY_POST_PATHS = frozenset({
     "/api/operator-demo/access-rules/npm-publish",
     "/api/operator-demo/access-rules/npm-install",
     "/api/operator-demo/access-rules/x-username",
+    "/api/operator-demo/access-rules/x-post",
     "/api/operator-demo/access-rules/alchemy-chain-status",
     "/api/operator-demo/oauth/google/disconnect",
     "/api/operator-demo/oauth/google/reauthorize",
@@ -394,6 +396,8 @@ _OPERATOR_CATALOG_BODY_POST_PATHS = frozenset({
     "/api/operator-demo/oauth/google/configuration/v2",
     "/api/operator-demo/oauth/google/configuration/v2/cancel",
     "/api/operator-demo/oauth/x/configuration/v1",
+    "/api/operator-demo/oauth/x/start",
+    "/api/operator-demo/oauth/x/disconnect",
     "/api/operator-demo/oauth/google/start",
     "/api/operator-demo/proxy/upstreams",
     "/api/operator-demo/proxy/upstreams/cancel",
@@ -5296,6 +5300,10 @@ async def _bounded_exact_data_plane_model(
 async def _bounded_credential_lease_request(
     request: Request,
 ) -> CredentialLeaseRequest | NativeCurrentCredentialLeaseRequest:
+    # One server-side budget starts before body admission and survives X
+    # refresh/identity verification. It is not a renewed token or lease TTL;
+    # the proxy independently retains its original end-to-end deadline.
+    x_deadline = time.monotonic() + 10.0
     wire = await _bounded_exact_data_plane_model(
         request,
         model_type=CredentialLeaseWireRequest,
@@ -5304,6 +5312,7 @@ async def _bounded_credential_lease_request(
         label="credential lease request",
         capture_original_key=_CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY,
     )
+    request.scope[_OPERATOR_X_LEASE_DEADLINE_SCOPE_KEY] = (wire.root, x_deadline)
     return wire.root
 
 
@@ -16351,6 +16360,19 @@ def _operator_google_reauthorization_response(operation, cookie_name: str | None
     return response
 
 
+@app.get("/api/oauth/callback/x")
+async def operator_x_callback(request: Request, code: str | None = None,
+        state: str | None = None, error: str | None = None,
+        error_description: str | None = None):
+    from serverware import operator_demo, operator_x_accounts_api
+    if operator_demo.active():
+        return await operator_x_accounts_api.callback(request)
+    # The separately admitted generic/native owner is unchanged. Ordinary X
+    # never falls back to this path or adopts its global provider settings.
+    return await asyncio.to_thread(oauth_callback, "x", request, code=code, state=state,
+        error=error, error_description=error_description)
+
+
 @app.get("/api/oauth/callback/{provider_id}")
 def oauth_callback(
     provider_id: str,
@@ -18993,13 +19015,27 @@ def _broker_credential_for_lease(credential_id: str) -> dict[str, Any] | None:
 
 
 def _credential_for_lease(
-    credential_id: str, *, allow_legacy_oauth: bool = True, allow_github_app: bool = False
+    credential_id: str, *, allow_legacy_oauth: bool = True, allow_github_app: bool = False,
+    allow_x: bool = False, expected_version: int | None = None, deadline: float | None = None,
+    principal_id: str | None = None, route_id: str | None = None, policy_hash: str | None = None,
 ) -> dict[str, Any] | None:
     from serverware import oauth_application_owner
     if oauth_application_owner.require_started() is not None:
         raise HTTPException(status_code=503, detail="enrolled credentials require the current fenced lease opening")
     from serverware import operator_github_app
     public = db.get_credential(credential_id, include_secret=False)
+    from serverware import operator_x_refresh
+    if public is not None and operator_x_refresh.selected(public):
+        if allow_x is not True:
+            raise HTTPException(status_code=409, detail="X account credential dispatch is unavailable")
+        try:
+            # Only the retained X owner may open/refresh its token material.
+            # The generic OAuth loop below must never see this marker.
+            return operator_x_refresh.prepare_for_lease(credential_id, expected_version,
+                principal_id=principal_id, route_id=route_id, policy_hash=policy_hash,
+                deadline=deadline)
+        except Exception:
+            raise HTTPException(status_code=503, detail="X account refresh is unavailable; inspect retained status") from None
     if public is not None and operator_github_app.selected(public):
         if allow_github_app is not True:
             raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
@@ -19018,6 +19054,8 @@ def _credential_for_lease(
             credential = runtime.get_control_plane_credential(credential_id)
             if credential is not None and operator_github_app.selected(credential):
                 raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
+            if credential is not None and operator_x_refresh.selected(credential):
+                raise HTTPException(status_code=409, detail="X account credential changed during dispatch preparation")
             if not credential or credential.get("kind") != "oauth2":
                 return credential
             metadata = credential.get("metadata")
@@ -19045,6 +19083,8 @@ def _credential_for_lease(
                 credential = runtime.get_control_plane_credential(credential_id)
                 if credential is not None and operator_github_app.selected(credential):
                     raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
+                if credential is not None and operator_x_refresh.selected(credential):
+                    raise HTTPException(status_code=409, detail="X account credential changed during dispatch preparation")
                 if not credential:
                     return None
                 metadata = credential.get("metadata")
@@ -20488,6 +20528,14 @@ def data_plane_credential_leases(
         dispatch_authority = _assert_credential_lease_release_authorization(
             payload, route=route
         )
+        x_oauth_allowed = (github_app_allowed and not bound_dispatch
+            and payload.api_version == "serverware.credentialLeaseRequest/v3"
+            and dispatch_authority == {"controlled": False, "issuanceKind": None,
+                "requestAuthority": None, "requestAuthoritySha256": None, "releaseAuthorization": None})
+        x_deadline_context = request.scope.get(_OPERATOR_X_LEASE_DEADLINE_SCOPE_KEY)
+        x_deadline = (x_deadline_context[1] if type(x_deadline_context) is tuple
+            and len(x_deadline_context) == 2 and x_deadline_context[0] is payload
+            and type(x_deadline_context[1]) is float else None)
         release_authorization = dispatch_authority["releaseAuthorization"]
         request_authority = dispatch_authority["requestAuthority"]
         if refresh_opening is not None:
@@ -20595,7 +20643,10 @@ def data_plane_credential_leases(
                 else _broker_credential_for_lease(payload.credential_id)
                 if broker
                 else _credential_for_lease(payload.credential_id,
-                    allow_legacy_oauth=currentness_opening is None, allow_github_app=github_app_allowed)
+                    allow_legacy_oauth=currentness_opening is None, allow_github_app=github_app_allowed,
+                    allow_x=x_oauth_allowed, expected_version=payload.expected_credential_version,
+                    principal_id=payload.principal_id, route_id=payload.route_id,
+                    policy_hash=payload.policy_hash, deadline=x_deadline)
             )
             if not prepared_credential:
                 raise HTTPException(
@@ -20620,8 +20671,11 @@ def data_plane_credential_leases(
                     payload.expected_metadata_sha256 or "",
                 )
             ):
-                from serverware import operator_google_lease_reconciliation
-                no_envelope = operator_google_lease_reconciliation.pre_encryption_generation_conflict(
+                from serverware import operator_google_lease_reconciliation, operator_x_refresh
+                from serverware import operator_x_lease_reconciliation
+                reconciliation = (operator_x_lease_reconciliation if operator_x_refresh.selected(prepared_credential)
+                    else operator_google_lease_reconciliation)
+                no_envelope = reconciliation.pre_encryption_generation_conflict(
                     request, payload, prepared_credential=prepared_credential,
                     prepared_metadata_sha256=prepared_metadata_sha256,
                     request_binding_sha256=request_binding_sha256,
@@ -20635,7 +20689,7 @@ def data_plane_credential_leases(
                     # audit storage must not nest a second SQLite writer in it.
                     _record_credential_lease_audit("rejected", payload,
                         authenticated=authenticated, status_code=409,
-                        reason=operator_google_lease_reconciliation.REASON)
+                        reason=reconciliation.REASON)
                     return Response(content=no_envelope, status_code=409,
                         media_type="application/json", headers={"Cache-Control": "no-store"})
                 raise HTTPException(
@@ -20738,6 +20792,25 @@ def data_plane_credential_leases(
                     status_code=404, detail="requested credential became unavailable"
                 )
             github_app_current = operator_github_app.selected(current_credential)
+            from serverware import operator_x_refresh
+            x_oauth_current = operator_x_refresh.selected(current_credential)
+            if x_oauth_current:
+                if not x_oauth_allowed or x_deadline is None or time.monotonic() >= x_deadline:
+                    raise HTTPException(status_code=409, detail="X account lease admission or deadline unavailable")
+                try:
+                    from contextlib import closing
+                    from serverware import operator_catalog_x_oauth
+                    # The outer mutation snapshot excludes X publishers. This
+                    # separate connection reads only public account/configuration
+                    # bindings; no HTTP, refresh or client-secret opening here.
+                    with closing(db.connect()) as x_connection:
+                        x_connection.execute("PRAGMA query_only=ON")
+                        x_connection.execute("BEGIN")
+                        operator_catalog_x_oauth.require_lease_binding(x_connection,
+                            principal_id=payload.principal_id, route_id=payload.route_id,
+                            credential_id=payload.credential_id, core_credential=current_credential)
+                except Exception:
+                    raise HTTPException(status_code=409, detail="X account lease binding unavailable") from None
             if (github_app_current and not github_app_allowed
                     or github_app_prepared and not github_app_current):
                 raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
@@ -20880,6 +20953,8 @@ def data_plane_credential_leases(
                 )
             if refresh_opening is not None:
                 refresh_opening.require_current(current_credential)
+            if x_oauth_current and (x_deadline is None or time.monotonic() >= x_deadline):
+                raise HTTPException(status_code=409, detail="X account lease deadline expired after encryption")
         if dispatch_authority["controlled"]:
             final_snapshot = get_policy_snapshot()
             if final_snapshot is None:
@@ -20958,6 +21033,8 @@ def data_plane_credential_leases(
             currentness_opening.check()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="credential currentness changed before lease output") from exc
+    if x_oauth_current and (x_deadline is None or time.monotonic() >= x_deadline):
+        raise HTTPException(status_code=409, detail="X account lease deadline expired before output")
     return Response(
         content=response_body,
         media_type="application/json",
@@ -29482,6 +29559,7 @@ from serverware import control_plane_workload_identity_routes as _workload_ident
 from serverware import operator_catalog_api as _operator_catalog_api
 from serverware import operator_google_configuration_api as _operator_google_configuration_api
 from serverware import operator_x_configuration_api as _operator_x_configuration_api
+from serverware import operator_x_accounts_api as _operator_x_accounts_api
 from serverware import operator_notification_api as _operator_notification_api
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
@@ -29499,5 +29577,6 @@ _fastapi_app.include_router(_workload_identity_routes.router)
 _fastapi_app.include_router(_operator_catalog_api.router)
 _fastapi_app.include_router(_operator_google_configuration_api.router)
 _fastapi_app.include_router(_operator_x_configuration_api.router)
+_fastapi_app.include_router(_operator_x_accounts_api.router)
 _fastapi_app.include_router(_operator_notification_api.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

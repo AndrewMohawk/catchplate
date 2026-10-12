@@ -80,7 +80,7 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False,
     """
     result = {"ready": False, "policy_hash": None, "loaded_policy_hash": None, "managed_google": None}
     if catalog:
-        result.update(x_available=False, alchemy_available=False, npm_install_available=False)
+        result.update(x_available=False, alchemy_available=False, npm_install_available=False, x_post_available=False)
     try:
         from serverware import operator_google_managed_config as managed
         from serverware import operator_publication as publication
@@ -122,12 +122,16 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False,
             result["alchemy_available"] = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
             from serverware import operator_catalog_npm_install
             result["npm_install_available"] = operator_catalog_npm_install.gate_descriptor_matches(observed.get("operator_npm_install"))
+            from serverware import operator_x_readiness
+            x_observed = operator_x_readiness.observe_health(observed)
+            result["x_post_available"] = (x_observed["ready"] is True
+                and x_observed["policy_hash"] == x_observed["loaded_policy_hash"] == result["policy_hash"])
     except Exception:
         # Never serialize configured paths, ciphertext, secret material or a
         # transport/SQLite error. A failed observer cannot undo a prior commit.
         result["ready"] = False
         if catalog:
-            result.update(x_available=False, alchemy_available=False, npm_install_available=False)
+            result.update(x_available=False, alchemy_available=False, npm_install_available=False, x_post_available=False)
     return result
 
 

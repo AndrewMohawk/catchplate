@@ -7,7 +7,8 @@ provider contact. Replacement and disable are deliberately not implemented.
 """
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime
 import json
 import sqlite3
@@ -93,8 +94,13 @@ def _audit_body(binding):
         "reviewed_revision", "committed_revision", "policy_hash", "profile_binding_digest", "created_at")}
 
 
-def _record(conn, directory):
-    """Exact row/audit/custody bijection, including authenticated key readback."""
+def retained_public_binding(conn):
+    """Original public row/audit binding under the caller's transaction.
+
+    This does not decrypt material, acquire publication locks, inspect the
+    catalog, or authorize provider contact. It is safe for catalog validators
+    already running inside the actual metadata owner.
+    """
     objects = _objects(conn, TABLE)
     audits = conn.execute("SELECT id FROM main.audit_events WHERE event_type=? "
         "OR lower(id) GLOB ? LIMIT 2", (EVENT, _AUDIT_PREFIX + "*")).fetchall()
@@ -143,6 +149,14 @@ def _record(conn, directory):
         and event["event_hash"] == audit_hash(event_id=event_id, event_type=EVENT,
             actor_type="admin", actor_id=event["actor_id"], event_json=event["event_json"],
             prev_event_hash=event["prev_event_hash"], created_at=event["created_at"]))
+    return binding
+
+
+def _record(conn, directory):
+    """Exact row/audit/custody bijection, including authenticated key readback."""
+    binding = retained_public_binding(conn)
+    if binding is None:
+        return None
     owner = admission.admit_owner(binding["owner_id"])
     bound = custody.bind_x(owner, config_version=1, public_profile=binding["public_profile"])
     _require(custody.inspect_public_roster(conn, owner) == ({"schema": custody.SCHEMA,
@@ -157,6 +171,48 @@ def _record(conn, directory):
     finally:
         keys.close_pin(pin)
     return binding
+
+
+@dataclass(frozen=True)
+class _RetainedSelection:
+    """Private existing material, not consent, dispatch or mutation authority."""
+    record: dict = field(repr=False)
+    profile: profiles.Profile = field(repr=False)
+    client_secret: str = field(repr=False)
+    key_pin: keys.KeyAdmission = field(repr=False)
+
+
+@contextmanager
+def _retained_selection(conn, directory):
+    """Select the immutable configured client; never initialize or fall back.
+
+    Enter only inside the caller's admitted database transaction. The caller
+    may close that transaction before provider I/O while this context retains
+    the exact key descriptor. Recheck the pin before each effect; this context
+    also rechecks and closes it on exit. Public callers must not serialize the
+    returned selection or its private material.
+    """
+    pin = None
+    try:
+        admission.check_connection(conn, directory)
+        record = _record(conn, directory)
+        _require(record is not None)
+        profile = profiles.parse_profile(record["public_profile"])
+        owner = admission.admit_owner(record["owner_id"])
+        bound = custody.bind_x(owner, config_version=record["config_version"],
+            public_profile=record["public_profile"])
+        pin = keys.read_existing_pinned(directory, owner.owner_id)
+        private = custody.read_secret(conn, owner, bound, key=pin.material)
+        profiles.validate_client_secret(private.secret)
+        keys.check_pin(pin)
+        admission.check_connection(conn, directory)
+        yield _RetainedSelection(json.loads(_canonical(record)), profile, private.secret, pin)
+    finally:
+        if pin is not None:
+            try:
+                keys.check_pin(pin)
+            finally:
+                keys.close_pin(pin)
 
 
 def _snapshot(conn, directory):
@@ -296,7 +352,15 @@ def configure(payload, actor_id):
             # no permission to repeat the POST. The actor can recover by GET.
             keys.check_pin(pin)
             _require(publication._database_identity(descriptor) == identity)
-            return result
+        # Publication is derived from the committed row, never a second save.
+        # Its failure leaves readiness false; startup can materialize the same
+        # retained record. Discovery and operation GETs remain read-only.
+        try:
+            from serverware import operator_demo_store
+            operator_demo_store.materialize()
+        except Exception:
+            pass
+        return result
     except catalog.CatalogConflict:
         raise
     except Exception:

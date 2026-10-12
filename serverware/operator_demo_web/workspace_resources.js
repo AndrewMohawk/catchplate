@@ -41,6 +41,7 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isXPostRule(rule)) { renderXPostCompatibility(id); return; }
   if (isAlchemyRule(rule)) { renderAlchemyCompatibility(id); return; }
   if (isXRule(rule)) { renderXCompatibility(id); return; }
   if (isNpmInstallRule(rule)) { renderNpmInstallCompatibility(id); return; }
@@ -92,6 +93,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isXPostRule(rule)) return xPostRuleRestrictions(rule);
   if (isAlchemyRule(rule)) return alchemyRuleRestrictions(rule);
   if (isXRule(rule)) return xRuleRestrictions(rule);
   if (isNpmInstallRule(rule)) return npmInstallRuleRestrictions(rule);
@@ -187,10 +189,11 @@ function operatorAccountActivity(credential, catalog) {
     const rule = catalog.access_rules.find(item => item.id === response.rule_id);
     rows.push(['Response application', app.name + ' (' + app.id + ')'], ['Response access rule', rule.name + ' (' + rule.id + ')']);
   }
-  if (credential.auth_type === 'google_oauth') {
+  if (['google_oauth', 'x_oauth'].includes(credential.auth_type)) {
     const latest = account.last_refresh_outcome === 'success' ? account.last_refresh_success : account.last_refresh_failure;
     if (latest) notes.push('Refresh ' + account.last_refresh_outcome + ' recorded ' + time(latest.recorded_at_epoch_ms));
-    rows.push(['Last recorded refresh success', describe(account.last_refresh_success)], ['Last recorded refresh failure', describe(account.last_refresh_failure)]);
+    rows.push(['Last recorded refresh success', describe(account.last_refresh_success)],
+      ['Last recorded refresh failure', credential.auth_type === 'x_oauth' ? 'Not available from the X observation source' : describe(account.last_refresh_failure)]);
   }
   const observed = notes.length > 0;
   let text = observed ? (credential.status !== 'active' ? 'Historical activity only: ' : '') + notes.join('. ') + '.' :
@@ -361,11 +364,15 @@ function createCredentialsView(workspace, actions = {}) {
     const expiredOpen = element('credentials-list').querySelector('[data-expired-app-access]')?.open;
     for (const credential of catalog.credentials) {
       const google = credential.auth_type === 'google_oauth';
+      const xAccount = isXOAuthCredential(credential);
       const badge = credential.status === 'quarantined' ? 'Quarantined · unusable' : credential.status === 'active' ? 'Saved' : 'Revoked locally';
       const card = google ? operatorGoogleAccountCard(credential, catalog) : resourceCard(credential, badge,
         operatorCredentialUseRows(credential, catalog));
       if (isAwsCredential(credential)) card.dataset.credentialType = 'aws_sigv4_v1';
       if (!google) {
+        if (xAccount) card.append(textNode('p', credential.provider_account + ' · Connected X account. ' +
+          (credential.status === 'active' ? 'Posting requires a separate permission and current paired gate. Saved consent is not proof of current entitlement or refresh health.' :
+            'Unavailable locally. Provider cleanup is confirmed only by its operation result.'), 'small muted'));
         if (isAwsCredential(credential)) card.append(textNode('p', operatorAwsNotice +
           ' AWS validity and permissions have not been tested. No automatic renewal. These credentials cannot be used by applications or generic header rules.', 'small muted'));
         if (isAlchemyCredential(credential)) card.append(textNode('p',
@@ -386,10 +393,13 @@ function createCredentialsView(workspace, actions = {}) {
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');
         for (const [label, value] of [['Credential ID', credential.id], ...(isAwsCredential(credential) ? awsCredentialRows(credential) : [
-          ['Authentication', isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubAppCredential(credential) ? 'GitHub App installation token' : isGithubCredential(credential) ? 'GitHub personal access token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
+          ['Authentication', xAccount ? 'X user account OAuth' : isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubAppCredential(credential) ? 'GitHub App installation token' : isGithubCredential(credential) ? 'GitHub personal access token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
           ['Header name', credential.header_name]]), ['Active rules', String(credential.active_rule_count)],
           ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
         details.append(identity);
+        if (xAccount) for (const [label, value] of [['X account', credential.provider_account], ['X subject', credential.provider_subject],
+          ['OAuth client', credential.oauth_client_id], ['Consent scopes', credential.scopes.join(', ')],
+          ['Permission preset', 'Text-only posting; no daily quota']]) identity.append(textNode('dt', label), textNode('dd', value));
         if (isGithubAppCredential(credential)) {
           const binding = credential.github_app;
           for (const [label, value] of [['GitHub App ID', binding.app_id], ['Installation ID', binding.installation_id],
@@ -401,8 +411,8 @@ function createCredentialsView(workspace, actions = {}) {
         }
         if (Object.hasOwn(credential, 'credential_generation')) {
           const metadata = textNode('dl', undefined, 'metadata'); metadata.dataset.keyReplacementDetails = '';
-          for (const [label, value] of [['Stored key generation', credential.credential_generation === null ? 'Unavailable after local revocation' : String(credential.credential_generation)],
-            ['Last replacement saved', credential.key_replaced_at ? new Date(credential.key_replaced_at).toLocaleString() : 'No replacement recorded']])
+          for (const [label, value] of [[xAccount ? 'Credential generation' : 'Stored key generation', credential.credential_generation === null ? 'Unavailable after local revocation' : String(credential.credential_generation)],
+            ...(!xAccount ? [['Last replacement saved', credential.key_replaced_at ? new Date(credential.key_replaced_at).toLocaleString() : 'No replacement recorded']] : [])])
             metadata.append(textNode('dt', label), textNode('dd', value));
           details.append(metadata);
         }
@@ -414,7 +424,12 @@ function createCredentialsView(workspace, actions = {}) {
         button.disabled = workspace.state.busy || workspace.state.uncertain;
         button.addEventListener('click', () => actions.reauthorize(credential.id)); card.append(button);
       }
-      if (credential.status === 'active' && !google) {
+      if (xAccount && ['active', 'quarantined'].includes(credential.status) && typeof actions.disconnectX === 'function') {
+        const button = textNode('button', 'Review X disconnect', 'secondary'); button.dataset.action = 'disconnect-x';
+        button.disabled = workspace.state.busy || workspace.state.uncertain;
+        button.addEventListener('click', () => actions.disconnectX(credential.id)); card.append(button);
+      }
+      if (credential.status === 'active' && !google && !xAccount) {
         if (awsReplaceAvailable(catalog, credential)) {
           const replace = textNode('button', 'Replace AWS credentials', 'secondary'); replace.dataset.action = 'replace-aws-credentials';
           replace.disabled = workspace.state.busy || workspace.state.uncertain;
@@ -570,7 +585,7 @@ function createAccessRulesView(workspace) {
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Connect an app; AWS storage cannot grant access');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Connect an app; AWS storage cannot grant access');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

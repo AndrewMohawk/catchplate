@@ -9337,6 +9337,15 @@ impl ShadowRuntime {
         }
     }
 
+    pub(crate) fn operator_x_profile(&self, snapshot: &Snapshot,
+        scope: &super::CredentialLeaseScope)
+        -> Result<Option<Arc<super::operator_x_profile::Profile>>, String> {
+        match &self.operator_demo {
+            Some(profile) => profile.x_profile(snapshot, scope),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn operator_effect_permit(&self, snapshot: &Snapshot, route_id: &str)
         -> Result<Option<super::operator_demo::EffectPermit>, String> {
         self.operator_demo.as_ref().map(|profile| profile.effect(snapshot, route_id)).transpose()
@@ -9354,7 +9363,20 @@ impl ShadowRuntime {
 
     pub(crate) fn prepare_operator_reload(&self, previous: &Snapshot, next: &Snapshot)
         -> Result<Option<super::operator_demo::PreparedReload>, String> {
-        self.operator_demo.as_ref().map(|profile| profile.prepare_reload(previous, next)).transpose()
+        self.prepare_operator_reload_with_publication(previous, next, None)
+    }
+
+    pub(crate) fn prepare_operator_reload_with_publication(&self, previous: &Snapshot, next: &Snapshot,
+        publication: Option<&super::operator_audit_publication::Permit<'_>>)
+        -> Result<Option<super::operator_demo::PreparedReload>, String> {
+        self.operator_demo.as_ref().map(|profile|
+            profile.prepare_reload_with_publication(previous, next, publication)).transpose()
+    }
+
+    pub(crate) fn operator_configuration_changed(&self,
+        publication: Option<&super::operator_audit_publication::Permit<'_>>) -> Result<bool, String> {
+        self.operator_demo.as_ref().map(|profile| profile.configuration_changed(publication))
+            .transpose().map(|changed| changed.unwrap_or(false))
     }
 
     pub(crate) fn commit_operator_reload(&self, prepared: Option<super::operator_demo::PreparedReload>)

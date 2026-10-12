@@ -63982,6 +63982,14 @@ def _refuse_generic_github_app_credential(kind, metadata=None, secret=None) -> N
         raise MetadataStoreError("GitHub App credentials require the operator catalog lifecycle")
 
 
+def _refuse_generic_operator_x_account(metadata) -> None:
+    if isinstance(metadata, dict) and (
+        "operator_x_account" in metadata or metadata.get("auth_type") == "x_oauth"
+        or metadata.get("connection_type") == "x_user_oauth_v1"
+    ):
+        raise MetadataStoreError("Operator X accounts require their retained lifecycle")
+
+
 def _refuse_retained_operator_aws_identity(conn: Any, item_id: str) -> None:
     """A retained provider-owned identity is not a generic upsert slot."""
     if metadata_uses_postgres():
@@ -63996,6 +64004,7 @@ def _refuse_retained_operator_aws_identity(conn: Any, item_id: str) -> None:
             if isinstance(record, dict):
                 _refuse_generic_aws_credential(record.get("auth_type"), record)
                 _refuse_generic_github_app_credential(record.get("auth_type"), record)
+                _refuse_generic_operator_x_account(record)
 
 
 def create_credential(
@@ -64015,6 +64024,7 @@ def create_credential(
 ) -> dict[str, Any]:
     _refuse_generic_aws_credential(kind, metadata)
     _refuse_generic_github_app_credential(kind, metadata, secret)
+    _refuse_generic_operator_x_account(metadata)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     operation = (_oauth_application_operation(metadata, _application_operation)
@@ -66513,6 +66523,7 @@ def _queue_superseded_oauth_secret(
     ):
         raise ManagedOAuthCredentialError("Operator Google cleanup work cannot be copied")
     metadata = loads(credential_row["metadata"], {})
+    _refuse_generic_operator_x_account(metadata)
     provider_id, _, _ = validate_managed_oauth_account_identity(metadata)
     if provider_id == "google":
         raise ManagedOAuthCredentialError(
@@ -67305,6 +67316,7 @@ def upsert_credential_with_id(
 ) -> dict[str, Any]:
     _refuse_generic_aws_credential(kind, metadata)
     _refuse_generic_github_app_credential(kind, metadata, secret)
+    _refuse_generic_operator_x_account(metadata)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     load_master_key()
@@ -67419,6 +67431,7 @@ def update_credential(
 ) -> dict[str, Any] | None:
     _refuse_generic_aws_credential(payload.get("kind"), payload.get("metadata"))
     _refuse_generic_github_app_credential(payload.get("kind"), payload.get("metadata"), payload.get("secret"))
+    _refuse_generic_operator_x_account(payload.get("metadata"))
     if "secret" in payload and payload["secret"] is not None:
         payload = {**payload, "secret": validate_credential_secret(payload["secret"])}
     if "metadata" in payload:
@@ -67446,6 +67459,7 @@ def update_credential(
         current_metadata = loads(current["metadata"], {})
         _refuse_generic_aws_credential(current["kind"], current_metadata)
         _refuse_generic_github_app_credential(current["kind"], current_metadata)
+        _refuse_generic_operator_x_account(current_metadata)
         if (
             current["kind"] == "oauth2" or current_metadata.get("oauth") is True
         ) and any(field in payload for field in ("kind", "secret", "metadata")):
@@ -67906,6 +67920,57 @@ def adopt_operator_google_reauthorization(conn, *, operation_id: str, actor_id: 
     reauthorization._require(floor is not None and floor["last_version"] == next_version)
 
 
+def adopt_operator_x_account(conn, *, work_id: str, token, identity) -> dict[str, Any]:
+    """Actual X journal admission and one borrowed-transaction encrypted CAS.
+
+    No generic refresh queue, native writer, success flag or old-token retirement
+    is borrowed. The store reclassifies its retained observations before this
+    write and commits its catalog/intent/audit effects in the same transaction.
+    """
+    from serverware import operator_x_account_store as owner
+    work, _, secret, metadata = owner.adoption_inputs(conn, work_id, token=token, identity=identity)
+    secret = validate_credential_secret(secret)
+    metadata = validate_credential_metadata(metadata)
+    # The dedicated owner already admits ordinary/no-enrolled state and the
+    # retained X application. Global provider_for('x') must remain unconfigured;
+    # it is neither a fallback configuration nor this operation's authority.
+    _oauth_application_secret(secret, metadata)
+    item_id = str(uuid.uuid4()) if work["operation"] == "code" else work["credential_id"]
+    _lock_credential_mutation(conn, item_id)
+    now = iso_now()
+    if work["operation"] == "code":
+        owner._need(conn.execute("SELECT 1 FROM credentials WHERE id=?", (item_id,)).fetchone() is None)
+        generation = _next_credential_generation(conn, item_id)
+        owner._need(generation == 1)
+        encrypted = _envelope_values(item_id, secret, generation)
+        conn.execute("INSERT INTO credentials (id,name,kind,encrypted_secret,encrypted_dek,secret_nonce,"
+            "secret_ciphertext,secret_kek_id,credential_version,secret_updated_at,metadata,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (item_id, work["name"], "oauth2", encrypted["encrypted_secret"],
+            encrypted["encrypted_dek"], encrypted["secret_nonce"], encrypted["secret_ciphertext"],
+            encrypted["secret_kek_id"], generation, encrypted["secret_updated_at"], dumps(metadata), now, now))
+    else:
+        expected = work["generation"]
+        owner._need(type(expected) is int and 1 <= expected < 9_007_199_254_740_990)
+        current = conn.execute("SELECT * FROM credentials WHERE id=?", (item_id,)).fetchone()
+        floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?", (item_id,)).fetchone()
+        owner._need(current is not None and current["kind"] == "oauth2"
+            and current["lifecycle_status"] == "active" and current["credential_version"] == expected
+            and loads(current["metadata"], {}) == work["metadata"] and floor is not None and floor[0] == expected)
+        generation = expected + 1
+        encrypted = _envelope_values(item_id, secret, generation)
+        owner._need(conn.execute("UPDATE credentials SET encrypted_secret=?,encrypted_dek=?,secret_nonce=?,"
+            "secret_ciphertext=?,secret_kek_id=?,credential_version=?,secret_updated_at=?,metadata=?,updated_at=? "
+            "WHERE id=? AND credential_version=? AND lifecycle_status='active'",
+            (encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+            encrypted["secret_ciphertext"], encrypted["secret_kek_id"], generation, encrypted["secret_updated_at"],
+            dumps(metadata), now, item_id, expected)).rowcount == 1)
+        _record_credential_generation(conn, item_id, generation)
+    floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?", (item_id,)).fetchone()
+    owner._need(floor is not None and floor[0] == generation)
+    owner._live(work)
+    return row_to_credential(conn.execute("SELECT * FROM credentials WHERE id=?", (item_id,)).fetchone())
+
+
 def update_credential_secret_if_version(
     item_id: str,
     *,
@@ -67917,6 +67982,7 @@ def update_credential_secret_if_version(
 ) -> tuple[dict[str, Any] | None, bool]:
     _refuse_generic_aws_credential(None, metadata)
     _refuse_generic_github_app_credential(None, metadata, secret)
+    _refuse_generic_operator_x_account(metadata)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     if expected_version < 1:
@@ -67932,6 +67998,7 @@ def update_credential_secret_if_version(
             return None, False
         _refuse_generic_aws_credential(current["kind"], loads(current["metadata"], {}))
         _refuse_generic_github_app_credential(current["kind"], loads(current["metadata"], {}))
+        _refuse_generic_operator_x_account(loads(current["metadata"], {}))
         if str(current["lifecycle_status"] or "active") != "active":
             return None, False
         current_version = int(current["credential_version"] or 1)
@@ -68118,6 +68185,7 @@ def begin_oauth_credential_disconnect(item_id: str) -> dict[str, Any]:
         if row is None:
             return {"ok": False, "reason": "credential_not_found"}
         metadata = loads(row["metadata"], {})
+        _refuse_generic_operator_x_account(metadata)
         if row["kind"] != "oauth2" and metadata.get("oauth") is not True:
             return {"ok": False, "reason": "credential_not_managed_oauth"}
         (
@@ -68178,6 +68246,7 @@ def finish_oauth_credential_disconnect(
         if row is None:
             return {"ok": False, "reason": "credential_not_found"}
         metadata = loads(row["metadata"], {})
+        _refuse_generic_operator_x_account(metadata)
         (
             provider_id,
             provider_subject,

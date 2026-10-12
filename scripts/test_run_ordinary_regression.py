@@ -25,6 +25,24 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
         self.assertIn("test_operator_notification_google_events.py", paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
+        x_backend = {"test_operator_x_accounts_api.py", "test_operator_x_transport.py",
+            "test_operator_x_refresh.py", "test_operator_x_lease_reconciliation.py",
+            "test_operator_x_lease_boundary.py", "test_operator_x_secret_boundary.py",
+            "test_operator_x_readiness.py"}
+        x_ui = {"test_operator_x_accounts_ui.cjs", "test_operator_x_configuration_ui.mjs"}
+        self.assertEqual({row.script for row in runner.SUITES if row.script.startswith("test_operator_x_")},
+            x_backend | x_ui)
+        for row in runner.SUITES:
+            if row.script in x_backend:
+                self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
+                    ("backend", "python", (), 240))
+            elif row.script in x_ui:
+                self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
+                    ("ui_contract", "node", (), 60))
+        for excluded in ("test_operator_x_lifecycle_connected.py", "test_operator_x_configuration_connected.py",
+                "test_operator_x_browser.cjs"):
+            self.assertNotIn(excluded, paths)
+        self.assertEqual((runner.MAX_SECONDS, runner.MAX_OUTPUT_BYTES), (900, 100 * 1024))
         for row in runner.SUITES:
             self.assertTrue((runner.ROOT / "scripts" / row.script).is_file())
             self.assertTrue(row.script.startswith("test_"))
@@ -136,6 +154,10 @@ class RunnerTests(unittest.TestCase):
             "test_operator_npm_install_ui.cjs": (common, "PASS fixture\n"),
             "test_operator_github_app_ui.mjs": ({"ok": True, "network": False, "browser": False, "provider": False,
                 "scope": "actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance"}, "PASS fixture\n"),
+            "test_operator_x_accounts_ui.cjs": ({"ok": True, "browser": False, "network": False,
+                "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"}, "PASS fixture\n"),
+            "test_operator_x_configuration_ui.mjs": ({"ok": True, "browser": False, "network": False,
+                "scope": "actual JS with inert DOM and independent synthetic API DTOs; not backend, browser or provider acceptance"}, "PASS fixture\n"),
         }
         for script, (shape, prefix) in examples.items():
             def wire(value):
@@ -146,6 +168,12 @@ class RunnerTests(unittest.TestCase):
                 for changed in ({**valid, "groups": 0}, {**valid, "groups": True}, {**valid, "groups": 1.0},
                         {**valid, "ok": False}, {**valid, "skipped": 1}, {**valid, "secret": "canary"}):
                     self.assertIsNone(runner.node_completion(script, wire(changed)))
+                for key in shape:
+                    self.assertIsNone(runner.node_completion(script, wire({name: value for name, value in valid.items()
+                        if name != key})))
+                    if key in {"browser", "network"}:
+                        self.assertIsNone(runner.node_completion(script, wire({**valid, key: True})))
+                        self.assertIsNone(runner.node_completion(script, wire({**valid, key: 0})))
                 self.assertIsNone(runner.node_completion(script, b""))
                 self.assertIsNone(runner.node_completion(script, wire(valid) + b"extra\n"))
                 self.assertIsNone(runner.node_completion(script, wire(valid).replace(b'"groups": 1', b'"groups": 1,"groups": 1')))

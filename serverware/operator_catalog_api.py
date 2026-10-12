@@ -25,7 +25,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials/alchemy-key", "/credentials/github-app", "/credentials/github-app/replace-key",
     "/credentials/aws-sigv4", "/credentials/aws-sigv4/replace",
     "/applications/rotate-token", "/applications/proxy-authentication",
-    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username",
+    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username", "/access-rules/x-post",
     "/access-rules/alchemy-chain-status", "/access-rules/npm-install",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
@@ -339,6 +339,11 @@ async def create_x_rule(request: Request, identity: auth.AdminIdentity = Depends
 @router.post("/access-rules/alchemy-chain-status")
 async def create_alchemy_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "AlchemyChainStatusRuleInput", "create_alchemy_rule", 4096, created=True)
+
+
+@router.post("/access-rules/x-post")
+async def create_x_post_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "XPostRuleInput", "create_x_post_rule", 4096, created=True)
 
 
 async def _google_disconnect_result(function, *args, accepted: bool = False) -> JSONResponse:

@@ -197,6 +197,9 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
     from serverware import operator_catalog_aws
     if operator_catalog_aws.selected(credential):
         raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
+    from serverware import operator_catalog_x_oauth, operator_catalog_x_post
+    if operator_catalog_x_oauth.selected(credential):
+        operator_catalog_x_post.validate_rule(rule, credential)
     mode = rule.get('credential_input', 'insert')
     if mode == 'insert':
         if 'placeholder' in rule:
@@ -204,10 +207,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
         return None
     if mode != 'replace_exact':
         raise CatalogIntegrityError('catalog credential input mode refused')
-    if credential.get('auth_type') not in {'bearer', 'header', 'google_oauth'}:
+    if credential.get('auth_type') not in {'bearer', 'header', 'google_oauth', 'x_oauth'}:
         raise CatalogIntegrityError('catalog replacement credential type refused')
     from serverware.policy_bundle import PolicyBundleError, validate_credential_header_replacement
-    injection = {'type': 'bearer', 'header': 'Authorization'} if credential.get('auth_type') in {'bearer', 'google_oauth'} else {
+    injection = {'type': 'bearer', 'header': 'Authorization'} if credential.get('auth_type') in {'bearer', 'google_oauth', 'x_oauth'} else {
         'type': 'header', 'name': credential.get('header_name'), 'prefix': ''}
     try:
         return validate_credential_header_replacement(
@@ -218,6 +221,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
+    from serverware import operator_catalog_x_post
+    if operator_catalog_x_post.selected(rule):
+        operator_catalog_x_post.validate_shape(rule)
+        return None, operator_catalog_x_post.RESPONSE_MODE
     from serverware import operator_catalog_npm_install
     if operator_catalog_npm_install.selected(rule):
         operator_catalog_npm_install.validate_shape(rule)
@@ -263,6 +270,10 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     from serverware import operator_catalog_aws
     if operator_catalog_aws.selected(credential):
         raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
+    from serverware import operator_catalog_x_oauth, operator_catalog_x_post
+    if operator_catalog_x_post.selected(rule) or operator_catalog_x_oauth.selected(credential):
+        operator_catalog_x_post.validate_rule(rule, credential)
+        return None
     request_mode, _ = rule_content_modes(rule)
     from serverware import operator_catalog_npm_install
     if operator_catalog_npm_install.selected(rule):
@@ -295,6 +306,13 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
 
 def validate_static_connection(record: dict, metadata: dict | None = None) -> bool:
     """Closed dispatch keeps generic credentials unmarked and retained unchanged."""
+    from serverware import operator_catalog_x_oauth
+    if operator_catalog_x_oauth.selected(record) or (type(metadata) is dict
+            and operator_catalog_x_oauth.MARKER in metadata):
+        operator_catalog_x_oauth.validate_identity(record)
+        if metadata is not None:
+            operator_catalog_x_oauth.validate_account_metadata(metadata)
+        return True
     from serverware import github_app_boundary, operator_github_app
     if (github_app_boundary.selected(record.get('auth_type'), record)
             or github_app_boundary.selected(None, metadata)):
@@ -336,6 +354,13 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
     catalog = read_catalog(conn) if catalog is None else catalog
     credentials = {row['id']: row for row in catalog['credentials']}
     applications = {row['id']: row for row in catalog['applications']}
+    from serverware import operator_catalog_x_oauth
+    x_configuration = None
+    if any(operator_catalog_x_oauth.selected(row) for row in credentials.values()):
+        from serverware import operator_x_configuration
+        x_configuration = operator_x_configuration.retained_public_binding(conn)
+        if x_configuration is None:
+            raise CatalogIntegrityError('retained X account configuration unavailable')
     for collection in _TABLES:
         reserved_identifiers(conn, collection)
         rows = catalog[collection]
@@ -345,11 +370,16 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
             statuses = {'active', 'revoked'}
             if collection == 'credentials' and row.get('auth_type') == 'google_oauth':
                 statuses = {'active', 'quarantined'}
+            if collection == 'credentials' and operator_catalog_x_oauth.selected(row):
+                statuses = {'active', 'quarantined', 'revoked'}
             if (row.get('status') not in statuses or not isinstance(row.get('name'), str) or not row['name']
                     or type(row.get('version')) is not int or row['version'] < 1):
                 raise CatalogIntegrityError('catalog resource state refused')
     for identifier, row in credentials.items():
         validate_static_connection(row)
+        x_account = operator_catalog_x_oauth.selected(row)
+        if x_account:
+            operator_catalog_x_oauth.validate_configuration_binding(row, x_configuration)
         core = conn.execute('SELECT id,name,kind,metadata,lifecycle_status FROM credentials WHERE id=?', (identifier,)).fetchone()
         if 'key_replaced_at' in row:
             try:
@@ -371,6 +401,12 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
                 operator_catalog_google.validate_quarantined_record(row, core, profile=metadata_profile)
             else:
                 operator_catalog_google.validate_record(row, core, profile=metadata_profile)
+            continue
+        if x_account:
+            if row['status'] == 'quarantined':
+                operator_catalog_x_oauth.validate_quarantined_record(row, core)
+            else:
+                operator_catalog_x_oauth.validate_record(row, core)
             continue
         bearer = row.get('auth_type') == 'bearer'
         try:
@@ -421,6 +457,8 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
     operator_catalog_npm_install.validate_route_coexistence(catalog['access_rules'])
     operator_catalog_x.validate_route_coexistence(catalog['access_rules'])
     operator_catalog_alchemy.validate_route_coexistence(catalog['access_rules'])
+    from serverware import operator_catalog_x_post
+    operator_catalog_x_post.validate_route_coexistence(catalog['access_rules'])
 
 
 def initialize(conn) -> None:

@@ -91,6 +91,14 @@ class XUsernameRuleInput(NamedInput):
         return validate_username(value)
 
 
+class XPostRuleInput(NamedInput):
+    """One fixed text-posting permission; daily quota is not available here."""
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["x_text_post_v1"]
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+
 class AlchemyKeyInput(NamedInput):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     secret: str = Field(min_length=1, max_length=8192, repr=False)

@@ -20,7 +20,7 @@ from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
     GithubTokenInput, GithubAppInput, ReplaceGithubAppKeyInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
-    XAppBearerInput, XUsernameRuleInput,
+    XAppBearerInput, XUsernameRuleInput, XPostRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
     AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
@@ -97,7 +97,7 @@ def _policy_observation(state: dict, *, publication_failed: bool = False) -> dic
         if not publication_failed and loaded is not None and loaded == current == state["policy_hash"] else "pending"}
 
 
-def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool]:
+def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool]:
     """One bounded gate read for this catalog response, never a shared cache.
 
     Managed mode retains its before/after configuration and binary checks.
@@ -107,6 +107,7 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool]:
     """
     loaded, current = None, None
     x_available, alchemy_available, npm_install_available = False, False, False
+    x_post_available = False
     try:
         from serverware import operator_catalog_x, operator_catalog_alchemy, operator_catalog_npm_install
         from serverware import operator_google_managed_config as managed
@@ -119,6 +120,7 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool]:
                 loaded = observed["loaded_policy_hash"]
                 x_available, alchemy_available = observed["x_available"], observed["alchemy_available"]
                 npm_install_available = observed["npm_install_available"]
+                x_post_available = observed["x_post_available"]
         else:
             observed = store.loaded_gate_status()
             if type(observed) is dict and observed.get("ok") is True:
@@ -126,23 +128,29 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool]:
                 x_available = operator_catalog_x.gate_descriptor_matches(observed.get("operator_x_app_read"))
                 alchemy_available = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
                 npm_install_available = operator_catalog_npm_install.gate_descriptor_matches(observed.get("operator_npm_install"))
+                from serverware import operator_x_readiness
+                x_observed = operator_x_readiness.observe_health(observed)
+                x_post_available = (x_observed["ready"] is True
+                    and x_observed["policy_hash"] == x_observed["loaded_policy_hash"] == loaded)
         # Starts only after HTTP and any managed snapshots have closed.
         with store._require().metadata_connection() as conn:
             current = _state(conn)["policy_hash"]
     except Exception:
         current = None
         x_available, alchemy_available, npm_install_available = False, False, False
+        x_post_available = False
     active = loaded is not None and loaded == current == state["policy_hash"]
     return ({"policy_hash": state["policy_hash"], "sequence": state["sequence"],
         "loaded_policy_hash": loaded, "activation": "active" if active else "pending"},
-        active and x_available, active and alchemy_available, active and npm_install_available)
+        active and x_available, active and alchemy_available, active and npm_install_available,
+        active and x_post_available)
 
 
 def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
     """Core generations from the SAME catalog snapshot, never a lease/decrypt."""
     result = {}
     for record in catalog["credentials"]:
-        if record["auth_type"] not in {"bearer", "header", "aws_sigv4_v1"}:
+        if record["auth_type"] not in {"bearer", "header", "aws_sigv4_v1", "x_oauth"}:
             continue
         if record["status"] == "revoked":
             result[record["id"]] = None
@@ -170,11 +178,16 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
         if record["auth_type"] == "google_oauth":
             from serverware import operator_catalog_google
             result.update(operator_catalog_google.public_fields(record))
+        elif record["auth_type"] == "x_oauth":
+            from serverware import operator_catalog_x_oauth
+            result.update(operator_catalog_x_oauth.public_fields(record))
+            if static_generations is not None:
+                result["credential_generation"] = static_generations[record["id"]]
         elif static_generations is not None:
             result["credential_generation"] = static_generations[record["id"]]
             if "key_replaced_at" in record:
                 result["key_replaced_at"] = record["key_replaced_at"]
-        if "connection_type" in record:
+        if "connection_type" in record and record["auth_type"] != "x_oauth":
             from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
             from serverware import operator_catalog_aws
             from serverware import operator_github_app
@@ -216,7 +229,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["request_body_mode"] = record["request_body_mode"]
         from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
         from serverware import operator_catalog_npm_install
-        if operator_catalog_npm_install.selected(record):
+        from serverware import operator_catalog_x_post
+        if operator_catalog_x_post.selected(record):
+            result.update(operator_catalog_x_post.public_fields(record))
+        elif operator_catalog_npm_install.selected(record):
             result.update(operator_catalog_npm_install.public_fields(record))
         elif operator_catalog_alchemy.selected(record):
             result.update(operator_catalog_alchemy.public_fields(record))
@@ -638,6 +654,30 @@ def create_x_rule(payload: XUsernameRuleInput, actor_id: str) -> dict:
     return _mutate(payload, actor_id, "access_rules", "access_rule.x_username_created", change)
 
 
+def create_x_post_rule(payload: XPostRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_x_post as x, operator_demo, operator_x_readiness
+    if x.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("X destination is not deployment-allowlisted")
+    observed = x.require_available(payload.expected_policy_hash)
+
+    def change(db, conn, catalog):
+        operator_x_readiness.require_start(conn, observed)
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        record = x.record_fields(payload)
+        x.admit_rule(record, catalog)
+        try:
+            x.validate_rule(record, credential)
+            schema.rule_credential_header(record, credential)
+        except CatalogIntegrityError:
+            raise ValueError("X posting requires an explicitly connected X account") from None
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.x_post_created", change)
+
+
 def create_alchemy_credential(payload: AlchemyKeyInput, actor_id: str) -> dict:
     from serverware import operator_catalog_alchemy as alchemy
     alchemy.require_available(payload.expected_policy_hash)
@@ -766,7 +806,7 @@ def create_npm_install_rule(payload: NpmInstallRuleInput, actor_id: str) -> dict
 def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "credentials", payload.id)
-        if record.get("auth_type") == "google_oauth":
+        if record.get("auth_type") in {"google_oauth", "x_oauth"}:
             # A shared OAuth grant needs provider-aware disconnect and retained
             # cleanup; the static deletion endpoint cannot substitute for it.
             raise CatalogConflict()
@@ -853,9 +893,10 @@ def catalog_status() -> dict:
             "active_max": MAX_ACTIVE_RESOURCES, "retained_max": MAX_RETAINED_RESOURCES} for collection in _RESULT_KEYS}
         observed_activity = operator_catalog_activity.project(
             conn, catalog, observed_at_epoch_ms=time.time_ns() // 1_000_000)
-    observation, x_available, alchemy_available, npm_install_available = _catalog_observation(state)
+    observation, x_available, alchemy_available, npm_install_available, x_post_available = _catalog_observation(state)
     now, settings = time.time_ns() // 1_000_000, operator_demo.settings()
     from serverware import operator_catalog_npm_install
+    from serverware import operator_catalog_x_oauth, operator_catalog_x_post
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
@@ -864,7 +905,8 @@ def catalog_status() -> dict:
         # Source capability, not proof of a deployed gate version. Publication
         # requires the co-versioned request/response/replacement gate (including
         # V2 metadata discard and explicit Basic transport); never downgrade.
-        "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else []),
+        "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else [])
+                + (["x_oauth"] if x_post_available else []),
             "application_proxy_authentication": {"schema": "serverware.operatorProxyAuthentication/v1",
                 "modes": ["bearer", "basic_and_bearer_v1"],
                 "path": "/api/operator-demo/applications/proxy-authentication"},
@@ -872,7 +914,7 @@ def catalog_status() -> dict:
                 "path": "/api/operator-demo/credentials/replace-key", "credential_types": ["bearer", "header"]},
             "aws_credentials": operator_catalog_aws.capability(),
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
-                "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None,
+                "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None or x_post_available,
             "google_oauth": google_oauth,
             "google_disconnect": google_disconnect,
             "google_reauthorization": google_reauthorization,
@@ -880,6 +922,8 @@ def catalog_status() -> dict:
             "github_app": operator_github_app.capability(),
             "github_app_key_replacement": operator_github_app.key_replacement_capability(),
             "x": operator_catalog_x._capability() if x_available else None,
+            "x_oauth": operator_catalog_x_oauth.capability() if x_post_available else None,
+            "x_post": operator_catalog_x_post._capability() if x_post_available else None,
             "alchemy": operator_catalog_alchemy._capability() if alchemy_available else None,
             "npm": operator_catalog_npm.capability(),
             "npm_publish": operator_catalog_npm_publish.capability(),

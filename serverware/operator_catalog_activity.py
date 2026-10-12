@@ -23,7 +23,8 @@ _RELEASE = "data_plane.response.released"
 _BLOCK = "data_plane.response.blocked"
 _REFRESH = "credential.oauth_refreshed"
 _FAILURE = "credential.oauth_refresh_failed"
-_EVENTS = {_START, _RELEASE, _BLOCK, _REFRESH, _FAILURE}
+_X_REFRESH = "operator_catalog.x_oauth.account_refreshed"
+_EVENTS = {_START, _RELEASE, _BLOCK, _REFRESH, _FAILURE, _X_REFRESH}
 _JOIN_FIELDS = ("credential_ref", "credential_version", "principal_id", "route_id",
                 "policy_hash", "request_digest", "operation_digest", "method")
 
@@ -78,7 +79,7 @@ def _indexes(catalog):
             index[row["id"]] = row
         indexes[collection] = index
     credentials, apps, rules = (indexes[key] for key in indexes)
-    if any(row.get("auth_type") not in {"bearer", "header", "google_oauth", "aws_sigv4_v1"}
+    if any(row.get("auth_type") not in {"bearer", "header", "google_oauth", "x_oauth", "aws_sigv4_v1"}
            for row in credentials.values()):
         raise ValueError("catalog evidence identity unavailable")
     principals = [app.get("principal_id") for app in apps.values()]
@@ -202,6 +203,26 @@ def _observation(row, event):
             "credential_version": event["credential_version"]}
 
 
+def _x_refresh_matches(row, event, credential):
+    """Join only the dedicated writer's exact success, not generic uncertainty."""
+    try:
+        binding = credential.get("operator_x_account") if type(credential) is dict else None
+        return (row[3] == "admin" and _uuid(row[1]) and _text(row[4], 256)
+            and type(binding) is dict and credential.get("auth_type") == "x_oauth"
+            and binding.get("schema") == "serverware.operatorXAccountBinding/v1"
+            and set(event) == {"operation_id", "provider", "credential_id", "work_id",
+                "previous_credential_generation", "credential_generation", "revision"}
+            and event["provider"] == "x" and _uuid(event["operation_id"])
+            and event["operation_id"] == binding.get("intent_id")
+            and event["credential_id"] == credential["id"] and _uuid(event["work_id"])
+            and _integer(event["previous_credential_generation"], 1)
+            and _integer(event["credential_generation"], 1)
+            and event["credential_generation"] == event["previous_credential_generation"] + 1
+            and _integer(event["revision"], 1))
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def _response_identity(event):
     return (event.get("component") == "serverware-decision-gate-rs"
             and _uuid(event.get("credential_ref"))
@@ -227,6 +248,19 @@ def _project(conn, catalog, now):
     attempts = {}
     for row in rows:
         _, _, kind, actor_type, actor_id, _, event = row
+        if kind == _X_REFRESH:
+            identifier = event.get("credential_id")
+            credential = credentials.get(identifier) if isinstance(identifier, str) else None
+            if not _x_refresh_matches(row, event, credential):
+                window["invalid_events"] += 1
+            else:
+                account = accounts[identifier]
+                if account["last_refresh_success"] is None:
+                    account["last_refresh_success"] = {"event_id": row[1],
+                        "recorded_at_epoch_ms": row[5], "credential_version": event["credential_generation"]}
+                if account["last_refresh_outcome"] == "unobserved":
+                    account["last_refresh_outcome"] = "success"
+            continue
         if kind in {_REFRESH, _FAILURE}:
             identifier = event.get("credential_id")
             credential = credentials.get(identifier) if isinstance(identifier, str) else None

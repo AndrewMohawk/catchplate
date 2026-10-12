@@ -45,6 +45,7 @@ mod operator_google_profile;
 mod operator_google_managed;
 mod operator_google_reconciliation;
 mod operator_google_preparation;
+mod operator_x_profile;
 mod operator_static_preparation;
 mod operator_background_renewal;
 mod operator_static_preparation_diagnostics;
@@ -15965,7 +15966,8 @@ fn refresh_policy_snapshot_guarded(
             .policy_trust_refresh_due
             .lock()
             .expect("policy trust refresh mutex poisoned");
-    if !force && !trust_refresh_due && !evidence_changed {
+    let operator_configuration_changed = state.policy_shadow.operator_configuration_changed(publication)?;
+    if !force && !trust_refresh_due && !evidence_changed && !operator_configuration_changed {
         let seen = state
             .policy_mtime
             .lock()
@@ -16060,7 +16062,7 @@ fn refresh_policy_snapshot_guarded(
             )?;
             // This separate demo admission is checked under the same guard as
             // the signed monotonic reload. It never authorizes native custody.
-            let operator_reload = state.policy_shadow.prepare_operator_reload(&previous, &snapshot)
+            let operator_reload = state.policy_shadow.prepare_operator_reload_with_publication(&previous, &snapshot, publication)
                 .map_err(|error| {
                     state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
                     enqueue_audit(state, "data_plane.policy.reload_failed", json!({
@@ -16166,6 +16168,13 @@ fn refresh_policy_snapshot_guarded(
                 && previous.response_signing_key_id == next.response_signing_key_id
                 && previous.attested_response_context == next.attested_response_context
             {
+                // X first-save is a public configuration transition, not a new
+                // policy or credential generation. Commit it under the same
+                // publication/dispatch/snapshot guards even for unchanged policy.
+                let current = state.snapshot.write().expect("policy snapshot lock poisoned");
+                if !Arc::ptr_eq(&current, &previous) { return Err("operator reload snapshot changed".into()); }
+                if let Some(permit) = publication { permit.check()?; }
+                state.policy_shadow.commit_operator_reload(operator_reload)?;
                 return Ok(false);
             }
             let (
@@ -51365,6 +51374,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
             "policy_signing_key_id":snapshot.policy_signing_key_id,
             "policy_trust_root_source":state.policy_trust_root_source.label(),
             "operator_x_app_read":x_app_read::gate_capability(),
+            "operator_x_post":operator_x_profile::gate_capability(),
             "operator_alchemy_rpc_read":alchemy_rpc_read::gate_capability(),
             "operator_npm_install":npm_install::gate_capability(),
             "attested_response_context":snapshot.attested_response_context,

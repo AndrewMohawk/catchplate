@@ -85,7 +85,8 @@ def one_read(_request, *, managed=False):
     def previous(state):
         # The exact former three production observations, not a fake result.
         policy = f.mutations._policy_observation(state)
-        return policy, x.capability(state["policy_hash"]) is not None, alchemy.capability(state["policy_hash"]) is not None
+        return (policy, x.capability(state["policy_hash"]) is not None,
+            alchemy.capability(state["policy_hash"]) is not None, False, False)
 
     with observed(f, transport):
         for _ in range(3):

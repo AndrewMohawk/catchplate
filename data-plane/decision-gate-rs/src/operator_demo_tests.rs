@@ -7,6 +7,8 @@ mod publication_integration;
 mod google_reconciliation;
 #[path = "operator_google_release_tests.rs"]
 mod google_release;
+#[path = "operator_x_reload_tests.rs"]
+mod x_reload;
 #[path = "operator_static_preparation_tests.rs"]
 mod static_preparation;
 
@@ -46,6 +48,7 @@ fn profile(snapshot: &Snapshot, deployment: Deployment) -> Profile {
         deployment: Arc::new(deployment),
         google: None,
         managed_google: None,
+        managed_x: None,
         active: Arc::new(RwLock::new(ApprovedPolicy {
             high_water: policy_high_water_for(snapshot),
             targets: BTreeSet::new(),

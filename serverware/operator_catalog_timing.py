@@ -38,7 +38,7 @@ _OPERATIONS = frozenset({
     "revoke_application", "rotate_application_token",
     "set_application_proxy_authentication", "create_rule", "revoke_rule",
     "create_gmail_rule", "create_github_rule", "create_npm_rule",
-    "create_npm_publish_rule", "create_x_credential", "create_x_rule",
+    "create_npm_publish_rule", "create_x_credential", "create_x_rule", "create_x_post_rule",
     "create_alchemy_credential", "create_alchemy_rule",
     "create_aws_credential", "replace_aws_credential",
 })

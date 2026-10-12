@@ -101,8 +101,11 @@ function createXConfigurationView(workspace) {
     element('x-configuration-operation-reference').textContent = operationId || '';
     element('x-configuration-check').disabled = busy || storageBlocked || !operationId || workspace.writeInFlight();
     element('x-configuration-consent').textContent = saved ?
-      'Application settings are saved. Account consent is not available yet; no X account, posting permission or provider access has been verified.' :
-      'Account consent and posting are not available from this configuration panel.';
+      (workspace.state.catalog?.capabilities?.x_oauth ?
+        'Application settings are saved. Connect an X account in Accounts & keys, then grant a separate posting permission. No post or provider-access test was run here.' :
+        'Application settings are saved. Account consent is unavailable until the current paired gate is ready. Saving settings does not connect an account or grant posting.') :
+      'Save application settings first. Account consent and posting permissions are separate steps.';
+    element('x-configuration-account-link').hidden = !saved || !workspace.state.catalog?.capabilities?.x_oauth;
     if (discovery && !current() && !busy && !unresolved())
       say('Workspace state changed. Review X application settings again before saving.');
   }
@@ -110,7 +113,7 @@ function createXConfigurationView(workspace) {
   function summary() {
     if (storageBlocked) return 'The public save reference could not be retained safely. Changes are blocked in this tab; do not repeat an uncertain save.';
     if (unresolved()) return 'Save outcome unconfirmed. Use Check result; do not submit another save. A missing receipt does not prove failure.';
-    if (profile()) return 'X application saved. No restart is required. Account consent remains unavailable; no provider request was made.';
+    if (profile()) return 'X application saved. No restart is required. Account consent and posting are separate; no provider request was made by this save.';
     if (!discovery) return 'X application settings have not been reviewed.';
     if (!current()) return 'Workspace state changed. Review X application settings again before saving.';
     if (discovery.blocked_reason === 'pending_google_configuration') return 'Resolve the pending Google configuration before saving an X application.';

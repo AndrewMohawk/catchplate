@@ -118,6 +118,7 @@ impl Target {
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub(super) struct Deployment {
     origins: BTreeSet<Target>,
     fixture_cidrs: Vec<IpNet>,
@@ -202,6 +203,8 @@ pub(crate) struct Selection {
     deployment: Option<Arc<Deployment>>,
     google: Option<super::operator_google_profile::Profile>,
     managed_google: Option<super::operator_google_managed::Identity>,
+    managed_x: bool,
+    x: Option<super::operator_x_profile::State>,
 }
 
 fn selected(
@@ -256,13 +259,15 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
         forbidden,
     )?;
     let managed = super::operator_google_managed::from_environment(operator)?;
+    let managed_x = super::operator_x_profile::from_environment(operator)?;
     let google = if managed { None }
         else { super::operator_google_profile::Profile::from_environment(operator)? };
     if !operator {
         return Ok(None);
     }
     if managed {
-        return Ok(Some(Selection { deployment: None, google: None, managed_google: None }));
+        return Ok(Some(Selection { deployment: None, google: None, managed_google: None,
+            managed_x, x: None }));
     }
     let deployment = Deployment::parse(
         &env::var("SERVERWARE_OPERATOR_DEMO_UPSTREAMS").map_err(|_| refused())?,
@@ -275,6 +280,8 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
         deployment: Some(Arc::new(deployment)),
         google,
         managed_google: None,
+        managed_x,
+        x: None,
     }))
 }
 
@@ -337,10 +344,12 @@ pub(crate) struct Profile {
     active: Arc<RwLock<ApprovedPolicy>>,
     google: Option<super::operator_google_profile::Profile>,
     managed_google: Option<super::operator_google_managed::Identity>,
+    managed_x: Option<Arc<RwLock<super::operator_x_profile::State>>>,
 }
 pub(crate) struct PreparedReload {
     previous_hash: String,
     approved: ApprovedPolicy,
+    x: Option<super::operator_x_profile::State>,
 }
 
 impl Selection {
@@ -351,6 +360,16 @@ impl Selection {
             self.deployment = Some(Arc::new(configuration.deployment));
             self.google = configuration.google;
             self.managed_google = Some(configuration.identity);
+        }
+        if self.managed_x {
+            let configuration = super::operator_x_profile::load(permit)?;
+            if self.deployment.as_deref() != Some(&configuration.deployment)
+                || self.managed_google.as_ref().is_some_and(|google|
+                    google.status()["effective_settings_digest"].as_str()
+                        != Some(configuration.state.identity.settings_digest())) {
+                return Err(refused());
+            }
+            self.x = Some(configuration.state);
         }
         Ok(self)
     }
@@ -373,7 +392,7 @@ impl Selection {
                 != Some("spiffe://operator-demo.serverware/decision-gate/local")
             || !audit_enabled(state)
             || state.policy_high_water_path.is_none()
-            || (self.google.is_some() && (state.credential_currentness.enabled()
+            || ((self.google.is_some() || self.x.is_some()) && (state.credential_currentness.enabled()
                 || state.credential_lease_recipient_attestation_command.is_some()
                 || state.response_proof_signer.release_profile() != super::ReleaseProfile::Legacy))
         {
@@ -385,6 +404,7 @@ impl Selection {
             deployment,
             google: self.google,
             managed_google: self.managed_google,
+            managed_x: self.x.map(|x| Arc::new(RwLock::new(x))),
             active: Arc::new(RwLock::new(ApprovedPolicy {
                 high_water: policy_high_water_for(&snapshot),
                 targets: BTreeSet::new(),
@@ -398,6 +418,14 @@ impl Selection {
 
 impl Profile {
     fn validate_snapshot(&self, snapshot: &Snapshot) -> Result<ApprovedPolicy, String> {
+        let x = self.managed_x.as_ref().map(|state|
+            state.read().map(|state| state.clone()).map_err(|_| refused())).transpose()?;
+        self.validate_snapshot_with_x(snapshot, x.as_ref())
+    }
+
+    fn validate_snapshot_with_x(&self, snapshot: &Snapshot, x: Option<&super::operator_x_profile::State>)
+        -> Result<ApprovedPolicy, String> {
+        if let Some(x) = x { x.validate_snapshot(snapshot)?; }
         if let Some(google) = &self.google { google.validate_snapshot(snapshot)?; }
         // A disabled managed cold admission cannot acquire Google authority
         // through a later policy-only reload, even if Gmail was already allowed.
@@ -442,7 +470,24 @@ impl Profile {
         previous: &Snapshot,
         next: &Snapshot,
     ) -> Result<PreparedReload, String> {
-        let approved = self.validate_snapshot(next)?;
+        self.prepare_reload_with_publication(previous, next, None)
+    }
+
+    pub(crate) fn prepare_reload_with_publication(
+        &self, previous: &Snapshot, next: &Snapshot,
+        publication: Option<&super::operator_audit_publication::Permit<'_>>,
+    ) -> Result<PreparedReload, String> {
+        let x = if let Some(current) = &self.managed_x {
+            let current = current.read().map_err(|_| refused())?.clone();
+            let configuration = current.reload(publication.ok_or_else(refused)?)?;
+            if configuration.deployment != *self.deployment
+                || self.managed_google.as_ref().is_some_and(|google|
+                    google.status()["effective_settings_digest"].as_str()
+                        != Some(configuration.state.identity.settings_digest())) { return Err(refused()); }
+            current.require_successor(&configuration.state)?;
+            Some(configuration.state)
+        } else { None };
+        let approved = self.validate_snapshot_with_x(next, x.as_ref())?;
         let active = self.active.read().map_err(|_| refused())?;
         if active.high_water.policy_hash != previous.hash {
             return Err(refused());
@@ -451,6 +496,7 @@ impl Profile {
         Ok(PreparedReload {
             previous_hash: previous.hash.clone(),
             approved,
+            x,
         })
     }
 
@@ -459,6 +505,15 @@ impl Profile {
         let mut active = self.active.write().map_err(|_| refused())?;
         if active.high_water.policy_hash != prepared.previous_hash {
             return Err(refused());
+        }
+        match (&self.managed_x, prepared.x) {
+            (Some(current), Some(next)) => {
+                let mut current = current.write().map_err(|_| refused())?;
+                current.require_successor(&next)?;
+                *current = next;
+            }
+            (None, None) => {}
+            _ => return Err(refused()),
         }
         *active = prepared.approved;
         Ok(())
@@ -470,11 +525,31 @@ impl Profile {
             .is_ok_and(|active| active.high_water.policy_hash == policy_hash)
     }
 
+    pub(crate) fn configuration_changed(&self, publication: Option<&super::operator_audit_publication::Permit<'_>>)
+        -> Result<bool, String> {
+        match &self.managed_x {
+            Some(state) => state.read().map_err(|_| refused())?
+                .publication_changed(publication.ok_or_else(refused)?),
+            None => Ok(false),
+        }
+    }
+
     pub(crate) fn google_profile(&self, snapshot: &Snapshot, scope: &super::CredentialLeaseScope)
         -> Result<Option<&super::operator_google_profile::Profile>, String> {
         let Some(google) = &self.google else { return Ok(None); };
         if !self.matches(&snapshot.hash) { return Err(refused()); }
         Ok(if google.scope_admitted(snapshot, scope)? { Some(google) } else { None })
+    }
+
+    pub(crate) fn x_profile(&self, snapshot: &Snapshot, scope: &super::CredentialLeaseScope)
+        -> Result<Option<Arc<super::operator_x_profile::Profile>>, String> {
+        let Some(state) = &self.managed_x else { return Ok(None); };
+        if !self.matches(&snapshot.hash) { return Err(refused()); }
+        let profile = state.read().map_err(|_| refused())?.profile.clone();
+        match profile {
+            Some(profile) if profile.scope_admitted(snapshot, scope)? => Ok(Some(profile)),
+            _ => Ok(None),
+        }
     }
 
     pub(crate) fn status(&self) -> Value {
@@ -490,6 +565,9 @@ impl Profile {
             "operator_policy_sha256":hash, "upstream_origin_count":self.deployment.origins.len()});
         if let Some(identity) = &self.managed_google {
             value["managed_google"] = identity.status();
+        }
+        if let Some(state) = &self.managed_x {
+            value["managed_x"] = state.read().map(|state| state.identity.status()).unwrap_or(Value::Null);
         }
         value
     }

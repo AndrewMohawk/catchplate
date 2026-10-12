@@ -1,4 +1,5 @@
-//! Request-owned freshness preparation for the ordinary Google buffered path.
+//! Shared request-owned freshness for independently admitted ordinary Google/X.
+//! Admission remains provider-disjoint; no Google marker admits an X account.
 //! A canonical decision pins its generation. Audit ACK precedes secret copying;
 //! neither a renewed envelope nor this owner extends an existing send binding.
 use super::*;

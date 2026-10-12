@@ -228,7 +228,14 @@ def materialize() -> None:
             from serverware import operator_google_gate_configuration
             google_configuration = json.dumps(operator_google_gate_configuration.record(conn),
                 sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
-        operator_gate_publication.materialize(raw, google_configuration=google_configuration)
+        from serverware import operator_x_admission
+        x_configuration = None
+        if operator_x_admission.enabled():
+            from serverware import operator_x_gate_configuration
+            x_configuration = json.dumps(operator_x_gate_configuration.record(conn),
+                sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
+        operator_gate_publication.materialize(raw, google_configuration=google_configuration,
+            x_configuration=x_configuration)
 
 
 def get_policy_high_water() -> dict | None:

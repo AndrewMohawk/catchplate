@@ -38,6 +38,8 @@ function isNpmPublishRule(rule) { return rule?.operation_bundle === 'npm_publish
 function isNpmInstallRule(rule) { return rule?.operation_bundle === 'npm_install_v1'; }
 function isXCredential(credential) { return credential?.connection_type === 'x_app_bearer_v1'; }
 function isXRule(rule) { return rule?.operation_bundle === 'x_username_read_v1'; }
+function isXOAuthCredential(credential) { return credential?.auth_type === 'x_oauth' && credential?.connection_type === 'x_user_oauth_v1'; }
+function isXPostRule(rule) { return rule?.operation_bundle === 'x_text_post_v1'; }
 function isAlchemyCredential(credential) { return credential?.connection_type === 'alchemy_key_v1'; }
 function isAlchemyRule(rule) { return rule?.operation_bundle === 'alchemy_chain_status_read_v1'; }
 function isAwsCredential(credential) { return credential?.auth_type === 'aws_sigv4_v1' || credential?.connection_type === 'aws_sigv4_v1'; }
@@ -108,17 +110,19 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
 }
 function operatorRuleContentValid(rule, credential) {
   if (isAwsCredential(credential)) return false; // Stored tuple is not a header credential or a grant.
+  if (rule && ['quota', 'daily_quota'].some(key => Object.hasOwn(rule, key))) return false;
   if (rule && !isAlchemyRule(rule) && Object.hasOwn(rule, 'chain')) return false;
   if (rule && !isXRule(rule) && Object.hasOwn(rule, 'username')) return false;
   if (rule && !isNpmPublishRule(rule) && ['package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
   if (rule && Object.hasOwn(rule, 'operation_bundle')) return isGmailRule(rule) ? gmailRuleValid(rule, credential) :
+    isXPostRule(rule) ? xPostRuleValid(rule, credential) :
     isAlchemyRule(rule) ? alchemyRuleValid(rule, credential) :
     isXRule(rule) ? xRuleValid(rule, credential) :
     isNpmPublishRule(rule) ? npmPublishRuleValid(rule, credential) :
     isNpmInstallRule(rule) ? npmInstallRuleValid(rule, credential) :
     isNpmRule(rule) ? npmRuleValid(rule, credential) :
     typeof isGithubRule === 'function' && isGithubRule(rule) && githubRuleValid(rule, credential);
-  if (['github_token_v1', 'github_app_v1', 'npm_token_v1', 'x_app_bearer_v1', 'alchemy_key_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
+  if (['github_token_v1', 'github_app_v1', 'npm_token_v1', 'x_app_bearer_v1', 'x_user_oauth_v1', 'alchemy_key_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
   if (!rule || !['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers'].every(name =>
       Array.isArray(rule[name]) && rule[name].every(value => typeof value === 'string')) ||
       !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
@@ -135,7 +139,7 @@ function operatorRuleCredentialValid(rule, credential) {
         rule.credential_input === 'insert' && Object.hasOwn(rule, 'placeholder')) return false;
     // Replacement has a stricter target contract than legacy insertion. Do not
     // apply its reserved-header/alias restrictions to an existing insert rule.
-    const bearer = ['bearer', 'google_oauth'].includes(credential?.auth_type);
+    const bearer = ['bearer', 'google_oauth', 'x_oauth'].includes(credential?.auth_type);
     if (bearer ? credential.header_name !== 'Authorization' : credential?.auth_type !== 'header' ||
         typeof credential.header_name !== 'string' || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(credential.header_name)) return false;
     clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential}); return true;
@@ -144,6 +148,8 @@ function operatorRuleCredentialValid(rule, credential) {
 function operatorRuleSupported(rule, catalog) {
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
+  if (isXPostRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
+    xPostRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && xPostAvailable(catalog, credential));
   if (isNpmInstallRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
     npmInstallRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && npmInstallAvailable(catalog, credential));
   if (isAlchemyRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
@@ -272,7 +278,8 @@ function projectObservedAccountActivity(value, credentials, applications, access
     const success = observation(item.last_refresh_success, item.credential_id);
     const failure = observation(item.last_refresh_failure, item.credential_id);
     if ([response, success, failure].includes(undefined) ||
-        credential.auth_type !== 'google_oauth' && (success || failure || item.last_refresh_outcome !== 'unobserved') ||
+        !['google_oauth', 'x_oauth'].includes(credential.auth_type) && (success || failure || item.last_refresh_outcome !== 'unobserved') ||
+        credential.auth_type === 'x_oauth' && (failure || item.last_refresh_outcome === 'failure') ||
         item.last_refresh_outcome === 'unobserved' && (success || failure) ||
         item.last_refresh_outcome === 'success' && (!success || failure && success.recorded_at_epoch_ms < failure.recorded_at_epoch_ms) ||
         item.last_refresh_outcome === 'failure' && (!failure || success && failure.recorded_at_epoch_ms < success.recorded_at_epoch_ms)) return null;
@@ -352,16 +359,18 @@ function projectCatalog(value) {
   const base = ['id', 'name', 'status', 'created_at', 'revoked_at'];
   const project = (items, names, credentialRecords = false) => items.map(item => {
     if (!item || typeof item.id !== 'string' || typeof item.name !== 'string' ||
-        !(['active', 'revoked'].includes(item.status) || credentialRecords && item.auth_type === 'google_oauth' && item.status === 'quarantined'))
+        !(['active', 'revoked'].includes(item.status) || credentialRecords && ['google_oauth', 'x_oauth'].includes(item.auth_type) && item.status === 'quarantined'))
       throw operatorError('Saved resource metadata is incomplete. Refresh before making changes.');
     return {...pick(item, [...base, ...names]), ...(credentialRecords ?
       isAwsCredential(item) ? projectAwsCredential(item) :
+      item.auth_type === 'x_oauth' ? projectXAccount(item) :
       item.auth_type === 'google_oauth' ? projectGoogleAccount(item) : projectStaticKeyMetadata(item) : {})};
   });
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   credentials.forEach((credential, index) => {
     const original = value.credentials[index];
     if (isAwsCredential(original)) return; // Exact non-header tuple projection already validated above.
+    if (original.auth_type === 'x_oauth') return; // Closed account projection is separate from static keys.
     if (Object.hasOwn(original, 'github_app') && !isGithubAppCredential(original))
       throw operatorError('Saved GitHub App marker and binding disagree. Changes are disabled.');
     if (!Object.hasOwn(original, 'connection_type')) return;
@@ -381,7 +390,7 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain'])
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota'])
       if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
   });
   for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';
@@ -415,6 +424,8 @@ function projectCatalog(value) {
   capabilities.npm_publish = value.capabilities?.npm_publish == null ? null : projectNpmPublishCapability(value.capabilities.npm_publish);
   capabilities.npm_install = value.capabilities?.npm_install == null ? null : projectNpmInstallCapability(value.capabilities.npm_install);
   capabilities.x = value.capabilities?.x == null ? null : projectXCapability(value.capabilities.x);
+  capabilities.x_post = value.capabilities?.x_post == null ? null : projectXPostCapability(value.capabilities.x_post);
+  capabilities.x_oauth = value.capabilities?.x_oauth == null ? null : projectXAccountCapability(value.capabilities.x_oauth);
   capabilities.alchemy = value.capabilities?.alchemy == null ? null : projectAlchemyCapability(value.capabilities.alchemy);
   capabilities.aws_credentials = value.capabilities?.aws_credentials == null ? null : projectAwsCapability(value.capabilities.aws_credentials);
   if (capabilities.oauth !== true && (value.capabilities?.google_oauth != null || capabilities.oauth !== undefined && capabilities.oauth !== false))

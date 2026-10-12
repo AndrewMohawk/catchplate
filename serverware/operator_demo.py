@@ -227,6 +227,12 @@ def settings() -> dict:
 
 def request_allowed(method: str, path: str) -> bool:
     from serverware import operator_catalog_oauth_profile as google_profile
+    x_accounts = "/api/operator-demo/oauth/x"
+    if path == "/api/oauth/callback/x" or path in {x_accounts + "/start", x_accounts + "/disconnect"}:
+        from serverware import operator_x_admission
+        if not operator_x_admission.enabled():
+            return False
+        return method.upper() == ("GET" if path == "/api/oauth/callback/x" else "POST")
     x_configuration = "/api/operator-demo/oauth/x/configuration/v1"
     if path == x_configuration:
         return method.upper() in {"GET", "POST"}
@@ -277,6 +283,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/access-rules/npm-publish",
         "/api/operator-demo/access-rules/npm-install",
         "/api/operator-demo/access-rules/x-username",
+        "/api/operator-demo/access-rules/x-post",
         "/api/operator-demo/access-rules/alchemy-chain-status",
         "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",
         "/api/operator-demo/oauth/google/setup/cancel",

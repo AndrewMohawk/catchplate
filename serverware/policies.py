@@ -184,11 +184,15 @@ def inject_credential(flow: Any, route: dict[str, Any]) -> str:
     if not credential_id:
         return "no credential configured"
     public = db.get_credential(credential_id, include_secret=False)
+    if public is not None and isinstance(public.get("metadata"), dict) and "operator_x_account" in public["metadata"]:
+        return "X accounts require the dedicated lease owner"
     if public is not None and github_app_boundary.credential_selected(public):
         return "GitHub App credentials require the dedicated lease owner"
     credential = db.get_credential(credential_id, include_secret=True)
     if not credential:
         return "credential missing"
+    if isinstance(credential.get("metadata"), dict) and "operator_x_account" in credential["metadata"]:
+        return "X accounts require the dedicated lease owner"
     if github_app_boundary.credential_selected(credential):
         return "GitHub App credentials require the dedicated lease owner"
 

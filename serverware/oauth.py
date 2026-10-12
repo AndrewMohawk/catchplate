@@ -1086,6 +1086,10 @@ def refresh_access_token(
     metadata: dict[str, Any],
     now_epoch: int | None = None,
 ) -> dict[str, Any]:
+    if isinstance(metadata, dict) and "operator_x_account" in metadata:
+        # Ordinary retained X accounts have a separate one-shot owner. Never
+        # resolve global X settings or reinterpret their binding as Google.
+        raise OAuthError("Operator X refresh requires its retained account owner")
     provider = provider_for(provider_id)
     if not provider.configured:
         raise OAuthError(f"{provider.display_name} OAuth is not configured")

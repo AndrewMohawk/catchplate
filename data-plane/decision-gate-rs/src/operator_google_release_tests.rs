@@ -15,6 +15,9 @@ const SECRET: &str = r#"{"access_token":"synthetic-google-release-secret"}"#;
 const TARGET: &str = "https://gmail.googleapis.com/resource";
 const WAIT: Duration = Duration::from_secs(3);
 
+#[path = "operator_x_release_tests.rs"]
+mod x_release;
+
 fn google() -> GoogleProfile {
     GoogleProfile::parse(Some("operator-google-v1"), true, Some(CLIENT), Some(CALLBACK))
         .unwrap().unwrap()
@@ -35,7 +38,9 @@ fn generation(snapshot: &Snapshot, version: u64, millis: u64) -> CredentialLease
 }
 
 fn seed(fixture: &Fixture, secret_ms: u64) {
-    let pin = generation(&fixture.snapshot, 7, 60_000);
+    let mut pin = generation(&fixture.snapshot, 7, 60_000);
+    pin.metadata = fixture.authority.metadata();
+    pin.metadata_sha256 = credential_lease_metadata_sha256(&pin.metadata);
     let lease = SecretLease { profile: ReleaseProfile::Legacy, scope: fixture.scope.clone(), version: 7,
         secret: Zeroizing::new(SECRET.into()), metadata: pin.metadata.clone(),
         metadata_sha256: pin.metadata_sha256.clone(), policy_hash: fixture.snapshot.hash.clone(),
@@ -56,10 +61,15 @@ struct Authority {
     pem: String,
     key_id: String,
     binary: String,
+    x: bool,
 }
 
 impl Authority {
     fn new(app_ttl: u64) -> Self {
+        Self::for_provider(app_ttl, false)
+    }
+
+    fn for_provider(app_ttl: u64, x: bool) -> Self {
         let (key, pem, key_id) = response_proof_signing_material().unwrap();
         let mut raw = signed_policy(&key, &key_id, 1, false);
         raw["principals"][0]["proxyAuthorization"]["expiresAtEpochMs"] = json!(now_epoch_ms() + u128::from(app_ttl));
@@ -75,6 +85,19 @@ impl Authority {
         route["adapter"]["config"].as_object_mut().unwrap().remove("noCredentialProof");
         route["adapter"]["config"]["credentialBinding"] = json!({"credentialType":"oauth2", "provider":"google",
             "subjects":[SUBJECT], "clientIds":[CLIENT], "requiredScopes":["https://www.googleapis.com/auth/gmail.readonly"]});
+        if x {
+            use crate::operator_x_profile::tests::{CLIENT, SUBJECT};
+            raw["credentials"] = json!([{"id":"x-account","credentialType":"oauth2","provider":"x",
+                "providerSubject":SUBJECT,"oauthClientId":CLIENT,"scopes":x_post::SCOPES,
+                "injection":{"type":"bearer","header":"Authorization","field":"access_token"}}]);
+            raw["routes"][0] = json!({"id":"route:test","principals":["agent:test"],"credentialRef":"x-account",
+                "credentialHeader":{"mode":"replaceExact","expectedValue":x_post::PLACEHOLDER},
+                "match":{"scheme":"https","host":"api.x.com","port":443,"methods":["POST"],"paths":["/2/tweets"]},
+                "adapter":{"type":x_post::ADAPTER,"config":{"credentialBinding":{"credentialType":"oauth2",
+                    "provider":"x","subjects":[SUBJECT],"clientIds":[CLIENT],"requiredScopes":x_post::SCOPES},
+                    "request":x_post::request_config(),"response":x_post::response_profile(false)}},
+                "constraints":[x_post::envelope("x-envelope")]});
+        }
         let signature = key.sign(canonical_json(&signature_payload(&raw)).as_bytes());
         raw["metadata"]["signature"] = json!(format!("ed25519:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes())));
         let binary = sha256_prefixed(b"synthetic-google-release-gate");
@@ -88,7 +111,19 @@ impl Authority {
             runtime_manifest_digest: sha256_prefixed(b"synthetic-google-release-runtime"),
             policy_bundle_digest: snapshot.hash.clone(), provenance_digest: None,
             image_signatures_digest: None, source_tree_digest: None });
-        Self { raw, snapshot: Arc::new(snapshot), key, pem, key_id, binary }
+        Self { raw, snapshot: Arc::new(snapshot), key, pem, key_id, binary, x }
+    }
+
+    fn metadata(&self) -> BTreeMap<String, Value> {
+        if !self.x { return metadata(); }
+        serde_json::from_value(json!({"provider":"x.oauth2","provider_id":"x","oauth":true,
+            "provider_subject":crate::operator_x_profile::tests::SUBJECT,"provider_identity_verified":true,
+            "oauth_client_id":crate::operator_x_profile::tests::CLIENT,"x_app_id":crate::operator_x_profile::tests::CLIENT,
+            "scopes":x_post::SCOPES,"expires_at":"2099-01-01T00:00:00Z"})).unwrap()
+    }
+
+    fn target(&self) -> (&'static str, &'static str) {
+        if self.x { ("POST","https://api.x.com/2/tweets") } else { ("GET",TARGET) }
     }
 
     fn attestation(&self, request: &IncomingRequest) -> Value {
@@ -126,8 +161,12 @@ struct Fixture {
 
 impl Fixture {
     fn new(app_ttl: u64) -> Self {
+        Self::for_provider(app_ttl, false)
+    }
+
+    fn for_provider(app_ttl: u64, x: bool) -> Self {
         let scratch = Scratch::new();
-        let authority = Arc::new(Authority::new(app_ttl));
+        let authority = Arc::new(Authority::for_provider(app_ttl, x));
         let path = scratch.0.join("policy-bundle.json");
         fs::write(&path, serde_json::to_vec(&authority.raw).unwrap()).unwrap();
         fs::write(scratch.0.join(LOCK_NAME), []).unwrap();
@@ -136,8 +175,17 @@ impl Fixture {
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let snapshot = Arc::clone(&authority.snapshot);
-        let mut admitted = profile(&snapshot, Deployment::parse(r#"["https://gmail.googleapis.com"]"#, None).unwrap());
-        admitted.google = Some(google());
+        let mut admitted = profile(&snapshot, Deployment::parse(
+            if x {r#"["https://api.x.com"]"#} else {r#"["https://gmail.googleapis.com"]"#}, None).unwrap());
+        if x {
+            let manifest_path=scratch.0.join("operator-x-configuration.json");
+            fs::write(&manifest_path,crate::operator_x_profile::tests::manifest(true).to_string()).unwrap();
+            fs::set_permissions(&manifest_path,fs::Permissions::from_mode(0o600)).unwrap();
+            let owner=Owner::open(&path).unwrap();
+            let permit=owner.acquire(Instant::now()+WAIT).unwrap();
+            let configuration=crate::operator_x_profile::test_load(&manifest_path,&permit).unwrap();
+            admitted.managed_x=Some(Arc::new(RwLock::new(configuration.state)));
+        } else { admitted.google = Some(google()); }
         admitted.validate_snapshot(&snapshot).unwrap();
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.policy_path = path.to_string_lossy().into_owned();
@@ -155,23 +203,34 @@ impl Fixture {
         state.audit_token = Some("synthetic-google-audit-service".into());
         state.server_instance_id = Some("test-instance".into());
         let fixture = Self { state: Arc::new(state), snapshot,
-            scope: CredentialLeaseScope::new("agent:test", "route:test", "google-account"),
+            scope: CredentialLeaseScope::new("agent:test", "route:test", if x {"x-account"} else {"google-account"}),
             authority, listener, _scratch: scratch };
         seed(&fixture, 60_000);
         fixture
     }
 
     fn request(&self, deadline: Instant) -> (Request, Value) {
+        self.request_expected(deadline, 7)
+    }
+
+    fn request_expected(&self, deadline: Instant, version: u64) -> (Request, Value) {
         let mut owner = Request::new(deadline);
-        let input = serde_json::from_value(json!({"method":"GET", "url":TARGET,
-            "headers":{"proxy-authorization":format!("Bearer {TOKEN}")}, "body":""})).unwrap();
+        let (method,target)=self.authority.target();
+        let mut wire=json!({"method":method, "url":target,
+            "headers":{"proxy-authorization":format!("Bearer {TOKEN}")}, "body":""});
+        if self.authority.x {
+            wire["headers"]["authorization"]=json!(x_post::PLACEHOLDER);
+            wire["headers"]["content-type"]=json!("application/json");
+            wire["body"]=json!("{\"text\":\"synthetic release test\"}");
+        }
+        let input=serde_json::from_value(wire).unwrap();
         // Exercise the actual forwarding-decision owner propagation, not a
         // separately acquired pin followed by an owner-less preview decision.
         let (decision, release) = decide_internal_for_forward_with_shadow(&self.state,
             &self.snapshot, input, Some("agent:test"), None, Some(&mut owner));
         assert!(release.is_none());
         assert_eq!(decision["allowed"], true, "actual ordinary decision: {decision}");
-        assert_eq!(decision["credential_version"], 7);
+        assert_eq!(decision["credential_version"], version);
         (owner, decision)
     }
 }
@@ -184,8 +243,8 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
     let ttl = if mode == "short-secret" { 100 }
         else if request.purpose == CredentialLeasePurpose::GenerationMetadata { 5_000 }
         else { 4_000 };
-    let version = if mode == "wrong-version" { 8 } else { 7 };
-    let mut values = metadata();
+    let version = if matches!(mode,"wrong-version"|"predecision-advance") { 8 } else { 7 };
+    let mut values = authority.metadata();
     if mode == "wrong-metadata" { values.insert("synthetic_drift".into(), json!(true)); }
     let aad = json!({"apiVersion":"serverware.credentialLeaseEnvelope/v2", "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
         "recipientKeyId":request.recipient_key_id, "recipientNonce":request.recipient_nonce,
@@ -224,20 +283,24 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
         &request.recipient_nonce, now, StatusCode::OK, envelope)
 }
 
-fn advanced(authority: &Authority, incoming: &IncomingRequest) -> Vec<u8> {
+fn advanced(authority: &Authority, incoming: &IncomingRequest, foreign_google: bool) -> Vec<u8> {
     let request: CredentialLeaseRequest = strict_json_from_slice(&incoming.body).unwrap();
     let wire: Value = strict_json_from_slice(&incoming.body).unwrap();
     let now = now_epoch_ms() as u64;
+    let x_profile=crate::operator_x_profile::parse(
+        crate::operator_x_profile::tests::manifest(true).to_string().as_bytes()).unwrap().state.profile.unwrap();
+    let selected_x=authority.x && !foreign_google;
+    let binding=if selected_x {x_profile.binding_digest().to_owned()} else {google().binding_digest().to_owned()};
     let body = json!({"apiVersion":"serverware.operatorCredentialLeaseNoEnvelope/v1",
-        "capability":"operator-google-v1","outcome":"noSecretEnvelopeIssued",
+        "capability":if selected_x {crate::operator_x_profile::CAPABILITY} else {"operator-google-v1"},"outcome":"noSecretEnvelopeIssued",
         "reason":"generationAdvancedBeforeEnvelope","purpose":"dispatchSecret",
-        "profileBindingSha256":google().binding_digest(),"requestBodySha256":digest_json_ensure_ascii(&wire),
+        "profileBindingSha256":binding,"requestBodySha256":digest_json_ensure_ascii(&wire),
         "requestBindingSha256":credential_lease_request_binding_sha256(&request),"policyHash":request.policy_hash,
         "scope":{"principalId":request.principal_id,"routeId":request.route_id,"credentialId":request.credential_id},
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,"recipientKeyId":request.recipient_key_id,
         "recipientNonceSha256":sha256_prefixed(&URL_SAFE_NO_PAD.decode(&request.recipient_nonce).unwrap()),
         "expectedCredentialVersion":request.expected_credential_version,"expectedMetadataSha256":request.expected_metadata_sha256,
-        "observedCredentialVersion":8,"observedMetadataSha256":credential_lease_metadata_sha256(&metadata()),
+        "observedCredentialVersion":8,"observedMetadataSha256":credential_lease_metadata_sha256(&authority.metadata()),
         "issuedAtEpochMs":now,"expiresAtEpochMs":now+5_000});
     signed_control_plane_test_response(&authority.key, &authority.snapshot, incoming,
         &request.recipient_nonce, now, StatusCode::CONFLICT, body)
@@ -286,11 +349,14 @@ impl Receiver {
                             assert_eq!(request.target, "/api/data-plane/credential-leases");
                             let body: Value = strict_json_from_slice(&request.body).unwrap();
                             let purpose = body["purpose"].as_str().unwrap().to_owned();
-                            assert!(!calls.iter().any(|(kind,_)| kind == &purpose), "no material retry");
-                            if purpose == "dispatchSecret" { assert_eq!(body["expectedCredentialVersion"], 7); }
+                            let second=mode=="predecision-advance" && calls.iter().any(|(kind,_)|kind=="dispatchSecret");
+                            assert!(!calls.iter().any(|(kind,_)| kind == &purpose) || (second && purpose=="dispatchSecret"
+                                && calls.iter().filter(|(kind,_)|kind=="dispatchSecret").count()==1), "no material retry");
+                            if purpose == "dispatchSecret" { assert_eq!(body["expectedCredentialVersion"], if second {8} else {7}); }
                             assert_eq!(body["policyHash"], authority.snapshot.hash);
                             calls.push((purpose, body));
-                            if mode == "advanced" { advanced(&authority, &request) }
+                            if matches!(mode,"advanced"|"cross-provider") || (mode=="predecision-advance" && !second) {
+                                advanced(&authority, &request, mode=="cross-provider") }
                             else { material(&authority, &request, mode) }
                         };
                         // Expired caller budgets may close the socket before a
@@ -326,10 +392,11 @@ fn launch(fixture: &Fixture, mut owner: Request, decision: Value)
     -> (mpsc::Receiver<(Request, Result<Option<SecretLease>, String>)>, thread::JoinHandle<()>)
 {
     let state = Arc::clone(&fixture.state); let snapshot = Arc::clone(&fixture.snapshot);
+    let (method,target)=fixture.authority.target();
     let (sent, received) = mpsc::channel();
     let worker = thread::spawn(move || {
         let result = owner.prepare_release_if_admitted(&state, &snapshot, &decision,
-            "GET", &Url::parse(TARGET).unwrap(), false);
+            method, &Url::parse(target).unwrap(), false);
         let _ = sent.send((owner, result));
     });
     (received, worker)

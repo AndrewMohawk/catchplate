@@ -183,7 +183,8 @@ const tests = [
     assert.equal(f.storage.get(STORAGE), ID); assert.equal(f.serializedPayloads.length, 1);
     f.state.operation = receipt(); f.state.discovery = configured(); held.resolve(response(receipt(), 201)); await pending;
     assert.match(f.node('x-configuration-status').textContent, /saved.*No restart is required/);
-    assert.match(f.node('x-configuration-consent').textContent, /consent is not available yet/);
+    assert.match(f.node('x-configuration-consent').textContent, /consent is unavailable until the current paired gate is ready/);
+    assert.equal(f.node('x-configuration-account-link').hidden, true);
     assert.equal(f.node('x-configuration-saved-client').textContent, CLIENT);
     assert.equal(f.workspace.state.busy, false); assert.equal(f.node('x-configuration-save').disabled, true);
     await f.fill(); await f.event('x-configuration-form', 'submit'); assert.equal(f.posts().length, 1); f.clean();

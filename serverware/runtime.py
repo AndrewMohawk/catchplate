@@ -3542,6 +3542,8 @@ def invalidate_secret_leases(credential_id: str | None = None) -> None:
 
 
 def _project_credential_for_data_plane(credential: dict[str, Any]) -> dict[str, Any] | None:
+    if isinstance(credential.get("metadata"), dict) and "operator_x_account" in credential["metadata"]:
+        return None  # Only the retained X lifecycle may prepare a scoped lease.
     if github_app_boundary.credential_selected(credential):
         return None  # Only the dedicated App owner can derive a lease token.
     if aws_credential_boundary.credential_selected(credential):
@@ -3580,11 +3582,13 @@ def get_control_plane_credential(credential_id: str | None) -> dict[str, Any] | 
         return None
     current = db.get_credential(credential_id, include_secret=False)
     if (current is None or aws_credential_boundary.credential_selected(current)
-            or github_app_boundary.credential_selected(current)):
+            or github_app_boundary.credential_selected(current)
+            or isinstance(current.get("metadata"), dict) and "operator_x_account" in current["metadata"]):
         return None
     credential = db.get_credential(credential_id, include_secret=True)
     if credential is not None and (aws_credential_boundary.credential_selected(credential)
-            or github_app_boundary.credential_selected(credential)):
+            or github_app_boundary.credential_selected(credential)
+            or isinstance(credential.get("metadata"), dict) and "operator_x_account" in credential["metadata"]):
         return None
     return credential
 
@@ -3852,7 +3856,8 @@ def get_credential(
     if any(value is not None for value in controlled_context):
         current = db.get_credential(credential_id, include_secret=False)
         if current is not None and (aws_credential_boundary.credential_selected(current)
-                or github_app_boundary.credential_selected(current)):
+                or github_app_boundary.credential_selected(current)
+                or isinstance(current.get("metadata"), dict) and "operator_x_account" in current["metadata"]):
             invalidate_secret_leases(credential_id)
             return None
         if request_authority is None or expected_release_identity is None:
@@ -3874,7 +3879,8 @@ def get_credential(
         return _project_credential_for_data_plane(credential)
     current = db.get_credential(credential_id)
     if (not current or aws_credential_boundary.credential_selected(current)
-            or github_app_boundary.credential_selected(current)):
+            or github_app_boundary.credential_selected(current)
+            or isinstance(current.get("metadata"), dict) and "operator_x_account" in current["metadata"]):
         invalidate_secret_leases(credential_id)
         _inc("credential_lease_misses")
         return None
@@ -3894,7 +3900,8 @@ def get_credential(
             _credential_cache.pop(key, None)
         cached = _credential_cache.get(cache_key)
         if cached and cached[0] > now:
-            if github_app_boundary.credential_selected(cached[1]):
+            if (github_app_boundary.credential_selected(cached[1])
+                    or isinstance(cached[1].get("metadata"), dict) and "operator_x_account" in cached[1]["metadata"]):
                 for key in [key for key in _credential_cache if key[0] == credential_id]:
                     _credential_cache.pop(key, None)
                 return None

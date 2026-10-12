@@ -1,4 +1,6 @@
-//! One request-owned reconciliation of a definitely pre-envelope Google advance.
+//! Shared request-owned reconciliation of a definitely pre-envelope OAuth advance.
+//! The closed admission carries the provider-specific capability and profile;
+//! Google and X never accept each other's signed outcome or cold configuration.
 //! A signed HTTP error is not itself retry authority. Only `verify_outcome` can
 //! construct the private proof, and only the elected dispatch-flight leader uses
 //! it. Neither the proof nor a retry instruction is published to flight waiters.
@@ -19,6 +21,22 @@ pub(super) enum FetchOutcome {
 pub(super) struct VerifiedAdvance {
     observed_version: u64,
     observed_metadata_sha256: String,
+    capability: &'static str,
+    profile_binding_digest: String,
+}
+
+pub(super) enum Admission<'a> {
+    Google(&'a operator_google_profile::Profile),
+    X(Arc<operator_x_profile::Profile>),
+}
+impl Admission<'_> {
+    fn capability(&self) -> &'static str {
+        match self { Self::Google(_) => operator_google_profile::CAPABILITY,
+            Self::X(_) => operator_x_profile::CAPABILITY }
+    }
+    fn binding_digest(&self) -> &str {
+        match self { Self::Google(profile) => profile.binding_digest(), Self::X(profile) => profile.binding_digest() }
+    }
 }
 
 #[derive(Deserialize)]
@@ -61,12 +79,13 @@ pub(super) fn admitted<'a>(
     scope: &CredentialLeaseScope,
     request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
-) -> Result<Option<&'a operator_google_profile::Profile>, String> {
-    let Some(profile) = state
-        .policy_shadow
-        .operator_google_profile(snapshot, scope)?
-    else {
-        return Ok(None);
+) -> Result<Option<Admission<'a>>, String> {
+    let profile = match (state.policy_shadow.operator_google_profile(snapshot, scope)?,
+        state.policy_shadow.operator_x_profile(snapshot, scope)?) {
+        (Some(profile), None) => Admission::Google(profile),
+        (None, Some(profile)) => Admission::X(profile),
+        (None, None) => return Ok(None),
+        _ => return Err(refused()),
     };
     if state.is_production
         || state.response_proof_signer.release_profile() != ReleaseProfile::Legacy
@@ -206,7 +225,7 @@ pub(super) fn verify_outcome(
     let now = now_epoch_ms();
     if recipient_nonce.len() != 32
         || outcome.api_version != "serverware.operatorCredentialLeaseNoEnvelope/v1"
-        || outcome.capability != "operator-google-v1"
+        || outcome.capability != profile.capability()
         || outcome.outcome != "noSecretEnvelopeIssued"
         || outcome.reason != "generationAdvancedBeforeEnvelope"
         || outcome.purpose != "dispatchSecret"
@@ -243,6 +262,8 @@ pub(super) fn verify_outcome(
     Ok(VerifiedAdvance {
         observed_version: outcome.observed_credential_version,
         observed_metadata_sha256: outcome.observed_metadata_sha256,
+        capability: profile.capability(),
+        profile_binding_digest: profile.binding_digest().to_owned(),
     })
 }
 
@@ -303,7 +324,10 @@ pub(super) fn reconcile(
     proof: VerifiedAdvance,
     deadline: Instant,
 ) -> Result<CredentialLeaseMaterial, String> {
-    admitted(state, snapshot, scope, None, None)?.ok_or_else(refused)?;
+    let profile = admitted(state, snapshot, scope, None, None)?.ok_or_else(refused)?;
+    if profile.capability() != proof.capability || profile.binding_digest() != proof.profile_binding_digest {
+        return Err(refused());
+    }
     invalidate_exact(state, snapshot, scope, expected, deadline)?;
     refresh_scoped_credential_material_singleflight_on_deadline(
         state,

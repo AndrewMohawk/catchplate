@@ -2364,6 +2364,16 @@ def derive_authority_v9_plan_contract(
     }
 
 
+def _require_public_jit_retention_request(request: Any) -> None:
+    from serverware import authority_jit_request
+    from serverware.authority_transition_core import TransitionKernelError
+
+    try:
+        authority_jit_request.require_public_request(request)
+    except TransitionKernelError:
+        raise ValueError("JIT retention requires commitment-only private ingress") from None
+
+
 def reserve_authority_execution_envelope(
     *,
     envelope_id: str,
@@ -2417,6 +2427,8 @@ def reserve_authority_execution_envelope(
         or exact_request.get("requestDigest") != request_digest
     ):
         raise ValueError("authority v9 request binding is not exact")
+    if operation == "jit.request":
+        _require_public_jit_retention_request(exact_request)
     raw = _require_planner_writer(connection)
     request_base64url = _b64url(exact_request_bytes)
     request_bytes_digest = "sha256:" + hashlib.sha256(
@@ -3320,6 +3332,16 @@ def complete_authority_planner_transaction(
         planner_payload = json.loads(exact_plan_json)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("authority measured plan is not canonical JSON") from exc
+    if isinstance(planner_payload, dict):
+        measured = planner_payload.get("measuredPlan")
+        typed = planner_payload.get("typedRequest")
+        if (isinstance(measured, dict) and measured.get("operation") == "jit.request"
+                or isinstance(typed, dict) and typed.get("operation") == "jit.request"):
+            _require_public_jit_retention_request(typed)
+            if (not isinstance(measured, dict) or measured.get("operation") != "jit.request"
+                    or any(measured.get(field) != typed[field]
+                           for field in ("operationId", "requestDigest"))):
+                raise ValueError("JIT measured plan differs from its public request")
     required_payload_fields = {
         "schema",
         "measuredPlan",

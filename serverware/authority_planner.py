@@ -270,6 +270,13 @@ def typed_request_digest(request: Mapping[str, Any]) -> str:
     # the public registration gate here, before the shared computation body.
     if request.get("operation") not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise AuthorityPlannerError("typed planner request is not closed")
+    if request.get("operation") == "jit.request":
+        from serverware import authority_jit_request
+
+        try:
+            authority_jit_request.require_public_request(request)
+        except (ValueError, TypeError, KeyError, authority_transition_core.TransitionKernelError):
+            raise AuthorityPlannerError("JIT planning requires commitment-only private ingress") from None
     return _typed_request_digest(request, work=None)
 
 

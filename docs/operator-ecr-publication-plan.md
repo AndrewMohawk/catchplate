@@ -155,9 +155,10 @@ not silently reinstall authority functions on page load.
 The public `ensure_jit_approval_request` facade sends a URL, two JSON documents
 and individual approver-policy arguments. The request kernel previously
 required caller-supplied commitments, opaque IDs and a combined policy instead.
-`authority_jit_request.py` now projects the actual marshaled public arguments
-into those kernel inputs. The original signed arguments and business intent
-remain unchanged. Opaque IDs are deterministic, purpose-separated selections
+`authority_jit_request.py` projects the actual marshaled arguments into those
+kernel inputs. The first ingress repair preserved raw signed arguments and
+business intent; the private-v2 profile below supersedes that production input
+shape before either commitment is created. Opaque IDs are deterministic, purpose-separated selections
 derived from the authority request envelope; they are not custody receipts.
 
 All three production callers supply the complete policy through
@@ -174,13 +175,13 @@ Missing custody remains a refusal; the tests must not manufacture admission or
 seed a pending approval and call that request-to-review acceptance.
 
 The focused ingress target is `make verify-authority-jit-request`. It exercises
-the real facade through dispatch capture, original request binding, pure
+the real facade through dispatch capture, private input separation, pure
 projection and actual query selection. It does not execute a successful writer
 transaction, review, hardware approval, provider call or deployment. Main's
 authority changes still require the separately reviewed retained-v9 migration;
 the working ordinary app remains on its compatible UI-only release.
 
-The focused October 12 ingress run passed **32 tests**: eight ingress, eleven
+The initial October 12 ingress run passed **32 tests**: eight ingress, eleven
 registry, ten policy-projection and three existing decision-component tests.
 It used the retained Python 3.11.15 engineering image with network disabled,
 read-only source and bounded resources; no build or download ran. All 15 pinned
@@ -190,6 +191,46 @@ and ran no tests; mounting only the nonsecret runner file corrected that harness
 permission issue. Both attempts are retained under
 `serverware-operator-workspace-evidence/jit-request-ingress.dXd2u4HI`. No database
 was started or accessed and no successful cold approval is claimed.
+
+### Private request documents must stay out of signed plans
+
+Sealing only the approval row is insufficient: the planner retains `typedRequest`
+and the executor retains the exact request envelope. Including the original URL,
+canonical request or display document there would retain plaintext independently
+of approval storage.
+
+The actual facade now selects `serverware.policyAuthorityPrivateJitWriterInput/v2`
+before intent synthesis. Its transient private channel carries those three
+originals; the public arguments use `serverware.jitRequestCommitments/v2`, the
+three individual hashes and a commitment to the complete original marshaled
+arguments. The actual service reconstructs and validates the originals before
+creating the public-only intent and authority request digest. A caller cannot
+choose a public hash while supplying different private bytes. Existing payload
+and explicit approver-policy limits remain in force.
+
+The planner and both durable writer entrypoints independently refuse old raw
+JIT request profiles. They never redact or rewrite an already signed request.
+Other operations retain their existing input contracts. The focused target is
+`make verify-authority-jit-private-request`.
+
+This is a privacy prerequisite, **not secure storage or a working approval**.
+The private documents are still transient service inputs: no native producer
+seals them, no opaque custody is admitted and no review-opening contract is
+implemented by this change. Missing custody and capacity evidence still refuse
+the request. No database migration, installed writer change, live deployment,
+pilot, hardware action or provider operation is performed. The retained app
+stays on its compatible ordinary-flow release; main is not a deployment bundle.
+
+The focused private-profile run passed **40 tests**: eight new privacy groups,
+eight adapted request-ingress groups, eleven registry, ten policy and three
+decision-component tests. It used the existing Python 3.11.15 image with no
+network, read-only source and bounded resources; no build, download or database
+startup ran. All 20 pinned source files were unchanged afterward, and the
+disposable container was removed. Logs and pins are retained under
+`serverware-operator-workspace-evidence/jit-private-ingress.73a5hKuC`.
+Writer tests establish refusal before database access, not successful persistence
+or native admission. Independent source review found no raw-JIT bypass through
+the operation-specific measured digest callers.
 
 The focused receipt checks require no pilot or build:
 

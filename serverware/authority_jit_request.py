@@ -1,8 +1,11 @@
-"""Pure projection of the actual JIT request facade's marshaled arguments.
+"""Pure JIT validation and projection, not custody or approval admission.
 
-The signed raw arguments and businessIntent remain the authority input. This
-projection supplies commitments and deterministic *lookup* identities only; it
-does not produce opaque custody, approve a request, or initialize an aggregate.
+The legacy raw projection validates the facade's originals before commitment.
+The current private-v2 ingress then places only their public commitments into
+the authority request and businessIntent. Durable retention refuses raw input;
+neither profile is rewritten after signing. This projection supplies commitments
+and deterministic *lookup* identities only; it does not produce opaque custody,
+approve a request, or initialize an aggregate.
 The current production route helper supplies an explicit RP/origin policy. Its
 legacy optional-policy callers are not admitted here: reading process settings
 would make a deterministic transition depend on unsigned mutable configuration.
@@ -134,11 +137,44 @@ def normalize(arguments: Mapping[str, Any], *, request_digest: str) -> dict[str,
     Existing opaque bindings continue to use the latter and the document hash.
     """
     try:
+        from serverware import authority_jit_private_request as private
+
+        if isinstance(arguments, Mapping) and arguments.get("schema") == private.PUBLIC_SCHEMA:
+            return private.public_arguments(arguments, typed=True, request_digest=request_digest)
         return _normalize(arguments, request_digest=request_digest)
     except core.TransitionKernelError:
         raise
     except (ValueError, TypeError, OverflowError, RecursionError):
         raise core.TransitionKernelError("JIT request facade projection is invalid") from None
+
+
+def require_public_request(request: Mapping[str, Any]) -> None:
+    """Require the explicit private-input profile before durable JIT retention.
+
+    This validates public commitments, not native sealing or authorization.
+    Raw v1 arguments are still understood by the isolated legacy projection,
+    but cannot enter a new signed plan or execution envelope. Never transform
+    an already committed request here: the facade/service must select v2 before
+    creating its business intent and request digest.
+    """
+    from serverware import authority_jit_private_request as private
+    from serverware import authority_request_commitment as commitment
+
+    _require(isinstance(request, Mapping) and set(request) == {
+        "schema", "operation", "operationId", "requestDigest", "handler",
+        "operationManifestDigest", "arguments"}
+        and request.get("schema") == "serverware.policyAuthorityV9Request/v1"
+        and request.get("operation") == OPERATION,
+        "JIT durable request requires its exact public envelope")
+    private.public_arguments(request["arguments"], typed=True,
+        request_digest=request["requestDigest"])
+    try:
+        digest = commitment._typed_request_digest(request, work=None)
+    except commitment.AuthorityPlannerError:
+        raise core.TransitionKernelError("JIT public request commitment is invalid") from None
+    _require(request["requestDigest"] == digest
+        and request["operationId"] == commitment.operation_id(OPERATION, digest),
+        "JIT public request commitment differs")
 
 
 def _normalize(arguments: Mapping[str, Any], *, request_digest: str) -> dict[str, Any]:

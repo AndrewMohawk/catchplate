@@ -30,6 +30,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-webauthn-receipts verify-authority-webauthn-receipts-postgres
 .PHONY: verify-authority-jit-approval verify-authority-jit-approval-postgres
 .PHONY: verify-authority-jit-request
+.PHONY: verify-authority-jit-private-request
 .PHONY: verify-operator-live-smoke-config
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
@@ -11371,6 +11372,10 @@ verify-authority-webauthn-receipts-postgres:
 # provider traffic, build or database startup is performed by these targets.
 verify-authority-jit-request:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_request.py
+
+# Commitment-only ingress and retention refusals, not native custody admission.
+verify-authority-jit-private-request:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_private_request.py
 
 # Offline configuration oracles only: no live smoke authorization or I/O.
 verify-operator-live-smoke-config:

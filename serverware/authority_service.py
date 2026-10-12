@@ -2828,6 +2828,53 @@ def _verify_webauthn_authorization(
     return receipt, receipt_digest
 
 
+def _extract_v9_runtime_input(
+    operation: str,
+    handler_name: str,
+    runtime_input: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """Separate JIT originals before forming any public typed commitment.
+
+    The returned private documents are transient inputs, not sealed custody or
+    native provenance. They must not enter typed requests or execution plans.
+    """
+    if operation == "jit.request":
+        from serverware import authority_jit_private_request
+        from serverware.authority_transition_core import TransitionKernelError
+
+        if handler_name != authority_contract.operation_spec(operation)["handler"]:
+            raise AuthorityServiceError("typed authority handler binding changed")
+        try:
+            arguments, private_documents = (
+                authority_jit_private_request.validate_runtime_input(runtime_input)
+            )
+        except TransitionKernelError:
+            raise AuthorityServiceError("authority private JIT input refused") from None
+        return arguments, None, private_documents
+    if (
+        set(runtime_input)
+        == {"schema", "handler", "operationManifestDigest", "arguments"}
+        and runtime_input.get("schema")
+            == "serverware.policyAuthorityControlledWriterInput/v1"
+        and runtime_input.get("handler") == handler_name
+        and runtime_input.get("operationManifestDigest")
+            == authority_contract.OPERATION_MANIFEST_DIGEST
+        and isinstance(runtime_input.get("arguments"), dict)
+    ):
+        return dict(runtime_input["arguments"]), None, None
+    if (
+        set(runtime_input) == {"input", "webauthnAuthorization"}
+        and isinstance(runtime_input.get("input"), dict)
+        and isinstance(runtime_input.get("webauthnAuthorization"), dict)
+    ):
+        return (
+            dict(runtime_input["input"]),
+            dict(runtime_input["webauthnAuthorization"]),
+            None,
+        )
+    raise AuthorityServiceError("authority v9 accepts only semantic typed input")
+
+
 def _authorization_arguments(
     arguments: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -8817,38 +8864,11 @@ class AuthorityProcess:
             # accepted as a verifier-produced verdict. Own the literal original.
             runtime_input = {"input": runtime_input["input"],
                 "webauthnAuthorization": runtime_input["webauthnAuthorization"]}
-        if (
-            set(runtime_input)
-            == {
-                "schema",
-                "handler",
-                "operationManifestDigest",
-                "arguments",
-            }
-            and runtime_input.get("schema")
-                == "serverware.policyAuthorityControlledWriterInput/v1"
-            and runtime_input.get("handler") == handler_name
-            and runtime_input.get("operationManifestDigest")
-                == authority_contract.OPERATION_MANIFEST_DIGEST
-            and isinstance(runtime_input.get("arguments"), dict)
-        ):
-            arguments = dict(runtime_input["arguments"])
-            explicit_webauthn = None
-        elif (
-            set(runtime_input) == {"input", "webauthnAuthorization"}
-            and isinstance(runtime_input.get("input"), dict)
-            and isinstance(
-                runtime_input.get("webauthnAuthorization"), dict
-            )
-        ):
-            arguments = dict(runtime_input["input"])
-            explicit_webauthn = dict(
-                runtime_input["webauthnAuthorization"]
-            )
-        else:
-            raise AuthorityServiceError(
-                "authority v9 accepts only semantic typed input"
-            )
+        arguments, explicit_webauthn, jit_private_documents = _extract_v9_runtime_input(
+            operation, handler_name, runtime_input,
+        )
+        # No native original producer consumes these transient documents yet.
+        # Keep them local, never in arguments, typedRequest or planner_request.
         if "businessIntent" in arguments:
             raise AuthorityServiceError(
                 "caller-supplied authority businessIntent is forbidden"

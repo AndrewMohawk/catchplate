@@ -40,6 +40,7 @@ from serverware import authority_service as service
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as quota
 from serverware import db
+from serverware.authority_store import authority_dispatch
 
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
 PUBLIC_FIELDS = frozenset({"route_id", "method", "url", "principal_id",
@@ -134,8 +135,18 @@ def dispatch_input(values):
 
 
 def arguments():
+    # Preserve the original raw projection as a component oracle, not as an
+    # admitted durable request. The installed facade now uses private ingress.
+    raw = authority_dispatch._authority_marshal_value(public_arguments())
+    return raw, service._synthesize_business_arguments("jit.request", raw), \
+        service._controlled_writer_request_digest("jit.request", raw)
+
+
+def kernel_arguments():
     _operation, document = dispatch_input(public_arguments())
-    raw = document["arguments"]
+    raw, explicit, _private = service._extract_v9_runtime_input(
+        "jit.request", "ensure_jit_approval_request", document)
+    assert explicit is None
     return raw, service._synthesize_business_arguments("jit.request", raw), \
         service._controlled_writer_request_digest("jit.request", raw)
 
@@ -153,12 +164,16 @@ class JitRequestIngressTests(unittest.TestCase):
         before = copy.deepcopy(values)
         operation, document = dispatch_input(values)
         self.assertEqual(operation, "jit.request")
-        self.assertEqual(set(document), {"schema", "handler", "operationManifestDigest", "arguments"})
-        self.assertEqual(document["schema"], "serverware.policyAuthorityControlledWriterInput/v1")
+        self.assertEqual(set(document), {"schema", "handler", "operationManifestDigest", "arguments", "privateDocuments"})
+        self.assertEqual(document["schema"], "serverware.policyAuthorityPrivateJitWriterInput/v2")
         self.assertEqual(document["handler"], "ensure_jit_approval_request")
         self.assertEqual(document["operationManifestDigest"], contract.OPERATION_MANIFEST_DIGEST)
         self.assertEqual(set(inspect.signature(db.ensure_jit_approval_request).parameters), PUBLIC_FIELDS)
-        raw = document["arguments"]
+        self.assertEqual(document["arguments"]["schema"], "serverware.jitRequestCommitments/v2")
+        self.assertEqual(set(document["privateDocuments"]), {"url", "canonical_request", "redacted_display"})
+        raw = {key: copy.deepcopy(value) for key, value in document["arguments"].items()
+            if key in PUBLIC_FIELDS}
+        raw.update(document["privateDocuments"])
         self.assertEqual(set(raw), PUBLIC_FIELDS)
         self.assertEqual(raw["required_approver_roles"], {"$authorityType": "set", "items": ["approver"]})
         self.assertEqual(raw["allowed_approver_ids"], {"$authorityType": "set", "items": ["oidc:alpha", "oidc:beta"]})
@@ -168,14 +183,10 @@ class JitRequestIngressTests(unittest.TestCase):
         for key in ("required_approver_roles", "allowed_approver_ids", "require_approver_webauthn",
                 "approval_threshold", "approver_credential_policy"):
             values.pop(key)
-        defaults = dispatch_input(values)[1]["arguments"]
-        self.assertIsNone(defaults["required_approver_roles"])
-        self.assertIsNone(defaults["allowed_approver_ids"])
-        self.assertIs(defaults["require_approver_webauthn"], False)
-        self.assertEqual(defaults["approval_threshold"], 1)
-        self.assertIsNone(defaults["approver_credential_policy"])
-        self.refused(service._synthesize_business_arguments("jit.request", defaults),
-            service._controlled_writer_request_digest("jit.request", defaults))
+        with patch.object(db, "dispatch_policy_authority_operation") as send:
+            with self.assertRaises(db.MetadataStoreError):
+                db.ensure_jit_approval_request(**values)
+            send.assert_not_called()
         for extra in ({"businessIntent": {}}, {"_connection": object()}, {"url_commitment": "sha256:" + "5" * 64}):
             with self.subTest(extra=tuple(extra)), patch.object(db, "dispatch_policy_authority_operation") as send:
                 with self.assertRaises(db.MetadataStoreError):
@@ -322,7 +333,7 @@ class JitRequestIngressTests(unittest.TestCase):
         self.refused(service._synthesize_business_arguments("jit.request", boundary), digest)
 
     def test_real_query_plan_is_deterministic_and_binds_derived_custody_ids(self):
-        _raw, value, digest = arguments()
+        _raw, value, digest = kernel_arguments()
         before = copy.deepcopy(value)
         kernel = quota.KERNELS["jit.request"]
         first = kernel.queries(arguments=value, database_now=NOW, request_digest=digest)
@@ -341,7 +352,7 @@ class JitRequestIngressTests(unittest.TestCase):
         self.assertIn("key-custody-seal/v1", contract.operation_spec("jit.request")["externalEvidenceTypes"])
 
     def test_valid_public_input_still_refuses_missing_custody_without_mutations(self):
-        _raw, value, digest = arguments()
+        _raw, value, digest = kernel_arguments()
         before = copy.deepcopy(value)
         context = core.KernelContext(operation="jit.request", arguments=value, selected_rows=(),
             database_now=NOW, request_digest=digest)

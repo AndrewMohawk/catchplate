@@ -392,6 +392,24 @@ def _install_authority_controlled_writer_boundaries() -> None:
                 raise _db_value("MetadataStoreError")(
                     "authority writer arguments are not closed"
                 )
+            if __operation == "jit.request":
+                from serverware import authority_jit_private_request
+                from serverware.authority_transition_core import (
+                    TransitionKernelError,
+                )
+
+                try:
+                    runtime_input = authority_jit_private_request.prepare(
+                        marshaled_arguments
+                    )
+                except TransitionKernelError:
+                    raise _db_value("MetadataStoreError")(
+                        "authority writer arguments are not canonical"
+                    ) from None
+                return _db_value("dispatch_policy_authority_operation")(
+                    __operation,
+                    runtime_input,
+                )
             try:
                 authority_contract.synthesize_business_intent(
                     __operation,

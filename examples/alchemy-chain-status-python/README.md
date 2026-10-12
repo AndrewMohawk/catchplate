@@ -1,9 +1,10 @@
 # Alchemy chain status with web3.py
 
-Status: implemented; **10 offline SDK tests passed** with the full installed
-transitive dependencies, and **isolated actual SDK-through-proxy/TLS acceptance
-passed** from source `062180fe`. No deployment, Actions, native-pilot acceptance,
-real Alchemy request or provider entitlement is claimed. This example uses the
+Status: implemented; **10 offline SDK tests passed with web3.py 7.15.0** and its
+installed transitive dependencies on Python 3.12.14. The earlier **isolated actual
+SDK-through-proxy/TLS acceptance** from source `062180fe` used web3.py 7.13.0;
+that acceptance has not been repeated for 7.15.0. No deployment, Actions,
+native-pilot acceptance, real Alchemy request or provider entitlement is claimed. This example uses the
 ordinary `Web3.eth.chain_id` and `Web3.eth.block_number` properties, not a custom
 JSON-RPC client. It does not request wallets, transactions, balances, NFT APIs,
 WebSockets, batching or `web3_clientVersion`.
@@ -17,15 +18,21 @@ python3.12 -m venv .venv
 .venv/bin/python -B -m unittest -v test_chain_status
 ```
 
-The requirements pin web3.py 7.13.0, Requests 2.34.2, urllib3 2.8.0, certifi
+The requirements pin web3.py 7.15.0, Requests 2.34.2, urllib3 2.8.0, certifi
 2026.7.22 and Pydantic 2.13.4. They are direct pins, not a complete transitive
 lock. The executable verifies these installed versions before launching.
-The recorded Python 3.12 component run installed and tested the transitive
-dependencies; a fresh environment must still resolve and install them. This is
+The recorded Python 3.12.14 component run resolved and installed 40 packages from
+wheels and tested the real SDK; a fresh environment must still resolve and
+install the transitive dependencies. This is
 not a stdlib-only example: web3.py also requires its Ethereum libraries,
 aiohttp and websockets, while Pydantic requires its matching native core.
 Use an interpreter that works without an ambient `LD_LIBRARY_PATH`: the child
 inherits only the explicit application configuration below, not shell settings.
+
+Version 7.15.0 fixes the maintainer's
+[CCIP Read advisory GHSA-5hr4-253g-cpx2](https://github.com/ApeWorX/web3.py/security/advisories/GHSA-5hr4-253g-cpx2).
+This example's two chain-status calls do not invoke `eth_call` or CCIP Read;
+the dependency update and regression tests are not an exploit-reachability test.
 
 ## Configure one saved permission
 
@@ -85,17 +92,18 @@ The 10 passing offline tests use the actual pinned web3.py/Requests preparation 
 synthetic responses at `HTTPAdapter.send`, with sockets forbidden. They inspect
 separate TLS policies but do not perform a TLS handshake, CONNECT, proxy
 credential replacement or provider request. Those acceptance checks remain
-separate: the actual entrypoint subsequently passed two mainnet reads and
+separate: the earlier 7.13.0 entrypoint passed two mainnet reads and
 wrong-application, wrong-chain and revoked-grant denials through the real proxy
 with a synthetic provider. The passing run verified exact key replacement and
 separate TLS roots, with one pooled tunnel for Python's two successful calls.
-The [verification record](../../docs/operator-alchemy-verification.md) preserves
-the complete result and both earlier failed runs.
+The historical [verification record](../../docs/operator-alchemy-verification.md)
+preserves that result and both earlier failed runs. The 7.15.0 update has only
+the offline SDK verification described above, not a new proxy/provider result.
 
 ## Primary implementation references
 
-- [Pinned web3.py HTTPProvider](https://raw.githubusercontent.com/ethereum/web3.py/v7.13.0/web3/providers/rpc/rpc.py): explicit session and `exception_retry_configuration=None`.
-- [Pinned web3.py provider base](https://raw.githubusercontent.com/ethereum/web3.py/v7.13.0/web3/providers/base.py): request IDs, serialization and opt-in caching.
+- [Pinned web3.py HTTPProvider](https://raw.githubusercontent.com/ethereum/web3.py/v7.15.0/web3/providers/rpc/rpc.py): explicit session and `exception_retry_configuration=None`.
+- [Pinned web3.py provider base](https://raw.githubusercontent.com/ethereum/web3.py/v7.15.0/web3/providers/base.py): request IDs, serialization and opt-in caching.
 - [Pinned Requests adapter extension](https://raw.githubusercontent.com/psf/requests/v2.34.2/src/requests/adapters.py): `proxy_manager_for`, retry and TLS settings.
 - [urllib3 HTTPS proxies](https://urllib3.readthedocs.io/en/2.8.0/advanced-usage.html#https-proxies): a separate `proxy_ssl_context` for TLS-in-TLS.
 - [Alchemy header authentication](https://www.alchemy.com/docs/how-to-use-api-keys-in-http-headers): bearer authentication at a keyless `/v2` endpoint.

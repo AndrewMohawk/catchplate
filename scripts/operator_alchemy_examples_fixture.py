@@ -37,7 +37,7 @@ CHAIN_IDS = {"eth-mainnet": "0x1", "eth-sepolia": "0xaa36a7"}
 BLOCK_NUMBER = "0x10"
 METHODS = ("eth_chainId", "eth_blockNumber")
 TOKEN = "serverware_alchemy_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
-AGENTS = {"node": None, "python": "web3.py/7.13.0/web3.providers.rpc.rpc.HTTPProvider", "go": "Go-http-client/1.1"}
+AGENTS = {"node": None, "python": "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider", "go": "Go-http-client/1.1"}
 MEDIA = {"node": "application/json", "python": "*/*", "go": "application/json", "probe": "application/json"}
 ROW_KEYS = {"ordinal", "accepted", "client", "case", "method", "target", "chain", "rpcMethod", "requestId",
     "semanticHeaders", "requestBodyBase64", "requestBodySha256", "requestBodyBytes", "responseBodySha256",

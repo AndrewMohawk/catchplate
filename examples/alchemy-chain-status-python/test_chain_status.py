@@ -33,7 +33,7 @@ sys.addaudithook(no_network)
 APP = "12345678-1234-4234-8234-123456789abc"
 TOKEN = "synthetic-app-password:@/?#%"
 EXPECTED = {"chain": "eth-mainnet", "chain_id": 1, "block_number": 123456}
-UA = "web3.py/7.13.0/web3.providers.rpc.rpc.HTTPProvider"
+UA = "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider"
 
 
 def response(request, *, value=None, status=200, raw=None, headers=None):

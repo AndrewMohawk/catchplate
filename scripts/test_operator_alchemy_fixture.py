@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts import operator_alchemy_examples_fixture as receiver
+from scripts import check_operator_alchemy_examples as checker
 from scripts import operator_alchemy_fixture_network as network
 from scripts import prepare_operator_alchemy_fixture as recipe
 
@@ -115,6 +116,42 @@ class ReceiverTests(unittest.TestCase):
         for invalid in (missing, missing + [("Accept", "*/*")], missing + [("Accept", "text/plain")]):
             with self.assertRaises(ValueError):
                 receiver.validated_headers("node", invalid)
+
+    def test_python_patched_sdk_fingerprint_is_exact_and_old_versions_are_counted_refusals(self):
+        expected = "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider"
+        self.assertEqual(receiver.AGENTS["python"], expected)
+        raw = raw_request("python")
+        original = [(name, expected if name == "User-Agent" else value)
+            for name, value in fields("python", raw)]
+        self.assertEqual(receiver.classify("POST", "/v2", original), ("python", "success"))
+        self.assertEqual(receiver.validated_headers("python", original)["user-agent"], expected)
+        for invalid in (expected.replace("7.15.0", "7.13.0"), expected.replace("7.15.0", "7.14.0"),
+                expected.replace("7.15.0", "7.15.1"), expected + " extra", "arbitrary-client"):
+            changed = [(name, invalid if name == "User-Agent" else value) for name, value in original]
+            with self.subTest(agent=invalid):
+                with self.assertRaises(ValueError):
+                    receiver.classify("POST", "/v2", changed)
+                with self.assertRaises(ValueError):
+                    receiver.validated_headers("python", changed)
+                instance, sent = handler("python", header_fields=changed)
+                instance.resource()
+                self.assertEqual(instance.server.total, 1)
+                self.assertEqual(instance.server.attempts, [{"ordinal": 1, "accepted": False}])
+                self.assertEqual(sent[0][0], 400)
+
+    def test_checker_accepts_new_python_fingerprint_and_refuses_old_observation(self):
+        for method in ("eth_chainId", "eth_blockNumber"):
+            instance, _ = handler("python", method)
+            instance.resource()
+            row = instance.server.attempts[0]
+            self.assertEqual(row["semanticHeaders"]["user-agent"],
+                "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider")
+            self.assertEqual(checker.validate_row(row, 1, "python", "success", method), raw_request("python", method))
+            for invalid in ("web3.py/7.13.0/web3.providers.rpc.rpc.HTTPProvider", "arbitrary-client"):
+                changed = deepcopy(row)
+                changed["semanticHeaders"]["user-agent"] = invalid
+                with self.assertRaises(ValueError):
+                    checker.validate_row(changed, 1, "python", "success", method)
 
     def test_rpc_write_batch_notification_ids_and_duplicate_fields_remain_counted_refusals(self):
         good = json.loads(raw_request())

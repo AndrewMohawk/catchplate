@@ -19,7 +19,7 @@ from requests.adapters import HTTPAdapter
 
 PLACEHOLDER = "serverware-alchemy-placeholder-v1"  # Public, not a provider key.
 CHAINS = {"eth-mainnet": 1, "eth-sepolia": 11155111}
-PINS = {"web3": "7.13.0", "requests": "2.34.2", "urllib3": "2.8.0",
+PINS = {"web3": "7.15.0", "requests": "2.34.2", "urllib3": "2.8.0",
     "certifi": "2026.7.22", "pydantic": "2.13.4"}
 REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
     "SERVERWARE_CA_FILE", "SERVERWARE_ALCHEMY_CHAIN")

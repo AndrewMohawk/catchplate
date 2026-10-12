@@ -96,7 +96,7 @@ function createGoogleConfigurationView(workspace) {
   const panel = element('google-configuration-panel');
   element('proxy').insertBefore(panel, element('proxy-setup-content'));
   let discovery = null; let reference = null; let receipt = null;
-  let visible = false; let busy = false; let storageBlocked = false;
+  let visible = false; let busy = false; let storageBlocked = false; let recoveryHint = null;
   const holdOwner = 'google-provider-configuration';
   try {
     const raw = sessionStorage.getItem(googleConfigurationKey);
@@ -121,7 +121,10 @@ function createGoogleConfigurationView(workspace) {
     try { sessionStorage.setItem(googleConfigurationKey, JSON.stringify(next)); reference = next; receipt = null; return true; }
     catch (_) { storageBlocked = true; return false; }
   }
-  function update() { workspace.setConsentHold(busy || storageBlocked || unresolved(), holdOwner); render(); }
+  function update() {
+    if (recoveryHint) recoveryHint.hidden = !storageBlocked && !unresolved();
+    workspace.setConsentHold(busy || storageBlocked || unresolved(), holdOwner); render();
+  }
   function operationText() {
     if (storageBlocked) return 'The public operation reference could not be retained safely in this tab. Changes are blocked; do not repeat an uncertain request.';
     if (!reference) return 'No Google provider configuration has been prepared in this tab.';
@@ -282,6 +285,20 @@ function createGoogleConfigurationView(workspace) {
   element('google-configuration-check').addEventListener('click', check);
   element('google-configuration-cancel').addEventListener('click', cancel);
   window.addEventListener('pagehide', clearSecret);
+  if (reference || storageBlocked) {
+    const message = storageBlocked ?
+      'Google provider configuration recovery is blocked because this tab could not safely read its public operation reference. Open Proxy setup → Google provider settings to inspect recovery status; do not repeat a possibly saved request.' :
+      'Google provider configuration needs a status check. Open Proxy setup → Google provider settings → Check operation result before allowing another change. The public operation reference is retained; no request has been repeated.';
+    recoveryHint = textNode('p'); recoveryHint.id = 'google-configuration-recovery-hint';
+    recoveryHint.append(textNode('span', message), ' ');
+    const link = textNode('a', storageBlocked ? 'Review Google recovery status' : 'Check Google configuration result');
+    link.id = 'google-configuration-recovery-link'; link.href = '#proxy'; recoveryHint.append(link);
+    // Keep another owner's warning and hold intact. requireReview replaces only
+    // its text paragraph, so this owner-scoped navigation survives later alerts.
+    element('mutation-review').append(recoveryHint);
+    if (!workspace.state.uncertain) workspace.requireReview('Google provider configuration recovery is required. Use the Google status link below before allowing another change.');
+    else element('mutation-review').hidden = false;
+  }
   workspace.subscribe(render); update();
   return {show(active) { visible = active; if (!active) clearSecret(); render(); }};
 }

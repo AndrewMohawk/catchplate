@@ -260,10 +260,19 @@ async function reloadUnresolved(page) {
   // The stored locator intentionally holds ordinary writes after reload until
   // an explicit Check recovers the receipt. The inherited ready() waits for
   // those writes to be enabled, which would incorrectly wait through this hold.
+  await view(page, 'overview');
   const loaded = page.waitForResponse(response => response.url() === ORIGIN + '/api/operator-demo/catalog');
   await page.reload({waitUntil: 'networkidle'});
   const response = await loaded; assert.equal(response.status(), 200); await response.finished();
-  await view(page, 'proxy');
+  assert.equal(new URL(page.url()).hash, '#overview');
+  await page.locator('#mutation-review').waitFor({state: 'visible'});
+  const hint = page.locator('#google-configuration-recovery-hint');
+  assert(await hint.isVisible(), 'Overview explains the Google-only hold before navigation');
+  assert.match(await hint.innerText(), /Google.*Proxy setup.*Google provider settings.*Check operation result/);
+  const recovery = page.locator('#google-configuration-recovery-link');
+  assert.equal(await recovery.getAttribute('href'), '#proxy');
+  await recovery.click();
+  await page.waitForFunction(() => location.hash === '#proxy' && !document.querySelector('#proxy').hidden);
   await page.waitForFunction(() => !document.querySelector('#google-configuration-check').disabled &&
     document.querySelector('#credential-fields').disabled && document.querySelector('#load-error').hidden);
   assert.equal((await page.locator('#proxy-url').innerText()).trim(), 'https://proxy.example.test');
@@ -472,6 +481,74 @@ const tests = [
     assert(await node(page, 'prepare').isDisabled()); assert(await node(page, 'cancel').isDisabled());
     assert.equal(await noMaterial(page), null); assert.equal(observed.prepares.length + observed.cancels.length, 0);
   })],
+  ['Overview exposes retained Google recovery; exact terminal GET releases only its hold before explicit confirmation', async browser => {
+    for (const status of ['cancelled', 'activated']) await fixture(browser, {}, async (page, state, observed) => {
+      await prepare(page); const reference = await noMaterial(page);
+      assert.deepEqual(reference, {operation_id: observed.operation.operation_id, kind: 'prepare'});
+      assert.equal(observed.prepares.length, 1);
+      await view(page, 'overview'); const beforeReload = observed.requests.length;
+      activeStep = 'retained-reference-overview-reload';
+      const loaded = page.waitForResponse(response => response.url() === ORIGIN + '/api/operator-demo/catalog');
+      await page.reload({waitUntil: 'networkidle'});
+      const response = await loaded; assert.equal(response.status(), 200); await response.finished();
+      await page.waitForFunction(() => document.querySelector('#load-error').hidden &&
+        document.querySelector('#credential-fields').disabled && !document.querySelector('#mutation-review-confirm').disabled);
+      assert.equal(await page.title(), 'Overview - Serverware operator workspace');
+      assert(await page.locator('#overview').isVisible()); assert(await page.locator('#proxy').isHidden());
+      assert(await page.locator('#mutation-review').isVisible());
+      assert(await node(page, 'recovery-hint').isVisible());
+      assert.match(await node(page, 'recovery-hint').innerText(), /Google provider configuration needs a status check/);
+      assert.equal(await node(page, 'recovery-link').getAttribute('href'), '#proxy');
+      assert.equal(await node(page, 'recovery-link').innerText(), 'Check Google configuration result');
+      assert.deepEqual(await noMaterial(page), reference);
+      assert.equal(observed.requests.length, beforeReload, 'restoring the reference never auto-checks or resubmits');
+      // Confirmation cannot clear the unresolved provider hold. The normal
+      // controller may emit again, but no request or mutation is authorized.
+      await page.locator('#mutation-review-confirm').click();
+      assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === true));
+      assert(await page.locator('#credential-save').isDisabled());
+      assert(await page.locator('#mutation-review').isVisible());
+      assert.equal(observed.requests.length, beforeReload);
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await node(page, 'recovery-link').isVisible());
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      activeStep = 'retained-reference-fixed-recovery-link';
+      await node(page, 'recovery-link').click(); await page.locator('#proxy').waitFor({state: 'visible'});
+      assert.equal(new URL(page.url()).hash, '#proxy');
+      assert.equal(await page.locator('nav a[href="#proxy"]').getAttribute('aria-current'), 'page');
+      assert.equal(await page.locator('.page:visible').count(), 1);
+      assert(await node(page, 'panel').isVisible()); assert(!await node(page, 'check').isDisabled());
+      await node(page, 'operation-reference').locator('..').locator(':scope > summary').click();
+      assert(await node(page, 'operation-reference').isVisible());
+      assert.equal(await node(page, 'operation-reference').innerText(), reference.operation_id);
+      assert.equal(observed.requests.length, beforeReload, 'the fixed navigation link itself performs no recovery request');
+      terminal(state, observed, status);
+      activeStep = 'retained-reference-exact-terminal-check';
+      await check(page);
+      assert.deepEqual(observed.requests.slice(beforeReload), [
+        {method: 'GET', path: PATH + '/' + reference.operation_id},
+        {method: 'GET', path: PATH},
+      ], 'one exact status GET followed by the existing read-only discovery refresh');
+      assert.equal(observed.prepares.length, 1); assert.equal(observed.cancels.length, 0);
+      assert.match(await node(page, 'operation-status').innerText(), status === 'cancelled' ? /Cancelled/ : /Activation is recorded/);
+      assert(await node(page, 'recovery-hint').isHidden(), 'only the resolved Google hint retires');
+      assert(await page.locator('#mutation-review').isVisible(), 'terminal receipt does not acknowledge the shared review');
+      assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === true));
+      assert(await page.locator('#credential-save').isDisabled());
+      assert(!await page.locator('#mutation-review-confirm').isDisabled());
+      assert.deepEqual(await noMaterial(page), reference);
+      const afterCheck = observed.requests.length;
+      activeStep = 'retained-reference-explicit-shared-confirmation';
+      await page.locator('#mutation-review-confirm').click(); await ready(page);
+      assert(await page.locator('#mutation-review').isHidden());
+      assert(await node(page, 'recovery-hint').isHidden());
+      await view(page, 'credentials'); assert(!await page.locator('#credential-save').isDisabled(),
+        'successful explicit confirmation proves the Google hold was released');
+      assert.equal(observed.requests.length, afterCheck, 'confirmation is local, not a replay or second recovery request');
+      assert.equal(observed.prepares.length, 1); assert.equal(observed.cancels.length, 0);
+      assert.deepEqual(await noMaterial(page), reference);
+    });
+  }],
 ];
 
 async function hashes() {

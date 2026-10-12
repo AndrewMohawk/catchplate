@@ -189,6 +189,7 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             # refresh trigger, provider probe or audit/catalog mutation.
             observed_again = self.status()
             self.assertEqual(self.snapshot(), committed)
+
             self.assertGreaterEqual(observed_again["observed_activity"]["observed_at_epoch_ms"],
                 activity["observed_at_epoch_ms"])
         with self.runner():
@@ -200,6 +201,21 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             restarted["observed_activity"]["observed_at_epoch_ms"] = activity["observed_at_epoch_ms"]
             self.assertEqual(restarted, current)
             self.assertEqual(self.snapshot(), committed)
+
+    def test_catalog_bodyless_http_reads_and_body_refusals_preserve_state(self):
+        with self.runner():
+            before = self.snapshot()
+            for headers in ([], [("Content-Length", "0")]):
+                code, raw, response_headers = self.request("GET", CATALOG, headers=headers)
+                self.assertEqual(code, 200)
+                self.assertEqual(json.loads(raw)["schema"], "serverware.operatorCatalog/v1")
+                self.assertEqual(response_headers.get("cache-control"), "no-store")
+            for body, headers in ((b"x", []), (None, [("Content-Encoding", "gzip")])):
+                code, raw, response_headers = self.request("GET", CATALOG, body=body, headers=headers)
+                self.assertEqual(code, 400)
+                self.assertEqual(json.loads(raw), {"detail": "operator catalog status accepts no body"})
+                self.assertEqual(response_headers.get("cache-control"), "no-store")
+            self.assertEqual(self.snapshot(), before)
 
     def test_cas_unknown_and_storage_failure_are_fixed_and_atomic(self):
         with self.runner():

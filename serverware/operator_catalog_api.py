@@ -198,8 +198,22 @@ async def catalog(request: Request, _: auth.AdminIdentity = Depends(_admin_ident
     from serverware import operator_catalog_mutations as mutations
 
     _admit(request, mutation=False)
-    if request.headers.getlist("transfer-encoding") or request.headers.getlist("content-length") not in ([], ["0"]):
+    if (request.headers.getlist("transfer-encoding") or request.headers.getlist("content-encoding")
+            or request.headers.getlist("content-length") not in ([], ["0"])):
         _reject(400, "operator catalog status accepts no body")
+    # Header declarations do not prove an empty ASGI stream. Check only after
+    # authentication/admission and before catalog work; never retain body bytes.
+    try:
+        async with asyncio.timeout(30):
+            async for chunk in request.stream():
+                if chunk:
+                    _reject(400, "operator catalog status accepts no body")
+    except HTTPException:
+        raise
+    except TimeoutError:
+        _reject(408, "operator catalog status body timed out")
+    except Exception:
+        _reject(400, "operator catalog status body unavailable")
     try:
         result = await _blocking(mutations.catalog_status)
         return JSONResponse(result, headers=_HEADERS)

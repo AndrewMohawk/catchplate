@@ -23,6 +23,7 @@ NODE_SHA256 = metadata.NODE_SHA256
 LIBATOMIC = Path("/usr/lib/x86_64-linux-gnu/libatomic.so.1.2.0")
 LIBATOMIC_SHA256 = "9d8a34468e614a71a6427dbabb0ac24eb8cb1e324dc6aa3bf95eb6f59201f000"
 DEPENDENCIES = "examples/npm-registry/node_modules"
+PACKAGES = {"npm": "11.20.0", "pacote": "21.5.1", "npm-registry-fetch": "19.1.1"}
 DEPENDENCIES_TARGET = "/app/" + DEPENDENCIES
 CHECKER = "/app/scripts/check_operator_npm_example.py"
 RUNTIME_SERVICES = {"network", "npm-registry", "serverware", "decision-gate-rs", "edge", "check"}
@@ -86,7 +87,7 @@ def validate_dependencies(root, expected):
     base.validated_binary_sha256(expected)
     observed = dependency_inventory(root)
     base.require(dependency_sha256(observed) == expected, "dependency tree pin differs")
-    for name, version in metadata.PACKAGES.items():
+    for name, version in PACKAGES.items():
         paths = [root / name / "package.json"]
         if name != "npm":
             paths.append(root / "npm/node_modules" / name / "package.json")

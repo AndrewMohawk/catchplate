@@ -6,10 +6,11 @@ a reviewed consumer project into a new retained directory. The
 client never receives the real npm provider token. This is example source, not a
 claim that this project has contacted the public npm registry successfully.
 
-The transport/configuration follows the existing isolated fixture for Node
-**25.5.0**, npm **11.8.0**, pacote **21.0.4**, and npm-registry-fetch **19.1.1**.
-The project requires those versions and POSIX process groups (Linux/macOS); the
-existing fixture was verified on Linux. Other versions/platforms are unverified.
+The current dependency pins are Node **25.5.0**, npm **11.20.0**, pacote
+**21.5.1**, and npm-registry-fetch **19.1.1**. The project requires those
+versions and POSIX process groups (Linux/macOS). Earlier isolated proxy
+acceptance below used npm 11.8.0/pacote 21.0.4; it is not acceptance of the
+updated graph. Other versions/platforms are unverified.
 Run as a normal OS account with a resolvable home directory (as on a GitHub-hosted
 runner), not an arbitrary numeric container UID with no passwd entry.
 
@@ -238,7 +239,35 @@ node --input-type=module -e "import { verifyVersions } from './client.mjs'; veri
 
 This checks installed package metadata, not a registry request.
 
-## Isolated proxy verification
+## Dependency repair and remaining upstream advisories
+
+The October 12 dependency repair uses the official
+[npm 11.20.0 release](https://github.com/npm/cli/releases/tag/v11.20.0) and
+[pacote 21.5.1 release](https://github.com/npm/pacote/releases/tag/v21.5.1).
+Both declare Node `^20.17.0 || >=22.9.0`, compatible with the retained Node
+25.5.0 pin. npm's bundled pacote and npm-registry-fetch are checked separately
+against the same exact versions as the standalone packages. No bundled code,
+dependency override, TLS policy or retry policy is patched.
+
+The regenerated lock still reports five vulnerable packages, all inside npm's
+upstream bundle: `brace-expansion`, `http-cache-semantics`, `ip-address`,
+`postcss-selector-parser`, and `undici` (three high, two moderate in the retained
+October 12 npm audit). This is a partial dependency repair, not an advisory-free
+or exploitability verdict. Do not hand-edit bundled dependencies or treat the
+older proxy receipt as verification of this updated graph.
+
+For this update, 29 Node component groups and 99 Python fixture/checker/recipe
+groups passed in a read-only, network-disabled container. The actual stock CLI
+also passed the separate loopback-only install, cold `ci`, and refused-audit
+protocol checks: 13 arrivals total, no cold-`ci` metadata reads, unchanged lock
+bytes, and audit failure rejected despite npm returning zero. That protocol
+fixture is not the Serverware proxy, does not exercise TLS, and does not
+establish publication or provider access for the updated versions. The first
+CLI attempt ran as an unsupported numeric UID without a passwd entry and
+failed before any registry arrival; using the image's existing normal account
+resolved that harness error without changing application configuration.
+
+## Historical isolated proxy verification
 
 On 2026-10-12 UTC, the expanded stock npm 11.8.0 scenario passed 25 commands
 against an isolated synthetic registry: nine successful commands and 16

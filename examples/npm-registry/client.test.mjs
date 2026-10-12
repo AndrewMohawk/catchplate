@@ -153,10 +153,19 @@ test('errors are neither printed nor retried, and an uncertain write has a fixed
 });
 
 test('version guards cover direct and npm-bundled libraries; malformed trust is refused', () => {
+  assert.deepEqual(VERSIONS, { npm: '11.20.0', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
   let reads = 0;
   const read = file => { reads++; const name = file.split('/').at(-2); return JSON.stringify({ name, version: VERSIONS[name] }); };
   verifyVersions(read);
   assert.equal(reads, 5);
+  for (const selected of ['npm', 'pacote', 'npm/node_modules/pacote']) {
+    assert.throws(() => verifyVersions(file => {
+      const relative = file.split('/node_modules/').slice(1).join('/node_modules/').replace(/\/package\.json$/, '');
+      const name = file.split('/').at(-2);
+      return JSON.stringify({name, version: relative === selected
+        ? (name === 'npm' ? '11.8.0' : '21.0.4') : VERSIONS[name]});
+    }));
+  }
   assert.throws(() => verifyVersions(file => JSON.stringify({ name: file.split('/').at(-2), version: '0.0.0' })));
   for (const text of ['', 'not a certificate', '-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----',
     '-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----']) {

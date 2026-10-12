@@ -152,7 +152,7 @@ def strict_json(raw):
         parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
 
 
-def validate_publish(raw, spec):
+def validate_publish(raw, spec, *, npm_version="11.8.0"):
     """Independent receiver oracle, not the production publish decoder."""
     with _refusal_stage("publish_identity"):
         require(isinstance(raw, bytes) and 0 < len(raw) <= MAX_BODY)
@@ -168,7 +168,7 @@ def validate_publish(raw, spec):
         manifest = document["versions"][version]
         require(isinstance(manifest, dict) and manifest.get("name") == package
             and manifest.get("version") == version and manifest.get("_id") == package + "@" + version
-            and manifest.get("_nodeVersion") == "25.5.0" and manifest.get("_npmVersion") == "11.8.0"
+            and manifest.get("_nodeVersion") == "25.5.0" and manifest.get("_npmVersion") == npm_version
             and not any(key in manifest for key in ("scripts", "dependencies", "publishConfig", "tag")))
     with _refusal_stage("publish_attachment"):
         name = package + "-" + version + ".tgz"
@@ -192,7 +192,7 @@ def validate_publish(raw, spec):
         "tarballIntegrity": integrity, "tarballShasum": shasum}, manifest, payload
 
 
-def validate_headers(fields, method, package, body_length):
+def validate_headers(fields, method, package, body_length, *, npm_version="11.8.0", pacote_version="21.0.4"):
     require(len(fields) <= 20 and len({name for name, _ in fields}) == len(fields))
     headers = dict(fields)
     common = {"host", "authorization", "accept", "user-agent", "connection", "content-length",
@@ -205,10 +205,10 @@ def validate_headers(fields, method, package, body_length):
         and headers.get("connection", "close") in {"close", "keep-alive"}
         and headers.get("content-length", "0") == str(body_length)
         and headers.get("npm-scope", "") == "" and headers.get("npm-in-ci") in {None, "false"}
-        and re.fullmatch(r"npm/11\.8\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
+        and re.fullmatch(r"npm/" + re.escape(npm_version) + r" node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
     if method == "GET":
         require(body_length == 0 and headers.get("accept") == CORGI
-            and headers.get("pacote-version") == "21.0.4" and headers.get("pacote-req-type") == "packument"
+            and headers.get("pacote-version") == pacote_version and headers.get("pacote-req-type") == "packument"
             and headers.get("pacote-pkg-id") == "registry:" + package
             and headers.get("cache-control") in {None, "no-cache"})
     else:

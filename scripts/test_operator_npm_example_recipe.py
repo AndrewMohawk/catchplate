@@ -190,7 +190,7 @@ class DependencyInventoryTests(InertTests):
         self.entry = self.root / "pacote/bin/index.js"
         self.entry.write_bytes(b"synthetic package entry\n"); self.entry.chmod(0o644)
         package = self.root / "pacote/package.json"
-        package.write_bytes(b'{"name":"pacote","version":"21.0.4"}\n'); package.chmod(0o644)
+        package.write_bytes(b'{"name":"pacote","version":"21.5.1"}\n'); package.chmod(0o644)
         self.link = self.root / ".bin/pacote"
         self.link.symlink_to("../pacote/bin/index.js")
 
@@ -237,9 +237,9 @@ class DependencyInventoryTests(InertTests):
         with self.assertRaises(ValueError): recipe.dependency_inventory(link)
 
     def test_exact_manifest_pin_and_both_top_level_and_bundled_package_versions(self):
-        identities = (("npm", "npm", "11.8.0"), ("pacote", "pacote", "21.0.4"),
+        identities = (("npm", "npm", "11.20.0"), ("pacote", "pacote", "21.5.1"),
             ("npm-registry-fetch", "npm-registry-fetch", "19.1.1"),
-            ("npm/node_modules/pacote", "pacote", "21.0.4"),
+            ("npm/node_modules/pacote", "pacote", "21.5.1"),
             ("npm/node_modules/npm-registry-fetch", "npm-registry-fetch", "19.1.1"))
         for relative, name, version in identities:
             directory = self.root / relative

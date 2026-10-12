@@ -96,7 +96,7 @@ def require(value):
         raise ValueError("private npm metadata fixture refused")
 
 
-def validate_headers(fields, spec):
+def validate_headers(fields, spec, *, npm_version="11.8.0", pacote_version="21.0.4"):
     require(len(fields) <= 16 and len({name for name, _ in fields}) == len(fields))
     headers = dict(fields)
     require(set(headers) <= {"host", "authorization", "accept", "user-agent", "connection",
@@ -104,16 +104,16 @@ def validate_headers(fields, spec):
         "npm-command", "npm-scope", "npm-in-ci", "cache-control"})
     require(headers.get("host") == "registry.npmjs.org"
         and hmac.compare_digest(headers.get("authorization", ""), "Bearer " + TOKEN)
-        and headers.get("accept") == spec["accept"] and headers.get("pacote-version") == "21.0.4"
+        and headers.get("accept") == spec["accept"] and headers.get("pacote-version") == pacote_version
         and headers.get("pacote-req-type") == "packument"
         and headers.get("pacote-pkg-id") == "registry:" + spec["package"]
         and headers.get("connection", "close") in {"close", "keep-alive"}
         and headers.get("content-length", "0") == "0")
     if spec["client"] == "npm":
         require(headers.get("npm-command") == "view" and headers.get("npm-auth-type") == "web"
-            and re.fullmatch(r"npm/11\.8\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
+            and re.fullmatch(r"npm/" + re.escape(npm_version) + r" node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
     else:
-        require(headers.get("user-agent") == "pacote/21.0.4 node/v25.5.0"
+        require(headers.get("user-agent") == "pacote/" + pacote_version + " node/v25.5.0"
             and not any(key in headers for key in ("npm-command", "npm-auth-type", "npm-scope")))
     require(headers.get("cache-control") in {None, "no-cache"} and headers.get("npm-scope", "") == ""
         and headers.get("npm-in-ci") in {None, "false"})

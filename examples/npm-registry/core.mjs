@@ -4,7 +4,7 @@ import { isAbsolute, resolve } from 'node:path';
 
 export const REGISTRY = 'https://registry.npmjs.org/';
 export const PUBLIC_NPM_DUMMY = 'serverware-npm-placeholder-v1';
-export const VERSIONS = Object.freeze({ npm: '11.8.0', pacote: '21.0.4', 'npm-registry-fetch': '19.1.1' });
+export const VERSIONS = Object.freeze({ npm: '11.20.0', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
 export const OPERATIONS = new Set(['view', 'manifest', 'publish', 'install', 'ci']);
 export const isInstallation = operation => operation === 'install' || operation === 'ci';
 const NAME = /^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*)$/;

@@ -239,19 +239,19 @@ def validate_header_projection(row, spec):
             and headers.get("host") == "registry.npmjs.org" and headers.get("npm-command") == spec["operation"]
             and headers.get("npm-auth-type", "web") == "web" and headers.get("npm-in-ci") in {None, "false"}
             and headers.get("npm-scope", "") == ""
-            and re.fullmatch(r"npm/11\.8\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")),
+            and re.fullmatch(r"npm/11\.20\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")),
             "npm install public header projection differs")
         if mode == "audit":
             require(headers.get("accept") == "*/*" and headers.get("content-type") == "application/json"
                 and headers.get("content-encoding") == "gzip", "npm install audit headers differ")
         elif mode == "metadata":
             # Stock Arborist requests fullMetadata; standalone pacote does not.
-            require(headers.get("accept") == fixture.FULL and headers.get("pacote-version") == "21.0.4"
+            require(headers.get("accept") == fixture.FULL and headers.get("pacote-version") == "21.5.1"
                 and headers.get("pacote-req-type") == "packument" and headers.get("pacote-pkg-id") == "registry:" + package
                 and "pacote-integrity" not in headers, "npm install metadata headers differ")
         else:
             record = stored_record(fixture.spec_for("publish_dependency" if package == fixture.PACKAGES[0] else "publish_scoped"))
-            require(headers.get("accept") == "*/*" and headers.get("pacote-version") == "21.0.4"
+            require(headers.get("accept") == "*/*" and headers.get("pacote-version") == "21.5.1"
                 and headers.get("pacote-req-type") == "tarball"
                 and headers.get("pacote-pkg-id") == "remote:" + package + "@" + fixture.ORIGIN + fixture.tarball_path(package, version)
                 and headers.get("pacote-integrity") == record["tarballIntegrity"], "npm install tarball headers differ")
@@ -265,15 +265,15 @@ def validate_header_projection(row, spec):
         and headers.get("host") == "registry.npmjs.org" and headers.get("npm-in-ci") in (None, "false")
         and headers.get("npm-scope", "") == "", "npm example request header projection differs")
     if spec["operation"] == "manifest":
-        require(headers.get("user-agent") == "pacote/21.0.4 node/v25.5.0"
+        require(headers.get("user-agent") == "pacote/21.5.1 node/v25.5.0"
             and not set(headers) & {"npm-command", "npm-auth-type", "npm-scope"}, "standalone pacote headers differ")
     else:
-        require(re.fullmatch(r"npm/11\.8\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", ""))
+        require(re.fullmatch(r"npm/11\.20\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", ""))
             and headers.get("npm-command") == spec["operation"] and headers.get("npm-auth-type", "web") == "web",
             "stock npm CLI headers differ")
     if row["method"] == "GET":
         require(headers.get("accept") == (fixture.FULL if spec["operation"] == "view" else fixture.CORGI)
-            and headers.get("pacote-version") == "21.0.4" and headers.get("pacote-req-type") == "packument"
+            and headers.get("pacote-version") == "21.5.1" and headers.get("pacote-req-type") == "packument"
             and headers.get("pacote-pkg-id") == "registry:" + spec["package"], "npm example metadata headers differ")
     else:
         require(row["method"] == "PUT" and spec["operation"] == "publish" and headers.get("accept") == "*/*"
@@ -913,7 +913,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             "clientCommands": 25, "successfulClientCommands": 9, "expectedFailedClientCommands": 16,
             "providerAttempts": 25, "metadataReleases": 13, "tarballReleases": 6, "auditReleases": 3,
             "unauthorizedPuts": 0,
-            "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
+            "npmVersion": "11.20.0", "pacoteVersion": "21.5.1", "registryFetchVersion": "19.1.1",
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "nodeSha256": metadata.NODE_SHA256,
             "nodeModulesSha256": self.args.expected_node_modules_sha256,
             "sourceSha256": {name: self.pins[Path("/app") / name][1] for name in SOURCE_FILES},
@@ -943,8 +943,8 @@ def validate_success_result(value):
     require(type(value) is dict and set(value) == fields and value["schema"] == SCHEMA
         and all(value[k] is True for k in true_flags) and all(value[k] is False for k in false_flags)
         and all(type(value[k]) is int and value[k] == v for k, v in integers.items()), "npm example final result shape differs")
-    require(value["trustMode"] == "additiveSharedNodeRoots" and value["npmVersion"] == "11.8.0"
-        and value["pacoteVersion"] == "21.0.4" and value["registryFetchVersion"] == "19.1.1"
+    require(value["trustMode"] == "additiveSharedNodeRoots" and value["npmVersion"] == "11.20.0"
+        and value["pacoteVersion"] == "21.5.1" and value["registryFetchVersion"] == "19.1.1"
         and value["nodeSha256"] == metadata.NODE_SHA256 and type(value["nodeModulesSha256"]) is str
         and HEX.fullmatch(value["nodeModulesSha256"]) and type(value["sourceSha256"]) is dict
         and set(value["sourceSha256"]) == set(SOURCE_FILES)

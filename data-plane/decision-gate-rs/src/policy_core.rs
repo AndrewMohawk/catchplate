@@ -12663,7 +12663,28 @@ mod query_explicit_time_tests {
             }
             _ => panic!("expected query denial, got {}", evaluation.disposition_label()),
         }
-        assert!(evaluation.operation.is_none());
+        assert_eq!(evaluation.operation.as_ref(), Some(&json!({"operation":"generic.read"})));
+        assert_eq!(evaluation.route_id.as_deref(), Some("route:test"));
+        assert!(evaluation.rewrite.is_none());
+        assert!(evaluation.conditions.is_empty());
+        assert_eq!(evaluation.dispatch_projection.as_ref(), Some(&json!({
+            "domain":"serverware.policyShadowNoDispatch/v1",
+            "outcome":{"kind":"deny","reason":expected},
+        })));
+        match &evaluation.plan {
+            SeparatedPolicyPlan::Active(plan) => {
+                assert!(matches!(plan.outcome(), PolicyOutcome::Deny { reason } if reason.as_str() == expected));
+                assert!(plan.effect_intents().is_empty());
+                assert!(plan.request_rewrite_commitments().is_empty());
+                assert!(plan.response_validation_commitments().is_empty());
+            }
+            SeparatedPolicyPlan::Candidate(plan) => {
+                assert!(matches!(plan.outcome(), PolicyOutcome::Deny { reason } if reason.as_str() == expected));
+                assert!(plan.effect_intents().is_empty());
+                assert!(plan.request_rewrite_commitments().is_empty());
+                assert!(plan.response_validation_commitments().is_empty());
+            }
+        }
     }
 
     #[test]

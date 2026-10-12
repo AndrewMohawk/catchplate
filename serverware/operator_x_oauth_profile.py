@@ -3,7 +3,7 @@
 These values do not configure or activate an application, prove its ownership,
 verify an account, grant posting, or admit development/native execution. There
 are no settings, environment, database, key-initialization or network effects.
-The future lifecycle owner must supply all of those independent admissions.
+The configuration and lifecycle owners must supply those independent admissions.
 """
 from __future__ import annotations
 
@@ -143,10 +143,10 @@ def parse_profile(record: dict) -> Profile:
 
 
 class XOAuthApplicationInput(RevisionInput):
-    """Unwired write-only input; validating it does not authorize a mutation.
+    """Write-only configuration input; validation alone authorizes no mutation.
 
     Pydantic hides input in str/repr, not in raw ValidationError.errors()/json().
-    A future HTTP owner must return fixed errors, never those raw diagnostics;
+    The HTTP owner must return fixed errors, never those raw diagnostics;
     internal structured diagnostics must exclude both input and context.
     """
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)

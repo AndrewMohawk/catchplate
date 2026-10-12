@@ -29370,6 +29370,7 @@ from serverware import portal_session_activation_confirmation_routes as _activat
 from serverware import control_plane_workload_identity_routes as _workload_identity_routes
 from serverware import operator_catalog_api as _operator_catalog_api
 from serverware import operator_google_configuration_api as _operator_google_configuration_api
+from serverware import operator_x_configuration_api as _operator_x_configuration_api
 from serverware import operator_notification_api as _operator_notification_api
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
@@ -29386,5 +29387,6 @@ _fastapi_app.include_router(_activation_confirmation_routes.router)
 _fastapi_app.include_router(_workload_identity_routes.router)
 _fastapi_app.include_router(_operator_catalog_api.router)
 _fastapi_app.include_router(_operator_google_configuration_api.router)
+_fastapi_app.include_router(_operator_x_configuration_api.router)
 _fastapi_app.include_router(_operator_notification_api.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

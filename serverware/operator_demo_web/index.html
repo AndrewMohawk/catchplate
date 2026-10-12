@@ -310,6 +310,32 @@ user-agent</textarea><p class="small muted">Do not list Content-Type: the reques
   </div>
   <p id="google-configuration-connect-link" hidden><a href="#credentials">Go to Accounts &amp; keys to connect a Google account →</a> This link does not start consent.</p>
 </article>
+<article id="x-configuration-panel" class="card" aria-labelledby="x-configuration-title" hidden>
+  <h2 id="x-configuration-title">X (Twitter) application</h2>
+  <button id="x-configuration-review" type="button" class="secondary">Review X application settings</button>
+  <p id="x-configuration-status" role="status" aria-live="polite"></p>
+  <div id="x-configuration-settings">
+  <p>Save the proxy’s X OAuth application. Settings are stored immediately with no restart; saving does not connect an account or verify access to X.</p>
+  <dl class="metadata"><dt>Callback URL</dt><dd><code id="x-configuration-callback">Review settings to get this deployment’s exact callback URL.</code></dd></dl>
+  <button id="x-configuration-copy" type="button" class="secondary" disabled>Copy callback URL</button>
+  <p class="small muted">Register this exact callback in your X application. Use the OAuth Client ID and Client secret, not an app-only bearer token or account access token.</p>
+  <details><summary>Requested account permissions</summary><pre id="x-configuration-scopes">Exact scopes are shown after review.</pre><p class="small muted">These are the fixed permissions for text posting. Saving an application does not grant these permissions or start consent.</p></details>
+  <form id="x-configuration-form" autocomplete="off" hidden>
+    <fieldset id="x-configuration-fields" disabled>
+      <label for="x-configuration-client-id">Client ID</label><input id="x-configuration-client-id" maxlength="256" autocomplete="off" spellcheck="false" required>
+      <label for="x-configuration-client-secret">Client secret</label><input id="x-configuration-client-secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" required>
+      <p class="small muted">Write-only. Cleared when submitted or when you leave this page; never saved in browser storage. Replacing a saved application is not supported yet.</p>
+      <button id="x-configuration-save" type="submit" disabled>Save X application</button>
+    </fieldset>
+  </form>
+  <div id="x-configuration-saved" hidden><h3>Saved application</h3><dl class="metadata"><dt>Client ID</dt><dd><code id="x-configuration-saved-client"></code></dd><dt>Client secret</dt><dd>Stored securely · never returned</dd></dl></div>
+  <p id="x-configuration-consent" class="small muted">Account consent and posting are not available from this configuration panel.</p>
+  </div>
+  <div id="x-configuration-operation" hidden>
+    <button id="x-configuration-check" type="button" class="secondary" disabled>Check result</button>
+    <details><summary>Save reference and recovery</summary><code id="x-configuration-operation-reference"></code><p class="small muted">Only this public operation ID is retained in this tab. An interrupted save is checked with read-only requests, never automatically resubmitted. A missing receipt does not prove failure.</p></details>
+  </div>
+</article>
 <article id="client-existing-settings" class="card"><h2>Use your existing client's proxy settings</h2><p>Keep your client's API URL, method and request data. Configure its HTTPS proxy endpoint below, send the application token as proxy authentication, and trust the downloaded CA for the destination inside the tunnel. Your client must support these proxy and TLS settings.</p><p>Every request must still match an active access rule. Follow that rule's credential-input choice: send no provider credential header for automatic insertion, or exactly the configured dummy value for replacement.</p></article>
 <div class="two-column"><article class="card"><h2>Proxy endpoint</h2><code id="proxy-url">Loading...</code><p class="small muted">Deployment-managed. Outer TLS uses system trust; the downloaded CA verifies the destination inside the tunnel.</p><p id="activation-status" role="status" aria-live="polite"></p><button id="proxy-refresh" class="secondary">Refresh activation</button></article><article class="card"><h2>Certificate authority</h2><p>Trust this public development CA only in your test client.</p><a id="ca-download" class="button" href="/ca.pem" download="serverware-ca.pem">Download CA certificate</a><p class="small muted">Do not install it system-wide or disable TLS verification. The private signing key is never downloaded.</p></article></div>
 <article id="client-proxy-login" class="card" hidden><h2>Proxy login for this application</h2><p id="client-proxy-auth-mode"></p><dl class="metadata"><dt>Proxy host</dt><dd><code id="client-proxy-host"></code></dd><dt>Port</dt><dd><code id="client-proxy-port"></code></dd><dt>Username</dt><dd><code id="client-proxy-username"></code></dd><dt>Password / token</dt><dd id="client-proxy-password-note"></dd></dl><p id="client-proxy-login-status" class="small muted" role="status" aria-live="polite"></p><p class="small muted">Login choices describe the control-plane source capability and require its paired proxy version. A loaded policy is not proof that a client request succeeded. Keep tokens out of proxy URLs.</p></article>

@@ -17,6 +17,8 @@ const UPSTREAM_LISTS = [[FIXTURE], [FIXTURE, GMAIL],
   [FIXTURE, 'https://api.github.com', 'https://registry.npmjs.org', GMAIL]];
 const CATALOG = '/api/operator-demo/catalog', UPSTREAMS = '/api/operator-demo/proxy/upstreams';
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2';
+const X_CONFIGURATION = '/api/operator-demo/oauth/x/configuration/v1';
+const X_DISABLED = {detail: 'X configuration is not supported by this deployment'};
 const PUBLIC = 'https://serverware-demo.example.com', POLICY = 'sha256:' + 'a'.repeat(64);
 const source = fs.readFileSync(CHECKER, 'utf8');
 const entrypoint = '\n(async () => {\n';
@@ -37,9 +39,10 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 scripts = module.SCRIPT_FILES
 variants = []
-for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js'},
-                {'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js'},
-                {'workspace_aws.js', 'workspace_gmail_sdk.js'}, {'workspace_gmail_sdk.js'}, set()):
+for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
+                {'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
+                {'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
+                {'workspace_gmail_sdk.js', 'workspace_x_configuration.js'}, {'workspace_x_configuration.js'}, set()):
     module.SCRIPT_FILES = tuple(name for name in scripts if name not in omitted)
     module.render.cache_clear()
     variants.append({'scripts': module.SCRIPT_FILES,
@@ -47,7 +50,7 @@ for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', '
 print(json.dumps({'scripts': module.SCRIPT_FILES,
     'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii'), 'variants': variants}))
 `, path.join(ROOT, 'serverware/operator_demo_portal.py')],
-  {encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024,
+  {encoding: 'utf8', timeout: 10000, maxBuffer: 8 * 1024 * 1024,
     env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}}));
 const expected = Buffer.from(reference.html, 'base64');
 assert(expected.length > 0 && expected.length <= 2 * 1024 * 1024);
@@ -125,6 +128,14 @@ function validate(f, route, value) {
   f.context.fixturePath = route; f.context.fixtureValue = value;
   return f.run('validate(fixturePath, fixtureValue)');
 }
+function disabledX(managed = false) {
+  const f = fixture(); f.context.mode = managed;
+  f.run('managedGoogle = mode; xConfigurationDisabled = serial(sourceScriptFiles()) === serial(X_CONFIGURATION_SCRIPTS);');
+  assert.equal(f.run('xConfigurationDisabled'), true);
+  f.context.fixtureReply = {status: 404, headers: [['content-type', 'application/json'], ['cache-control', 'no-store']],
+    body_base64: Buffer.from(JSON.stringify(X_DISABLED)).toString('base64')};
+  return f;
+}
 
 const tests = [
   ['only the exact Docker CLI receives a bounded Go scheduler in its clean child environment', () => {
@@ -155,10 +166,11 @@ const tests = [
     assert.equal(f.run('subprocessFailure("/usr/bin/docker", failure, undefined).bridge_refused'), false);
     assert.equal(forbiddenCalls, 0);
   }],
-  ['actual documentBytes matches all five closed Python renderer rosters in both checker modes', async () => {
-    assert.equal(reference.variants.length, 5);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true]);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_gmail_sdk.js')), [false, false, false, false, true]);
+  ['actual documentBytes matches all six closed Python renderer rosters in both checker modes', async () => {
+    assert.equal(reference.variants.length, 6);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_gmail_sdk.js')), [false, false, false, false, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_x_configuration.js')), [false, false, false, false, false, true]);
     for (const variant of reference.variants) {
       for (const managed of [false, true]) {
       const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
@@ -166,7 +178,9 @@ const tests = [
       assert.deepEqual(names, variant.scripts);
       assert.equal(new Set(names).size, names.length);
       assert.equal(names[names.indexOf('workspace_npm.js') + 1], 'workspace_npm_publish.js');
-      assert.deepEqual(names.slice(-2), ['workspace_google_configuration.js', 'app.js']);
+      if (names.includes('workspace_x_configuration.js'))
+        assert.deepEqual(names.slice(-3), ['workspace_google_configuration.js', 'workspace_x_configuration.js', 'app.js']);
+      else assert.deepEqual(names.slice(-2), ['workspace_google_configuration.js', 'app.js']);
       f.reads.length = 0;
       const actual = f.render(managed);
       const bytes = Buffer.from(variant.html, 'base64');
@@ -198,7 +212,7 @@ const tests = [
     assert.equal(forbiddenCalls, 0);
   }],
   ['Gmail SDK is additive only in its exact selected position, never mixed into older rosters', () => {
-    const names = reference.scripts;
+    const names = reference.variants[4].scripts;
     assert.equal(names[names.indexOf('workspace_applications.js') + 1], 'workspace_gmail_sdk.js');
     assert.equal(names[names.indexOf('workspace_gmail_sdk.js') + 1], 'workspace_proxy_audit.js');
     for (const changed of [names.filter(name => name !== 'workspace_aws.js'),
@@ -209,6 +223,134 @@ const tests = [
       assert.throws(() => f.render(true), error => error.message === 'renderer_roster_refused');
       assert.deepEqual(f.reads, ['operator_demo_portal.py'], 'refused roster never reads candidate assets');
     }
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['X configuration is additive only after Google configuration in the exact current roster', () => {
+    const names = reference.scripts;
+    assert.deepEqual(names.slice(-3), ['workspace_google_configuration.js', 'workspace_x_configuration.js', 'app.js']);
+    const mixed = reference.variants.slice(0, 4).map(variant =>
+      [...variant.scripts.slice(0, -1), 'workspace_x_configuration.js', 'app.js']);
+    for (const changed of [...mixed,
+      [...names.slice(0, -3), 'workspace_x_configuration.js', 'workspace_google_configuration.js', 'app.js'],
+      [...names, 'workspace_x_configuration.js']]) {
+      const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + changed.map(JSON.stringify).join(', ') + ')\n'});
+      assert.throws(() => f.render(true), error => error.message === 'renderer_roster_refused');
+      assert.deepEqual(f.reads, ['operator_demo_portal.py'], 'refused roster never reads candidate assets');
+    }
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['only the current roster permits the exact disabled-X GET flag and three additional reads', async () => {
+    for (const variant of reference.variants) {
+      for (const managed of [false, true]) {
+        const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
+        f.context.mode = managed;
+        f.run('managedGoogle = mode; xConfigurationDisabled = serial(sourceScriptFiles()) === serial(X_CONFIGURATION_SCRIPTS);');
+        const current = variant === reference.variants[5];
+        assert.equal(f.run('paths().includes(X_CONFIGURATION)'), current);
+        if (!current) {
+          await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
+          assert.equal(f.context.fixtureRequests.length, 0, 'historical assets never issue X discovery');
+        }
+      }
+    }
+    for (const managed of [false, true]) {
+      const f = disabledX(managed);
+      for (let index = 0; index < 3; index++) {
+        const reply = await f.run('get(X_CONFIGURATION)');
+        assert.equal(reply.status, 404); assert.equal(reply.headers['cache-control'], 'no-store');
+        assert.deepEqual(JSON.parse(reply.body), X_DISABLED);
+      }
+      assert.deepEqual(JSON.parse(JSON.stringify(f.context.fixtureRequests)), Array.from({length: 3}, () =>
+        ({op: 'get', path: X_CONFIGURATION, x_configuration_disabled: true})));
+      await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
+      assert.equal(f.context.fixtureRequests.length, 3);
+      const bounded = disabledX(managed);
+      bounded.context.cap = (managed ? 17 : 16) + 3;
+      bounded.run('receipt.gets = Array.from({length: cap - 1}, () => ({path: "/", method: "GET"}));');
+      await bounded.run('get(X_CONFIGURATION)');
+      await assert.rejects(bounded.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
+      assert.equal(bounded.context.fixtureRequests.length, 1, 'total GET bound still enforced');
+    }
+    const runSource = source.slice(source.indexOf('async function run()'), source.indexOf(entrypoint));
+    assert(runSource.indexOf('await identity();') < runSource.indexOf('xConfigurationDisabled = serial(sourceScriptFiles())'));
+    assert(runSource.indexOf('xConfigurationBrowserReadComplete = true;') < runSource.indexOf('await route.fulfill(response)'));
+    assert(runSource.includes("xConfigurationDisabled && phase === 'proxy' && seen[path] === 1"));
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['disabled-X accepts only the fixed 404 detail and one no-store header, not generic errors', async () => {
+    for (const mutate of [reply => reply.status = 200, reply => reply.status = 503,
+      reply => reply.headers = [['content-type', 'application/json']],
+      reply => reply.headers[1][1] = 'private, no-store',
+      reply => reply.headers.push(['Cache-Control', 'no-store']),
+      reply => reply.body_base64 = Buffer.from(JSON.stringify({detail: 'other unavailable'})).toString('base64'),
+      reply => reply.body_base64 = Buffer.from(JSON.stringify({...X_DISABLED, extra: true})).toString('base64'),
+      reply => reply.body_base64 = Buffer.from('[]').toString('base64'),
+      reply => reply.body_base64 = Buffer.from('{').toString('base64')]) {
+      const f = disabledX(); mutate(f.context.fixtureReply);
+      await assert.rejects(f.run('get(X_CONFIGURATION)'));
+      assert.equal(f.run('xConfigurationBrowserReadComplete'), false);
+      assert.equal(f.context.fixtureRequests.length, 1, 'no retry after invalid response');
+    }
+    const f = disabledX(true); await f.run('get(X_CONFIGURATION)');
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(before[X_CONFIGURATION])')), X_DISABLED);
+    f.run('before[X_CONFIGURATION].detail = "changed";');
+    await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'public_resource_changed_during_read');
+    const other = disabledX(true);
+    await assert.rejects(other.run('get(CATALOG)'), error => error.message === 'response_invalid');
+    assert.deepEqual(JSON.parse(JSON.stringify(other.context.fixtureRequests)),
+      [{op: 'get', path: CATALOG, managed_google_unconfigured: true}]);
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['disabled-X requires a completed browser read, hidden panel and no visible global hold', async () => {
+    for (const failed of [null, 'completed', 'seen', '#x-configuration-panel', '#x-configuration-form',
+      '#credential-fields', '#mutation-review']) {
+      const f = disabledX(); f.run('xConfigurationBrowserReadComplete = true; seen[X_CONFIGURATION] = 1;');
+      if (failed === 'completed') f.run('xConfigurationBrowserReadComplete = false');
+      if (failed === 'seen') f.run('seen[X_CONFIGURATION] = 2');
+      const visited = [];
+      f.context.fixturePage = {locator(selector) {
+        visited.push(selector);
+        assert(['#x-configuration-panel', '#x-configuration-form', '#credential-fields', '#mutation-review'].includes(selector));
+        return {async isHidden() { return selector !== failed; }, async isDisabled() { return selector === failed; }};
+      }};
+      if (failed === null) {
+        await f.run('verifyXConfigurationDisabled(fixturePage)');
+        assert.deepEqual(visited, ['#x-configuration-panel', '#x-configuration-form', '#credential-fields', '#mutation-review']);
+      } else await assert.rejects(f.run('verifyXConfigurationDisabled(fixturePage)'),
+        error => error.message === 'disabled_x_configuration_panel_or_hold_mismatch');
+      assert.equal(f.context.fixtureRequests.length, 0);
+    }
+    const old = fixture(); old.context.fixturePage = {locator: forbidden};
+    await old.run('verifyXConfigurationDisabled(fixturePage)');
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['only the verified exact disabled-X 404 console event is separated, at most once', () => {
+    const message = (url = PUBLIC + X_CONFIGURATION, text = 'Failed to load resource: the server responded with a status of 404 (Not Found)', type = 'error') =>
+      ({type: () => type, location: () => ({url}), text: () => text});
+    const f = disabledX();
+    f.run('xConfigurationBrowserReadComplete = true; seen[X_CONFIGURATION] = 1; receipt.expected_disabled_x_console_errors = 0;');
+    f.context.fixtureMessage = message(); f.run('recordConsole(fixtureMessage)');
+    assert.equal(f.run('receipt.expected_disabled_x_console_errors'), 1);
+    assert.equal(f.run('receipt.console_errors'), 0);
+    f.run('recordConsole(fixtureMessage)');
+    assert.equal(f.run('receipt.expected_disabled_x_console_errors'), 1);
+    assert.equal(f.run('receipt.console_errors'), 1, 'second identical error is not exempt');
+    for (const failed of ['historical', 'incomplete', 'unseen', 'duplicate', 'url', 'text']) {
+      const sample = disabledX();
+      sample.run('xConfigurationBrowserReadComplete = true; seen[X_CONFIGURATION] = 1; receipt.expected_disabled_x_console_errors = 0;');
+      if (failed === 'historical') sample.run('xConfigurationDisabled = false');
+      if (failed === 'incomplete') sample.run('xConfigurationBrowserReadComplete = false');
+      if (failed === 'unseen') sample.run('delete seen[X_CONFIGURATION]');
+      if (failed === 'duplicate') sample.run('seen[X_CONFIGURATION] = 2');
+      sample.context.fixtureMessage = message(failed === 'url' ? PUBLIC + CATALOG : undefined,
+        failed === 'text' ? 'synthetic-private-console-canary' : undefined);
+      sample.run('recordConsole(fixtureMessage)');
+      assert.equal(sample.run('receipt.expected_disabled_x_console_errors'), 0);
+      assert.equal(sample.run('receipt.console_errors'), 1);
+      assert(!sample.run('JSON.stringify(receipt)').includes('synthetic-private-console-canary'));
+    }
+    const info = disabledX(); info.context.fixtureMessage = message(undefined, undefined, 'info');
+    info.run('recordConsole(fixtureMessage)'); assert.equal(info.run('receipt.console_errors'), 0);
     assert.equal(forbiddenCalls, 0);
   }],
   ['missing or reordered modules and any changed response byte fail exact HTML comparison', async () => {
@@ -229,7 +371,8 @@ const tests = [
   }],
   ['raw-text escapes and missing or duplicated HTML markers still refuse', () => {
     for (const [name, value] of [['workspace_npm_publish.js', '/* </ScRiPt> */'],
-      ['workspace_aws.js', '/* </ScRiPt> */'], ['workspace_gmail_sdk.js', '/* </ScRiPt> */'], ['style.css', '/* </StYlE> */']]) {
+      ['workspace_aws.js', '/* </ScRiPt> */'], ['workspace_gmail_sdk.js', '/* </ScRiPt> */'],
+      ['workspace_x_configuration.js', '/* </ScRiPt> */'], ['style.css', '/* </StYlE> */']]) {
       for (const managed of [false, true]) assert.throws(() => fixture({[name]: value}).render(managed),
         error => error.message === 'renderer_raw_text_terminator');
     }
@@ -241,7 +384,7 @@ const tests = [
     }
   }],
   ['a missing selected asset fails closed without fallback or runtime work', () => {
-    for (const name of ['workspace_npm_publish.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_google_configuration.js']) {
+    for (const name of ['workspace_npm_publish.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js']) {
       const failure = Object.assign(new Error('synthetic missing public asset'), {code: 'ENOENT'});
       for (const managed of [false, true]) assert.throws(() => fixture({[name]: failure}).render(managed),
         error => error === failure);

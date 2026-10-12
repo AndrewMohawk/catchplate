@@ -136,8 +136,9 @@ verify a retained cache. No real build source, cache or deployment was changed.
 
 The intended story is: connect an X account in the console, give an application
 a posting permission, send its ordinary SDK request through the proxy, and
-inspect the durable audit result. The first unimplemented boundary is account
-connection: `operator_catalog_schema.py` admits `google_oauth` but no X OAuth
+inspect the durable audit result. First-save application configuration is now
+connected in source, but is not deployed. The next unimplemented boundary is
+account connection: `operator_catalog_schema.py` admits `google_oauth` but no X OAuth
 credential type, and `operator_demo.py` does not admit an X callback. Full-flow
 verification stops there; the component results above do not bridge that gap.
 
@@ -157,22 +158,61 @@ The operator journey is **configure the X application once → connect an accoun
 posting readiness are separate states. App-only username lookup stays separate;
 it must never be relabelled as a user account or a posting permission.
 
-The proposed configuration preset is `x_text_post_v1`. The server fixes its four
+The configuration preset is `x_text_post_v1`. The server fixes its four
 scopes, confidential-client authentication, provider endpoints and callback
 `/api/oauth/callback/x`. The administrator supplies only the client ID and a
 write-only client secret, alongside the normal operation/revision/policy guards.
 A public profile describes configuration; neither its digest nor a validated
 input object proves ownership, activation or permission to contact X.
 
-The public profile/input validator and explicit-key encryption primitives are
-implemented in `operator_x_oauth_profile.py` and `operator_x_provider_custody.py`.
-Nine profile and nine real-AES envelope tests passed in the retained application
-dependency image, together with all 29 existing Google custody controls. Source
-was read-only and container networking disabled. These modules create no key or
-table, select no active configuration, and do not contact a provider. The existing
-Google module is unchanged. Write-only serialization omits the client secret;
-future HTTP handlers must still suppress raw Pydantic structured errors because
-their default diagnostic objects can include submitted input.
+`operator_x_configuration.py` now joins first-save configuration, its dedicated
+SQLite custody namespace, one catalog revision and one audit event in the same
+publication-owned transaction. The authenticated API and Proxy setup panel use
+`/api/operator-demo/oauth/x/configuration/v1`; exact actor-owned operation GETs
+recover a lost save response without resubmitting. Discovery uses an existing
+read-only database and authenticates retained ciphertext; missing or corrupt
+state is not silently initialized. Existing credentials, applications, permissions,
+signed policy and upstream settings are unchanged by saving an X application.
+
+This configuration is per-operation control-plane state, not Google's cold
+app/proxy profile selection. Saving requires no restart and does not populate
+global X OAuth settings. Actual process admission still excludes native/enrolled
+ownership. Each future consent, refresh or cleanup operation must bind its exact
+retained configuration version before contacting X. Replacement and disabling
+remain refused until dependent account/cleanup ownership is implemented.
+
+The deployment owner must explicitly select
+`SERVERWARE_OPERATOR_MANAGED_X_ENABLED=1` and an existing private 0700
+`SERVERWARE_OPERATOR_X_CUSTODY_DIR`, mounted only in the app. This directory must
+be separate and non-nested from both app data and Google's provider key directory;
+it must also be kept out of gate/notification mounts. The normal Compose
+deployment has not been changed or enabled by these source additions. X controls
+stay hidden when the deployment reports the feature disabled. No consent button
+or posting-ready claim is exposed.
+
+The public profile/input validator remains separate from ownership admission.
+Write-only serialization omits the client secret; the connected HTTP handler
+returns fixed errors instead of raw Pydantic diagnostics. The browser clears
+secret fields after request serialization or navigation and retains only a public
+operation UUID for recovery, with explicit guidance after an uncertain reload.
+
+Source verification on 2026-10-12 covered 132 focused tests/groups: 24 X custody,
+27 provider-key, 12 admission, 9 API, 12 real-service, 2 full-application ASGI,
+14 offline UI, 11 read-only bridge and 21 renderer/asset controls. The real-service
+reopen fixture initially omitted publication startup admission; that fixture was
+corrected and its one failing group passed independently. The full-ASGI harness
+initially omitted the runner's private-file umask and compared HTTP header names
+case-sensitively; both test-only mistakes were corrected without relaxing runtime
+checks. Both full-app stories then passed in 27.474 seconds, including real
+administrator/Origin checks, encrypted readback, preserved existing resources and
+policy, one revision/audit event, lost-response recovery, and missing-key refusal.
+
+Backend checks used the retained application dependency image with networking
+disabled, read-only source and fresh disposable data. UI and browser-helper tests
+used inert DOM/transport fixtures: no rendered-browser, real-provider, Internet
+proxy or deployed-X acceptance is claimed. No Rust build, service restart, DNS
+change or pilot ran. The operator-owned private evidence directory is
+`serverware-operator-workspace-evidence/x-configuration-connected.basqSwQ1`.
 
 `operator_x_oauth_protocol.py` additionally builds private request descriptions
 and classifies supplied token, identity and revocation responses. All ten
@@ -197,7 +237,7 @@ The next integration must join these actual owners:
 
 | Boundary | Required owner and durable result |
 | --- | --- |
-| Configure | Explicit ordinary-development admission, provider-disjoint retained configuration/custody, exact selected version, audit and paired activation. No browser-triggered restart. |
+| Configure | Implemented in source: explicit ordinary-development admission, provider-disjoint retained configuration/custody, exact version and atomic audit/revision. No restart or provider contact. |
 | Consent | Actor-owned X intent, browser-bound one-use state and S256 PKCE, exact profile/revision checks, and retained cleanup capacity before exchanging a code. |
 | Connect | Verify `/2/users/me`; atomically join encrypted token, credential generation, X catalog identity, completed intent, cleanup disposition and audit. No implicit app grant. |
 | Refresh | Retain issued material before validation; atomically join replacement generation and audit. Preserve uncertain outcomes and original-client cleanup custody; do not automatically replay after a CAS conflict. |
@@ -211,8 +251,10 @@ generic OAuth routes, or remove native/enrolled-writer refusals.
 
 Google's existing custody table has a global configuration-version key and its
 reader validates the entire retained version roster. X must not add rows to it.
-Any future X tables need their own `operator_x_provider_custody` namespace, and
-shared-key first initialization must check both providers' retained history.
+The X store uses its own `operator_x_provider_custody` namespace and its own
+app-only key directory. First-key initialization refuses retained X configuration
+or custody objects; Google first-key initialization is unchanged. There is no
+shared provider-key bootstrap or cross-provider key adoption.
 Decryption alone does not select the active profile/version. Client replacement
 must remain refused until original-client cleanup ownership is implemented.
 

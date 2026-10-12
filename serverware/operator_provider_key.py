@@ -223,14 +223,39 @@ def initialize_first(admission: DirectoryAdmission, conn: sqlite3.Connection, *,
     provider-custody namespace. A failed DB commit may leave a valid orphan key;
     only another explicit first Prepare with the same proof may reuse it.
     """
+    return _initialize_first(admission, conn, no_retained_provider_state=no_retained_provider_state,
+        x_configuration=False)
+
+
+def initialize_first_x(admission: DirectoryAdmission, conn: sqlite3.Connection, *,
+        no_retained_provider_state: bool) -> KeyAdmission:
+    """First X save only, with its separate application-only key directory.
+
+    The X configuration owner proves its complete history/audit/custody absence
+    before calling. Google custody may coexist in the database, but the caller
+    must admit a different, non-nested key directory. Readers never call this.
+    """
+    return _initialize_first(admission, conn, no_retained_provider_state=no_retained_provider_state,
+        x_configuration=True)
+
+
+def _initialize_first(admission, conn, *, no_retained_provider_state, x_configuration):
     try:
         _require(type(admission) is DirectoryAdmission and no_retained_provider_state is True
             and isinstance(conn, sqlite3.Connection) and conn.in_transaction)
         from serverware.operator_publication import assert_held
         assert_held()
         _require(conn.execute("PRAGMA query_only").fetchone()[0] == 0
-            and conn.execute("PRAGMA read_uncommitted").fetchone()[0] == 0
-            and conn.execute("SELECT 1 FROM sqlite_master WHERE lower(name) GLOB 'operator_provider_custody*' "
+            and conn.execute("PRAGMA read_uncommitted").fetchone()[0] == 0)
+        if x_configuration:
+            for schema in ("main.sqlite_master", "sqlite_temp_master"):
+                _require(conn.execute("SELECT 1 FROM " + schema + " WHERE "
+                    "lower(name) GLOB 'operator_x_provider_custody*' OR "
+                    "lower(tbl_name) GLOB 'operator_x_provider_custody*' OR "
+                    "lower(name) GLOB 'operator_x_configuration*' OR "
+                    "lower(tbl_name) GLOB 'operator_x_configuration*' LIMIT 1").fetchone() is None)
+        else:
+            _require(conn.execute("SELECT 1 FROM sqlite_master WHERE lower(name) GLOB 'operator_provider_custody*' "
                 "OR lower(tbl_name) GLOB 'operator_provider_custody*' LIMIT 1").fetchone() is None)
         with _open_directory(admission.path) as directory:
             _check_directory(admission, directory)

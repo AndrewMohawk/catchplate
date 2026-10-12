@@ -18,6 +18,8 @@ PUBLIC = "https://serverware-demo.example.com"
 TOKEN_FILE = "/run/secrets/serverware/admin.token"
 PATHS = {"/", "/api/operator-demo/catalog", "/api/operator-demo/notifications", "/api/operator-demo/proxy/upstreams"}
 GOOGLE_CONFIGURATION = "/api/operator-demo/oauth/google/configuration/v2"
+X_CONFIGURATION = "/api/operator-demo/oauth/x/configuration/v1"
+X_DISABLED_DETAIL = "X configuration is not supported by this deployment"
 PRIVATE = {"secret", "client_token", "access_token", "refresh_token", "id_token", "admin_token", "encrypted_secret",
            "token_hash", "secret_nonce", "encrypted_dek", "client_secret", "provider_secret", "password",
            "proxy_password", "proxy_authorization", "authorization", "cookie", "set_cookie", "private_key"}
@@ -69,6 +71,11 @@ def source(command):
 def get_path(command):
     """Closed opt-in route admission, before any token or socket access."""
     require(type(command) is dict and command.get("op") == "get" and type(command.get("path")) is str)
+    if "x_configuration_disabled" in command:
+        require(set(command) == {"op", "path", "x_configuration_disabled"}
+            and command["x_configuration_disabled"] is True and command["path"] == X_CONFIGURATION
+            and os.environ.get("SERVERWARE_OPERATOR_MANAGED_X_ENABLED", "0") == "0")
+        return command["path"]
     managed = "managed_google_unconfigured" in command
     require(set(command) == ({"op", "path", "managed_google_unconfigured"} if managed else {"op", "path"}))
     if managed:
@@ -96,18 +103,23 @@ def get(command):
             "X-Serverware-Admin-Token": token, "Accept-Encoding": "identity", "Accept": media, "Connection": "close"})
         response = connection.getresponse()
         headers = response.getheaders()
-        require(response.status == 200 and len(headers) <= 64 and len({key.lower() for key, _ in headers}) == len(headers))
+        require(response.status == (404 if path == X_CONFIGURATION else 200)
+            and len(headers) <= 64 and len({key.lower() for key, _ in headers}) == len(headers))
         require(all(token not in key and token not in value and len(key) + len(value) <= 8192 and
                     key.lower() not in {"location", "set-cookie", "content-encoding", "transfer-encoding", "www-authenticate"} for key, value in headers))
         mapped = {key.lower(): value for key, value in headers}
         require(mapped.get("content-type", "").split(";", 1)[0].strip().lower() == media and "no-store" in mapped.get("cache-control", ""))
-        maximum = 32768 if path.endswith("/upstreams") or path == GOOGLE_CONFIGURATION else 131072 if path.endswith("/notifications") else 2 * 1024 * 1024
+        maximum = 32768 if path.endswith("/upstreams") or path in {GOOGLE_CONFIGURATION, X_CONFIGURATION} else 131072 if path.endswith("/notifications") else 2 * 1024 * 1024
         body = response.read(maximum + 1)
         require(0 < len(body) <= maximum and token_bytes not in body and b"PRIVATE KEY-----" not in body)
         if "content-length" in mapped:
             require(int(mapped["content-length"]) == len(body))
         if path != "/":
             public_json(body, token)
+        if path == X_CONFIGURATION:
+            # Exactly this public disabled response, including duplicate-field
+            # refusal. No generic 404 acceptance or error-body forwarding.
+            require(json.loads(body, object_pairs_hook=tuple) == (("detail", X_DISABLED_DETAIL),))
         return {"ok": True, "status": response.status, "headers": headers, "body_base64": base64.b64encode(body).decode("ascii")}
     finally:
         connection.close()

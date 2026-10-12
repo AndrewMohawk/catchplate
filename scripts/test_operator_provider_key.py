@@ -325,6 +325,110 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
         self.assertEqual(child.returncode, 0, "cold subprocess refused")
         self.assertEqual(child.stdout, b"")
 
+    def initialize_x(self):
+        with patch("serverware.operator_publication.assert_held") as held:
+            result = keys.initialize_first_x(self.admission, self.conn,
+                no_retained_provider_state=True)
+        held.assert_called_once_with()
+        return self.keep(result)
+
+    def test_x_first_key_can_coexist_with_distinct_google_key_and_namespace(self):
+        # Real keys/SQLite/AES; publication ownership and development admission
+        # flags are synthetic component inputs, not a configured lifecycle.
+        from serverware import operator_provider_custody as custody
+        from serverware import operator_x_provider_custody as x_custody
+        from serverware import operator_x_oauth_profile as profiles
+        google_directory = self.root / "google"
+        google_directory.mkdir(mode=0o700)
+        google_admission = keys.admit_directory(google_directory, data_directory=self.data)
+        google_key = self.initialize(google_admission)
+        google_path = google_directory / keys.FILENAME
+        before = google_path.read_bytes()
+        self.conn.execute("CREATE TABLE operator_provider_custody_meta (synthetic)")
+        self.conn.execute("CREATE TEMP TABLE operator_provider_custody_old (synthetic)")
+        with patch("serverware.operator_publication.assert_held"):
+            self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
+        value = self.initialize_x()
+        self.assertNotEqual(value.owner_id, google_key.owner_id)
+        self.assertNotEqual(value.material, google_key.material)
+        self.assertEqual(google_path.read_bytes(), before)
+        keys.check_pin(google_key)
+        keys.check_pin(value)
+        owner = custody.admit_development_owner(value.owner_id, operator_development=True,
+            release_channel="dev", production_image=False, native_or_enrolled=False)
+        binding = x_custody.bind_x(owner, config_version=1, public_profile=profiles.public_record(
+            profiles.build_profile(client_id="synthetic-x", public_origin="https://operator.example.com")))
+        sealed = x_custody.seal_x(owner, binding, key=value.material, secret="synthetic-x-private-value")
+        self.assertEqual(x_custody.open_x(owner, sealed, key=value.material).secret, "synthetic-x-private-value")
+        with self.assertRaises(x_custody.CustodyError):
+            x_custody.open_x(owner, sealed, key=google_key.material)
+
+    def test_x_main_and_temp_configuration_or_custody_namespaces_refuse(self):
+        for temporary in (False, True):
+            for name in ("operator_x_provider_custody", "Operator_X_Provider_Custody_orphan",
+                    "operator_x_configuration", "Operator_X_Configuration_partial"):
+                with self.subTest(temporary=temporary, name=name):
+                    self.conn.execute('CREATE ' + ('TEMP ' if temporary else '') + 'TABLE "' + name + '" (x)')
+                    with patch("serverware.operator_publication.assert_held"):
+                        self.refused(keys.initialize_first_x, self.admission, self.conn,
+                            no_retained_provider_state=True)
+                    self.assertFalse(self.path.exists())
+                    self.conn.execute('DROP TABLE ' + ('temp' if temporary else 'main') + '."' + name + '"')
+        self.conn.execute("CREATE TABLE ordinary (x)")
+        self.conn.execute("CREATE TRIGGER operator_x_configuration_trigger AFTER INSERT ON ordinary BEGIN SELECT 1; END")
+        with patch("serverware.operator_publication.assert_held"):
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+        self.assertFalse(self.path.exists())
+
+    def test_x_explicit_proof_publication_and_real_transaction_required(self):
+        self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+        with patch("serverware.operator_publication.assert_held") as held:
+            for proof in (False, None, 1, "true"):
+                self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=proof)
+            held.assert_not_called()
+            self.conn.rollback()
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+            self.conn.execute("PRAGMA read_uncommitted=ON")
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+            self.conn.rollback()
+            self.conn.execute("PRAGMA read_uncommitted=OFF")
+            self.conn.execute("PRAGMA query_only=ON")
+            self.conn.execute("BEGIN")
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+        self.assertFalse(self.path.exists())
+
+    def test_x_valid_orphan_recovery_preserves_exact_inode_owner_and_bytes(self):
+        value = self.initialize_x()
+        before = self.file_state()
+        self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        recovered = self.initialize_x()
+        self.assertEqual(recovered.owner_id, value.owner_id)
+        self.assertEqual(recovered.material, value.material)
+        self.assertEqual(self.file_state(), before)
+        self.conn.execute("CREATE TABLE operator_x_configuration_history (x)")
+        with patch("serverware.operator_publication.assert_held"):
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+        self.assertEqual(self.file_state(), before)
+
+    def test_x_retained_namespace_missing_key_is_never_recreated(self):
+        value = self.initialize_x()
+        keys.close_pin(value)
+        self.path.unlink()
+        self.conn.execute("CREATE TEMP TABLE operator_x_provider_custody_lost (x)")
+        with patch("serverware.operator_publication.assert_held"):
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+        self.refused(keys.read_existing_pinned, self.admission, value.owner_id)
+        self.assertFalse(self.path.exists())
+
+    def test_x_malformed_orphan_is_not_repaired_or_replaced(self):
+        self.write_record(b"synthetic-partial-key")
+        before = self.file_state()
+        with patch("serverware.operator_publication.assert_held"):
+            self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
+        self.assertEqual(self.file_state(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

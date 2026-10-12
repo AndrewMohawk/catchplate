@@ -13,7 +13,7 @@
 services:
   serverware:
     environment:
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:b824bdfe77d8f1a14ce629909da027a0f6725651b6441bc160032714a1219641
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:7101d7e367ecaa398bf057a6cb12f24497670625dd0b0d4ca843f6a0ab6f4da6
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
       SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR: /provider-custody
       SERVERWARE_PROCESS_MODE: serverware-control-plane
@@ -27,7 +27,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-a30c645ef06711a4acf605c3f01f4b129d10b0f6
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-bad0fc6f02471103b9f47001e079db2102e237d2
         target: /app
         read_only: true
         bind: {create_host_path: false}
@@ -42,7 +42,7 @@ services:
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-b824bdfe77d8f1a14ce629909da027a0f6725651b6441bc160032714a1219641/serverware-decision-gate
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-7101d7e367ecaa398bf057a6cb12f24497670625dd0b0d4ca843f6a0ab6f4da6/serverware-decision-gate
         target: /usr/local/bin/serverware-decision-gate
         read_only: true
         bind: {create_host_path: false}

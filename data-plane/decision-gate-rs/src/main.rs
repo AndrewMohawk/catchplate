@@ -47566,7 +47566,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 provider_query::validate_built_request(&decision["canonical_request"], route, &upstream_url, built)?;
             }
             if let Some(owner) = &reviewed_audit_body {
-                validate_npm_install_built_audit(owner, route, &decision, built)?;
+                validate_npm_install_built_audit(owner, route, &decision, built)
+                    .map_err(|_| "npm_install_audit_built_request_invalid")?;
             }
             if route.adapter_config.pointer("/request/bodyMode").and_then(Value::as_str) == Some(buffered_request::MODE) {
                 buffered_request::validate_built_body(&decision, built)

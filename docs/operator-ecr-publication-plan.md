@@ -232,6 +232,50 @@ Writer tests establish refusal before database access, not successful persistenc
 or native admission. Independent source review found no raw-JIT bypass through
 the operation-specific measured digest callers.
 
+### Review storage and disclosure are separate responsibilities
+
+The review history reader now selects only the ten decision-metadata fields
+that its UI formatter consumes. It neither fetches nor decrypts historical
+request documents. Four focused controls passed against disposable SQLite,
+including a database authorizer that rejects private-column reads and invalid
+ciphertext that would fail if the general approval reader were invoked. Existing
+scope filters, current-request exclusion, ordering and limits are unchanged.
+
+The pending native storage connection must preserve all three private inputs in
+two purpose-separated ciphertexts: a versioned URL-plus-canonical-request
+wrapper and the review display. The URL commitment alone cannot reconstruct the
+request after restart, and the wrapper's digest is not the canonical request's
+digest. Envelope bindings include the complete public request and original
+expiry; opening later must not restart the pending lifetime.
+
+Encryption is only the material step. A separate admitted native caller and
+fresh native proof, atomic opaque/evidence/approval insertion, authenticated cold
+capacity initialization, authorized review opening, and retained writer migration
+are still necessary before this becomes a working request-to-review workflow.
+The ordinary console must not perform that commissioning on page load.
+
+The new `native_jit_review_material` implements the two randomized AES-GCM
+envelopes with independent wrapped data keys, full request/scope bindings and
+mandatory readback. `native_jit_review_owner` adds a purpose-fixed sealing state
+machine: it validates the original private inputs, pins the configured policy and
+key/channel identity, clamps the original deadlines, and burns each request before
+encryption or output. Failed or uncertain output poisons the owner. It has no
+review/open command. Neither component is connected to the native dispatcher,
+Rust RPC, signing path or writer; its unsigned output is not admitted evidence.
+
+The focused run resolved 31 test groups across two snapshots: four metadata-history,
+eleven material, eight owner and eight existing private-ingress groups. The first
+material run passed ten groups; the remaining group's test helper accidentally
+replaced explicit `None` with a valid fixture. A sentinel-only helper correction
+left production code and assertions unchanged. That group and the two previously
+unreached eight-group suites then passed; earlier passing groups were not rerun.
+The tests use actual encryption and request codecs, with synthetic broker/channel
+owners; they do not establish native admission or end-to-end approvals. Both runs
+used the existing Python 3.11.15 image, no network, read-only source and bounded
+resources. Source pins remained unchanged and disposable containers were removed.
+Logs and pins are retained under
+`serverware-operator-workspace-evidence/jit-review-storage.rJfXoBjq`.
+
 The focused receipt checks require no pilot or build:
 
 ```sh

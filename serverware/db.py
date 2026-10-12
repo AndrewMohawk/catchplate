@@ -82115,6 +82115,7 @@ def list_approvals(status: str | None = None, limit: int = 50) -> list[dict[str,
 def list_similar_approvals(
     approval: dict[str, Any], limit: int = 5
 ) -> list[dict[str, Any]]:
+    """Return only the decision metadata used by approval review history."""
     args: list[Any] = [approval["id"]]
     clauses = ["id <> ?"]
     for field in ("principal_id", "route_id", "credential_id", "policy_hash"):
@@ -82126,14 +82127,22 @@ def list_similar_approvals(
     with connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT * FROM approval_requests
+            SELECT id, status, requested_at, expires_at, approved_until,
+                   decision_note, approved_by, approval_authn,
+                   request_digest, operation_digest
+            FROM approval_requests
             WHERE {" AND ".join(clauses)}
             ORDER BY requested_at DESC
             LIMIT ?
             """,
             args,
         ).fetchall()
-    return [row_to_approval(row) for row in rows]
+    history = []
+    for row in rows:
+        item = dict(row)
+        item["approval_authn"] = loads(item.get("approval_authn"), None)
+        history.append(item)
+    return history
 
 
 def _row_to_webauthn_trust_publication(row: Any) -> dict[str, Any]:

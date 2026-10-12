@@ -31,6 +31,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-jit-approval verify-authority-jit-approval-postgres
 .PHONY: verify-authority-jit-request
 .PHONY: verify-authority-jit-private-request
+.PHONY: verify-approval-history-metadata verify-native-jit-review-material verify-native-jit-review-owner
 .PHONY: verify-operator-live-smoke-config
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
@@ -11376,6 +11377,17 @@ verify-authority-jit-request:
 # Commitment-only ingress and retention refusals, not native custody admission.
 verify-authority-jit-private-request:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_private_request.py
+
+# Metadata-only history and private material components; no native admission,
+# review authorization, broker launch, provider access or database startup.
+verify-approval-history-metadata:
+	python3 -B scripts/test_approval_history_metadata.py
+
+verify-native-jit-review-material:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_material.py
+
+verify-native-jit-review-owner:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_owner.py
 
 # Offline configuration oracles only: no live smoke authorization or I/O.
 verify-operator-live-smoke-config:

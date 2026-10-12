@@ -30,9 +30,9 @@ func TestSelectedModuleGraphSecurityFloors(t *testing.T) {
 	want := map[string]string{
 		"github.com/ethereum/go-ethereum": "v1.17.0",
 		"github.com/gorilla/websocket":    "v1.5.3",
-		"golang.org/x/crypto":             "v0.52.0",
-		"golang.org/x/net":                "v0.55.0",
-		"google.golang.org/grpc":          "v1.83.1",
+		"golang.org/x/crypto":             "v0.55.0",
+		"golang.org/x/net":                "v0.58.0",
+		"google.golang.org/grpc":          "v1.83.2",
 	}
 	seen := make(map[string]bool)
 	decoder := json.NewDecoder(bytes.NewReader(raw))

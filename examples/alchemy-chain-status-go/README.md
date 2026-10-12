@@ -123,10 +123,16 @@ modify your environment. Remove those overrides before running, and use
 The pinned [go-ethereum v1.17.0 module](https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.17.0.mod)
 requires Go 1.24, while the complete patched graph requires Go 1.25.
 In addition to `gorilla/websocket v1.5.3`, this module deliberately retains
-`x/crypto v0.52.0`, `x/net v0.55.0` and `grpc v1.83.1` security floors.
+`x/crypto v0.55.0`, `x/net v0.58.0` and `grpc v1.83.2` security floors.
 The named HTTP RPC job does not compile every package in the selected module
 graph. These floors protect that graph; they are not evidence that SSH, gRPC,
 WebSockets or peer-to-peer networking execute in this example.
+
+The gRPC 1.83 branch requires at least 1.83.2 for
+[GHSA-2v4p-qf9q-27wj](https://github.com/grpc/grpc-go/security/advisories/GHSA-2v4p-qf9q-27wj);
+the separate 1.82.2 fix does not make 1.83.1 safe. The newer crypto/net/sys/text
+requirements come from the actual 1.83.2 module graph. This targeted repair is
+not a claim that the whole graph is vulnerability-free.
 
 Ordinary `go mod tidy` removes the unused floors and selects older vulnerable
 upstream requirements. Do not treat that change as harmless cleanup: retain the

@@ -59,9 +59,13 @@ to 1 MiB. See the [Gmail verification boundary](../../docs/operator-gmail-job-ve
 
 Use a supported Go release at least 1.25; this dependency repair uses the
 official Go 1.26.9 toolchain. Direct dependency pins are Google API client
-`v0.264.0` and OAuth2 `v0.36.0`. The patched gRPC `v1.83.1` graph requires
-these coupled updates through GAX, alongside `x/crypto v0.52.0` and
-`x/net v0.55.0`; they are not arbitrary latest-version upgrades.
+`v0.264.0` and OAuth2 `v0.36.0`. The patched gRPC `v1.83.2` graph requires
+these coupled updates through GAX, alongside `x/crypto v0.55.0` and
+`x/net v0.58.0`; they are not arbitrary latest-version upgrades.
+The 1.83 branch specifically requires 1.83.2 for
+[GHSA-2v4p-qf9q-27wj](https://github.com/grpc/grpc-go/security/advisories/GHSA-2v4p-qf9q-27wj);
+its separate 1.82.2 fix does not cover 1.83.1. This targeted repair does not
+establish that the entire dependency graph is vulnerability-free.
 Install dependencies before supplying the application token:
 
 ```sh

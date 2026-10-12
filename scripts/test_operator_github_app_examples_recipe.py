@@ -158,6 +158,52 @@ class RecipeTests(unittest.TestCase):
             self.assertEqual(list(evidence.iterdir()), [])
             self.assertEqual((job / "retained").read_text(), "owned previous attempt")
 
+    def test_image_entrypoint_optional_map_key_preserves_strict_prelaunch_admission(self):
+        # Docker may omit an unset map key. Assert the actual command uses
+        # map indexing; the injected CLI response models its JSON projection.
+        # No Docker process or fixture startup is executed by this control.
+        for image_config in ({"Env": ["PATH=/usr/bin:/bin"]},
+                {"Env": ["PATH=/usr/bin:/bin"], "Entrypoint": None},
+                {"Env": ["PATH=/usr/bin:/bin"], "Entrypoint": []},
+                {"Env": ["PATH=/usr/bin:/bin"], "Entrypoint": ["/unexpected"]}):
+            with self.subTest(image_config=image_config), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, job, evidence = (root / name for name in ("source", "job", "evidence"))
+                for path in (source, job, evidence): path.mkdir(mode=0o700)
+                run = runner.AppExamplesRun(SimpleNamespace(source=source, job_root=job, evidence=evidence,
+                    commit="a" * 40, binary=BINARY, initializer=INITIALIZER, node=NODE, node_modules=MODULES,
+                    python_runtime=PYTHON, python_packages=PACKAGES, go=GO, **PINS))
+                run.save, run.inputs, run.cleanup = Mock(), Mock(return_value={}), Mock()
+                run.container_rows = Mock(return_value=[])
+                # Stop before arming/creating any runtime, after image admission.
+                run.no_project_networks = Mock(return_value=False)
+                def command(name, arguments, seconds):
+                    self.assertTrue(name.startswith("image-"))
+                    self.assertEqual(arguments[:4], ["docker", "image", "inspect", "--format"])
+                    self.assertEqual(arguments[4], '{"id":{{json .Id}},"environment":{{json .Config.Env}},'
+                        '"entrypoint":{{json (index .Config "Entrypoint")}}}')
+                    self.assertEqual(seconds, 10)
+                    image = arguments[5]
+                    return json.dumps({"id": image if image.startswith("sha256:") else "sha256:" + "c" * 64,
+                        "environment": image_config["Env"], "entrypoint": image_config.get("Entrypoint")}).encode()
+                run.command = Mock(side_effect=command)
+                with patch.object(runner, "__file__", str(source / runner.SOURCE_SCRIPT)), \
+                        patch.object(recipe, "build", return_value=self.config), patch("builtins.print"):
+                    self.assertEqual(run.execute(), 1)
+                if image_config.get("Entrypoint") in (None, []):
+                    expected_images = {service["image"] for service in self.config["services"].values()}
+                    self.assertEqual(run.command.call_count, len(expected_images))
+                    self.assertEqual(run.image_environments, {image: {"PATH": "/usr/bin:/bin"} for image in expected_images})
+                    run.container_rows.assert_called_once_with("preexisting")
+                    run.no_project_networks.assert_called_once_with("preexisting-networks")
+                else:
+                    self.assertEqual(run.command.call_count, 1)
+                    run.container_rows.assert_not_called()
+                    run.no_project_networks.assert_not_called()
+                run.cleanup.assert_not_called()
+                self.assertEqual(list(job.iterdir()), [])
+                self.assertEqual(list(evidence.iterdir()), [])
+
     def test_full_dependency_inventory_pins_bytes_and_symlink_targets(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); root.chmod(0o755)

@@ -120,7 +120,7 @@ class AppExamplesRun(NpmExampleRun):
             for index, image in enumerate(sorted({service["image"] for service in self.services.values()})):
                 require(re.fullmatch(r"(?:python@)?sha256:[0-9a-f]{64}", image))
                 value = json.loads(self.command("image-" + str(index), ["docker", "image", "inspect", "--format",
-                    '{"id":{{json .Id}},"environment":{{json .Config.Env}},"entrypoint":{{json .Config.Entrypoint}}}', image], 10))
+                    '{"id":{{json .Id}},"environment":{{json .Config.Env}},"entrypoint":{{json (index .Config "Entrypoint")}}}', image], 10))
                 require(set(value) == {"id", "environment", "entrypoint"} and value["entrypoint"] in (None, [])
                     and re.fullmatch(r"sha256:[0-9a-f]{64}", value["id"])
                     and (not image.startswith("sha256:") or value["id"] == image))

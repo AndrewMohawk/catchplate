@@ -6,7 +6,7 @@
   "engines": { "node": "25.5.0" },
   "scripts": {
     "start": "node client.mjs",
-    "test": "node --test client.test.mjs"
+    "test": "node --test *.test.mjs"
   },
   "dependencies": {
     "npm": "11.8.0",

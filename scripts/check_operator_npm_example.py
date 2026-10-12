@@ -39,7 +39,7 @@ from scripts.run_operator_x_examples_fixture import failure_site
 SCHEMA = "serverware.privateNpmExampleCheck/v1"
 COMMAND = ("/node", "/app/examples/npm-registry/client.mjs")
 SOURCE_FILES = tuple("examples/npm-registry/" + name for name in
-    ("client.mjs", "core.mjs", "worker.mjs", "package.json", "package-lock.json"))
+    ("client.mjs", "core.mjs", "worker.mjs", "diagnostics.mjs", "package.json", "package-lock.json"))
 PHASES = ("view_unscoped", "view_scoped", "manifest_unscoped", "manifest_scoped", "metadata_only_publish",
     "publish_unscoped", "publish_scoped", "publish_dependency", "install_published", "ci_published", "install_audit_negative",
     "outside_window_publish", "wrong_package_view", "wrong_package_manifest",
@@ -55,22 +55,65 @@ OUTER = "/client-trust/outer-ca.pem"
 ROW_KEYS = {"ordinal", "accepted", "case", "method", "rawTarget", "requestHeaders", "requestBodySha256",
     "requestBodyBytes", "operation", "status", "responseContentType", "responseBodySha256", "responseBodyBytes",
     "allParsedHeadersValidated"}
+DIAGNOSTIC_SCHEMA = "serverware.npmExampleDiagnostic/v1"
+DIAGNOSTIC_ENUMS = {
+    "launcherStage": frozenset({"configuration", "versions", "trust", "publication_input", "installation_input",
+        "runtime_setup", "worker_process", "worker_summary", "installation_summary", "cleanup", "other"}),
+    "workerStage": frozenset({"configuration", "runtime", "dependencies", "manifest", "installation_input",
+        "publication_input", "npm_process", "npm_json", "installation_readback", "installation_summary", "result_summary", "other"}),
+    "processRole": frozenset({"worker", "npm", "other"}),
+    "signal": frozenset({"SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGINT", "other"}),
+    "systemCode": frozenset({"ENOENT", "EACCES", "EPERM", "EAGAIN", "ENOMEM", "ENOSPC", "ETIMEDOUT",
+        "ENOBUFS", "EIO", "EEXIST", "ENOTDIR", "other"}),
+    "npmCode": frozenset({"EUSAGE", "ECIGLOBAL", "ENOLOCK", "ENOENT", "EACCES", "EPERM", "ENOSPC",
+        "E400", "E401", "E403", "E404", "E409", "E429", "E500", "E502", "E503", "ETIMEDOUT", "ECONNRESET",
+        "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EINTEGRITY", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        "SELF_SIGNED_CERT_IN_CHAIN", "DEPTH_ZERO_SELF_SIGNED_CERT", "other"}),
+}
+
+
+def validate_client_diagnostic(value):
+    """Admit only the already-redacted, closed client diagnostic vocabulary."""
+    require(type(value) is dict and set(value) == {"schema", "exitCode", *DIAGNOSTIC_ENUMS}
+        and value["schema"] == DIAGNOSTIC_SCHEMA, "npm example diagnostic shape differs")
+    require(all(value[key] is None or (type(value[key]) is str and value[key] in allowed)
+        for key, allowed in DIAGNOSTIC_ENUMS.items()), "npm example diagnostic enum differs")
+    code = value["exitCode"]
+    require(code is None or (type(code) is int and 0 <= code <= 255)
+        or (type(code) is str and code == "other"), "npm example diagnostic exit differs")
+    return {key: value[key] for key in ("schema", "launcherStage", "workerStage", "processRole",
+        "exitCode", "signal", "systemCode", "npmCode")}
+
+
+class ClientProcessFailure(CheckFailure):
+    def __init__(self, message, diagnostic):
+        super().__init__(message)
+        self.diagnostic = validate_client_diagnostic(diagnostic)
+
+
+def require_client_result(condition, message, diagnostic):
+    if not condition and diagnostic is not None:
+        raise ClientProcessFailure(message, diagnostic)
+    require(condition, message)
 
 
 def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
 
 
-def expected_summary(spec, installation=None):
+def expected_summary(spec, installation=None, *, diagnostic=None):
     if not spec["success"]:
         value = {"ok": False, "operation": spec["operation"],
             "error": "npm example failed; check configuration, permissions and Serverware audit logs."}
         if spec["operation"] == "publish":
             value["warning"] = "Publication may be unconfirmed. Inspect registry metadata and audit evidence; do not automatically retry."
-        elif spec["case"] in fixture.INSTALL_CASES:
+        elif spec["case"] in fixture.INSTALL_CASES and installation is not None:
             value.update(installationDirectory=installation["directory"], warning=
                 "Partial installation retained. Inspect it and audit logs; choose a new output directory for a deliberate retry.")
+        if diagnostic is not None:
+            value["diagnostic"] = validate_client_diagnostic(diagnostic)
         return value
+    require(diagnostic is None, "npm example success must not contain a failure diagnostic")
     value = {"ok": True, "operation": spec["operation"], "package": spec["package"], "version": spec["version"]}
     if spec["operation"] == "publish":
         value.update(tag="fixture", tarballSha256=hashlib.sha256(fixture.tarball(spec)).hexdigest(), npmReportedSuccess=True)
@@ -82,17 +125,46 @@ def expected_summary(spec, installation=None):
     return value
 
 
+def client_failure_diagnostic(spec, code, out, err, *, directory=None):
+    """Extract no raw output: require a complete exact generic failure first.
+
+    Early installation failures may precede output-directory creation. Their
+    closed diagnostic can explain refusal, but never qualifies for readback or
+    an expected negative receipt without the original directory requirement.
+    """
+    if type(code) is not int or code != 1 or type(out) is not bytes or out != b"" \
+            or type(err) is not bytes or not 0 < len(err) <= 4096:
+        return None
+    try:
+        value = fixture.publish.strict_json(err)
+        require(type(value) is dict and "diagnostic" in value, "npm example failure diagnostic absent")
+        diagnostic = validate_client_diagnostic(value["diagnostic"])
+        installation = None
+        if "installationDirectory" in value:
+            require(spec["case"] in fixture.INSTALL_CASES and type(directory) is str
+                and value["installationDirectory"] == directory, "npm example failure directory differs")
+            installation = {"directory": directory}
+        expected = expected_summary({**spec, "success": False}, installation, diagnostic=diagnostic)
+        raw = json.dumps(expected, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+        require(err == raw, "npm example generic failure differs")
+        return diagnostic
+    except (ValueError, TypeError, UnicodeError, RecursionError, CheckFailure):
+        return None
+
+
 def validate_client_result(spec, code, out, err, *, installation=None):
     require(type(code) is int and type(out) is bytes and type(err) is bytes, "npm example process result differs")
     if spec["case"] in fixture.INSTALL_CASES:
         validate_installation_receipt(installation, spec)
     else:
         require(installation is None, "unexpected installation receipt")
-    summary = expected_summary(spec, installation)
+    diagnostic = client_failure_diagnostic(spec, code, out, err,
+        directory=installation["directory"] if installation is not None else None)
+    summary = expected_summary(spec, installation, diagnostic=diagnostic if not spec["success"] else None)
     # Source property insertion order is part of the actual entrypoint output.
     raw = json.dumps(summary, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
-    require((code == 0 and out == raw and err == b"") if spec["success"] else
-        (code == 1 and out == b"" and err == raw), "npm example exact summary or fixed failure differs")
+    require_client_result((code == 0 and out == raw and err == b"") if spec["success"] else
+        (code == 1 and out == b"" and err == raw), "npm example exact summary or fixed failure differs", diagnostic)
     return {"phase": spec["case"], "operation": spec["operation"], "exitCode": code, "summary": summary,
         **({"installation": installation} if installation is not None else {})}
 
@@ -107,7 +179,8 @@ def validate_installation_process(spec, code, out, err, directory):
         and type(code) is int and type(out) is bytes and type(err) is bytes
         and len(out) <= 4096 and len(err) <= 4096 and type(directory) is str,
         "npm installation process result differs")
-    require(code == (0 if spec["success"] else 1), "npm installation process exit differs")
+    diagnostic = client_failure_diagnostic(spec, code, out, err, directory=directory)
+    require_client_result(code == (0 if spec["success"] else 1), "npm installation process exit differs", diagnostic)
     selected = {"directory": directory}
     if spec["success"]:
         require(out and err == b"", "npm installation process streams differ")
@@ -118,7 +191,8 @@ def validate_installation_process(spec, code, out, err, directory):
         require(type(value) is dict and type(value.get("lockSha256")) is str and HEX.fullmatch(value["lockSha256"]),
             "npm installation process summary differs")
         selected["lockSha256"] = value["lockSha256"]
-    raw = json.dumps(expected_summary(spec, selected), separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+    raw = json.dumps(expected_summary(spec, selected, diagnostic=diagnostic if not spec["success"] else None),
+        separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
     require((out == raw and err == b"") if spec["success"] else (out == b"" and err == raw),
         "npm installation process summary differs")
 
@@ -894,8 +968,12 @@ def validate_success_result(value):
             installations[spec["case"]] = installation
         else:
             require(installation is None and "installation" not in row, "unexpected installation receipt")
+        summary = row.get("summary")
+        require(type(summary) is dict, "npm example client summary differs")
+        diagnostic = validate_client_diagnostic(summary["diagnostic"]) if "diagnostic" in summary else None
         expected = {"phase": spec["case"], "operation": spec["operation"], "exitCode": 0 if spec["success"] else 1,
-            "summary": expected_summary(spec, installation), **({"installation": installation} if installation is not None else {})}
+            "summary": expected_summary(spec, installation, diagnostic=diagnostic),
+            **({"installation": installation} if installation is not None else {})}
         require(type(row) is dict and encoded(row) == encoded(expected), "npm example actual client receipt differs")
     require(len({str(Path(row["directory"]).parent) for row in installations.values()}) == 1
         and installations["ci_published"]["lockSha256"] == installations["install_published"]["lockSha256"],
@@ -971,6 +1049,20 @@ def validate_success_result(value):
     return True
 
 
+def failure_result(error, phase):
+    """The sole failure projection: no exception text or process streams."""
+    result = {"schema": SCHEMA, "ok": False, "syntheticOnly": True, "productionReady": False, "realNpmVerified": False,
+        "phase": phase if phase in (*PHASES, "startup", "final") else "startup",
+        "failureSite": failure_site(error, Path(__file__).resolve().parents[1]),
+        "error": "acceptance_check_failed" if isinstance(error, CheckFailure) else "acceptance_internal_failure"}
+    if isinstance(error, ClientProcessFailure):
+        try:
+            result["clientDiagnostic"] = validate_client_diagnostic(error.diagnostic)
+        except CheckFailure:
+            pass  # Never let a changed exception attribute widen the receipt.
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("control-base", "management-base", "proxy-url", "operator-origin", "expected-binary-sha256", "expected-node-modules-sha256"):
@@ -991,10 +1083,7 @@ def main():
         signal.alarm(args.timeout_seconds); claim_fixture(args.fixture_marker_file, args.run_claim_file)
         check = NpmExampleCheck(args); result = check.run()
     except Exception as error:
-        result = {"schema": SCHEMA, "ok": False, "syntheticOnly": True, "productionReady": False, "realNpmVerified": False,
-            "phase": check.phase if check is not None and check.phase in (*PHASES, "startup", "final") else "startup",
-            "failureSite": failure_site(error, Path(__file__).resolve().parents[1]),
-            "error": "acceptance_check_failed" if isinstance(error, CheckFailure) else "acceptance_internal_failure"}
+        result = failure_result(error, check.phase if check is not None else "startup")
     finally:
         signal.alarm(0)
     print(json.dumps(result, sort_keys=True)); return 0 if result["ok"] else 1

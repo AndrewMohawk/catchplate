@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { configuration, childEnvironment, npmConfiguration, reviewedTarball,
   reviewedProject, isInstallation, requireValue, failure, VERSIONS } from './core.mjs';
+import { sanitizeDiagnostic, caughtDiagnostic, processDiagnostic, workerDiagnostic } from './diagnostics.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 
@@ -56,24 +57,30 @@ export function verifyVersions(readFile = readFileSync) {
 
 // A separate POSIX process group lets the deadline also stop a nested npm CLI.
 // Killing only the worker could otherwise leave a publish child running.
-export function invokeWorker(command, args, options, launch = spawn, timeoutMs = 15000) {
+export function invokeWorker(command, args, options, launch = spawn, timeoutMs = 15000, observe = () => {}) {
   requireValue(Number.isInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 65000);
   return new Promise((accept, reject) => {
     const child = launch(command, args, { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '', refused = false;
-    const stop = () => {
+    let stdout = '', stderr = '', refused = false, processError;
+    const stop = code => {
       refused = true;
+      processError = { code };
       try { process.kill(-child.pid, 'SIGKILL'); }
       catch { try { child.kill('SIGKILL'); } catch { /* The exit/error handler still refuses. */ } }
     };
-    const timer = setTimeout(stop, timeoutMs);
+    const timer = setTimeout(() => stop('ETIMEDOUT'), timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', chunk => { stdout += chunk; if (Buffer.byteLength(stdout) > 16384) stop(); });
-    child.stderr.on('data', chunk => { stderr += chunk; if (Buffer.byteLength(stderr) > 16384) stop(); });
-    child.once('error', () => { clearTimeout(timer); reject(new Error('npm worker unavailable')); });
+    child.stdout.on('data', chunk => { stdout += chunk; if (Buffer.byteLength(stdout) > 16384) stop('ENOBUFS'); });
+    child.stderr.on('data', chunk => { stderr += chunk; if (Buffer.byteLength(stderr) > 16384) stop('ENOBUFS'); });
+    child.once('error', error => {
+      processError = error;
+      observe(processDiagnostic('worker', { error, status: null, signal: null }));
+      clearTimeout(timer); reject(new Error('npm worker unavailable'));
+    });
     child.once('close', (status, signal) => {
       clearTimeout(timer);
+      observe(processDiagnostic('worker', { status, signal, error: processError }));
       if (refused) reject(new Error('npm worker bounded operation refused'));
       else accept({ status, signal, stdout, stderr });
     });
@@ -88,19 +95,26 @@ async function main() {
   }
   const operation = args[0] ?? 'view';
   let taskRoot, installationDirectory;
+  let diagnostic = sanitizeDiagnostic({ launcherStage: 'configuration' });
+  const observe = update => { diagnostic = sanitizeDiagnostic({ ...diagnostic, ...update }); };
   try {
     requireValue(args.length <= 1 && process.version === 'v25.5.0' && process.platform !== 'win32');
     const config = configuration(process.env, operation);
+    observe({ launcherStage: 'versions' });
     verifyVersions();
+    observe({ launcherStage: 'trust' });
     const trust = (config.proxyCaFile ? trustedPem(boundedFile(config.proxyCaFile, 262144)) : '')
       + trustedPem(boundedFile(config.caFile, 262144));
+    observe({ launcherStage: 'publication_input' });
     const tarball = operation === 'publish'
       ? reviewedTarball(config, boundedFile(resolve(config.tarball), 8 * 1024 * 1024)) : null;
     let project;
     if (isInstallation(operation)) {
+      observe({ launcherStage: 'installation_input' });
       project = createInstallationProject(config);
       installationDirectory = config.output;
     }
+    observe({ launcherStage: 'runtime_setup' });
     taskRoot = mkdtempSync(join(tmpdir(), 'serverware-npm-example-'));
     requireValue((statSync(taskRoot).mode & 0o777) === 0o700);
     const paths = { root: taskRoot, cache: join(taskRoot, 'cache'),
@@ -113,27 +127,39 @@ async function main() {
     writeFileSync(join(taskRoot, 'global.npmrc'), '', { flag: 'wx', mode: 0o600 });
     if (tarball) writeFileSync(paths.tarball, tarball, { flag: 'wx', mode: 0o400 });
     // Extra roots must exist in the environment BEFORE this Node process starts.
+    observe({ launcherStage: 'worker_process', processRole: 'worker' });
     const result = await invokeWorker(process.execPath, [join(directory, 'worker.mjs'), operation], {
       cwd: taskRoot, env: childEnvironment(config, paths),
-    }, undefined, isInstallation(operation) ? 65000 : 15000);
+    }, undefined, isInstallation(operation) ? 65000 : 15000, observe);
+    if (result.status !== 0 || result.signal !== null || result.stderr !== '') {
+      const worker = workerDiagnostic(result.stderr);
+      if (worker) observe({ ...worker, launcherStage: 'worker_process' });
+    }
     requireValue(!result.error && result.signal === null && result.status === 0 && result.stderr === '');
+    observe({ launcherStage: 'worker_summary' });
     const summary = JSON.parse(result.stdout);
     requireValue(summary.ok === true && summary.operation === operation && summary.package === config.packageName);
     if (isInstallation(operation)) {
+      observe({ launcherStage: 'installation_summary' });
       requireValue(summary.installed === true && summary.defaultAuditReportedSuccess === true);
       summary.installationDirectory = installationDirectory;
       if (operation === 'ci') requireValue(readFileSync(join(installationDirectory, 'package-lock.json')).equals(project.lockBytes));
     }
     console.log(JSON.stringify(summary));
-  } catch {
+  } catch (error) {
     console.error(JSON.stringify({ ...failure(operation), ...(installationDirectory ? { installationDirectory,
-      warning: 'Partial installation retained. Inspect it and audit logs; choose a new output directory for a deliberate retry.' } : {}) }));
+      warning: 'Partial installation retained. Inspect it and audit logs; choose a new output directory for a deliberate retry.' } : {}),
+      diagnostic: caughtDiagnostic(diagnostic, error) }));
     process.exitCode = 1;
   } finally {
     // Only the exact fresh task directory is removed, never source/CA/tarball inputs.
     if (taskRoot) {
       try { rmSync(taskRoot, { recursive: true, force: false }); }
-      catch { console.error(JSON.stringify(failure(operation))); process.exitCode = 1; }
+      catch (error) {
+        console.error(JSON.stringify({ ...failure(operation),
+          diagnostic: caughtDiagnostic({ launcherStage: 'cleanup' }, error) }));
+        process.exitCode = 1;
+      }
     }
   }
 }

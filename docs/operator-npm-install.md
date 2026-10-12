@@ -75,9 +75,14 @@ at the first installation metadata request: the synthetic registry incorrectly
 required abbreviated metadata while pinned npm's Arborist requests full JSON.
 This was an upstream fixture 400, not another credential-preparation failure.
 The fixture/checker correction keeps standalone pacote metadata unchanged and
-reuses the verified Rust binary because no compilation input changes. Full
-stock-npm acceptance is still required. The ordinary live app is unchanged by
-these source commits.
+reuses the verified Rust binary because no compilation input changes. The next
+run (`npm-install-acceptance.UQcyBVGi`) completed installation, including exact
+published bytes, the transitive dependency, generated lock and default audit.
+It then failed at cold `ci`, before any additional upstream request was recorded.
+The original fixed error envelope did not identify which client stage failed;
+that evidence does not establish a cause. All failed runs remain preserved with
+completed cleanup. Full stock-npm acceptance is still required. The ordinary
+live app is unchanged by these source commits.
 Public proxy DNS repair and real npm
 account entitlement remain separate unverified requirements. No pilot is needed
 to open or use the persistent operator app.

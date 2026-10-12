@@ -125,6 +125,12 @@ Nonzero vulnerability counts are reported, not hidden; an independent policy
 can decide whether they should block adoption. The proxy's request/response
 audit is separate from npm's dependency-vulnerability audit.
 
+Failures include a small `diagnostic` object naming the launcher/worker stage
+and an allowlisted process or npm error code. Unknown codes become `other`;
+raw error messages, command output, credentials and paths are not included in
+that object. This helps distinguish input, transport and verification failures
+without retrying a command or treating a partial installation as success.
+
 ## Explicit public publication
 
 This changes the registry. Read the full [publishing policy](../../docs/operator-npm-publish.md)
@@ -233,7 +239,7 @@ This checks installed package metadata, not a registry request.
 
 ## Isolated proxy verification
 
-On 2026-10-11 UTC, this unchanged launcher and worker passed all 21 integration
+On 2026-10-11 UTC, the then-current launcher and worker passed all 21 integration
 cases through the actual Serverware application, Rust gate and HTTPS proxy
 against an isolated synthetic registry. The run verified metadata reads, both
 scoped and unscoped publications, permission/time-window/revocation denials,

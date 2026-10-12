@@ -165,6 +165,12 @@ def client_receipt(spec):
         "summary": summary(spec), **({"installation": installation(spec)} if spec["case"] in INSTALL_PHASES else {})}
 
 
+def diagnostic(**changes):
+    return {"schema": "serverware.npmExampleDiagnostic/v1", "launcherStage": "worker_process",
+        "workerStage": "npm_process", "processRole": "npm", "exitCode": 1,
+        "signal": None, "systemCode": None, "npmCode": "E503", **changes}
+
+
 def phase_evidence(value, phase):
     return next(row for row in value["phaseEvidence"] if row["phase"] == phase)
 
@@ -472,7 +478,7 @@ def success_result():
         "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
         "dataPlaneBinaryDigest": sha(901), "nodeSha256": "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d",
         "nodeModulesSha256": "a" * 64, "sourceSha256": {"examples/npm-registry/" + name: format(3100 + index, "064x")
-            for index, name in enumerate(("client.mjs", "core.mjs", "worker.mjs", "package.json", "package-lock.json"))},
+            for index, name in enumerate(("client.mjs", "core.mjs", "worker.mjs", "diagnostics.mjs", "package.json", "package-lock.json"))},
         "credentialId": CREDENTIAL, "applicationIds": apps, "ruleIds": rules, "policyHash": POLICY,
         "revokedPolicyHash": sha(902), "publishingWindowUtc": {"start": "18:00", "end": "19:00"},
         "clients": [client_receipt(spec) for spec in SPECS], "requests": expected_wire(observation()),
@@ -541,6 +547,88 @@ class NpmExampleCheckerTests(unittest.TestCase):
                 (Path("/tmp/project"), Path("/tmp/project")), (Path("/tmp/project"), Path("/tmp/project/out"))):
             with self.assertRaises(checker.CheckFailure):
                 checker.client_environment(spec_for("install_published"), uid(2), "a" * 43, project=project, output=output)
+
+    def test_diagnostic_vocabulary_is_closed_typed_and_redacted(self):
+        allowed = {
+            "launcherStage": ("configuration", "versions", "trust", "publication_input", "installation_input",
+                "runtime_setup", "worker_process", "worker_summary", "installation_summary", "cleanup", "other"),
+            "workerStage": ("configuration", "runtime", "dependencies", "manifest", "installation_input", "publication_input",
+                "npm_process", "npm_json", "installation_readback", "installation_summary", "result_summary", "other"),
+            "processRole": ("worker", "npm", "other"),
+            "signal": ("SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGINT", "other"),
+            "systemCode": ("ENOENT", "EACCES", "EPERM", "EAGAIN", "ENOMEM", "ENOSPC", "ETIMEDOUT", "ENOBUFS",
+                "EIO", "EEXIST", "ENOTDIR", "other"),
+            "npmCode": ("EUSAGE", "ECIGLOBAL", "ENOLOCK", "ENOENT", "EACCES", "EPERM", "ENOSPC", "E400", "E401",
+                "E403", "E404", "E409", "E429", "E500", "E502", "E503", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED",
+                "ENOTFOUND", "EAI_AGAIN", "EINTEGRITY", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+                "SELF_SIGNED_CERT_IN_CHAIN", "DEPTH_ZERO_SELF_SIGNED_CERT", "other"),
+        }
+        for key, values in allowed.items():
+            for value in (None, *values):
+                original = diagnostic(**{key: value})
+                actual = checker.validate_client_diagnostic(original)
+                self.assertEqual(actual, original); self.assertIsNot(actual, original)
+            for invalid in (False, 1, [], {}, "secret-canary", "/private/secret-canary", "E503\nsecret-canary"):
+                with self.subTest(field=key), self.assertRaises(checker.CheckFailure) as caught:
+                    checker.validate_client_diagnostic(diagnostic(**{key: invalid}))
+                self.assertNotIn("secret-canary", str(caught.exception))
+        for value in (None, 0, 1, 255, "other"):
+            self.assertEqual(checker.validate_client_diagnostic(diagnostic(exitCode=value)), diagnostic(exitCode=value))
+        for value in (True, False, -1, 256, 1.0, "1", "secret-canary", []):
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_client_diagnostic(diagnostic(exitCode=value))
+        for key in diagnostic():
+            missing = diagnostic(); missing.pop(key)
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_client_diagnostic(missing)
+        for value in (None, [], diagnostic(secret="secret-canary"), diagnostic(schema="secret-canary")):
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_client_diagnostic(value)
+
+    def test_diagnostics_preserve_exact_negative_receipts_not_success_or_arbitrary_errors(self):
+        safe = diagnostic()
+        result = success_result()
+        for spec, row in zip(SPECS, result["clients"]):
+            if spec["success"]:
+                continue
+            installed = installation(spec) if spec["case"] in INSTALL_PHASES else None
+            expected = {**summary(spec), "diagnostic": safe}
+            raw = encode(expected) + b"\n"
+            actual = checker.validate_client_result(spec, 1, b"", raw, installation=installed)
+            self.assertEqual(actual, {**client_receipt(spec), "summary": expected})
+            row["summary"] = expected
+            if installed is not None:
+                checker.validate_installation_process(spec, 1, b"", raw, installed["directory"])
+        self.assertTrue(checker.validate_success_result(result))
+        forbidden_success = deepcopy(result); forbidden_success["clients"][0]["summary"]["diagnostic"] = safe
+        with self.assertRaises(checker.CheckFailure):
+            checker.validate_success_result(forbidden_success)
+        forbidden_pin = deepcopy(result); forbidden_pin["sourceSha256"].pop("examples/npm-registry/diagnostics.mjs")
+        with self.assertRaises(checker.CheckFailure):
+            checker.validate_success_result(forbidden_pin)
+        phase = spec_for("missing_confirmation")
+        good = {**summary(phase), "diagnostic": safe}
+        for change in (lambda v: v.update(error="secret-canary"), lambda v: v.update(warning="secret-canary"),
+                lambda v: v.update(argv=["secret-canary"]), lambda v: v["diagnostic"].update(npmCode="secret-canary"),
+                lambda v: v["diagnostic"].update(path="secret-canary"), lambda v: v["diagnostic"].pop("signal")):
+            value = deepcopy(good); change(value)
+            with self.assertRaises(checker.CheckFailure) as caught:
+                checker.validate_client_result(phase, 1, b"", encode(value) + b"\n")
+            self.assertNotIn("clientDiagnostic", checker.failure_result(caught.exception, phase["case"]))
+        duplicate = (encode(good) + b"\n").replace(b'"schema":', b'"schema":"secret-canary","schema":', 1)
+        for raw in (duplicate, encode(good), encode(good) + b"\nsecret-canary", b"secret-canary", b"x" * 4097):
+            self.assertIsNone(checker.client_failure_diagnostic(phase, 1, b"", raw))
+        # A transport exception carrying arbitrary similarly named attributes is
+        # not an admitted diagnostic, and its message never becomes output.
+        error = RuntimeError("secret-canary"); error.diagnostic = {"token": "secret-canary"}
+        projection = checker.failure_result(error, "unknown-secret-canary")
+        self.assertEqual(projection["error"], "acceptance_internal_failure")
+        self.assertEqual(projection["phase"], "startup")
+        self.assertNotIn("secret-canary", encode(projection).decode())
+        trusted = checker.ClientProcessFailure("secret-canary", safe)
+        self.assertEqual(checker.failure_result(trusted, "install_published")["clientDiagnostic"], safe)
+        trusted.diagnostic["npmCode"] = "secret-canary"
+        self.assertNotIn("clientDiagnostic", checker.failure_result(trusted, "install_published"))
 
     def test_install_process_guard_requires_exact_exit_and_redacted_summary(self):
         for phase in INSTALL_PHASES:
@@ -840,7 +928,8 @@ class NpmExampleCheckerTests(unittest.TestCase):
             def get_map(self): return self.items
             def select(self, _): return [(SimpleNamespace(fd=stream, fileobj=stream, data=name), None)
                 for stream, name in self.items.items()]
-        cases = [(phase, None) for phase in INSTALL_PHASES] + [("install_published", "exit"), ("install_published", "summary")]
+        cases = [(phase, None) for phase in INSTALL_PHASES] + [("install_published", failure)
+            for failure in ("exit", "summary", "diagnostic", "early-diagnostic", "invalid-diagnostic")]
         for phase, failure in cases:
             spec = spec_for(phase); installed = installation(spec)
             raw = encode(summary(spec)) + b"\n"
@@ -849,6 +938,14 @@ class NpmExampleCheckerTests(unittest.TestCase):
                 code, out_bytes, err_bytes = 1, b"", b"secret-canary"
             elif failure == "summary":
                 out_bytes = b"secret-canary"
+            elif failure in {"diagnostic", "early-diagnostic", "invalid-diagnostic"}:
+                public_failure = {"ok": False, "operation": "install",
+                    "error": "npm example failed; check configuration, permissions and Serverware audit logs."}
+                if failure != "early-diagnostic":
+                    public_failure.update(installationDirectory=installed["directory"], warning=
+                        "Partial installation retained. Inspect it and audit logs; choose a new output directory for a deliberate retry.")
+                public_failure["diagnostic"] = diagnostic(npmCode="secret-canary") if failure == "invalid-diagnostic" else diagnostic()
+                code, out_bytes, err_bytes = 1, b"", encode(public_failure) + b"\n"
             out, err = io.BytesIO(), io.BytesIO()
             pending = {out: [out_bytes, b""] if out_bytes else [b""], err: [err_bytes, b""] if err_bytes else [b""]}
             child = SimpleNamespace(stdout=out, stderr=err, wait=lambda **_: code, poll=lambda: code,
@@ -865,9 +962,17 @@ class NpmExampleCheckerTests(unittest.TestCase):
                     with self.assertRaises(checker.CheckFailure) as caught:
                         checker.run_client(spec, environment, 20, clean=lambda _: None)
                     self.assertEqual(str(caught.exception), "npm installation process " +
-                        ("exit differs" if failure == "exit" else "summary differs"))
+                        ("summary differs" if failure == "summary" else "exit differs"))
                     self.assertNotIn("secret-canary", str(caught.exception))
                     inspect.assert_not_called()
+                    failed = checker.failure_result(caught.exception, phase)
+                    if failure in {"diagnostic", "early-diagnostic"}:
+                        self.assertIsInstance(caught.exception, checker.ClientProcessFailure)
+                        self.assertEqual(failed["clientDiagnostic"], diagnostic())
+                        self.assertNotIn("installationDirectory", failed)
+                    else:
+                        self.assertNotIn("clientDiagnostic", failed)
+                    self.assertNotIn("secret-canary", encode(failed).decode())
                 else:
                     self.assertEqual(checker.run_client(spec, environment, 20, clean=lambda _: None), client_receipt(spec))
                     inspect.assert_called_once()

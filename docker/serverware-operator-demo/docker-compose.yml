@@ -43,7 +43,7 @@ services:
       SERVERWARE_OPERATOR_DEMO_PROXY_URL: https://serverware-proxy.example.com:443
       SERVERWARE_DATA_DIR: /data
       SERVERWARE_RELEASE_CHANNEL: dev
-      SERVERWARE_PUBLIC_URL: https://serverware-demo.example.com
+      SERVERWARE_PUBLIC_URL: https://serverware.example.com
       SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED: "1"
       SERVERWARE_ADMIN_USER: user:operator-demo-operator
       SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED: "0"
@@ -258,6 +258,17 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=traefik-v3-public
+      # Canonical UI and compatibility route use the existing authenticated edge.
+      - traefik.http.routers.serverware-public.rule=Host(`serverware.example.com`)
+      - traefik.http.routers.serverware-public.entrypoints=websecure
+      - traefik.http.routers.serverware-public.tls=true
+      - traefik.http.routers.serverware-public.middlewares=authelia-public@file
+      - traefik.http.routers.serverware-public.service=serverware-demo-edge
+      - traefik.http.routers.serverware-lab.rule=Host(`serverware.lab.example.com`)
+      - traefik.http.routers.serverware-lab.entrypoints=websecure
+      - traefik.http.routers.serverware-lab.tls=true
+      - traefik.http.routers.serverware-lab.middlewares=localnetwork@file
+      - traefik.http.routers.serverware-lab.service=serverware-demo-edge
       - traefik.http.routers.serverware-demo-public.rule=Host(`serverware-demo.example.com`)
       - traefik.http.routers.serverware-demo-public.entrypoints=websecure
       - traefik.http.routers.serverware-demo-public.tls=true
@@ -270,9 +281,9 @@ services:
       - traefik.http.routers.serverware-demo-lab.service=serverware-demo-edge
       - traefik.http.services.serverware-demo-edge.loadbalancer.server.port=8080
       - homepage.group=Apps & Data
-      - homepage.name=Serverware Demo
-      - homepage.href=https://serverware-demo.example.com/
-      - homepage.description=Authenticated operator demo; local keys, not production authority
+      - homepage.name=Serverware
+      - homepage.href=https://serverware.example.com/
+      - homepage.description=Authenticated Serverware; local keys, not hardware-backed authority
       - com.centurylinklabs.watchtower.enable=false
 
 networks:

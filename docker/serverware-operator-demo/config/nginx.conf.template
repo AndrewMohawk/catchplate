@@ -31,20 +31,20 @@ http {
     map $http_origin $foreign_origin {
         default 1;
         "" 0;
-        "https://serverware-demo.example.com" 0;
+        "https://serverware.example.com" 0;
     }
     map "$request_method:$http_origin" $unsafe_origin {
         default 1;
         ~^(GET|HEAD|OPTIONS): 0;
-        ~^[A-Z]+:https://serverware-demo\.example\.com$ 0;
+        ~^[A-Z]+:https://serverware\.example\.com$ 0;
     }
 
     proxy_http_version 1.1;
-    proxy_set_header Host serverware-demo.example.com;
+    proxy_set_header Host serverware.example.com;
     proxy_set_header Connection "";
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Host serverware-demo.example.com;
+    proxy_set_header X-Forwarded-Host serverware.example.com;
     proxy_set_header X-Forwarded-Port 443;
     proxy_set_header Forwarded "";
     proxy_set_header Authorization "";
@@ -67,7 +67,7 @@ http {
 
     server {
         listen 8080;
-        server_name serverware-demo.example.com;
+        server_name serverware.example.com;
         if ($traefik_peer = 0) { return 403; }
         if ($sandbox_operator = 0) { return 403; }
         if ($foreign_origin = 1) { return 403; }
@@ -76,11 +76,11 @@ http {
         location / {
             # nginx proxy_set_header inheritance is all-or-nothing. Repeat the
             # scrubbed forwarding headers alongside the private token include.
-            proxy_set_header Host serverware-demo.example.com;
+            proxy_set_header Host serverware.example.com;
             proxy_set_header Connection "";
             proxy_set_header X-Forwarded-Proto https;
             proxy_set_header X-Forwarded-For $remote_addr;
-            proxy_set_header X-Forwarded-Host serverware-demo.example.com;
+            proxy_set_header X-Forwarded-Host serverware.example.com;
             proxy_set_header X-Forwarded-Port 443;
             proxy_set_header Forwarded "";
             proxy_set_header Authorization "";
@@ -92,7 +92,7 @@ http {
 
     server {
         listen 8080;
-        server_name serverware-demo.lab.example.com;
+        server_name serverware.lab.example.com serverware-demo.lab.example.com;
         if ($traefik_peer = 0) { return 403; }
         set $sandbox_backend http://serverware:3000;
         location = /healthz {
@@ -101,8 +101,27 @@ http {
             proxy_pass $sandbox_backend;
         }
         location / {
-            return 308 https://serverware-demo.example.com$request_uri;
+            # Lab navigation never carries callback/query material across origins.
+            if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+            if ($args != "") { return 400; }
+            return 302 https://serverware.example.com/;
         }
+    }
+
+    # Old public hostname is navigation compatibility, never an API alias.
+    # The same Traefik/Authelia/peer/user boundary applies before any redirect.
+    server {
+        listen 8080;
+        server_name serverware-demo.example.com;
+        if ($traefik_peer = 0) { return 403; }
+        if ($sandbox_operator = 0) { return 403; }
+        if ($foreign_origin = 1) { return 403; }
+        if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+        if ($args != "") { return 400; }
+        add_header Cache-Control no-store always;
+        add_header Referrer-Policy no-referrer always;
+        location ^~ /api/ { return 410; }
+        location / { return 302 https://serverware.example.com/; }
     }
 
     # Container liveness, deliberately not backend/native-pilot readiness.

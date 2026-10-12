@@ -151,7 +151,7 @@ func TestStockSDKListPaginationAndMetadataSerialization(t *testing.T) {
 			t.Fatal("stock SDK request shape changed")
 		}
 		if r.Header.Get("Authorization") != "Bearer "+dummyToken || r.Header.Get("Proxy-Authorization") != "" ||
-			r.Header.Get("User-Agent") == "" || !strings.Contains(r.Header.Get("X-Goog-Api-Client"), "gdcl/0.230.0") {
+			r.Header.Get("User-Agent") == "" || !strings.Contains(r.Header.Get("X-Goog-Api-Client"), "gdcl/0.264.0") {
 			t.Fatal("stock SDK authentication/header contract changed")
 		}
 		for key := range r.Header {

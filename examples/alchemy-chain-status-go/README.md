@@ -1,11 +1,11 @@
 # Go: read Ethereum chain status through Serverware
 
-**Isolated actual SDK-through-proxy/TLS acceptance passed** from source
-`062180fe`. Eight main component test groups also passed and the example binary
-was built. Deployed support, Actions and real-provider/native-pilot acceptance
-remain unverified.
+**Historical isolated SDK-through-proxy/TLS acceptance passed** from source
+`062180fe` with go-ethereum v1.15.11. That result does not establish through-proxy
+acceptance for the upgraded dependency graph below. Deployed support, Actions
+and real-provider/native-pilot acceptance remain unverified.
 This example uses the ordinary
-[`go-ethereum/rpc` client pinned to v1.15.11](https://github.com/ethereum/go-ethereum/tree/v1.15.11/rpc),
+[`go-ethereum/rpc` client pinned to v1.17.0](https://github.com/ethereum/go-ethereum/tree/v1.17.0/rpc),
 not an Alchemy-specific SDK or a replacement HTTP implementation. It makes two
 separate read-only RPC calls, `eth_chainId` and `eth_blockNumber`, for one selected
 chain. No batching, arbitrary RPC, wallet, transaction, WebSocket or NFT operation
@@ -43,7 +43,8 @@ only and is not automatically loaded:
 | `SERVERWARE_ALCHEMY_CHAIN` | Exactly `eth-mainnet` or `eth-sepolia`, matching the saved rule |
 
 Supply the application token through an environment/CI secret store, not command
-arguments, URLs or tracked files. With Go 1.23 or later, from this directory:
+arguments, URLs or tracked files. Use a supported Go release at least 1.25;
+this dependency repair uses official Go 1.26.9. From this directory:
 
 ```sh
 GOTOOLCHAIN=local go mod download
@@ -87,9 +88,9 @@ HTTP/1.1 adds its default `User-Agent: Go-http-client/1.1` and `Connection: clos
 No JSON, path or header rewriter stands between the SDK and normal transport.
 
 These behaviors are visible in the pinned
-[client options](https://github.com/ethereum/go-ethereum/blob/v1.15.11/rpc/client_opt.go),
-[RPC message creation](https://github.com/ethereum/go-ethereum/blob/v1.15.11/rpc/client.go)
-and [HTTP transport](https://github.com/ethereum/go-ethereum/blob/v1.15.11/rpc/http.go).
+[client options](https://github.com/ethereum/go-ethereum/blob/v1.17.0/rpc/client_opt.go),
+[RPC message creation](https://github.com/ethereum/go-ethereum/blob/v1.17.0/rpc/client.go)
+and [HTTP transport](https://github.com/ethereum/go-ethereum/blob/v1.17.0/rpc/http.go).
 The proxy remains responsible for the complete strict response envelope checks,
 including response ID/type matching, version, bounds and credential reflection;
 the SDK must not be mistaken for a substitute for those checks.
@@ -119,20 +120,36 @@ modify your environment. Remove those overrides before running, and use
 
 ## Dependency and acceptance boundary
 
-Version v1.15.11 is pinned for the available Go 1.23 toolchain; its
-[module declaration](https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.15.11.mod)
-requires Go 1.23.0. The [module version record](https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.15.11.info)
-resolves to commit `36b2371c59cd91a9b1da062b3e382f05a6d8687e`. Initial module and
-go.mod checksum entries come from the
-[Go checksum database](https://sum.golang.org/lookup/github.com/ethereum/go-ethereum@v1.15.11).
-The recorded component run resolved dependencies and built the binary; normal
-Go tooling must still resolve and verify them in a fresh environment before use.
-Do not disable checksum verification or download a different toolchain implicitly.
+The pinned [go-ethereum v1.17.0 module](https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.17.0.mod)
+requires Go 1.24, while the complete patched graph requires Go 1.25.
+In addition to `gorilla/websocket v1.5.3`, this module deliberately retains
+`x/crypto v0.52.0`, `x/net v0.55.0` and `grpc v1.83.1` security floors.
+The named HTTP RPC job does not compile every package in the selected module
+graph. These floors protect that graph; they are not evidence that SSH, gRPC,
+WebSockets or peer-to-peer networking execute in this example.
+
+Ordinary `go mod tidy` removes the unused floors and selects older vulnerable
+upstream requirements. Do not treat that change as harmless cleanup: retain the
+reviewed constraints and run `TestSelectedModuleGraphSecurityFloors`, which
+queries the actual selected graph with `GOPROXY=off` and `-mod=readonly`.
+The graph test requires module metadata to have been fetched during setup.
+The checked-in module checksums are verified against the
+[Go checksum database](https://sum.golang.org/lookup/github.com/ethereum/go-ethereum@v1.17.0).
+Normal Go tooling must still resolve and verify dependencies in a fresh
+environment. Do not disable checksum verification or implicitly download a
+different toolchain.
 
 The source tests cover actual SDK request serialization, both chains, exact
 empty-array parameters, fixed dummy authentication, CONNECT-only application
 authentication, fixed errors, no redirects/retries and per-host TLS trust.
-The eight main test groups passed. Separately, the actual binary passed two
+On 2026-10-12, the upgraded graph passed these eight groups plus the selected
+module-graph regression (nine groups total), followed by an ordinary binary
+build, using verified official Go 1.26.9. Tests and build used a network-disabled
+container with read-only source/module cache and `-mod=readonly`. The application
+code and original SDK tests are unchanged. This is offline component evidence;
+fresh SDK-through-proxy acceptance is still required for the upgraded binary.
+
+The historical eight main test groups passed with v1.15.11. Separately, that binary passed two
 mainnet reads and wrong-application, wrong-chain and revoked-grant denials through
 the real proxy with a synthetic provider, exact key replacement and separate TLS
 roots. See the [verification record](../../docs/operator-alchemy-verification.md),

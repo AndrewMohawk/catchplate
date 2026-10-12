@@ -57,16 +57,18 @@ to 1 MiB. See the [Gmail verification boundary](../../docs/operator-gmail-job-ve
 
 ## Run
 
-Use Go 1.23 or newer. The reviewed direct dependency pins are Google API client
-`v0.230.0` and OAuth2 `v0.30.0`; this is a deliberate Go-1.23-compatible pin, not a
-claim to use the latest Google release. Install dependencies before supplying the
-application token:
+Use a supported Go release at least 1.25; this dependency repair uses the
+official Go 1.26.9 toolchain. Direct dependency pins are Google API client
+`v0.264.0` and OAuth2 `v0.36.0`. The patched gRPC `v1.83.1` graph requires
+these coupled updates through GAX, alongside `x/crypto v0.52.0` and
+`x/net v0.55.0`; they are not arbitrary latest-version upgrades.
+Install dependencies before supplying the application token:
 
 ```sh
 cd examples/google-gmail-go
-go mod download
-go test ./...
-go build -o gmail-example .
+GOTOOLCHAIN=local go mod download
+GOTOOLCHAIN=local go test ./...
+GOTOOLCHAIN=local go build -o gmail-example .
 ```
 
 The reviewed `go.mod` and `go.sum` are checked in; dependency installation should
@@ -143,7 +145,7 @@ lowercase DNS hostname, not an IP address or `gmail.googleapis.com`.
 
 Ambient `HTTPS_PROXY`/`NO_PROXY` cannot bypass the configured proxy. The endpoint
 is fixed to Gmail; the code neither rewrites SDK requests nor follows provider
-URLs. [Generated SDK methods at the pinned version](https://github.com/googleapis/google-api-go-client/blob/v0.230.0/gmail/v1/gmail-gen.go)
+URLs. [Generated SDK methods at the pinned version](https://github.com/googleapis/google-api-go-client/blob/v0.264.0/gmail/v1/gmail-gen.go)
 produce the normal `alt=json`, `prettyPrint=false`, list and metadata parameters.
 No unsupported `fields` projection is added.
 
@@ -156,7 +158,18 @@ redirect after refusal, bounds, and CONNECT credential separation. TLS tests use
 synthetic certificates to check both correct and crossed trust roles without
 opening sockets.
 
-On 2026-10-10, all eight offline groups passed with Go 1.23.12 and the pinned
+On 2026-10-12, the upgraded graph passed all eight offline test groups and an
+ordinary binary build using verified official Go 1.26.9. Tests and build ran in a
+network-disabled container with read-only source and module cache. The application
+code is unchanged; the stock `X-Goog-Api-Client` header is now
+`gl-go/1.26.9 gdcl/0.264.0`. Fresh SDK-through-proxy acceptance remains required
+for this binary and dependency graph.
+
+The historical results below used Go 1.23.12 with Google API `v0.230.0` and
+OAuth2 `v0.30.0`, not the upgraded graph. They are not renewed through-proxy
+acceptance for this dependency repair.
+
+On 2026-10-10, all eight offline groups passed with those earlier
 dependencies (`GOPROXY=off go test -p 2 -count=1 -v ./...`). A separate isolated
 network run passed on 2026-10-11 UTC using this actual compiled entrypoint and
 the normal Serverware application and Rust proxy. It completed list/pagination

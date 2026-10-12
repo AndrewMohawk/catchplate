@@ -59,7 +59,7 @@ struct Authority {
 }
 
 impl Authority {
-    fn new(app_ttl: u64, streaming: bool) -> Self {
+    fn new(app_ttl: u64) -> Self {
         let (key, pem, key_id) = response_proof_signing_material().unwrap();
         let mut raw = signed_policy(&key, &key_id, 1, false);
         raw["principals"][0]["proxyAuthorization"]["expiresAtEpochMs"] = json!(now_epoch_ms() + u128::from(app_ttl));
@@ -75,10 +75,6 @@ impl Authority {
         route["adapter"]["config"].as_object_mut().unwrap().remove("noCredentialProof");
         route["adapter"]["config"]["credentialBinding"] = json!({"credentialType":"oauth2", "provider":"google",
             "subjects":[SUBJECT], "clientIds":[CLIENT], "requiredScopes":["https://www.googleapis.com/auth/gmail.readonly"]});
-        if streaming {
-            route["adapter"]["config"]["response"]["mode"] = json!("stream");
-            route["adapter"]["config"]["response"]["allowedFields"] = json!([]);
-        }
         let signature = key.sign(canonical_json(&signature_payload(&raw)).as_bytes());
         raw["metadata"]["signature"] = json!(format!("ed25519:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes())));
         let binary = sha256_prefixed(b"synthetic-google-release-gate");
@@ -130,12 +126,8 @@ struct Fixture {
 
 impl Fixture {
     fn new(app_ttl: u64) -> Self {
-        Self::with_response(app_ttl, false)
-    }
-
-    fn with_response(app_ttl: u64, streaming: bool) -> Self {
         let scratch = Scratch::new();
-        let authority = Arc::new(Authority::new(app_ttl, streaming));
+        let authority = Arc::new(Authority::new(app_ttl));
         let path = scratch.0.join("policy-bundle.json");
         fs::write(&path, serde_json::to_vec(&authority.raw).unwrap()).unwrap();
         fs::write(scratch.0.join(LOCK_NAME), []).unwrap();
@@ -549,16 +541,21 @@ fn operator_google_release_canonical_scope_version_and_proof_cannot_be_substitut
         assert_eq!(fixture.listener.accept().unwrap_err().kind(),io::ErrorKind::WouldBlock);
         assert_eq!(fixture.state.audit_sent.load(Ordering::Relaxed),0); no_material(&fixture);
     }
-    // Independently signed/compiled ordinary Google streaming route: the new
-    // buffered owner must not claim it or change its existing release path.
-    let fixture = Fixture::with_response(60_000, true);
-    assert!(streaming_response_policy(&response_policy_for_route(&fixture.snapshot.routes[0])).is_some());
-    let mut owner = Request::new(Instant::now() + Duration::from_secs(5));
-    assert!(owner.acquire_if_admitted(&fixture.state, &fixture.snapshot, &fixture.scope, false).unwrap().is_none());
-    assert!(owner.prepare_release_if_admitted(&fixture.state, &fixture.snapshot, &Value::Null,
-        "GET", &Url::parse(TARGET).unwrap(), false).unwrap().is_none(), "excluded route claimed the request");
-    assert_eq!(fixture.listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
-    assert_eq!(fixture.state.audit_sent.load(Ordering::Relaxed), 0); no_material(&fixture);
+    // A genuine OAuth policy cannot admit opaque generic response streaming.
+    // Re-sign the altered original and require the real compiler's refusal;
+    // do not manufacture a compiled snapshot to exercise an impossible route.
+    let authority = Authority::new(60_000);
+    let mut raw = authority.raw.clone();
+    raw["routes"][0]["adapter"]["config"]["response"]["mode"] = json!("stream");
+    raw["routes"][0]["adapter"]["config"]["response"]["allowedFields"] = json!([]);
+    let signature = authority.key.sign(canonical_json(&signature_payload(&raw)).as_bytes());
+    raw["metadata"]["signature"] = json!(format!("ed25519:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes())));
+    let trust = PolicyTrustRoot { verifying_key: authority.key.verifying_key(), key_id: authority.key_id.clone(),
+        attested_policy_hash: None, attested_data_plane_binary_digest: None,
+        response_verifying_key: None, response_signing_key_id: None, attested_response_context: None };
+    assert_eq!(compile_signed_snapshot(raw, trust, &authority.binary, true).err()
+        .expect("OAuth generic response stream must be refused"),
+        "route route:test credential-bearing generic.rest response mode must be explicitly buffered");
 }
 
 #[test]

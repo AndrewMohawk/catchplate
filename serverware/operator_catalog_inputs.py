@@ -185,6 +185,31 @@ class GithubRepositoryInput(BaseModel):
         return self
 
 
+class GithubAppInput(NamedInput):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    app_id: str = Field(min_length=1, max_length=16)
+    installation_id: str = Field(min_length=1, max_length=16)
+    private_key_pem: str = Field(min_length=1, max_length=8192, repr=False)
+    repository: GithubRepositoryInput
+    issues_permission: Literal["read", "write"]
+
+    @field_validator("app_id", "installation_id")
+    @classmethod
+    def numeric_identity(cls, value: str) -> str:
+        from serverware.operator_github_app import identifier
+        identifier(value)
+        return value
+
+    @field_validator("private_key_pem")
+    @classmethod
+    def rsa_key(cls, value: str) -> str:
+        from serverware.github_app import load_private_key
+        if len(value.encode("utf-8")) > 8192:
+            raise ValueError("GitHub App key refused")
+        load_private_key(value.encode("utf-8"))
+        return value
+
+
 class GithubRuleInput(NamedInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)

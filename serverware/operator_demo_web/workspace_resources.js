@@ -370,8 +370,11 @@ function createCredentialsView(workspace, actions = {}) {
           'Alchemy chain-status reads only. Stored API or access key, never a key-bearing URL. Validity and provider entitlement are not tested here; Serverware does not renew this key.', 'small muted'));
         if (isXCredential(credential)) card.append(textNode('p',
           'X app-only username lookup only. Stored token; validity and provider entitlement are not tested here. No posting or user OAuth. Serverware does not renew this token.', 'small muted'));
-        if (isGithubCredential(credential)) card.append(textNode('p',
-          'GitHub issue presets only. Stored token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
+        if (isGithubCredential(credential)) card.append(textNode('p', isGithubAppCredential(credential) ?
+          'GitHub App bound to ' + credential.github_app.repository.owner + '/' + credential.github_app.repository.name +
+          (credential.status === 'active' ? '. Serverware automatically renews scoped installation tokens using the stored private key. This page has not tested current renewal health; application proxy tokens have their own expiry.' :
+            '. Revoked locally: unavailable for requests or token renewal here. This does not uninstall the App at GitHub.') :
+          'GitHub issue presets only. Stored personal access token; validity and repository access are not tested here. Serverware does not renew this token.', 'small muted'));
         if (isNpmCredential(credential)) card.append(textNode('p',
           catalog.capabilities.npm_install ?
             'Saved npm token. Explicit installation permissions require every package and dependency in their allowlist. Metadata and publishing permissions remain separate; provider validity is untested and this token is not renewed.' : catalog.capabilities.npm_publish ?
@@ -381,11 +384,20 @@ function createCredentialsView(workspace, actions = {}) {
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');
         for (const [label, value] of [['Credential ID', credential.id], ...(isAwsCredential(credential) ? awsCredentialRows(credential) : [
-          ['Authentication', isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubCredential(credential) ? 'GitHub token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
+          ['Authentication', isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubAppCredential(credential) ? 'GitHub App installation token' : isGithubCredential(credential) ? 'GitHub personal access token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
           ['Header name', credential.header_name]]), ['Active rules', String(credential.active_rule_count)],
           ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
         details.append(identity);
-        if (Object.hasOwn(credential, 'credential_generation')) {
+        if (isGithubAppCredential(credential)) {
+          const binding = credential.github_app;
+          for (const [label, value] of [['GitHub App ID', binding.app_id], ['Installation ID', binding.installation_id],
+            ['Account ID', binding.account_id], ['Repository ID', binding.repository_id],
+            ['Repository', binding.repository.owner + '/' + binding.repository.name],
+            ['Maximum permission', githubPermissionName(binding.issues_permission === 'write' ? operatorGithub.write : operatorGithub.read)],
+            ['Installation-token renewal', credential.status === 'active' ? 'Automatic; current health is not observed here' : 'Disabled by local revocation']])
+            identity.append(textNode('dt', label), textNode('dd', value));
+        }
+        if (!isGithubAppCredential(credential) && Object.hasOwn(credential, 'credential_generation')) {
           const metadata = textNode('dl', undefined, 'metadata'); metadata.dataset.keyReplacementDetails = '';
           for (const [label, value] of [['Stored key generation', credential.credential_generation === null ? 'Unavailable after local revocation' : String(credential.credential_generation)],
             ['Last replacement saved', credential.key_replaced_at ? new Date(credential.key_replaced_at).toLocaleString() : 'No replacement recorded']])
@@ -416,7 +428,8 @@ function createCredentialsView(workspace, actions = {}) {
           isAwsCredential(credential) && !awsStorageAvailable(catalog);
         button.addEventListener('click', () => {
           if (isAwsCredential(credential) && !awsStorageAvailable(workspace.state.catalog)) return;
-          if (!window.confirm(isAwsCredential(credential) ? `Remove AWS credentials "${credential.name}" (${credential.id}) from Serverware? This does not revoke them at AWS.` :
+          if (!window.confirm(isGithubAppCredential(credential) ? `Revoke GitHub App connection "${credential.name}" (${credential.id}) locally? This stops its use and token renewal here; it does not uninstall the App at GitHub.` :
+            isAwsCredential(credential) ? `Remove AWS credentials "${credential.name}" (${credential.id}) from Serverware? This does not revoke them at AWS.` :
             `Revoke locally stored credential "${credential.name}" (${credential.id})? This does not revoke the key at its provider.`)) return;
           workspace.mutate('credentials/revoke', {id: credential.id}, 'credential-action-status');
         }); card.append(button);

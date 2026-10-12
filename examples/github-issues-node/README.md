@@ -13,8 +13,18 @@ tests, and no active workflow is installed by this directory.
 
 In the operator UI:
 
-1. Add a **GitHub token** credential. The real GitHub token stays in Serverware;
-   never put it in this project or the workflow.
+For GitHub App setup, the operator must first allow `https://api.github.com`.
+**Save and verify GitHub App** contacts GitHub to verify the App, installation
+and exact repository and obtain a scoped token before saving. PAT storage alone
+does not verify the token and is permitted while that upstream is disabled;
+granting or using either connection still requires the enabled upstream.
+
+1. Choose **GitHub**, then **personal access token (PAT)** or **GitHub App**.
+   For a PAT, save a connection name and token. For an App, save its App ID,
+   installation ID, private-key PEM, exact repository owner/name and Issues
+   access (`read`, or `write` for the creation commands). The App must already
+   be installed for that repository with the required permission. Provider
+   credentials stay in Serverware, never in this project or the workflow.
 2. Create an application with **Basic and Bearer** proxy authentication and keep
    its application ID and token. This example uses Basic CONNECT authentication.
 3. Grant that application **Read issues and comments** for one exact owner and
@@ -26,9 +36,21 @@ In the operator UI:
    identity with the proxy operator before trusting it. If the HTTPS proxy itself
    uses a private CA, obtain that separate outer CA too.
 
-Application-token expiry/revocation and the provider token's own permissions
-still apply. The client does not configure the proxy, save credentials, renew
-tokens, change policy or perform hardware approval.
+Application-token expiry/revocation and the provider's own permissions still
+apply. Serverware stores the App private key encrypted and automatically obtains
+and renews its short-lived installation tokens; PATs are not automatically
+renewed. The App's exact repository/Issues ceiling does not replace the separate
+application grant. A GitHub App installation is not GitHub OAuth user login, and
+its App ID is not `SERVERWARE_APP_ID`.
+
+App token reuse requires a 65-second expiry margin. A mint failure is not retried
+in the same call; only a later separately authorized lease after a 60-second
+backoff may attempt fresh authentication. This never retries a repository write.
+
+Both choices use the unchanged SDK, public dummy and proxy-token inputs below.
+Do not give Octokit the App private key, a JWT or an installation token. The client
+does not configure the proxy, save credentials, renew tokens, change policy or
+perform hardware approval. The new App flow is **not yet verified against real GitHub**; its [synthetic verification is recorded separately](../../docs/operator-github-client-compatibility.md#github-app-feature-verification-checkpoint).
 
 ## 2. Install and configure the client
 
@@ -148,7 +170,8 @@ The later 2026-10-10 [actual-entrypoint acceptance](../../docs/operator-github-c
 passed this program through the normal Rust proxy with verified TLS and a
 synthetic GitHub service: two-page reads succeeded, and wrong-application and
 wrong-repository requests were denied before dispatch. No real GitHub request
-or GitHub Actions execution is claimed.
+or GitHub Actions execution is claimed. This historical static-token fixture
+does not verify GitHub App installation authentication or token renewal.
 
 ## GitHub Actions sample
 
@@ -182,7 +205,9 @@ be valid. This sample does not bypass network restrictions or renew tokens.
 The workflow performs **only a read**. Its `contents: read` permission is for
 checking out the example, not authentication to the target GitHub repository;
 the client uses the Serverware application token and fixed public GitHub dummy.
-Do not add a real GitHub provider token to the workflow. The job has a five-minute
+Do not add a real GitHub provider token, App private key, JWT or installation
+token to the workflow. Running this issues client in Actions does not grant
+access to Actions/workflow management APIs. The job has a five-minute
 deadline; the read step is limited to two minutes and its client process to
 100 seconds. It creates a private temporary CA directory and removes only its
 two named PEM files and that directory on exit. Logs can contain returned issue

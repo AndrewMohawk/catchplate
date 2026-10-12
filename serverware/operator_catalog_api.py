@@ -22,7 +22,7 @@ PREFIX = "/api/operator-demo"
 CATALOG_PATH = PREFIX + "/catalog"
 MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials", "/credentials/revoke", "/credentials/replace-key", "/credentials/github-token", "/credentials/npm-token", "/credentials/x-app-bearer", "/applications", "/applications/revoke",
-    "/credentials/alchemy-key",
+    "/credentials/alchemy-key", "/credentials/github-app",
     "/credentials/aws-sigv4", "/credentials/aws-sigv4/replace",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username",
@@ -161,6 +161,7 @@ async def _mutate(request: Request, identity: auth.AdminIdentity, model_name: st
     from serverware import operator_catalog_inputs as inputs
     from serverware import operator_catalog_mutations as mutations
     from serverware import operator_catalog_schema
+    from serverware.operator_github_app import GitHubAppUnavailable
 
     _admit(request, mutation=True)
     # _admit and the route's admin dependency own admission. The tracker is
@@ -180,6 +181,8 @@ async def _mutate(request: Request, identity: auth.AdminIdentity, model_name: st
         _reject(409, "operator catalog or policy changed; refresh before trying again")
     except mutations.CatalogLimitReached:
         _reject(409, "operator catalog capacity reached; inspect workspace limits before trying again")
+    except GitHubAppUnavailable:
+        _reject(503, "GitHub App verification failed; check app, installation and repository permissions")
     except ValueError:
         _reject(422, "invalid operator catalog input or unsupported policy")
     except Exception:
@@ -217,6 +220,11 @@ async def revoke_credential(request: Request, identity: auth.AdminIdentity = Dep
 @router.post("/credentials/github-token")
 async def create_github_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "GithubTokenInput", "create_github_credential", 16384, created=True)
+
+
+@router.post("/credentials/github-app")
+async def create_github_app_credential(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "GithubAppInput", "create_github_app_credential", 32768, created=True)
 
 
 @router.post("/credentials/replace-key")

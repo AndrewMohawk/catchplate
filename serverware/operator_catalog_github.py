@@ -35,6 +35,11 @@ def selected(rule: dict) -> bool:
 
 
 def validate_credential(record: dict, metadata: dict | None = None) -> bool:
+    from serverware import operator_github_app as app_connection
+    from serverware import github_app_boundary
+    if (github_app_boundary.selected(record.get("auth_type"), record)
+            or github_app_boundary.selected(None, metadata)):
+        return app_connection.validate_credential(record, metadata)
     marker = record.get("connection_type")
     if "connection_type" not in record:
         if metadata is not None and "connection_type" in metadata:
@@ -81,6 +86,12 @@ def validate_rule(rule: dict, credential: dict) -> None:
     validate_shape(rule)
     if not validate_credential(credential):
         raise CatalogIntegrityError("GitHub preset requires a GitHub token connection")
+    from serverware import operator_github_app as app_connection
+    if credential.get("connection_type") == app_connection.CONNECTION:
+        binding = credential["github_app"]
+        if (rule["repository"] != binding["repository"] or
+                binding["issues_permission"] == "read" and rule["operation_bundle"] != READ_BUNDLE):
+            raise CatalogIntegrityError("GitHub App repository or permission ceiling refused")
 
 
 def render_route(rule: dict, credential: dict, principal_id: str) -> dict:

@@ -18925,6 +18925,9 @@ def _broker_credential_for_lease(credential_id: str) -> dict[str, Any] | None:
     # This preliminary read contains no secret and cannot trigger legacy
     # refresh. The actual ciphertext is read later under the mutation lock.
     credential = db.get_credential(credential_id, include_secret=False)
+    from serverware import operator_github_app
+    if credential is not None and operator_github_app.selected(credential):
+        raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
     from serverware.aws_credential_boundary import credential_selected
     if credential is not None and credential_selected(credential):
         raise HTTPException(status_code=409, detail="AWS credential dispatch is unavailable")
@@ -18934,17 +18937,31 @@ def _broker_credential_for_lease(credential_id: str) -> dict[str, Any] | None:
 
 
 def _credential_for_lease(
-    credential_id: str, *, allow_legacy_oauth: bool = True
+    credential_id: str, *, allow_legacy_oauth: bool = True, allow_github_app: bool = False
 ) -> dict[str, Any] | None:
     from serverware import oauth_application_owner
     if oauth_application_owner.require_started() is not None:
         raise HTTPException(status_code=503, detail="enrolled credentials require the current fenced lease opening")
+    from serverware import operator_github_app
+    public = db.get_credential(credential_id, include_secret=False)
+    if public is not None and operator_github_app.selected(public):
+        if allow_github_app is not True:
+            raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
+        try:
+            operator_github_app.require_runtime()
+        except Exception:
+            raise HTTPException(status_code=503, detail="GitHub App credential dispatch is unavailable") from None
+        # Only the dedicated service opens App key material, after the route,
+        # generation and metadata checks below. Never load it into this path.
+        return public
     credential: dict[str, Any] | None = None
     provider_id: str | None = None
     refreshed: dict[str, Any] | None = None
     try:
         for _ in range(2):
             credential = runtime.get_control_plane_credential(credential_id)
+            if credential is not None and operator_github_app.selected(credential):
+                raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
             if not credential or credential.get("kind") != "oauth2":
                 return credential
             metadata = credential.get("metadata")
@@ -18970,6 +18987,8 @@ def _credential_for_lease(
             with db.oauth_refresh_lock(credential_id):
                 runtime.invalidate_secret_leases(credential_id)
                 credential = runtime.get_control_plane_credential(credential_id)
+                if credential is not None and operator_github_app.selected(credential):
+                    raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
                 if not credential:
                     return None
                 metadata = credential.get("metadata")
@@ -19392,6 +19411,13 @@ def _assert_route_credential_binding(
     metadata = credential.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise HTTPException(status_code=503, detail="credential metadata is invalid")
+    from serverware import operator_github_app
+    if operator_github_app.selected(credential):
+        try:
+            operator_github_app.require_runtime()
+            operator_github_app.validate_route(credential, route, credential_policy)
+        except Exception:
+            raise HTTPException(status_code=409, detail="GitHub App route binding is unavailable") from None
     binding = route.adapter_config.get("credentialBinding")
     if not isinstance(binding, dict):
         raise HTTPException(
@@ -19492,8 +19518,20 @@ def _assert_policy_candidate_credential_bindings(snapshot: Any) -> None:
 
 
 def _credential_secret_for_lease(
-    credential: dict[str, Any], credential_policy: Any
+    credential: dict[str, Any], credential_policy: Any, *, route: Any = None
 ) -> str:
+    from serverware import operator_github_app
+    if operator_github_app.selected(credential):
+        if route is None:
+            raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
+        try:
+            operator_github_app.require_runtime()
+            operator_github_app.validate_route(credential, route, credential_policy)
+            # Cache-only under the final real mutation snapshot: no provider
+            # request, refresh or App private-key projection is permitted here.
+            return operator_github_app.cached_dispatch_token(credential, route, credential_policy)
+        except Exception:
+            raise HTTPException(status_code=503, detail="GitHub App credential dispatch is unavailable") from None
     from serverware.aws_credential_boundary import credential_selected
     if credential_selected(credential):
         raise HTTPException(status_code=409, detail="AWS credential dispatch is unavailable")
@@ -20380,6 +20418,10 @@ def data_plane_credential_leases(
             from serverware.control_plane_oauth_refresh import LeaseOpening
             refresh_opening = LeaseOpening(request, payload)
         native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
+        github_app_allowed = (profile == "legacy" and not wrapped and not broker
+            and currentness_opening is None and refresh_opening is None)
+        github_app_prepared = False
+        from serverware import operator_github_app
         snapshot = get_policy_snapshot()
         if not snapshot:
             raise HTTPException(
@@ -20496,7 +20538,8 @@ def data_plane_credential_leases(
                 if refresh_opening is not None
                 else _broker_credential_for_lease(payload.credential_id)
                 if broker
-                else _credential_for_lease(payload.credential_id, allow_legacy_oauth=currentness_opening is None)
+                else _credential_for_lease(payload.credential_id,
+                    allow_legacy_oauth=currentness_opening is None, allow_github_app=github_app_allowed)
             )
             if not prepared_credential:
                 raise HTTPException(
@@ -20543,6 +20586,14 @@ def data_plane_credential_leases(
                     status_code=409,
                     detail="credential generation or metadata changed before secret release",
                 )
+            if operator_github_app.selected(prepared_credential):
+                if not github_app_allowed:
+                    raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
+                try:
+                    operator_github_app.prepare_dispatch_token(prepared_credential, route, credential_policy)
+                except Exception:
+                    raise HTTPException(status_code=503, detail="GitHub App credential dispatch is unavailable") from None
+                github_app_prepared = True
 
         current_snapshot = get_policy_snapshot()
         if current_snapshot is None:
@@ -20620,7 +20671,7 @@ def data_plane_credential_leases(
 
         credential_snapshot = (
             db.credential_generation_snapshot
-            if payload.purpose == "generationMetadata"
+            if payload.purpose == "generationMetadata" or github_app_prepared
             else db.credential_ciphertext_snapshot
             if broker
             else db.credential_lease_snapshot
@@ -20630,6 +20681,10 @@ def data_plane_credential_leases(
                 raise HTTPException(
                     status_code=404, detail="requested credential became unavailable"
                 )
+            github_app_current = operator_github_app.selected(current_credential)
+            if (github_app_current and not github_app_allowed
+                    or github_app_prepared and not github_app_current):
+                raise HTTPException(status_code=409, detail="GitHub App credential dispatch is unavailable")
             if refresh_opening is not None:
                 refresh_opening.require_current(current_credential)
             elif broker and current_credential.get("kind") == "oauth2":
@@ -20682,7 +20737,7 @@ def data_plane_credential_leases(
                     credential_entry["storageMetadata"] = current_credential["storageMetadata"]
                 else:
                     credential_entry["secret"] = _credential_secret_for_lease(
-                        current_credential, current_credential_policy
+                        current_credential, current_credential_policy, route=current_route
                     )
             credentials = [credential_entry]
 

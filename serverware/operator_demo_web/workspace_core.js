@@ -29,7 +29,8 @@ function projectOperationBundles(value, google) {
   return value.map(() => operatorGmailDescriptor());
 }
 function isGmailRule(rule) { return rule?.operation_bundle === operatorGmail.bundle; }
-function isGithubCredential(credential) { return credential?.connection_type === 'github_token_v1'; }
+function isGithubAppCredential(credential) { return credential?.connection_type === 'github_app_v1'; }
+function isGithubCredential(credential) { return ['github_token_v1', 'github_app_v1'].includes(credential?.connection_type); }
 function isGithubRule(rule) { return ['github_issues_read_v1', 'github_issues_write_v1'].includes(rule?.operation_bundle); }
 function isNpmCredential(credential) { return credential?.connection_type === 'npm_token_v1'; }
 function isNpmRule(rule) { return rule?.operation_bundle === 'npm_metadata_read_v1'; }
@@ -117,7 +118,7 @@ function operatorRuleContentValid(rule, credential) {
     isNpmInstallRule(rule) ? npmInstallRuleValid(rule, credential) :
     isNpmRule(rule) ? npmRuleValid(rule, credential) :
     typeof isGithubRule === 'function' && isGithubRule(rule) && githubRuleValid(rule, credential);
-  if (['github_token_v1', 'npm_token_v1', 'x_app_bearer_v1', 'alchemy_key_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
+  if (['github_token_v1', 'github_app_v1', 'npm_token_v1', 'x_app_bearer_v1', 'alchemy_key_v1'].includes(credential?.connection_type) || rule && ['age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
   if (!rule || !['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers'].every(name =>
       Array.isArray(rule[name]) && rule[name].every(value => typeof value === 'string')) ||
       !rule.methods.length || rule.methods.some(method => !operatorMethods.includes(method)) ||
@@ -291,6 +292,7 @@ function projectStaticKeyReplacementCapability(value) {
   return {schema: value.schema, path: value.path, credential_types: ['bearer', 'header']};
 }
 function projectStaticKeyMetadata(item) {
+  if (isGithubAppCredential(item)) return {}; // Installation-token generations are not a replaceable PAT.
   if (!['bearer', 'header'].includes(item.auth_type) || !Object.hasOwn(item, 'credential_generation')) return {};
   const generation = item.credential_generation;
   const valid = item.status === 'active' ? Number.isSafeInteger(generation) && generation > 0 :
@@ -304,6 +306,7 @@ function projectStaticKeyMetadata(item) {
 function staticKeyReplacementAvailable(catalog, credential) {
   const metadata = credential ? projectStaticKeyMetadata(credential) : {};
   return Boolean(projectStaticKeyReplacementCapability(catalog?.capabilities?.static_key_replacement) &&
+    !isGithubAppCredential(credential) &&
     credential?.status === 'active' && ['bearer', 'header'].includes(credential.auth_type) &&
     Number.isSafeInteger(metadata.credential_generation) && metadata.credential_generation > 0 &&
     metadata.credential_generation < Number.MAX_SAFE_INTEGER);
@@ -359,13 +362,16 @@ function projectCatalog(value) {
   credentials.forEach((credential, index) => {
     const original = value.credentials[index];
     if (isAwsCredential(original)) return; // Exact non-header tuple projection already validated above.
+    if (Object.hasOwn(original, 'github_app') && !isGithubAppCredential(original))
+      throw operatorError('Saved GitHub App marker and binding disagree. Changes are disabled.');
     if (!Object.hasOwn(original, 'connection_type')) return;
-    const provider = original.connection_type === 'github_token_v1' ? 'github' : original.connection_type === 'npm_token_v1' ? 'npm' :
+    const provider = isGithubCredential(original) ? 'github' : original.connection_type === 'npm_token_v1' ? 'npm' :
       original.connection_type === 'x_app_bearer_v1' ? 'x' : original.connection_type === 'alchemy_key_v1' ? 'alchemy' : null;
     if (provider === null || original.provider_id !== provider ||
         original.auth_type !== 'bearer' || original.header_name !== 'Authorization')
       throw operatorError('Saved provider connection metadata is unsupported. Changes are disabled.');
     credential.connection_type = original.connection_type; credential.provider_id = provider;
+    if (isGithubAppCredential(original)) Object.assign(credential, projectGithubAppMetadata(original));
   });
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
   applications.forEach((application, index) => {
@@ -403,6 +409,7 @@ function projectCatalog(value) {
   capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   capabilities.github = value.capabilities?.github == null ? null : projectGithubCapability(value.capabilities.github);
+  capabilities.github_app = value.capabilities?.github_app == null ? null : projectGithubAppCapability(value.capabilities.github_app);
   capabilities.npm = value.capabilities?.npm == null ? null : projectNpmCapability(value.capabilities.npm);
   capabilities.npm_publish = value.capabilities?.npm_publish == null ? null : projectNpmPublishCapability(value.capabilities.npm_publish);
   capabilities.npm_install = value.capabilities?.npm_install == null ? null : projectNpmInstallCapability(value.capabilities.npm_install);
@@ -488,14 +495,14 @@ function createOperatorWorkspace() {
     let success = false;
     try {
       const pending = api('/api/operator-demo/' + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...body, ...reviewed})});
-      for (const name of ['secret', 'access_key_id', 'secret_access_key', 'session_token'])
+      for (const name of ['secret', 'private_key_pem', 'access_key_id', 'secret_access_key', 'session_token'])
         if (Object.hasOwn(body, name)) body[name] = '';
       const result = await pending; await onSuccess(result); success = true;
       element(statusId).textContent = 'Saved. Refreshing the current state and proxy enforcement...';
     } catch (error) {
       requireReview(operatorMessage(error));
       element(statusId).textContent = operatorMessage(error);
-    } finally { for (const name of ['secret', 'access_key_id', 'secret_access_key', 'session_token'])
+    } finally { for (const name of ['secret', 'private_key_pem', 'access_key_id', 'secret_access_key', 'session_token'])
       if (Object.hasOwn(body, name)) body[name] = ''; }
     await refresh(); state.busy = false; emit(); return success;
   }

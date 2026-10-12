@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from serverware import db
+from serverware import db, github_app_boundary
 from serverware.config import PUBLIC_URL
 
 
@@ -183,9 +183,14 @@ def inject_credential(flow: Any, route: dict[str, Any]) -> str:
     credential_id = route.get("credential_id")
     if not credential_id:
         return "no credential configured"
+    public = db.get_credential(credential_id, include_secret=False)
+    if public is not None and github_app_boundary.credential_selected(public):
+        return "GitHub App credentials require the dedicated lease owner"
     credential = db.get_credential(credential_id, include_secret=True)
     if not credential:
         return "credential missing"
+    if github_app_boundary.credential_selected(credential):
+        return "GitHub App credentials require the dedicated lease owner"
 
     injection = route.get("injection") or {}
     injection_type = injection.get("type") or credential.get("kind") or "bearer"

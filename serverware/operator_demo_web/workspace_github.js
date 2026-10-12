@@ -15,10 +15,60 @@ function projectGithubCapability(value) {
   if (typeof value?.destination_allowed !== 'boolean' || !operatorExact(value, githubCapabilityDescriptor(value.destination_allowed))) return null;
   return githubCapabilityDescriptor(value.destination_allowed);
 }
-function githubAvailable(catalog, credential) {
-  return isGithubCredential(credential) && credential.status === 'active' &&
-    projectGithubCapability(catalog?.capabilities.github)?.destination_allowed === true &&
+function githubAppCapabilityDescriptor(destinationAllowed) {
+  return {...githubCapabilityDescriptor(destinationAllowed), schema: 'serverware.operatorGithubApp/v1',
+    connection_type: 'github_app_v1', create_credential_path: '/api/operator-demo/credentials/github-app'};
+}
+function projectGithubAppCapability(value) {
+  return typeof value?.destination_allowed === 'boolean' && operatorExact(value, githubAppCapabilityDescriptor(value.destination_allowed)) ?
+    githubAppCapabilityDescriptor(value.destination_allowed) : null;
+}
+function githubAppDestinationAvailable(catalog) {
+  return projectGithubAppCapability(catalog?.capabilities?.github_app)?.destination_allowed === true &&
     catalog.allowed_upstreams.includes(operatorGithub.origin);
+}
+function githubIdValid(value) {
+  return typeof value === 'string' && /^[1-9][0-9]{0,15}$/.test(value) &&
+    (value.length < 16 || value <= '9007199254740991');
+}
+function projectGithubAppMetadata(credential) {
+  const value = credential?.github_app;
+  if (!isGithubAppCredential(credential) || credential.provider_id !== 'github' || credential.auth_type !== 'bearer' ||
+      credential.header_name !== 'Authorization' || credential.legacy_upstream_origin || !value ||
+      !operatorExact(Object.keys(value).sort(), ['account_id', 'app_id', 'installation_id', 'issues_permission', 'repository', 'repository_id', 'token_refresh']) ||
+      !['app_id', 'installation_id', 'account_id', 'repository_id'].every(key => githubIdValid(value[key])) ||
+      !githubRepositoryValid(value.repository) || !['read', 'write'].includes(value.issues_permission) || value.token_refresh !== 'automatic')
+    throw operatorError('Saved GitHub App binding is unsupported. Refresh before making changes.');
+  return {github_app: {app_id: value.app_id, installation_id: value.installation_id, account_id: value.account_id,
+    repository_id: value.repository_id, repository: {owner: value.repository.owner, name: value.repository.name},
+    issues_permission: value.issues_permission, token_refresh: 'automatic'}};
+}
+function githubPermissionBundles(credential) {
+  if (!isGithubAppCredential(credential)) return [operatorGithub.read, operatorGithub.write];
+  try { return projectGithubAppMetadata(credential).github_app.issues_permission === 'write' ?
+    [operatorGithub.read, operatorGithub.write] : [operatorGithub.read]; }
+  catch (_) { return []; }
+}
+function githubAppCredentialReceipt(credential, submitted) {
+  const binding = projectGithubAppMetadata(credential).github_app;
+  if (credential.status !== 'active' || credential.name !== submitted?.name ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(credential.id || '') ||
+      typeof credential.created_at !== 'string' || !Number.isFinite(Date.parse(credential.created_at)) ||
+      !['app_id', 'installation_id', 'repository', 'issues_permission'].every(key => operatorExact(binding[key], submitted[key])))
+    throw operatorError('The exact saved GitHub App connection was not confirmed. Inspect saved state; do not submit again.');
+  return {id: credential.id, name: credential.name, status: credential.status, created_at: credential.created_at,
+    auth_type: credential.auth_type, header_name: credential.header_name, connection_type: credential.connection_type,
+    provider_id: credential.provider_id, github_app: binding};
+}
+function githubAppCredentialReceiptMatches(credential, expected) {
+  try { return operatorExact(githubAppCredentialReceipt(credential, {name: expected.name, ...expected.github_app}), expected); }
+  catch (_) { return false; }
+}
+function githubAvailable(catalog, credential) {
+  const capability = isGithubAppCredential(credential) ? projectGithubAppCapability(catalog?.capabilities?.github_app) :
+    projectGithubCapability(catalog?.capabilities?.github);
+  return isGithubCredential(credential) && credential.status === 'active' && githubPermissionBundles(credential).length > 0 &&
+    capability?.destination_allowed === true && catalog.allowed_upstreams.includes(operatorGithub.origin);
 }
 function githubRepositoryValid(repository) {
   return repository && operatorExact(Object.keys(repository).sort(), ['name', 'owner']) &&
@@ -45,6 +95,8 @@ function githubRuleValid(rule, credential) {
   try {
     return isGithubCredential(credential) && credential.provider_id === 'github' &&
       credential.auth_type === 'bearer' && credential.header_name === 'Authorization' && !Object.hasOwn(rule, 'age_policy') &&
+      (isGithubAppCredential(credential) ? githubPermissionBundles(credential).includes(rule.operation_bundle) &&
+        operatorExact(rule.repository, projectGithubAppMetadata(credential).github_app.repository) : !Object.hasOwn(credential, 'github_app')) &&
       Object.entries(githubRuleFields(rule.operation_bundle, rule.repository)).every(([key, value]) => operatorExact(rule[key], value));
   } catch (_) { return false; }
 }

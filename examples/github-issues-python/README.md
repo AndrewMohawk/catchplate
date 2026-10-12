@@ -12,7 +12,17 @@ GitHub token to this program.
 
 ## Operator setup
 
-1. Add a GitHub credential in **Accounts & keys**.
+GitHub App verification/save requires the operator to allow
+`https://api.github.com` before provider contact. **Save and verify GitHub App**
+checks the App, installation and repository and obtains a scoped token before
+saving. A PAT may instead be saved untested while the upstream is disabled;
+neither connection can be granted or used until the upstream is enabled.
+
+1. Choose **GitHub**, then a **personal access token (PAT)** or **GitHub App**
+   connection. A PAT needs a name and token. An App needs a name, App ID,
+   installation ID, private-key PEM, exact repository owner/name and Issues
+   access; choose `read` for this read-only client. Install the App for that
+   repository with the required permission in GitHub first.
 2. Create an application with **Basic proxy authentication** enabled; retain its
    application ID and one-time application token.
 3. Give that application the **GitHub issues: read** permission for exactly the
@@ -23,6 +33,23 @@ GitHub token to this program.
 
 No generic permission, repository-metadata route, `/user` or `/rate_limit` grant
 is needed. The named issues permission, not this client, is the authority boundary.
+
+Serverware keeps the App private key encrypted server-side and automatically
+obtains and renews short-lived installation tokens. It does not renew PATs or the
+client's Serverware application token. The App's repository/Issues ceiling and
+the application's saved grant both apply; this remains the existing issues and
+comments preset, not arbitrary GitHub APIs, git, GraphQL or Actions/workflow
+management. This program remains read only even if the connection permits writes.
+
+App token reuse requires a 65-second expiry margin. A failed mint is not retried
+in the same call. A later separately authorized lease may attempt fresh
+authentication after a 60-second backoff; this is not a repository-request retry.
+
+A GitHub App installation is not a GitHub OAuth user-login flow, and its App ID
+is not `SERVERWARE_APP_ID`. PyGithub still receives only the public dummy. Never
+put the private key, JWT or installation token in this project's environment.
+The new App flow is **not yet verified against real GitHub**;
+[App lifecycle synthetic verification is recorded separately](../../docs/operator-github-client-compatibility.md#github-app-feature-verification-checkpoint).
 
 ## Run
 
@@ -106,6 +133,8 @@ Python 3.12.14, verified TLS and a synthetic GitHub service. Two-page reads
 succeeded; wrong-application and wrong-repository attempts were denied before
 dispatch. The client-only combined CA trust remains the tradeoff described above.
 No real GitHub request or public deployment is established by that isolated run.
+That historical static-token fixture does not establish GitHub App installation
+authentication or automatic token renewal.
 
 A saved operator permission, valid app token and running proxy are still needed
 to run against your repository. The four

@@ -1,31 +1,71 @@
 # GitHub issues: implemented client contract and acceptance boundary
 
-The operator-workspace feature at `7ee40d18` implements a reusable GitHub token
-connection and two named-repository permissions. This document describes that
-source contract and the isolated runtime checkpoints below, not a deployed
-GitHub integration or a successful real-provider request.
+The GitHub client contract supports a server-held personal access token (PAT)
+or a GitHub App installation, with the same two named-repository permissions.
+The PAT connection originated at `7ee40d18`; the new App connection and automatic
+installation-token renewal have a separate [verification checkpoint](#github-app-feature-verification-checkpoint).
+Synthetic verification does not establish a successful real-provider request.
 
 ## Operator journey
 
-In **Connect an app**, choose **GitHub token**, save a name and personal access
-token, select or create an application, then enter the repository owner/name and
-choose:
+In **Connect an app**, choose **GitHub**, then select a personal access token or
+a GitHub App connection:
+
+| Connection | Inputs saved in Serverware | Credential lifecycle |
+| --- | --- | --- |
+| Personal access token (PAT) | Connection name and the existing GitHub token. | Serverware does not renew the PAT; its provider permissions and expiry still apply. |
+| GitHub App | Connection name, numeric App ID, numeric installation ID, private-key PEM, exact repository owner/name, and Issues access (`read` or `write`). | Serverware holds the encrypted private key and obtains short-lived installation tokens server-side, renewing them when needed. |
+
+For a GitHub App, first register and install your App in GitHub with access to the
+selected repository and the required Issues permission. This is an existing App
+installation, not a GitHub OAuth user-login or consent flow. The GitHub App ID and
+installation ID are also **not** the Serverware application ID: the latter
+identifies the client allowed to use the proxy.
+
+Select or create a Serverware application, review the exact repository, and grant:
 
 - **Read issues and comments**: list and read issues/comments, including supported
   pagination.
 - **Read and create issues/comments**: those reads plus issue/comment creation.
 
-Review the exact repository and permission before granting access. No manual
-method, path, request-field or response-field lists are required. The repository
-name is reviewed authority, not a verified discovery result; the provider token
-must already have the necessary repository permissions. Saving it does not test
-its validity, and Serverware does not renew it. Existing generic Bearer keys and
-saved rules are not automatically converted to GitHub permissions.
+No manual method, path, request-field or response-field lists are required.
+For a PAT, the repository name is reviewed authority, not a verified discovery
+result; saving the PAT does not test its validity. **Save and verify GitHub App**
+instead contacts GitHub: it verifies the App and installation, obtains a scoped
+installation token and verifies the repository before committing the connection.
+The resulting App, installation, account and repository numeric identities are
+bound to the selected repository and Issues permission ceiling. A read-only
+App connection cannot authorize the create preset; a write-capable connection
+still requires a separate application grant. Broader permissions on the GitHub
+App do not become broader Serverware permissions. Existing generic Bearer keys
+and saved rules are not automatically converted to either connection type.
+
+Serverware stores the App private key encrypted, signs the App JWT server-side,
+and requests an installation token limited to the saved repository and Issues
+access, plus GitHub's read-only metadata permission. This does not grant clients
+repository-metadata routes. Derived tokens are held in memory and renewed on demand near expiry
+(a 65-second safety margin: 60 seconds plus a five-second lease allowance), not
+handed to the SDK client. Renewal does
+not extend the Serverware application token, expand a grant, or change the
+stored credential configuration's generation. This version has no in-place App
+private-key rotation UI: revoke the old connection and explicitly create and
+grant a new one. GitHub's [JWT documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
+and [installation-token documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
+explain the provider-side authentication and repository/permission limits.
+
+A failed token-mint attempt is not retried in the same call. After a 60-second
+backoff, a later separately authorized lease may attempt fresh authentication.
+This is not a retry of an issue/comment request; repository writes are never
+automatically replayed. Revoking the Serverware connection stops future local
+use but does not claim remote GitHub-token revocation or recall an in-flight
+request or an already-issued lease.
 
 The deployment must advertise the exact GitHub capability and allow
-`https://api.github.com` in its retained `allowed_upstreams`. A token may be saved
-while that destination is disabled, but no GitHub permission can be granted or
-used through client setup. The capability describes co-versioned source support;
+`https://api.github.com` in its retained `allowed_upstreams`. A PAT may be saved
+while that destination is disabled, but App verification/save requires it to be
+enabled before any provider contact. Neither option can be granted or used
+through client setup while the destination is disabled. The capability describes
+co-versioned source support;
 it does not negotiate or prove the running gate version. Wait for the exact saved
 policy to be loaded by the accepted app/gate pair.
 
@@ -37,10 +77,10 @@ Node.js **22.19 or newer**, **`@octokit/rest@22.0.1`** and **`undici@8.11.2`**.
 It uses Octokit's normal request/pagination APIs and Undici `ProxyAgent` transport;
 it does not install retry/throttling plugins or rewrite SDK requests in the client.
 
-The application receives only the public GitHub dummy
+With either connection type, the application receives only the public GitHub dummy
 `serverware-github-placeholder-v1`. Octokit sends
 `Authorization: token serverware-github-placeholder-v1`; the proxy replaces that
-exact value with the stored provider credential after authorization. A missing or
+exact value with the PAT or server-derived installation token after authorization. A missing or
 different dummy is not permission to insert a credential.
 
 Proxy authentication is separate: the public application ID is the Basic
@@ -49,6 +89,9 @@ Bearer-only applications use their advertised Bearer mode. The recipe reads the
 app token from `SERVERWARE_PROXY_TOKEN` and supplies it through the proxy-only
 `token` option, never a credential-bearing URL or upstream header. Neither the
 real GitHub token nor a literal application token appears in the displayed code.
+The GitHub App private key, JWT and installation token must not be added to client
+environment variables, configuration downloads or a GitHub Actions job. No SDK
+App-authentication plugin or client-side token-renewal code is needed.
 
 `proxyTls` verifies the outer HTTPS proxy using default trust or an explicitly
 selected proxy CA. `requestTls` separately trusts the downloaded Serverware CA
@@ -59,8 +102,11 @@ requires the page to hold the matching one-time app token.
 ## Deliberate compatibility limits
 
 This is GitHub REST issues/comments for the named repository, not full-provider
-support: no GraphQL, git transport, GitHub App installation/JWT/token lifecycle,
-edits, deletes, merges or unrelated APIs. AWS and npm presets are not implemented
+support: no GraphQL, git transport, edits, deletes, merges, Actions/workflow APIs
+or unrelated routes. The App JWT/installation-token lifecycle is server-side
+credential preparation, not an additional client API grant. A GitHub Actions
+workflow may host the existing client, but that does not authorize workflow
+management or other Actions operations. AWS and npm presets are not implemented
 by this feature.
 
 GET requests have no body; creation accepts bounded JSON up to 64 KiB. Supported
@@ -83,7 +129,33 @@ metadata does not make an uncertain write safe to replay. A denial before
 dispatch differs from a lost response after dispatch; issue/comment creation is
 never automatically retried by the supplied recipe.
 
+## GitHub App feature: verification checkpoint
+
+On 2026-10-12, the retained-compatible demo branch passed 39 focused backend
+tests: 13 provider-protocol checks, nine private-key boundary checks, six App
+catalog checks, six existing PAT catalog checks and five actual encrypted-lease
+checks. The API and lease fixtures use real SQLite custody, catalog publication,
+request authentication, signing and X25519 envelope decryption, with synthetic
+GitHub HTTP replies. They cover exact repository/permission binding, expiry,
+automatic renewal, failure backoff, revocation and generation races. The private
+key is not the dispatched credential. Protocol tests install a process-wide
+network/subprocess refusal hook; run that suite separately from worker suites.
+
+All 13 focused UI checks and seven App plus eight existing PAT rendered-browser
+groups pass. Browser API responses are intercepted fixtures; those results do
+not claim real GitHub authentication or SDK execution. Initial fixture mistakes
+and one live-branch port guard-placement error were corrected before the final
+successful runs. Test sources are under `scripts/test_github_app*.py` and
+`scripts/test_operator_*github*.{py,cjs,mjs}`.
+
+Deployment and a real installed GitHub App remain separate acceptance steps at
+this source checkpoint. No real repository operation or new App-through-Rust
+SDK run is claimed. The historical checkpoints below used a static-token
+fixture; they do not prove the new App lifecycle.
+
 ## Checked-in Node, Python and Go examples
+
+Historical PAT/static-token checkpoint; not GitHub App lifecycle evidence:
 
 On 2026-10-10, the actual entrypoints in `examples/github-issues-node`,
 `examples/github-issues-python` and `examples/github-issues-go` passed through

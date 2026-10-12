@@ -63976,8 +63976,14 @@ def _refuse_generic_aws_credential(kind, metadata=None) -> None:
         raise MetadataStoreError("AWS credentials require the operator catalog lifecycle")
 
 
+def _refuse_generic_github_app_credential(kind, metadata=None, secret=None) -> None:
+    from serverware import github_app_boundary
+    if github_app_boundary.selected(kind, metadata) or github_app_boundary.secret_selected(secret):
+        raise MetadataStoreError("GitHub App credentials require the operator catalog lifecycle")
+
+
 def _refuse_retained_operator_aws_identity(conn: Any, item_id: str) -> None:
-    """A revoked AWS catalog identity is not an available generic upsert slot."""
+    """A retained provider-owned identity is not a generic upsert slot."""
     if metadata_uses_postgres():
         return  # Operator catalog custody is SQLite-only.
     exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -63989,6 +63995,7 @@ def _refuse_retained_operator_aws_identity(conn: Any, item_id: str) -> None:
             record = loads(retained["data_json"], {})
             if isinstance(record, dict):
                 _refuse_generic_aws_credential(record.get("auth_type"), record)
+                _refuse_generic_github_app_credential(record.get("auth_type"), record)
 
 
 def create_credential(
@@ -64007,6 +64014,7 @@ def create_credential(
     _application_operation=None,
 ) -> dict[str, Any]:
     _refuse_generic_aws_credential(kind, metadata)
+    _refuse_generic_github_app_credential(kind, metadata, secret)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     operation = (_oauth_application_operation(metadata, _application_operation)
@@ -67296,6 +67304,7 @@ def upsert_credential_with_id(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _refuse_generic_aws_credential(kind, metadata)
+    _refuse_generic_github_app_credential(kind, metadata, secret)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     load_master_key()
@@ -67309,6 +67318,7 @@ def upsert_credential_with_id(
         if existing:
             existing_metadata = loads(existing["metadata"], {})
             _refuse_generic_aws_credential(existing["kind"], existing_metadata)
+            _refuse_generic_github_app_credential(existing["kind"], existing_metadata)
             if existing["kind"] == "oauth2" or (
                 isinstance(existing_metadata, dict)
                 and existing_metadata.get("oauth") is True
@@ -67317,6 +67327,7 @@ def upsert_credential_with_id(
                     "managed OAuth credentials cannot be replaced through the fixed-ID upsert path"
                 )
             current_secret = decrypt_secret_envelope(existing)
+            _refuse_generic_github_app_credential(existing["kind"], existing_metadata, current_secret)
             secret_changed = current_secret != secret
             metadata_changed = loads(existing["metadata"], {}) != (metadata or {})
             needs_migration = _needs_envelope_migration(existing)
@@ -67407,6 +67418,7 @@ def update_credential(
     _connection: Any | None = None,
 ) -> dict[str, Any] | None:
     _refuse_generic_aws_credential(payload.get("kind"), payload.get("metadata"))
+    _refuse_generic_github_app_credential(payload.get("kind"), payload.get("metadata"), payload.get("secret"))
     if "secret" in payload and payload["secret"] is not None:
         payload = {**payload, "secret": validate_credential_secret(payload["secret"])}
     if "metadata" in payload:
@@ -67421,6 +67433,7 @@ def update_credential(
     )
     with connection_scope as conn:
         _lock_credential_mutation(conn, item_id)
+        _refuse_retained_operator_aws_identity(conn, item_id)
         current = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
@@ -67432,6 +67445,7 @@ def update_credential(
             )
         current_metadata = loads(current["metadata"], {})
         _refuse_generic_aws_credential(current["kind"], current_metadata)
+        _refuse_generic_github_app_credential(current["kind"], current_metadata)
         if (
             current["kind"] == "oauth2" or current_metadata.get("oauth") is True
         ) and any(field in payload for field in ("kind", "secret", "metadata")):
@@ -67450,6 +67464,7 @@ def update_credential(
             "secret" in payload and payload["secret"] is not None
         ) or "metadata" in payload:
             current_secret = decrypt_secret_envelope(current)
+            _refuse_generic_github_app_credential(current["kind"], current_metadata, current_secret)
             next_secret = (
                 payload.get("secret")
                 if payload.get("secret") is not None
@@ -67491,6 +67506,79 @@ def update_credential(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
     return row_to_credential(row) if row else None
+
+
+def _operator_github_app_transaction(conn: Any) -> None:
+    from serverware import operator_catalog_schema, operator_github_app, operator_publication
+    operator_github_app.require_runtime()
+    if (metadata_uses_postgres() or type(conn) is not sqlite3.Connection
+            or not conn.in_transaction):
+        raise MetadataStoreError("operator GitHub App transaction refused")
+    operator_publication.assert_held()
+    databases = conn.execute("PRAGMA database_list").fetchall()
+    if ([row[2] for row in databases if row[1] == "main"] != [str(DB_PATH)]
+            or not operator_catalog_schema.active(conn)):
+        raise MetadataStoreError("operator GitHub App store refused")
+
+
+def create_operator_github_app_credential(conn: Any, *, name: str, secret: str,
+        metadata: dict[str, Any]) -> dict[str, Any]:
+    """Dedicated encrypted App creation; the catalog owns audit, policy and COMMIT."""
+    from serverware import operator_github_app
+    _operator_github_app_transaction(conn)
+    if (type(name) is not str or not 1 <= len(name) <= 128 or name != name.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+        raise ValueError("GitHub App credential name refused")
+    operator_github_app.validate_stored(secret, metadata)
+    item_id, now = str(uuid.uuid4()), iso_now()
+    _lock_credential_mutation(conn, item_id)
+    version = _next_credential_generation(conn, item_id)
+    encrypted = _envelope_values(item_id, secret, version)
+    conn.execute("INSERT INTO credentials (id,name,kind,encrypted_secret,encrypted_dek,secret_nonce,"
+        "secret_ciphertext,secret_kek_id,credential_version,secret_updated_at,metadata,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (item_id, name, "bearer",
+        encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+        encrypted["secret_ciphertext"], encrypted["secret_kek_id"], version,
+        encrypted["secret_updated_at"], dumps(metadata), now, now))
+    return row_to_credential(conn.execute("SELECT * FROM credentials WHERE id=?", (item_id,)).fetchone())
+
+
+def delete_operator_github_app_credential(conn: Any, item_id: str) -> bool:
+    """Local catalog revocation without private-key decryption or provider requests."""
+    from serverware import operator_catalog_schema, operator_github_app
+    _operator_github_app_transaction(conn)
+    try:
+        if type(item_id) is not str or str(uuid.UUID(item_id)) != item_id:
+            raise ValueError()
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError("operator GitHub App credential identifier refused") from None
+    _lock_credential_mutation(conn, item_id)
+    current = conn.execute("SELECT id,name,kind,metadata,lifecycle_status,credential_version "
+        "FROM credentials WHERE id=?", (item_id,)).fetchone()
+    retained = conn.execute("SELECT id,ordinal,data_json FROM operator_catalog_credentials WHERE id=?",
+        (item_id,)).fetchone()
+    if current is None or retained is None:
+        return False
+    try:
+        metadata, record = loads(current["metadata"], {}), loads(retained["data_json"], {})
+        if (type(metadata) is not dict or type(record) is not dict or "id" in record or "ordinal" in record
+                or current["kind"] != "bearer" or current["lifecycle_status"] != "active"
+                or record.get("name") != current["name"] or record.get("status") != "active"):
+            raise ValueError()
+        operator_github_app.validate_credential({"id": item_id, "ordinal": retained["ordinal"], **record}, metadata)
+        version = current["credential_version"]
+        floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?",
+            (item_id,)).fetchone()
+        if (type(version) is not int or not 1 <= version <= 9_007_199_254_740_991 or floor is None
+                or type(floor["last_version"]) is not int or floor["last_version"] != version):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError, operator_catalog_schema.CatalogIntegrityError):
+        raise MetadataStoreError("operator GitHub App credential binding refused") from None
+    changed = conn.execute("DELETE FROM credentials WHERE id=? AND credential_version=? "
+        "AND lifecycle_status='active'", (item_id, version)).rowcount
+    if changed != 1:
+        raise MetadataStoreError("operator GitHub App revocation compare-and-swap refused")
+    return True
 
 
 def _operator_aws_transaction(conn: Any) -> None:
@@ -67636,6 +67724,7 @@ def replace_operator_static_credential_secret_if_version(
             or not isinstance(item_id, str) or str(uuid.UUID(item_id)) != item_id):
         raise ValueError("operator static replacement review refused")
     secret = validate_credential_secret(secret)
+    _refuse_generic_github_app_credential(None, secret=secret)
     if len(secret) > 8192 or any(ord(char) < 32 or ord(char) > 126 for char in secret):
         raise ValueError("operator static replacement value refused")
     _lock_credential_mutation(conn, item_id)
@@ -67653,6 +67742,8 @@ def replace_operator_static_credential_secret_if_version(
         catalog = loads(retained["data_json"], {})
         if not isinstance(metadata, dict) or not isinstance(catalog, dict):
             raise ValueError("static binding refused")
+        _refuse_generic_github_app_credential(current["kind"], metadata)
+        _refuse_generic_github_app_credential(catalog.get("auth_type"), catalog)
         metadata_fields = {"provider_id", "provider_subject", "secret_class"}
         if "connection_type" in metadata or "connection_type" in catalog:
             if not operator_catalog_schema.validate_static_connection(catalog, metadata):
@@ -67762,6 +67853,7 @@ def update_credential_secret_if_version(
     _application_operation=None,
 ) -> tuple[dict[str, Any] | None, bool]:
     _refuse_generic_aws_credential(None, metadata)
+    _refuse_generic_github_app_credential(None, metadata, secret)
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     if expected_version < 1:
@@ -67769,19 +67861,22 @@ def update_credential_secret_if_version(
     load_master_key()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
+        _refuse_retained_operator_aws_identity(conn, item_id)
         current = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
         if not current:
             return None, False
         _refuse_generic_aws_credential(current["kind"], loads(current["metadata"], {}))
+        _refuse_generic_github_app_credential(current["kind"], loads(current["metadata"], {}))
         if str(current["lifecycle_status"] or "active") != "active":
             return None, False
         current_version = int(current["credential_version"] or 1)
-        if current_version != expected_version:
-            return row_to_credential(current, include_secret=True), False
         current_secret = decrypt_secret_envelope(current)
         current_metadata = loads(current["metadata"], {})
+        _refuse_generic_github_app_credential(current["kind"], current_metadata, current_secret)
+        if current_version != expected_version:
+            return {**row_to_credential(current), "secret": current_secret}, False
         managed_oauth_provider = None
         if current["kind"] == "oauth2" or current_metadata.get("oauth") is True:
             operation = _oauth_application_operation(metadata, _application_operation)
@@ -68075,12 +68170,14 @@ def delete_credential(item_id: str, *, _connection: Any | None = None) -> bool:
     )
     with connection_scope as conn:
         _lock_credential_mutation(conn, item_id)
+        _refuse_retained_operator_aws_identity(conn, item_id)
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
         if row is not None:
             metadata = loads(row["metadata"], {})
             _refuse_generic_aws_credential(row["kind"], metadata)
+            _refuse_generic_github_app_credential(row["kind"], metadata)
             if row["kind"] == "oauth2" or metadata.get("oauth") is True:
                 raise ManagedOAuthCredentialError(
                     "managed OAuth credentials must be revoked through the provider disconnect flow"

@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from serverware.native_kms_cms import unwrap_broker_kek
-from serverware import aws_credential_boundary, native_service_tokens
+from serverware import aws_credential_boundary, github_app_boundary, native_service_tokens
 from serverware import native_oauth_refresh_owner
 from serverware import native_oauth_cleanup_owner
 from serverware import native_oauth_pending_retirement_owner
@@ -359,7 +359,9 @@ class _Broker:
         _require(type(value["storageMetadata"]) is str)
         storage = _private_document(value["storageMetadata"].encode("utf-8"), 32 * 1024)
         _require(not aws_credential_boundary.selected(None, storage)
-            and not aws_credential_boundary.selected(None, value["metadata"]))
+            and not aws_credential_boundary.selected(None, value["metadata"])
+            and not github_app_boundary.selected(None, storage)
+            and not github_app_boundary.selected(None, value["metadata"]))
         encrypted_dek = row["encryptedDek"].split(":")
         secret_nonce, secret_ciphertext = row["secretNonce"].split(":"), row["secretCiphertext"].split(":")
         _require(len(encrypted_dek) == 3 and len(secret_nonce) == len(secret_ciphertext) == 2
@@ -372,6 +374,7 @@ class _Broker:
             _stored(secret_ciphertext[1], 1024 * 1024 + 16),
             f"serverware:secret:{credential}:v{version}".encode("utf-8"))
         _require(1 <= len(plaintext) <= 1024 * 1024)
+        _require(not github_app_boundary.secret_selected(plaintext))
         if value["metadata"].get("oauth") is True or storage.get("oauth") is True:
             # The CP validates account identity and application ownership on
             # the actual encrypted row. Rejoin its exact private metadata to

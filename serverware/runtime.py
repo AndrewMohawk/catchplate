@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 
-from serverware import aws_credential_boundary, db
+from serverware import aws_credential_boundary, db, github_app_boundary
 from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
     ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
@@ -3542,6 +3542,8 @@ def invalidate_secret_leases(credential_id: str | None = None) -> None:
 
 
 def _project_credential_for_data_plane(credential: dict[str, Any]) -> dict[str, Any] | None:
+    if github_app_boundary.credential_selected(credential):
+        return None  # Only the dedicated App owner can derive a lease token.
     if aws_credential_boundary.credential_selected(credential):
         return None  # Stored tuples are not header secrets or signing grants.
     if credential.get("kind") != "oauth2":
@@ -3577,10 +3579,12 @@ def get_control_plane_credential(credential_id: str | None) -> dict[str, Any] | 
     if not credential_id:
         return None
     current = db.get_credential(credential_id, include_secret=False)
-    if current is None or aws_credential_boundary.credential_selected(current):
+    if (current is None or aws_credential_boundary.credential_selected(current)
+            or github_app_boundary.credential_selected(current)):
         return None
     credential = db.get_credential(credential_id, include_secret=True)
-    if credential is not None and aws_credential_boundary.credential_selected(credential):
+    if credential is not None and (aws_credential_boundary.credential_selected(credential)
+            or github_app_boundary.credential_selected(credential)):
         return None
     return credential
 
@@ -3847,7 +3851,8 @@ def get_credential(
     )
     if any(value is not None for value in controlled_context):
         current = db.get_credential(credential_id, include_secret=False)
-        if current is not None and aws_credential_boundary.credential_selected(current):
+        if current is not None and (aws_credential_boundary.credential_selected(current)
+                or github_app_boundary.credential_selected(current)):
             invalidate_secret_leases(credential_id)
             return None
         if request_authority is None or expected_release_identity is None:
@@ -3867,12 +3872,14 @@ def get_credential(
         if not credential:
             return None
         return _project_credential_for_data_plane(credential)
-    start_runtime_workers()
     current = db.get_credential(credential_id)
-    if not current or aws_credential_boundary.credential_selected(current):
+    if (not current or aws_credential_boundary.credential_selected(current)
+            or github_app_boundary.credential_selected(current)):
         invalidate_secret_leases(credential_id)
         _inc("credential_lease_misses")
         return None
+
+    start_runtime_workers()
 
     now = time.monotonic()
     credential_version = int(current.get("credential_version") or 0)
@@ -3887,6 +3894,10 @@ def get_credential(
             _credential_cache.pop(key, None)
         cached = _credential_cache.get(cache_key)
         if cached and cached[0] > now:
+            if github_app_boundary.credential_selected(cached[1]):
+                for key in [key for key in _credential_cache if key[0] == credential_id]:
+                    _credential_cache.pop(key, None)
+                return None
             _inc("credential_lease_hits")
             return copy.deepcopy(cached[1])
 

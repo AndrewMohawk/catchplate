@@ -295,6 +295,10 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
 
 def validate_static_connection(record: dict, metadata: dict | None = None) -> bool:
     """Closed dispatch keeps generic credentials unmarked and retained unchanged."""
+    from serverware import github_app_boundary, operator_github_app
+    if (github_app_boundary.selected(record.get('auth_type'), record)
+            or github_app_boundary.selected(None, metadata)):
+        return operator_github_app.validate_credential(record, metadata)
     from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
     from serverware import operator_catalog_aws, aws_credential_boundary
     if operator_catalog_aws.selected(record) or aws_credential_boundary.selected(None, metadata):

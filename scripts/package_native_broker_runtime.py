@@ -47,7 +47,7 @@ BROKER_MODULES = (
     "native_secret_broker_history.py", "native_oauth_succession.py", "native_oauth_succession_rows.py",
     "native_oauth_succession_materials.py", "native_oauth_succession_receipts.py", "native_oauth_succession_tls.py", "native_oauth_succession_owner.py",
     "authority_oauth_retirement_succession_catalog.py",
-    "aws_credential_boundary.py", "native_static_credential.py", "native_static_credential_owner.py",
+    "aws_credential_boundary.py", "github_app_boundary.py", "native_static_credential.py", "native_static_credential_owner.py",
     "native_static_credential_rotation.py", "native_static_credential_rotation_owner.py",
     "authority_static_credential_create.py", "authority_static_credential_rotate.py",
     "authority_publication_approval.py", "authority_setup_bind_credential.py",

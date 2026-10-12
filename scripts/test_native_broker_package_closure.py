@@ -45,7 +45,7 @@ PRIOR_MODULES = (
     "authority_oauth_retirement_succession_catalog.py",
 )
 ADDED_MODULES = frozenset({
-    "aws_credential_boundary.py", "native_static_credential.py", "native_static_credential_owner.py",
+    "aws_credential_boundary.py", "github_app_boundary.py", "native_static_credential.py", "native_static_credential_owner.py",
     "native_static_credential_rotation.py", "native_static_credential_rotation_owner.py",
     "authority_static_credential_create.py", "authority_static_credential_rotate.py",
     "authority_publication_approval.py", "authority_setup_bind_credential.py",

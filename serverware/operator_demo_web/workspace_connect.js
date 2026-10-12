@@ -31,6 +31,9 @@ function createConnectView(workspace, applications, proxy) {
   let review = null; let checkpoint = null; let open = false;
   let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
   const catalog = () => workspace.state.catalog;
+  const newGithubApp = () => connectionMethod === 'github' && element('connect-github-type').value === 'github_app_v1';
+  const githubCreationAvailable = () => newGithubApp() ? githubAppDestinationAvailable(catalog()) :
+    element('connect-github-type').value === 'github_token_v1' && Boolean(projectGithubCapability(catalog()?.capabilities.github));
   const writable = () => Boolean(catalog() && !workspace.state.busy && !workspace.state.uncertain);
   const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active' && !isAwsCredential(item));
   const application = () => catalog()?.applications.find(item => item.id === selectedApplication && item.status === 'active');
@@ -98,12 +101,18 @@ function createConnectView(workspace, applications, proxy) {
     if (checkpoint.alchemyPolicyHash && catalog().revision === checkpoint.revision && catalog().policy.policy_hash !== checkpoint.alchemyPolicyHash) {
       checkpoint.message = 'The saved Alchemy receipt and refreshed policy disagree. Inspect saved state; do not submit again.'; return;
     }
+    if (checkpoint.githubAppPolicyHash && catalog().revision === checkpoint.revision && catalog().policy.policy_hash !== checkpoint.githubAppPolicyHash) {
+      checkpoint.message = 'The saved GitHub App receipt and refreshed policy disagree. Inspect saved state; do not submit again.'; return;
+    }
     const item = catalog()[checkpoint.collection].find(item => item.id === checkpoint.id && item.status === 'active');
     if (!item) { message('The exact saved resource cannot be confirmed. Review saved state; no repeat request was sent.'); return; }
     if (checkpoint.collection === 'credentials') {
       if (isAwsCredential(item)) { checkpoint.message = 'AWS credentials are stored only; no application setup is available.'; return; }
-      if (checkpoint.github && !isGithubCredential(item)) {
+      if (checkpoint.github && item.connection_type !== 'github_token_v1') {
         message('The saved GitHub connection cannot be confirmed. Refresh saved state; do not submit again.'); return;
+      }
+      if (checkpoint.githubApp && !githubAppCredentialReceiptMatches(item, checkpoint.githubApp)) {
+        checkpoint.message = 'The saved GitHub App binding does not match its creation receipt. Inspect saved state; do not submit again.'; return;
       }
       if (checkpoint.npm && !isNpmCredential(item)) {
         message('The saved npm connection cannot be confirmed. Refresh saved state; do not submit again.'); return;
@@ -165,10 +174,14 @@ function createConnectView(workspace, applications, proxy) {
       throw operatorError('The saved resource receipt was incomplete. Review saved state; do not repeat automatically.');
     const xMutation = providerName !== undefined && providerKind === 'x' || collection === 'access_rules' && isXRule(review?.rule);
     const alchemyMutation = providerName !== undefined && providerKind === 'alchemy' || collection === 'access_rules' && isAlchemyRule(review?.rule);
-    if ((xMutation || alchemyMutation) && (result.revision < 1 || result.revision <= catalog().revision || result[key].status !== 'active' ||
+    const githubAppMutation = providerKind === 'github_app' || collection === 'access_rules' && isGithubAppCredential(credential());
+    if ((xMutation || alchemyMutation || githubAppMutation) && (result.revision < 1 || result.revision <= catalog().revision || result[key].status !== 'active' ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(result[key].id) ||
         !/^sha256:[a-f0-9]{64}$/.test(result.policy?.policy_hash || '')))
-      throw operatorError('The saved ' + (alchemyMutation ? 'Alchemy' : 'X') + ' receipt was incomplete. Inspect saved state; do not repeat automatically.');
+      throw operatorError('The saved ' + (githubAppMutation ? 'GitHub App' : alchemyMutation ? 'Alchemy' : 'X') + ' receipt was incomplete. Inspect saved state; do not repeat automatically.');
+    if (githubAppMutation && collection === 'access_rules' && (!githubRuleValid(result[key], credential()) ||
+        !operatorExact(githubRulePayload(result[key]), githubRulePayload(review.rule))))
+      throw operatorError('The GitHub App permission receipt did not match the reviewed repository and permission. Inspect saved state; do not repeat automatically.');
     if (collection === 'access_rules' && isXRule(review?.rule) && (!xRuleValid(result[key], credential()) ||
         !operatorExact(xRulePayload(result[key]), xRulePayload(review.rule))))
       throw operatorError('The X permission receipt did not match the reviewed username. Inspect saved state; do not repeat automatically.');
@@ -178,9 +191,11 @@ function createConnectView(workspace, applications, proxy) {
     checkpoint = {collection, id: result[key].id, revision: result.revision,
       ...(xMutation ? {xPolicyHash: result.policy.policy_hash} : {}),
       ...(alchemyMutation ? {alchemyPolicyHash: result.policy.policy_hash} : {}),
+      ...(githubAppMutation ? {githubAppPolicyHash: result.policy.policy_hash} : {}),
+      ...(collection === 'credentials' && githubAppMutation ? {githubApp: githubAppCredentialReceipt(result[key], providerName)} : {}),
       ...(collection === 'credentials' && xMutation ? {x: xCredentialReceipt(result[key], providerName)} : {}),
       ...(collection === 'credentials' && alchemyMutation ? {alchemy: alchemyCredentialReceipt(result[key], providerName)} : {}),
-      ...(collection === 'credentials' && connectionMethod === 'github' ? {github: true} : {}),
+      ...(collection === 'credentials' && connectionMethod === 'github' && !githubAppMutation ? {github: true} : {}),
       ...(collection === 'credentials' && connectionMethod === 'npm' ? {npm: true} : {})};
   }
   function renderInputs() {
@@ -204,7 +219,7 @@ function createConnectView(workspace, applications, proxy) {
         ...(npmInstallAvailable(value, credential()) ? [{id: operatorNpmInstall.bundle, name: 'Install packages and run npm audit'}] : []),
         ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
       choices('connect-operation', alchemy ? alchemyAvailable(value, credential()) ? [{id: operatorAlchemy.bundle, name: 'Read chain status'}] : [] : x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
-        [operatorGithub.read, operatorGithub.write].map(id => ({id, name: githubPermissionName(id)})) : [] :
+        githubPermissionBundles(credential()).map(id => ({id, name: githubPermissionName(id)})) : [] :
         [...(bundle ? [{id: operatorGmail.bundle, name: 'Read Gmail'}] : []),
           {id: 'exact', name: 'Advanced: one exact endpoint'}], alchemy ? operatorAlchemy.bundle : x ? operatorX.bundle : npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
       if (alchemy) {
@@ -237,7 +252,12 @@ function createConnectView(workspace, applications, proxy) {
     fields('connect-alchemy-new', connectionMethod === 'alchemy');
     fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
     fields('connect-credential-auth-group', connectionMethod === 'key');
-    element('connect-github-token-note').hidden = connectionMethod !== 'github';
+    fields('connect-github-type-group', connectionMethod === 'github');
+    fields('connect-provider-secret-group', newCredential && !['x', 'alchemy'].includes(connectionMethod) && !newGithubApp());
+    fields('connect-github-app-fields', newGithubApp());
+    for (const option of element('connect-github-type').options) option.disabled = option.value === 'github_app_v1' ?
+      !catalog()?.capabilities.github_app : !catalog()?.capabilities.github;
+    element('connect-github-token-note').hidden = connectionMethod !== 'github' || newGithubApp();
     element('connect-npm-token-note').hidden = connectionMethod !== 'npm';
     element('connect-npm-token-note').textContent = catalog()?.capabilities.npm_publish ?
       'Use a least-privilege npm token for the intended packages and operations. Publishing needs provider publishing rights without an interactive 2FA flow. The token stays in Serverware, never in the client recipe; it is not renewed or tested here.' :
@@ -281,6 +301,13 @@ function createConnectView(workspace, applications, proxy) {
       'Choose automatic insertion or your own exact public dummy below. These custom HTTP settings are retained when switching client choices; no saved permission is changed.';
     element('connect-gmail-sdk-app-link').hidden = !gmailSdk || applicationProxyAuthentication(application()) === 'basic_and_bearer_v1';
     fields('connect-github-repository', github);
+    for (const [id, key] of [['connect-github-owner', 'owner'], ['connect-github-repo', 'name']]) {
+      element(id).readOnly = isGithubAppCredential(credential());
+      if (isGithubAppCredential(credential())) element(id).value = credential().github_app.repository[key];
+    }
+    element('connect-github-repository-note').textContent = isGithubAppCredential(credential()) ?
+      'Repository fixed by this GitHub App connection. You may grant only its saved permission or less. No response-field setup is needed.' :
+      'This is the exact named repository you authorize, not a discovered or verified account relationship. The saved token must already have the required GitHub permission. No response-field setup is needed.';
     fields('connect-x-username-group', x);
     fields('connect-alchemy-chain-group', alchemy);
     element('connect-alchemy-summary').textContent = !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ?
@@ -319,9 +346,9 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-gmail-summary').textContent = gmail && !gmailAvailable(catalog(), credential()) ?
       'Read Gmail is no longer advertised for this account. Refresh or explicitly choose another permission; no rule is changed automatically.' :
       'Read Gmail: list messages, follow pagination and read individual messages in this account. No age restriction or optional content filtering. No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.';
-    element('connect-credential-next').textContent = newCredential ? 'Save credential & continue' : 'Use saved credential';
-    element('connect-credential-next').disabled = !newCredential && !catalog()?.credentials.some(item =>
-      item.id === element('connect-credential-choice').value && item.status === 'active');
+    element('connect-credential-next').textContent = newGithubApp() ? 'Save and verify GitHub App' : newCredential ? 'Save credential & continue' : 'Use saved credential';
+    element('connect-credential-next').disabled = connectionMethod === 'github' && !githubCreationAvailable() ||
+      !newCredential && !catalog()?.credentials.some(item => item.id === element('connect-credential-choice').value && item.status === 'active');
     element('connect-application-next').textContent = newApp ? 'Create app and show token' : 'Use this application';
     element('connect-application-proxy-default').textContent = newApplicationProxyAuthentication(catalog()).proxy_authentication ?
       'Proxy login: public application ID as username, this app’s token as password. Bearer also remains supported. Never use the provider key.' :
@@ -330,7 +357,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-application-note').textContent = newApp ? '' : selected ?
       'Expires ' + new Date(selected.token_expires_at_epoch_ms).toLocaleString() + '. Use the token already configured in your app. If lost or expired, rotate explicitly in Applications; this flow does not retrieve or renew it.' : 'Select an available application.';
     element('connect-credential-fields').disabled = !['key', 'github', 'npm', 'x', 'alchemy', 'saved'].includes(connectionMethod) || !writable() || Boolean(checkpoint) ||
-      newCredential && !workspace.ready('credentials') || connectionMethod === 'github' && !catalog()?.capabilities.github ||
+      newCredential && !workspace.ready('credentials') || connectionMethod === 'github' && !catalog()?.capabilities.github && !catalog()?.capabilities.github_app ||
       connectionMethod === 'npm' && !catalog()?.capabilities.npm || connectionMethod === 'x' && !xDestinationAvailable(catalog()) ||
       connectionMethod === 'alchemy' && !alchemyDestinationAvailable(catalog());
     element('connect-application-fields').disabled = !writable() || Boolean(checkpoint) || !credential() || newApp && !workspace.ready('applications');
@@ -349,6 +376,7 @@ function createConnectView(workspace, applications, proxy) {
     return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule) &&
       (review.gmailClient !== 'sdk' || !gmailSdkProblem() && operatorExact(review.rule, gmailSdkRule())) &&
       (!isXRule(review.rule) || xCredentialReceiptMatches(credential(), review.xCredential)) &&
+      (!isGithubAppCredential(credential()) || githubAppCredentialReceiptMatches(credential(), review.githubAppCredential)) &&
       (!isAlchemyRule(review.rule) || alchemyCredentialReceiptMatches(credential(), review.alchemyCredential));
   }
   function renderReview() {
@@ -376,6 +404,7 @@ function createConnectView(workspace, applications, proxy) {
         'Google account: quarantined and unavailable for use. Provider revocation is not proven. This setup does not start consent or cleanup.' :
         'Google account: saved metadata only. This setup has not tested consent, token refresh or a Google request. ' +
           (catalog()?.capabilities.google_oauth ? 'Use Connect Google for a separate, explicit consent flow.' : 'Google account connection remains disabled here.') :
+        isGithubAppCredential(provider) ? 'GitHub App: saved installation and repository binding. Installation-token renewal is automatic; this page has not tested current refresh health or run a client.' :
         'Provider key: stored, not tested here.') +
       ' Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.';
     const active = writable() && activePair() && workspace.loaded() && rule?.enforcement === 'active' && application()?.access_status === 'active' && supported(rule);
@@ -391,12 +420,13 @@ function createConnectView(workspace, applications, proxy) {
     const googleOpen = connectionMethod === 'google';
     element('connect-method-choice').hidden = connectionMethod !== null;
     element('connect-credential-form').hidden = !['key', 'github', 'npm', 'x', 'alchemy', 'saved'].includes(connectionMethod);
-    element('connect-credential-heading').textContent = connectionMethod === 'alchemy' ? 'Save an Alchemy API or access key' : connectionMethod === 'x' ? 'Save an X app-only bearer token' : connectionMethod === 'npm' ? 'Save an npm token' : connectionMethod === 'github' ? 'Save a GitHub token' : connectionMethod === 'key' ? 'Use an API key' : 'Use a saved connection';
+    element('connect-credential-heading').textContent = connectionMethod === 'alchemy' ? 'Save an Alchemy API or access key' : connectionMethod === 'x' ? 'Save an X app-only bearer token' : connectionMethod === 'npm' ? 'Save an npm token' : connectionMethod === 'github' ? newGithubApp() ? 'Connect a GitHub App' : 'Save a GitHub token' : connectionMethod === 'key' ? 'Use an API key' : 'Use a saved connection';
     element('connect-google-slot').hidden = !googleOpen;
     element('connect-method-change').hidden = connectionMethod === null || googleOpen;
     element('connect-method-change').disabled = !writable() || Boolean(checkpoint);
     element('connect-use-key').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials');
-    element('connect-use-github').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !catalog()?.capabilities.github;
+    element('connect-use-github').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') ||
+      !catalog()?.capabilities.github && !catalog()?.capabilities.github_app;
     element('connect-use-npm').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !catalog()?.capabilities.npm;
     element('connect-use-x').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !xDestinationAvailable(catalog());
     element('connect-use-alchemy').disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials') || !alchemyDestinationAvailable(catalog());
@@ -417,9 +447,12 @@ function createConnectView(workspace, applications, proxy) {
       catalog().capabilities.npm.destination_allowed && catalog().allowed_upstreams.includes(operatorNpm.origin) ?
         'npm: save one token and grant Read package metadata for named packages. npm view/pacote.manifest only; no install, publish, tarballs or npm audit. No provider lookup has been tested here.' :
         'An npm token can be saved, but metadata access cannot be granted until the operator approves registry.npmjs.org in deployment settings.';
-    element('connect-github-status').textContent = !catalog()?.capabilities.github ? 'GitHub presets are not advertised by this deployment. AWS presets are not available here.' :
+    element('connect-github-status').textContent = catalog()?.capabilities.github_app ?
+      githubAppDestinationAvailable(catalog()) ? 'GitHub: choose a personal access token or GitHub App, then grant repository-scoped issue permissions. App installation tokens renew automatically; personal access tokens do not.' :
+        'Approve api.github.com in Proxy setup before verifying a GitHub App. No destination is added automatically. Personal access tokens can still be saved when advertised.' :
+      !catalog()?.capabilities.github ? 'GitHub presets are not advertised by this deployment. AWS presets are not available here.' :
       catalog().capabilities.github.destination_allowed && catalog().allowed_upstreams.includes(operatorGithub.origin) ?
-        'GitHub: save one token and grant repository-scoped issue permissions. Requires the paired proxy implementation; this page has not tested GitHub.' :
+        'GitHub: save a personal access token and grant repository-scoped issue permissions. GitHub App connections are not advertised by this deployment.' :
         'A GitHub token can be saved, but access cannot be granted until the operator approves api.github.com in deployment settings.';
     element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item => item.status === 'active' && !isAwsCredential(item));
     for (const id of ['connect-actions', 'connect-leave-help', 'connect-compatibility']) element(id).hidden = googleOpen;
@@ -435,6 +468,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-token-note').hidden = !missingToken;
     element('connect-token-note').textContent = 'This page does not hold this application’s one-time token. Use the token you already saved. If it was lost or cleared, explicitly rotate it in Applications; no token is retrieved or renewed by this flow.';
     if (!catalog()) element('connect-credential-secret').value = '';
+    if (!catalog() || workspace.state.uncertain || !githubAppDestinationAvailable(catalog())) element('connect-github-private-key').value = '';
     if (!catalog() || workspace.state.uncertain || !xDestinationAvailable(catalog())) element('connect-x-secret').value = '';
     if (!catalog() || workspace.state.uncertain || !alchemyDestinationAvailable(catalog())) element('connect-alchemy-secret').value = '';
     if (checkpoint) message(checkpoint.message || 'Save received, but the exact resource is not yet confirmed in refreshed state. Refresh; do not submit again.');
@@ -443,6 +477,26 @@ function createConnectView(workspace, applications, proxy) {
 
   element('connect-credential-form').addEventListener('submit', async event => {
     event.preventDefault();
+    if (newGithubApp()) {
+      let body;
+      try {
+        if (step !== 0 || !writable() || checkpoint || !workspace.ready('credentials') ||
+            !githubCreationAvailable() || !event.currentTarget.reportValidity()) return;
+        const submitted = {name: element('connect-credential-name').value.trim(), app_id: element('connect-github-app-id').value,
+          installation_id: element('connect-github-installation-id').value,
+          repository: {owner: element('connect-github-app-owner').value.trim(), name: element('connect-github-app-repo').value.trim()},
+          issues_permission: element('connect-github-app-permission').value};
+        if (!githubIdValid(submitted.app_id) || !githubIdValid(submitted.installation_id) ||
+            !githubRepositoryValid(submitted.repository) || !['read', 'write'].includes(submitted.issues_permission))
+          throw operatorError('Enter canonical numeric App and installation IDs, an exact repository and a supported permission. No request was sent.');
+        body = {...submitted, private_key_pem: element('connect-github-private-key').value};
+        element('connect-github-private-key').value = '';
+        await workspace.mutate('credentials/github-app', body, 'connect-status',
+          result => receipt(result, 'credentials', 'credential', submitted, 'github_app'));
+      } catch (error) { message(operatorMessage(error)); }
+      finally { element('connect-github-private-key').value = ''; if (body) body.private_key_pem = ''; render(); }
+      return;
+    }
     if (connectionMethod === 'alchemy') {
       let body;
       try {
@@ -475,7 +529,7 @@ function createConnectView(workspace, applications, proxy) {
       if (!catalog().credentials.some(item => item.id === choice && item.status === 'active' && !isAwsCredential(item))) return;
       savedChoice = choice; selectedCredential = choice; selectedApplication = ''; selectedRule = ''; review = null; goto(1); return;
     }
-    if (!workspace.ready('credentials') || connectionMethod === 'github' && !catalog().capabilities.github || connectionMethod === 'npm' && !catalog().capabilities.npm) return;
+    if (!workspace.ready('credentials') || connectionMethod === 'github' && !githubCreationAvailable() || connectionMethod === 'npm' && !catalog().capabilities.npm) return;
     const body = ['github', 'npm'].includes(connectionMethod) ?
       {name: element('connect-credential-name').value.trim(), secret: element('connect-credential-secret').value} :
       {name: element('connect-credential-name').value.trim(), auth_type: element('connect-credential-auth-type').value,
@@ -543,6 +597,8 @@ function createConnectView(workspace, applications, proxy) {
     }
     if (isGithubCredential(credential())) {
       const repository = {owner: element('connect-github-owner').value.trim(), name: element('connect-github-repo').value.trim()};
+      if (isGithubAppCredential(credential()) && !operatorExact(repository, credential().github_app.repository))
+        throw operatorError('This GitHub App connection is bound to its saved repository. No grant was sent.');
       const bundle = element('connect-operation').value;
       const rule = {...githubRuleFields(bundle, repository), name: (githubPermissionName(bundle) + ' · ' + repository.owner + '/' + repository.name).slice(0, 128),
         application_id: selectedApplication, credential_id: selectedCredential};
@@ -589,6 +645,7 @@ function createConnectView(workspace, applications, proxy) {
       if (!existing && isGmailRule(rule)) review.gmailClient = element('connect-gmail-client').value;
       if (isXRule(rule)) review.xCredential = xCredentialReceipt(credential(), credential().name);
       if (isAlchemyRule(rule)) review.alchemyCredential = alchemyCredentialReceipt(credential(), credential().name);
+      if (isGithubAppCredential(credential())) review.githubAppCredential = githubAppCredentialReceipt(credential(), {name: credential().name, ...credential().github_app});
       message('Review the exact effective permissions before continuing.'); goto(3);
     } catch (error) { message(operatorMessage(error)); }
   });
@@ -609,20 +666,24 @@ function createConnectView(workspace, applications, proxy) {
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     render();
   });
+  element('connect-github-type').addEventListener('change', () => {
+    element('connect-credential-secret').value = ''; element('connect-github-private-key').value = ''; review = null; render();
+  });
   for (const [id, method] of [['connect-use-key', 'key'], ['connect-use-github', 'github'], ['connect-use-npm', 'npm'], ['connect-use-x', 'x'], ['connect-use-alchemy', 'alchemy'], ['connect-use-saved', 'saved']]) element(id).addEventListener('click', () => {
     if (step !== 0 || connectionMethod !== null || !writable() || checkpoint) return;
-    if (method === 'github' && !catalog()?.capabilities.github) return;
+    if (method === 'github' && !catalog()?.capabilities.github && !catalog()?.capabilities.github_app) return;
     if (method === 'npm' && !catalog()?.capabilities.npm) return;
     if (method === 'x' && !xDestinationAvailable(catalog())) return;
     if (method === 'alchemy' && !alchemyDestinationAvailable(catalog())) return;
-    element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = '';
+    element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';
+    if (method === 'github') element('connect-github-type').value = catalog()?.capabilities.github ? 'github_token_v1' : 'github_app_v1';
     if (['github', 'npm'].includes(method)) element('connect-credential-secret').value = '';
     connectionMethod = method;
     element('connect-credential-choice').value = ''; render();
   });
   element('connect-method-change').addEventListener('click', () => {
     if (step !== 0 || !['key', 'github', 'npm', 'x', 'alchemy', 'saved'].includes(connectionMethod) || !writable() || checkpoint) return;
-    element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = '';
+    element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     if (['github', 'npm'].includes(connectionMethod)) element('connect-credential-secret').value = '';
     connectionMethod = null; render();
@@ -638,7 +699,7 @@ function createConnectView(workspace, applications, proxy) {
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
     for (const id of ['connect-response-mode', 'connect-request-body-mode', 'connect-operation']) element(id).value = '';
     element('connect-restrictions').open = false;
-    element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; proxy.mount(null); step = 0;
+    element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; proxy.mount(null); step = 0;
   }
   element('connect-cancel').addEventListener('click', () => {
     if (workspace.state.busy || !window.confirm('Leave setup and discard this local draft? Saved credentials, applications and access rules remain. An uncertain operation must still be reconciled before another change. Any held one-time token remains under Applications until cleared or reloaded; save it before leaving the page. Nothing will be deleted, retried or renewed.')) return;
@@ -649,16 +710,17 @@ function createConnectView(workspace, applications, proxy) {
     resetDraft(); message('Start a new setup. Existing resources and any held token remain.'); goto(0);
   });
   element('connect-credential-form').addEventListener('invalid', () => {
+    if (newGithubApp()) element('connect-github-private-key').value = '';
     if (connectionMethod === 'x') element('connect-x-secret').value = '';
     if (connectionMethod === 'alchemy') element('connect-alchemy-secret').value = '';
   }, true);
-  window.addEventListener('hashchange', () => { element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; });
-  window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; });
+  window.addEventListener('hashchange', () => { element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; });
+  window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; });
   workspace.subscribe(render);
   return {openGoogle({returning = false} = {}) {
     if (connectionMethod === 'google') return true;
     if (!returning && (!writable() || checkpoint)) return false;
-    element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = '';
+    element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';
     beforeGoogle = {step, method: connectionMethod};
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     connectionMethod = 'google'; goto(0); location.hash = 'connect'; return true;
@@ -675,7 +737,7 @@ function createConnectView(workspace, applications, proxy) {
     message('Saved Google account selected. Choose an application; no access has been granted.'); goto(1); return true;
   }, show(active) {
     open = active;
-    if (!active) { element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; }
+    if (!active) { element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; }
     if (!active && ['github', 'npm'].includes(connectionMethod)) element('connect-credential-secret').value = '';
     applications.mount(active ? element('connect-token-slot') : null);
     if (!active || step !== 4) proxy.mount(null);

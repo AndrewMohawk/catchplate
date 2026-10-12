@@ -18,7 +18,7 @@ from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
-    GithubTokenInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
+    GithubTokenInput, GithubAppInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
     XAppBearerInput, XUsernameRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
     AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput,
@@ -176,13 +176,18 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
         if "connection_type" in record:
             from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
             from serverware import operator_catalog_aws
+            from serverware import operator_github_app
             schema.validate_static_connection(record)
             providers = {operator_catalog_github.CONNECTION: "github",
                 operator_catalog_npm.CONNECTION: "npm", operator_catalog_x.CONNECTION: "x",
-                operator_catalog_alchemy.CONNECTION: "alchemy", operator_catalog_aws.CONNECTION: "aws"}
+                operator_catalog_alchemy.CONNECTION: "alchemy", operator_catalog_aws.CONNECTION: "aws",
+                operator_github_app.CONNECTION: "github"}
             result.update(connection_type=record["connection_type"], provider_id=providers[record["connection_type"]])
             if record["connection_type"] == operator_catalog_aws.CONNECTION:
                 result.update(operator_catalog_aws.public_fields(record, now))
+            if record["connection_type"] == operator_github_app.CONNECTION:
+                from copy import deepcopy
+                result["github_app"] = deepcopy(record["github_app"])
     elif collection == "applications":
         count = len(_active_rules(catalog, "application_id", record["id"]))
         revoked = record["status"] == "revoked"
@@ -363,6 +368,48 @@ def create_aws_credential(payload: AwsSigV4CredentialInput, actor_id: str) -> di
     return _mutate(payload, actor_id, "credentials", "credential.aws_sigv4_created", change)
 
 
+def create_github_app_credential(payload: GithubAppInput, actor_id: str) -> dict:
+    from serverware import operator_github_app as apps, operator_catalog_github as github, operator_demo
+    apps.require_runtime()
+    if github.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("GitHub destination is not deployment-allowlisted")
+    # Reject stale submissions before provider contact; recheck the same CAS in
+    # the ordinary mutation owner after all bounded network work has finished.
+    db = store._require()
+    with store.operator_publication.exclusive():
+        with db.metadata_connection() as conn:
+            conn.execute("BEGIN")
+            schema.require_revision(conn, payload.expected_revision)
+            if _state(conn)["policy_hash"] != payload.expected_policy_hash:
+                raise CatalogConflict()
+            catalog = schema.read_catalog(conn)
+            schema.validate_bindings(conn, catalog)
+            _admit_create(conn, catalog, "credentials")
+    prepared = apps.verify_connection(payload)
+    subject = str(uuid.uuid4())
+    metadata = apps.metadata(prepared.public, subject)
+
+    def change(db, conn, catalog):
+        apps.require_runtime()
+        _admit_create(conn, catalog, "credentials")
+        credential = db.create_operator_github_app_credential(conn, name=payload.name,
+            secret=prepared.secret, metadata=metadata)
+        record = {"id": credential["id"], "name": payload.name, "auth_type": "bearer",
+            "header_name": "Authorization", "connection_type": apps.CONNECTION,
+            "provider_subject": subject, "github_app": prepared.public,
+            "created_at": db.iso_now(), "status": "active"}
+        return _Change(schema.save_resource(conn, "credentials", record, create=True))
+    result = _mutate(payload, actor_id, "credentials", "credential.github_app_created", change)
+    # Memory-only optimization AFTER commit. Failure must not hide the saved
+    # receipt; first dispatch can independently obtain its scoped token.
+    try:
+        apps.seed_committed({"id": result["credential"]["id"], "kind": "bearer",
+            "credential_version": result["credential"]["credential_generation"], "metadata": metadata}, prepared)
+    except Exception:
+        pass
+    return result
+
+
 def replace_aws_credential(payload: ReplaceAwsSigV4CredentialInput, actor_id: str) -> dict:
     from serverware import operator_catalog_aws as aws
 
@@ -385,6 +432,9 @@ def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) ->
     def change(db, conn, catalog):
         record = _target(catalog, "credentials", payload.id)
         if record["auth_type"] not in {"bearer", "header"}:
+            raise CatalogConflict()
+        from serverware import operator_github_app
+        if record.get("connection_type") == operator_github_app.CONNECTION:
             raise CatalogConflict()
         from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
         if schema.validate_static_connection(record):
@@ -667,13 +717,19 @@ def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
         if _active_rules(catalog, "credential_id", payload.id):
             raise CatalogConflict()
         from serverware import operator_catalog_aws as aws
+        from serverware import operator_github_app
         removed = (db.delete_operator_aws_credential(conn, payload.id) if aws.selected(record)
+            else db.delete_operator_github_app_credential(conn, payload.id)
+                if record.get("connection_type") == operator_github_app.CONNECTION
             else db.delete_credential(payload.id, _connection=conn))
         if not removed:
             raise CatalogIntegrityError("credential binding disappeared")
         record.update(status="revoked", revoked_at=db.iso_now())
         return _Change(schema.save_resource(conn, "credentials", record))
-    return _mutate(payload, actor_id, "credentials", "credential.revoked", change)
+    result = _mutate(payload, actor_id, "credentials", "credential.revoked", change)
+    from serverware import operator_github_app
+    operator_github_app.forget(payload.id)
+    return result
 
 
 def revoke_application(payload: TargetInput, actor_id: str) -> dict:
@@ -725,6 +781,7 @@ def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
 def catalog_status() -> dict:
     from serverware import operator_catalog_activity, operator_catalog_capabilities, operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy, operator_demo
     from serverware import operator_catalog_aws
+    from serverware import operator_github_app
     with store._require().connect() as conn:
         conn.execute("BEGIN")
         catalog = schema.read_catalog(conn)
@@ -764,6 +821,7 @@ def catalog_status() -> dict:
             "google_disconnect": google_disconnect,
             "google_reauthorization": google_reauthorization,
             "github": operator_catalog_github.capability(),
+            "github_app": operator_github_app.capability(),
             "x": operator_catalog_x._capability() if x_available else None,
             "alchemy": operator_catalog_alchemy._capability() if alchemy_available else None,
             "npm": operator_catalog_npm.capability(),

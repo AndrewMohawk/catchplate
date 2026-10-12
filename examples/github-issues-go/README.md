@@ -7,14 +7,40 @@ or edit anything, discover repositories, or print issue contents.
 
 ## Configure and run
 
-In Serverware, save the GitHub provider token as a `github_token_v1` connection,
-create an application, and grant **GitHub issues: read** for the exact owner/repo.
+GitHub App verification/save requires `https://api.github.com` to be an
+operator-allowed upstream before any provider contact. **Save and verify GitHub
+App** verifies the App, installation and repository and obtains a scoped token
+before saving. A PAT may be saved untested while that upstream is disabled;
+granting or using either connection still requires it to be enabled.
+
+In Serverware, choose **GitHub**, then either a personal access token (PAT,
+`github_token_v1`) or a GitHub App (`github_app_v1`) connection. A PAT needs a
+connection name and token. An App needs a name, App ID, installation ID,
+private-key PEM, exact repository owner/name and Issues access; choose `read`
+for this read-only example. The App must already be installed in GitHub for that
+repository with the required permission. Create a Serverware application and
+grant **GitHub issues: read** for the same exact owner/repo.
 Select the application's **Basic and Bearer** proxy authentication mode
 (`basic_and_bearer_v1`). This example uses Basic authentication for CONNECT;
 a Bearer-only application is not compatible with this recipe.
-Keep the real GitHub token in Serverware, not in this application's environment.
+Keep the real GitHub credentials in Serverware, not in this application's environment.
 Download and verify the Serverware interception CA through your operator's
 authenticated setup flow. Use the deployed proxy's HTTPS URL, not the admin UI.
+
+Serverware stores the App private key encrypted and automatically obtains and
+renews its short-lived installation tokens. It does not renew PATs or the
+Serverware application's proxy token. The App connection's repository/Issues
+ceiling does not replace the application grant. App authentication is not GitHub
+OAuth user login, and the GitHub App ID is not `SERVERWARE_APP_ID`.
+
+App token reuse requires a 65-second expiry margin. Failed minting has no retry
+in the same call; only a later separately authorized lease after a 60-second
+backoff may attempt fresh authentication. It does not retry repository requests.
+
+The client, SDK and input variables below are unchanged for either connection.
+Do not pass an App private key, JWT or installation token to this program. The
+new App flow is **not yet verified against real GitHub**;
+[its synthetic verification is recorded separately](../../docs/operator-github-client-compatibility.md#github-app-feature-verification-checkpoint).
 
 Supply these values using your environment or CI secret store:
 
@@ -49,8 +75,9 @@ level. Inspect the saved permission and audit records before running again.
 The stock SDK keeps its normal API URL, request headers, and pagination methods.
 A standard `oauth2.Transport` with a **static public dummy** and `TokenType:
 "token"` supplies `Authorization: token serverware-github-placeholder-v1`.
-Serverware replaces that exact value. This is not an OAuth exchange; there is no
-refresh token or provider login. The SDK's `WithAuthToken` helper would use
+Serverware replaces that exact value with the saved PAT or server-derived App
+installation token. This client performs no OAuth exchange, refresh-token flow
+or provider login. The SDK's `WithAuthToken` helper would use
 `Bearer`, which is not this preset's replacement contract. Ambient `GITHUB_TOKEN`,
 `GH_TOKEN`, `HTTPS_PROXY`, and `NO_PROXY` are not consulted.
 
@@ -86,6 +113,10 @@ entrypoint through the normal Rust proxy subsequently passed in the
 two-page reads succeeded against a synthetic GitHub service, while
 wrong-application and wrong-repository attempts were denied before dispatch.
 The actual stock SDK media type passed without client header rewriting.
+That historical static-token fixture does not verify GitHub App installation
+authentication or automatic token renewal. Either connection still authorizes
+only the existing issue/comment presets, not arbitrary GitHub APIs, git,
+GraphQL or Actions/workflow management; this example itself only reads issues.
 Neither in-memory tests nor that isolated run establish public deployment or
 real-GitHub compatibility with your token and repository.
 No provider token, real repository, native enrollment, or deployment is created

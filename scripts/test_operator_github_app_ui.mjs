@@ -1,0 +1,324 @@
+#!/usr/bin/env node
+// Actual UI functions and core transport with an inert DOM and in-memory API.
+// No browser, provider, SDK, HTTP, key parsing or generated recipe is executed.
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require = createRequire(import.meta.url);
+const {context, clone, IDS} = require('./test_operator_npm_ui.cjs');
+const {credential, application, rule} = require('./test_operator_catalog_browser.cjs');
+const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
+const ORIGIN = 'https://api.github.com';
+const READ = 'github_issues_read_v1', WRITE = 'github_issues_write_v1';
+const REPOSITORY = {owner: 'Example-Owner', name: 'Example.Repo'};
+const PEM = '-----BEGIN PRIVATE KEY-----\nSYNTHETIC_PRIVATE_KEY_NEVER_RENDER\n-----END PRIVATE KEY-----';
+const PAT = 'synthetic_github_PAT_NEVER_RENDER';
+const NAME = 'Fixture GitHub App';
+// Independent literal API fixtures; no production descriptor/receipt generator.
+function capability(app = true, allowed = true) {
+  return {schema: app ? 'serverware.operatorGithubApp/v1' : 'serverware.operatorGithub/v1',
+    connection_type: app ? 'github_app_v1' : 'github_token_v1',
+    create_credential_path: '/api/operator-demo/credentials/' + (app ? 'github-app' : 'github-token'),
+    create_rule_path: '/api/operator-demo/access-rules/github', api_origin: ORIGIN,
+    destination_allowed: allowed, operation_bundles: [READ, WRITE], sdk_auth_token: 'serverware-github-placeholder-v1',
+    placeholder: 'token serverware-github-placeholder-v1', query_mode: 'githubRestV1',
+    response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true};
+}
+function binding(changes = {}) {
+  return {app_id: '12345', installation_id: '23456', account_id: '34567', repository_id: '45678',
+    repository: {...REPOSITORY}, issues_permission: 'read', token_refresh: 'automatic', ...changes};
+}
+function appCredential(changes = {}) {
+  return credential({name: NAME, connection_type: 'github_app_v1', provider_id: 'github', github_app: binding(), ...changes});
+}
+function patCredential(changes = {}) {
+  return credential({name: 'Fixture PAT', connection_type: 'github_token_v1', provider_id: 'github', credential_generation: 1, ...changes});
+}
+function githubRule(permission = READ, changes = {}) {
+  return rule({name: 'Reviewed GitHub permission', operation_bundle: permission, repository: {...REPOSITORY},
+    upstream_url: ORIGIN + '/repos/Example-Owner/Example.Repo/issues', methods: permission === READ ? ['GET'] : ['GET', 'POST'],
+    request_fields: [], response_fields: [], request_body_mode: 'preserve_json_v1',
+    query_keys: ['assignee', 'creator', 'direction', 'labels', 'mentioned', 'milestone', 'page', 'per_page', 'since', 'sort', 'state'],
+    allowed_headers: ['accept', 'accept-language', 'sec-fetch-mode', 'user-agent', 'x-github-api-version'],
+    credential_input: 'replace_exact', placeholder: 'token serverware-github-placeholder-v1',
+    query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2', ...changes});
+}
+function catalog({credentials = [appCredential()], rules = [], app = capability(), pat = capability(false), allowed = [ORIGIN]} = {}) {
+  const value = publicCatalog({revision: 1, sequence: 1, active: digest(1), loaded: digest(1), credentials,
+    applications: [application({proxy_authentication: 'basic_and_bearer_v1'})], rules, allowedUpstreams: allowed,
+    responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'], requestBodyModes: ['preserve_json_v1'],
+    credentialInputModes: ['insert', 'replace_exact']});
+  value.capabilities.github = pat; value.capabilities.github_app = app;
+  value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+    modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
+  value.capabilities.static_key_replacement = {schema: 'serverware.operatorStaticKeyReplacement/v1',
+    path: '/api/operator-demo/credentials/replace-key', credential_types: ['bearer', 'header']};
+  return value;
+}
+const plain = context();
+const project = raw => clone(plain.run('projectCatalog(input)', raw));
+const submitted = () => ({name: NAME, app_id: '12345', installation_id: '23456', repository: {...REPOSITORY}, issues_permission: 'read'});
+const jsonResponse = (value, status = 200) => ({status, ok: status >= 200 && status < 300,
+  headers: {get: key => key === 'content-type' ? 'application/json' : null}, json: async () => clone(value)});
+
+async function fixture(options = {}) {
+  const current = context(); const raw = catalog(options); const requests = [], bodies = [], violations = [], events = new Map();
+  // Extend only this harness with the native select property the real UI uses.
+  for (const node of current.dom.nodes.values()) if (node.tag === 'select')
+    Object.defineProperty(node, 'options', {get: () => node.children.filter(child => child.tag === 'option')});
+  const created = []; const createElement = current.dom.createElement;
+  current.dom.createElement = tag => { const node = createElement(tag); created.push(node); return node; };
+  const forbidden = kind => { violations.push(kind); throw new Error('Forbidden test effect'); };
+  for (const name of ['sessionStorage', 'localStorage']) Object.defineProperty(current.value, name, {get: () => forbidden('storage')});
+  current.value.AbortSignal = {timeout: value => { assert.equal(value, 30000); return undefined; }};
+  current.value.TextEncoder = TextEncoder; current.value.clearTimeout = () => {};
+  current.value.setTimeout = () => forbidden('timer');
+  current.value.window = {addEventListener(name, handler) { events.set(name, [...(events.get(name) || []), handler]); }, confirm: () => true};
+  let mode = options.mode || 'success', held = null, receiptChange = options.receiptChange, catalogChange = options.catalogChange;
+  current.value.fetch = async (path, init) => {
+    try {
+      assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
+      if (!init.method) { assert.equal(path, '/api/operator-demo/catalog'); requests.push({path, method: 'GET'}); return jsonResponse(raw); }
+      assert.equal(init.method, 'POST'); assert.equal(init.headers['Content-Type'], 'application/json');
+      const payload = JSON.parse(init.body);
+      assert.equal(payload.expected_revision, raw.revision); assert.equal(payload.expected_policy_hash, raw.policy.policy_hash);
+      if (path === '/api/operator-demo/credentials/github-app') {
+        assert.deepEqual(Object.keys(payload).sort(), ['app_id', 'expected_policy_hash', 'expected_revision', 'installation_id',
+          'issues_permission', 'name', 'private_key_pem', 'repository']);
+        assert.equal(payload.private_key_pem, PEM); delete payload.private_key_pem;
+        for (const [key, value] of Object.entries(submitted())) assert.deepEqual(payload[key], value);
+      } else if (path === '/api/operator-demo/credentials/github-token') {
+        assert.deepEqual(Object.keys(payload).sort(), ['expected_policy_hash', 'expected_revision', 'name', 'secret']);
+        assert.equal(payload.secret, PAT); delete payload.secret;
+      } else {
+        assert.equal(path, '/api/operator-demo/access-rules/github');
+        assert.deepEqual(Object.keys(payload).sort(), ['application_id', 'credential_id', 'expected_policy_hash',
+          'expected_revision', 'name', 'operation_bundle', 'repository']);
+        assert.equal(payload.application_id, IDS.application); assert.equal(payload.credential_id, IDS.credential);
+        assert.deepEqual(payload.repository, REPOSITORY); assert([READ, WRITE].includes(payload.operation_bundle));
+      }
+      requests.push({path, method: 'POST', payload});
+      const respond = () => {
+        if (mode === 'lost') throw new Error(PEM);
+        if (typeof mode === 'number') return jsonResponse({detail: PEM}, mode);
+        raw.revision++;
+        const kind = path.endsWith('/github') ? 'access_rule' : 'credential';
+        const item = kind === 'access_rule' ? githubRule(payload.operation_bundle, {name: payload.name}) :
+          path.endsWith('/github-token') ? patCredential({name: payload.name}) : appCredential({name: payload.name});
+        raw[kind === 'credential' ? 'credentials' : 'access_rules'] = [clone(item)];
+        const result = {revision: raw.revision, policy: clone(raw.policy), [kind]: clone(item)};
+        receiptChange?.(result); catalogChange?.(raw); return jsonResponse(result, 201);
+      };
+      if (mode === 'hold') return await new Promise((resolve, reject) => { held = () => { mode = 'success'; try { resolve(respond()); } catch (error) { reject(error); } }; });
+      return respond();
+    } catch (error) {
+      if (error?.code === 'ERR_ASSERTION') violations.push('fixture API assertion');
+      throw error;
+    }
+  };
+  const workspace = current.run('createOperatorWorkspace()');
+  const mutate = workspace.mutate;
+  workspace.mutate = (...args) => { bodies.push(args[1]); return mutate(...args); };
+  assert.equal(await workspace.refresh(), true);
+  current.value.workspaceFixture = workspace;
+  const view = current.run('createConnectView(workspaceFixture, {mount(){},tokenFor(){return null;}}, {mount(){},select(){}})');
+  view.show(true);
+  const node = id => current.dom.getElementById(id);
+  const event = async (id, type = 'click') => { const target = node(id); assert.equal(typeof target.events[type], 'function');
+    await target.events[type]({preventDefault() {}, currentTarget: target}); };
+  const clean = () => {
+    assert.deepEqual(violations, []);
+    const values = [...current.dom.nodes.values(), ...created].map(node => [node.value, node.textContent, node.attrs, node.dataset]);
+    const surfaces = JSON.stringify([values, workspace.state, requests, bodies, current.value.location]);
+    for (const secret of [PEM, 'SYNTHETIC_PRIVATE_KEY_NEVER_RENDER', PAT]) assert(!surfaces.includes(secret));
+  };
+  return {...current, raw, workspace, view, requests, bodies, node, event, clean,
+    posts: () => requests.filter(row => row.method === 'POST'),
+    release: () => { assert(held); held(); },
+    fire: async name => { for (const handler of events.get(name) || []) await handler(); }};
+}
+async function newApp(f) {
+  await f.event('connect-use-github'); f.node('connect-github-type').value = 'github_app_v1';
+  await f.event('connect-github-type', 'change');
+  for (const [id, value] of Object.entries({'connect-credential-name': NAME, 'connect-github-app-id': '12345',
+    'connect-github-installation-id': '23456', 'connect-github-app-owner': REPOSITORY.owner,
+    'connect-github-app-repo': REPOSITORY.name, 'connect-github-app-permission': 'read', 'connect-github-private-key': PEM})) f.node(id).value = value;
+}
+async function savedPair(f) {
+  await f.event('connect-use-saved'); f.node('connect-credential-choice').value = IDS.credential;
+  await f.event('connect-credential-form', 'submit'); f.node('connect-application-choice').value = IDS.application;
+  await f.event('connect-application-form', 'submit');
+}
+const tests = [
+  ['literal App capability is closed and independent of PAT', () => {
+    for (const allowed of [false, true]) {
+      assert.deepEqual(clone(plain.run('githubAppCapabilityDescriptor(input)', allowed)), capability(true, allowed));
+      assert.deepEqual(project(catalog({app: capability(true, allowed)})).capabilities.github_app, capability(true, allowed));
+    }
+    const mutations = [{schema: 'serverware.operatorGithub/v1'}, {connection_type: 'github_token_v1'},
+      {create_credential_path: '/api/operator-demo/credentials/github-token'}, {create_rule_path: '/arbitrary'},
+      {api_origin: 'https://other.example.test'}, {destination_allowed: 1}, {operation_bundles: [READ]},
+      {sdk_auth_token: PEM}, {placeholder: 'Bearer dummy'}, {query_mode: 'orderedFormV1'},
+      {response_mode: 'projected_json'}, {source_pair_required: false}, {extra: true}];
+    for (const changed of [null, {}, ...mutations.map(change => ({...capability(), ...change}))]) {
+      const value = project(catalog({app: changed}));
+      assert.equal(value.capabilities.github_app, null); assert.deepEqual(value.capabilities.github, capability(false));
+      assert.equal(plain.run('githubAvailable(input, input.credentials[0])', value), false);
+    }
+    const appOnly = project(catalog({pat: null}));
+    assert.equal(plain.run('githubAvailable(input, input.credentials[0])', appOnly), true);
+  }],
+  ['canonical string IDs and exact public binding reject forged or private metadata', () => {
+    const value = project(catalog({credentials: [appCredential({private_key_pem: PEM, secret: PEM, token: PAT, credential_generation: 8})]}));
+    assert.deepEqual(value.credentials[0].github_app, binding());
+    assert(!Object.hasOwn(value.credentials[0], 'credential_generation'));
+    assert(!JSON.stringify(value).includes(PEM)); assert(!JSON.stringify(value).includes(PAT));
+    for (const key of ['app_id', 'installation_id', 'account_id', 'repository_id']) {
+      for (const invalid of [0, 1, true, null, '', '0', '01', '+1', '1.0', '1e2', ' 1', '1 ', '١', '9007199254740992', '10000000000000000'])
+        assert.throws(() => project(catalog({credentials: [appCredential({github_app: binding({[key]: invalid})})]})));
+      for (const valid of ['1', '9007199254740991'])
+        assert.equal(project(catalog({credentials: [appCredential({github_app: binding({[key]: valid})})]})).credentials[0].github_app[key], valid);
+    }
+    for (const change of [{issues_permission: 'admin'}, {token_refresh: 'manual'}, {private_key_pem: PEM},
+      {repository: {...REPOSITORY, id: '1'}}, {repository: {owner: '*', name: '*'}}])
+      assert.throws(() => project(catalog({credentials: [appCredential({github_app: binding(change)})]})));
+    for (const change of [{provider_id: 'npm'}, {header_name: 'X-API-Key'}, {auth_type: 'header'},
+      {legacy_upstream_origin: 'https://other.example.test'}, {connection_type: 'github_token_v1'}])
+      assert.throws(() => project(catalog({credentials: [appCredential(change)]})));
+  }],
+  ['App rules bind exact repository and permission ceiling, never a generic upgrade', () => {
+    assert.equal(project(catalog({rules: [githubRule()]})).access_rules[0].operation_bundle, READ);
+    assert.throws(() => project(catalog({rules: [githubRule(WRITE)]})));
+    for (const change of [{repository: {...REPOSITORY, name: 'Other'}}, {repository: {...REPOSITORY, owner: 'example-owner'}},
+      {methods: ['DELETE']}, {placeholder: 'Bearer wrong'}, {query_mode: 'orderedFormV1'}, {response_fields: ['id']}])
+      assert.throws(() => project(catalog({rules: [githubRule(READ, change)]})));
+    assert.throws(() => project(catalog({rules: [rule()]})));
+    for (const permission of [READ, WRITE])
+      assert.equal(project(catalog({credentials: [appCredential({github_app: binding({issues_permission: 'write'})})],
+        rules: [githubRule(permission)]})).access_rules[0].operation_bundle, permission);
+    for (const options of [{app: capability(true, false)}, {allowed: []}, {app: null}]) {
+      const value = project(catalog({...options, rules: [githubRule()]}));
+      assert.equal(plain.run('operatorRuleSupported(input.access_rules[0], input)', value), false);
+    }
+  }],
+  ['creation and refreshed receipt bind all public App identity fields', () => {
+    const receipt = clone(plain.run('githubAppCredentialReceipt(input.row, input.submitted)', {row: appCredential(), submitted: submitted()}));
+    assert.deepEqual(Object.keys(receipt).sort(), ['auth_type', 'connection_type', 'created_at', 'github_app', 'header_name', 'id', 'name', 'provider_id', 'status']);
+    assert.equal(plain.run('githubAppCredentialReceiptMatches(input.row, input.receipt)', {row: appCredential(), receipt}), true);
+    for (const change of [{name: 'Different'}, {app_id: '2'}, {installation_id: '2'}, {issues_permission: 'write'},
+      {repository: {...REPOSITORY, name: 'Other'}}])
+      assert.throws(() => plain.run('githubAppCredentialReceipt(input.row, input.submitted)', {row: appCredential(), submitted: {...submitted(), ...change}}));
+    for (const change of [{account_id: '2'}, {repository_id: '2'}, {app_id: '2'}, {installation_id: '2'}, {issues_permission: 'write'}])
+      assert.equal(plain.run('githubAppCredentialReceiptMatches(input.row, input.receipt)',
+        {row: appCredential({github_app: binding(change)}), receipt}), false);
+  }],
+  ['App has no generic Replace key action while PAT retains it', async () => {
+    const f = await fixture();
+    assert.equal(f.run('staticKeyReplacementAvailable(workspaceFixture.state.catalog, input)', appCredential({credential_generation: 1})), false);
+    assert.equal(f.run('staticKeyReplacementAvailable(workspaceFixture.state.catalog, input)', patCredential()), true);
+    f.run('createCredentialsView(workspaceFixture).render()');
+    const actions = () => f.node('credentials-list').descendants().map(node => node.dataset.action);
+    assert(!actions().includes('replace-key')); assert(actions().includes('revoke-credential'));
+    f.raw.credentials = [patCredential()]; await f.workspace.refresh();
+    assert(actions().includes('replace-key')); f.clean();
+  }],
+  ['save uses one App POST with exact CAS and clears PEM before held reply', async () => {
+    const f = await fixture({credentials: [], mode: 'hold'}); await newApp(f);
+    assert(f.node('connect-provider-secret-group').hidden); assert(f.node('connect-credential-secret').disabled);
+    assert(!f.node('connect-github-app-fields').hidden);
+    const pending = f.event('connect-credential-form', 'submit');
+    assert.equal(f.posts().length, 1); assert.equal(f.node('connect-github-private-key').value, '');
+    assert.equal(f.bodies[0].private_key_pem, ''); assert.equal(f.workspace.writeInFlight(), true); f.clean();
+    f.release(); await pending;
+    assert.equal(f.posts().length, 1); assert.equal(f.raw.access_rules.length, 0);
+    assert(!f.node('connect-application-step').hidden); assert.equal(f.workspace.state.uncertain, false); f.clean();
+  }],
+  ['PAT and manual credential choices remain separate and available', async () => {
+    const f = await fixture({credentials: [], app: null}); await f.event('connect-use-github');
+    assert.equal(f.node('connect-github-type').value, 'github_token_v1');
+    assert(f.node('connect-github-app-fields').hidden); assert(!f.node('connect-provider-secret-group').hidden);
+    assert(!f.node('connect-github-type').children.some(node => node.value === 'github_app_v1' && !node.disabled));
+    f.node('connect-credential-name').value = 'Fixture PAT'; f.node('connect-credential-secret').value = PAT;
+    await f.event('connect-credential-form', 'submit');
+    assert.equal(f.posts()[0].path, '/api/operator-demo/credentials/github-token'); f.clean();
+    const manual = await fixture({credentials: [], app: null, pat: null});
+    assert(manual.node('connect-use-github').disabled); assert(!manual.node('connect-use-key').disabled);
+    await manual.event('connect-use-key'); assert(!manual.node('connect-credential-auth-group').hidden); manual.clean();
+  }],
+  ['existing App grant UI fixes the repository and excludes write above ceiling', async () => {
+    const f = await fixture(); await savedPair(f);
+    for (const [id, value] of [['connect-github-owner', REPOSITORY.owner], ['connect-github-repo', REPOSITORY.name]]) {
+      assert.equal(f.node(id).value, value); assert.equal(f.node(id).readOnly, true);
+    }
+    assert(!f.node('connect-operation').children.some(node => node.value === WRITE && !node.disabled));
+    await f.event('connect-access-form', 'submit'); assert(!f.node('connect-review-step').hidden);
+    assert.equal(f.posts().length, 0); await f.event('connect-grant');
+    assert.equal(f.posts().length, 1); assert.equal(f.posts()[0].payload.operation_bundle, READ);
+    assert(!f.node('connect-setup-step').hidden); f.clean();
+    const write = await fixture({credentials: [appCredential({github_app: binding({issues_permission: 'write'})})]});
+    await savedPair(write); assert(write.node('connect-operation').children.some(node => node.value === WRITE && !node.disabled));
+    write.node('connect-operation').value = WRITE; await write.event('connect-access-form', 'submit');
+    await write.event('connect-grant'); assert.equal(write.posts()[0].payload.operation_bundle, WRITE); write.clean();
+  }],
+  ['programmatic scope escalation cannot create a grant', async () => {
+    for (const [id, value] of [['connect-operation', WRITE], ['connect-github-owner', 'Other'], ['connect-github-repo', 'Other']]) {
+      const f = await fixture(); await savedPair(f); f.node(id).value = value;
+      await f.event('connect-access-form', 'submit'); await f.event('connect-grant');
+      assert.equal(f.posts().length, 0); assert(f.node('connect-setup-step').hidden); f.clean();
+    }
+  }],
+  ['capability, origin, binding or revision drift invalidates reviewed grant', async () => {
+    const changes = [raw => { raw.capabilities.github_app = null; }, raw => { raw.allowed_upstreams = []; },
+      raw => { raw.credentials[0].github_app.repository_id = '999'; }, raw => { raw.revision++; }];
+    for (const change of changes) {
+      const f = await fixture(); await savedPair(f); await f.event('connect-access-form', 'submit');
+      change(f.raw); await f.workspace.refresh(); await f.event('connect-grant');
+      assert.equal(f.posts().length, 0); assert(f.node('connect-setup-step').hidden); f.clean();
+    }
+  }],
+  ['uncertain, denied and lost saves clear PEM with no automatic replay or raw errors', async () => {
+    for (const mode of [401, 409, 422, 503, 'lost']) {
+      const f = await fixture({credentials: [], mode}); await newApp(f);
+      await f.event('connect-credential-form', 'submit'); assert.equal(f.posts().length, 1);
+      assert.equal(f.workspace.state.uncertain, true); assert.equal(f.node('connect-github-private-key').value, '');
+      await f.event('connect-credential-form', 'submit'); await f.workspace.refresh();
+      assert.equal(f.posts().length, 1); f.clean();
+    }
+  }],
+  ['mismatched creation or refreshed identity never advances or repeats save', async () => {
+    for (const options of [
+      {receiptChange: result => { result.credential.github_app.app_id = '999'; }},
+      {catalogChange: raw => { raw.credentials[0].github_app.repository_id = '999'; }},
+      {catalogChange: raw => { raw.credentials[0] = patCredential({name: NAME}); }}
+    ]) {
+      const f = await fixture({credentials: [], ...options}); await newApp(f);
+      await f.event('connect-credential-form', 'submit');
+      assert(f.node('connect-application-step').hidden); assert.equal(f.posts().length, 1);
+      await f.event('connect-credential-form', 'submit'); assert.equal(f.posts().length, 1); f.clean();
+    }
+  }],
+  ['PEM clears on navigation, type switch and invalid input without storage', async () => {
+    for (const action of [f => f.view.show(false), f => f.fire('pagehide'), f => f.fire('hashchange'),
+      async f => { f.node('connect-github-type').value = 'github_token_v1'; await f.event('connect-github-type', 'change'); },
+      f => f.event('connect-method-change'), f => f.event('connect-credential-form', 'invalid')]) {
+      const f = await fixture({credentials: []}); await newApp(f); await action(f);
+      assert.equal(f.node('connect-github-private-key').value, ''); assert.equal(f.posts().length, 0); f.clean();
+    }
+    for (const invalid of ['01', '9007199254740992', '+1']) {
+      const f = await fixture({credentials: []}); await newApp(f); f.node('connect-github-app-id').value = invalid;
+      await f.event('connect-credential-form', 'submit');
+      assert.equal(f.posts().length, 0); assert.equal(f.node('connect-github-private-key').value, ''); f.clean();
+    }
+  }],
+];
+let group = 0;
+async function main() {
+  assert.equal(process.argv.length, 2, 'No target, credentials, browser or live arguments accepted');
+  assert.equal(tests.length, 13, 'The complete nonempty regression roster is required');
+  for (const [name, test] of tests) { group++; await test(); console.log('PASS ' + name); }
+  console.log(JSON.stringify({ok: true, groups: tests.length, network: false, browser: false, provider: false,
+    scope: 'actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance'}));
+}
+main().catch(error => {
+  const frames = [...String(error?.stack || '').matchAll(/test_operator_github_app_ui\.mjs:(\d+):(\d+)/g)].slice(0, 5).map(match => [Number(match[1]), Number(match[2])]);
+  console.error(JSON.stringify({ok: false, group, frames})); process.exitCode = 1;
+});

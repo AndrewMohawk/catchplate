@@ -2,23 +2,30 @@
 
 Reuses the separately tested metadata/publish validators, deterministic inert
 tarballs, exclusive storage and isolated HTTPS setup. No registry client, SDK
-rewrite, mutable control endpoint or tarball download is added. Only ten exact
-arrivals are allowed; the other explicit example phases must stop at the gate
-or locally. Successful npm output is not evidence of persisted publication:
-observations independently re-read the two stored tarballs and records.
+rewrite or mutable control endpoint is added. The original publication phases
+remain unchanged; one explicit dependency publication feeds install and cold
+ci. Twenty-five arrivals are permitted, including a deliberately failed audit.
+Stored tarball bytes are independently re-read, never inferred from npm exit.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 from copy import deepcopy
+import gzip
+import hashlib
+import hmac
 from http.server import HTTPServer
+import io
 import os
 from pathlib import Path
 import re
 import signal
 import ssl
 import sys
+import tarfile
 import time
+import zlib
 
 from scripts import operator_npm_metadata_fixture as metadata
 from scripts import operator_npm_publish_fixture as publish
@@ -33,7 +40,10 @@ MAX_BODY, MAX_ATTEMPTS = publish.MAX_BODY, 32
 SCHEMA = "serverware.privateNpmExampleObservations/v1"
 REFUSAL_SCHEMA = "serverware.privateNpmExampleRefusal/v1"
 encoded, digest, path = metadata.encoded, metadata.digest, metadata.path
-require, tarball, save_new = publish.require, publish.tarball, publish.save_new
+require, save_new = publish.require, publish.save_new
+INSTALL_CASES = ("install_published", "ci_published", "install_audit_negative")
+TOP_VERSION, LEAF_VERSION = "1.0.2", "3.0.0"
+AUDIT_PATH = "/-/npm/v1/security/advisories/bulk"
 
 _PHASES = (
     ("view_unscoped", "view", PACKAGES[0], "1.0.0", True, "outside"),
@@ -43,6 +53,10 @@ _PHASES = (
     ("metadata_only_publish", "publish", PACKAGES[0], "1.0.1", False, "metadata"),
     ("publish_unscoped", "publish", PACKAGES[0], "2.0.0", True, "unscoped"),
     ("publish_scoped", "publish", PACKAGES[1], "3.0.0", True, "scoped"),
+    ("publish_dependency", "publish", PACKAGES[0], TOP_VERSION, True, "unscoped"),
+    ("install_published", "install", PACKAGES[0], TOP_VERSION, True, "install"),
+    ("ci_published", "ci", PACKAGES[0], TOP_VERSION, True, "install"),
+    ("install_audit_negative", "install", PACKAGES[0], TOP_VERSION, False, "install"),
     ("outside_window_publish", "publish", PACKAGES[0], "5.0.0", False, "outside"),
     ("wrong_package_view", "view", FORBIDDEN_PACKAGE, "1.0.0", False, "unscoped"),
     ("wrong_package_manifest", "manifest", FORBIDDEN_PACKAGE, "1.0.0", False, "unscoped"),
@@ -63,11 +77,133 @@ SPECS = tuple(dict(zip(("case", "operation", "package", "version", "success", "a
 ARRIVALS = (("view_unscoped", "GET"), ("view_scoped", "GET"),
     ("manifest_unscoped", "GET"), ("manifest_scoped", "GET"),
     ("metadata_only_publish", "GET"), ("publish_unscoped", "GET"), ("publish_unscoped", "PUT"),
-    ("publish_scoped", "GET"), ("publish_scoped", "PUT"), ("outside_window_publish", "GET"))
+    ("publish_scoped", "GET"), ("publish_scoped", "PUT"),
+    ("publish_dependency", "GET"), ("publish_dependency", "PUT"),
+    *((case, method) for case in INSTALL_CASES for method in
+        (("GET", "GET", "POST") if case == "ci_published" else ("GET", "GET", "GET", "GET", "POST"))),
+    ("outside_window_publish", "GET"))
 
 
 def spec_for(case):
     return next(spec for spec in SPECS if spec["case"] == case)
+
+
+def package_manifest(spec):
+    value = {"name": spec["package"], "version": spec["version"],
+        "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js"}
+    if spec["case"] == "publish_dependency":
+        require(spec == spec_for("publish_dependency"))
+        value["dependencies"] = {PACKAGES[1]: LEAF_VERSION}
+    return value
+
+
+def tarball(spec):
+    if spec["case"] != "publish_dependency":
+        return publish.tarball(spec)
+    archive, output = io.BytesIO(), io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w", format=tarfile.USTAR_FORMAT) as stream:
+        for name, body in (("package/package.json", encoded(package_manifest(spec)) + b"\n"),
+                ("package/index.js", b"module.exports = 'inert synthetic package';\n")):
+            member = tarfile.TarInfo(name)
+            member.size, member.mode, member.mtime = len(body), 0o644, 0
+            stream.addfile(member, io.BytesIO(body))
+    with gzip.GzipFile(filename="", fileobj=output, mode="wb", mtime=0) as stream:
+        stream.write(archive.getvalue())
+    result = output.getvalue()
+    require(0 < len(result) < 32768)
+    return result
+
+
+def validate_publish(raw, spec):
+    """Only this explicit third publication may carry one fixed dependency."""
+    if spec["case"] != "publish_dependency":
+        return publish.validate_publish(raw, spec)
+    require(spec == spec_for("publish_dependency") and type(raw) is bytes and 0 < len(raw) <= MAX_BODY)
+    value = publish.strict_json(raw)
+    name, version, payload = spec["package"], spec["version"], tarball(spec)
+    attachment = name + "-" + version + ".tgz"
+    integrity = "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode("ascii")
+    shasum = hashlib.sha1(payload).hexdigest()
+    manifest = {**package_manifest(spec), "_id": name + "@" + version,
+        "_nodeVersion": "25.5.0", "_npmVersion": "11.8.0",
+        "dist": {"integrity": integrity, "shasum": shasum,
+            "tarball": "http://registry.npmjs.org/" + name + "/-/" + attachment}}
+    require(type(value) is dict and set(value) == {"_id", "name", "description", "dist-tags", "versions", "access", "_attachments"}
+        and value["_id"] == value["name"] == name and value["description"] == "Synthetic publication fixture"
+        and value["dist-tags"] == {TAG: version} and value["access"] == "public"
+        and type(value["versions"]) is dict and set(value["versions"]) == {version})
+    observed = value["versions"][version]
+    # As in the original publish oracle, stock pacote may retain its local
+    # _from/_resolved/readme metadata. It is not substituted into the archive.
+    require(type(observed) is dict and all(observed.get(key) == item for key, item in manifest.items())
+        and not set(observed) & {"scripts", "publishConfig", "tag"}
+        and value["_attachments"] == {attachment: {"content_type": "application/octet-stream",
+            "data": base64.b64encode(payload).decode("ascii"), "length": len(payload)}}
+        and type(value["_attachments"][attachment]["length"]) is int)
+    return {"package": name, "version": version, "tag": TAG, "attachmentName": attachment,
+        "attachmentBytes": len(payload), "tarballSha256": digest(payload),
+        "tarballIntegrity": integrity, "tarballShasum": shasum}, manifest, payload
+
+
+def tarball_path(package, version):
+    require((package, version) in ((PACKAGES[0], TOP_VERSION), (PACKAGES[1], LEAF_VERSION)))
+    return "/" + package + "/-/" + package.rsplit("/", 1)[-1] + "-" + version + ".tgz"
+
+
+def install_requests(case):
+    """Exact phase set; parallel stock audit/download ordering is not prescribed."""
+    require(case in INSTALL_CASES)
+    rows = [] if case == "ci_published" else [("GET", path(package), "metadata", package, None) for package in PACKAGES]
+    return tuple(rows + [("GET", tarball_path(package, version), "tarball", package, version)
+        for package, version in ((PACKAGES[0], TOP_VERSION), (PACKAGES[1], LEAF_VERSION))]
+        + [("POST", AUDIT_PATH, "audit", None, None)])
+
+
+def validate_audit(raw):
+    require(type(raw) is bytes and 0 < len(raw) <= MAX_BODY)
+    try:
+        stream = zlib.decompressobj(31)
+        decoded = stream.decompress(raw, 4097)
+        require(len(decoded) <= 4096 and stream.eof and not stream.unused_data and not stream.unconsumed_tail)
+        value = publish.strict_json(decoded)
+    except (zlib.error, RecursionError):
+        raise ValueError("private npm audit fixture refused") from None
+    require(value == {PACKAGES[0]: [TOP_VERSION], PACKAGES[1]: [LEAF_VERSION]})
+    return {"operation": "npm.install.audit.read", "packages": sorted(PACKAGES),
+        "packageVersions": {package: value[package] for package in sorted(PACKAGES)}}
+
+
+def install_headers(fields, spec, mode, package, version, length):
+    require(len(fields) <= 20 and len({name for name, _ in fields}) == len(fields))
+    headers = dict(fields)
+    common = {"host", "authorization", "accept", "user-agent", "connection", "content-length",
+        "npm-auth-type", "npm-command", "npm-scope", "npm-in-ci"}
+    allowed = common | ({"content-type", "content-encoding"} if mode == "audit" else
+        {"pacote-version", "pacote-req-type", "pacote-pkg-id", "pacote-integrity", "cache-control"})
+    require(set(headers) <= allowed and headers.get("host") == "registry.npmjs.org"
+        and hmac.compare_digest(headers.get("authorization", ""), "Bearer " + TOKEN)
+        and headers.get("npm-command") == spec["operation"] and headers.get("npm-auth-type", "web") == "web"
+        and headers.get("npm-in-ci") in {None, "false"} and headers.get("npm-scope", "") == ""
+        and headers.get("connection", "close") in {"close", "keep-alive"}
+        and headers.get("content-length", "0") == str(length)
+        and re.fullmatch(r"npm/11\.8\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
+    if mode == "audit":
+        require(length > 0 and headers.get("accept") == "*/*" and headers.get("content-type") == FULL
+            and headers.get("content-encoding") == "gzip" and headers.get("content-length") == str(length))
+    else:
+        require(length == 0 and headers.get("pacote-version") == "21.0.4"
+            and headers.get("cache-control") in {None, "no-cache"})
+        if mode == "metadata":
+            require(headers.get("accept") == CORGI and headers.get("pacote-req-type") == "packument"
+                and headers.get("pacote-pkg-id") == "registry:" + package and "pacote-integrity" not in headers)
+        else:
+            payload = tarball(spec_for("publish_dependency" if package == PACKAGES[0] else "publish_scoped"))
+            integrity = "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode("ascii")
+            require(headers.get("accept") == "*/*" and headers.get("pacote-req-type") == "tarball"
+                and headers.get("pacote-pkg-id") == "remote:" + package + "@" + ORIGIN + tarball_path(package, version)
+                and headers.get("pacote-integrity") == integrity)
+    return {key: value for key, value in headers.items()
+        if key not in {"authorization", "connection", "content-length", "cache-control"}}
 
 
 def packument(package, stored):
@@ -80,9 +216,12 @@ def packument(package, stored):
     for row in stored:
         if row["package"] == package:
             require(row["version"] not in document["versions"])
-            # These are independently accepted/stored versions, not caller
-            # success reports. The existing publication packument is minimal.
-            document["versions"][row["version"]] = {"name": package, "version": row["version"]}
+            spec = spec_for(row["case"])
+            # The registry's read URL is canonical; it is not the stock publish
+            # attachment metadata URL. Only independently stored bytes feed it.
+            url = ORIGIN + "/" + package + "/-/" + package.rsplit("/", 1)[-1] + "-" + row["version"] + ".tgz"
+            document["versions"][row["version"]] = {**package_manifest(spec), "dist": {
+                "tarball": url, "integrity": row["tarballIntegrity"], "shasum": row["tarballShasum"]}}
             document["dist-tags"][TAG] = row["version"]
     return document
 
@@ -117,6 +256,8 @@ def refusal_observation(ordinal, method, stage, error):
             or error_class not in publish.REFUSAL_ERRORS):
         return None
     case, expected_method = ARRIVALS[ordinal - 1] if ordinal <= len(ARRIVALS) else (None, None)
+    if case in INSTALL_CASES:
+        expected_method = None  # This phase admits a closed set, not a fabricated parallel ordering.
     return {"schema": REFUSAL_SCHEMA, "ordinal": ordinal, "expectedCase": case,
         "expectedMethod": expected_method, "actualMethod": method
             if type(method) is str and method in publish.REFUSAL_METHODS else "other",
@@ -172,22 +313,43 @@ class Handler(publish.Handler):
             case, method = ARRIVALS[self.server.total - 1]
             spec = spec_for(case)
             stage = "target"
-            require(self.command == method and self.path == path(spec["package"]))
+            mode, package, version = None, spec["package"], spec["version"]
+            if case in INSTALL_CASES:
+                candidates = [item for item in install_requests(case) if item[:2] == (self.command, self.path)]
+                require(len(candidates) == 1 and not any(old.get("case") == case
+                    and (old.get("method"), old.get("rawTarget")) == (self.command, self.path)
+                    for old in self.server.attempts[:-1]))
+                method, _, mode, package, version = candidates[0]
+            else:
+                require(self.command == method and self.path == path(package))
             stage = "framing"
             length = self.headers.get("content-length", "0")
             require(re.fullmatch(r"0|[1-9][0-9]{0,5}", length) and int(length) <= MAX_BODY)
             raw = self.rfile.read(int(length))
             require(len(raw) == int(length))
             stage = "headers"
-            headers = validate_headers([(name.lower(), value) for name, value in self.headers.raw_items()],
-                spec, method, len(raw))
-            if method == "GET":
+            fields = [(name.lower(), value) for name, value in self.headers.raw_items()]
+            headers = (install_headers(fields, spec, mode, package, version, len(raw)) if mode else
+                validate_headers(fields, spec, method, len(raw)))
+            if mode == "audit":
+                operation = validate_audit(raw)
+                status, content_type = (400 if case == "install_audit_negative" else 200), FULL
+                response = b'{"error":"synthetic_audit_refused"}' if status == 400 else b'{}'
+            elif mode == "tarball":
+                stored = next((item for item in self.server.stored
+                    if (item["package"], item["version"]) == (package, version)), None)
+                require(stored is not None)
+                response = (Path("/npm-state") / (stored["case"] + ".tgz")).read_bytes()
+                require(digest(response) == stored["tarballSha256"] and len(response) == stored["attachmentBytes"])
+                status, content_type = 200, "application/octet-stream"
+                operation = {"operation": "npm.install.tarball.read", "package": package, "version": version}
+            elif method == "GET":
                 status = 200
                 content_type = FULL if spec["operation"] == "view" else "application/vnd.npm.install-v1+json"
-                response = encoded(packument(spec["package"], self.server.stored))
-                operation = {"operation": "npm.metadata.read", "package": spec["package"]}
+                response = encoded(packument(package, self.server.stored))
+                operation = {"operation": "npm.install.metadata.read" if mode else "npm.metadata.read", "package": package}
             else:
-                stored, _, payload = publish.validate_publish(raw, spec)
+                stored, _, payload = validate_publish(raw, spec)
                 stage = "storage"
                 require(not any(old["package"] == stored["package"] and old["version"] == stored["version"]
                     for old in self.server.stored))

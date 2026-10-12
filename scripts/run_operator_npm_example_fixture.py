@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """One bounded npm example acceptance using existing offline artifacts only.
 
-No install, build, pull, retry, public registry or live data. A clean exact
+No host installation, build, pull, retry, public registry or live data. Stock
+install/ci consume only the finite synthetic registry in the existing private
+checker tmpfs. A clean exact
 checkout, separately pinned adjacent dependencies and two new private roots
 are mandatory. Failed evidence/state is retained, exact owned containers removed.
 """

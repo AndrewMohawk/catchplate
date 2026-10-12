@@ -3,6 +3,8 @@
 
 No installation, image acquisition, initializer or client execution. The runner
 separately requires a clean exact commit and pins all already-acquired bytes.
+The checker later gives stock install/ci a fresh project in its existing private
+/tmp tmpfs; no writable source, host project or additional mount is needed.
 """
 from __future__ import annotations
 

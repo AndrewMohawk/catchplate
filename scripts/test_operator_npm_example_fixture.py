@@ -8,12 +8,14 @@ Expected phases, headers, package bytes and stored records are constructed here,
 not obtained from the receiver's oracle or the production npm adapter.
 """
 import base64
+from collections import Counter
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from email.message import Message
 import gzip
 import hashlib
 import io
+from itertools import permutations
 import json
 import os
 from pathlib import Path
@@ -33,7 +35,7 @@ FULL = "application/json"
 CORGI = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
 VENDOR = "application/vnd.npm.install-v1+json"
 TAG = "fixture"
-PHASES = (
+LEGACY_PHASES = (
     ("view_unscoped", "view", PACKAGES[0], "1.0.0", True, "outside"),
     ("view_scoped", "view", PACKAGES[1], "1.0.0", True, "scoped"),
     ("manifest_unscoped", "manifest", PACKAGES[0], "1.0.0", True, "outside"),
@@ -56,12 +58,34 @@ PHASES = (
     ("revoked_manifest", "manifest", PACKAGES[1], "1.0.0", False, "scoped"),
     ("revoked_publish", "publish", PACKAGES[1], "7.0.0", False, "scoped"),
 )
+ADDED_PHASES = (
+    ("publish_dependency", "publish", PACKAGES[0], "1.0.2", True, "unscoped"),
+    ("install_published", "install", PACKAGES[0], "1.0.2", True, "install"),
+    ("ci_published", "ci", PACKAGES[0], "1.0.2", True, "install"),
+    ("install_audit_negative", "install", PACKAGES[0], "1.0.2", False, "install"),
+)
+PHASES = LEGACY_PHASES[:7] + ADDED_PHASES + LEGACY_PHASES[7:]
 SPECS = {row[0]: dict(zip(("case", "operation", "package", "version", "success", "application"), row))
     for row in PHASES}
-ARRIVALS = (("view_unscoped", "GET"), ("view_scoped", "GET"),
+LEGACY_ARRIVALS = (("view_unscoped", "GET"), ("view_scoped", "GET"),
     ("manifest_unscoped", "GET"), ("manifest_scoped", "GET"),
     ("metadata_only_publish", "GET"), ("publish_unscoped", "GET"), ("publish_unscoped", "PUT"),
     ("publish_scoped", "GET"), ("publish_scoped", "PUT"), ("outside_window_publish", "GET"))
+INSTALL_CASES = ("install_published", "ci_published", "install_audit_negative")
+AUDIT_PATH = "/-/npm/v1/security/advisories/bulk"
+AUDIT_DOCUMENT = {PACKAGES[0]: ["1.0.2"], PACKAGES[1]: ["3.0.0"]}
+INSTALL_ROWS = (
+    ("GET", "/serverware-fixture-publish", "metadata", PACKAGES[0], None),
+    ("GET", "/@serverware-fixture%2fpublish", "metadata", PACKAGES[1], None),
+    ("GET", "/serverware-fixture-publish/-/serverware-fixture-publish-1.0.2.tgz", "tarball", PACKAGES[0], "1.0.2"),
+    ("GET", "/@serverware-fixture/publish/-/publish-3.0.0.tgz", "tarball", PACKAGES[1], "3.0.0"),
+    ("POST", AUDIT_PATH, "audit", None, None),
+)
+INSTALL_REQUESTS = {case: INSTALL_ROWS[2:] if case == "ci_published" else INSTALL_ROWS for case in INSTALL_CASES}
+ARRIVALS = (LEGACY_ARRIVALS[:-1] + (("publish_dependency", "GET"), ("publish_dependency", "PUT"))
+    + tuple((case, row[0]) for case in INSTALL_CASES for row in INSTALL_REQUESTS[case])
+    + LEGACY_ARRIVALS[-1:])
+PUBLICATIONS = ("publish_unscoped", "publish_scoped", "publish_dependency")
 ROW_KEYS = {"ordinal", "accepted", "case", "method", "rawTarget", "requestHeaders",
     "requestBodySha256", "requestBodyBytes", "operation", "status", "responseContentType",
     "responseBodySha256", "responseBodyBytes", "allParsedHeadersValidated"}
@@ -85,6 +109,8 @@ def expected_tarball(spec):
     """Independent inert USTAR/gzip construction with fixed member metadata."""
     manifest = {"name": spec["package"], "version": spec["version"],
         "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js"}
+    if spec["case"] == "publish_dependency":
+        manifest["dependencies"] = {PACKAGES[1]: "3.0.0"}
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         for name, content in (("package/package.json", encoded(manifest) + b"\n"),
@@ -115,6 +141,8 @@ def publish_document(spec):
         "_nodeVersion": "25.5.0", "_npmVersion": "11.8.0", "dist": {
             "integrity": stored["tarballIntegrity"], "shasum": stored["tarballShasum"],
             "tarball": "http://registry.npmjs.org/" + name + "/-/" + stored["attachmentName"]}}
+    if spec["case"] == "publish_dependency":
+        manifest["dependencies"] = {PACKAGES[1]: "3.0.0"}
     return {"_id": name, "name": name, "description": "Synthetic publication fixture",
         "dist-tags": {TAG: version}, "versions": {version: manifest}, "access": "public",
         "_attachments": {stored["attachmentName"]: {"content_type": "application/octet-stream",
@@ -140,6 +168,40 @@ def fields(spec, method="GET", length=0):
 
 def changed(fields_, name, value):
     return [(key, value if key == name else old) for key, old in fields_]
+
+
+def compressed(raw):
+    output = io.BytesIO()
+    with gzip.GzipFile(filename="", fileobj=output, mode="wb", mtime=0) as stream:
+        stream.write(raw)
+    return output.getvalue()
+
+
+def install_fields(case, request, length=0):
+    method, pathname, mode, package, version = request
+    result = [("host", "registry.npmjs.org"), ("authorization", "Bearer " + registry.TOKEN),
+        ("accept", CORGI if mode == "metadata" else "*/*"), ("connection", "close"),
+        ("content-length", str(length)), ("npm-auth-type", "web"),
+        ("npm-command", SPECS[case]["operation"]),
+        ("user-agent", "npm/11.8.0 node/v25.5.0 linux x64 workspaces/false")]
+    if mode == "audit":
+        result.extend((("content-type", FULL), ("content-encoding", "gzip")))
+    else:
+        result.extend((("pacote-version", "21.0.4"), ("pacote-req-type", "packument" if mode == "metadata" else "tarball"),
+            ("pacote-pkg-id", "registry:" + package if mode == "metadata" else
+             "remote:" + package + "@https://registry.npmjs.org" + pathname)))
+        if mode == "tarball":
+            publication = "publish_dependency" if package == PACKAGES[0] else "publish_scoped"
+            result.append(("pacote-integrity", expected_stored(SPECS[publication])["tarballIntegrity"]))
+    return result
+
+
+def install_receive(state, case, request, *, body=None, headers=None, path=None, method=None):
+    if body is None:
+        body = compressed(encoded(AUDIT_DOCUMENT)) if request[2] == "audit" else b""
+    return receive(state, SPECS[case], request[0] if method is None else method, body,
+        headers=install_fields(case, request, len(body)) if headers is None else headers,
+        path=request[1] if path is None else path)
 
 
 def server():
@@ -186,8 +248,16 @@ class NpmExampleFixtureTests(unittest.TestCase):
 
     def complete(self):
         state, responses = server(), []
+        install_indices = Counter()
         for ordinal, (case, method) in enumerate(ARRIVALS, 1):
             spec = SPECS[case]
+            if case in INSTALL_CASES:
+                request = INSTALL_REQUESTS[case][install_indices[case]]
+                install_indices[case] += 1
+                status, raw, media = install_receive(state, case, request)
+                self.assert_install_row(state, case, request, status, raw, media)
+                responses.append(raw if request[2] == "tarball" else json.loads(raw))
+                continue
             body = encoded(publish_document(spec)) if method == "PUT" else b""
             status, raw, media = receive(state, spec, method, body)
             self.assertEqual(status, 201 if method == "PUT" else 200)
@@ -216,15 +286,49 @@ class NpmExampleFixtureTests(unittest.TestCase):
             responses.append(json.loads(raw))
         return state, responses
 
-    def test_exact_twenty_one_phases_and_ten_arrivals(self):
+    def assert_install_row(self, state, case, request, status, raw, media):
+        method, pathname, mode, package, version = request
+        body = compressed(encoded(AUDIT_DOCUMENT)) if mode == "audit" else b""
+        self.assertEqual(status, 400 if case == "install_audit_negative" and mode == "audit" else 200)
+        self.assertEqual(media, {"metadata": VENDOR, "tarball": "application/octet-stream", "audit": FULL}[mode])
+        row = state.attempts[-1]
+        self.assertEqual(set(row), ROW_KEYS)
+        self.assertEqual((row["ordinal"], row["case"], row["method"], row["rawTarget"]),
+            (state.total, case, method, pathname))
+        self.assertIs(row["accepted"], True)
+        self.assertIs(row["allParsedHeadersValidated"], True)
+        headers = dict(install_fields(case, request, len(body)))
+        for key in ("authorization", "connection", "content-length"):
+            headers.pop(key)
+        self.assertEqual(row["requestHeaders"], headers)
+        self.assertEqual((row["requestBodySha256"], row["requestBodyBytes"]), (digest(body), len(body)))
+        self.assertEqual((row["responseBodySha256"], row["responseBodyBytes"]), (digest(raw), len(raw)))
+        if mode == "audit":
+            self.assertEqual(row["operation"], {"operation": "npm.install.audit.read", "packages": sorted(PACKAGES),
+                "packageVersions": AUDIT_DOCUMENT})
+            self.assertEqual(raw, b'{"error":"synthetic_audit_refused"}' if status == 400 else b'{}')
+        else:
+            expected = {"operation": "npm.install." + mode + ".read", "package": package}
+            if mode == "tarball":
+                expected["version"] = version
+                self.assertEqual(raw, expected_tarball(SPECS[
+                    "publish_dependency" if package == PACKAGES[0] else "publish_scoped"]))
+            self.assertEqual(row["operation"], expected)
+
+    def test_exact_twenty_five_phases_preserve_original_twenty_one_oracle(self):
         self.assertEqual(registry.SPECS, tuple(SPECS.values()))
         self.assertEqual(registry.ARRIVALS, ARRIVALS)
-        self.assertEqual((len(registry.SPECS), len(registry.ARRIVALS)), (21, 10))
+        self.assertEqual((len(registry.SPECS), len(registry.ARRIVALS)), (25, 25))
+        added = {row[0] for row in ADDED_PHASES}
+        self.assertEqual(tuple(tuple(row[key] for key in ("case", "operation", "package", "version", "success", "application"))
+            for row in registry.SPECS if row["case"] not in added), LEGACY_PHASES)
+        self.assertEqual(tuple(row for row in registry.ARRIVALS if row[0] not in added), LEGACY_ARRIVALS)
         self.assertEqual((registry.PACKAGES, registry.TAG, registry.FORBIDDEN_PACKAGE), (PACKAGES, TAG, FORBIDDEN))
         self.assertEqual((registry.MAX_BODY, registry.MAX_ATTEMPTS), (65536, 32))
         self.assertEqual([spec["case"] for spec in registry.SPECS if spec["success"]],
-            ["view_unscoped", "view_scoped", "manifest_unscoped", "manifest_scoped", "publish_unscoped", "publish_scoped"])
-        self.assertEqual([case for case, method in ARRIVALS if method == "PUT"], ["publish_unscoped", "publish_scoped"])
+            ["view_unscoped", "view_scoped", "manifest_unscoped", "manifest_scoped", "publish_unscoped", "publish_scoped",
+             "publish_dependency", "install_published", "ci_published"])
+        self.assertEqual([case for case, method in ARRIVALS if method == "PUT"], list(PUBLICATIONS))
         self.assertNotIn("wrong_package_publish", dict(ARRIVALS))
         for case, spec in SPECS.items():
             self.assertEqual(registry.spec_for(case), spec)
@@ -297,14 +401,15 @@ class NpmExampleFixtureTests(unittest.TestCase):
                     self.assertEqual((member.mode, member.mtime, member.uid, member.gid), (0o644, 0, 0, 0))
                 self.assertEqual(json.load(archive.extractfile("package/package.json")),
                     {"name": spec["package"], "version": spec["version"], "description": "Synthetic publication fixture",
-                     "license": "MIT", "main": "index.js"})
+                     "license": "MIT", "main": "index.js",
+                     **({"dependencies": {PACKAGES[1]: "3.0.0"}} if spec["case"] == "publish_dependency" else {})})
                 self.assertEqual(archive.extractfile("package/index.js").read(), b"module.exports = 'inert synthetic package';\n")
 
     def test_publication_oracle_binds_two_versions_tag_tarball_and_integrity(self):
-        for case in ("publish_unscoped", "publish_scoped"):
+        for case in PUBLICATIONS:
             spec = SPECS[case]
             document = publish_document(spec)
-            actual, manifest, blob = registry.publish.validate_publish(encoded(document), spec)
+            actual, manifest, blob = registry.validate_publish(encoded(document), spec)
             expected = expected_stored(spec)
             self.assertEqual(actual, {key: value for key, value in expected.items() if key != "case"})
             self.assertEqual(manifest, document["versions"][spec["version"]])
@@ -323,19 +428,25 @@ class NpmExampleFixtureTests(unittest.TestCase):
                 candidate = deepcopy(document)
                 mutate(candidate)
                 with self.subTest(case=case, change=index), self.assertRaises(ValueError):
-                    registry.publish.validate_publish(encoded(candidate), spec)
+                    registry.validate_publish(encoded(candidate), spec)
 
-    def test_actual_handler_ten_arrivals_store_only_two_exact_publications(self):
+    def test_actual_handler_exact_arrival_multiset_and_three_persisted_publications(self):
         state, responses = self.complete()
-        self.assertEqual((state.total, len(state.attempts), len(state.stored)), (10, 10, 2))
-        self.assertEqual(state.stored, [expected_stored(SPECS[case]) for case in ("publish_unscoped", "publish_scoped")])
+        self.assertEqual((state.total, len(state.attempts), len(state.stored)), (25, 25, 3))
+        self.assertEqual(state.stored, [expected_stored(SPECS[case]) for case in PUBLICATIONS])
+        self.assertEqual(Counter(row["operation"]["operation"] for row in state.attempts),
+            {"npm.metadata.read": 9, "npm.install.metadata.read": 4, "npm.install.tarball.read": 6,
+             "npm.install.audit.read": 3, "npm.publish": 3})
+        self.assertEqual(Counter(row["status"] for row in state.attempts), {200: 21, 201: 3, 400: 1})
         self.assertEqual({item.name for item in self.directory.iterdir()},
-            {case + suffix for case in ("publish_unscoped", "publish_scoped") for suffix in (".tgz", ".json")})
+            {case + suffix for case in PUBLICATIONS for suffix in (".tgz", ".json")})
         for ordinal in (0, 1, 2, 3, 4, 5, 7):
             self.assertEqual(set(responses[ordinal]["versions"]), {"1.0.0"})
             self.assertEqual(responses[ordinal]["dist-tags"], {"latest": "1.0.0"})
         self.assertEqual(set(responses[9]["versions"]), {"1.0.0", "2.0.0"})
         self.assertEqual(responses[9]["dist-tags"], {"latest": "1.0.0", "fixture": "2.0.0"})
+        self.assertEqual(set(responses[24]["versions"]), {"1.0.0", "2.0.0", "1.0.2"})
+        self.assertEqual(responses[24]["dist-tags"], {"latest": "1.0.0", "fixture": "1.0.2"})
         for row in state.stored:
             for suffix in (".tgz", ".json"):
                 path = self.directory / (row["case"] + suffix)
@@ -456,7 +567,7 @@ class NpmExampleFixtureTests(unittest.TestCase):
                 "expectedCase": "publish_scoped", "expectedMethod": "PUT", "actualMethod": "PUT",
                 "stage": "headers", "errorClass": kind.__name__})
             self.assertNotIn(canary, json.dumps(record))
-        unknown = registry.refusal_observation(11, canary, "sequence", ValueError(canary))
+        unknown = registry.refusal_observation(26, canary, "sequence", ValueError(canary))
         self.assertEqual((unknown["expectedCase"], unknown["expectedMethod"], unknown["actualMethod"]), (None, None, "other"))
         for ordinal in (0, 33, -1, True, 1.0, "1", None):
             self.assertIsNone(registry.refusal_observation(ordinal, "GET", "sequence", ValueError(canary)))
@@ -476,10 +587,204 @@ class NpmExampleFixtureTests(unittest.TestCase):
             result = registry.packument(package, stored)
             self.assertEqual(set(result["versions"]), {"1.0.0", version})
             self.assertEqual(result["dist-tags"], {"latest": "1.0.0", "fixture": version})
-            self.assertEqual(result["versions"][version], {"name": package, "version": version})
+            published = result["versions"][version]
+            stored_row = next(row for row in stored if row["package"] == package)
+            self.assertEqual(published, {"name": package, "version": version,
+                "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js",
+                "dist": {"tarball": "https://registry.npmjs.org/" + package + "/-/" + package.rsplit("/", 1)[-1] + "-" + version + ".tgz",
+                    "integrity": stored_row["tarballIntegrity"], "shasum": stored_row["tarballShasum"]}})
             self.assertNotIn(FORBIDDEN, json.dumps(result))
         self.assertEqual(stored, before)
         with self.assertRaises(ValueError): registry.packument(PACKAGES[0], stored + [stored[0]])
+
+    def test_dependency_archive_metadata_and_persisted_transitive_closure_agree(self):
+        state, _ = self.complete()
+        top = registry.packument(PACKAGES[0], state.stored)["versions"]["1.0.2"]
+        leaf = registry.packument(PACKAGES[1], state.stored)["versions"]["3.0.0"]
+        self.assertEqual(top["dependencies"], {PACKAGES[1]: "3.0.0"})
+        self.assertNotIn("dependencies", leaf)
+        for case, manifest in (("publish_dependency", top), ("publish_scoped", leaf)):
+            original = (self.directory / (case + ".tgz")).read_bytes()
+            self.assertEqual(original, expected_tarball(SPECS[case]))
+            with tarfile.open(fileobj=io.BytesIO(original), mode="r:gz") as archive:
+                packaged = json.load(archive.extractfile("package/package.json"))
+                self.assertEqual(packaged, {key: value for key, value in manifest.items() if key != "dist"})
+                self.assertNotIn("scripts", packaged)
+            self.assertEqual(manifest["dist"]["integrity"], "sha512-" + base64.b64encode(hashlib.sha512(original).digest()).decode())
+            self.assertEqual(manifest["dist"]["shasum"], hashlib.sha1(original, usedforsecurity=False).hexdigest())
+        # Seed metadata may retain its original deliberately rich dependency
+        # fields; only these two explicit installed versions define this graph.
+        self.assertEqual(set(top["dependencies"]) | {top["name"]}, set(PACKAGES))
+        for package, version in ((PACKAGES[0], "2.0.0"), (PACKAGES[1], "1.0.0"), (FORBIDDEN, "3.0.0")):
+            with self.assertRaises(ValueError): registry.tarball_path(package, version)
+
+    def test_dependency_publication_cannot_expand_graph_or_change_canonical_archive(self):
+        spec = SPECS["publish_dependency"]
+        original = publish_document(spec)
+        attachment = next(iter(original["_attachments"]))
+        for mutate in (
+                lambda value: value["versions"]["1.0.2"].update(dependencies={}),
+                lambda value: value["versions"]["1.0.2"].update(dependencies={PACKAGES[1]: "^3.0.0"}),
+                lambda value: value["versions"]["1.0.2"].update(dependencies={PACKAGES[1]: "3.0.0", FORBIDDEN: "1.0.0"}),
+                lambda value: value["versions"]["1.0.2"].update(scripts={"postinstall": "canary"}),
+                lambda value: value["versions"]["1.0.2"]["dist"].update(tarball="https://elsewhere.invalid/changed")):
+            candidate = deepcopy(original)
+            mutate(candidate)
+            with self.assertRaises(ValueError): registry.validate_publish(encoded(candidate), spec)
+        # Identical tar members compressed under a different gzip header are
+        # still different published bytes; recomputing all hashes cannot admit.
+        candidate = deepcopy(original)
+        blob = bytearray(expected_tarball(spec))
+        blob[4] = 1
+        self.assertEqual(gzip.decompress(blob), gzip.decompress(expected_tarball(spec)))
+        candidate["_attachments"][attachment]["data"] = base64.b64encode(blob).decode()
+        candidate["versions"]["1.0.2"]["dist"].update(
+            integrity="sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode(),
+            shasum=hashlib.sha1(blob, usedforsecurity=False).hexdigest())
+        with self.assertRaises(ValueError): registry.validate_publish(encoded(candidate), spec)
+        # The new dependency exception does not relax either older publication.
+        for case in PUBLICATIONS[:2]:
+            candidate = publish_document(SPECS[case])
+            candidate["versions"][SPECS[case]["version"]]["dependencies"] = {PACKAGES[1]: "3.0.0"}
+            with self.assertRaises(ValueError): registry.validate_publish(encoded(candidate), SPECS[case])
+
+    def test_all_install_phase_permutations_are_exact_sets_with_cold_ci_no_metadata(self):
+        completed, _ = self.complete()
+        before = {path: path.read_bytes() for path in self.directory.iterdir()}
+        for case, start in (("install_published", 11), ("ci_published", 16), ("install_audit_negative", 19)):
+            self.assertEqual(registry.install_requests(case), INSTALL_REQUESTS[case])
+            self.assertEqual(len(set(INSTALL_REQUESTS[case])), 3 if case == "ci_published" else 5)
+            for order in permutations(INSTALL_REQUESTS[case]):
+                state = SimpleNamespace(total=start, attempts=[], stored=deepcopy(completed.stored))
+                for request in order:
+                    self.assert_install_row(state, case, request, *install_receive(state, case, request))
+                self.assertEqual(Counter((row["method"], row["rawTarget"]) for row in state.attempts),
+                    Counter(item[:2] for item in INSTALL_REQUESTS[case]))
+                self.assertEqual(state.total, start + len(order))
+                self.assertEqual(state.stored, completed.stored)
+        self.assertEqual({path: path.read_bytes() for path in self.directory.iterdir()}, before)
+
+    def test_install_duplicates_retries_and_cross_phase_requests_refuse(self):
+        completed, _ = self.complete()
+        for case, start in (("install_published", 11), ("ci_published", 16), ("install_audit_negative", 19)):
+            for request in INSTALL_REQUESTS[case]:
+                state = SimpleNamespace(total=start, attempts=[], stored=deepcopy(completed.stored))
+                self.assert_install_row(state, case, request, *install_receive(state, case, request))
+                self.assertEqual(install_receive(state, case, request)[:2], (400, REFUSAL))
+                self.assertEqual(state.attempts[-1], {"ordinal": start + 2, "accepted": False})
+        for start, request in ((0, INSTALL_ROWS[2]), (9, INSTALL_ROWS[2]), (24, INSTALL_ROWS[2]),
+                (25, INSTALL_ROWS[4]), (16, INSTALL_ROWS[0]), (16, INSTALL_ROWS[1])):
+            state = SimpleNamespace(total=start, attempts=[], stored=deepcopy(completed.stored))
+            self.assertEqual(install_receive(state, "install_published", request)[:2], (400, REFUSAL))
+            self.assertEqual(state.attempts[-1], {"ordinal": start + 1, "accepted": False})
+        for case in INSTALL_CASES:
+            with self.assertRaises(ValueError): registry.install_requests(case + "-retry")
+
+    def test_install_requests_refuse_wrong_credentials_headers_paths_methods_and_body(self):
+        completed, _ = self.complete()
+        for request in INSTALL_ROWS:
+            body = compressed(encoded(AUDIT_DOCUMENT)) if request[2] == "audit" else b""
+            original = install_fields("install_published", request, len(body))
+            for name, value in (("authorization", "Bearer " + registry.PLACEHOLDER),
+                    ("authorization", "Bearer private-canary"), ("host", "elsewhere.invalid"),
+                    ("npm-command", "ci"), ("accept", FULL), ("content-length", str(len(body) + 1))):
+                state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+                self.assertEqual(install_receive(state, "install_published", request,
+                    headers=changed(original, name, value))[:2], (400, REFUSAL))
+                self.assertEqual(state.attempts, [{"ordinal": 12, "accepted": False}])
+            for header in (("authorization", "Bearer " + registry.TOKEN), ("proxy-authorization", "private-canary"),
+                    ("x-private", "private-canary"), ("accept-encoding", "gzip"), ("npm-session", "private-canary")):
+                state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+                self.assertEqual(install_receive(state, "install_published", request,
+                    headers=original + [header])[:2], (400, REFUSAL))
+            for method in ("PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
+                state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+                self.assertEqual(install_receive(state, "install_published", request, method=method)[:2], (400, REFUSAL))
+            for pathname in (request[1] + "?write=true", request[1] + "/", "/" + FORBIDDEN,
+                    "/-/npm/v1/security/audits/quick"):
+                state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+                self.assertEqual(install_receive(state, "install_published", request, path=pathname)[:2], (400, REFUSAL))
+        for request in INSTALL_ROWS[:4]:
+            state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+            self.assertEqual(install_receive(state, "install_published", request, body=b"private-canary")[:2], (400, REFUSAL))
+        for request, header, value in ((INSTALL_ROWS[2], "pacote-integrity", "sha512-AAAA"),
+                (INSTALL_ROWS[3], "pacote-pkg-id", "remote:" + FORBIDDEN),
+                (INSTALL_ROWS[4], "content-encoding", "identity")):
+            body = compressed(encoded(AUDIT_DOCUMENT)) if request[2] == "audit" else b""
+            state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+            self.assertEqual(install_receive(state, "install_published", request,
+                headers=changed(install_fields("install_published", request, len(body)), header, value))[:2], (400, REFUSAL))
+        self.assertNotIn("private-canary", self.stderr.getvalue())
+
+    def test_audit_gzip_single_member_strict_json_and_both_body_bounds(self):
+        raw = encoded(AUDIT_DOCUMENT)
+        good = compressed(raw)
+        self.assertEqual(good, compressed(raw))
+        self.assertEqual(good[4:8], b"\0\0\0\0")
+        expected = {"operation": "npm.install.audit.read", "packages": sorted(PACKAGES), "packageVersions": AUDIT_DOCUMENT}
+        self.assertEqual(registry.validate_audit(good), expected)
+        self.assertEqual(registry.validate_audit(compressed(raw + b" " * (4096 - len(raw)))), expected)
+        # Wire bound can be hit without growing plaintext using a bounded gzip
+        # comment; gzip header bytes are not authority or package semantics.
+        header = bytearray(good[:10])
+        header[3] |= 16
+        maximum_wire = bytes(header) + b"x" * (65536 - len(good) - 1) + b"\0" + good[10:]
+        self.assertEqual(len(maximum_wire), 65536)
+        self.assertEqual(registry.validate_audit(maximum_wire), expected)
+        duplicate = b'{"' + PACKAGES[0].encode() + b'":["1.0.2"],"' + PACKAGES[0].encode() + b'":["1.0.2"],"' + PACKAGES[1].encode() + b'":["3.0.0"]}'
+        malformed = [b"", raw, good[:-1], good + b"junk", good + good,
+            good[:-1] + bytes([good[-1] ^ 1]), maximum_wire + b"x",
+            compressed(raw + b" " * (4097 - len(raw))), compressed(duplicate),
+            compressed(b'{"private-canary":NaN}'), compressed(b'{"private-canary":1e999}'),
+            compressed(raw + b'{}'), compressed(encoded({PACKAGES[0]: ["1.0.2"]})),
+            compressed(encoded({**AUDIT_DOCUMENT, FORBIDDEN: ["1.0.0"]})),
+            compressed(encoded({PACKAGES[0]: ["2.0.0"], PACKAGES[1]: ["3.0.0"]})),
+            compressed(encoded({PACKAGES[0]: ["1.0.2", "1.0.2"], PACKAGES[1]: ["3.0.0"]})),
+            compressed(encoded({PACKAGES[0]: "1.0.2", PACKAGES[1]: ["3.0.0"]}))]
+        for index, candidate in enumerate(malformed):
+            with self.subTest(index=index), self.assertRaises(ValueError): registry.validate_audit(candidate)
+        with self.assertRaises(ValueError): registry.validate_audit(bytearray(good))
+
+    def test_negative_audit_is_recorded_as_real_400_without_relaxing_refusals(self):
+        completed, _ = self.complete()
+        row = next(row for row in completed.attempts if row["case"] == "install_audit_negative" and row["method"] == "POST")
+        self.assertTrue(row["accepted"])
+        self.assertEqual((row["status"], row["operation"]["operation"]), (400, "npm.install.audit.read"))
+        self.assertEqual(row["responseBodySha256"], digest(b'{"error":"synthetic_audit_refused"}'))
+        state = SimpleNamespace(total=19, attempts=[], stored=deepcopy(completed.stored))
+        canary = compressed(b'{"private-canary":["secret-version"]}')
+        self.assertEqual(install_receive(state, "install_audit_negative", INSTALL_ROWS[4], body=canary)[:2], (400, REFUSAL))
+        self.assertEqual(state.attempts, [{"ordinal": 20, "accepted": False}])
+        record = json.loads(self.stderr.getvalue().splitlines()[-1])
+        self.assertEqual((record["expectedCase"], record["expectedMethod"], record["actualMethod"]),
+            ("install_audit_negative", None, "POST"))
+        self.assertNotIn("private-canary", json.dumps(state.attempts) + self.stderr.getvalue())
+
+    def test_download_rereads_persisted_bytes_and_never_substitutes_packument_claims(self):
+        completed, _ = self.complete()
+        request = INSTALL_ROWS[2]
+        pathname = self.directory / "publish_dependency.tgz"
+        before = pathname.read_bytes()
+        pathname.chmod(0o600)
+        pathname.write_bytes(b"changed-private-canary")
+        state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
+        self.assertEqual(install_receive(state, "install_published", request)[:2], (400, REFUSAL))
+        self.assertEqual(state.attempts, [{"ordinal": 12, "accepted": False}])
+        pathname.write_bytes(before)
+        pathname.chmod(0o400)
+        missing = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored[:2]))
+        self.assertEqual(install_receive(missing, "install_published", request)[:2], (400, REFUSAL))
+        self.assertEqual(registry.stored_observations(self.directory, completed.stored), completed.stored)
+
+    def test_dependency_publish_strict_json_and_wire_bound(self):
+        spec = SPECS["publish_dependency"]
+        raw = encoded(publish_document(spec))
+        expected = registry.validate_publish(raw, spec)
+        self.assertEqual(registry.validate_publish(raw + b" " * (65536 - len(raw)), spec), expected)
+        for candidate in (raw + b" " * (65537 - len(raw)), raw + b'{}',
+                b'{"name":"private-canary",' + raw[1:], b'{"private-canary":NaN}',
+                b'{"private-canary":Infinity}', b'{"private-canary":1e999}', raw[:-1], b''):
+            with self.assertRaises(ValueError): registry.validate_publish(candidate, spec)
 
 
 if __name__ == "__main__":

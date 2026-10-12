@@ -22,6 +22,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 if __package__ in (None, ""):
@@ -40,10 +41,11 @@ COMMAND = ("/node", "/app/examples/npm-registry/client.mjs")
 SOURCE_FILES = tuple("examples/npm-registry/" + name for name in
     ("client.mjs", "core.mjs", "worker.mjs", "package.json", "package-lock.json"))
 PHASES = ("view_unscoped", "view_scoped", "manifest_unscoped", "manifest_scoped", "metadata_only_publish",
-    "publish_unscoped", "publish_scoped", "outside_window_publish", "wrong_package_view", "wrong_package_manifest",
+    "publish_unscoped", "publish_scoped", "publish_dependency", "install_published", "ci_published", "install_audit_negative",
+    "outside_window_publish", "wrong_package_view", "wrong_package_manifest",
     "wrong_package_publish", "wrong_app_view", "wrong_app_manifest", "wrong_app_publish", "wrong_outer_ca",
     "wrong_inner_ca", "missing_confirmation", "wrong_tarball_hash", "revoked_view", "revoked_manifest", "revoked_publish")
-APPLICATIONS = ("metadata", "unscoped", "scoped", "outside", "unassigned")
+APPLICATIONS = ("metadata", "unscoped", "scoped", "outside", "unassigned", "install")
 LOCAL_PHASES = {"missing_confirmation", "wrong_tarball_hash"}
 CONNECT_DENIED, KEEP_ALIVE = metadata.CONNECT_DENIED, publish.KEEP_ALIVE
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
@@ -59,32 +61,43 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
 
 
-def expected_summary(spec):
+def expected_summary(spec, installation=None):
     if not spec["success"]:
         value = {"ok": False, "operation": spec["operation"],
             "error": "npm example failed; check configuration, permissions and Serverware audit logs."}
         if spec["operation"] == "publish":
             value["warning"] = "Publication may be unconfirmed. Inspect registry metadata and audit evidence; do not automatically retry."
+        elif spec["case"] in fixture.INSTALL_CASES:
+            value.update(installationDirectory=installation["directory"], warning=
+                "Partial installation retained. Inspect it and audit logs; choose a new output directory for a deliberate retry.")
         return value
     value = {"ok": True, "operation": spec["operation"], "package": spec["package"], "version": spec["version"]}
     if spec["operation"] == "publish":
         value.update(tag="fixture", tarballSha256=hashlib.sha256(fixture.tarball(spec)).hexdigest(), npmReportedSuccess=True)
+    elif spec["case"] in fixture.INSTALL_CASES:
+        value.update(installed=True, added=2, audited=3, defaultAuditReportedSuccess=True, vulnerabilities=0,
+            lockSha256=installation["lockSha256"], installationDirectory=installation["directory"])
     else:
         value["tarballFetched"] = False
     return value
 
 
-def validate_client_result(spec, code, out, err):
+def validate_client_result(spec, code, out, err, *, installation=None):
     require(type(code) is int and type(out) is bytes and type(err) is bytes, "npm example process result differs")
-    summary = expected_summary(spec)
+    if spec["case"] in fixture.INSTALL_CASES:
+        validate_installation_receipt(installation, spec)
+    else:
+        require(installation is None, "unexpected installation receipt")
+    summary = expected_summary(spec, installation)
     # Source property insertion order is part of the actual entrypoint output.
     raw = json.dumps(summary, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
     require((code == 0 and out == raw and err == b"") if spec["success"] else
         (code == 1 and out == b"" and err == raw), "npm example exact summary or fixed failure differs")
-    return {"phase": spec["case"], "operation": spec["operation"], "exitCode": code, "summary": summary}
+    return {"phase": spec["case"], "operation": spec["operation"], "exitCode": code, "summary": summary,
+        **({"installation": installation} if installation is not None else {})}
 
 
-def client_environment(spec, application, token):
+def client_environment(spec, application, token, *, project=None, output=None):
     require(spec in fixture.SPECS and type(application) is str and UUID.fullmatch(application)
         and type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token), "npm example app identity differs")
     value = {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": metadata.PROXY, "SERVERWARE_APP_ID": application,
@@ -96,6 +109,10 @@ def client_environment(spec, application, token):
         value.update(SERVERWARE_NPM_TAG="fixture", SERVERWARE_NPM_TARBALL="/client-packages/" + spec["case"] + ".tgz",
             SERVERWARE_NPM_TARBALL_SHA256=hashlib.sha256(fixture.tarball(spec)).hexdigest(),
             SERVERWARE_NPM_PUBLISH_CONFIRM="publish-publicly")
+    if spec["case"] in fixture.INSTALL_CASES:
+        require(isinstance(project, Path) and isinstance(output, Path) and project.is_absolute() and output.is_absolute()
+            and project != output and not output.is_relative_to(project), "npm installation output overlaps source")
+        value.update(SERVERWARE_NPM_PROJECT=str(project), SERVERWARE_NPM_OUTPUT=str(output))
     if spec["case"] == "wrong_outer_ca":
         value.pop("SERVERWARE_PROXY_CA_FILE")
     elif spec["case"] == "wrong_inner_ca":
@@ -109,6 +126,35 @@ def client_environment(spec, application, token):
 
 def validate_header_projection(row, spec):
     headers = row["requestHeaders"]
+    if spec["case"] in fixture.INSTALL_CASES:
+        common = {"host", "accept", "user-agent", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope"}
+        candidates = [item for item in fixture.install_requests(spec["case"])
+            if item[:2] == (row["method"], row["rawTarget"])]
+        require(len(candidates) == 1, "npm install target differs")
+        _, _, mode, package, version = candidates[0]
+        allowed = common | ({"content-type", "content-encoding"} if mode == "audit" else
+            {"pacote-version", "pacote-req-type", "pacote-pkg-id", "pacote-integrity"})
+        require(type(headers) is dict and set(headers) <= allowed
+            and all(type(value) is str and value.isascii() and len(value) <= 8192 for value in headers.values())
+            and headers.get("host") == "registry.npmjs.org" and headers.get("npm-command") == spec["operation"]
+            and headers.get("npm-auth-type", "web") == "web" and headers.get("npm-in-ci") in {None, "false"}
+            and headers.get("npm-scope", "") == ""
+            and re.fullmatch(r"npm/11\.8\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")),
+            "npm install public header projection differs")
+        if mode == "audit":
+            require(headers.get("accept") == "*/*" and headers.get("content-type") == "application/json"
+                and headers.get("content-encoding") == "gzip", "npm install audit headers differ")
+        elif mode == "metadata":
+            require(headers.get("accept") == fixture.CORGI and headers.get("pacote-version") == "21.0.4"
+                and headers.get("pacote-req-type") == "packument" and headers.get("pacote-pkg-id") == "registry:" + package
+                and "pacote-integrity" not in headers, "npm install metadata headers differ")
+        else:
+            record = stored_record(fixture.spec_for("publish_dependency" if package == fixture.PACKAGES[0] else "publish_scoped"))
+            require(headers.get("accept") == "*/*" and headers.get("pacote-version") == "21.0.4"
+                and headers.get("pacote-req-type") == "tarball"
+                and headers.get("pacote-pkg-id") == "remote:" + package + "@" + fixture.ORIGIN + fixture.tarball_path(package, version)
+                and headers.get("pacote-integrity") == record["tarballIntegrity"], "npm install tarball headers differ")
+        return
     allowed = {"host", "accept", "user-agent", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope",
         "pacote-pkg-id", "pacote-req-type", "pacote-version"}
     if row["method"] == "PUT":
@@ -140,14 +186,21 @@ def canonical_digests(row, scope, credential_id):
         and type(credential_id) is str and UUID.fullmatch(credential_id), "npm example canonical scope differs")
     if spec["operation"] == "publish":
         return publish.canonical_digests(row, tuple(scope), credential_id)
-    require(row["method"] == "GET" and type(row["requestBodyBytes"]) is int and row["requestBodyBytes"] == 0
-        and row["requestBodySha256"] == digest(b""), "npm example metadata body differs")
+    headers = dict(row["requestHeaders"])
+    if row["method"] == "POST":
+        require(spec["case"] in fixture.INSTALL_CASES and type(row["requestBodyBytes"]) is int
+            and 0 < row["requestBodyBytes"] <= 65536 and SHA256.fullmatch(row["requestBodySha256"]),
+            "npm install compressed body commitment differs")
+        headers["content-length"] = str(row["requestBodyBytes"])
+    else:
+        require(row["method"] == "GET" and type(row["requestBodyBytes"]) is int and row["requestBodyBytes"] == 0
+            and row["requestBodySha256"] == digest(b""), "npm example metadata body differs")
     canonical = {"v": 2, "principal": scope[0], "client_ip": "127.0.0.1", "route_id": scope[1],
         "credential_ref": credential_id, "credential_version": "1", "policy_hash": scope[2],
-        "request": {"method": "GET", "scheme": "https", "authority": "registry.npmjs.org", "path": row["rawTarget"],
-            "query": [], "headers": row["requestHeaders"], "body_sha256": digest(b""),
+        "request": {"method": row["method"], "scheme": "https", "authority": "registry.npmjs.org", "path": row["rawTarget"],
+            "query": [], "headers": headers, "body_sha256": row["requestBodySha256"],
             "discard_headers": ["accept-encoding", "npm-session"]},
-        "operation": {"operation": "npm.metadata.read", "package": spec["package"]}}
+        "operation": row["operation"]}
     return digest(encoded(canonical)), digest(encoded({k: v for k, v in canonical.items() if k not in {"v", "client_ip"}}))
 
 
@@ -159,6 +212,16 @@ def stored_record(spec):
         "tarballShasum": hashlib.sha1(payload).hexdigest()}
 
 
+def scope_key(row):
+    if row["case"] not in fixture.INSTALL_CASES:
+        return row["method"]
+    operation = row.get("operation")
+    modes = {"npm.install.metadata.read": "metadata", "npm.install.tarball.read": "tarball", "npm.install.audit.read": "audit"}
+    require(type(operation) is dict and type(operation.get("operation")) is str and operation["operation"] in modes,
+        "npm install operation scope differs")
+    return modes[operation["operation"]]
+
+
 def validate_observations(value, completed, phase_scopes, credential_id):
     require(type(completed) is list and completed == list(PHASES[:len(completed)]), "npm example phase order differs")
     arrivals = [item for item in fixture.ARRIVALS if item[0] in completed]
@@ -166,17 +229,44 @@ def validate_observations(value, completed, phase_scopes, credential_id):
         and value["schema"] == SCHEMA.replace("Check", "Observations") and value["syntheticOnly"] is True
         and type(value["total"]) is int and value["total"] == len(arrivals)
         and type(value["attempts"]) is list and len(value["attempts"]) == len(arrivals), "npm example provider arrival count differs")
-    wire, stored = [], []
+    wire, stored, seen_install = [], [], set()
     for ordinal, (row, (phase, method)) in enumerate(zip(value["attempts"], arrivals), 1):
         spec = fixture.spec_for(phase)
         require(type(row) is dict and set(row) == ROW_KEYS and row["accepted"] is True
             and type(row["ordinal"]) is int and row["ordinal"] == ordinal and row["case"] == phase
-            and row["method"] == method and row["rawTarget"] == fixture.path(spec["package"])
             and row["allParsedHeadersValidated"] is True and type(row["status"]) is int,
             "npm example exact provider request differs")
-        if method == "GET":
-            response = fixture.encoded(fixture.packument(spec["package"], stored))
-            operation = {"operation": "npm.metadata.read", "package": spec["package"]}
+        mode, package, version = None, spec["package"], spec["version"]
+        if phase in fixture.INSTALL_CASES:
+            candidates = [item for item in fixture.install_requests(phase)
+                if item[:2] == (row["method"], row["rawTarget"])]
+            key = (phase, row["method"], row["rawTarget"])
+            require(len(candidates) == 1 and key not in seen_install, "npm install unexpected or repeated arrival")
+            seen_install.add(key)
+            method, _, mode, package, version = candidates[0]
+        else:
+            require(row["method"] == method and row["rawTarget"] == fixture.path(package), "npm example target differs")
+        if mode == "audit":
+            operation = {"operation": "npm.install.audit.read", "packages": sorted(fixture.PACKAGES),
+                "packageVersions": {fixture.PACKAGES[1]: ["3.0.0"], fixture.PACKAGES[0]: ["1.0.2"]}}
+            status = 400 if phase == "install_audit_negative" else 200
+            response = b'{"error":"synthetic_audit_refused"}' if status == 400 else b'{}'
+            require(row["status"] == status and row["responseContentType"] == fixture.FULL
+                and type(row["requestBodyBytes"]) is int and 0 < row["requestBodyBytes"] <= 65536
+                and type(row["requestBodySha256"]) is str and SHA256.fullmatch(row["requestBodySha256"]),
+                "npm install audit status/body differs")
+        elif mode == "tarball":
+            spec_blob = fixture.spec_for("publish_dependency" if package == fixture.PACKAGES[0] else "publish_scoped")
+            record = stored_record(spec_blob)
+            require(record in stored, "npm install tarball was not independently published")
+            response = fixture.tarball(spec_blob)
+            operation = {"operation": "npm.install.tarball.read", "package": package, "version": version}
+            require(row["status"] == 200 and row["responseContentType"] == "application/octet-stream"
+                and type(row["requestBodyBytes"]) is int and row["requestBodyBytes"] == 0
+                and row["requestBodySha256"] == digest(b""), "npm install tarball response differs")
+        elif method == "GET":
+            response = fixture.encoded(fixture.packument(package, stored))
+            operation = {"operation": "npm.install.metadata.read" if mode else "npm.metadata.read", "package": package}
             require(type(row["requestBodyBytes"]) is int and row["requestBodyBytes"] == 0
                 and row["requestBodySha256"] == digest(b"") and row["status"] == 200
                 and row["responseContentType"] == (fixture.FULL if spec["operation"] == "view" else "application/vnd.npm.install-v1+json"),
@@ -192,7 +282,7 @@ def validate_observations(value, completed, phase_scopes, credential_id):
                 and type(row["requestBodySha256"]) is str and SHA256.fullmatch(row["requestBodySha256"]), "npm example publication body differs")
         require(row["operation"] == operation and row["responseBodySha256"] == digest(response)
             and type(row["responseBodyBytes"]) is int and row["responseBodyBytes"] == len(response), "npm example operation/response commitment differs")
-        scope = tuple(phase_scopes[phase][method])
+        scope = tuple(phase_scopes[phase][mode if mode else method])
         request, operation_digest = canonical_digests(row, scope, credential_id)
         wire.append({**row, "scope": scope, "requestDigest": request, "operationDigest": operation_digest})
     require(value["stored"] == stored, "npm example independently stored versions differ")
@@ -201,15 +291,56 @@ def validate_observations(value, completed, phase_scopes, credential_id):
 
 def joined_attempts(rows, wire, credential_id):
     features.audit_cutoff(rows)
+    expected, pairs, starts, terminals = {}, {}, Counter(), Counter()
+    for item in wire:
+        key = (item["requestDigest"], item["operationDigest"])
+        expected.setdefault(key, []).append(item)
     for row in rows:
         if row["event_type"] in {START, RELEASE, BLOCK}:
-            event = row["event"]
+            kind, event = row["event_type"], row["event"]
             require(SHA256.fullmatch(row["id"]) and type(event.get("credential_version")) is int,
                 "npm example gate audit identity/generation differs")
-            if row["event_type"] == RELEASE:
-                require(type(event.get("upstream_status")) is int and type(event.get("response_body_bytes")) is int,
-                    "npm example audit response counts differ")
-    return publish.joined_attempts(rows, wire, credential_id)
+            require(kind != BLOCK, "npm example response was blocked")
+            key = (event.get("request_digest"), event.get("operation_digest"))
+            require(key in expected, "npm example unexpected release commitment")
+            item = expected[key][0]
+            require(tuple(event.get(name) for name in ("principal_id", "route_id", "policy_hash")) == item["scope"]
+                and event.get("credential_ref") == credential_id and event["credential_version"] == 1
+                and event.get("method") == item["method"] and event.get("body_sha256") == item["requestBodySha256"],
+                "npm example release authority differs")
+            attempt = event.get("attempt_id")
+            require(type(attempt) is str and SHA256.fullmatch(attempt) and event.get("flow_id") == attempt,
+                "npm example release attempt identity differs")
+            pair = pairs.setdefault(attempt, {"key": key})
+            slot = "start" if kind == START else "terminal"
+            require(pair["key"] == key and slot not in pair, "npm example repeated or rebound release attempt")
+            pair[slot] = row["id"]
+            if kind == START:
+                require(event.get("outcome") == "release_started", "npm example release start differs")
+                starts[key] += 1
+                require(starts[key] <= len(expected[key]), "npm example extra release start")
+            else:
+                signature = (event.get("upstream_status"), event.get("response_body_sha256"), event.get("response_body_bytes"))
+                available = Counter((r["status"], r["responseBodySha256"], r["responseBodyBytes"]) for r in expected[key])
+                require(type(signature[0]) is int and type(signature[2]) is int and signature in available,
+                    "npm example release response commitment differs")
+                validation = event.get("response_validation", {})
+                if item["case"] in fixture.INSTALL_CASES:
+                    mode = {"metadata": "npmInstallMetadataJsonV1", "tarball": "npmInstallTarballV1",
+                        "audit": "npmInstallAuditJsonV1"}[scope_key(item)]
+                    adapter = "npm.install.v1"
+                else:
+                    mode = "npmMetadataJsonV1" if item["method"] == "GET" else "npmPublishJsonV1"
+                    adapter = "npm.metadata.v1" if item["method"] == "GET" else "npm.publish.v1"
+                require(event.get("outcome") == "released" and validation.get("ok") is True
+                    and validation.get("mode") == mode and validation.get("adapter") == adapter
+                    and validation.get("body_bytes_preserved") is True and validation.get("allowed_fields_redacted") is False,
+                    "npm example typed response validation differs")
+                terminals[(key, signature)] += 1
+                require(terminals[(key, signature)] <= available[signature], "npm example extra terminal release")
+    require(len(pairs) <= len(wire), "npm example extra attempt identity")
+    return pairs, len(pairs) == sum(terminals.values()) == len(wire) and all(
+        {"start", "terminal"} <= pair.keys() for pair in pairs.values())
 
 
 def expected_denials(spec, rule):
@@ -230,7 +361,7 @@ def connection_units(spec):
     phase = spec["case"]
     if phase in LOCAL_PHASES or phase == "wrong_outer_ca":
         return 0, 0
-    count = 2 if spec["operation"] == "publish" else 1
+    count = len(fixture.install_requests(phase)) if phase in fixture.INSTALL_CASES else 2 if spec["operation"] == "publish" else 1
     return (0, count) if phase.startswith(("wrong_app_", "revoked_")) else (count, 0)
 
 
@@ -250,9 +381,96 @@ def local_lease_delta(before, after, event_kinds):
     return added
 
 
-def run_client(spec, environment, seconds):
+def project_bytes():
+    return fixture.encoded({"name": "serverware-fixture-consumer", "version": "1.0.0", "private": True,
+        "dependencies": {"serverware-fixture-publish": "1.0.2"}}) + b"\n"
+
+
+def project_files(directory):
+    """Bounded actual output/source inventory; no archive extraction or execution."""
+    require(directory.is_absolute() and directory.resolve() == directory and not directory.is_symlink(),
+        "npm installation directory identity differs")
+    pending, files, count, total = [directory], {}, 0, 0
+    while pending:
+        parent = pending.pop()
+        require(stat.S_ISDIR(parent.lstat().st_mode), "npm installation directory changed")
+        for entry in sorted(parent.iterdir()):
+            count += 1
+            require(count <= 24, "npm installation output roster exceeds bound")
+            info = entry.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(entry)
+            else:
+                require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 4 * 1024**2,
+                    "npm installation output file differs")
+                total += info.st_size
+                require(total <= 8 * 1024**2, "npm installation output bytes exceed bound")
+                identity, checksum = file_pin(entry)
+                raw = entry.read_bytes()
+                require(file_identity(entry) == identity and hashlib.sha256(raw).hexdigest() == checksum,
+                    "npm installation output changed during readback")
+                files[entry.relative_to(directory).as_posix()] = raw
+    return files
+
+
+def validate_installation_receipt(value, spec):
+    require(type(value) is dict and set(value) == {"directory", "lockSha256", "fileSha256", "sourcePreserved", "ciLockUnchanged"}
+        and type(value["directory"]) is str and re.fullmatch(r"/tmp/serverware-npm-install-[a-zA-Z0-9_]{8}/" + spec["case"], value["directory"])
+        and type(value["lockSha256"]) is str and HEX.fullmatch(value["lockSha256"])
+        and value["sourcePreserved"] is True and value["ciLockUnchanged"] is (spec["operation"] == "ci"),
+        "npm installation receipt differs")
+    files = value["fileSha256"]
+    expected = {"package.json", "package-lock.json", "node_modules/.package-lock.json"}
+    for package in fixture.PACKAGES:
+        expected |= {"node_modules/" + package + "/package.json", "node_modules/" + package + "/index.js"}
+    require(type(files) is dict and set(files) == expected and all(type(item) is str and HEX.fullmatch(item) for item in files.values())
+        and files["package-lock.json"] == value["lockSha256"]
+        and files["package.json"] == hashlib.sha256(project_bytes()).hexdigest(), "npm installation file commitments differ")
+    for package, case in zip(fixture.PACKAGES, ("publish_dependency", "publish_scoped")):
+        manifest = fixture.encoded(fixture.package_manifest(fixture.spec_for(case))) + b"\n"
+        require(files["node_modules/" + package + "/package.json"] == hashlib.sha256(manifest).hexdigest()
+            and files["node_modules/" + package + "/index.js"] == hashlib.sha256(b"module.exports = 'inert synthetic package';\n").hexdigest(),
+            "npm installation published byte commitment differs")
+
+
+def inspect_installation(spec, output, source, before, clean):
+    require(project_files(source) == before, "npm installation changed original project")
+    files = project_files(output)
+    for raw in files.values():
+        clean(raw)
+    require(files.get("package.json") == project_bytes(), "npm installation manifest copy differs")
+    lock_raw = files.get("package-lock.json", b"")
+    lock = fixture.publish.strict_json(lock_raw)
+    expected_locations = {"", *("node_modules/" + package for package in fixture.PACKAGES)}
+    require(type(lock) is dict and type(lock.get("lockfileVersion")) is int and lock["lockfileVersion"] == 3
+        and lock.get("name") == "serverware-fixture-consumer" and lock.get("version") == "1.0.0"
+        and type(lock.get("packages")) is dict and set(lock["packages"]) == expected_locations
+        and lock["packages"][""].get("dependencies") == {fixture.PACKAGES[0]: "1.0.2"},
+        "npm installation exact lock closure differs")
+    for package, case in zip(fixture.PACKAGES, ("publish_dependency", "publish_scoped")):
+        saved = stored_record(fixture.spec_for(case))
+        entry = lock["packages"]["node_modules/" + package]
+        require(entry.get("version") == saved["version"] and entry.get("integrity") == saved["tarballIntegrity"]
+            and entry.get("resolved") == fixture.ORIGIN + fixture.tarball_path(package, saved["version"])
+            and entry.get("dependencies", {}) == ({fixture.PACKAGES[1]: "3.0.0"} if package == fixture.PACKAGES[0] else {})
+            and entry.get("link") is not True, "npm installation transitive dependency differs")
+    if spec["operation"] == "ci":
+        require(lock_raw == before.get("package-lock.json"), "npm ci changed reviewed source lock")
+    receipt = {"directory": str(output), "lockSha256": hashlib.sha256(lock_raw).hexdigest(),
+        "fileSha256": {name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(files.items())},
+        "sourcePreserved": True, "ciLockUnchanged": spec["operation"] == "ci"}
+    validate_installation_receipt(receipt, spec)
+    return receipt
+
+
+def run_client(spec, environment, seconds, *, clean=None):
     require(spec in fixture.SPECS and 0 < seconds <= 25, "npm example process deadline differs")
     deadline = time.monotonic() + seconds
+    source = Path(environment["SERVERWARE_NPM_PROJECT"]) if spec["case"] in fixture.INSTALL_CASES else None
+    output = Path(environment["SERVERWARE_NPM_OUTPUT"]) if source is not None else None
+    before = project_files(source) if source is not None else None
+    if source is not None:
+        require(not output.exists() and not output.is_symlink() and callable(clean), "npm install requires fresh output and leak guard")
     argv = COMMAND if spec["case"] == "view_unscoped" else (*COMMAND, spec["operation"])
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, close_fds=True, start_new_session=True)
@@ -271,7 +489,9 @@ def run_client(spec, environment, seconds):
                         output[key.data].extend(chunk)
                         require(len(output[key.data]) <= 4096, "npm example process output exceeds bound")
         code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
-        return validate_client_result(spec, code, bytes(output["out"]), bytes(output["err"]))
+        installation = (inspect_installation(spec, Path(environment["SERVERWARE_NPM_OUTPUT"]), source, before, clean)
+            if source is not None else None)
+        return validate_client_result(spec, code, bytes(output["out"]), bytes(output["err"]), installation=installation)
     finally:
         # The actual example deliberately creates its own detached worker.
         # This is not a descendant-containment claim: any uncertain result
@@ -306,7 +526,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             and account.pw_name == "serverware" and account.pw_dir == "/home/serverware"
             and Path(account.pw_dir).is_dir(), "npm example existing service account differs")
         require(args.ca_file == Path(INNER) and args.proxy_ca_file == Path(OUTER), "npm example trust paths differ")
-        require(tuple(s["case"] for s in fixture.SPECS) == PHASES and len(fixture.ARRIVALS) == 10,
+        require(tuple(s["case"] for s in fixture.SPECS) == PHASES and len(fixture.ARRIVALS) == 25,
             "npm example fixed fixture protocol differs")
         self.dependency_root = Path("/app/examples/npm-registry/node_modules")
         self.dependencies = validate_dependencies(self.dependency_root, args.expected_node_modules_sha256)
@@ -326,6 +546,10 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
         self.phase_scopes, self.bindings, self.rules, self.apps = {}, {}, {}, {}
         self.baseline, self.cutoff, self.previous_provider = {}, {}, None
         self.revocation = None
+        self.install_root = Path(tempfile.mkdtemp(prefix="serverware-npm-install-"))
+        self.install_source = self.install_root / "source"
+        self.install_source.mkdir(mode=0o700)
+        fixture.save_new(self.install_source / "package.json", project_bytes())
 
     def current_files(self, *, full=False):
         for path, pin in self.pins.items():
@@ -367,8 +591,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             if units:
                 key = (binding["principal"], binding["policy"])
                 needed_connections[key] += units
-                if units == 2:
-                    needed_kept[key] += 1
+                needed_kept[key] += max(0, units - 1)
             needed_denials.extend(expected_denials(spec, self.rules.get(spec["application"])))
         scopes = {tuple(scope) for phase in self.completed for scope in self.phase_scopes[phase].values()
             if not phase.startswith("revoked_") and phase not in LOCAL_PHASES | {"wrong_outer_ca", "wrong_inner_ca"}}
@@ -410,9 +633,10 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
                     "npm example CONNECT scope differs")
                 authority = dict(event); authority.pop("outcome")
                 if kind == KEEP_ALIVE:
-                    require(type(event.get("intercepted_request_count")) is int and event["intercepted_request_count"] == 2,
+                    limit = 5 if key[0] == self.apps["install"][0]["principal_id"] else 2
+                    require(type(event.get("intercepted_request_count")) is int and 2 <= event["intercepted_request_count"] <= limit,
                         "npm example reused tunnel request count differs")
-                    authority.pop("intercepted_request_count"); kept[key] += 1
+                    authority.pop("intercepted_request_count"); kept[key] += event["intercepted_request_count"] - 1
                     require(kept[key] <= needed_kept[key], "npm example extra reused tunnel")
                     kept_authorities[encoded(authority)] += 1
                 else:
@@ -430,7 +654,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
                 require(self.revocation is not None and event.get("previous_policy_hash") == self.accepted_policy
                     and event.get("policy_hash") == self.revocation[2]
                     and event.get("policy_sequence") == self.snapshot["policy"]["sequence"]
-                    and type(event.get("routes")) is int and event["routes"] == 5 and counts[kind] <= 1,
+                    and type(event.get("routes")) is int and event["routes"] == 8 and counts[kind] <= 1,
                     "npm example revoked policy reload differs")
             elif kind == "operator_catalog.application.revoked":
                 require((kind, event.get("resource_id"), event.get("policy_hash")) == self.revocation
@@ -444,7 +668,8 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
         if self.revocation is not None:
             complete = complete and counts[RELOAD] == counts["operator_catalog.application.revoked"] == 1
         self.audit_kinds = {row["id"]: row["event_type"] for row in events}
-        return complete, {"namedAuditInventory": dict(sorted(counts.items())), "auditAttemptIds": sorted(pairs)}
+        return complete, {"namedAuditInventory": dict(sorted(counts.items())), "auditAttemptIds": sorted(pairs),
+            "reusedTunnelRequestUnits": sum(kept.values())}
 
     def checkpoint(self):
         drained = None
@@ -470,6 +695,11 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             and capabilities.get("npm_publish", {}).get("source_pair_required") is True
             and capabilities["npm_publish"].get("destination_allowed") is True
             and capabilities["npm_publish"].get("registry_origin") == fixture.ORIGIN
+            and capabilities.get("npm_install", {}).get("schema") == "serverware.operatorNpmInstall/v1"
+            and capabilities["npm_install"].get("source_pair_required") is True
+            and capabilities["npm_install"].get("destination_allowed") is True
+            and capabilities["npm_install"].get("modes") == ["metadata", "tarball", "audit"]
+            and capabilities["npm_install"].get("dependencies_require_explicit_grant") is True
             and capabilities.get("application_proxy_authentication", {}).get("modes") == ["bearer", "basic_and_bearer_v1"],
             "npm example paired Basic metadata/publish capability missing")
         self.policy_hash = initial["policy"]["policy_hash"]
@@ -492,6 +722,10 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             if name == "metadata":
                 route, payload, event = "/access-rules/npm-metadata", {**common, "operation_bundle": "npm_metadata_read_v1",
                     "packages": [package]}, "npm_metadata_created"
+            elif name == "install":
+                self.wait_catalog_loaded("npm-example-install-admission")
+                route, payload, event = "/access-rules/npm-install", {**common, "operation_bundle": "npm_install_v1",
+                    "packages": sorted(fixture.PACKAGES)}, "npm_install_created"
             else:
                 route, payload, event = "/access-rules/npm-publish", {**common, "operation_bundle": "npm_publish_v1", "package": package,
                     "tag": "fixture", "publishing_window": self.window if name == "outside" else None}, "npm_publish_created"
@@ -500,7 +734,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             require(all(rule.get(k) == v for k, v in payload.items()), "npm example saved permission differs")
             self.rules[name] = rule
         self.wait_catalog_loaded("npm-example-ready"); pins = self.warm_cas_snapshot()
-        require([len(pins[k]) for k in COLLECTIONS] == [1, 5, 4], "npm example resource inventory differs")
+        require([len(pins[k]) for k in COLLECTIONS] == [1, 6, 5], "npm example resource inventory differs")
         while not self.audit_drained():
             time.sleep(min(0.1, self.timeout()))
         self.baseline = self.cutoff = features.audit_cutoff(self.audit())
@@ -520,15 +754,21 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
                 self.checkpoint()
             self.unchanged(pins)
             self.bindings[phase] = {"principal": app["principal_id"], "policy": self.policy_hash}
-            scopes = {} if rule is None else {"GET": (app["principal_id"], rule["route_id"]
-                + ("" if spec["application"] == "metadata" else ".metadata"), self.policy_hash)}
-            if rule is not None and spec["application"] != "metadata":
+            if spec["application"] == "install":
+                scopes = {mode: (app["principal_id"], rule["route_id"] + suffix, self.policy_hash)
+                    for mode, suffix in (("metadata", ""), ("tarball", ".tarball"), ("audit", ".audit"))}
+            else:
+                scopes = {} if rule is None else {"GET": (app["principal_id"], rule["route_id"]
+                    + ("" if spec["application"] == "metadata" else ".metadata"), self.policy_hash)}
+            if rule is not None and spec["application"] not in {"metadata", "install"}:
                 scopes["PUT"] = (app["principal_id"], rule["route_id"], self.policy_hash)
             self.phase_scopes[phase] = scopes
             before_provider, before_cutoff = self.previous_provider, dict(self.cutoff)
             self.current_files()
-            self.clients.append(run_client(spec, client_environment(spec, app["id"], token),
-                min(25, self.deadline - time.monotonic())))
+            project = (self.install_root / "install_published" if spec["operation"] == "ci" else self.install_source)
+            environment = client_environment(spec, app["id"], token,
+                **({"project": project, "output": self.install_root / phase} if phase in fixture.INSTALL_CASES else {}))
+            self.clients.append(run_client(spec, environment, min(25, self.deadline - time.monotonic()), clean=self.clean))
             self.current_files(); self.completed.append(phase)
             evidence = self.checkpoint()
             if not any(case == phase for case, _ in fixture.ARRIVALS):
@@ -553,7 +793,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
                 found.add(key); durable.add(row["id"])
             if row["event_type"] in {START, RELEASE}:
                 durable.add(row["id"])
-        require(found == set(self.mutations) and len(found) == 11 and len(durable) == 31, "npm example durable mutation/request inventory differs")
+        require(found == set(self.mutations) and len(found) == 13 and len(durable) == 63, "npm example durable mutation/request inventory differs")
         chain = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
         require(chain.get("ok") is True and chain.get("complete") is True and chain.get("backend") == "sqlite",
             "npm example complete persisted audit chain unavailable")
@@ -561,10 +801,13 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
         result = {"schema": SCHEMA, "ok": True, "syntheticOnly": True, "actualExampleEntrypoint": True,
             "auditChainVerified": True, "stockClientTransports": True, "allParsedUpstreamHeadersValidated": True,
             "distinctOuterInnerCAs": True, "trustMode": "additiveSharedNodeRoots", "productionReady": False, "realNpmVerified": False,
-            "npmInstallVerified": False, "publicDnsVerified": False, "hiddenWireHeaderProof": False,
+            "npmInstallVerified": True, "coldCiVerified": True, "transitiveDependencyVerified": True,
+            "defaultAuditSuccessVerified": True, "swallowedAuditFailureDetected": True,
+            "publicDnsVerified": False, "hiddenWireHeaderProof": False,
             "defaultRetryBehaviorVerified": False, "configuredRetries": 0, "commandRetries": 0,
-            "clientCommands": 21, "successfulClientCommands": 6, "expectedFailedClientCommands": 15,
-            "providerAttempts": 10, "metadataReleases": 8, "unauthorizedPuts": 0,
+            "clientCommands": 25, "successfulClientCommands": 9, "expectedFailedClientCommands": 16,
+            "providerAttempts": 25, "metadataReleases": 13, "tarballReleases": 6, "auditReleases": 3,
+            "unauthorizedPuts": 0,
             "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "nodeSha256": metadata.NODE_SHA256,
             "nodeModulesSha256": self.args.expected_node_modules_sha256,
@@ -581,15 +824,17 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
 def validate_success_result(value):
     """Closed actual-entrypoint evidence; runner additionally requires exit zero."""
     true_flags = {"ok", "syntheticOnly", "actualExampleEntrypoint", "auditChainVerified", "stockClientTransports",
-        "allParsedUpstreamHeadersValidated", "distinctOuterInnerCAs"}
-    false_flags = {"productionReady", "realNpmVerified", "npmInstallVerified", "publicDnsVerified",
+        "allParsedUpstreamHeadersValidated", "distinctOuterInnerCAs", "npmInstallVerified", "coldCiVerified",
+        "transitiveDependencyVerified", "defaultAuditSuccessVerified", "swallowedAuditFailureDetected"}
+    false_flags = {"productionReady", "realNpmVerified", "publicDnsVerified",
         "hiddenWireHeaderProof", "defaultRetryBehaviorVerified"}
-    integers = {"configuredRetries": 0, "commandRetries": 0, "clientCommands": 21, "successfulClientCommands": 6,
-        "expectedFailedClientCommands": 15, "providerAttempts": 10, "metadataReleases": 8, "unauthorizedPuts": 0}
+    integers = {"configuredRetries": 0, "commandRetries": 0, "clientCommands": 25, "successfulClientCommands": 9,
+        "expectedFailedClientCommands": 16, "providerAttempts": 25, "metadataReleases": 13,
+        "tarballReleases": 6, "auditReleases": 3, "unauthorizedPuts": 0}
     fields = true_flags | false_flags | set(integers) | {"schema", "trustMode", "npmVersion", "pacoteVersion", "registryFetchVersion",
         "dataPlaneBinaryDigest", "nodeSha256", "nodeModulesSha256", "sourceSha256", "credentialId", "applicationIds",
         "ruleIds", "policyHash", "revokedPolicyHash", "publishingWindowUtc", "clients", "requests", "storedPublications",
-        "phaseEvidence", "catalogMutations", "durableAuditEventIds", "namedAuditInventory", "auditAttemptIds"}
+        "phaseEvidence", "catalogMutations", "durableAuditEventIds", "namedAuditInventory", "auditAttemptIds", "reusedTunnelRequestUnits"}
     require(type(value) is dict and set(value) == fields and value["schema"] == SCHEMA
         and all(value[k] is True for k in true_flags) and all(value[k] is False for k in false_flags)
         and all(type(value[k]) is int and value[k] == v for k, v in integers.items()), "npm example final result shape differs")
@@ -605,31 +850,43 @@ def validate_success_result(value):
     require(type(apps) is dict and set(apps) == set(APPLICATIONS) and type(rules) is dict
         and set(rules) == set(APPLICATIONS) - {"unassigned"}, "npm example saved resource inventory differs")
     ids = [value["credentialId"], *apps.values(), *rules.values()]
-    require(all(type(v) is str and UUID.fullmatch(v) for v in ids) and len(set(ids)) == 10, "npm example resource identities differ")
+    require(all(type(v) is str and UUID.fullmatch(v) for v in ids) and len(set(ids)) == 12, "npm example resource identities differ")
     require(value["publishingWindowUtc"] in ({"start": "18:00", "end": "19:00"}, {"start": "06:00", "end": "07:00"}),
         "npm example original closed window differs")
-    require(type(value["clients"]) is list and len(value["clients"]) == 21, "npm example actual command count differs")
+    require(type(value["clients"]) is list and len(value["clients"]) == 25, "npm example actual command count differs")
+    installations = {}
     for row, spec in zip(value["clients"], fixture.SPECS):
+        require(type(row) is dict, "npm example client receipt differs")
+        installation = row.get("installation")
+        if spec["case"] in fixture.INSTALL_CASES:
+            validate_installation_receipt(installation, spec)
+            installations[spec["case"]] = installation
+        else:
+            require(installation is None and "installation" not in row, "unexpected installation receipt")
         expected = {"phase": spec["case"], "operation": spec["operation"], "exitCode": 0 if spec["success"] else 1,
-            "summary": expected_summary(spec)}
+            "summary": expected_summary(spec, installation), **({"installation": installation} if installation is not None else {})}
         require(type(row) is dict and encoded(row) == encoded(expected), "npm example actual client receipt differs")
+    require(len({str(Path(row["directory"]).parent) for row in installations.values()}) == 1
+        and installations["ci_published"]["lockSha256"] == installations["install_published"]["lockSha256"],
+        "npm ci original lock or fresh output relationship differs")
     requests = value["requests"]
-    require(type(requests) is list and len(requests) == 10 and all(type(row) is dict
+    require(type(requests) is list and len(requests) == 25 and all(type(row) is dict
         and set(row) == ROW_KEYS | {"scope", "requestDigest", "operationDigest"} for row in requests), "npm example request inventory differs")
     scopes = {}
     for row in requests:
         scope = row["scope"]
         require(type(scope) in (list, tuple) and len(scope) == 3 and all(type(v) is str and 0 < len(v) <= 256 for v in scope)
             and scope[2] == value["policyHash"], "npm example request policy scope differs")
-        scopes.setdefault(row["case"], {})[row["method"]] = scope
-    observed = {"schema": fixture.SCHEMA, "syntheticOnly": True, "total": 10,
+        key = scope_key(row)
+        previous = scopes.setdefault(row["case"], {}).setdefault(key, scope)
+        require(previous == scope, "npm example phase route rebound")
+    observed = {"schema": fixture.SCHEMA, "syntheticOnly": True, "total": 25,
         "attempts": [{k: v for k, v in row.items() if k in ROW_KEYS} for row in requests], "stored": value["storedPublications"]}
     wire, stored = validate_observations(observed, list(PHASES), scopes, value["credentialId"])
-    require(encoded(wire) == encoded(requests) and len(stored) == 2
-        and len({row["requestDigest"] for row in requests}) == len({row["operationDigest"] for row in requests}) == 10,
+    require(encoded(wire) == encoded(requests) and len(stored) == 3,
         "npm example request/operation/storage joins differ")
     phases = value["phaseEvidence"]
-    require(type(phases) is list and len(phases) == 21, "npm example per-phase checkpoints unavailable")
+    require(type(phases) is list and len(phases) == 25, "npm example per-phase checkpoints unavailable")
     count, seen = 0, set()
     for row, spec in zip(phases, fixture.SPECS):
         phase = spec["case"]
@@ -657,26 +914,29 @@ def validate_success_result(value):
             "npm example checkpoint audit identities differ")
         seen.update(audit_ids); count = next_count
     mutations = value["catalogMutations"]
-    require(type(mutations) is list and len(mutations) == 11 and all(type(row) in (list, tuple) and len(row) == 3
+    require(type(mutations) is list and len(mutations) == 13 and all(type(row) in (list, tuple) and len(row) == 3
         and type(row[0]) is str and type(row[1]) is str and UUID.fullmatch(row[1])
         and type(row[2]) is str and SHA256.fullmatch(row[2]) for row in mutations), "npm example mutation evidence differs")
     require(Counter(row[0] for row in mutations) == Counter({"operator_catalog.credential.npm_token_created": 1,
-        "operator_catalog.application.created": 5, "operator_catalog.access_rule.npm_metadata_created": 1,
-        "operator_catalog.access_rule.npm_publish_created": 3, "operator_catalog.application.revoked": 1})
+        "operator_catalog.application.created": 6, "operator_catalog.access_rule.npm_metadata_created": 1,
+        "operator_catalog.access_rule.npm_publish_created": 3, "operator_catalog.access_rule.npm_install_created": 1,
+        "operator_catalog.application.revoked": 1})
         and mutations[-1] == type(mutations[-1])(("operator_catalog.application.revoked", apps["scoped"], value["revokedPolicyHash"])),
         "npm example publication/revocation mutation inventory differs")
-    for key, length, hash_count in (("durableAuditEventIds", 31, 20), ("auditAttemptIds", 10, 10)):
+    for key, length, hash_count in (("durableAuditEventIds", 63, 50), ("auditAttemptIds", 25, 25)):
         rows = value[key]
         require(type(rows) is list and len(rows) == length and all(type(v) is str and (UUID.fullmatch(v) or SHA256.fullmatch(v)) for v in rows)
             and len(set(rows)) == length and sum(bool(SHA256.fullmatch(v)) for v in rows) == hash_count,
             "npm example durable audit identity inventory differs")
     counts = value["namedAuditInventory"]
-    expected = {START: 10, RELEASE: 10, DENIED: 6, CONNECT_DENIED: 8, RELOAD: 1, "operator_catalog.application.revoked": 1}
+    expected = {START: 25, RELEASE: 25, DENIED: 6, CONNECT_DENIED: 8, RELOAD: 1, "operator_catalog.application.revoked": 1}
+    reused = value["reusedTunnelRequestUnits"]
     require(type(counts) is dict and set(counts) in (set(expected) | {CONNECT, LEASE}, set(expected) | {CONNECT, LEASE, KEEP_ALIVE})
         and all(type(v) is int for v in counts.values()) and all(counts[k] == v for k, v in expected.items())
-        and 1 <= counts[LEASE] <= 128 and 0 <= counts.get(KEEP_ALIVE, 0) <= 5
+        and 1 <= counts[LEASE] <= 128 and type(reused) is int and 0 <= counts.get(KEEP_ALIVE, 0) <= reused <= 16
+        and reused <= 4 * counts.get(KEEP_ALIVE, 0)
         and sum(len(row["localConcurrentLeaseEventIds"]) for row in phases) <= counts[LEASE]
-        and counts[CONNECT] + counts.get(KEEP_ALIVE, 0) == 17, "npm example final named audit inventory differs")
+        and counts[CONNECT] + reused == 32, "npm example final named audit inventory differs")
     return True
 
 

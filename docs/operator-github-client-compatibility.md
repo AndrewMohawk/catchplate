@@ -148,7 +148,7 @@ and one live-branch port guard-placement error were corrected before the final
 successful runs. Test sources are under `scripts/test_github_app*.py` and
 `scripts/test_operator_*github*.{py,cjs,mjs}`.
 
-The ordinary demo now runs immutable source
+The running Serverware instance currently uses immutable source
 `bf33afce290aba279033c4c1f78c486312516632`, deployed through the canonical workspace's
 retained five-layer Compose configuration. Only the app source mount changed;
 the accepted Rust binary remains
@@ -166,10 +166,13 @@ completion, a saved real App or provider contact.
 
 Private rollout receipts and preserved state live under
 `serverware-operator-workspace-evidence/github-app-connection.Jenpesvt/`.
-Real GitHub authentication, a real repository operation and a new App-through-Rust
-SDK run remain unverified. The public proxy's outstanding DNS decision was not
-changed by this feature. Historical SDK checkpoints below used a static-token
-fixture and do not prove the new App lifecycle.
+Real GitHub authentication and a real repository operation remain unverified.
+A fresh [App-through-Rust SDK run](operator-github-app-verification.md) passed
+at main `fa49e872`: Node/Python/Go reads across genuine expiry/renewal, all nine
+scope/revocation denials, twelve distinct request/release audit pairs and clean
+shutdown. That isolated synthetic-provider check did not change the running
+instance or resolve the public proxy's outstanding DNS decision. Historical
+SDK checkpoints below used a static-token fixture and remain separate evidence.
 
 ## Checked-in Node, Python and Go examples
 

@@ -71,7 +71,7 @@ depends on the deployment's advertised capabilities and approved destinations.
 
 | Job | Current operator-workspace boundary |
 | --- | --- |
-| Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Node/Python/Go proxy fixtures passed with static/PAT credentials; the new App-through-Rust SDK run and real GitHub acceptance remain open. [Contract](docs/operator-github-client-compatibility.md). |
+| Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Isolated Node/Python/Go App-through-Rust reads passed across token renewal, scope denials and revocation. Real GitHub acceptance remains open. [Contract](docs/operator-github-client-compatibility.md). |
 | Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. Historical Go proxy acceptance does not cover the upgraded Go graph or new Node/Python examples, whose joined acceptance remains pending. |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
 | Publish an npm package | Named-package publishing preset and downloadable stock npm example; historical isolated cases passed. The upgraded npm 11.20.0 graph still needs joined proxy verification. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |

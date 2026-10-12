@@ -13,25 +13,27 @@ import argparse
 from collections import Counter
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import ssl
 import stat
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 import uuid
 
 try:
-    from scripts.check_operator_catalog import COLLECTIONS, OperatorCatalogCheck, features
+    from scripts.check_operator_catalog import COLLECTIONS, PREFIX, OperatorCatalogCheck, features
     from scripts.check_operator_demo import AUTHORITY, SHA256, CheckFailure, TunnelTLS, require, token_file
     from scripts.check_operator_ordinary_client import (
         BLOCK, CONNECT, DENIED, DRAIN_COUNTERS, ERRORS, LEASE, RELEASE, START, ZERO_COUNTERS,
         RESPONSE_MODES, V2_RESPONSE_MODE,
     )
 except ModuleNotFoundError:
-    from check_operator_catalog import COLLECTIONS, OperatorCatalogCheck, features
+    from check_operator_catalog import COLLECTIONS, PREFIX, OperatorCatalogCheck, features
     from check_operator_demo import AUTHORITY, SHA256, CheckFailure, TunnelTLS, require, token_file
     from check_operator_ordinary_client import (
         BLOCK, CONNECT, DENIED, DRAIN_COUNTERS, ERRORS, LEASE, RELEASE, START, ZERO_COUNTERS,
@@ -54,6 +56,41 @@ CREATIONS = (("/credentials", "credentials", "credential"),
 
 def sha(body):
     return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def parse_expected_upstreams(raw):
+    """Select catalog metadata only; the sole request target remains /echo."""
+    synthetic = "https://" + AUTHORITY
+    if raw is None:
+        return [synthetic]
+    message = "expected upstreams require unique canonical HTTPS origins including the synthetic fixture"
+    require(type(raw) is str and 1 <= len(raw) <= 32768, message)
+    try:
+        origins = json.loads(raw)
+        require(type(origins) is list and 1 <= len(origins) <= 16, message)
+        for value in origins:
+            require(type(value) is str and 1 <= len(value) <= 2048
+                    and all(33 <= ord(character) <= 126 for character in value), message)
+            if value == synthetic:
+                continue
+            parsed = urlsplit(value)
+            host = parsed.hostname or ""
+            require(parsed.scheme == "https" and parsed.username is None and parsed.password is None
+                    and parsed.port is None and not any((parsed.path, parsed.query, parsed.fragment))
+                    and value == "https://" + host and "." in host and len(host) <= 253
+                    and not host.endswith((".localhost", ".local", ".internal", ".invalid", ".test"))
+                    and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                            for label in host.split(".")), message)
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pass
+            else:
+                raise CheckFailure(message)
+        require(len(set(origins)) == len(origins) and synthetic in origins, message)
+        return origins
+    except (ValueError, TypeError, RecursionError):
+        raise CheckFailure(message) from None
 
 
 def private_output(path, payload):
@@ -261,6 +298,7 @@ class LiveSmoke(OperatorCatalogCheck):
         return OperatorCatalogCheck._optional_ca(path, endpoint)
 
     def __init__(self, args):
+        self.expected_upstreams = parse_expected_upstreams(getattr(args, "expected_upstreams", None))
         super().__init__(args)
         self.run_id = "serverware-live-smoke-" + uuid.uuid4().hex
         self.plans = [{"route": route, "collection": collection, "name": self.run_id + "-" + kind,
@@ -268,6 +306,24 @@ class LiveSmoke(OperatorCatalogCheck):
         self.additions = {key: [] for key in COLLECTIONS}
         self.negative_observations, self.feature_observations = [], []
         self.token_retained = False
+
+    def catalog(self):
+        # Keep the shared isolated-fixture checker synthetic-only. This live
+        # checker changes only its exact, independently selected origin roster.
+        snapshot = self.control_json(PREFIX + "/catalog", authenticated=True)
+        require(isinstance(snapshot, dict) and snapshot.get("schema") == "serverware.operatorCatalog/v1"
+                and snapshot.get("mode") == "operator-development"
+                and snapshot.get("productionReady") is False and snapshot.get("hardwareVerified") is False
+                and snapshot.get("allowed_upstreams") == self.expected_upstreams
+                and type(snapshot.get("revision")) is int and snapshot["revision"] >= 1
+                and all(isinstance(snapshot.get(key), list) for key in COLLECTIONS),
+                "target is not the explicitly selected operator catalog")
+        policy = snapshot.get("policy", {})
+        require(isinstance(policy.get("policy_hash"), str) and SHA256.fullmatch(policy["policy_hash"])
+                and type(policy.get("sequence")) is int and policy["sequence"] > 0,
+                "catalog signed policy metadata is invalid")
+        self.snapshot = snapshot
+        return snapshot
 
     def submit_mutation(self, before, route, payload, **kwargs):
         plan = next((item for item in self.plans if item["route"] == route), None)
@@ -439,6 +495,7 @@ def run_checks(args):
         require(isinstance(pin, str) and SHA256.fullmatch(pin), "explicit expected binary SHA256 required")
         require(args.execute is True and type(args.timeout_seconds) is int and 10 <= args.timeout_seconds <= 120,
                 "explicit live execution and bounded timeout required")
+        parse_expected_upstreams(getattr(args, "expected_upstreams", None))
         require(args.run_claim_file.name == ".operator-live-smoke.claim", "live smoke claim filename differs")
         args.control_base, args.management_base = "http://172.16.249.19:3000", "http://172.16.249.20:9091"
         args.proxy_url, args.operator_origin, args.upstream_address = PROXY, "https://serverware-demo.example.com", "172.16.249.18"
@@ -462,6 +519,8 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-binary-sha256", required=True,
         help="Independently selected binary digest, formatted sha256:<64 lowercase hex>")
+    parser.add_argument("--expected-upstreams",
+        help="Exact ordered JSON array of canonical HTTPS origins; defaults to the synthetic fixture only")
     parser.add_argument("--timeout-seconds", type=int, default=120)
     args = parser.parse_args()
     def expired(_signum, _frame):

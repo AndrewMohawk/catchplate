@@ -201,7 +201,7 @@ def install_requests(phase):
 
 def headers(spec, method, mode=None, package=None, version=None):
     if spec["case"] in INSTALL_PHASES:
-        value = {"host": "registry.npmjs.org", "accept": CORGI if mode == "metadata" else "*/*",
+        value = {"host": "registry.npmjs.org", "accept": "application/json" if mode == "metadata" else "*/*",
             "user-agent": "npm/11.8.0 node/v25.5.0 linux x64 workspaces/false",
             "npm-command": spec["operation"], "npm-auth-type": "web"}
         if mode == "audit":
@@ -288,7 +288,7 @@ def observation(completed=PHASES):
         elif method == "GET":
             response = encode(packument(package, stored))
             operation = {"operation": "npm.install.metadata.read" if mode else "npm.metadata.read", "package": package}
-            content_type = "application/json" if spec["operation"] == "view" else "application/vnd.npm.install-v1+json"
+            content_type = "application/json" if mode == "metadata" or spec["operation"] == "view" else "application/vnd.npm.install-v1+json"
         else:
             record = stored_record(spec); stored.append(record)
             blob = archive(spec)
@@ -542,6 +542,44 @@ class NpmExampleCheckerTests(unittest.TestCase):
             with self.assertRaises(checker.CheckFailure):
                 checker.client_environment(spec_for("install_published"), uid(2), "a" * 43, project=project, output=output)
 
+    def test_install_process_guard_requires_exact_exit_and_redacted_summary(self):
+        for phase in INSTALL_PHASES:
+            spec = spec_for(phase); directory = installation(spec)["directory"]
+            raw = encode(summary(spec)) + b"\n"
+            code, out, err = (0, raw, b"") if spec["success"] else (1, b"", raw)
+            checker.validate_installation_process(spec, code, out, err, directory)
+            for changed in ((True, out, err), (2, out, err), (1 - code, out, err),
+                    (code, out + b"secret-canary", err), (code, out, err + b"secret-canary"),
+                    (code, out.rstrip(), err.rstrip()), (code, b"secret-canary", b"")):
+                with self.subTest(phase=phase), self.assertRaises(checker.CheckFailure) as caught:
+                    checker.validate_installation_process(spec, *changed, directory)
+                self.assertNotIn("secret-canary", str(caught.exception))
+            if spec["success"]:
+                for change in (lambda v: v.pop("lockSha256"), lambda v: v.update(lockSha256="secret-canary"),
+                        lambda v: v.update(audited=0), lambda v: v.update(defaultAuditReportedSuccess=False),
+                        lambda v: v.update(installationDirectory=directory + "-other")):
+                    value = summary(spec); change(value)
+                    with self.assertRaises(checker.CheckFailure):
+                        checker.validate_installation_process(spec, 0, encode(value) + b"\n", b"", directory)
+
+    def test_install_full_metadata_keeps_standalone_manifest_and_publish_corgi(self):
+        document = observation()
+        for phase in ("install_published", "install_audit_negative", "manifest_unscoped", "publish_unscoped"):
+            index = next(i for i, row in enumerate(document["attempts"]) if row["case"] == phase
+                and row["operation"]["operation"] in {"npm.install.metadata.read", "npm.metadata.read"})
+            row = document["attempts"][index]; spec = spec_for(phase)
+            full = phase in INSTALL_PHASES
+            self.assertEqual(row["requestHeaders"]["accept"], "application/json" if full else CORGI)
+            self.assertEqual(row["responseContentType"], "application/json" if full else "application/vnd.npm.install-v1+json")
+            checker.validate_header_projection(row, spec)
+            changed = deepcopy(row); changed["requestHeaders"]["accept"] = CORGI if full else "application/json"
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_header_projection(changed, spec)
+            changed = deepcopy(document)
+            changed["attempts"][index]["responseContentType"] = "application/vnd.npm.install-v1+json" if full else "application/json"
+            with self.assertRaises(checker.CheckFailure):
+                checker.validate_observations(changed, PHASES, phase_scopes(), CREDENTIAL)
+
     def test_independent_canonical_v2_metadata_and_framed_publication(self):
         document = observation(); wire = expected_wire(document)
         self.assertEqual([row["method"] for row in wire].count("GET"), 19)
@@ -792,6 +830,49 @@ class NpmExampleCheckerTests(unittest.TestCase):
         for seconds in (0, 26):
             with self.assertRaises(checker.CheckFailure):
                 checker.run_client(SPECS[0], {}, seconds)
+
+    def test_actual_launcher_checks_install_child_before_lock_readback(self):
+        class Selected:
+            def __enter__(self): self.items = {}; return self
+            def __exit__(self, *_): return False
+            def register(self, stream, _, name): self.items[stream] = name
+            def unregister(self, stream): self.items.pop(stream)
+            def get_map(self): return self.items
+            def select(self, _): return [(SimpleNamespace(fd=stream, fileobj=stream, data=name), None)
+                for stream, name in self.items.items()]
+        cases = [(phase, None) for phase in INSTALL_PHASES] + [("install_published", "exit"), ("install_published", "summary")]
+        for phase, failure in cases:
+            spec = spec_for(phase); installed = installation(spec)
+            raw = encode(summary(spec)) + b"\n"
+            code, out_bytes, err_bytes = (0, raw, b"") if spec["success"] else (1, b"", raw)
+            if failure == "exit":
+                code, out_bytes, err_bytes = 1, b"", b"secret-canary"
+            elif failure == "summary":
+                out_bytes = b"secret-canary"
+            out, err = io.BytesIO(), io.BytesIO()
+            pending = {out: [out_bytes, b""] if out_bytes else [b""], err: [err_bytes, b""] if err_bytes else [b""]}
+            child = SimpleNamespace(stdout=out, stderr=err, wait=lambda **_: code, poll=lambda: code,
+                kill=lambda: self.fail("completed inert child must not be killed"))
+            environment = {"SERVERWARE_NPM_PROJECT": "/tmp/original-project", "SERVERWARE_NPM_OUTPUT": installed["directory"]}
+            with patch.object(checker.subprocess, "Popen", return_value=child) as launch, \
+                    patch.object(checker.selectors, "DefaultSelector", Selected), \
+                    patch.object(checker.os, "read", side_effect=lambda stream, _: pending[stream].pop(0)), \
+                    patch.object(checker.time, "monotonic", return_value=10), \
+                    patch.object(checker, "project_files", return_value={"package.json": checker.project_bytes()}), \
+                    patch.object(Path, "exists", return_value=False), patch.object(Path, "is_symlink", return_value=False), \
+                    patch.object(checker, "inspect_installation", return_value=installed) as inspect:
+                if failure:
+                    with self.assertRaises(checker.CheckFailure) as caught:
+                        checker.run_client(spec, environment, 20, clean=lambda _: None)
+                    self.assertEqual(str(caught.exception), "npm installation process " +
+                        ("exit differs" if failure == "exit" else "summary differs"))
+                    self.assertNotIn("secret-canary", str(caught.exception))
+                    inspect.assert_not_called()
+                else:
+                    self.assertEqual(checker.run_client(spec, environment, 20, clean=lambda _: None), client_receipt(spec))
+                    inspect.assert_called_once()
+            self.assertEqual(launch.call_count, 1)
+            self.assertTrue(out.closed and err.closed)
 
     def test_local_refusal_allows_only_explicit_validated_concurrent_lease_delta(self):
         instance, rows = runtime_fixture()

@@ -194,7 +194,9 @@ def install_headers(fields, spec, mode, package, version, length):
         require(length == 0 and headers.get("pacote-version") == "21.0.4"
             and headers.get("cache-control") in {None, "no-cache"})
         if mode == "metadata":
-            require(headers.get("accept") == CORGI and headers.get("pacote-req-type") == "packument"
+            # npm 11.8.0's Arborist #fetchManifest forces fullMetadata:true;
+            # this differs from the standalone pacote/publish corgi requests.
+            require(headers.get("accept") == FULL and headers.get("pacote-req-type") == "packument"
                 and headers.get("pacote-pkg-id") == "registry:" + package and "pacote-integrity" not in headers)
         else:
             payload = tarball(spec_for("publish_dependency" if package == PACKAGES[0] else "publish_scoped"))
@@ -345,7 +347,7 @@ class Handler(publish.Handler):
                 operation = {"operation": "npm.install.tarball.read", "package": package, "version": version}
             elif method == "GET":
                 status = 200
-                content_type = FULL if spec["operation"] == "view" else "application/vnd.npm.install-v1+json"
+                content_type = FULL if mode == "metadata" or spec["operation"] == "view" else "application/vnd.npm.install-v1+json"
                 response = encoded(packument(package, self.server.stored))
                 operation = {"operation": "npm.install.metadata.read" if mode else "npm.metadata.read", "package": package}
             else:

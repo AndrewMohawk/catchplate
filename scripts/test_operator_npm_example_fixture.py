@@ -180,7 +180,7 @@ def compressed(raw):
 def install_fields(case, request, length=0):
     method, pathname, mode, package, version = request
     result = [("host", "registry.npmjs.org"), ("authorization", "Bearer " + registry.TOKEN),
-        ("accept", CORGI if mode == "metadata" else "*/*"), ("connection", "close"),
+        ("accept", FULL if mode == "metadata" else "*/*"), ("connection", "close"),
         ("content-length", str(length)), ("npm-auth-type", "web"),
         ("npm-command", SPECS[case]["operation"]),
         ("user-agent", "npm/11.8.0 node/v25.5.0 linux x64 workspaces/false")]
@@ -290,7 +290,7 @@ class NpmExampleFixtureTests(unittest.TestCase):
         method, pathname, mode, package, version = request
         body = compressed(encoded(AUDIT_DOCUMENT)) if mode == "audit" else b""
         self.assertEqual(status, 400 if case == "install_audit_negative" and mode == "audit" else 200)
-        self.assertEqual(media, {"metadata": VENDOR, "tarball": "application/octet-stream", "audit": FULL}[mode])
+        self.assertEqual(media, {"metadata": FULL, "tarball": "application/octet-stream", "audit": FULL}[mode])
         row = state.attempts[-1]
         self.assertEqual(set(row), ROW_KEYS)
         self.assertEqual((row["ordinal"], row["case"], row["method"], row["rawTarget"]),
@@ -384,6 +384,26 @@ class NpmExampleFixtureTests(unittest.TestCase):
             for candidate in mutations:
                 with self.subTest(case=case, method=method), self.assertRaises(ValueError):
                     registry.validate_headers(candidate, spec, method, length)
+
+    def test_install_metadata_uses_stock_full_json_and_refuses_corgi(self):
+        # npm's bundled Arborist requests full metadata for its dependency
+        # graph. Standalone pacote/publish profiles remain covered separately.
+        for case, start in (("install_published", 11), ("install_audit_negative", 19)):
+            for request in INSTALL_ROWS[:2]:
+                with self.subTest(case=case, package=request[3]):
+                    original = install_fields(case, request)
+                    self.assertEqual(dict(original)["accept"], "application/json")
+                    state = SimpleNamespace(total=start, attempts=[], stored=[])
+                    status, raw, media = install_receive(state, case, request, headers=original)
+                    self.assertEqual((status, media), (200, "application/json"))
+                    self.assertEqual(json.loads(raw)["name"], request[3])
+                    self.assertEqual(state.attempts[-1]["requestHeaders"]["accept"], "application/json")
+                    self.assertEqual(state.attempts[-1]["responseContentType"], "application/json")
+                    refused = SimpleNamespace(total=start, attempts=[], stored=[])
+                    self.assertEqual(install_receive(refused, case, request,
+                        headers=changed(original, "accept", CORGI))[:2], (400, REFUSAL))
+                    self.assertEqual(refused.attempts, [{"ordinal": start + 1, "accepted": False}])
+                    self.assertEqual(refused.stored, [])
 
     def test_tarballs_are_exact_deterministic_inert_bytes(self):
         for spec in SPECS.values():
@@ -687,7 +707,8 @@ class NpmExampleFixtureTests(unittest.TestCase):
             original = install_fields("install_published", request, len(body))
             for name, value in (("authorization", "Bearer " + registry.PLACEHOLDER),
                     ("authorization", "Bearer private-canary"), ("host", "elsewhere.invalid"),
-                    ("npm-command", "ci"), ("accept", FULL), ("content-length", str(len(body) + 1))):
+                    ("npm-command", "ci"), ("accept", CORGI if request[2] == "metadata" else FULL),
+                    ("content-length", str(len(body) + 1))):
                 state = SimpleNamespace(total=11, attempts=[], stored=deepcopy(completed.stored))
                 self.assertEqual(install_receive(state, "install_published", request,
                     headers=changed(original, name, value))[:2], (400, REFUSAL))

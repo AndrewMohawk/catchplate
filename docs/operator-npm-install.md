@@ -67,10 +67,17 @@ are preserved. The stopped database, read with its WAL, shows a five-second
 secret issued while the older generation had less than one second remaining.
 Preparation must reserve the secret-fetch budget before acquiring that secret;
 an already-fresh cached pair still needs no acquisition. The corrected path
-must retain the original deadline and exact generation pin, without retrying
-the provider request or extending any issued lease. Compiled regression and
-stock-npm acceptance of this remaining repair are still required. The ordinary
-live app is unchanged by these source commits.
+retains the original deadline and exact generation pin, without retrying
+the provider request or extending any issued lease. The corrected Rust path
+passed all 128 selected regressions. Its stock-npm run
+(`npm-install-acceptance.SFxf8yI5`) completed all three publications, then stopped
+at the first installation metadata request: the synthetic registry incorrectly
+required abbreviated metadata while pinned npm's Arborist requests full JSON.
+This was an upstream fixture 400, not another credential-preparation failure.
+The fixture/checker correction keeps standalone pacote metadata unchanged and
+reuses the verified Rust binary because no compilation input changes. Full
+stock-npm acceptance is still required. The ordinary live app is unchanged by
+these source commits.
 Public proxy DNS repair and real npm
 account entitlement remain separate unverified requirements. No pilot is needed
 to open or use the persistent operator app.

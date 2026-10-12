@@ -97,6 +97,32 @@ def validate_client_result(spec, code, out, err, *, installation=None):
         **({"installation": installation} if installation is not None else {})}
 
 
+def validate_installation_process(spec, code, out, err, directory):
+    """Refuse failed/malformed children before reading a possibly absent lock.
+
+    This is only a process-result guard. The claimed lock digest is still
+    independently checked against actual files by the unchanged readback.
+    """
+    require(spec in fixture.SPECS and spec["case"] in fixture.INSTALL_CASES
+        and type(code) is int and type(out) is bytes and type(err) is bytes
+        and len(out) <= 4096 and len(err) <= 4096 and type(directory) is str,
+        "npm installation process result differs")
+    require(code == (0 if spec["success"] else 1), "npm installation process exit differs")
+    selected = {"directory": directory}
+    if spec["success"]:
+        require(out and err == b"", "npm installation process streams differ")
+        try:
+            value = json.loads(out)
+        except (ValueError, UnicodeError, RecursionError):
+            raise CheckFailure("npm installation process summary differs") from None
+        require(type(value) is dict and type(value.get("lockSha256")) is str and HEX.fullmatch(value["lockSha256"]),
+            "npm installation process summary differs")
+        selected["lockSha256"] = value["lockSha256"]
+    raw = json.dumps(expected_summary(spec, selected), separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+    require((out == raw and err == b"") if spec["success"] else (out == b"" and err == raw),
+        "npm installation process summary differs")
+
+
 def client_environment(spec, application, token, *, project=None, output=None):
     require(spec in fixture.SPECS and type(application) is str and UUID.fullmatch(application)
         and type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token), "npm example app identity differs")
@@ -145,7 +171,8 @@ def validate_header_projection(row, spec):
             require(headers.get("accept") == "*/*" and headers.get("content-type") == "application/json"
                 and headers.get("content-encoding") == "gzip", "npm install audit headers differ")
         elif mode == "metadata":
-            require(headers.get("accept") == fixture.CORGI and headers.get("pacote-version") == "21.0.4"
+            # Stock Arborist requests fullMetadata; standalone pacote does not.
+            require(headers.get("accept") == fixture.FULL and headers.get("pacote-version") == "21.0.4"
                 and headers.get("pacote-req-type") == "packument" and headers.get("pacote-pkg-id") == "registry:" + package
                 and "pacote-integrity" not in headers, "npm install metadata headers differ")
         else:
@@ -269,7 +296,8 @@ def validate_observations(value, completed, phase_scopes, credential_id):
             operation = {"operation": "npm.install.metadata.read" if mode else "npm.metadata.read", "package": package}
             require(type(row["requestBodyBytes"]) is int and row["requestBodyBytes"] == 0
                 and row["requestBodySha256"] == digest(b"") and row["status"] == 200
-                and row["responseContentType"] == (fixture.FULL if spec["operation"] == "view" else "application/vnd.npm.install-v1+json"),
+                and row["responseContentType"] == (fixture.FULL if mode == "metadata" or spec["operation"] == "view"
+                    else "application/vnd.npm.install-v1+json"),
                 "npm example complete metadata response differs")
         else:
             record = stored_record(spec); stored.append(record)
@@ -489,6 +517,9 @@ def run_client(spec, environment, seconds, *, clean=None):
                         output[key.data].extend(chunk)
                         require(len(output[key.data]) <= 4096, "npm example process output exceeds bound")
         code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        if source is not None:
+            validate_installation_process(spec, code, bytes(output["out"]), bytes(output["err"]),
+                environment["SERVERWARE_NPM_OUTPUT"])
         installation = (inspect_installation(spec, Path(environment["SERVERWARE_NPM_OUTPUT"]), source, before, clean)
             if source is not None else None)
         return validate_client_result(spec, code, bytes(output["out"]), bytes(output["err"]), installation=installation)

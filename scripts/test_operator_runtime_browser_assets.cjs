@@ -74,7 +74,8 @@ function fixture(overrides = {}) {
             return overrides[name];
           }
           return fs.readFileSync(filename, encoding);
-        }, realpathSync: forbidden, mkdirSync: forbidden, writeFileSync: forbidden};
+        }, realpathSync: overrides.realpathSync || forbidden, lstatSync: overrides.lstatSync || forbidden,
+        mkdirSync: forbidden, writeFileSync: forbidden};
       if (name === 'node:child_process') return {execFile: forbidden};
       if (name.endsWith('/lib/node_modules/playwright')) return {chromium: {launch: forbidden}};
       throw new Error('unexpected checker dependency');
@@ -466,7 +467,7 @@ const tests = [
     const f = fixture(), base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
     const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
     assert.deepEqual(parse(base), {appId: base[0], commit: base[1], output: base[2], managedGoogle: false,
-      expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: PUBLIC});
+      expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: PUBLIC, sourceDirectory: null});
     assert.equal(parse([...base, '--managed-google-unconfigured']).managedGoogle, true);
     for (const origins of UPSTREAM_LISTS) {
       const result = parse([...base, '--expected-catalog-revision', '39', '--expected-upstreams', JSON.stringify(origins),
@@ -486,6 +487,71 @@ const tests = [
       ['--expected-catalog-revision', '39', '--expected-catalog-revision', '40']])
       assert.throws(() => parse([...base, ...suffix]));
     assert.equal(f.context.fixtureRequests.length, 0);
+  }],
+  ['snapshot directory option is explicit and retains the historical default', () => {
+    const probes = [], f = fixture({realpathSync(value) { probes.push(['realpath', value]); return value; },
+      lstatSync(value) { probes.push(['lstat', value]); return {isDirectory: () => true}; }});
+    const base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
+    const selected = '/mnt/immutable/source-' + base[1];
+    const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
+    assert.equal(parse(base).sourceDirectory, null);
+    f.context.fixtureCommit = base[1];
+    assert.equal(f.run('sourceDirectory(fixtureCommit)'),
+      path.join(path.dirname(ROOT), 'serverware-operator-artifacts/source-' + base[1]));
+    const all = [...base, '--managed-google-unconfigured', '--expected-upstreams', JSON.stringify(UPSTREAM_LISTS[2]),
+      '--expected-catalog-revision', '39', '--canonical-origin', '--source-directory', selected];
+    assert.equal(parse(all).sourceDirectory, selected);
+    assert.equal(f.run('sourceDirectory(parseRuntimeOptions(args).commit, parseRuntimeOptions(args).sourceDirectory)'), selected);
+    assert.deepEqual(probes.slice(-2), [['realpath', selected], ['lstat', selected]]);
+    for (const suffix of [['--source-directory'], ['--source-directory', selected, '--source-directory', selected],
+      ['--source-directory=' + selected], ['--source-directory', 'x'.repeat(4097)]])
+      assert.throws(() => parse([...base, ...suffix]));
+    assert.equal(f.context.fixtureRequests.length, 0);
+  }],
+  ['snapshot directory refuses aliases symlinks non-directories and wrong commit names', () => {
+    const commit = 'b'.repeat(40), exact = '/mnt/immutable/source-' + commit;
+    for (const invalid of ['', 'source-' + commit, '/mnt/immutable/source-' + 'c'.repeat(40),
+      exact + '/', '/mnt/immutable/./source-' + commit, '/mnt/other/../immutable/source-' + commit, '/', true]) {
+      const f = fixture(); f.context.fixtureCommit = commit; f.context.fixtureDirectory = invalid;
+      assert.throws(() => f.run('sourceDirectory(fixtureCommit, fixtureDirectory)'),
+        error => error.message === 'source_directory_not_exact');
+    }
+    for (const filesystem of [
+      {realpathSync: () => '/mnt/other/source-' + commit, lstatSync: () => ({isDirectory: () => true})},
+      {realpathSync: value => value, lstatSync: () => ({isDirectory: () => false})},
+      {realpathSync() { throw new Error('synthetic missing path'); }}]) {
+      const f = fixture(filesystem); f.context.fixtureCommit = commit; f.context.fixtureDirectory = exact;
+      assert.throws(() => f.run('sourceDirectory(fixtureCommit, fixtureDirectory)'));
+    }
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['identity forwards the exact snapshot path and still binds mount host and container proofs', async () => {
+    const selected = '/mnt/immutable/source-' + 'b'.repeat(40), app = 'a'.repeat(64), digest = 'd'.repeat(64);
+    for (const mismatch of [null, 'mount', 'host', 'container']) {
+      const f = fixture();
+      f.context.fixtureSource = selected; f.context.fixtureApp = app; f.context.fixtureCommit = 'b'.repeat(40);
+      f.context.fixtureCalls = [];
+      f.context.fixtureInspect = {id: app, running: true, health: 'healthy', project: 'serverware-operator-demo',
+        service: 'serverware', mounts: [{source: mismatch === 'mount' ? selected + '-wrong' : selected, rw: false, type: 'bind'}]};
+      f.context.fixtureVerified = {ok: true, commit: 'b'.repeat(40), source: mismatch === 'host' ? selected + '-wrong' : selected,
+        git_blob_equality: true, world_readable_and_nonwritable: true, manifest_sha256: digest, files: 2};
+      f.context.fixtureReply = {ok: true, manifest_sha256: mismatch === 'container' ? 'e'.repeat(64) : digest, files: 2};
+      f.run(`source = fixtureSource; appId = fixtureApp; commit = fixtureCommit;
+        command = async (binary, args, input, timeout) => {
+          fixtureCalls.push({binary, args, input, timeout});
+          return JSON.stringify(binary === '/usr/bin/docker' ? fixtureInspect : fixtureVerified);
+        };`);
+      if (mismatch === null) await f.run('identity()');
+      else await assert.rejects(f.run('identity()'), error => error.message === {
+        mount: 'runtime_identity_mismatch', host: 'host_source_mismatch', container: 'container_source_mismatch'}[mismatch]);
+      const calls = JSON.parse(f.run('JSON.stringify(fixtureCalls)'));
+      assert.equal(calls.length, mismatch === 'mount' ? 1 : 2);
+      if (mismatch !== 'mount') assert.deepEqual(calls[1], {binary: '/usr/bin/python3', args: ['-I', '-B',
+        path.join(__dirname, 'verify_operator_source_snapshot.py'), '--commit', 'b'.repeat(40), '--source-directory', selected],
+        input: '', timeout: 40000});
+      assert.equal(f.context.fixtureRequests.length, ['mount', 'host'].includes(mismatch) ? 0 : 1);
+    }
+    assert.equal(forbiddenCalls, 0);
   }],
   ['canonical origin is a closed explicit opt-in with unchanged paths and renderer proof', () => {
     const canonical = 'https://serverware.example.com', base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];

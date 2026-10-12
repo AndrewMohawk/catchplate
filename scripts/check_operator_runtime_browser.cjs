@@ -4,8 +4,9 @@
 // provider, proxy, CA, notification delivery, restart or mutation acceptance.
 // Usage: node scripts/check_operator_runtime_browser.cjs FULL_APP_ID SOURCE_COMMIT FRESH_OUTPUT_DIRECTORY
 //   [--managed-google-unconfigured] [--expected-upstreams JSON_ARRAY] [--expected-catalog-revision INTEGER] [--canonical-origin]
-const {readFileSync, realpathSync, mkdirSync, writeFileSync} = require('node:fs');
-const {join, dirname, resolve, isAbsolute} = require('node:path');
+//   [--source-directory FULL_IMMUTABLE_SNAPSHOT]
+const {readFileSync, realpathSync, lstatSync, mkdirSync, writeFileSync} = require('node:fs');
+const {join, dirname, basename, resolve, isAbsolute} = require('node:path');
 const {createHash} = require('node:crypto');
 const {execFile} = require('node:child_process');
 const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
@@ -43,22 +44,23 @@ const children = new Set(), before = {}, seen = {};
 const receipt = {schema: 'serverware.operatorRuntimeReadonlyBrowser/v1', ok: false, gets: [], screenshots: [], refused_requests: 0,
   page_errors: 0, console_errors: 0, boundary: 'Actual internal app HTML/APIs only. No external SSO, provider, proxy, CA, delivery or mutation acceptance.'};
 function parseRuntimeOptions(args) {
-  need(Array.isArray(args) && args.length >= 3 && args.length <= 9 && args.every(value => typeof value === 'string'),
+  need(Array.isArray(args) && args.length >= 3 && args.length <= 11 && args.every(value => typeof value === 'string'),
     'usage_full_app_id_commit_fresh_output');
   const selected = {appId: args[0], commit: args[1], output: args[2], managedGoogle: false,
-    expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: LEGACY_PUBLIC};
+    expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: LEGACY_PUBLIC, sourceDirectory: null};
   const used = new Set();
   for (let index = 3; index < args.length; index++) {
     const flag = args[index];
-    need(['--managed-google-unconfigured', '--expected-upstreams', '--expected-catalog-revision', '--canonical-origin'].includes(flag) && !used.has(flag),
+    need(['--managed-google-unconfigured', '--expected-upstreams', '--expected-catalog-revision', '--canonical-origin', '--source-directory'].includes(flag) && !used.has(flag),
       'runtime_option_refused');
     used.add(flag);
     if (flag === '--managed-google-unconfigured') selected.managedGoogle = true;
     else if (flag === '--canonical-origin') selected.publicOrigin = CANONICAL_PUBLIC;
     else {
       const value = args[++index];
-      need(typeof value === 'string' && value.length <= 1024, 'runtime_option_value_refused');
-      if (flag === '--expected-upstreams') {
+      need(typeof value === 'string' && value.length <= (flag === '--source-directory' ? 4096 : 1024), 'runtime_option_value_refused');
+      if (flag === '--source-directory') selected.sourceDirectory = value;
+      else if (flag === '--expected-upstreams') {
         let origins;
         try { origins = JSON.parse(value); } catch (_) { throw new Refusal('expected_upstreams_refused'); }
         need(REVIEWED_UPSTREAMS.some(reviewed => serial(origins) === serial(reviewed)), 'expected_upstreams_refused');
@@ -70,6 +72,14 @@ function parseRuntimeOptions(args) {
     }
   }
   return selected;
+}
+function sourceDirectory(commit, explicit = null) {
+  const directory = explicit === null ? join(dirname(ROOT), 'serverware-operator-artifacts/source-' + commit) : explicit;
+  need(/^[0-9a-f]{40}$/.test(commit) && typeof directory === 'string' && directory.length <= 4096 &&
+    isAbsolute(directory) && resolve(directory) === directory && basename(directory) === 'source-' + commit,
+    'source_directory_not_exact');
+  need(realpathSync(directory) === directory && lstatSync(directory).isDirectory(), 'source_directory_not_exact');
+  return directory;
 }
 const expectedGoogleRevision = () => expectedRevision === null ? 13 : expectedRevision;
 const expectedGoogleOrigins = () => expectedUpstreams.includes(GMAIL) ? [...expectedUpstreams] : [...expectedUpstreams, GMAIL];
@@ -131,7 +141,8 @@ async function identity() {
   const actual = JSON.parse(await command('/usr/bin/docker', ['inspect', '--format', format, appId]));
   need(actual.id === appId && actual.running === true && actual.health === 'healthy' && actual.project === 'serverware-operator-demo' &&
     actual.service === 'serverware' && serial(actual.mounts) === serial([{source, rw: false, type: 'bind'}]), 'runtime_identity_mismatch');
-  const verified = JSON.parse(await command('/usr/bin/python3', ['-I', '-B', join(__dirname, 'verify_operator_source_snapshot.py'), '--commit', commit], '', 40000));
+  const verified = JSON.parse(await command('/usr/bin/python3', ['-I', '-B', join(__dirname, 'verify_operator_source_snapshot.py'), '--commit', commit,
+    '--source-directory', source], '', 40000));
   need(verified.ok === true && verified.commit === commit && verified.source === source && verified.git_blob_equality === true &&
     verified.world_readable_and_nonwritable === true && /^[0-9a-f]{64}$/.test(verified.manifest_sha256), 'host_source_mismatch');
   if (manifest) need(serial(verified) === serial(manifest), 'host_source_changed'); else manifest = verified;
@@ -293,8 +304,7 @@ async function run() {
   ({appId, commit, output, managedGoogle, expectedUpstreams, expectedRevision} = selected);
   need(/^[0-9a-f]{64}$/.test(appId) && /^[0-9a-f]{40}$/.test(commit) && isAbsolute(output) && resolve(output) === output &&
     realpathSync(dirname(output)) === dirname(output), 'exact_parameters_required');
-  source = join(dirname(ROOT), 'serverware-operator-artifacts/source-' + commit);
-  need(realpathSync(source) === source, 'source_directory_not_exact');
+  source = sourceDirectory(commit, selected.sourceDirectory);
   bridgeCode = readFileSync(join(__dirname, 'operator_runtime_readonly_bridge.py'), 'utf8');
   mkdirSync(output, {mode: 0o700}); claimed = true; // A used directory can never be replayed.
   receipt.app_container_id = appId; receipt.source_commit = commit; receipt.started_at = new Date().toISOString();

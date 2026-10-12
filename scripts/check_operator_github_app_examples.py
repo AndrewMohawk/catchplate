@@ -126,6 +126,21 @@ def match_pairs(rows, wire, scope, credential_id):
     return complete if len(complete) == len(wire) and not any(expected.values()) else None
 
 
+def validate_revoked_credential(before, after):
+    """Only the sole grant's derived count changes; custody stays identical."""
+    require(type(before) is dict and type(after) is dict
+        and type(before.get("active_rule_count")) is int and before["active_rule_count"] == 1
+        and type(after.get("active_rule_count")) is int and after["active_rule_count"] == 0
+        and type(before.get("credential_generation")) is int and before["credential_generation"] == 1
+        and type(after.get("credential_generation")) is int and after["credential_generation"] == 1,
+        "App credential generation or revoked grant count differs")
+    expected = {**before, "active_rule_count": 0}
+    # JSON equality also distinguishes bool/int/float substitutions, retaining
+    # all current and future public fields rather than a selected subset.
+    require(json.dumps(after, sort_keys=True) == json.dumps(expected, sort_keys=True),
+        "App credential changed during rule revocation")
+
+
 class AppExamplesCheck(stock.ExamplesCheck):
     def __init__(self, args):
         self.app_pem = None
@@ -232,8 +247,10 @@ class AppExamplesCheck(stock.ExamplesCheck):
                 require(event.get("target") == "api.github.com:443" and event.get("principal_id") == scope[0]
                     and event.get("policy_hash") == scope[2], "App CONNECT binding differs")
             elif kind == RELOAD:
+                # With no active grants the schema still has operator.empty:
+                # one credential-free route for a permanently expired principal.
                 require((event.get("previous_policy_hash"), event.get("policy_hash"), event.get("routes")) in {
-                    (self.initial_policy_hash, scope[2], 1), (scope[2], revoked_hash, 0)}, "App policy reload differs")
+                    (self.initial_policy_hash, scope[2], 1), (scope[2], revoked_hash, 1)}, "App policy reload differs")
         require(len(leases) >= 2 and set(self.mutations) <= {(r["event_type"], r["event"].get("resource_id"),
             r["event"].get("policy_hash")) for r in rows}, "App mutation or dispatch evidence missing")
         verified = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
@@ -296,9 +313,10 @@ class AppExamplesCheck(stock.ExamplesCheck):
             event="operator_catalog.access_rule.revoked", authority_changed=True)
         self.wait_catalog_loaded("revoked")
         revoked = self.warm_cas_snapshot()
-        require(self.resource(revoked, "access_rules", rule["id"])["status"] == "revoked"
-            and self.resource(revoked, "credentials", credential["id"]) == self.resource(pins, "credentials", credential["id"]),
-            "App credential changed during rule revocation")
+        require(self.resource(revoked, "access_rules", rule["id"])["status"] == "revoked",
+            "App rule revocation did not persist")
+        validate_revoked_credential(self.resource(pins, "credentials", credential["id"]),
+            self.resource(revoked, "credentials", credential["id"]))
         for client in fixture.examples.CLIENTS:
             self.negative(client, "revoked", application, token)
         self.current_phase = "audit"

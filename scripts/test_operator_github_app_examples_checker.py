@@ -112,6 +112,100 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(check.completed, [])
         self.assertEqual(check.current_phase, "read_initial")
 
+    def test_revocation_changes_only_exact_derived_count_not_credential_authority(self):
+        before = {"id": "credential", "name": "synthetic App", "created_at": "2026-10-12T00:00:00Z",
+            "status": "active", "revoked_at": None, "version": 1, "auth_type": "bearer",
+            "header_name": "Authorization", "active_rule_count": 1, "credential_generation": 1,
+            "connection_type": "github_app_v1", "provider_id": "github",
+            "github_app": {"app_id": "123", "installation_id": "456", "account_id": "700",
+                "repository_id": "900", "repository": {"owner": "serverware-fixture", "name": "operator-demo"},
+                "issues_permission": "read", "token_refresh": "automatic"},
+            "future_public_field": {"retained": [1, "unchanged"]}}
+        after = {**deepcopy(before), "active_rule_count": 0}
+        original = deepcopy((before, after))
+        checker.validate_revoked_credential(before, after)
+        self.assertEqual((before, after), original)
+        for side, value in (("before", 0), ("before", 2), ("before", True), ("before", 1.0),
+                ("after", 1), ("after", False), ("after", 0.0), ("after", None)):
+            left, right = deepcopy(original)
+            (left if side == "before" else right)["active_rule_count"] = value
+            with self.subTest(side=side, count=value), self.assertRaises(checker.CheckFailure):
+                checker.validate_revoked_credential(left, right)
+        for field, value in (("credential_generation", 2), ("credential_generation", True),
+                ("credential_generation", 1.0), ("id", "other"), ("status", "revoked"),
+                ("version", 2), ("version", True), ("name", "changed"), ("created_at", "changed"),
+                ("revoked_at", "changed"), ("auth_type", "header"), ("header_name", "X-Other"),
+                ("connection_type", "github_token_v1"), ("provider_id", "other"),
+                ("github_app", {**before["github_app"], "repository_id": "901"}),
+                ("github_app", {**before["github_app"], "issues_permission": "write"}),
+                ("future_public_field", {"retained": [True, "unchanged"]})):
+            changed = {**deepcopy(after), field: value}
+            with self.subTest(field=field, value=value), self.assertRaises(checker.CheckFailure):
+                checker.validate_revoked_credential(before, changed)
+        for changed in ({k: v for k, v in after.items() if k != "future_public_field"},
+                {**after, "unexpected": True}):
+            with self.assertRaises(checker.CheckFailure): checker.validate_revoked_credential(before, changed)
+
+    def test_empty_policy_retains_one_expired_sentinel_and_no_credential_or_active_grant(self):
+        from serverware import operator_demo, operator_demo_store
+        with patch.object(operator_demo, "settings", return_value={"allowed_upstreams": ["https://api.github.com"]}):
+            policy = operator_demo_store._build([], 3, "sha256:" + "a" * 64)
+        self.assertEqual(policy["credentials"], [])
+        self.assertEqual(policy["defaults"]["action"], "deny")
+        self.assertEqual(policy["defaults"]["failMode"], "closed")
+        self.assertEqual(len(policy["principals"]), 1)
+        principal = policy["principals"][0]
+        self.assertEqual(principal["id"], "agent:operator-demo:empty")
+        self.assertEqual(principal["proxyAuthorization"]["tokenId"], "empty")
+        self.assertEqual(principal["proxyAuthorization"]["expiresAtEpochMs"], 1)
+        self.assertEqual(len(policy["routes"]), 1)
+        route = policy["routes"][0]
+        self.assertEqual(route["id"], "operator.empty")
+        self.assertEqual(route["principals"], [principal["id"]])
+        self.assertEqual(route["match"]["methods"], ["GET"])
+        self.assertEqual(route["match"]["paths"], ["/__serverware_operator_demo_unconfigured__"])
+        self.assertNotIn("credentialRef", route)
+        self.assertEqual(route["adapter"]["config"]["credentialMode"], "none")
+        self.assertEqual(route["adapter"]["config"]["noCredentialProof"], {
+            "credentialRefAbsent": True, "secretInjectionDisabled": True,
+            "sensitiveHeadersForwarded": False, "authorizationForwarded": False})
+
+    def test_final_audit_accepts_only_exact_one_route_reload_and_unchanged_authority(self):
+        check = object.__new__(checker.AppExamplesCheck)
+        check.initial_policy_hash = "sha256:" + "a" * 64
+        check.args = SimpleNamespace(expected_binary_sha256="sha256:" + "b" * 64)
+        revoked_hash = "sha256:" + "9" * 64
+        rows = [row for number in range(1, 13) for row in pair(number)]
+        check.wire = [WIRE] * 12
+        check.pairs = checker.match_pairs(rows, check.wire, SCOPE, "credential")
+        check.mutations = []
+        for kind, count in ((checker.DENIED, 3), (CONNECT_DENIED, 6), (checker.CONNECT, 15)):
+            rows += [{"id": kind + str(n), "event_type": kind, "event": {
+                "target": "api.github.com:443", "principal_id": SCOPE[0], "policy_hash": SCOPE[2]}}
+                for n in range(count)]
+        rows += [{"id": "lease" + str(n), "event_type": LEASE, "event": {
+            "outcome": "issued", "status_code": 200, **dict(zip(("principal_id", "route_id", "policy_hash"), SCOPE)),
+            "credential_id": "credential", "data_plane_binary_digest": check.args.expected_binary_sha256,
+            "purpose": "dispatchSecret", "expected_credential_version": 1}} for n in range(2)]
+        rows += [{"id": "reload1", "event_type": checker.RELOAD, "event": {
+            "previous_policy_hash": check.initial_policy_hash, "policy_hash": SCOPE[2], "routes": 1}},
+            {"id": "reload2", "event_type": checker.RELOAD, "event": {
+                "previous_policy_hash": SCOPE[2], "policy_hash": revoked_hash, "routes": 1}}]
+        check.audit = Mock(return_value=rows)
+        check.control_json = Mock(return_value={"ok": True, "complete": True})
+        check.audit_drained = Mock(return_value=True)
+        with patch.object(checker.features, "audit_cutoff", side_effect=lambda value: {r["id"]: r["id"] for r in value}):
+            result = check.audit_result({}, SCOPE, {"id": "credential"}, revoked_hash)
+            self.assertEqual(len(result["auditAttemptIds"]), 12)
+            check.control_json.assert_called_once_with("/api/audit/verify?limit=1000", authenticated=True)
+            for field, value in (("routes", 0), ("routes", 2), ("policy_hash", SCOPE[2]),
+                    ("previous_policy_hash", check.initial_policy_hash)):
+                changed = deepcopy(rows)
+                changed[-1]["event"][field] = value
+                check.audit.return_value = changed
+                with self.subTest(field=field, value=value), self.assertRaises(checker.CheckFailure):
+                    check.audit_result({}, SCOPE, {"id": "credential"}, revoked_hash)
+
     def test_clean_refuses_public_observation_of_private_material(self):
         check = object.__new__(checker.AppExamplesCheck)
         check.app_pem = "-----BEGIN PRIVATE KEY-----\nsynthetic-private-key-line\n-----END PRIVATE KEY-----"

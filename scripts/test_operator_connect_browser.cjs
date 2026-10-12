@@ -181,9 +181,22 @@ const tests = [
       await ready(page); await page.locator('#overview-try-demo').click();
       await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
       assert.equal(await page.locator('[data-demo-rule-id]').count(), 0);
-      assert.match(await page.locator('#overview-demo-status').innerText(), /no.*saved|not.*configured|not.*found/i);
+      const status = await page.locator('#overview-demo-status').innerText();
+      assert.match(status, /no.*saved|not.*configured|not.*found/i);
+      assert.match(status, /made-up Bearer value, never a real provider secret/);
+      assert(status.includes(SYNTHETIC_ORIGIN + '/echo'));
+      assert(!status.includes('fixture key supplied by the deployment operator'));
+      const link = page.locator('#overview-demo-connect');
+      assert.equal(await link.getAttribute('href'), '#connect');
+      const retained = JSON.stringify([state.credentials, state.applications, state.rules]);
+      await link.click(); await step(page, 'credential');
+      assert(await page.locator('#connect-method-choice').isVisible());
+      assert(await page.locator('#connect-credential-form').isHidden());
+      assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
+      assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), retained);
       assert.equal(state.posts.length, 0);
       assert(!state.requests.some(item => item.path === '/echo' || item.path === '/ca.pem'));
+      await view(page, 'overview');
       await page.locator('#overview-try-demo').click(); assert(await page.locator('#overview-demo-panel').isHidden());
     })],
   ['expired-app grouping preserves every credential and keeps mixed, unknown and unlinked accounts primary', browser => fixture(browser,
@@ -248,6 +261,7 @@ const tests = [
       await ready(page); await page.locator('#overview-try-demo').click();
       await page.locator('#overview-demo-panel').waitFor({state: 'visible'});
       assert(await page.locator('#overview').isVisible(), 'opening a list never silently selects a client');
+      assert.equal(await page.locator('#overview-demo-connect').count(), 0, 'saved permissions keep their explicit selection path');
       assert.deepEqual((await page.locator('[data-demo-rule-id]').evaluateAll(items => items.map(item => item.dataset.demoRuleId))).sort(),
         [IDS.rule, OTHER_RULE, '88888888-8888-4888-8888-888888888888'].sort());
       const first = page.locator('[data-demo-rule-id="' + IDS.rule + '"]');
@@ -461,6 +475,21 @@ const tests = [
       assert.match(googleStatus, /Google connection is unavailable in this deployment/);
       assert.match(googleStatus, /administrator must enable the supported Google profile/);
       assert.match(googleStatus, /Do not paste Google access or refresh tokens/);
+      const retained = JSON.stringify([state.credentials, state.applications, state.rules]);
+      for (const id of ['connect-google-status', 'credential-oauth-status']) {
+        const link = page.locator('#' + id + ' [data-google-settings-link]');
+        assert.equal(await link.count(), 1); assert.equal(await link.getAttribute('href'), '#proxy');
+        assert.equal(await link.innerText(), 'Google provider settings in Proxy setup');
+      }
+      await page.locator('#connect-google-status [data-google-settings-link]').click();
+      await page.locator('#proxy').waitFor({state: 'visible'});
+      assert(await page.locator('#google-configuration-panel').isVisible());
+      assert(await page.locator('#google-configuration-form').isHidden());
+      assert(await page.locator('#google-configuration-prepare').isDisabled());
+      assert(await page.locator('#connect-google').isDisabled());
+      assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), retained);
+      await view(page, 'connect'); await step(page, 'credential');
+      assert.equal(await page.locator('#connect-google-status [data-google-settings-link]').count(), 1, 'rerender replaces the link rather than duplicating it');
       await useCredential(page); await useApplication(page); assert(await page.locator('#connect-review').isDisabled());
       assert.equal(state.posts.length, 0); assert(!state.requests.some(item => /oauth|google/.test(item.path)));
     })],

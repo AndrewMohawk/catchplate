@@ -90,9 +90,13 @@ else {
     const rules = operatorSyntheticPermissions(catalog);
     const approved = catalog?.allowed_upstreams.includes('https://demo-upstream:8443');
     element('overview-demo-status').textContent = !catalog ? 'Refresh saved state to inspect synthetic API permissions.' :
-      !rules.length ? approved ? 'No saved demo API permission exists. Use Connect an app with the fixture key supplied by the deployment operator, then explicitly allow its /echo path. This page does not create a starter connection.' :
+      !rules.length ? approved ? 'No saved demo API permission exists. Use a made-up Bearer value, never a real provider secret, then choose an application and explicitly allow https://demo-upstream:8443/echo. This page does not create a starter connection or send a request.' :
         'The synthetic API destination is not approved in this deployment. Ask the operator to configure it, or connect an approved real service.' :
         rules.length + ' saved demo API permission' + (rules.length === 1 ? '' : 's') + '. Choose one explicitly; none has been selected or tested by opening this list.';
+    if (catalog && approved && !rules.length) {
+      const link = textNode('a', 'Connect a synthetic app'); link.id = 'overview-demo-connect'; link.href = '#connect';
+      element('overview-demo-status').append(' ', link);
+    }
     renderCards('overview-demo-list', rules.map(rule => {
       const app = catalog.applications.find(item => item.id === rule.application_id);
       const credential = catalog.credentials.find(item => item.id === rule.credential_id);

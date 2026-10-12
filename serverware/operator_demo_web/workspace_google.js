@@ -98,9 +98,15 @@ function createGoogleView(workspace, applications, connect) {
       element(id).textContent = enabled ? 'Connect Google' : 'Google connection unavailable';
       element(id).disabled = !available;
     }
-    for (const id of ['connect-google-status', 'credential-oauth-status']) element(id).textContent = enabled ?
-      'Connect with Google for Read Gmail. Provider tokens stay in Serverware; apps receive a separate, scoped identity.' :
-      'Google connection is unavailable in this deployment. An administrator must enable the supported Google profile. Do not paste Google access or refresh tokens.';
+    for (const id of ['connect-google-status', 'credential-oauth-status']) {
+      element(id).textContent = enabled ?
+        'Connect with Google for Read Gmail. Provider tokens stay in Serverware; apps receive a separate, scoped identity.' :
+        'Google connection is unavailable in this deployment. An administrator must enable the supported Google profile. Do not paste Google access or refresh tokens.';
+      if (!enabled) {
+        const link = textNode('a', 'Google provider settings in Proxy setup'); link.href = '#proxy';
+        link.dataset.googleSettingsLink = ''; element(id).append(' ', link);
+      }
+    }
     element('google-consent-panel').hidden = !opened;
     element('google-start-form').hidden = attempted;
     element('google-start-fields').disabled = !available || !checked || attempted || held();

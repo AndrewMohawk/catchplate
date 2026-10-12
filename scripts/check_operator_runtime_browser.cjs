@@ -94,11 +94,15 @@ function subprocessFailure(binary, error, stdout) {
     bridge_refused: typeof stdout === 'string' && stdout.trim() === '{"ok":false,"reason":"runtime_readonly_bridge_refused"}'
   };
 }
+function commandEnvironment(binary) {
+  // Bound only the host Docker CLI's Go scheduler, not Chromium or the app.
+  return {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', ...(binary === '/usr/bin/docker' ? {GOMAXPROCS: '2'} : {})};
+}
 function command(binary, args, input = '', timeout = 25000) {
   need(!stopped, 'run_stopped');
   return new Promise((resolve, reject) => {
     const child = execFile(binary, args, {timeout, killSignal: 'SIGKILL', maxBuffer: 3 * 1024 * 1024,
-      encoding: 'utf8', env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}}, (error, stdout) => {
+      encoding: 'utf8', env: commandEnvironment(binary)}, (error, stdout) => {
       children.delete(child);
       if (error) {
         receipt.subprocess_failure = subprocessFailure(binary, error, stdout);

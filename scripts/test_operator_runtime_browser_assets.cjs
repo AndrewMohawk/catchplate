@@ -127,6 +127,18 @@ function validate(f, route, value) {
 }
 
 const tests = [
+  ['only the exact Docker CLI receives a bounded Go scheduler in its clean child environment', () => {
+    const f = fixture();
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(commandEnvironment("/usr/bin/docker"))')),
+      {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', GOMAXPROCS: '2'});
+    for (const binary of ['/usr/bin/python3', '/tmp/docker', 'docker']) {
+      f.context.binary = binary;
+      assert.deepEqual(JSON.parse(f.run('JSON.stringify(commandEnvironment(binary))')), {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'});
+    }
+    f.run('const alteredEnvironment = commandEnvironment("/usr/bin/docker"); alteredEnvironment.GOMAXPROCS = "99";');
+    assert.equal(f.run('commandEnvironment("/usr/bin/docker").GOMAXPROCS'), '2');
+    assert.equal(forbiddenCalls, 0);
+  }],
   ['subprocess failure diagnostics contain only fixed categories, never private messages or output', () => {
     const f = fixture();
     f.context.failure = {code: 'EAGAIN', signal: 'SIGKILL', killed: true,

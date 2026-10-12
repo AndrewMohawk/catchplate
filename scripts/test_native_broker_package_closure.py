@@ -6,7 +6,8 @@ only that staged serverware package. Installed third-party packages are still
 the test image's packages, but imports outside the producer's explicit three
 dependencies are refused. No interpreter/ELF/SquashFS build is performed.
 Historical evidence below is explicitly synthetic parser input, not a valid
-Nitro quote or signature. Actual rotation material uses real AESGCM.
+Nitro quote or signature. Actual rotation and JIT material use real AESGCM;
+the JIT owner receives a synthetic broker/channel, not actual FD3 custody.
 """
 import ast
 import hashlib
@@ -49,6 +50,14 @@ ADDED_MODULES = frozenset({
     "authority_static_credential_create.py", "authority_static_credential_rotate.py",
     "authority_publication_approval.py", "authority_setup_bind_credential.py",
     "authority_oauth_setup.py", "authority_oauth_activation.py", "static_credential_provenance_values.py",
+})
+JIT_MODULES = frozenset({
+    "native_jit_review_owner.py", "native_jit_review_material.py",
+    "authority_jit_private_request.py", "authority_jit_request.py",
+    "authority_approver_policy.py", "rbac.py", "authority_contract.py",
+    "authority_transition_core.py", "authority_complete_query.py",
+    "authority_index_projection.py", "authority_index_contract.py", "authority_challenge_id.py",
+    "authority_query_reads.py", "authority_query_read_work.py", "authority_request_commitment.py",
 })
 
 WORKER = r'''
@@ -101,7 +110,7 @@ def refused(call):
         return
     raise AssertionError("malformed original was accepted")
 
-checks = 0
+checks, jit_checks, jit_exercised = 0, 0, False
 if options["operation"] == "rotation":
     # Literal independent grammar fixture: there is no signature/Nitro verifier
     # substitution and no claim that these historical originals prove custody.
@@ -191,12 +200,132 @@ if options["operation"] == "rotation":
     refused(lambda: rotation.arguments(rotation.OPERATION, changed))
     checks += 1
 
+if options["operation"] in {"jit", "jit-refusals"}:
+    from unittest.mock import patch
+    from serverware import authority_contract as contract
+    from serverware import authority_jit_private_request as private
+    from serverware import authority_jit_request as jit_request
+    from serverware import native_jit_review_owner as jit
+    from serverware import native_jit_review_material as jit_material
+    assert broker.native_jit_review_owner is jit
+    C, H = jit_material.canonical, jit_material.sha256
+    B = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    raw = {"route_id": "route:synthetic", "method": "PUT", "principal_id": "agent:synthetic",
+        "credential_id": "credential:synthetic", "credential_version": 7,
+        "policy_hash": H(b"synthetic policy"), "request_digest": H(b"provider request"),
+        "operation_digest": H(b"provider operation"), "url": "https://synthetic.invalid/private-url-canary",
+        "canonical_request": {"private": "private-document-canary", "method": "PUT"},
+        "redacted_display": {"label": "private-display-canary", "unicode": "caf\u00e9"},
+        "pending_ttl_seconds": 300, "grant_ttl_seconds": 30, "grant_max_uses": 1,
+        "required_approver_roles": {"$authorityType": "set", "items": ["approver"]},
+        "allowed_approver_ids": None, "require_approver_webauthn": True, "approval_threshold": 1,
+        "approver_credential_policy": {"rpId": "synthetic.invalid", "origins": ["https://synthetic.invalid"]}}
+    envelope = private.prepare(raw)
+    public, documents = private.validate_runtime_input(envelope)
+    typed = {**public, "businessIntent": contract.synthesize_business_intent("jit.request", public)}
+    authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": "jit.request",
+        "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": typed}
+
+    def framed(domain, *frames):
+        return H(domain.encode("ascii") + b"\0" + b"".join(
+            len(frame).to_bytes(8, "big") + frame for frame in frames))
+
+    request_digest = framed("serverware.policyAuthorityV9Request/v1", C(authorization))
+    request = {**authorization, "schema": "serverware.policyAuthorityV9Request/v1",
+        "requestDigest": request_digest, "operationId": framed("serverware.policyAuthorityOperation/v2",
+            b"jit.request", request_digest.encode("ascii"))}
+    jit_request.require_public_request(request)
+
+    class Clock:
+        wall = 1_800_000_000_000_000_000
+        boot = 100_000_000_000
+        def boottime(self, kind):
+            assert kind == jit.time.CLOCK_BOOTTIME
+            return self.boot
+
+    class SyntheticChannel:
+        def __init__(self, clock):
+            self.clock, self.deadline = clock, clock.boot + 600_000_000_000
+            self.messages = []
+        def check(self, deadline=None):
+            assert self.clock.boot < min(self.deadline, deadline or self.deadline)
+        def send(self, value, deadline=None):
+            self.check(deadline)
+            self.messages.append(copy.deepcopy(value))
+
+    class SyntheticBroker:
+        # Not _Broker: no FD3, CMS, authenticated cold config or native claim.
+        def __init__(self, channel):
+            key = bytes(range(32))
+            self.channel, self.kek = channel, AESGCM(key)
+            self.commitment, self.rsa, self.service_tokens_opened = H(key), None, True
+            self.key_id = "attested-memory-kek:" + self.commitment[7:31]
+        def require_owner_configuration(self):
+            self.channel.check()
+
+    def configured():
+        clock = Clock()
+        synthetic = SyntheticBroker(SyntheticChannel(clock))
+        identity = {name: H(name.encode("ascii")) for name in jit.IDENTITY_FIELDS}
+        boot = b"b" * 32
+        identity.update(bootId=B(boot), policyHash=raw["policy_hash"])
+        identity["holderId"] = H(b"serverware/credential-currentness-holder/v1\0" + boot
+            + bytes.fromhex(identity["keyId"][7:]))
+        config = {"apiVersion": jit.CONFIG, "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
+            "controlPlaneConfigurationDigest": H(b"synthetic configuration"),
+            "deploymentId": "synthetic-offline", "instanceId": "spiffe://synthetic.invalid/native",
+            "secretKekId": synthetic.key_id, "identity": identity, "attemptCapacity": 1}
+        with patch.object(jit.time, "time_ns", lambda: clock.wall), \
+                patch.object(jit.time, "clock_gettime_ns", clock.boottime):
+            instance = jit.Owner(synthetic, {"apiVersion": jit.CHANNEL, "phase": "configure", "configuration": config})
+        command = {"apiVersion": jit.CHANNEL, "phase": "seal-pair", "runtimeInput": copy.deepcopy(envelope),
+            "publicRequest": copy.deepcopy(request), "issuedAtEpochNs": clock.wall,
+            "sealExpiresAtEpochNs": clock.wall + 20_000_000_000,
+            "documentExpiresAtEpochNs": clock.wall + 120_000_000_000,
+            "deadlineBoottimeNs": clock.boot + 25_000_000_000, "challenge": B(b"c" * 32)}
+        return instance, synthetic, clock, command
+
+    instance, synthetic, clock, command = configured()
+    instance.handle(command)
+    assert len(synthetic.channel.messages) == 2
+    result = synthetic.channel.messages[-1]
+    assert result["phase"] == "prepared" and result["operation"] == "jit.request"
+    assert result["statementBindings"]["requestDigest"] == request_digest
+    assert result["statementBindings"]["pairSha256"] == H(C(result["pair"]))
+    assert result["pair"]["scope"]["publicRequest"] == request
+    assert jit_material.open_pair(result["pair"], expected_scope=result["pair"]["scope"],
+        key_id=synthetic.key_id, kek=synthetic.kek, now_epoch_ns=clock.wall) == documents
+    for canary in (b"private-url-canary", b"private-document-canary", b"private-display-canary"):
+        assert canary not in C(result)
+    assert instance._spent == {request_digest} and instance.operation is None
+    jit_exercised = True
+    if options["operation"] == "jit-refusals":
+        refused(lambda: instance.handle(command))
+        assert instance._poisoned and len(synthetic.channel.messages) == 2
+        jit_checks += 1
+        for failure in ("private", "public-digest", "kek", "open", "release"):
+            instance, synthetic, clock, command = configured()
+            if failure == "private":
+                command["runtimeInput"]["privateDocuments"]["url"] += "-changed"
+            elif failure == "public-digest":
+                command["publicRequest"]["requestDigest"] = H(b"not the actual request")
+            elif failure == "kek":
+                synthetic.kek = AESGCM(bytes(reversed(range(32))))
+            else:
+                command["phase"] = failure
+            refused(lambda: instance.handle(command))
+            assert instance._poisoned and instance._spent == set()
+            assert synthetic.channel.messages == [{"apiVersion": jit.CHANNEL, "phase": "configured"}]
+            jit_checks += 1
+
 # Prove both the external and local import fences fail without relying on the
 # environment lacking these otherwise-installed modules.
 for name in ("cbor2", "sqlite3_forbidden_fixture", "fastapi", "sqlalchemy", "psycopg", "requests",
-        "db", "config", "env", "scripts.verify_nitro_tee", "serverware.app",
-        "serverware.authority_contract", "serverware.authority_transition_core",
-        "serverware.native_jit_review_owner", "serverware.native_jit_review_material"):
+        "db", "config", "env", "scripts.verify_nitro_tee", "serverware.app", "serverware.db",
+        "serverware.config", "serverware.authority_store", "serverware.authority_service",
+        "serverware.authority_planner", "serverware.authority_transition_registry",
+        "serverware.authority_transition_quota", "serverware.authority_primary_contract"):
     assert name not in sys.modules
     try:
         importlib.import_module(name)
@@ -209,6 +338,7 @@ assert set(loaded) == allowed
 for name in loaded:
     assert Path(sys.modules[name].__file__).resolve().is_relative_to(site / "serverware")
 print(json.dumps({"ok": True, "loaded": loaded, "rotationNegativeControls": checks,
+    "jitOwnerExercised": jit_exercised, "jitNegativeControls": jit_checks,
     "brokerConstructed": False, "nativeAdmissionVerified": False}, sort_keys=True))
 '''
 
@@ -244,7 +374,7 @@ class PackageClosureTests(unittest.TestCase):
     def test_explicit_roster_and_producer_use(self):
         self.assertIs(type(producer.BROKER_MODULES), tuple)
         self.assertEqual(len(producer.BROKER_MODULES), len(set(producer.BROKER_MODULES)))
-        self.assertEqual(set(producer.BROKER_MODULES), set(PRIOR_MODULES) | ADDED_MODULES)
+        self.assertEqual(set(producer.BROKER_MODULES), set(PRIOR_MODULES) | ADDED_MODULES | JIT_MODULES)
         self.assertEqual(producer.PACKAGES, {"cryptography": "50.0.0", "cffi": "2.1.0", "pycparser": "3.0"})
         self.assertEqual((producer.MAX_FILE, producer.MAX_TOTAL, producer.MAX_FILES),
             (128 * 1024 * 1024, 512 * 1024 * 1024, 20000))
@@ -294,6 +424,18 @@ class PackageClosureTests(unittest.TestCase):
         _, _, site = self.staged()
         value = self.passed(self.child(site, operation="rotation", prior_version=2))
         self.assertEqual(value["rotationNegativeControls"], 7)
+
+    def test_jit_owner_validates_and_seals_real_private_input_in_package(self):
+        _, _, site = self.staged()
+        value = self.passed(self.child(site, operation="jit"))
+        self.assertTrue(value["jitOwnerExercised"])
+        self.assertEqual(value["jitNegativeControls"], 0)
+
+    def test_jit_owner_refuses_mismatch_replay_open_and_release_in_package(self):
+        _, _, site = self.staged()
+        value = self.passed(self.child(site, operation="jit-refusals"))
+        self.assertTrue(value["jitOwnerExercised"])
+        self.assertEqual(value["jitNegativeControls"], 6)
 
 
 if __name__ == "__main__":

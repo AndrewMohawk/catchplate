@@ -1,10 +1,11 @@
-"""Disconnected, purpose-fixed JIT sealing state machine for a retained broker.
+"""Purpose-fixed JIT sealing on the retained broker's private FD3 dispatcher.
 
-This class is NOT wired to the native helper dispatcher or a Rust RPC. Its
-constructor does not authenticate cold configuration, admit a native identity,
-or provision a key. A future measured parent must supply those original owners
-and independently authorize this distinct purpose. No caller-provided verdict
-can replace that missing admission.
+The broker supplies its existing provisioned key and completed service-token
+owner. This constructor does not independently authenticate cold configuration
+or admit a native identity. The measured parent must supply those original
+owners and authorize this distinct purpose; a caller verdict cannot replace
+that admission. Connecting this private channel is not a native-proof or RPC
+authorization path.
 
 Only the exact private-v2 JIT request can be sealed. The unsigned preparation
 is not attestation, approval, opaque-value evidence, persistence or a commit.
@@ -53,23 +54,33 @@ def _require(value):
         raise OwnerError("native JIT review owner unavailable")
 
 
-def _copy(value, maximum):
-    # Copy only JSON; never retain a caller's mutable graph. The actual private
-    # request validators below retain their own depth and aggregate bounds.
+def _bounded_json(value, *, private_floats=False):
+    # Shared with the private channel decoder. Public/control fields retain
+    # integer-only JSON numbers; finite floats are ordinary private document
+    # values, never deadlines, policy choices, or public request authority.
+    _require(type(private_floats) is bool)
     _require(type(value) is dict)
-    pending, count = [(value, 0)], 0
+    pending, count = [(value, ())], 0
     while pending:
-        item, depth = pending.pop()
+        item, path = pending.pop()
         count += 1
-        _require(depth <= 32 and count <= 131072)
+        _require(len(path) <= 32 and count <= 131072)
         if type(item) is dict:
             _require(all(type(key) is str for key in item))
-            pending.extend((child, depth + 1) for child in item.values())
+            pending.extend((child, path + (key,)) for key, child in item.items())
         elif type(item) is list:
-            pending.extend((child, depth + 1) for child in item)
+            pending.extend((child, path + (index,)) for index, child in enumerate(item))
         else:
             _require(item is None or type(item) in (bool, int, str)
-                or type(item) is float and math.isfinite(item))
+                or type(item) is float and math.isfinite(item) and private_floats
+                and path[:3] in (("runtimeInput", "privateDocuments", "canonical_request"),
+                    ("runtimeInput", "privateDocuments", "redacted_display")))
+
+
+def _copy(value, maximum, *, private_floats=False):
+    # Copy only JSON; never retain a caller's mutable graph. The actual private
+    # request validators below retain their own depth and aggregate bounds.
+    _bounded_json(value, private_floats=private_floats)
     raw = material.canonical(value)
     _require(0 < len(raw) <= maximum)
     return json.loads(raw)
@@ -163,7 +174,7 @@ class Owner:
         try:
             self.check()
             _require(self.operation is None)
-            self._seal_pair(_copy(value, MAX_COMMAND_BYTES))
+            self._seal_pair(_copy(value, MAX_COMMAND_BYTES, private_floats=True))
         except BaseException as error:
             # A partial ciphertext reply may already have escaped. Neither
             # expiry, a caught exception nor a missing reply rearms this owner.

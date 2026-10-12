@@ -260,8 +260,11 @@ mandatory readback. `native_jit_review_owner` adds a purpose-fixed sealing state
 machine: it validates the original private inputs, pins the configured policy and
 key/channel identity, clamps the original deadlines, and burns each request before
 encryption or output. Failed or uncertain output poisons the owner. It has no
-review/open command. Neither component is connected to the native dispatcher,
-Rust RPC, signing path or writer; its unsigned output is not admitted evidence.
+review/open command. The broker's private dispatcher now connects the seal-only
+owner to the actually provisioned helper key and completed service-token phase.
+The Rust RPC, signing path and writer are still missing; its unsigned output is
+not admitted evidence. The [private channel contract](native-broker-runtime-image.md#private-jit-sealing-channel)
+records the package and process-test boundaries.
 
 The focused run resolved 31 test groups across two snapshots: four metadata-history,
 eleven material, eight owner and eight existing private-ingress groups. The first

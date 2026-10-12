@@ -37,6 +37,7 @@ from serverware import native_oauth_succession_owner
 from serverware import native_secret_broker_history
 from serverware import native_static_credential_owner
 from serverware import native_static_credential_rotation_owner
+from serverware import native_jit_review_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
@@ -108,7 +109,9 @@ def _text(value, maximum):
     return value
 
 
-def _document(original):
+def _document(original, *, allow_jit_seal=False):
+    _require(type(allow_jit_seal) is bool)
+    has_float = False
     def pairs(items):
         value = {}
         for key, item in items:
@@ -117,7 +120,21 @@ def _document(original):
         return value
     def invalid(_value):
         raise ValueError("native broker JSON number is invalid")
-    value = json.loads(original, object_pairs_hook=pairs, parse_float=invalid, parse_constant=invalid)
+    def finite(raw):
+        nonlocal has_float
+        number = float(raw)
+        _require(math.isfinite(number))
+        has_float = True
+        return number
+    value = json.loads(original, object_pairs_hook=pairs,
+        parse_float=finite if allow_jit_seal else invalid, parse_constant=invalid)
+    _require(type(value) is dict)
+    jit_seal = (value.get("apiVersion") == native_jit_review_owner.CHANNEL
+        and value.get("phase") == "seal-pair")
+    _require(not has_float or jit_seal)
+    if jit_seal:
+        _require(allow_jit_seal and len(original) <= native_jit_review_owner.MAX_COMMAND_BYTES)
+        native_jit_review_owner._bounded_json(value, private_floats=True)
     _require(type(value) is dict and _canonical(value) == original)
     return value
 
@@ -201,10 +218,10 @@ class _Channel:
         self.check(deadline)
         return bytes(chunks)
 
-    def receive(self, deadline=None):
+    def receive(self, deadline=None, *, allow_jit_seal=False):
         length = int.from_bytes(self._read(4, deadline), "big")
         _require(1 <= length <= _MAX)
-        return _document(self._read(length, deadline))
+        return _document(self._read(length, deadline), allow_jit_seal=allow_jit_seal)
 
     def send(self, value, deadline=None):
         original = _canonical(value)
@@ -258,6 +275,7 @@ class _Broker:
         self.historical_keys = None
         self.static_credential_owner = None
         self.static_credential_rotation_owner = None
+        self.jit_review_owner = None
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
@@ -409,6 +427,7 @@ def main():
             capture_retirement_operation = None if broker.capture_retirement_owner is None else broker.capture_retirement_owner.operation
             static_credential_operation = None if broker.static_credential_owner is None else broker.static_credential_owner.operation
             static_rotation_operation = None if broker.static_credential_rotation_owner is None else broker.static_credential_rotation_owner.operation
+            jit_review_operation = None if broker.jit_review_owner is None else broker.jit_review_owner.operation
             active = [(purpose, operation) for purpose, operation in (
                 (native_oauth_refresh_owner.CHANNEL, refresh_operation),
                 (native_oauth_exchange_owner.CHANNEL, exchange_operation),
@@ -419,13 +438,23 @@ def main():
                 (native_oauth_pending_retirement_owner.CHANNEL, pending_retirement_operation),
                 (native_oauth_capture_retirement_owner.CHANNEL, capture_retirement_operation),
                 (native_static_credential_owner.CHANNEL, static_credential_operation),
-                (native_static_credential_rotation_owner.CHANNEL, static_rotation_operation)) if operation is not None]
+                (native_static_credential_rotation_owner.CHANNEL, static_rotation_operation),
+                (native_jit_review_owner.CHANNEL, jit_review_operation)) if operation is not None]
             _require(len(active) <= 1)
             active_operation = active[0][1] if active else None
-            value = channel.receive(None if active_operation is None else active_operation.deadline)
+            value = channel.receive(None if active_operation is None else active_operation.deadline,
+                allow_jit_seal=broker.jit_review_owner is not None and not active)
             if active:
                 _require(value.get("apiVersion") == active[0][0])
-            if value.get("apiVersion") == native_static_credential_owner.CHANNEL:
+            if value.get("apiVersion") == native_jit_review_owner.CHANNEL:
+                _require(not active)
+                if value.get("phase") == "configure":
+                    _require(broker.jit_review_owner is None)
+                    broker.jit_review_owner = native_jit_review_owner.Owner(broker, value)
+                else:
+                    _require(broker.jit_review_owner is not None)
+                    broker.jit_review_owner.handle(value)
+            elif value.get("apiVersion") == native_static_credential_owner.CHANNEL:
                 _require(not active)
                 if value.get("phase") == "configure":
                     _require(broker.static_credential_owner is None and broker.static_credential_rotation_owner is None)

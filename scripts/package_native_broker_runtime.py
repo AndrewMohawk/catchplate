@@ -28,8 +28,9 @@ MAX_TOTAL = 512 * 1024 * 1024
 MAX_FILES = 20000
 ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}
 PACKAGES = {"cryptography": "50.0.0", "cffi": "2.1.0", "pycparser": "3.0"}
-# Reviewed local runtime closure, not import discovery. Authority-side SQL,
-# transition execution, Nitro verification and unwired JIT owners stay out.
+# Reviewed local runtime closure, not import discovery. Pure contract/core
+# values are included for the actual JIT owner's original validation; SQL,
+# planner/transition registration and Nitro/native admission stay out.
 # Static rotation uses the shared pure historical-original parser; its caller
 # still performs independent provenance/approval verification outside this child.
 BROKER_MODULES = (
@@ -51,6 +52,12 @@ BROKER_MODULES = (
     "authority_static_credential_create.py", "authority_static_credential_rotate.py",
     "authority_publication_approval.py", "authority_setup_bind_credential.py",
     "authority_oauth_setup.py", "authority_oauth_activation.py", "static_credential_provenance_values.py",
+    "native_jit_review_owner.py", "native_jit_review_material.py",
+    "authority_jit_private_request.py", "authority_jit_request.py",
+    "authority_approver_policy.py", "rbac.py", "authority_contract.py",
+    "authority_transition_core.py", "authority_complete_query.py",
+    "authority_index_projection.py", "authority_index_contract.py", "authority_challenge_id.py",
+    "authority_query_reads.py", "authority_query_read_work.py", "authority_request_commitment.py",
 )
 SKIP = {"__pycache__", "site-packages", "ensurepip", "idlelib", "tkinter", "turtledemo", "test", "tests"}
 SAFE_PATH = re.compile(r"/[A-Za-z0-9_./+:-]+\Z")

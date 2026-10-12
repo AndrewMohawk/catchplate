@@ -119,6 +119,50 @@ the full selected row and all existing assertions; the three affected groups wer
 then rerun with the previously unreached tests. These results do not establish a
 deployed image, genuine Nitro admission or a live provider request.
 
+### Private JIT sealing channel
+
+The helper now dispatches `serverware.nativeJitReviewChannel/v1` on its existing
+anonymous parent socket. Configuration requires the actually provisioned broker
+KEK and completed encrypted service-token exchange. Configuration is one-use;
+other active purpose operations exclude JIT commands. Existing idle owners may coexist, but
+their configurations, request profiles and encryption domains are not exchanged.
+Only `seal-pair` is available after configuration. There is no review/open,
+plaintext-return, public listener or general decryption command.
+
+The ordinary broker wire remains integer-only. After JIT configuration, the
+decoder additionally accepts finite JSON numbers only inside the canonical
+request and redacted-display private document subtrees of an exact `seal-pair`
+frame. Configuration, policy, public commitments and every other command remain
+strict. Duplicate/noncanonical JSON, nonfinite numbers, oversized commands,
+depth/work overflow, replay, expiry and uncertain output remain fatal to that
+helper process. Both document envelopes retain their original expiry.
+
+The explicit source roster includes the 15 existing pure modules needed by the
+actual JIT owner, its private-input validators and public request commitment.
+It does not import app configuration, database access, SQL execution, planner or
+transition registration, or Nitro admission. Dependency pins and package bounds
+are unchanged. Both native source inventories include the new dependencies.
+
+The connected process test target is `make verify-native-jit-broker-channel`.
+It must run in an isolated test container as UID/GID 65534, with its test parent
+not PID 1. It uses the actual helper entrypoint and private socket, local
+RSA-OAEP/AES-CBC CMS material, encrypted service-token exchange and JIT AES-GCM.
+Its synthetic identities and local test KEK are not KMS, Nitro or cold-purpose
+admission. The package isolation checks remain a separate test boundary.
+
+Offline validation on 2026-10-12 passed all 25 groups in the cached Python
+3.11.15 image: eight package-isolation groups (4.877 seconds), eight owner groups
+(0.149 seconds), and nine actual-process groups (19.149 seconds, 24 child
+processes). Both runs used network-disabled, unprivileged containers with
+read-only source mounts. All 20 recorded source/test hashes remained unchanged;
+no test rerun, image build, service restart or pilot was needed. The process
+suite used the source helper, not the full measured SquashFS/native runtime.
+
+This connection does not make a working approval workflow: the authenticated
+confidential native caller, private Rust preparation, distinct fresh proof,
+independent authority verification, atomic writer custody and authorized review
+opening are still required. The ordinary deployment is unchanged.
+
 The [shadow-key helper](native-shadow-encrypted-keys.md#real-process-and-packaging-contract)
 has a separate offline packager and image identity. Sharing the bounded copier
 does not give either helper the other's entrypoint, key inventory or authority.

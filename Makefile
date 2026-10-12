@@ -33,6 +33,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-jit-private-request
 .PHONY: verify-approval-history-metadata verify-native-jit-review-material verify-native-jit-review-owner
 .PHONY: verify-native-broker-package-closure verify-static-credential-provenance-values
+.PHONY: verify-native-jit-broker-channel
 .PHONY: verify-operator-live-smoke-config
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
@@ -1651,6 +1652,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_data_plane_audit.py \
 	serverware/native_kms_cms.py \
 	serverware/native_secret_broker_helper.py \
+	serverware/native_jit_review_owner.py \
+	serverware/native_jit_review_material.py \
+	serverware/authority_jit_private_request.py \
+	serverware/authority_jit_request.py \
+	serverware/authority_approver_policy.py \
+	serverware/authority_challenge_id.py \
+	serverware/rbac.py \
 	serverware/native_oauth_refresh.py \
 	serverware/native_oauth_refresh_owner.py \
 	serverware/native_oauth_refresh_receipts.py \
@@ -4835,6 +4843,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_data_plane_audit.py \
 				serverware/native_kms_cms.py \
 				serverware/native_secret_broker_helper.py \
+				serverware/native_jit_review_owner.py \
+				serverware/native_jit_review_material.py \
+				serverware/authority_jit_private_request.py \
+				serverware/authority_jit_request.py \
+				serverware/authority_approver_policy.py \
+				serverware/authority_challenge_id.py \
+				serverware/rbac.py \
 				serverware/native_oauth_refresh.py \
 				serverware/native_oauth_refresh_owner.py \
 				serverware/native_oauth_refresh_receipts.py \
@@ -11396,6 +11411,11 @@ verify-native-jit-review-owner:
 # probe imports only the explicit staged broker roster, not the source tree.
 verify-native-broker-package-closure:
 	python3 -I -B scripts/test_native_broker_package_closure.py
+
+# Run in an isolated test container as UID/GID 65534, not as PID 1. This
+# exercises real FD3/local crypto without granting native/KMS authority.
+verify-native-jit-broker-channel:
+	python3 -I -B scripts/test_native_jit_broker_channel.py
 
 verify-static-credential-provenance-values:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -I -B scripts/test_static_credential_provenance_values.py

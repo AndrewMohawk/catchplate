@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # X account posting: implementation boundary
 
 Status on 2026-10-12: the typed posting contract and ordinary SDK examples are
@@ -67,6 +69,47 @@ forwarding transport: its existing credential-replacement refusal is unchanged.
 The 13 X-read and 15 npm-metadata regression groups also passed. The attempted
 GitHub suite stopped before test discovery because that image lacks `mitmproxy`;
 it is not counted as a pass. No dependencies were installed for these checks.
+
+All 45 selected Rust tests passed from source commit `2bc016ed`: nine new posting
+tests, 11 X-read tests, 12 credential-replacement tests, eight post-dispatch
+outcome tests, three provider-request tests and two legacy-X controls. The new
+tests reach the real embedded v1/v2 schema compiler, OAuth metadata checks,
+account-quota key/conflict rules, body preparation and bounded loopback response
+finalizers. They prove neither OAuth consent nor shared-store consumption.
+
+The test binary SHA-256 is
+`7af4c9261ff7a74dcecb7558619bb52ba09e038a04ca2f53ec3dca948def2313`.
+Evidence is retained under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/x-post-core-r3.kww8UBlX`.
+Compile and test containers had network access disabled; selected response
+fixtures used only their own loopback. Every owned container was removed, and
+the retained cache stayed unchanged. No normal release binary was built or
+deployed by this run.
+
+Earlier evidence is retained separately: the first build was stopped after a
+review found a test-fixture omission; the next build passed compilation but its
+startup-schema test failed on an unsupported external fragment reference.
+Moving the unchanged quota definition into the bundle's local definitions fixed
+that real startup issue without widening the closed resolver. All 11 Python core
+tests passed again, followed by the final Rust build and 45 passing tests above.
+
+### Build timing is not session initialization
+
+The first completed offline optimized Rust test build took 587.689 seconds.
+Inspection found avoidable library compilation: fresh Git archives refreshed all
+760 Cargo/source file timestamps, although the next change touched only two
+schemas. The library's 207 recorded inputs were byte-identical and included
+neither schema, but Cargo reinvoked it; that stage previously took about 286
+seconds. All 223 third-party dependency artifacts remained fresh.
+
+Future build snapshots should preserve prior modification times only for files
+whose bytes, type and mode are independently verified identical, before freezing
+the new snapshot. Changed/new inputs must remain newer than cached dependency
+records. Reverify the exact Git tree afterward; never alter old snapshots,
+shared hardlinks, Cargo fingerprints or a running compiler's inputs. The existing
+read-only deployment-snapshot verifier is not a build-preparation tool. This
+procedure has not yet been integrated into it or measured as an optimization.
+None of these developer builds or source inventories runs on ordinary page load.
 
 ## Remaining work before enabling the preset
 

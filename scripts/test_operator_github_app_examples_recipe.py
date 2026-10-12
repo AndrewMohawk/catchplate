@@ -70,13 +70,21 @@ class RecipeTests(unittest.TestCase):
         self.assertLess(recipe.PRECHECK_SECONDS + recipe.CHECKER_OUTER_SECONDS + 15, recipe.KEEPER_SECONDS)
 
     def test_private_generated_app_key_only_checker_and_public_ca_only_app(self):
+        private = {"app-key.pem": "/client-secrets/github-app.pem",
+            "app-replacement-key.pem": "/client-secrets/github-app-replacement.pem"}
+        observed = set()
         for name, service in self.config["services"].items():
             for mount in service["volumes"]:
                 self.assertFalse(mount["bind"]["create_host_path"])
-                if mount["source"].endswith("app-key.pem"):
-                    self.assertEqual((name, mount["target"], mount["read_only"]), ("check", "/client-secrets/github-app.pem", True))
+                leaf = Path(mount["source"]).name
+                if leaf in private:
+                    observed.add(leaf)
+                    self.assertEqual((name, mount["target"], mount["read_only"]), ("check", private[leaf], True))
                 if name in {"serverware", "decision-gate-rs", "github"}:
-                    self.assertNotIn("app-key.pem", mount["source"])
+                    self.assertNotIn(leaf, private)
+        self.assertEqual(observed, set(private))
+        provider_targets = {m["target"] for m in self.config["services"]["github"]["volumes"]}
+        self.assertTrue({"/github/app-public.pem", "/github/app-replacement-public.pem"} <= provider_targets)
         app = self.config["services"]["serverware"]
         self.assertEqual(app["environment"]["SSL_CERT_FILE"], "/github-public/ca.pem")
         self.assertEqual(app["command"], ["python", "-B", "-m", "serverware.operator_demo_runner"])
@@ -88,6 +96,7 @@ class RecipeTests(unittest.TestCase):
                 "/example-go/github-issues", "/client-trust/requests-ca.pem", "/client-trust/inner-ca.pem", "/client-trust/outer-ca.pem"):
             self.assertTrue(mounts[target]["read_only"])
         self.assertEqual(check["command"][0], "/app/scripts/check_operator_github_app_examples.py")
+        self.assertEqual(check["command"][-2:], ["--replacement-key-file", "/client-secrets/github-app-replacement.pem"])
 
     def test_exact_recipe_rejects_new_authority_environment_or_runtime_shape(self):
         recipe.validate(self.config, *ARGS, **PINS)

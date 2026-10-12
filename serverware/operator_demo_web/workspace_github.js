@@ -23,6 +23,33 @@ function projectGithubAppCapability(value) {
   return typeof value?.destination_allowed === 'boolean' && operatorExact(value, githubAppCapabilityDescriptor(value.destination_allowed)) ?
     githubAppCapabilityDescriptor(value.destination_allowed) : null;
 }
+function projectGithubAppKeyReplacementCapability(value) {
+  const expected = {schema: 'serverware.operatorGithubAppKeyReplacement/v1',
+    path: '/api/operator-demo/credentials/github-app/replace-key'};
+  return operatorExact(value, expected) ? {...expected} : null;
+}
+function projectGithubAppKeyMetadata(credential) {
+  if (!isGithubAppCredential(credential)) return {};
+  // Historical inventories may omit this metadata; they cannot offer replacement.
+  if (!Object.hasOwn(credential, 'credential_generation') && !Object.hasOwn(credential, 'key_replaced_at')) return {};
+  const generation = credential.credential_generation, time = credential.key_replaced_at;
+  const hasTime = Object.hasOwn(credential, 'key_replaced_at');
+  if (!(credential.status === 'active' ? Number.isSafeInteger(generation) && generation > 0 :
+      credential.status === 'revoked' && generation === null) || hasTime && (typeof time !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(time) ||
+      !Number.isFinite(Date.parse(time)) || new Date(time).toISOString().slice(0, 19) !== time.slice(0, 19)))
+    throw operatorError('Saved GitHub App key metadata is incomplete. Refresh before making changes.');
+  return {credential_generation: generation, ...(hasTime ? {key_replaced_at: time} : {})};
+}
+function githubAppKeyReplacementAvailable(catalog, credential) {
+  try {
+    if (!projectGithubAppKeyReplacementCapability(catalog?.capabilities?.github_app_key_replacement) ||
+        !githubAppDestinationAvailable(catalog) || !isGithubAppCredential(credential) || credential.status !== 'active') return false;
+    projectGithubAppMetadata(credential);
+    const generation = projectGithubAppKeyMetadata(credential).credential_generation;
+    return Number.isSafeInteger(generation) && generation > 0 && generation < Number.MAX_SAFE_INTEGER;
+  } catch (_) { return false; }
+}
 function githubAppDestinationAvailable(catalog) {
   return projectGithubAppCapability(catalog?.capabilities?.github_app)?.destination_allowed === true &&
     catalog.allowed_upstreams.includes(operatorGithub.origin);
@@ -181,4 +208,92 @@ function renderGithubCompatibility(id, rule) {
     'Use the pinned Octokit/Undici recipe. Compression offers are removed before forwarding; compressed responses, streaming, redirects and arbitrary request headers are not supported.',
     'A loaded policy confirms publication, not a successful GitHub request or valid provider token. A denied request and an uncertain post-dispatch outcome are different: do not automatically retry creation after a lost response.'
   ].map(value => textNode('p', value, 'small muted')));
+}
+function createGithubAppKeyReplacementView(workspace) {
+  const panel = element('github-app-replace-panel'), form = element('github-app-replace-form');
+  const secret = element('github-app-replace-private-key'); let draft = null;
+  const caveat = 'Existing installation tokens, proxy leases and in-flight requests are not recalled. ' +
+    'Delete the old private key separately in GitHub after reviewing the replacement. Application proxy tokens and their expiry are unchanged.';
+  const message = value => { element('github-app-replace-status').textContent = value; };
+  const writable = () => Boolean(workspace.state.catalog && !workspace.state.busy && !workspace.state.uncertain);
+  function identity(credential) {
+    return JSON.stringify({resource: keyReplacementIdentity(credential),
+      app: githubAppCredentialReceipt(credential, {name: credential.name, ...projectGithubAppMetadata(credential).github_app})});
+  }
+  function review(id) {
+    const catalog = workspace.state.catalog, credential = catalog?.credentials.find(item => item.id === id);
+    if (!githubAppKeyReplacementAvailable(catalog, credential) ||
+        !Number.isSafeInteger(catalog.policy.sequence) || catalog.policy.sequence < 1) return null;
+    let boundIdentity;
+    try { boundIdentity = identity(credential); } catch (_) { return null; }
+    return {id, generation: credential.credential_generation, revision: catalog.revision,
+      policyHash: catalog.policy.policy_hash, sequence: catalog.policy.sequence, identity: boundIdentity,
+      bindings: keyReplacementBindings(catalog), replacedAt: credential.key_replaced_at,
+      capability: catalog.capabilities.github_app_key_replacement};
+  }
+  function close() {
+    secret.value = ''; draft = null; panel.hidden = true; element('github-app-replace-fields').disabled = true;
+  }
+  function render() {
+    if (draft && (!writable() || !operatorExact(review(draft.id), draft))) {
+      close(); message('Saved state changed or became unavailable. The private key was cleared. Review the connection and open replacement again; no request was retried.');
+    }
+    element('github-app-replace-fields').disabled = !draft || !writable();
+  }
+  function open(id) {
+    close(); if (!writable()) return;
+    draft = review(id); if (!draft) return;
+    const catalog = workspace.state.catalog, credential = catalog.credentials.find(item => item.id === id);
+    element('github-app-replace-title').textContent = 'Replace GitHub App private key · ' + credential.name;
+    element('github-app-replace-binding').textContent = 'GitHub App ' + credential.github_app.app_id + ' · installation ' +
+      credential.github_app.installation_id + ' · ' + credential.github_app.repository.owner + '/' + credential.github_app.repository.name +
+      ' · ' + githubPermissionName(credential.github_app.issues_permission === 'write' ? operatorGithub.write : operatorGithub.read);
+    const rules = catalog.access_rules.filter(item => item.status === 'active' && item.credential_id === id);
+    const ids = new Set(rules.map(item => item.application_id));
+    const apps = operatorConnectResourceChoices(catalog.applications.filter(item => ids.has(item.id)));
+    element('github-app-replace-count').textContent = apps.length + ' affected app' + (apps.length === 1 ? '' : 's') +
+      ' · ' + rules.length + ' active access rule' + (rules.length === 1 ? '' : 's') + '. Existing permissions stay unchanged.';
+    element('github-app-replace-apps').replaceChildren(...(apps.length ? apps.map(item => {
+      const row = textNode('li', item.name); row.dataset.applicationId = item.id; return row;
+    }) : [textNode('li', 'No apps currently have access through this connection.')]));
+    message(''); panel.hidden = false; render(); secret.focus();
+  }
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!draft || !writable()) { secret.value = ''; return; }
+    if (!operatorExact(review(draft.id), draft)) { render(); return; }
+    if (!form.reportValidity() || !secret.value || new TextEncoder().encode(secret.value).length > 8192) {
+      secret.value = ''; message('Enter the new GitHub App private key PEM, up to 8192 UTF-8 bytes. The value was cleared.'); return;
+    }
+    const reviewed = draft, body = {id: draft.id, expected_credential_generation: draft.generation, private_key_pem: secret.value};
+    close(); // Both DOM and request object are cleared before awaiting the response.
+    let receipt = null;
+    const accepted = await workspace.mutate('credentials/github-app/replace-key', body, 'github-app-replace-status', result => {
+      const credential = result.credential, replacement = result.key_replacement;
+      const metadata = projectGithubAppKeyMetadata(credential);
+      if (!credential || identity(credential) !== reviewed.identity || metadata.credential_generation !== reviewed.generation + 1 ||
+          !metadata.key_replaced_at || result.revision !== reviewed.revision + 1 ||
+          result.policy?.policy_hash !== reviewed.policyHash || result.policy.sequence !== reviewed.sequence ||
+          !operatorExact(replacement, {previous_credential_generation: reviewed.generation, credential_generation: reviewed.generation + 1,
+            cache_invalidation: replacement?.cache_invalidation, in_flight_requests: 'not_recalled'}) ||
+          !['local_completed', 'local_unconfirmed'].includes(replacement.cache_invalidation))
+        throw operatorError('The GitHub App replacement receipt could not be confirmed. Review saved state; do not assume rollback or repeat the request.');
+      receipt = {generation: metadata.credential_generation, replacedAt: metadata.key_replaced_at, cache: replacement.cache_invalidation};
+    }).finally(() => { body.private_key_pem = ''; });
+    if (!accepted) return;
+    const catalog = workspace.state.catalog, current = catalog?.credentials.find(item => item.id === reviewed.id);
+    const confirmed = receipt && current?.status === 'active' && isGithubAppCredential(current) && catalog.revision === reviewed.revision + 1 &&
+      catalog.policy.policy_hash === reviewed.policyHash && catalog.policy.sequence === reviewed.sequence &&
+      identity(current) === reviewed.identity && keyReplacementBindings(catalog) === reviewed.bindings &&
+      current.credential_generation === receipt.generation && current.key_replaced_at === receipt.replacedAt;
+    const notice = (confirmed ? 'GitHub App private-key replacement saved in Serverware. App identities, repository binding and access rules are unchanged. ' :
+      'Replacement acknowledged, but refreshed saved state could not be confirmed. Refresh and review before another replacement; do not assume rollback. ') +
+      (receipt?.cache === 'local_unconfirmed' ? 'Local cache invalidation was not confirmed. ' : '') + caveat;
+    if (!confirmed) workspace.requireReview(notice);
+    message(notice);
+  });
+  form.addEventListener('invalid', () => { secret.value = ''; }, true);
+  element('github-app-replace-cancel').addEventListener('click', () => { close(); message('Replacement cancelled. No private key was submitted.'); });
+  window.addEventListener('hashchange', close); window.addEventListener('pagehide', close);
+  return {open, render};
 }

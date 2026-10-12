@@ -299,11 +299,12 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
         from serverware import operator_catalog_api as api, operator_notification_api as notifications
         from serverware import operator_google_configuration_api as google, operator_x_configuration_api as x
         roster, _ = classification()
-        self.assertEqual(len(roster), 36)
+        self.assertEqual(len(roster), 37)
+        self.assertIn("/api/operator-demo/credentials/github-app/replace-key", roster)
         self.assertEqual(roster, api.MUTATION_PATHS | PROVIDER_POST_LIMITS.keys())
         routes = [route for router in (api.router, notifications.router, google.router, x.router) for route in router.routes
             if "POST" in route.methods]
-        self.assertEqual(len(routes), 35)
+        self.assertEqual(len(routes), 36)
         self.assertEqual({route.path for route in routes}, roster - {GOOGLE_START})
         for route in routes:
             with self.subTest(path=route.path):

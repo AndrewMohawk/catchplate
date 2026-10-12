@@ -45,6 +45,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         services[name]["command"] = ["python", "-B", "-m", "scripts.operator_github_app_examples_fixture"]
     services["github-pki"]["command"].append("--setup")
     services["github"]["volumes"].append(bind(runtime / "upstream-data/github/app-public.pem", "/github/app-public.pem"))
+    services["github"]["volumes"].append(bind(runtime / "upstream-data/github/app-replacement-public.pem", "/github/app-replacement-public.pem"))
     # Production urllib still performs normal HTTPS verification. Only this
     # network-none app process trusts the newly generated synthetic provider CA.
     services["serverware"]["environment"]["SSL_CERT_FILE"] = "/github-public/ca.pem"
@@ -53,13 +54,15 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
     check["image"], check["entrypoint"] = PYTHON_IMAGE, ["/example-python/bin/python", "-B"]
     check["command"][0] = "/app/scripts/check_operator_github_app_examples.py"
     check["command"] += ["--expected-go-sha256", expected_go_sha256, "--expected-initial-revision", "1",
-        "--app-key-file", "/client-secrets/github-app.pem"]
+        "--app-key-file", "/client-secrets/github-app.pem",
+        "--replacement-key-file", "/client-secrets/github-app-replacement.pem"]
     check["volumes"] = [mount for mount in check["volumes"] if mount["target"] != "/sdk/node_modules"]
     check["volumes"] += [bind(node_modules, "/app/" + NODE_EXAMPLE + "/node_modules"),
         bind(LIBATOMIC, "/usr/lib/x86_64-linux-gnu/libatomic.so.1"), bind(python_runtime, "/example-python"),
         bind(python_packages, "/example-python/lib/python3.12/site-packages"), bind(go, "/example-go/github-issues"),
         bind(runtime / "basic-pki/requests-ca.pem", "/client-trust/requests-ca.pem"),
-        bind(runtime / "upstream-data/github/app-key.pem", "/client-secrets/github-app.pem")]
+        bind(runtime / "upstream-data/github/app-key.pem", "/client-secrets/github-app.pem"),
+        bind(runtime / "upstream-data/github/app-replacement-key.pem", "/client-secrets/github-app-replacement.pem")]
     require(set(services) == RUNTIME_SERVICES | {"initialize", "github-pki", "basic-pki"}
         and "networks" not in config, "closed GitHub App service roster required")
     for service in services.values():

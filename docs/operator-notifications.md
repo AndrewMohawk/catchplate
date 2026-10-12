@@ -7,7 +7,7 @@ destination settings, notification-only encrypted custody, a persistent outbox,
 safe audit projections, Slack/generic HTTPS transport, administrator API routes
 and a Notifications panel. A separately admitted, read-only native observation
 bridge is implemented in source. The feature remains default-off for new
-deployments; the running demo now enables it with all destinations unconfigured.
+deployments; the running Serverware instance enables it with all destinations unconfigured.
 The October 10 paired app/gate rollout verified the deployed read-only UI and
 preserved retained data and empty app-only custody. Outbound DNS/TLS was verified
 at the earlier notification-enabled rollout checkpoint, without sending HTTP.
@@ -81,8 +81,8 @@ not included in these copies.
 
 Google account consent, connection, reauthorization, disconnect, cleanup and
 refresh history also have separate **audit-only** filters. Fourteen lifecycle
-types bring the full audit filter list to 64; the existing 64-filter limit is
-unchanged. Each copy uses a fixed summary and validated public UUID references,
+types originally brought the audit filter list to 64; the per-destination
+64-filter selection limit is unchanged. Each copy uses a fixed summary and validated public UUID references,
 generation/revision information or bounded counts. No email address, account
 identity, OAuth client ID, scope list, token, consent state/code, URL or raw
 provider error is exported. Producer actor types and deterministic event IDs
@@ -90,6 +90,15 @@ must match their event references, including at the final pre-delivery check;
 malformed lifecycle records are skipped. These events never request approval,
 touch a security key, or enable action-required delivery. Existing saved filter
 selections and disabled destinations stay unchanged.
+
+The current source advertises 68 audit event types, including GitHub App
+creation, private-key replacement, npm installation permission and X application
+configuration. The App replacement event includes only the credential UUID,
+catalog revision, unchanged policy hash/sequence and consecutive old/new
+generation numbers. It is audit-only, not an action alert or proof of remote key
+revocation. Its exact producer body and administrator actor are validated again
+before delivery; malformed or extra-field records are skipped, with no
+metadata-only fallback. Existing saved filters are not expanded automatically.
 
 Focused verification on October 11 passed all 41 distinct controls: 25 existing
 event tests, 11 Google projection tests and five connected producer/store tests.

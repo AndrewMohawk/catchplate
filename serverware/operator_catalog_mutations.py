@@ -5,6 +5,7 @@ hashes; raw client tokens are returned once and never retained here or in audit.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 import hashlib
 import secrets
@@ -18,7 +19,7 @@ from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
-    GithubTokenInput, GithubAppInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
+    GithubTokenInput, GithubAppInput, ReplaceGithubAppKeyInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
     XAppBearerInput, XUsernameRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
     AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput,
@@ -299,6 +300,9 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
         try:
             from serverware import runtime
             runtime.invalidate_secret_leases(changed.resource["id"])
+            from serverware import operator_github_app
+            if changed.resource.get("connection_type") == operator_github_app.CONNECTION:
+                operator_github_app.forget(changed.resource["id"])
             cache_invalidation = "local_completed"
         except Exception:
             pass  # Durable replacement remains committed; never claim rollback.
@@ -404,6 +408,58 @@ def create_github_app_credential(payload: GithubAppInput, actor_id: str) -> dict
     # receipt; first dispatch can independently obtain its scoped token.
     try:
         apps.seed_committed({"id": result["credential"]["id"], "kind": "bearer",
+            "credential_version": result["credential"]["credential_generation"], "metadata": metadata}, prepared)
+    except Exception:
+        pass
+    return result
+
+
+def replace_github_app_key(payload: ReplaceGithubAppKeyInput, actor_id: str) -> dict:
+    from serverware import operator_github_app as apps, operator_catalog_github as github, operator_demo
+    apps.require_runtime()
+    if github.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("GitHub destination is not deployment-allowlisted")
+    db = store._require()
+    # No provider request or old-key decrypt before the saved active binding and
+    # all submitted CAS values have been checked in one actual catalog snapshot.
+    with store.operator_publication.exclusive():
+        with db.metadata_connection() as conn:
+            conn.execute("BEGIN")
+            schema.require_revision(conn, payload.expected_revision)
+            if _state(conn)["policy_hash"] != payload.expected_policy_hash:
+                raise CatalogConflict()
+            catalog = schema.read_catalog(conn)
+            schema.validate_bindings(conn, catalog)
+            original = deepcopy(_target(catalog, "credentials", payload.id))
+            if original.get("connection_type") != apps.CONNECTION:
+                raise CatalogConflict()
+            if _static_generations(conn, catalog)[payload.id] != payload.expected_credential_generation:
+                raise CatalogConflict()
+    prepared = apps.verify_replacement(original["github_app"], payload.private_key_pem)
+    metadata = apps.metadata(original["github_app"], original["provider_subject"])
+
+    def change(db, conn, catalog):
+        apps.require_runtime()
+        if github.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
+            raise ValueError("GitHub destination is not deployment-allowlisted")
+        record = _target(catalog, "credentials", payload.id)
+        # _mutate already rechecks revision/policy and every current binding.
+        # Bind the provider observation to the exact original retained record as
+        # well; never retarget a candidate to a changed App or repository.
+        if record != original:
+            raise CatalogConflict()
+        receipt = db.replace_operator_github_app_credential_if_version(conn, payload.id,
+            expected_version=payload.expected_credential_generation, secret=prepared.secret)
+        if receipt is None:
+            raise CatalogConflict()
+        record["key_replaced_at"] = receipt["key_replaced_at"]
+        return _Change(schema.save_resource(conn, "credentials", record), key_replacement=receipt)
+
+    result = _mutate(payload, actor_id, "credentials", "credential.github_app_key_replaced", change)
+    # Cache invalidation was attempted after COMMIT by _mutate. Seeding is only
+    # an optimization at the new generation; failure never hides durable success.
+    try:
+        apps.seed_committed({"id": payload.id, "kind": "bearer",
             "credential_version": result["credential"]["credential_generation"], "metadata": metadata}, prepared)
     except Exception:
         pass
@@ -822,6 +878,7 @@ def catalog_status() -> dict:
             "google_reauthorization": google_reauthorization,
             "github": operator_catalog_github.capability(),
             "github_app": operator_github_app.capability(),
+            "github_app_key_replacement": operator_github_app.key_replacement_capability(),
             "x": operator_catalog_x._capability() if x_available else None,
             "alchemy": operator_catalog_alchemy._capability() if alchemy_available else None,
             "npm": operator_catalog_npm.capability(),

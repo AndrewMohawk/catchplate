@@ -23,6 +23,7 @@ import test_operator_catalog_github_app as github
 import test_operator_x_configuration as xconfig
 
 GITHUB_EVENT = "operator_catalog.credential.github_app_created"
+GITHUB_KEY_EVENT = "operator_catalog.credential.github_app_key_replaced"
 X_EVENT = "operator_catalog.x_oauth.configuration_saved"
 
 
@@ -90,6 +91,33 @@ def github_created():
         ["PRIVATE KEY", github.ACTOR, *fixture.provider.tokens, *fixture.provider.jwts])
 
 
+def github_key_replaced():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    fixture = github.Fixture()
+    replacement = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = replacement.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()).decode("ascii")
+    with fixture.transport():
+        original = fixture.create()["credential"]
+        fixture.provider.key = replacement
+        result = fixture.mutations.replace_github_app_key(fixture.inputs.ReplaceGithubAppKeyInput(
+            **fixture.review(), id=original["id"], expected_credential_generation=1,
+            private_key_pem=pem), github.ACTOR)
+    assert fixture.provider.calls == ["installation", "mint-name", "repositories",
+        "installation", "mint-id", "repositories"]
+    with closing(fixture.db.connect()) as conn:
+        body = json.loads(conn.execute("SELECT event_json FROM audit_events WHERE event_type=?",
+            (GITHUB_KEY_EVENT,)).fetchone()[0])
+    assert set(body) == {"resource_type", "resource_id", "revision", "policy_hash", "policy_sequence",
+        "previous_credential_generation", "credential_generation"}
+    assert body["resource_id"] == original["id"] == result["credential"]["id"]
+    assert body["previous_credential_generation"] == 1 and body["credential_generation"] == 2
+    expected = {"actor_type": "admin", "provider": "github", **body}
+    return prove(fixture.db, GITHUB_KEY_EVENT, expected,
+        ["PRIVATE KEY", fixture.pem, pem, github.ACTOR, *fixture.provider.tokens, *fixture.provider.jwts])
+
+
 def x_configured():
     _, db, _, _, service = xconfig.fixture()
     command = xconfig.payload(service)
@@ -107,7 +135,8 @@ def x_configured():
     return prove(db, X_EVENT, expected, [xconfig.CLIENT, xconfig.SECRET, body["profile_binding_digest"]])
 
 
-OPERATIONS = {"github-created": github_created, "x-configured": x_configured}
+OPERATIONS = {"github-created": github_created, "github-key-replaced": github_key_replaced,
+    "x-configured": x_configured}
 
 
 class ProviderNotificationIntegrationTests(unittest.TestCase):
@@ -129,6 +158,9 @@ class ProviderNotificationIntegrationTests(unittest.TestCase):
 
     def test_actual_github_app_creation_audit_projection(self):
         self.worker("github-created")
+
+    def test_actual_github_app_key_replacement_audit_projection(self):
+        self.worker("github-key-replaced")
 
     def test_actual_x_configuration_audit_projection(self):
         self.worker("x-configured")

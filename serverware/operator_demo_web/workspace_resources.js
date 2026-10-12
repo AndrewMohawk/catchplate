@@ -337,6 +337,7 @@ function createStaticKeyReplacementView(workspace) {
 function createCredentialsView(workspace, actions = {}) {
   const form = element('credential-form');
   const replacement = createStaticKeyReplacementView(workspace);
+  const githubAppReplacement = createGithubAppKeyReplacementView(workspace);
   const aws = createAwsCredentialsView(workspace);
   element('credential-auth-type').addEventListener('change', () => {
     const custom = element('credential-auth-type').value === 'header';
@@ -353,6 +354,7 @@ function createCredentialsView(workspace, actions = {}) {
   function render() {
     const catalog = workspace.state.catalog;
     replacement.render();
+    githubAppReplacement.render();
     element('credential-fields').disabled = element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials');
     if (!catalog) { element('credential-secret').value = ''; return; }
     const currentCards = []; const expiredCards = [];
@@ -397,7 +399,7 @@ function createCredentialsView(workspace, actions = {}) {
             ['Installation-token renewal', credential.status === 'active' ? 'Automatic; current health is not observed here' : 'Disabled by local revocation']])
             identity.append(textNode('dt', label), textNode('dd', value));
         }
-        if (!isGithubAppCredential(credential) && Object.hasOwn(credential, 'credential_generation')) {
+        if (Object.hasOwn(credential, 'credential_generation')) {
           const metadata = textNode('dl', undefined, 'metadata'); metadata.dataset.keyReplacementDetails = '';
           for (const [label, value] of [['Stored key generation', credential.credential_generation === null ? 'Unavailable after local revocation' : String(credential.credential_generation)],
             ['Last replacement saved', credential.key_replaced_at ? new Date(credential.key_replaced_at).toLocaleString() : 'No replacement recorded']])
@@ -422,6 +424,11 @@ function createCredentialsView(workspace, actions = {}) {
           const replace = textNode('button', 'Replace key', 'secondary'); replace.dataset.action = 'replace-key';
           replace.disabled = workspace.state.busy || workspace.state.uncertain;
           replace.addEventListener('click', () => replacement.open(credential.id)); card.append(replace);
+        }
+        if (githubAppKeyReplacementAvailable(catalog, credential)) {
+          const replace = textNode('button', 'Replace GitHub App private key', 'secondary'); replace.dataset.action = 'replace-github-app-key';
+          replace.disabled = workspace.state.busy || workspace.state.uncertain;
+          replace.addEventListener('click', () => githubAppReplacement.open(credential.id)); card.append(replace);
         }
         const button = textNode('button', isAwsCredential(credential) ? 'Remove AWS credentials' : 'Revoke credential', 'secondary'); button.dataset.action = 'revoke-credential';
         button.disabled = workspace.state.busy || workspace.state.uncertain || credential.active_rule_count > 0 ||

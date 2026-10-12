@@ -34,7 +34,7 @@ _PROGRESS_LABELS = frozenset({
 })
 _OPERATIONS = frozenset({
     "create_credential", "revoke_credential", "create_github_credential",
-    "replace_credential_key", "create_npm_credential", "create_application",
+    "replace_credential_key", "replace_github_app_key", "create_npm_credential", "create_application",
     "revoke_application", "rotate_application_token",
     "set_application_proxy_authentication", "create_rule", "revoke_rule",
     "create_gmail_rule", "create_github_rule", "create_npm_rule",

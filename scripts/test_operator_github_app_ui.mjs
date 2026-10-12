@@ -13,6 +13,8 @@ const REPOSITORY = {owner: 'Example-Owner', name: 'Example.Repo'};
 const PEM = '-----BEGIN PRIVATE KEY-----\nSYNTHETIC_PRIVATE_KEY_NEVER_RENDER\n-----END PRIVATE KEY-----';
 const PAT = 'synthetic_github_PAT_NEVER_RENDER';
 const NAME = 'Fixture GitHub App';
+const REPLACE = '/api/operator-demo/credentials/github-app/replace-key';
+const REPLACEMENT = {schema: 'serverware.operatorGithubAppKeyReplacement/v1', path: REPLACE};
 // Independent literal API fixtures; no production descriptor/receipt generator.
 function capability(app = true, allowed = true) {
   return {schema: app ? 'serverware.operatorGithubApp/v1' : 'serverware.operatorGithub/v1',
@@ -28,7 +30,7 @@ function binding(changes = {}) {
     repository: {...REPOSITORY}, issues_permission: 'read', token_refresh: 'automatic', ...changes};
 }
 function appCredential(changes = {}) {
-  return credential({name: NAME, connection_type: 'github_app_v1', provider_id: 'github', github_app: binding(), ...changes});
+  return credential({name: NAME, connection_type: 'github_app_v1', provider_id: 'github', github_app: binding(), credential_generation: 1, ...changes});
 }
 function patCredential(changes = {}) {
   return credential({name: 'Fixture PAT', connection_type: 'github_token_v1', provider_id: 'github', credential_generation: 1, ...changes});
@@ -42,12 +44,13 @@ function githubRule(permission = READ, changes = {}) {
     credential_input: 'replace_exact', placeholder: 'token serverware-github-placeholder-v1',
     query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2', ...changes});
 }
-function catalog({credentials = [appCredential()], rules = [], app = capability(), pat = capability(false), allowed = [ORIGIN]} = {}) {
+function catalog({credentials = [appCredential()], rules = [], app = capability(), pat = capability(false), allowed = [ORIGIN], replacement = null} = {}) {
   const value = publicCatalog({revision: 1, sequence: 1, active: digest(1), loaded: digest(1), credentials,
     applications: [application({proxy_authentication: 'basic_and_bearer_v1'})], rules, allowedUpstreams: allowed,
     responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'], requestBodyModes: ['preserve_json_v1'],
     credentialInputModes: ['insert', 'replace_exact']});
   value.capabilities.github = pat; value.capabilities.github_app = app;
+  value.capabilities.github_app_key_replacement = replacement;
   value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
   value.capabilities.static_key_replacement = {schema: 'serverware.operatorStaticKeyReplacement/v1',
@@ -81,7 +84,11 @@ async function fixture(options = {}) {
       assert.equal(init.method, 'POST'); assert.equal(init.headers['Content-Type'], 'application/json');
       const payload = JSON.parse(init.body);
       assert.equal(payload.expected_revision, raw.revision); assert.equal(payload.expected_policy_hash, raw.policy.policy_hash);
-      if (path === '/api/operator-demo/credentials/github-app') {
+      if (path === REPLACE) {
+        assert.deepEqual(Object.keys(payload).sort(), ['expected_credential_generation', 'expected_policy_hash', 'expected_revision', 'id', 'private_key_pem']);
+        assert.equal(payload.id, IDS.credential); assert.equal(payload.expected_credential_generation, raw.credentials[0].credential_generation);
+        assert.equal(payload.private_key_pem, PEM); delete payload.private_key_pem;
+      } else if (path === '/api/operator-demo/credentials/github-app') {
         assert.deepEqual(Object.keys(payload).sort(), ['app_id', 'expected_policy_hash', 'expected_revision', 'installation_id',
           'issues_permission', 'name', 'private_key_pem', 'repository']);
         assert.equal(payload.private_key_pem, PEM); delete payload.private_key_pem;
@@ -101,6 +108,16 @@ async function fixture(options = {}) {
         if (mode === 'lost') throw new Error(PEM);
         if (typeof mode === 'number') return jsonResponse({detail: PEM}, mode);
         raw.revision++;
+        if (path === REPLACE) {
+          const item = raw.credentials[0], previous = item.credential_generation;
+          item.credential_generation++; item.key_replaced_at = '2026-10-10T12:00:00+00:00';
+          const result = {revision: raw.revision, policy: clone(raw.policy), credential: clone(item), key_replacement: {
+            previous_credential_generation: previous, credential_generation: item.credential_generation,
+            cache_invalidation: 'local_completed', in_flight_requests: 'not_recalled'}};
+          receiptChange?.(result); catalogChange?.(raw);
+          if (mode === 'lost-after-commit') throw new Error(PEM);
+          return jsonResponse(result);
+        }
         const kind = path.endsWith('/github') ? 'access_rule' : 'credential';
         const item = kind === 'access_rule' ? githubRule(payload.operation_bundle, {name: payload.name}) :
           path.endsWith('/github-token') ? patCredential({name: payload.name}) : appCredential({name: payload.name});
@@ -122,6 +139,12 @@ async function fixture(options = {}) {
   current.value.workspaceFixture = workspace;
   const view = current.run('createConnectView(workspaceFixture, {mount(){},tokenFor(){return null;}}, {mount(){},select(){}})');
   view.show(true);
+  let replacementView;
+  if (options.replacement) {
+    for (const node of current.dom.nodes.values()) node.focus = () => {};
+    replacementView = current.run('createGithubAppKeyReplacementView(workspaceFixture)');
+    workspace.subscribe(replacementView.render);
+  }
   const node = id => current.dom.getElementById(id);
   const event = async (id, type = 'click') => { const target = node(id); assert.equal(typeof target.events[type], 'function');
     await target.events[type]({preventDefault() {}, currentTarget: target}); };
@@ -131,7 +154,7 @@ async function fixture(options = {}) {
     const surfaces = JSON.stringify([values, workspace.state, requests, bodies, current.value.location]);
     for (const secret of [PEM, 'SYNTHETIC_PRIVATE_KEY_NEVER_RENDER', PAT]) assert(!surfaces.includes(secret));
   };
-  return {...current, raw, workspace, view, requests, bodies, node, event, clean,
+  return {...current, raw, workspace, view, replacementView, requests, bodies, node, event, clean,
     posts: () => requests.filter(row => row.method === 'POST'),
     release: () => { assert(held); held(); },
     fire: async name => { for (const handler of events.get(name) || []) await handler(); }};
@@ -170,7 +193,7 @@ const tests = [
   ['canonical string IDs and exact public binding reject forged or private metadata', () => {
     const value = project(catalog({credentials: [appCredential({private_key_pem: PEM, secret: PEM, token: PAT, credential_generation: 8})]}));
     assert.deepEqual(value.credentials[0].github_app, binding());
-    assert(!Object.hasOwn(value.credentials[0], 'credential_generation'));
+    assert.equal(value.credentials[0].credential_generation, 8);
     assert(!JSON.stringify(value).includes(PEM)); assert(!JSON.stringify(value).includes(PAT));
     for (const key of ['app_id', 'installation_id', 'account_id', 'repository_id']) {
       for (const invalid of [0, 1, true, null, '', '0', '01', '+1', '1.0', '1e2', ' 1', '1 ', '١', '9007199254740992', '10000000000000000'])
@@ -309,11 +332,118 @@ const tests = [
       assert.equal(f.posts().length, 0); assert.equal(f.node('connect-github-private-key').value, ''); f.clean();
     }
   }],
+  ['App replacement capability and configuration generation are separately closed', () => {
+    const value = project(catalog({replacement: REPLACEMENT}));
+    assert.deepEqual(value.capabilities.github_app_key_replacement, REPLACEMENT);
+    assert.equal(plain.run('githubAppKeyReplacementAvailable(input, input.credentials[0])', value), true);
+    assert.equal(plain.run('staticKeyReplacementAvailable(input, input.credentials[0])', value), false);
+    for (const options of [{app: null}, {app: capability(true, false)}, {allowed: []},
+      {app: {...capability(), api_origin: 'https://other.invalid'}}]) {
+      const projected = project(catalog({replacement: REPLACEMENT, ...options}));
+      assert.equal(plain.run('githubAppKeyReplacementAvailable(input, input.credentials[0])', projected), false);
+    }
+    for (const invalid of [null, {}, {...REPLACEMENT, extra: true}, {...REPLACEMENT, schema: 'unknown'},
+      {...REPLACEMENT, path: '/api/operator-demo/credentials/replace-key'}]) {
+      const projected = project(catalog({replacement: invalid}));
+      assert.equal(projected.capabilities.github_app_key_replacement, null);
+      assert.equal(plain.run('githubAppKeyReplacementAvailable(input, input.credentials[0])', projected), false);
+    }
+    for (const generation of [true, '1', 0, -1, 1.5, null, Number.MAX_SAFE_INTEGER + 1])
+      assert.throws(() => project(catalog({credentials: [appCredential({credential_generation: generation})]})));
+    for (const time of ['', 'not-date', '2026-02-30T00:00:00Z', '2026-10-10T00:00:00+04:00'])
+      assert.throws(() => project(catalog({credentials: [appCredential({key_replaced_at: time})]})));
+    const legacy = appCredential(); delete legacy.credential_generation;
+    for (const row of [legacy, appCredential({credential_generation: Number.MAX_SAFE_INTEGER}),
+      appCredential({status: 'revoked', credential_generation: null}), patCredential()]) {
+      const projected = project(catalog({credentials: [row], replacement: REPLACEMENT}));
+      assert.equal(plain.run('githubAppKeyReplacementAvailable(input, input.credentials[0])', projected), false);
+    }
+  }],
+  ['replacement sends only complete private-key CAS and clears before held reply while retaining all assignments', async () => {
+    const f = await fixture({replacement: REPLACEMENT, rules: [githubRule()], mode: 'hold'});
+    const before = clone({apps: f.raw.applications, rules: f.raw.access_rules, policy: f.raw.policy, binding: f.raw.credentials[0].github_app});
+    f.replacementView.open(IDS.credential); assert(!f.node('github-app-replace-panel').hidden);
+    assert.match(f.node('github-app-replace-count').textContent, /^1 affected app · 1 active access rule/);
+    f.node('github-app-replace-private-key').value = PEM;
+    const pending = f.event('github-app-replace-form', 'submit');
+    assert.equal(f.posts().length, 1); assert.equal(f.posts()[0].path, REPLACE);
+    assert.equal(f.node('github-app-replace-private-key').value, ''); assert.equal(f.bodies[0].private_key_pem, '');
+    assert(f.node('github-app-replace-panel').hidden); assert(f.workspace.writeInFlight()); f.clean();
+    await f.event('github-app-replace-form', 'submit'); assert.equal(f.posts().length, 1);
+    f.release(); await pending;
+    assert.equal(f.raw.credentials[0].credential_generation, 2); assert.equal(f.workspace.state.uncertain, false);
+    assert.deepEqual({apps: f.raw.applications, rules: f.raw.access_rules, policy: f.raw.policy, binding: f.raw.credentials[0].github_app}, before);
+    assert.match(f.node('github-app-replace-status').textContent, /replacement saved in Serverware/);
+    assert.match(f.node('github-app-replace-status').textContent, /Delete the old private key separately in GitHub/); f.clean();
+  }],
+  ['replacement cancellation navigation invalid input and shared holds clear without writes', async () => {
+    for (const action of [f => f.event('github-app-replace-cancel'), f => f.fire('hashchange'), f => f.fire('pagehide'),
+      f => f.event('github-app-replace-form', 'invalid'), f => f.workspace.setConsentHold(true, 'independent-owner')]) {
+      const f = await fixture({replacement: REPLACEMENT}); f.replacementView.open(IDS.credential);
+      f.node('github-app-replace-private-key').value = PEM; await action(f);
+      assert.equal(f.posts().length, 0); assert.equal(f.node('github-app-replace-private-key').value, ''); f.clean();
+    }
+    const f = await fixture({replacement: REPLACEMENT}); f.replacementView.open(IDS.credential);
+    f.node('github-app-replace-private-key').value = 'é'.repeat(4097);
+    await f.event('github-app-replace-form', 'submit'); assert.equal(f.posts().length, 0);
+    assert.equal(f.node('github-app-replace-private-key').value, ''); f.clean();
+  }],
+  ['replacement review refuses generation capability policy binding and assignment drift before submission', async () => {
+    for (const drift of [v => v.credentials[0].credential_generation++, v => v.revision++,
+      v => v.capabilities.github_app_key_replacement = null, v => v.capabilities.github_app = null,
+      v => v.allowed_upstreams = [], v => v.policy.sequence++,
+      v => v.credentials[0].github_app.account_id = '999', v => v.applications[0].token_generation++,
+      v => v.access_rules[0].name = 'Changed permission']) {
+      const f = await fixture({replacement: REPLACEMENT, rules: [githubRule()]}); f.replacementView.open(IDS.credential);
+      f.node('github-app-replace-private-key').value = PEM; drift(f.raw); await f.workspace.refresh();
+      assert(f.node('github-app-replace-panel').hidden); assert.equal(f.node('github-app-replace-private-key').value, '');
+      await f.event('github-app-replace-form', 'submit'); assert.equal(f.posts().length, 0); f.clean();
+    }
+  }],
+  ['uncertain replacement preserves committed state without replay and requires explicit review acknowledgement', async () => {
+    for (const mode of [401, 409, 422, 503, 'lost', 'lost-after-commit']) {
+      const f = await fixture({replacement: REPLACEMENT, mode}); f.replacementView.open(IDS.credential);
+      f.node('github-app-replace-private-key').value = PEM; await f.event('github-app-replace-form', 'submit');
+      assert.equal(f.workspace.state.uncertain, true); assert(f.node('github-app-replace-panel').hidden);
+      f.replacementView.open(IDS.credential); assert(f.node('github-app-replace-panel').hidden);
+      await f.event('github-app-replace-form', 'submit'); await f.workspace.refresh();
+      assert.equal(f.posts().length, 1); assert.equal(f.raw.credentials[0].credential_generation, mode === 'lost-after-commit' ? 2 : 1);
+      assert.equal(f.node('mutation-review-confirm').disabled, false); await f.event('mutation-review-confirm');
+      f.replacementView.open(IDS.credential); assert(!f.node('github-app-replace-panel').hidden);
+      assert.equal(f.node('github-app-replace-private-key').value, ''); assert.equal(f.posts().length, 1); f.clean();
+    }
+  }],
+  ['replacement receipt requires exact identity generation policy and closed result metadata', async () => {
+    for (const receiptChange of [v => v.credential.github_app.app_id = '999', v => v.credential.name = 'Different',
+      v => v.credential.credential_generation++, v => delete v.credential.key_replaced_at, v => v.policy.sequence++,
+      v => v.key_replacement.in_flight_requests = 'recalled', v => v.key_replacement.extra = true,
+      v => v.key_replacement.cache_invalidation = 'private-error']) {
+      const f = await fixture({replacement: REPLACEMENT, receiptChange}); f.replacementView.open(IDS.credential);
+      f.node('github-app-replace-private-key').value = PEM; await f.event('github-app-replace-form', 'submit');
+      assert.equal(f.workspace.state.uncertain, true); assert.equal(f.posts().length, 1); f.clean();
+    }
+    const f = await fixture({replacement: REPLACEMENT, receiptChange: value => value.key_replacement.cache_invalidation = 'local_unconfirmed'});
+    f.replacementView.open(IDS.credential); f.node('github-app-replace-private-key').value = PEM;
+    await f.event('github-app-replace-form', 'submit'); assert.equal(f.workspace.state.uncertain, false);
+    assert.match(f.node('github-app-replace-status').textContent, /Local cache invalidation was not confirmed/); f.clean();
+  }],
+  ['replacement acknowledgement does not replace exact refreshed assignment and generation proof', async () => {
+    for (const catalogChange of [v => v.credentials[0].credential_generation--, v => v.credentials[0].github_app.repository_id = '999',
+      v => v.applications[0].token_generation++, v => v.access_rules[0].name = 'Different',
+      v => v.credentials[0] = patCredential({name: NAME})]) {
+      const f = await fixture({replacement: REPLACEMENT, rules: [githubRule()], catalogChange});
+      f.replacementView.open(IDS.credential); f.node('github-app-replace-private-key').value = PEM;
+      await f.event('github-app-replace-form', 'submit');
+      assert.equal(f.workspace.state.uncertain, true); assert.equal(f.node('mutation-review-confirm').disabled, true);
+      assert.equal(f.posts().length, 1); await f.workspace.refresh();
+      assert.equal(f.posts().length, 1); f.clean();
+    }
+  }],
 ];
 let group = 0;
 async function main() {
   assert.equal(process.argv.length, 2, 'No target, credentials, browser or live arguments accepted');
-  assert.equal(tests.length, 13, 'The complete nonempty regression roster is required');
+  assert.equal(tests.length, 20, 'The complete nonempty regression roster is required');
   for (const [name, test] of tests) { group++; await test(); console.log('PASS ' + name); }
   console.log(JSON.stringify({ok: true, groups: tests.length, network: false, browser: false, provider: false,
     scope: 'actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance'}));

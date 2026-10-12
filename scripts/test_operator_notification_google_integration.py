@@ -148,9 +148,10 @@ def all_filters():
     from serverware import operator_notification_store as store, operator_notification_events as events
     from serverware import operator_notification_transport as transport, operator_notifications as notifications
     added_events = {"operator_catalog.access_rule.npm_install_created",
-        "operator_catalog.credential.github_app_created", "operator_catalog.x_oauth.configuration_saved"}
+        "operator_catalog.credential.github_app_created", "operator_catalog.credential.github_app_key_replaced",
+        "operator_catalog.x_oauth.configuration_saved"}
     advertised = list(events.AUDIT_EVENT_TYPES)
-    assert len(advertised) == 67 and added_events <= set(advertised)
+    assert len(advertised) == 68 and added_events <= set(advertised)
     selected = [kind for kind in advertised if kind not in added_events]
     assert len(selected) == 64
     payload = {"operation_id": str(uuid.uuid4()), "slot": "audit_log.webhook", "expected_revision": 0,

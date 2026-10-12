@@ -262,6 +262,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/credentials", "/api/operator-demo/credentials/revoke",
         "/api/operator-demo/credentials/replace-key", "/api/operator-demo/credentials/github-token",
         "/api/operator-demo/credentials/github-app",
+        "/api/operator-demo/credentials/github-app/replace-key",
         "/api/operator-demo/credentials/npm-token",
         "/api/operator-demo/credentials/x-app-bearer",
         "/api/operator-demo/credentials/alchemy-key",

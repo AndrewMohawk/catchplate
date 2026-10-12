@@ -192,10 +192,14 @@ class EventTests(unittest.TestCase):
                 self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
 
     def provider_record(self, provider):
-        if provider == "github":
-            return ("operator_catalog.credential.github_app_created", str(uuid.uuid4()),
-                {"resource_type": "credential", "resource_id": str(uuid.uuid4()), "revision": 2,
-                    "policy_hash": DIGEST, "policy_sequence": 1})
+        if provider in ("github", "github-key"):
+            body = {"resource_type": "credential", "resource_id": str(uuid.uuid4()), "revision": 2,
+                "policy_hash": DIGEST, "policy_sequence": 1}
+            suffix = "created"
+            if provider == "github-key":
+                suffix = "key_replaced"
+                body.update(previous_credential_generation=1, credential_generation=2)
+            return ("operator_catalog.credential.github_app_" + suffix, str(uuid.uuid4()), body)
         operation = str(uuid.uuid4())
         return ("operator_catalog.x_oauth.configuration_saved", "operator-x-configuration:" + operation,
             {"operation_id": operation, "actor_id": CANARY, "config_version": 1,
@@ -204,21 +208,23 @@ class EventTests(unittest.TestCase):
 
     def test_closed_provider_configuration_projections_are_audit_only(self):
         expected = []
-        for provider in ("github", "x"):
+        for provider in ("github", "github-key", "x"):
             kind, identifier, body = self.provider_record(provider)
             self.assertIn(kind, events.AUDIT_EVENT_TYPES)
             self.assertNotIn(kind, events.ACTION_EVENT_TYPES)
             self.append(kind, body, identifier=identifier, actor_type="admin")
-            details = {"actor_type": "admin", "provider": provider, "policy_hash": DIGEST}
-            if provider == "github":
+            details = {"actor_type": "admin", "provider": "x" if provider == "x" else "github", "policy_hash": DIGEST}
+            if provider != "x":
                 details.update(resource_type="credential", resource_id=body["resource_id"],
                     revision=2, policy_sequence=1)
+                if provider == "github-key":
+                    details.update(previous_credential_generation=1, credential_generation=2)
             else:
                 details.update(operation_id=body["operation_id"], config_version=1,
                     reviewed_revision=2, committed_revision=3)
             expected.append(details)
         batch, cursor = self.read()
-        self.assertEqual(cursor.rowid, 2)
+        self.assertEqual(cursor.rowid, 3)
         self.assertEqual([item.audit_payload["details"] for item in batch], expected)
         with self.reader(forbid_secrets=True) as conn:
             for item in batch:
@@ -234,9 +240,9 @@ class EventTests(unittest.TestCase):
 
     def test_provider_configuration_requires_exact_producer_ids_actors_and_bodies(self):
         count = 0
-        for provider in ("github", "x"):
+        for provider in ("github", "github-key", "x"):
             kind, identifier, body = self.provider_record(provider)
-            wrong_ids = ("sha256:" + ("a" if provider == "github" else "b") * 64,
+            wrong_ids = ("sha256:" + {"github": "a", "github-key": "c", "x": "b"}[provider] * 64,
                 "operator-google-reauthorized:" + str(uuid.uuid4()))
             if provider == "x":
                 wrong_ids += (str(uuid.uuid4()), "operator-x-configuration:" + str(uuid.uuid4()),
@@ -251,9 +257,16 @@ class EventTests(unittest.TestCase):
             _, identifier, body = self.provider_record(provider)
             invalid = [{}, {**body, "client_secret": CANARY}, {**body, "policy_hash": CANARY}]
             invalid.extend({key: value for key, value in body.items() if key != omitted} for omitted in body)
-            if provider == "github":
+            if provider != "x":
                 invalid.extend({**body, **change} for change in ({"resource_type": "application"},
                     {"resource_id": CANARY}, {"revision": True}, {"revision": 0}, {"policy_sequence": True}))
+                if provider == "github-key":
+                    invalid.extend({**body, **change} for change in (
+                        {"private_key_pem": CANARY}, {"previous_credential_generation": True},
+                        {"previous_credential_generation": 0}, {"credential_generation": True},
+                        {"credential_generation": 1}, {"credential_generation": 3},
+                        {"previous_credential_generation": 9007199254740991,
+                            "credential_generation": 9007199254740992}))
             else:
                 invalid.extend({**body, **change} for change in ({"actor_id": "another-administrator"},
                     {"config_version": True}, {"config_version": 2}, {"reviewed_revision": True},
@@ -272,16 +285,18 @@ class EventTests(unittest.TestCase):
                 _, identifier, _ = self.provider_record(provider)
                 self.append(kind, raw=raw, identifier=identifier, actor_type="admin")
                 count += 1
-        batch, cursor = self.read(limit=64)
-        self.assertEqual(batch, ())  # No metadata-only fallback for a corrupt producer body.
+        cursor = events.EventCursor()
+        for _ in range((count + 63) // 64):
+            batch, cursor = self.read(cursor, limit=64)
+            self.assertEqual(batch, ())  # No metadata-only fallback for a corrupt producer body.
         self.assertEqual(cursor.rowid, count)
 
     def test_provider_configuration_final_recheck_rejects_changed_source_or_projection(self):
-        for provider in ("github", "x"):
+        for provider in ("github", "github-key", "x"):
             kind, identifier, body = self.provider_record(provider)
             self.append(kind, body, identifier=identifier, actor_type="admin")
         batch, _ = self.read()
-        self.assertEqual(len(batch), 2)
+        self.assertEqual(len(batch), 3)
         for item in batch:
             changed = json.loads(json.dumps(item.audit_payload))
             changed["details"]["provider"] = "other"

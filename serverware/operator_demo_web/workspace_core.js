@@ -292,7 +292,7 @@ function projectStaticKeyReplacementCapability(value) {
   return {schema: value.schema, path: value.path, credential_types: ['bearer', 'header']};
 }
 function projectStaticKeyMetadata(item) {
-  if (isGithubAppCredential(item)) return {}; // Installation-token generations are not a replaceable PAT.
+  if (isGithubAppCredential(item)) return {}; // App private-key generations use their separate replacement contract.
   if (!['bearer', 'header'].includes(item.auth_type) || !Object.hasOwn(item, 'credential_generation')) return {};
   const generation = item.credential_generation;
   const valid = item.status === 'active' ? Number.isSafeInteger(generation) && generation > 0 :
@@ -371,7 +371,7 @@ function projectCatalog(value) {
         original.auth_type !== 'bearer' || original.header_name !== 'Authorization')
       throw operatorError('Saved provider connection metadata is unsupported. Changes are disabled.');
     credential.connection_type = original.connection_type; credential.provider_id = provider;
-    if (isGithubAppCredential(original)) Object.assign(credential, projectGithubAppMetadata(original));
+    if (isGithubAppCredential(original)) Object.assign(credential, projectGithubAppMetadata(original), projectGithubAppKeyMetadata(original));
   });
   const applications = project(value.applications, ['principal_id', 'token_expires_at_epoch_ms', 'token_generation', 'token_status', 'access_status', 'active_rule_count']);
   applications.forEach((application, index) => {
@@ -410,6 +410,7 @@ function projectCatalog(value) {
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   capabilities.github = value.capabilities?.github == null ? null : projectGithubCapability(value.capabilities.github);
   capabilities.github_app = value.capabilities?.github_app == null ? null : projectGithubAppCapability(value.capabilities.github_app);
+  capabilities.github_app_key_replacement = projectGithubAppKeyReplacementCapability(value.capabilities?.github_app_key_replacement);
   capabilities.npm = value.capabilities?.npm == null ? null : projectNpmCapability(value.capabilities.npm);
   capabilities.npm_publish = value.capabilities?.npm_publish == null ? null : projectNpmPublishCapability(value.capabilities.npm_publish);
   capabilities.npm_install = value.capabilities?.npm_install == null ? null : projectNpmInstallCapability(value.capabilities.npm_install);

@@ -26,15 +26,16 @@ from scripts import operator_github_examples_fixture as examples
 from scripts import operator_github_fixture as base
 from scripts.operator_github_fixture_network import FIXTURE_IP, assert_isolated_network
 
-SCHEMA = "serverware.privateGithubAppExampleObservations/v1"
+SCHEMA = "serverware.privateGithubAppExampleObservations/v2"
 APP_ID, INSTALLATION_ID, ACCOUNT_ID, REPOSITORY_ID = 123, 456, 700, 900
 TOKEN_SECONDS = 120
-TOKENS = ("ghs_123_synthetic.initial-token_v1", "ghs_123_synthetic.renewed-token_v2")
+TOKENS = ("ghs_123_synthetic.initial-token_v1", "ghs_123_synthetic.renewed-token_v2",
+    "ghs_123_synthetic.replaced-token_v3")
 INSTALL_PATH = f"/repos/{examples.OWNER}/{examples.REPO}/installation"
 MINT_PATH = f"/app/installations/{INSTALLATION_ID}/access_tokens"
 REPOSITORIES_PATH = "/installation/repositories?per_page=100&page=1"
 PERMISSIONS = {"issues": "read", "metadata": "read"}
-MAX_ARRIVALS = 24
+MAX_ARRIVALS = 34  # Exactly 28 expected; retain six bounded refusal observations.
 require = examples.require
 
 
@@ -88,9 +89,11 @@ def repository():
 
 
 class Oracle:
-    def __init__(self, public_key):
-        require(isinstance(public_key, rsa.RSAPublicKey) and public_key.key_size == 2048)
-        self.public_key = public_key
+    def __init__(self, public_key, replacement_public_key):
+        require(all(isinstance(key, rsa.RSAPublicKey) and key.key_size == 2048
+            for key in (public_key, replacement_public_key))
+            and public_key.public_numbers() != replacement_public_key.public_numbers())
+        self.public_keys = {"A": public_key, "B": replacement_public_key}
         self.auth, self.attempts, self.mints = [], [], []
         self.total = 0
 
@@ -109,43 +112,54 @@ class Oracle:
     def handle(self, method, target, fields, body, now):
         auth, row = self.arrival(target)
         if auth:
-            step, cycle = len(self.auth) - 1, len(self.mints)
-            expected = (("GET", INSTALL_PATH), ("POST", MINT_PATH), ("GET", REPOSITORIES_PATH))[step % 3]
-            require(step < 6 and (method, target) == expected)
+            step = len(self.auth) - 1
+            # A connect, rejected B verification (no mint), A expiry renewal,
+            # then valid B replacement. No control endpoint changes this plan.
+            require(step < 10)
+            rejected = step == 3
+            cycle = 0 if step < 4 else 1 if step < 7 else 2
+            part = 0 if rejected else step if step < 3 else (step - 4) % 3
+            key_name = "B" if rejected or cycle == 2 else "A"
+            expected = (("GET", INSTALL_PATH), ("POST", MINT_PATH), ("GET", REPOSITORIES_PATH))[part]
+            require((method, target) == expected)
             headers = provisioning_headers(fields, post=method == "POST", length=len(body))
-            if step % 3 < 2:
-                verify_jwt(headers["authorization"], self.public_key, now)
+            if part < 2:
+                verify_jwt(headers["authorization"], self.public_keys[key_name], now)
             else:
-                require(hmac.compare_digest(headers["authorization"], "Bearer " + TOKENS[cycle - 1]))
-            if step % 3 == 0:
-                require((step == 0 and not self.attempts) or
-                    (step == 3 and len(self.attempts) == 6 and now > self.mints[0]["expiresAt"]))
-                value = {"id": INSTALLATION_ID, "app_id": APP_ID, "account": {
+                require(hmac.compare_digest(headers["authorization"], "Bearer " + TOKENS[cycle]))
+            if part == 0:
+                require((step in {0, 3} and not self.attempts) or
+                    (step == 4 and len(self.attempts) == 6 and now > self.mints[0]["expiresAt"]) or
+                    (step == 7 and len(self.attempts) == 12))
+                value = {"id": INSTALLATION_ID, "app_id": APP_ID + 1 if rejected else APP_ID, "account": {
                     "id": ACCOUNT_ID, "login": examples.OWNER, "type": "Organization"},
                     "target_id": ACCOUNT_ID, "target_type": "Organization", "suspended_at": None,
                     "suspended_by": None, "permissions": PERMISSIONS}
                 status = 200
-            elif step % 3 == 1:
+            elif part == 1:
+                require(len(self.mints) == cycle)
                 require(strict_json(body) == {"permissions": PERMISSIONS,
                     **({"repositories": [examples.REPO]} if cycle == 0 else {"repository_ids": [REPOSITORY_ID]})})
                 expires = int(now) + (TOKEN_SECONDS if cycle == 0 else 3600)
                 self.mints.append({"ordinal": cycle + 1, "issuedAt": int(now), "expiresAt": expires,
-                    "selection": "name" if cycle == 0 else "id", "permissions": dict(PERMISSIONS)})
+                    "selection": "name" if cycle == 0 else "id", "permissions": dict(PERMISSIONS),
+                    "signingKey": key_name})
                 value = {"token": TOKENS[cycle], "expires_at": datetime.fromtimestamp(expires, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "permissions": PERMISSIONS, "repository_selection": "selected", "repositories": [repository()]}
                 status = 201
             else:
                 value, status = {"total_count": 1, "repositories": [repository()]}, 200
-            row.update(accepted=True, kind=("installation", "mint", "repositories")[step % 3],
-                cycle=step // 3 + 1, method=method, status=status, jwtVerified=step % 3 < 2)
+            row.update(accepted=True, kind=("installation", "mint", "repositories")[part],
+                cycle=cycle + 1, method=method, status=status, jwtVerified=part < 2,
+                signingKey=key_name, bindingMatches=not rejected)
             return status, base.encoded(value), ()
 
         index = len(self.attempts) - 1
-        require(index < 12 and body == b"")
+        require(index < 18 and body == b"")
         client, page = examples.classify(method, target)
         cycle = index // 6
         require((client, page) == (examples.CLIENTS[(index % 6) // 2], index % 2 + 1)
-            and len(self.auth) == (cycle + 1) * 3 and len(self.mints) == cycle + 1
+            and len(self.auth) == (4, 7, 10)[cycle] and len(self.mints) == cycle + 1
             and self.mints[cycle]["issuedAt"] <= now < self.mints[cycle]["expiresAt"])
         headers = dict((name.lower(), value) for name, value in fields)
         require(len(headers) == len(fields) and hmac.compare_digest(headers.get("authorization", ""), "Bearer " + TOKENS[cycle]))
@@ -154,7 +168,8 @@ class Oracle:
         semantic = examples.validated_headers(client, [(name, "Bearer " + examples.TOKEN if name.lower() == "authorization" else value)
             for name, value in fields])
         output = examples.body(page)
-        row.update(accepted=True, client=client, page=page, cycle=cycle + 1, method="GET", target=target,
+        row.update(accepted=True, client=client, page=page, cycle=cycle + 1,
+            signingKey="B" if cycle == 2 else "A", method="GET", target=target,
             semanticHeaders=semantic, requestBodySha256="sha256:" + hashlib.sha256(b"").hexdigest(),
             responseBodySha256="sha256:" + hashlib.sha256(output).hexdigest(), responseBodyBytes=len(output), status=200,
             providerCredentialMatched=True, proxyAuthorizationPresent=False, allParsedHeadersValidated=True)
@@ -198,10 +213,13 @@ class Handler(base.Handler):
 def setup():
     root = Path("/upstream-data/github")
     base.setup(root, Path("/private-fixture.json"))
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    material = {"app-key.pem": key.private_bytes(serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8, serialization.NoEncryption()),
-        "app-public.pem": key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)}
+    material = {}
+    for prefix in ("app", "app-replacement"):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        material[prefix + "-key.pem"] = key.private_bytes(serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        material[prefix + "-public.pem"] = key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
     for name, data in material.items():
         fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         with os.fdopen(fd, "wb") as stream:
@@ -217,12 +235,13 @@ def main():
         setup(); return
     assert_isolated_network()
     key = serialization.load_pem_public_key(Path("/github/app-public.pem").read_bytes())
+    replacement = serialization.load_pem_public_key(Path("/github/app-replacement-public.pem").read_bytes())
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain("/github/cert.pem", "/github/key.pem")
     with base.HTTPServer((FIXTURE_IP, 443), Handler) as server:
         server.socket = context.wrap_socket(server.socket, server_side=True)
-        server.oracle, server.timeout = Oracle(key), 0.5
+        server.oracle, server.timeout = Oracle(key, replacement), 0.5
         until = time.monotonic() + 300
         while time.monotonic() < until:
             server.handle_request()

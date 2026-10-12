@@ -47,9 +47,8 @@ repository-metadata routes. Derived tokens are held in memory and renewed on dem
 (a 65-second safety margin: 60 seconds plus a five-second lease allowance), not
 handed to the SDK client. Renewal does
 not extend the Serverware application token, expand a grant, or change the
-stored credential configuration's generation. This version has no in-place App
-private-key rotation UI: revoke the old connection and explicitly create and
-grant a new one. GitHub's [JWT documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
+stored credential configuration's generation. Manual private-key replacement is
+a separate, generation-changing action described below. GitHub's [JWT documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
 and [installation-token documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
 explain the provider-side authentication and repository/permission limits.
 
@@ -68,6 +67,46 @@ through client setup while the destination is disabled. The capability describes
 co-versioned source support;
 it does not negotiate or prove the running gate version. Wait for the exact saved
 policy to be loaded by the accepted app/gate pair.
+
+## Replace an App private key without rebuilding permissions
+
+When the instance advertises this capability, open **Credentials**, select
+**Replace GitHub App private key**, and review the repository and affected
+applications. Generate a new private key for the same App in GitHub, then submit
+that PEM. Do not create another Serverware connection or remove existing grants.
+GitHub supports overlapping keys for rotation; deleting the old key is a
+separate [GitHub-side action](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps).
+
+Serverware verifies the candidate against the saved numeric App, installation,
+account and repository identities and Issues ceiling before committing it. A
+successful replacement advances the encrypted credential generation and catalog
+revision once, records the replacement timestamp and emits the separately
+selectable audit event `operator_catalog.credential.github_app_key_replaced`.
+It does not change the credential identity, assigned applications, access rules,
+signed policy or application proxy tokens. The replacement PEM is never returned
+in the receipt or copied into audit notifications.
+
+The review is bound to the saved generation, catalog revision and policy hash.
+Changed state or failed provider verification refuses the replacement. If a
+response is lost, refresh and review saved state; do not assume rollback or
+automatically submit again. The form clears the PEM on submit, cancellation,
+navigation and failure. Acknowledged storage and confirmed local cache
+invalidation are reported separately. Previously issued GitHub installation
+tokens, proxy leases and in-flight requests are not recalled by this operation.
+Delete the old GitHub key separately after reviewing the result.
+
+The current source includes this workflow; the deployed `fa49e872` instance does
+not yet advertise it. Eight connected backend stories passed, including actual
+RSA verification, encrypted storage without decrypting the old key, two shared
+assignments, CAS/rollback/cache races, a fresh-process reopen and full-ASGI
+authentication-before-body admission. Twenty focused UI groups and all thirteen
+intercepted App/PAT browser groups passed, including desktop/mobile replacement,
+private-draft clearing and manual recovery. The initial backend/browser attempts
+found test-only header-casing, synthetic-token collision and collapsed-disclosure
+assertions; those failures remain recorded. These checks did not contact GitHub,
+run a stock SDK through Rust or deploy the feature. See the separate
+[joined verification record](operator-github-app-verification.md) for that later
+boundary; existing App creation/renewal evidence is not replacement acceptance.
 
 ## Stock client recipe
 
@@ -148,7 +187,7 @@ and one live-branch port guard-placement error were corrected before the final
 successful runs. Test sources are under `scripts/test_github_app*.py` and
 `scripts/test_operator_*github*.{py,cjs,mjs}`.
 
-The running Serverware instance currently uses immutable source
+The earlier App-connection rollout used immutable source
 `bf33afce290aba279033c4c1f78c486312516632`, deployed through the canonical workspace's
 retained five-layer Compose configuration. Only the app source mount changed;
 the accepted Rust binary remains
@@ -170,8 +209,10 @@ Real GitHub authentication and a real repository operation remain unverified.
 A fresh [App-through-Rust SDK run](operator-github-app-verification.md) passed
 at main `fa49e872`: Node/Python/Go reads across genuine expiry/renewal, all nine
 scope/revocation denials, twelve distinct request/release audit pairs and clean
-shutdown. That isolated synthetic-provider check did not change the running
-instance or resolve the public proxy's outstanding DNS decision. Historical
+shutdown. The later canonical-instance cutover deployed `fa49e872` with normal
+Rust `e94f2339`; see the [deployment record](../docker/serverware-operator-demo/README.md).
+Neither check establishes real-provider use or resolves the public proxy's
+outstanding DNS decision. Historical
 SDK checkpoints below used a static-token fixture and remain separate evidence.
 
 ## Checked-in Node, Python and Go examples

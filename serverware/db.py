@@ -67543,6 +67543,69 @@ def create_operator_github_app_credential(conn: Any, *, name: str, secret: str,
     return row_to_credential(conn.execute("SELECT * FROM credentials WHERE id=?", (item_id,)).fetchone())
 
 
+def replace_operator_github_app_credential_if_version(conn: Any, item_id: str, *,
+        expected_version: int, secret: str) -> dict[str, Any] | None:
+    """Replace only the encrypted key, inside the catalog's exact transaction.
+
+    No old ciphertext is selected or decrypted. The catalog owns verification,
+    its revision/audit, and COMMIT. Every accepted replacement advances the
+    existing generation, including an identical key; all metadata stays fixed.
+    """
+    from serverware import operator_catalog_schema, operator_github_app
+    _operator_github_app_transaction(conn)
+    try:
+        if (type(item_id) is not str or str(uuid.UUID(item_id)) != item_id
+                or type(expected_version) is not int
+                or not 1 <= expected_version < 9_007_199_254_740_991):
+            raise ValueError()
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError("operator GitHub App replacement review refused") from None
+    _lock_credential_mutation(conn, item_id)
+    current = conn.execute("SELECT id,name,kind,metadata,lifecycle_status,credential_version "
+        "FROM credentials WHERE id=?", (item_id,)).fetchone()
+    retained = conn.execute("SELECT id,ordinal,data_json FROM operator_catalog_credentials WHERE id=?",
+        (item_id,)).fetchone()
+    if current is None or retained is None:
+        return None
+    try:
+        metadata, record = loads(current["metadata"], {}), loads(retained["data_json"], {})
+        if (type(metadata) is not dict or type(record) is not dict or "id" in record or "ordinal" in record
+                or current["kind"] != "bearer" or current["lifecycle_status"] != "active"
+                or record.get("name") != current["name"] or record.get("status") != "active"):
+            raise ValueError()
+        operator_github_app.validate_credential({"id": item_id, "ordinal": retained["ordinal"], **record}, metadata)
+        version = current["credential_version"]
+        floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?",
+            (item_id,)).fetchone()
+        if (type(version) is not int or not 1 <= version <= 9_007_199_254_740_991 or floor is None
+                or type(floor["last_version"]) is not int or floor["last_version"] != version):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError, operator_catalog_schema.CatalogIntegrityError):
+        raise MetadataStoreError("operator GitHub App credential binding refused") from None
+    if version != expected_version:
+        return None
+    # The replacement envelope must repeat the exact retained public binding;
+    # neither a bearer string nor a different App/repository can be substituted.
+    operator_github_app.validate_stored(secret, metadata)
+    next_version = version + 1
+    encrypted = _envelope_values(item_id, secret, next_version)
+    changed = conn.execute("UPDATE credentials SET encrypted_secret=?,encrypted_dek=?,secret_nonce=?,"
+        "secret_ciphertext=?,secret_kek_id=?,credential_version=?,secret_updated_at=?,updated_at=? "
+        "WHERE id=? AND credential_version=? AND lifecycle_status='active'", (
+        encrypted["encrypted_secret"], encrypted["encrypted_dek"], encrypted["secret_nonce"],
+        encrypted["secret_ciphertext"], encrypted["secret_kek_id"], next_version,
+        encrypted["secret_updated_at"], encrypted["secret_updated_at"], item_id, version)).rowcount
+    if changed != 1:
+        raise MetadataStoreError("operator GitHub App replacement compare-and-swap refused")
+    _record_credential_generation(conn, item_id, next_version)
+    advanced = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?",
+        (item_id,)).fetchone()
+    if advanced is None or type(advanced["last_version"]) is not int or advanced["last_version"] != next_version:
+        raise MetadataStoreError("operator GitHub App replacement generation update refused")
+    return {"previous_credential_generation": version, "credential_generation": next_version,
+        "key_replaced_at": encrypted["secret_updated_at"]}
+
+
 def delete_operator_github_app_credential(conn: Any, item_id: str) -> bool:
     """Local catalog revocation without private-key decryption or provider requests."""
     from serverware import operator_catalog_schema, operator_github_app

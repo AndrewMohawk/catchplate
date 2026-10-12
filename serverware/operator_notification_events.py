@@ -60,6 +60,7 @@ _CATALOG = {
     "credential.created": "Provider key saved",
     "credential.github_token_created": "GitHub token saved",
     "credential.github_app_created": "GitHub App connection saved",
+    "credential.github_app_key_replaced": "GitHub App private key replaced; assignments preserved",
     "credential.npm_token_created": "npm token saved",
     "credential.x_app_bearer_created": "X app-only token saved",
     "credential.alchemy_key_created": "Alchemy key saved",
@@ -88,6 +89,8 @@ _CATALOG = {
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
 _GITHUB_APP_CREATED = "operator_catalog.credential.github_app_created"
+_GITHUB_APP_KEY_REPLACED = "operator_catalog.credential.github_app_key_replaced"
+_GITHUB_APP_EVENTS = {_GITHUB_APP_CREATED, _GITHUB_APP_KEY_REPLACED}
 _X_CONFIGURATION_SAVED = "operator_catalog.x_oauth.configuration_saved"
 _X_CONFIGURATION_PREFIX = "operator-x-configuration:"
 _SUMMARIES[_X_CONFIGURATION_SAVED] = "X application configuration saved; account consent is separate"
@@ -188,7 +191,7 @@ def _event_identifier(identifier, event_type):
     if event_type == _X_CONFIGURATION_SAVED:
         return (isinstance(identifier, str) and identifier.startswith(_X_CONFIGURATION_PREFIX)
             and _uuid(identifier[len(_X_CONFIGURATION_PREFIX):]))
-    if event_type == _GITHUB_APP_CREATED:
+    if event_type in _GITHUB_APP_EVENTS:
         return _uuid(identifier)
     if event_type in _SETUP_IDS:
         return _setup_operation(identifier, event_type) is not None
@@ -355,17 +358,27 @@ def _details(row, event):
 def _provider_configuration_details(row, event):
     """Exact committed producer records, not provider readiness or actions.
 
-    Do not fall back to metadata-only delivery for these two closed producers.
+    Do not fall back to metadata-only delivery for these closed producers.
     Raw profiles, App keys, client IDs and secrets are never copied here.
     """
     _require(type(event) is dict and row["actor_type"] == "admin"
         and _text(row["actor_id"], 256))
-    if row["event_type"] == _GITHUB_APP_CREATED:
-        _require(set(event) == {"resource_type", "resource_id", "revision", "policy_hash", "policy_sequence"}
+    if row["event_type"] in _GITHUB_APP_EVENTS:
+        replaced = row["event_type"] == _GITHUB_APP_KEY_REPLACED
+        fields = {"resource_type", "resource_id", "revision", "policy_hash", "policy_sequence"}
+        if replaced:
+            fields |= {"previous_credential_generation", "credential_generation"}
+        _require(set(event) == fields
             and event["resource_type"] == "credential" and _uuid(event["resource_id"])
             and _integer(event["revision"], 1) and _integer(event["policy_sequence"], 1)
             and _hash(event["policy_hash"]))
-        return {**_details(row, event), "provider": "github"}
+        result = {**_details(row, event), "provider": "github"}
+        if replaced:
+            _require(_integer(event["previous_credential_generation"], 1, _MAX_INT - 1)
+                and _integer(event["credential_generation"], 2)
+                and event["credential_generation"] == event["previous_credential_generation"] + 1)
+            result["previous_credential_generation"] = event["previous_credential_generation"]
+        return result
     _require(row["event_type"] == _X_CONFIGURATION_SAVED
         and set(event) == {"operation_id", "actor_id", "config_version", "reviewed_revision",
             "committed_revision", "policy_hash", "profile_binding_digest", "created_at"}
@@ -651,7 +664,7 @@ def _approval(conn, row, event, now):
 
 
 def _audit_projection(row, event):
-    if row["event_type"] in {_GITHUB_APP_CREATED, _X_CONFIGURATION_SAVED}:
+    if row["event_type"] in _GITHUB_APP_EVENTS | {_X_CONFIGURATION_SAVED}:
         details = _provider_configuration_details(row, event)
     else:
         details = _google_details(row, event) if row["event_type"] in _GOOGLE_SUMMARIES else _details(row, event)

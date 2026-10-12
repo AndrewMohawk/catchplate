@@ -139,6 +139,7 @@ class AppExamplesRun(NpmExampleRun):
                 "initializerSha256": recipe.base.INITIALIZER_SHA256, "composeSha256": recipe.base.digest(compose_path),
                 "project": self.project, "images": image_ids, "keeperLifetimeSeconds": recipe.KEEPER_SECONDS,
                 "checkerSeconds": recipe.CHECKER_SECONDS, "initialProviderTokenSeconds": 120,
+                "keyReplacementStory": True, "generatedAppSigningKeys": 2,
                 "syntheticOnly": True, "realGithubVerified": False, "productionReady": False})
             for phase, profile, limit in (("initialize", "prepare", 35), ("github-pki", "github-pki", 25)):
                 self.command(phase, compose + ["--profile", profile, "run", "--rm", "--no-deps", "--pull", "never", phase], limit)

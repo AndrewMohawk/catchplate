@@ -37,14 +37,17 @@ class ReceiverTests(unittest.TestCase):
         cls.pem = cls.private.private_bytes(serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
         cls.signing = protocol.load_private_key(cls.pem.encode())
+        cls.replacement = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.replacement_signing = protocol.load_private_key(cls.replacement.private_bytes(serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
         cls.config = protocol.AppConfig(123, 456, fixture.examples.OWNER, fixture.examples.REPO, "read")
 
     def setUp(self):
         for name in ("socket.socket", "socket.create_connection", "socket.getaddrinfo", "subprocess.Popen"):
             self.enterContext(patch(name, side_effect=AssertionError("inert test attempted runtime I/O")))
-        self.oracle = fixture.Oracle(self.private.public_key())
+        self.oracle = fixture.Oracle(self.private.public_key(), self.replacement.public_key())
 
-    def provision(self, *, now=NOW, config=None):
+    def provision(self, *, now=NOW, config=None, signing=None):
         def transport(request, **kwargs):
             self.assertEqual(kwargs["require_https"], True)
             self.assertEqual(request.full_url.split("/", 3)[:3], ["https:", "", "api.github.com"])
@@ -56,7 +59,15 @@ class ReceiverTests(unittest.TestCase):
                 sent, request.data or b"", now)
             headers = (("content-type", "application/json; charset=utf-8"), ("content-length", str(len(raw))))
             return HttpResponse(status, dict(headers), headers, raw)
-        return protocol.mint_installation_token(config or self.config, self.signing, transport=transport, clock=lambda: now)
+        return protocol.mint_installation_token(config or self.config, signing or self.signing,
+            transport=transport, clock=lambda: now)
+
+    def reject_candidate(self, config, now=NOW):
+        with self.assertRaises(protocol.GitHubAppError):
+            self.provision(now=now, config=config, signing=self.replacement_signing)
+        self.assertEqual(len(self.oracle.mints), 1)
+        self.assertEqual(self.oracle.auth[-1]["signingKey"], "B")
+        self.assertIs(self.oracle.auth[-1]["bindingMatches"], False)
 
     def read_cycle(self, cycle, now):
         for client in fixture.examples.CLIENTS:
@@ -70,14 +81,20 @@ class ReceiverTests(unittest.TestCase):
         first = self.provision()
         self.assertEqual((first.config.account_id, first.config.repository_id), (700, 900))
         self.assertEqual(first.token, fixture.TOKENS[0])
+        self.reject_candidate(first.config)
         self.read_cycle(0, NOW + 1)
         second = self.provision(now=NOW + 122, config=first.config)
         self.assertEqual(second.config, first.config)
         self.assertEqual(second.token, fixture.TOKENS[1])
         self.read_cycle(1, NOW + 123)
+        third = self.provision(now=NOW + 124, config=first.config, signing=self.replacement_signing)
+        self.assertEqual(third.config, first.config)
+        self.assertEqual(third.token, fixture.TOKENS[2])
+        self.read_cycle(2, NOW + 130)
         observed = checker.validate_observation(self.oracle.observation())
-        self.assertEqual((observed["total"], len(observed["auth"]), len(observed["attempts"])), (18, 6, 12))
-        self.assertEqual([v["selection"] for v in observed["mints"]], ["name", "id"])
+        self.assertEqual((observed["total"], len(observed["auth"]), len(observed["attempts"])), (28, 10, 18))
+        self.assertEqual([v["selection"] for v in observed["mints"]], ["name", "id", "id"])
+        self.assertEqual([v["signingKey"] for v in observed["mints"]], ["A", "A", "B"])
         self.assertNotIn("BEGIN PRIVATE", json.dumps(observed))
         for token in fixture.TOKENS:
             self.assertNotIn(token, json.dumps(observed))
@@ -97,22 +114,34 @@ class ReceiverTests(unittest.TestCase):
                 b'{"permissions":{"issues":"read","metadata":"read"},"repository_ids":[900]}',
                 b'{"permissions":{"issues":"read","metadata":"read"},"repositories":["operator-demo","other"]}',
                 b'{"repositories":[],"repositories":[]}'):
-            oracle = fixture.Oracle(self.private.public_key())
+            oracle = fixture.Oracle(self.private.public_key(), self.replacement.public_key())
             oracle.handle("GET", fixture.INSTALL_PATH, fields(jwt), b"", NOW)
             with self.assertRaises(ValueError): oracle.handle("POST", fixture.MINT_PATH, fields(jwt, body=body), body, NOW)
             self.assertEqual(oracle.mints, [])
             self.assertEqual(oracle.auth[-1], {"ordinal": 2, "accepted": False})
 
     def test_early_refresh_expired_or_wrong_token_and_unexpected_resource_refused(self):
-        first = self.provision(); self.read_cycle(0, NOW + 1)
+        first = self.provision(); self.reject_candidate(first.config); self.read_cycle(0, NOW + 1)
         with self.assertRaises(protocol.GitHubAppError): self.provision(now=NOW + 100, config=first.config)
         self.assertEqual(len(self.oracle.mints), 1)
         for when, headers, target in ((NOW + 121, issue_fields("node"), fixture.examples.target("node", 1)),
                 (NOW + 1, issue_fields("node", 1), fixture.examples.target("node", 1)),
                 (NOW + 1, issue_fields("node"), "/repos/serverware-fixture/other/issues")):
-            self.oracle = fixture.Oracle(self.private.public_key()); self.provision()
+            self.oracle = fixture.Oracle(self.private.public_key(), self.replacement.public_key())
+            first = self.provision(); self.reject_candidate(first.config)
             with self.assertRaises(ValueError): self.oracle.handle("GET", target, headers, b"", when)
-            self.assertEqual(self.oracle.attempts, [{"ordinal": 4, "accepted": False}])
+            self.assertEqual(self.oracle.attempts, [{"ordinal": 5, "accepted": False}])
+
+    def test_wrong_signing_key_cannot_substitute_candidate_or_committed_replacement(self):
+        first = self.provision()
+        with self.assertRaises(protocol.GitHubAppError): self.provision(config=first.config)
+        self.assertEqual(self.oracle.auth[-1], {"ordinal": 4, "accepted": False})
+        self.oracle = fixture.Oracle(self.private.public_key(), self.replacement.public_key())
+        first = self.provision(); self.reject_candidate(first.config); self.read_cycle(0, NOW + 1)
+        self.provision(now=NOW + 122, config=first.config); self.read_cycle(1, NOW + 123)
+        with self.assertRaises(protocol.GitHubAppError): self.provision(now=NOW + 124, config=first.config)
+        self.assertEqual(len(self.oracle.mints), 2)
+        with self.assertRaises(ValueError): fixture.Oracle(self.private.public_key(), self.private.public_key())
 
     def test_exact_provisioning_headers_and_no_proxy_credential_or_redirect_target(self):
         good = fields("Bearer synthetic")
@@ -133,8 +162,8 @@ class ReceiverTests(unittest.TestCase):
         handler.resource()
         self.assertEqual(self.oracle.auth, [{"ordinal": 1, "accepted": False}])
         self.assertEqual(responses, [(400, b'{"message":"synthetic App fixture refused"}')])
-        for _ in range(30): handler.resource()
-        self.assertEqual(self.oracle.total, 31)
+        for _ in range(fixture.MAX_ARRIVALS + 6): handler.resource()
+        self.assertEqual(self.oracle.total, fixture.MAX_ARRIVALS + 7)
         self.assertEqual(len(self.oracle.auth), fixture.MAX_ARRIVALS)
         self.assertNotIn("private-canary", json.dumps(self.oracle.observation()))
         with self.assertRaises(checker.CheckFailure): checker.validate_observation(self.oracle.observation())

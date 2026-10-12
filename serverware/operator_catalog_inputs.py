@@ -229,6 +229,18 @@ class TargetInput(RevisionInput):
     _canonical_id = field_validator("id")(_identifier)
 
 
+class ReplaceGithubAppKeyInput(TargetInput):
+    """Write-only candidate key; no saved App/repository binding is editable."""
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    expected_credential_generation: int = Field(ge=1, lt=9_007_199_254_740_991)
+    private_key_pem: str = Field(min_length=1, max_length=8192, repr=False, exclude=True)
+
+    @field_validator("private_key_pem")
+    @classmethod
+    def rsa_key(cls, value: str) -> str:
+        return GithubAppInput.rsa_key(value)
+
+
 class _AwsSigV4TupleInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     credential_kind: Literal["long_term", "session"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -27,7 +28,7 @@ _PUBLIC = {"app_id", "installation_id", "account_id", "repository_id", "reposito
     "issues_permission", "token_refresh"}
 _METADATA = {"provider_id", "provider_subject", "secret_class", "connection_type", "github_app"}
 _RECORD = {"id", "ordinal", "version", "name", "created_at", "status", "revoked_at",
-    "auth_type", "header_name", "connection_type", "provider_subject", "github_app"}
+    "auth_type", "header_name", "connection_type", "provider_subject", "github_app", "key_replaced_at"}
 _CAPACITY = 256
 _MARGIN = 65
 _BACKOFF = 60.0
@@ -125,6 +126,11 @@ def validate_credential(record, metadata=None):
             and type(record.get("provider_subject")) is str
             and str(uuid.UUID(record["provider_subject"])) == record["provider_subject"])
         public_config(record["github_app"])
+        if "key_replaced_at" in record:
+            stamp = record["key_replaced_at"]
+            _require(type(stamp) is str and 1 <= len(stamp) <= 64 and stamp.isascii()
+                and not any(ord(char) < 32 or ord(char) == 127 for char in stamp)
+                and datetime.fromisoformat(stamp).tzinfo is not None)
         if metadata is not None:
             validate_metadata(metadata)
             _require(metadata["github_app"] == record["github_app"]
@@ -174,6 +180,30 @@ def verify_connection(payload):
         return PreparedConnection(public, secret, token, time.time(), time.monotonic())
     except Exception:
         raise GitHubAppUnavailable("GitHub App verification failed; no connection was saved") from None
+
+
+def verify_replacement(public, private_key_pem):
+    """Verify a new key against every saved numeric binding, without caching it.
+
+    The caller must check its saved active row and review CAS before this
+    provider operation, then recheck both inside the eventual write transaction.
+    This neither deletes an old GitHub key nor revokes issued installation tokens.
+    """
+    require_runtime()
+    from serverware import operator_publication as publication
+    publication.assert_not_held()
+    try:
+        config = public_config(public)
+        _require(type(private_key_pem) is str and 1 <= len(private_key_pem.encode("utf-8")) <= 8192)
+        key = protocol.load_private_key(private_key_pem.encode("utf-8"))
+        token = protocol.mint_installation_token(config, key)
+        _require(token.config == config)
+        saved = _public(config)
+        secret = _canonical({"schema": SECRET_SCHEMA, "github_app": saved,
+            "private_key_pem": private_key_pem})
+        return PreparedConnection(saved, secret, token, time.time(), time.monotonic())
+    except Exception:
+        raise GitHubAppUnavailable("GitHub App key verification failed; no replacement was saved") from None
 
 
 def metadata(public, subject):
@@ -328,3 +358,8 @@ def capability():
     value = github.capability()
     return {**value, "schema": "serverware.operatorGithubApp/v1", "connection_type": CONNECTION,
         "create_credential_path": "/api/operator-demo/credentials/github-app"}
+
+
+def key_replacement_capability():
+    return {"schema": "serverware.operatorGithubAppKeyReplacement/v1",
+        "path": "/api/operator-demo/credentials/github-app/replace-key"}

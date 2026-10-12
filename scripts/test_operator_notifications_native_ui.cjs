@@ -60,10 +60,11 @@ function delivery(changes = {}) {
   return api.project(value).slots[0].last_delivery;
 }
 const tests = [
-  ['67 advertised audit types never widen the 64-filter destination limit or select anything', () => {
+  ['68 advertised audit types never widen the 64-filter destination limit or select anything', () => {
     const value = status();
     const types = [...Array.from({length: 64}, (_, index) => 'fixture.event_' + String(index).padStart(2, '0')),
       'operator_catalog.access_rule.npm_install_created', 'operator_catalog.credential.github_app_created',
+      'operator_catalog.credential.github_app_key_replaced',
       'operator_catalog.x_oauth.configuration_saved'].sort();
     value.capabilities.audit_log.event_types = types;
     const before = JSON.stringify(value);

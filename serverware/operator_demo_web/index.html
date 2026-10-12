@@ -216,6 +216,19 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
           <div class="actions"><button id="credential-replace-submit" type="submit">Replace key</button><button id="credential-replace-cancel" type="button" class="secondary">Cancel</button></div>
         </fieldset></form>
       </section>
+      <section id="github-app-replace-panel" class="card" aria-labelledby="github-app-replace-title" hidden>
+        <h2 id="github-app-replace-title">Replace GitHub App private key</h2>
+        <p>The App, installation, repository, permissions and assigned applications stay unchanged. Serverware verifies the new key and requests a fresh scoped installation token before saving.</p>
+        <p id="github-app-replace-binding"></p><p id="github-app-replace-count"></p><ul id="github-app-replace-apps"></ul>
+        <p class="small muted">Existing installation tokens, proxy leases and in-flight requests are not recalled. Delete the old private key separately in GitHub after reviewing the replacement. Application proxy tokens and their expiry are unchanged.</p>
+        <form id="github-app-replace-form" autocomplete="off"><fieldset id="github-app-replace-fields" disabled>
+          <label for="github-app-replace-private-key">New GitHub App private key PEM</label>
+          <textarea id="github-app-replace-private-key" rows="6" maxlength="8192" autocomplete="new-password" autocapitalize="none" spellcheck="false" required></textarea>
+          <p class="small muted">The existing key cannot be retrieved. The new PEM is cleared on submission, cancellation, state changes and navigation; it is never saved in browser storage.</p>
+          <div class="actions"><button id="github-app-replace-submit" type="submit">Verify and replace private key</button><button id="github-app-replace-cancel" type="button" class="secondary">Cancel</button></div>
+        </fieldset></form>
+      </section>
+      <p id="github-app-replace-status" role="status" aria-live="polite"></p>
     </section>
     <section id="applications" class="page" aria-labelledby="applications-title" hidden>
       <h1 id="applications-title">Applications</h1><p class="intro">Create an identity for each app. Its token can use only the rules you assign; it never contains a provider credential.</p>

@@ -129,7 +129,7 @@ function projectNotificationStatus(value) {
       !notificationNativeValid(caps.native_hardware) ||
       !['source_note', 'test_note'].every(key => typeof caps[key] === 'string' && caps[key].length <= 512) ||
       !['action_required', 'audit_log'].every(channel => notificationObject(caps[channel], ['source_available', 'event_types']) &&
-        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? 67 : 64)) ||
+        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? 68 : 64)) ||
       !value.available && (caps.action_required.source_available || caps.native_hardware.source_available) ||
       caps.native_hardware.source_available && !caps.action_required.source_available || caps.audit_log.source_available !== value.available ||
       !value.slots.every(slot => slot.event_types.every(type => caps[slot.channel].event_types.includes(type)))) bad();

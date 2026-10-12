@@ -33,6 +33,7 @@ from serverware import authority_static_credential_assignment as assignment
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
 from serverware import authority_transition_static_credential_rotate as kernel
+from serverware import authority_webauthn_bindings as bindings
 from serverware import credential_currentness_rows as rows
 import authority_revocation_trust_fixture as trust
 
@@ -153,8 +154,10 @@ class RotationControls(unittest.TestCase):
                 "credentialId": credential["credential_id"], "rpId": "unit.example", "origin": "https://unit.example"}).decode(),
             "expires_at": STAMP(now + 10_000_000_000), "used_at": None, "created_at": STAMP(now - 1_000_000_000)}
         challenge.update({field: 0 if field == "retention_reference_mask" else None for field in retention.DERIVED_FIELDS})
+        # The genuine reader commits its original ten columns; the selected
+        # row below retains all seventeen columns for full-row custody/CAS.
         public = {**json.loads(challenge["payload_json"]), "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": core.framed_digest("serverware.policyAuthorityWebAuthnChallengeRow/v1", C(challenge))}
+            "challengeRowDigest": bindings.challenge_row_digest(challenge)}
         high = trust.trust_rows()["webauthn_trust_publication_high_water"][0]
         evidence = {"operation": rotation.OPERATION, "operationId": operation_id, "requestDigest": request_digest,
             "credentialRecordId": credential["id"], "credentialId": credential["credential_id"], "challengeId": challenge["id"],

@@ -79,6 +79,46 @@ interpreter import/refusal probe of both actual receipt entrypoints. This probe
 is not valid signed admission or complete image/runtime verification. No test
 or image build has been executed.
 
+### Static credential import and rotation preflight
+
+The broker entrypoint also imports the AWS exclusion guard and the static
+credential creation/rotation owners. The old explicit package roster omitted
+those modules and their dependencies. An ordinary source-tree import hid that
+defect; the isolated helper root could not import its entrypoint.
+
+`BROKER_MODULES` now supplies the source-fixed roster through the same copier
+used by production packaging. Rotation's historical-proof syntax is shared in
+`static_credential_provenance_values.py`, rather than importing the authority's
+database-transition and Nitro-verification graph into the helper. Existing
+authority entrypoints delegate to the same parser. Signature verification,
+native assignment and quote admission, and authenticated history/current-row
+checks remain separate and unchanged; parsing a prior proof never authorizes
+rotation. Dependency versions, native image bounds and purpose admission are
+not expanded by this repair.
+
+The fast preflight requires no image build or pilot:
+
+```sh
+make verify-native-broker-package-closure
+make verify-static-credential-provenance-values
+```
+
+The package check stages only the reviewed source roster, isolates it from the
+checkout and tests the actual helper import and rotation parser calls. It is
+not a substitute for the full generated-root ELF check, reproducible SquashFS
+build, native owner admission or credential-bearing application acceptance.
+
+Offline validation on 2026-10-12 used the cached Python 3.11.15 test image with
+network disabled, no writable source mount and no service restart. Six package
+closure groups and eight parser/signature groups passed. Four authority rotation
+groups, ten native rotation material groups and 37 additional planner, assignment
+and historical lookup controls also passed across two runs. The first run exposed
+an older rotation fixture hashing 17 stored challenge fields instead of the
+producer's ten-field digest projection. Only that fixture was corrected, retaining
+the full selected row and all existing assertions; the three affected groups were
+then rerun with the previously unreached tests. These results do not establish a
+deployed image, genuine Nitro admission or a live provider request.
+
 The [shadow-key helper](native-shadow-encrypted-keys.md#real-process-and-packaging-contract)
 has a separate offline packager and image identity. Sharing the bounded copier
 does not give either helper the other's entrypoint, key inventory or authority.

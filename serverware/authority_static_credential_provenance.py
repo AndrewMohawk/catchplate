@@ -12,17 +12,18 @@ from serverware import authority_oauth_setup as codec
 from serverware import authority_setup_bind_credential as timestamps
 from serverware import authority_static_credential_create as creation
 from serverware import authority_static_credential_custody as custody
+from serverware import static_credential_provenance_values as values
 from serverware import authority_transition_quota as shared
 from serverware import credential_currentness_rows
 
-SCHEMA = "serverware.staticCredentialCreationProvenance/v1"
-MAX_ORIGINAL_BYTES = 40 * 1024
-FIELDS = frozenset({"apiVersion", "creationRequestDigest", "nativeEvidenceOriginal"})
+SCHEMA = values.SCHEMA
+MAX_ORIGINAL_BYTES = values.MAX_ORIGINAL_BYTES
+FIELDS = values.FIELDS
 AUDIT_FIELDS = frozenset({"schema", "operation", "requestDigest", "credentialId",
     "credentialVersion", "candidateSha256", "intentSha256", "nativeGenerationSha256",
     "custodyStatementSha256", "approvalId"})
-ROTATION_SCHEMA = "serverware.staticCredentialRotationProvenance/v1"
-ROTATION_FIELDS = frozenset({"apiVersion", "rotationRequestDigest", "nativeEvidenceOriginal"})
+ROTATION_SCHEMA = values.ROTATION_SCHEMA
+ROTATION_FIELDS = values.ROTATION_FIELDS
 ROTATION_AUDIT_SCHEMA = "serverware.staticCredentialRotationAudit/v1"
 ROTATION_AUDIT_FIELDS = AUDIT_FIELDS | {"previousCredentialVersion", "previousCredentialSha256",
     "previousCurrentnessOriginRequestDigest", "previousProvenanceSha256", "predecessorBarrierSha256",
@@ -30,23 +31,13 @@ ROTATION_AUDIT_FIELDS = AUDIT_FIELDS | {"previousCredentialVersion", "previousCr
 
 
 def original(value):
-    """Closed literal native evidence acquired from the original measured plan."""
-    creation.require(type(value) is str and value.isascii()
-        and 0 < len(value) <= MAX_ORIGINAL_BYTES)
-    parsed = codec.document(value.encode("ascii"), MAX_ORIGINAL_BYTES)
-    creation.require(set(parsed) == FIELDS and parsed["apiVersion"] == SCHEMA)
-    creation.digest(parsed["creationRequestDigest"])
-    evidence = parsed["nativeEvidenceOriginal"]
-    creation.require(type(evidence) is str and evidence.isascii()
-        and 0 < len(evidence) <= custody.MAX_EVIDENCE_BYTES)
-    custody.evidence(codec.document(evidence.encode("ascii"), custody.MAX_EVIDENCE_BYTES))
-    return parsed
+    """Compatibility syntax projection; historical authority is checked separately."""
+    return values.original(value)
 
 
 def evidence(value):
-    parsed = original(value)
-    return custody.evidence(codec.document(parsed["nativeEvidenceOriginal"].encode("ascii"),
-        custody.MAX_EVIDENCE_BYTES))
+    """Compatibility syntax projection; historical authority is checked separately."""
+    return values.evidence(value)
 
 
 def outbox_id(value):
@@ -133,31 +124,18 @@ def verify_rows(value, *, credential, generation, root, outbox,
 
 
 def generation_original(value):
-    """Explicit creation/rotation provenance dispatch, never a fresh verdict."""
-    creation.require(type(value) is str and value.isascii() and 0 < len(value) <= MAX_ORIGINAL_BYTES)
-    parsed = codec.document(value.encode("ascii"), MAX_ORIGINAL_BYTES)
-    if parsed.get("apiVersion") == SCHEMA:
-        return original(value)
-    from serverware import authority_static_credential_rotation_custody as rotation_custody
-    creation.require(set(parsed) == ROTATION_FIELDS and parsed["apiVersion"] == ROTATION_SCHEMA)
-    creation.digest(parsed["rotationRequestDigest"])
-    native = parsed["nativeEvidenceOriginal"]
-    creation.require(type(native) is str and native.isascii() and 0 < len(native) <= rotation_custody.MAX_EVIDENCE_BYTES)
-    rotation_custody.evidence(codec.document(native.encode("ascii"), rotation_custody.MAX_EVIDENCE_BYTES))
-    return parsed
+    """Compatibility syntax projection; historical authority is checked separately."""
+    return values.generation_original(value)
 
 
 def request_digest(parsed):
-    return parsed["creationRequestDigest"] if parsed["apiVersion"] == SCHEMA else parsed["rotationRequestDigest"]
+    """Compatibility syntax projection; historical authority is checked separately."""
+    return values.request_digest(parsed)
 
 
 def generation_evidence(value):
-    parsed = generation_original(value)
-    if parsed["apiVersion"] == SCHEMA:
-        return evidence(value)
-    from serverware import authority_static_credential_rotation_custody as rotation_custody
-    return rotation_custody.evidence(codec.document(parsed["nativeEvidenceOriginal"].encode("ascii"),
-        rotation_custody.MAX_EVIDENCE_BYTES))
+    """Compatibility syntax projection; historical authority is checked separately."""
+    return values.generation_evidence(value)
 
 
 def generation_outbox_id(value):

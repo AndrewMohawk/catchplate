@@ -39,7 +39,7 @@ POLICY_FIELDS = creation.POLICY_FIELDS | {"nativeCustodyPurpose"}
 
 
 def _intent_request(value):
-    from serverware import authority_static_credential_provenance as provenance
+    from serverware import static_credential_provenance_values as provenance
 
     require(type(value) is dict and set(value) == INTENT_FIELDS)
     identifier(value["credentialId"])

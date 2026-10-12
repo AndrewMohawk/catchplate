@@ -32,6 +32,7 @@ SHELL := /bin/sh
 .PHONY: verify-authority-jit-request
 .PHONY: verify-authority-jit-private-request
 .PHONY: verify-approval-history-metadata verify-native-jit-review-material verify-native-jit-review-owner
+.PHONY: verify-native-broker-package-closure verify-static-credential-provenance-values
 .PHONY: verify-operator-live-smoke-config
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
@@ -1468,6 +1469,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oauth_refresh.py \
 	serverware/authority_credential_currentness.py \
 	serverware/authority_static_credential_provenance.py \
+	serverware/static_credential_provenance_values.py \
 	serverware/authority_credential_currentness_policy.py \
 	serverware/authority_credential_currentness_assignment.py \
 	serverware/control_plane_credential_currentness_assignment.py \
@@ -4657,6 +4659,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oauth_refresh.py \
 				serverware/authority_credential_currentness.py \
 				serverware/authority_static_credential_provenance.py \
+				serverware/static_credential_provenance_values.py \
 				serverware/authority_credential_currentness_policy.py \
 				serverware/authority_credential_currentness_assignment.py \
 				serverware/control_plane_credential_currentness_assignment.py \
@@ -11388,6 +11391,14 @@ verify-native-jit-review-material:
 
 verify-native-jit-review-owner:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_owner.py
+
+# No image build, native startup, database or provider effects. The package
+# probe imports only the explicit staged broker roster, not the source tree.
+verify-native-broker-package-closure:
+	python3 -I -B scripts/test_native_broker_package_closure.py
+
+verify-static-credential-provenance-values:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -I -B scripts/test_static_credential_provenance_values.py
 
 # Offline configuration oracles only: no live smoke authorization or I/O.
 verify-operator-live-smoke-config:

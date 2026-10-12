@@ -26,28 +26,23 @@ from serverware import authority_credential_currentness as current
 from serverware import authority_credential_currentness_policy as native
 from serverware import authority_static_credential_create as profile
 from serverware import authority_static_credential_assignment as assignment
+from serverware import static_credential_provenance_values as values
 
 canonical, sha256, digest, require = profile.canonical, profile.sha256, profile.digest, profile.require
 FIELD = "staticCredentialCustodyPolicy"
 SCHEMA = "serverware.staticCredentialCustodyAuthorityPolicy/v2"
 TRUST_SCHEMA = "serverware.staticCredentialNativeTrustRoots/v1"
-STATEMENT_SCHEMA = "serverware.nativeStaticCredentialGenerationStatement/v1"
+STATEMENT_SCHEMA = values.CREATION_STATEMENT_SCHEMA
 SIGN_OPERATION = "nativeStaticCredentialGeneration.sign/v1"
 SIGNATURE_DOMAIN = STATEMENT_SCHEMA.encode("ascii") + b"\0"
 ATTESTATION_DOMAIN = b"serverware/native-static-credential-generation-attestation/v1\0"
-MAX_EVIDENCE_BYTES = 32 * 1024
+MAX_EVIDENCE_BYTES = values.MAX_EVIDENCE_BYTES
 MAX_AUTHORITY_EVIDENCE_BYTES = MAX_EVIDENCE_BYTES + 2 * assignment.MAX_ORIGINAL_BYTES + 256
 MAX_POLICY_BYTES = 512 * 1024
 POLICY_FIELDS = frozenset({"schema", "deploymentId",
     "operationMaxSeconds", "trustRoots", "assignmentAuthorizer", "target"})
 ASSIGNMENT_FIELDS = assignment.ASSIGNMENT_FIELDS
-STATEMENT_FIELDS = frozenset({"apiVersion", "operation", "holderId", "bootId", "keyId",
-    "controlPlaneResponseSigningKeyId", "deploymentId", "instanceId",
-    "controlPlaneConfigurationDigest", "actorId", "credentialId", "credentialVersion",
-    "intentSha256", "generationSha256", "inputSha256", "secretKekId",
-    "generationCreatedAtEpochNs", "challenge", "policyHash", "dataPlaneBinarySha256",
-    "intakeOrigin", "portalOrigin", "ingressLeafCertificateSha256", "ingressLeafSpkiSha256",
-    "issuedAtEpochNs", "expiresAtEpochNs"})
+STATEMENT_FIELDS = values.CREATION_STATEMENT_FIELDS
 _SCOPE_DIGESTS = ("releaseRecordSha256", "policyHash", "configurationSha256",
     "caCertificateSha256", "caPublicKeySpkiSha256")
 
@@ -83,38 +78,8 @@ def decoded(value, maximum, exact=None):
 
 
 def _evidence(value):
-    """Closed scalar/byte checks only; this is not proof verification."""
-    require(type(value) is dict and set(value) == {"statement", "signature", "nativeKeyEvidence"})
-    item = value["statement"]
-    require(type(item) is dict and set(item) == STATEMENT_FIELDS
-        and item["apiVersion"] == STATEMENT_SCHEMA and item["operation"] == profile.OPERATION)
-    for name in ("holderId", "keyId", "controlPlaneResponseSigningKeyId", "controlPlaneConfigurationDigest",
-            "intentSha256", "generationSha256", "inputSha256", "policyHash", "dataPlaneBinarySha256",
-            "ingressLeafCertificateSha256", "ingressLeafSpkiSha256"):
-        digest(item[name])
-    require(item["holderId"] == current.holder_id(item["bootId"], item["keyId"]))
-    profile._actor(item["actorId"])
-    profile.identifier(item["credentialId"])
-    profile._kek_id(item["secretKekId"])
-    require(type(item["credentialVersion"]) is int and item["credentialVersion"] == 1)
-    require(type(item["deploymentId"]) is str
-        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", item["deploymentId"]) is not None)
-    require(_text(item["instanceId"], 4096).startswith("spiffe://"))
-    origin(item["intakeOrigin"]); origin(item["portalOrigin"])
-    require(item["intakeOrigin"] != item["portalOrigin"])
-    require(decoded(item["challenge"], 32, 32) != bytes(32))
-    _integer(item["generationCreatedAtEpochNs"])
-    issued, expires = _integer(item["issuedAtEpochNs"]), _integer(item["expiresAtEpochNs"])
-    require(item["generationCreatedAtEpochNs"] <= issued < expires <= issued + 30_000_000_000)
-    require(type(value["signature"]) is str and value["signature"].startswith("ed25519:"))
-    decoded(value["signature"][8:], 64, 64)
-    key = value["nativeKeyEvidence"]
-    require(type(key) is dict and set(key) == {"apiVersion", "responseProofPublicKey", "attestationDocumentB64"}
-        and key["apiVersion"] == "serverware.nativeResponseProofKeyEvidence/v1"
-        and decoded(key["responseProofPublicKey"], 32, 32) != bytes(32))
-    decoded(key["attestationDocumentB64"], 12 * 1024)
-    require(len(canonical(value)) <= MAX_EVIDENCE_BYTES)
-    return value
+    """Compatibility parser only; cryptographic admission remains below."""
+    return values.creation_evidence(value)
 
 
 evidence = _evidence

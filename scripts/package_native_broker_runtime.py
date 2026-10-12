@@ -28,6 +28,30 @@ MAX_TOTAL = 512 * 1024 * 1024
 MAX_FILES = 20000
 ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}
 PACKAGES = {"cryptography": "50.0.0", "cffi": "2.1.0", "pycparser": "3.0"}
+# Reviewed local runtime closure, not import discovery. Authority-side SQL,
+# transition execution, Nitro verification and unwired JIT owners stay out.
+# Static rotation uses the shared pure historical-original parser; its caller
+# still performs independent provenance/approval verification outside this child.
+BROKER_MODULES = (
+    "__init__.py", "native_kms_cms.py", "native_service_tokens.py", "native_secret_broker_helper.py",
+    "native_oauth_refresh.py", "native_oauth_refresh_receipts.py", "native_oauth_refresh_tls.py", "native_oauth_refresh_owner.py",
+    "native_oauth_exchange.py", "native_oauth_exchange_receipts.py", "native_oauth_exchange_tls.py", "native_oauth_exchange_owner.py",
+    "native_oauth_setup.py", "native_oauth_setup_rows.py", "native_oauth_setup_receipts.py", "native_oauth_setup_tls.py", "native_oauth_setup_owner.py",
+    "native_oauth_cleanup.py", "native_oauth_cleanup_receipts.py", "native_oauth_cleanup_owner.py",
+    "native_oauth_pending_retirement.py", "native_oauth_pending_retirement_receipts.py", "native_oauth_pending_retirement_owner.py",
+    "oauth_retirement_values.py", "native_oauth_capture_retirement.py", "native_oauth_capture_retirement_receipts.py", "native_oauth_capture_retirement_owner.py",
+    "oauth_retirement_policy_values.py", "oauth_pending_retirement_values.py",
+    "oauth_capture_retirement_policy.py", "oauth_pending_retirement_policy.py",
+    "native_oauth_reconnect.py", "native_oauth_reconnect_rows.py", "native_oauth_reconnect_receipts.py", "native_oauth_reconnect_tls.py", "native_oauth_reconnect_owner.py",
+    "native_secret_broker_history.py", "native_oauth_succession.py", "native_oauth_succession_rows.py",
+    "native_oauth_succession_materials.py", "native_oauth_succession_receipts.py", "native_oauth_succession_tls.py", "native_oauth_succession_owner.py",
+    "authority_oauth_retirement_succession_catalog.py",
+    "aws_credential_boundary.py", "native_static_credential.py", "native_static_credential_owner.py",
+    "native_static_credential_rotation.py", "native_static_credential_rotation_owner.py",
+    "authority_static_credential_create.py", "authority_static_credential_rotate.py",
+    "authority_publication_approval.py", "authority_setup_bind_credential.py",
+    "authority_oauth_setup.py", "authority_oauth_activation.py", "static_credential_provenance_values.py",
+)
 SKIP = {"__pycache__", "site-packages", "ensurepip", "idlelib", "tkinter", "turtledemo", "test", "tests"}
 SAFE_PATH = re.compile(r"/[A-Za-z0-9_./+:-]+\Z")
 
@@ -261,6 +285,13 @@ class Closure:
         return [{"path": path, **entry} for path, entry in sorted(self.files.items())]
 
 
+def add_broker_sources(closure: Closure) -> None:
+    """Stage exactly the source-fixed broker modules, including its entrypoint."""
+    for name in BROKER_MODULES:
+        closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
+    closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
+
+
 def main() -> None:
     require(len(sys.argv) == 1 and os.geteuid() == 0 and platform.machine() == "x86_64"
             and sys.version_info[:2] == (3, 11), "producer requires its fixed Linux/amd64 Python 3.11 build stage")
@@ -282,21 +313,7 @@ def main() -> None:
     backends = sorted(Path("/deps").glob("_cffi_backend*.so"))
     require(len(backends) == 1, "broker requires exactly one pinned CFFI extension")
     closure.add(backends[0], SITE / backends[0].name)
-    for name in ("__init__.py", "native_kms_cms.py", "native_service_tokens.py", "native_secret_broker_helper.py",
-                 "native_oauth_refresh.py", "native_oauth_refresh_receipts.py", "native_oauth_refresh_tls.py", "native_oauth_refresh_owner.py",
-                 "native_oauth_exchange.py", "native_oauth_exchange_receipts.py", "native_oauth_exchange_tls.py", "native_oauth_exchange_owner.py",
-                 "native_oauth_setup.py", "native_oauth_setup_rows.py", "native_oauth_setup_receipts.py", "native_oauth_setup_tls.py", "native_oauth_setup_owner.py",
-                 "native_oauth_cleanup.py", "native_oauth_cleanup_receipts.py", "native_oauth_cleanup_owner.py",
-                 "native_oauth_pending_retirement.py", "native_oauth_pending_retirement_receipts.py", "native_oauth_pending_retirement_owner.py",
-                 "oauth_retirement_values.py", "native_oauth_capture_retirement.py", "native_oauth_capture_retirement_receipts.py", "native_oauth_capture_retirement_owner.py",
-                 "oauth_retirement_policy_values.py", "oauth_pending_retirement_values.py",
-                 "oauth_capture_retirement_policy.py", "oauth_pending_retirement_policy.py",
-                 "native_oauth_reconnect.py", "native_oauth_reconnect_rows.py", "native_oauth_reconnect_receipts.py", "native_oauth_reconnect_tls.py", "native_oauth_reconnect_owner.py",
-                 "native_secret_broker_history.py", "native_oauth_succession.py", "native_oauth_succession_rows.py",
-                 "native_oauth_succession_materials.py", "native_oauth_succession_receipts.py", "native_oauth_succession_tls.py", "native_oauth_succession_owner.py",
-                 "authority_oauth_retirement_succession_catalog.py"):
-        closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
-    closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
+    add_broker_sources(closure)
     closure.libraries()
     inventory = closure.finish()
     # This check executes only during the single post-freeze build, in the

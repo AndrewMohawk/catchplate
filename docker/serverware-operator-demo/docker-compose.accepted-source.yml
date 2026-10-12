@@ -1,4 +1,4 @@
-# UI-only notification diagnostics on retained-compatible authority; Google unconfigured.
+# Paired withheld-response/audit update on retained-compatible authority; Google unconfigured.
 # Do not deploy unrelated authority-contract changes without a reviewed migration.
 # AWS credentials are storage-only: no signing, grants or ECR publication.
 # Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
@@ -13,7 +13,7 @@
 services:
   serverware:
     environment:
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:6f70ddfefa130ca29f36dab92f8a001a827284027ba545bcde2c27ba63fccd16
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:b824bdfe77d8f1a14ce629909da027a0f6725651b6441bc160032714a1219641
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
       SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR: /provider-custody
       SERVERWARE_PROCESS_MODE: serverware-control-plane
@@ -27,7 +27,7 @@ services:
       SERVERWARE_DEV_DEMO_SEED: "0"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-247ec17e4d4bac5822971ab5a818b8ada69899b7
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/source-71d4227fe3ccc91cdad829d07ab016e64e5d5cc7
         target: /app
         read_only: true
         bind: {create_host_path: false}
@@ -42,7 +42,7 @@ services:
       SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
     volumes:
       - type: bind
-        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-6f70ddfefa130ca29f36dab92f8a001a827284027ba545bcde2c27ba63fccd16/serverware-decision-gate
+        source: /srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-b824bdfe77d8f1a14ce629909da027a0f6725651b6441bc160032714a1219641/serverware-decision-gate
         target: /usr/local/bin/serverware-decision-gate
         read_only: true
         bind: {create_host_path: false}

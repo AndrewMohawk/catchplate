@@ -20,6 +20,7 @@ const LIMITS = {credentials: 16384, 'credentials/revoke': 1024, applications: 20
   'applications/revoke': 1024, 'applications/rotate-token': 2048, 'access-rules': 32768, 'access-rules/revoke': 1024};
 const NOTIFICATIONS = '/api/operator-demo/notifications';
 const NOTIFICATION_LIMITS = {[NOTIFICATIONS + '/settings']: 16384, [NOTIFICATIONS + '/test']: 1024};
+const X_CONFIGURATION = '/api/operator-demo/oauth/x/configuration/v1';
 const digest = number => 'sha256:' + number.toString(16).padStart(64, '0');
 const token = (id, generation = 1) => 'synthetic_application_' + id.replaceAll('-', '') + '_generation_' + generation;
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -148,6 +149,7 @@ async function fixture(browser, options, exercise) {
     activationOverride: options.activationOverride,
     revision: 1, sequence: 1, active: digest(1), loaded: options.pending ? digest(0) : digest(1), autoLoad: options.autoLoad !== false,
     posts: [], requests: [], errors: [], unexpected: [], consoleErrors: [], expectedFailures: new Set(), dialogs: [], catalogCalls: 0,
+    xConfigurationReads: 0,
     catalogStatus: 200, cancelNextDialog: false, fault: options.fault, faultUsed: false};
   const context = await browser.newContext({viewport: {width: 1280, height: 960}, serviceWorkers: 'block',
     permissions: ['clipboard-read', 'clipboard-write']});
@@ -169,6 +171,15 @@ async function fixture(browser, options, exercise) {
         state.catalogCalls++;
         if (state.catalogStatus !== 200) { state.expectedFailures.add(url.pathname); return await answer(route, {detail: 'synthetic access refusal'}, state.catalogStatus); }
         return await answer(route, options.invalidCatalog ? {...catalog(state), productionReady: true} : catalog(state));
+      }
+      if (request.method() === 'GET' && url.pathname === X_CONFIGURATION && !url.search) {
+        const headers = request.headers();
+        if (Object.hasOwn(headers, 'transfer-encoding') || Object.hasOwn(headers, 'content-encoding') ||
+          Object.hasOwn(headers, 'content-length') && headers['content-length'] !== '0')
+          return await refuse('X configuration GET framing refused');
+        state.xConfigurationReads++;
+        state.expectedFailures.add(X_CONFIGURATION);
+        return await answer(route, {detail: 'X configuration is not supported by this deployment'}, 404);
       }
       if (request.method() === 'GET' && url.pathname === '/api/audit/search') {
         assert.equal(url.searchParams.get('limit'), '20'); assert.equal(url.searchParams.get('scanLimit'), '5000');
@@ -221,6 +232,9 @@ async function fixture(browser, options, exercise) {
     await page.goto(ORIGIN, {waitUntil: 'networkidle'});
     await exercise(page, state, {context, openPage});
     assert.deepEqual(state.errors, []); assert.deepEqual(state.unexpected, []);
+    assert.equal(state.xConfigurationReads, state.requests.filter(item =>
+      item.method === 'GET' && item.path === X_CONFIGURATION && item.query === '').length,
+    'only the exact bodyless disabled-profile discovery GET is admitted');
     for (const entry of state.consoleErrors) assert(entry.url && state.expectedFailures.has(new URL(entry.url).pathname), 'unexpected browser console error');
     assert(state.requests.every(item => item.method === 'GET' || item.method === 'POST' &&
       (Object.hasOwn(LIMITS, item.path.slice('/api/operator-demo/'.length)) ||

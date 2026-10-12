@@ -217,8 +217,11 @@ dummy credential. The passed X recipes are:
   authorizer hooks and per-host TLS verification. It is not an official X SDK.
 
 These are explicit supported client configurations, not a claim that ambient
-proxy settings or unchanged retry defaults suffice. The implemented Alchemy
-examples have passed offline SDK checks and the isolated actual-proxy flow:
+proxy settings or unchanged retry defaults suffice. Alchemy's Node and Go
+examples have passed offline SDK checks and the isolated actual-proxy flow.
+Python's historical proxy acceptance used web3.py 7.13.0; the current 7.15.0
+example has offline SDK evidence only, with new SDK-through-proxy verification
+pending:
 
 - [Node](../examples/alchemy-chain-status-node/README.md): pinned official
   `alchemy-sdk` **3.6.5**, ethers **5.8.0**, Node **25.5.0**, with keyless `url`,
@@ -228,11 +231,22 @@ examples have passed offline SDK checks and the isolated actual-proxy flow:
   attempt; `maxRetries: 0` is not used. This archived SDK is a pinned compatibility
   example, not a claim of active maintenance.
 - [Python](../examples/alchemy-chain-status-python/README.md): `web3.py`
-  **7.13.0**, using explicitly configured Requests sessions/proxy/trust and
+  **7.15.0**, using explicitly configured Requests sessions/proxy/trust and
   disabled exception retries, without ambient `.netrc` or proxy fallback.
+  Its prior 7.13.0 proxy acceptance does not verify this updated dependency.
 - [Go](../examples/alchemy-chain-status-go/README.md): `go-ethereum/rpc`
   **v1.15.11**, with `WithHTTPClient` and `WithHeader`, context deadlines,
   explicit HTTPS proxy, per-host verified TLS trust and no redirects or retries.
+
+The workspace's public project and guide links target the repository's `main`
+branch, without app IDs, provider secrets or client configuration in the URLs.
+For an SDK-compatible saved Gmail permission and explicit Basic app login,
+Proxy setup also links the new [Node](../examples/google-gmail-node/README.md)
+and [Python](../examples/google-gmail-python/README.md) projects with
+**proxy verification pending** labels. Their source/offline tests do not inherit
+the existing [Go](../examples/google-gmail-go/README.md) proxy acceptance.
+The copied Go recipe and saved permission/login settings are unchanged; opening
+a public source link does not run an SDK or verify access.
 
 Source references: [X SDKs](https://docs.x.com/tools-and-libraries),
 [X TS client](https://raw.githubusercontent.com/xdevplatform/xdk-typescript/main/src/client.ts),

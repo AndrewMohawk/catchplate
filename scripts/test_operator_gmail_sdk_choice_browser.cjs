@@ -22,8 +22,9 @@ const BASIC = 'basic_and_bearer_v1';
 const GMAIL = 'https://gmail.googleapis.com';
 const AUTH = {schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', BASIC],
   path: '/api/operator-demo/applications/proxy-authentication'};
-const PROJECT = 'https://github.com/AndrewMohawk/serverware/tree/serverware/operator-workspace/examples/google-gmail-go';
-const GUIDE = 'https://github.com/AndrewMohawk/serverware/blob/serverware/operator-workspace/docs/operator-gmail-job-verification.md';
+const PROJECTS = ['go', 'node', 'python'].map(language =>
+  'https://github.com/AndrewMohawk/serverware/tree/main/examples/google-gmail-' + language);
+const GUIDE = 'https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-gmail-job-verification.md';
 const PRIVATE = ['synthetic-gmail-provider-private-never-render', 'synthetic-gmail-refresh-private-never-render'];
 const CLIENT_TOKEN = Buffer.alloc(32, 85).toString('base64url');
 const executeFile = promisify(execFile);
@@ -173,7 +174,7 @@ const tests = [
         expected_revision: 1, expected_policy_hash: digest(1)}]);
       assert.equal(state.posts.length, 0);
       assert.equal(state.rules[0].query_mode, 'orderedFormV1');
-      await projects(page, [PROJECT, GUIDE]);
+      await projects(page, [...PROJECTS, GUIDE]);
       assert.match(await page.locator('#gmail-sdk-guidance').innerText(), /has not run it or tested your account/);
       assert(await page.locator('#download-config').isDisabled(), 'no saved token is retrieved');
       await view(page, 'connect'); await refresh(page); assert.equal(observed.posts.length, 1);

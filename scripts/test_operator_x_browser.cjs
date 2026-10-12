@@ -51,7 +51,7 @@ async function recipe(page) {
   assert.match(await page.locator('#client-guidance').innerText(), /No X lookup was tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No posting.*user OAuth/);
   const source = 'https://github.com/AndrewMohawk/serverware/';
-  const branch = 'serverware/operator-workspace/';
+  const branch = 'main/';
   const expectedLinks = [
     ['Node.js', source + 'tree/' + branch + 'examples/x-username-node'],
     ['Python', source + 'tree/' + branch + 'examples/x-username-python'],

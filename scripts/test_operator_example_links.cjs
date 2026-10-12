@@ -12,7 +12,7 @@ const {google} = require('./test_operator_ordinary_modes_browser.cjs');
 
 const ROOT = resolve(__dirname, '..');
 const BASE = 'https://github.com/AndrewMohawk/serverware/';
-const BRANCH = 'serverware/operator-workspace/';
+const BRANCH = 'main/';
 const HTML = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
 const PROXY = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
 const f = context();
@@ -162,15 +162,17 @@ const tests = [
       render(value); assert.equal(node('client-example-links').children.length, 5);
       assert.equal(node('client-example-note').textContent,
         'Public source only, separate from your private client config. ' +
-        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
+        'Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. ' +
+        'The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. ' +
         'This page has not tested your Alchemy credentials or provider entitlement. ' +
         'The GitHub Actions recipe is inactive and has not been run.');
-      assert(!node('client-example-note').textContent.includes('verification is pending'));
+      assert.match(node('client-example-note').textContent, /verification of web3\.py 7\.15\.0 is pending/);
       assert(!links(value).some(item => item.href.includes('/.github/workflows/')));
     }
     const workflow = 'examples/alchemy-chain-status-node/workflow.example.yml';
     assert(statSync(resolve(ROOT, workflow)).isFile());
     assert.match(readFileSync(resolve(ROOT, workflow), 'utf8'), /workflow_dispatch:/);
+    assert.match(readFileSync(resolve(ROOT, 'examples/alchemy-chain-status-python/requirements.txt'), 'utf8'), /^web3==7\.15\.0$/m);
   }],
   ['Alchemy discovery requires the exact pair, capability, approved chain and RPC profile', () => {
     for (const change of [value => { delete value.capabilities.alchemy; }, value => { value.capabilities.alchemy = null; },
@@ -216,7 +218,7 @@ const tests = [
       assert(!node('client-example-note').textContent.includes('guide only'));
     }
   }],
-  ['validated exact Gmail replacement links the Go project and preserves the guide', () => {
+  ['validated exact Gmail replacement preserves Go and labels new SDK projects pending', () => {
     const value = gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'});
     assert.equal(value.applications[0].proxy_authentication, 'basic_and_bearer_v1');
     assert.deepEqual(value.capabilities.application_proxy_authentication, {
@@ -225,9 +227,11 @@ const tests = [
     assert.equal(value.access_rules[0].query_mode, 'orderedFormV1');
     assert.deepEqual(links(value), [
       {label: 'Go + Gmail SDK', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-go'},
+      {label: 'Node.js + Gmail SDK (proxy verification pending)', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-node'},
+      {label: 'Python + Gmail SDK (proxy verification pending)', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-python'},
       {label: 'Google / Gmail guide', kind: 'guide', href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
     render(value);
-    assert.equal(node('client-example-links').children.length, 2);
+    assert.equal(node('client-example-links').children.length, 4);
     assert.match(node('client-example-note').textContent, /separate from your private client config/);
     assert.match(node('client-example-note').textContent, /opening an example does not run it or verify access/);
     const bearer = clone(value); bearer.applications[0].proxy_authentication = 'bearer';
@@ -295,14 +299,23 @@ const tests = [
       const expected = links(value);
       value.proxy_url = 'https://PRIVATE_TOKEN@private.example.test/?PRIVATE_QUERY';
       value.credentials[0].secret = 'PROVIDER_SECRET_CANARY'; value.applications[0].token = 'APP_SECRET_CANARY';
+      value.credentials[0].name = 'PRIVATE_CREDENTIAL_NAME'; value.applications[0].name = 'PRIVATE_APPLICATION_NAME';
       value.access_rules[0].example_url = 'https://untrusted.example.test';
       assert.deepEqual(links(value), expected);
       for (const link of links(value)) {
         const url = new URL(link.href); assert.equal(url.origin, 'https://github.com');
+        assert.match(url.pathname, /^\/operator\/serverware\/(?:tree|blob)\/main\/(?:examples|docs)\//);
         assert.equal(url.username + url.password + url.search + url.hash, '');
         for (const forbidden of [IDS.application, IDS.credential, IDS.rule, 'PRIVATE_', 'SECRET_CANARY', 'untrusted.example.test'])
           assert(!JSON.stringify(link).includes(forbidden));
       }
+      const unchanged = clone(value);
+      render(value);
+      assert.deepEqual(value, unchanged, 'public discovery must not rewrite saved resources');
+      const publicContent = JSON.stringify({note: node('client-example-note').textContent,
+        anchors: node('client-example-links').children.map(anchor => ({label: anchor.textContent, href: anchor.href}))});
+      for (const forbidden of [IDS.application, IDS.credential, IDS.rule, 'PRIVATE_', 'SECRET_CANARY', 'untrusted.example.test'])
+        assert(!publicContent.includes(forbidden));
     }
   }],
   ['rendered inert anchors are explicit public navigation and stale links are removed', () => {
@@ -326,7 +339,8 @@ const tests = [
     assert.equal(networkCalls, 0);
   }],
   ['all advertised project directories contain a README in the source snapshot', () => {
-    for (const directory of ['github-issues-node', 'github-issues-python', 'github-issues-go', 'npm-registry', 'google-gmail-go',
+    for (const directory of ['github-issues-node', 'github-issues-python', 'github-issues-go', 'npm-registry',
+      'google-gmail-go', 'google-gmail-node', 'google-gmail-python',
       'x-username-node', 'x-username-python', 'x-username-go',
       'alchemy-chain-status-node', 'alchemy-chain-status-python', 'alchemy-chain-status-go'])
       assert(statSync(resolve(ROOT, 'examples', directory, 'README.md')).isFile());

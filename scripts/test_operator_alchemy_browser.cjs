@@ -59,7 +59,7 @@ async function recipe(page, chain = CHAINS[0], method = RPC[0]) {
   assert.match(await page.locator('#client-guidance').innerText(), /No Alchemy request was tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /HTTP 200 can contain an RPC error/);
   const source = 'https://github.com/AndrewMohawk/serverware/';
-  const branch = 'serverware/operator-workspace/';
+  const branch = 'main/';
   const links = page.locator('#client-example-links a');
   assert.deepEqual(await links.evaluateAll(items => items.map(item => [item.textContent, item.getAttribute('href')])), [
     ['Node.js', source + 'tree/' + branch + 'examples/alchemy-chain-status-node'],
@@ -76,7 +76,8 @@ async function recipe(page, chain = CHAINS[0], method = RPC[0]) {
     assert.equal(url.origin, 'https://github.com'); assert.equal(url.username + url.password + url.search + url.hash, '');
     for (const privateValue of [PRIVATE, APP_TOKEN, IDS.application, IDS.credential, IDS.rule]) assert(!url.href.includes(privateValue));
   }
-  const acceptance = 'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
+  const acceptance = 'Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. ' +
+    'The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. ' +
     'This page has not tested your Alchemy credentials or provider entitlement. ' +
     'The GitHub Actions recipe is inactive and has not been run.';
   assert.equal(await page.locator('#client-example-note').innerText(),

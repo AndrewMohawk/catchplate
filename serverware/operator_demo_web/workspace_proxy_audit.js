@@ -10,7 +10,7 @@ function operatorGmailSdkCompatible(rule, catalog) {
 function operatorExampleProjects(rule, catalog) {
   if (!rule || rule.status !== 'active' || !operatorRuleSupported(rule, catalog)) return [];
   const source = 'https://github.com/AndrewMohawk/serverware/';
-  const branch = 'serverware/operator-workspace/';
+  const branch = 'main/';
   const project = (label, directory) => ({label, kind: 'project', href: source + 'tree/' + branch + 'examples/' + directory});
   const guide = (label, filename) => ({label, kind: 'guide', href: source + 'blob/' + branch + 'docs/' + filename});
   switch (rule.operation_bundle) {
@@ -35,7 +35,9 @@ function operatorExampleProjects(rule, catalog) {
       guide('Alchemy preset scope and compatibility', 'operator-provider-presets.md')];
     case 'gmail_read_v1': return [
       ...(operatorGmailSdkCompatible(rule, catalog) ?
-        [project('Go + Gmail SDK', 'google-gmail-go')] : []),
+        [project('Go + Gmail SDK', 'google-gmail-go'),
+          project('Node.js + Gmail SDK (proxy verification pending)', 'google-gmail-node'),
+          project('Python + Gmail SDK (proxy verification pending)', 'google-gmail-python')] : []),
       guide('Google / Gmail guide', 'operator-gmail-job-verification.md')];
     default: return [];
   }
@@ -45,7 +47,7 @@ function renderOperatorExampleProjects(rule, catalog) {
   const projects = operatorExampleProjects(rule, catalog);
   links.replaceChildren(); panel.hidden = projects.length === 0;
   element('client-example-note').textContent = !projects.length ? '' : isAlchemyRule(rule) ?
-    'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
+    'Public source only, separate from your private client config. Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires ordered Gmail queries, the exact public dummy and this app’s standard username/password proxy login. Saved permissions and login modes are never changed here.';
@@ -221,7 +223,7 @@ function createProxyView(workspace, applications) {
         'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
         'Read ' + rule.chain + ' only: eth_chainId and eth_blockNumber, POST to keyless /v2, params: [] and no URL query. No arbitrary RPC, batches, notifications, transactions, wallets, WebSockets, NFT or Notify APIs. ' +
         'The fixed public dummy is not your Alchemy key. The app token authenticates separately to the proxy. Keep both TLS legs verified. HTTP 200 can contain an RPC error. ' +
-        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.';
+        'Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.';
       return;
     }
     if (x) {

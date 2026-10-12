@@ -7,6 +7,8 @@ const {fixture, githubRule} = require('./test_operator_github_browser.cjs');
 const {ready, view, application} = require('./test_operator_catalog_browser.cjs');
 const npm = require('./test_operator_npm_browser.cjs');
 const gmail = require('./test_operator_gmail_bundle_browser.cjs');
+const x = require('./operator_x_browser_fixture.cjs');
+const alchemy = require('./operator_alchemy_browser_fixture.cjs');
 
 async function main() {
   assert.equal(process.argv.length, 2, 'No live target arguments accepted');
@@ -25,7 +27,7 @@ async function main() {
       for (const [index, language] of ['node', 'python', 'go'].entries()) {
         const link = page.locator('#client-example-links a').nth(index);
         assert.equal(await link.getAttribute('href'),
-          'https://github.com/AndrewMohawk/serverware/tree/serverware/operator-workspace/examples/github-issues-' + language);
+          'https://github.com/AndrewMohawk/serverware/tree/main/examples/github-issues-' + language);
         assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
       }
       for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}]) {
@@ -41,10 +43,12 @@ async function main() {
       await page.locator('#connect-credential-form').waitFor({state: 'visible'});
       assert.equal(observed.creates.length + observed.grants.length, 0);
       assert.deepEqual(state.errors, []);
+      assert.deepEqual(state.unexpected, [], 'synthetic request paths: ' +
+        JSON.stringify(state.requests.map(({method, path}) => ({method, path}))));
       results.push({manualChoiceOpensForm: true, mutations: 0});
     });
     const source = 'https://github.com/AndrewMohawk/serverware/';
-    const branch = 'serverware/operator-workspace/';
+    const branch = 'main/';
     async function checkLinks(page, name, expected) {
       await ready(page); await view(page, 'proxy');
       await page.locator('#client-examples').waitFor({state: 'visible'});
@@ -66,6 +70,24 @@ async function main() {
       assert.equal(observed.creates.length + observed.grants.length, 0);
       assert.deepEqual(state.errors, []);
     });
+    for (const [name, provider, savedRule, directory] of [
+      ['x', x, x.xRule(), 'x-username'],
+      ['alchemy', alchemy, alchemy.alchemyRule(), 'alchemy-chain-status'],
+    ]) await provider.fixture(browser, {rules: [savedRule]}, async (page, state, observed) => {
+      await checkLinks(page, name, [...['node', 'python', 'go'].map(language =>
+        'tree/' + branch + 'examples/' + directory + '-' + language),
+      'blob/' + branch + 'examples/' + directory + '-node/workflow.example.yml',
+      'blob/' + branch + 'docs/operator-provider-presets.md']);
+      const note = await page.locator('#client-example-note').innerText();
+      if (name === 'alchemy') {
+        assert.match(note, /prior Python acceptance used web3\.py 7\.13\.0/);
+        assert.match(note, /verification of web3\.py 7\.15\.0 is pending/);
+        assert(!note.includes('Node.js, Python and Go examples passed'));
+      }
+      assert.equal(observed.credentials.length + observed.applications.length + observed.grants.length, 0);
+      assert.deepEqual(state.posts, []); assert.deepEqual(state.errors, []);
+      await provider.privateAbsent(page);
+    });
     for (const [replace, basic] of [[false, false], [true, false], [true, true]]) {
       const rule = gmail.bundleRule(replace ? {credential_input: 'replace_exact',
         placeholder: 'Bearer serverware-gmail-placeholder-v1'} : {});
@@ -76,8 +98,12 @@ async function main() {
           return value;
         }}), async (page, state, observed) => {
         const paths = ['blob/' + branch + 'docs/operator-gmail-job-verification.md'];
-        if (replace && basic) paths.unshift('tree/' + branch + 'examples/google-gmail-go');
+        if (replace && basic) paths.unshift(...['go', 'node', 'python'].map(language =>
+          'tree/' + branch + 'examples/google-gmail-' + language));
         await checkLinks(page, replace && basic ? 'gmail-project' : replace ? 'gmail-bearer-guide' : 'gmail-guide', paths);
+        if (replace && basic) assert.deepEqual(await page.locator('#client-example-links a').allTextContents(), [
+          'Go + Gmail SDK', 'Node.js + Gmail SDK (proxy verification pending)',
+          'Python + Gmail SDK (proxy verification pending)', 'Google / Gmail guide']);
         assert.equal(observed.posts.length, 0); assert.deepEqual(state.posts, []);
         assert.deepEqual(state.errors, []);
       });

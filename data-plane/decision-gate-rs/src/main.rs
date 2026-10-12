@@ -397,6 +397,7 @@ const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 31_536_000;
 const POLICY_TRUST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const POLICY_TRUST_MAX_AGE: Duration = Duration::from_secs(90);
 const CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
+const CREDENTIAL_LEASE_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(1);
 const CREDENTIAL_LEASE_HOT_WINDOW: Duration = Duration::from_secs(30);
 const CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT: Duration = Duration::from_secs(2);
@@ -22025,7 +22026,7 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
         .header("X-Serverware-Response-Nonce", recipient_nonce.as_str())
         .json(&request_wire);
     if let Some(remaining) = native_upstream_remaining(state, &snapshot.hash)? {
-        request = request.timeout(remaining.min(Duration::from_secs(3)));
+        request = request.timeout(remaining.min(CREDENTIAL_LEASE_REQUEST_TIMEOUT));
     }
     if let Some(deadline) = deadline {
         let mut remaining = custody_deadline_remaining(deadline, "credential original request")?;
@@ -22033,7 +22034,7 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
             remaining = remaining.min(native_service_remaining(state)?
                 .ok_or("native credential service lifetime absent")?);
         }
-        request = request.timeout(remaining.min(Duration::from_secs(3)));
+        request = request.timeout(remaining.min(CREDENTIAL_LEASE_REQUEST_TIMEOUT));
     }
     let mut response = request
         .send()
@@ -53738,7 +53739,7 @@ fn main() -> Result<(), String> {
         UPSTREAM_RESOLUTION_TIMEOUT,
     )?);
     let audit_client = build_audit_client()?;
-    let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
+    let credential_lease_client = build_control_plane_client(CREDENTIAL_LEASE_REQUEST_TIMEOUT)?;
     let mitm_authority = build_mitm_authority()?;
     let mut initialized_state = GateStateInputs {
         service_tokens: native_service_tokens::Source::Legacy,

@@ -171,8 +171,9 @@ impl RenewalFixture {
                     assert_eq!(request.target, "/api/data-plane/credential-leases");
                     let body: Value = strict_json_from_slice(&request.body).unwrap();
                     assert_eq!(body["policyHash"], authority.snapshot.hash);
+                    let ttl_ms = if body["purpose"] == "generationMetadata" { 5_000 } else { 4_000 };
                     material.push(body);
-                    material_response(&authority.key, &authority.snapshot, &request, 7, 4_000)
+                    material_response(&authority.key, &authority.snapshot, &request, 7, ttl_ms)
                 };
                 stream.write_all(&response).unwrap();
             }

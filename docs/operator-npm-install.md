@@ -49,7 +49,7 @@ distinct durable audit attempts, and all prior denial controls. A successful
 mocked check or compilation is not that acceptance result.
 
 Current candidate status: focused Python, catalog, Node and fixture-oracle
-checks and 96 compiled Rust controls passed. The first real stock-npm run
+checks and 125 compiled Rust controls passed. The first real stock-npm run
 stopped at the third publication with a credential-preparation 503, before
 installation. Its state and cleanup receipts are preserved in
 `npm-install-acceptance.Jg4Pc6mt`; it is not a successful acceptance result.
@@ -60,8 +60,17 @@ request from joining a background secret-renewal flight that can become
 ineligible while waiting for publication. Existing five-second leases, exact
 generation checks, request deadlines and native/Google behavior are unchanged.
 Closed diagnostic categories distinguish these failures without logging
-credentials. Compiled regression and stock-npm acceptance of this repair are
-still required. The ordinary live app is unchanged by these source commits.
+credentials. That repair passed its compiled controls, but the second stock-npm
+run (`npm-install-acceptance.oyag53ql`) stopped at the same publication with a
+different final-pair freshness failure. Its cleanup completed and its receipts
+are preserved. The stopped database, read with its WAL, shows a five-second
+secret issued while the older generation had less than one second remaining.
+Preparation must reserve the secret-fetch budget before acquiring that secret;
+an already-fresh cached pair still needs no acquisition. The corrected path
+must retain the original deadline and exact generation pin, without retrying
+the provider request or extending any issued lease. Compiled regression and
+stock-npm acceptance of this remaining repair are still required. The ordinary
+live app is unchanged by these source commits.
 Public proxy DNS repair and real npm
 account entitlement remain separate unverified requirements. No pilot is needed
 to open or use the persistent operator app.

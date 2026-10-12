@@ -108,12 +108,16 @@ pub(super) fn principal_expiry(snapshot: &Snapshot, scope: &CredentialLeaseScope
 }
 
 fn margin() -> Result<(u128, Instant), String> {
+    margin_for(CREDENTIAL_LEASE_RENEW_BEFORE)
+}
+
+fn margin_for(required: Duration) -> Result<(u128, Instant), String> {
     Ok((
         now_epoch_ms()
-            .checked_add(CREDENTIAL_LEASE_RENEW_BEFORE.as_millis())
+            .checked_add(required.as_millis())
             .ok_or_else(refused)?,
         Instant::now()
-            .checked_add(CREDENTIAL_LEASE_RENEW_BEFORE)
+            .checked_add(required)
             .ok_or_else(refused)?,
     ))
 }
@@ -123,10 +127,25 @@ fn generation_with_margin(
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Result<Option<CredentialLeaseGeneration>, String> {
+    generation_with_required_margin(state, snapshot, scope, CREDENTIAL_LEASE_RENEW_BEFORE, None)
+}
+
+fn generation_with_required_margin(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    required: Duration,
+    pin: Option<&CredentialLeaseGeneration>,
+) -> Result<Option<CredentialLeaseGeneration>, String> {
     let generations = state.credential_generations.lock().map_err(|_| refused())?;
-    let (epoch, monotonic) = margin()?;
-    Ok(generations
-        .get(scope)
+    let generation = generations.get(scope);
+    if pin.is_some_and(|pin| !generation.is_some_and(|current| same_generation(current, pin))) {
+        return Err(refused());
+    }
+    // Sample only after the cache lock. A renewed expiry may be selected, but
+    // it cannot substitute another version or metadata for an existing pin.
+    let (epoch, monotonic) = margin_for(required)?;
+    Ok(generation
         .filter(|generation| {
             generation.profile == ReleaseProfile::Legacy
                 && credential_generation_valid_after(generation, snapshot, epoch, monotonic)
@@ -243,8 +262,8 @@ fn prepare_pair_on_deadline<T>(
             return diagnostic.observe(Stage::GenerationLookup, Err(refused()));
         }
     }
-    let pin = match diagnostic.observe(Stage::GenerationLookup, generation_with_margin(state, snapshot, scope))? {
-        Some(generation) => generation,
+    let (mut pin, metadata_acquired) = match diagnostic.observe(Stage::GenerationLookup, generation_with_margin(state, snapshot, scope))? {
+        Some(generation) => (generation, false),
         None => {
             diagnostic.observe(Stage::GenerationRefresh, refresh_scoped_credential_material_singleflight_on_deadline(
                 state,
@@ -256,7 +275,7 @@ fn prepare_pair_on_deadline<T>(
                 Some(deadline),
             ))?;
             let generation = diagnostic.observe(Stage::GenerationMargin, generation_with_margin(state, snapshot, scope))?;
-            diagnostic.observe(Stage::GenerationMargin, generation.ok_or_else(refused))?
+            (diagnostic.observe(Stage::GenerationMargin, generation.ok_or_else(refused))?, true)
         }
     };
     if expected_pin.is_some_and(|expected| !same_generation(&pin, expected)) {
@@ -265,21 +284,38 @@ fn prepare_pair_on_deadline<T>(
     diagnostic.observe(Stage::Binding, validate_runtime_credential_binding(snapshot, scope, &pin.metadata))?;
     diagnostic.observe(Stage::Binding, check_credential_operation_deadline(Some(deadline)))?;
     if diagnostic.observe(Stage::PairBeforeSecret, pair_with_margin(state, snapshot, scope, &pin, lease_info))?.is_none() {
-        let result = if expected_pin.is_some() {
-            refresh_scoped_credential_material_singleflight_with_leader(
-                state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
-                None, None, Some(deadline),
-                |original_deadline| refresh_scoped_credential_material_pinned_on_deadline(
-                    state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
-                    None, None, original_deadline, Some(&pin),
-                ),
-            )
-        } else {
-            refresh_scoped_credential_material_singleflight_on_deadline(
-                state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
-                None, None, Some(deadline),
-            )
+        // A cached pair needs only the final margin. A generation carried into
+        // the first secret acquisition must also cover that request's maximum
+        // HTTP budget. Refresh metadata at most once in this preparation, and
+        // only before a secret attempt; no failed acquisition is retried.
+        let required = diagnostic.observe(Stage::GenerationMargin,
+            CREDENTIAL_LEASE_REQUEST_TIMEOUT.checked_add(CREDENTIAL_LEASE_RENEW_BEFORE)
+                .ok_or_else(refused))?;
+        let ready = diagnostic.observe(Stage::GenerationMargin,
+            generation_with_required_margin(state, snapshot, scope, required, Some(&pin)))?;
+        pin = match ready {
+            Some(generation) => generation,
+            None => {
+                if metadata_acquired {
+                    return diagnostic.observe(Stage::GenerationMargin, Err(refused()));
+                }
+                diagnostic.observe(Stage::GenerationRefresh, refresh_scoped_credential_material_singleflight_on_deadline(
+                    state, snapshot, scope, CredentialLeasePurpose::GenerationMetadata,
+                    None, None, Some(deadline),
+                ))?;
+                let generation = diagnostic.observe(Stage::GenerationMargin,
+                    generation_with_required_margin(state, snapshot, scope, required, Some(&pin)))?;
+                diagnostic.observe(Stage::GenerationMargin, generation.ok_or_else(refused))?
+            }
         };
+        let result = refresh_scoped_credential_material_singleflight_with_leader(
+            state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
+            None, None, Some(deadline),
+            |original_deadline| refresh_scoped_credential_material_pinned_on_deadline(
+                state, snapshot, scope, CredentialLeasePurpose::DispatchSecret,
+                None, None, original_deadline, Some(&pin),
+            ),
+        );
         diagnostic.observe(Stage::SecretRefresh, result)?;
     }
     // No further acquisition, even if either renewed value is already short.

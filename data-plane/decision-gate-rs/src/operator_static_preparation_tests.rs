@@ -134,6 +134,17 @@ fn material_response(
     version: u64,
     ttl_ms: u64,
 ) -> Vec<u8> {
+    material_response_with_metadata(key, snapshot, incoming, version, ttl_ms, metadata())
+}
+
+fn material_response_with_metadata(
+    key: &SigningKey,
+    snapshot: &Snapshot,
+    incoming: &IncomingRequest,
+    version: u64,
+    ttl_ms: u64,
+    material_metadata: BTreeMap<String, Value>,
+) -> Vec<u8> {
     let request: CredentialLeaseRequest = strict_json_from_slice(&incoming.body).unwrap();
     let now = now_epoch_ms() as u64;
     let aad = json!({"apiVersion":"serverware.credentialLeaseEnvelope/v2","algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
@@ -141,7 +152,7 @@ fn material_response(
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,"principalId":request.principal_id,
         "routeId":request.route_id,"credentialId":request.credential_id,"issuedAtEpochMs":now,"expiresAtEpochMs":now+ttl_ms});
     let mut credential = json!({"credentialId":request.credential_id,"credentialVersion":version,
-        "metadataSha256":credential_lease_metadata_sha256(&metadata()),"metadata":metadata()});
+        "metadataSha256":credential_lease_metadata_sha256(&material_metadata),"metadata":material_metadata});
     if request.purpose == CredentialLeasePurpose::DispatchSecret {
         credential["secret"] = json!(SECRET);
     }
@@ -243,7 +254,7 @@ fn broker(
                         strict_json_from_slice(&incoming.body).unwrap();
                     requests.push(strict_json_from_slice::<Value>(&incoming.body).unwrap());
                     assert!(requests.len() <= 4, "unbounded synthetic acquisition");
-                    if matches!(mode, "hold" | "deadline") && requests.len() == 1 {
+                    if matches!(mode, "hold" | "deadline" | "final-expiry") && requests.len() == 1 {
                         entered_send.send(()).unwrap();
                         released.recv_timeout(Duration::from_secs(3)).unwrap();
                     }
@@ -267,15 +278,35 @@ fn broker(
                             json!({"detail":"synthetic refusal"}),
                         )
                     } else if request.purpose == CredentialLeasePurpose::GenerationMetadata {
-                        material_response(
+                        let mut selected_metadata = metadata();
+                        if mode == "metadata-hash-drift" {
+                            selected_metadata.insert("managed".to_owned(), json!(true));
+                            validate_credential_generation_metadata(&selected_metadata).unwrap();
+                            validate_runtime_credential_binding(&snapshot, &scope, &selected_metadata).unwrap();
+                        }
+                        material_response_with_metadata(
                             &key,
                             &snapshot,
                             &incoming,
-                            7,
-                            if mode == "short-metadata" { 500 } else { 4_000 },
+                            if mode == "metadata-generation-drift" { 8 } else { 7 },
+                            match mode {
+                                "short-metadata" => 500,
+                                "insufficient-metadata" => 2_000,
+                                // A genuinely new signed five-second generation, not
+                                // an extension of any retained lease's clocks.
+                                _ => 5_000,
+                            },
+                            selected_metadata,
                         )
                     } else if mode == "short-secret" {
                         material_response(&key, &snapshot, &incoming, 7, 500)
+                    } else if mode == "delayed-secret" {
+                        // Capture the real signed expiry before delaying the wire
+                        // response. Transport succeeds within its three-second
+                        // budget, but the remaining final one-second margin fails.
+                        let response = material_response(&key, &snapshot, &incoming, 7, 1_500);
+                        thread::sleep(Duration::from_millis(750));
+                        response
                     } else {
                         signed_encrypted_dispatch_credential_response(
                             &key,
@@ -337,6 +368,9 @@ fn assert_pair(state: &GateState, snapshot: &Snapshot, scope: &CredentialLeaseSc
 #[test]
 fn operator_static_fresh_pair_no_fetch() {
     let (state, snapshot, scope, _) = fixture();
+    // Cached pairs need only the existing final one-second margin. Requiring
+    // acquisition headroom here would force unavailable, unnecessary broker I/O.
+    seed(&state, &snapshot, &scope, 2_000, 2_000);
     assert!(state.credential_lease_url.is_none());
     let info = preparation::prepare_if_admitted(&state, &snapshot, &scope, false)
         .unwrap()
@@ -387,6 +421,131 @@ fn operator_static_near_expiry_secret_one_call() {
     let requests = server.finish();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["purpose"], "dispatchSecret");
+}
+
+#[test]
+fn operator_static_missing_secret_requires_both_generation_acquisition_clocks() {
+    for short_clock in ["both", "epoch", "monotonic"] {
+        let (state, snapshot, scope, key) = fixture();
+        seed(&state, &snapshot, &scope, 60_000, 60_000);
+        state.credential_leases.lock().unwrap().clear();
+        {
+            let mut generations = state.credential_generations.lock().unwrap();
+            let selected = generations.get_mut(&scope).unwrap();
+            if short_clock != "monotonic" {
+                selected.expires_at_epoch_ms = now_epoch_ms() + 2_000;
+            }
+            if short_clock != "epoch" {
+                selected.expires_at_monotonic = Instant::now() + Duration::from_secs(2);
+            }
+        }
+        let original = state.credential_generations.lock().unwrap()[&scope].clone();
+        let (state, server) = broker(state, &snapshot, &scope, key, "success");
+        let info = preparation::prepare_if_admitted(&state, &snapshot, &scope, false)
+            .unwrap().unwrap();
+        assert!(info.secret_available, "{short_clock}");
+        assert_pair(&state, &snapshot, &scope);
+        let requests = server.finish();
+        assert_eq!(requests.len(), 2, "{short_clock}");
+        assert_eq!(requests[0]["purpose"], "generationMetadata");
+        assert_eq!(requests[1]["purpose"], "dispatchSecret");
+        assert_eq!(requests[1]["expectedCredentialVersion"], original.version);
+        assert_eq!(requests[1]["expectedMetadataSha256"], original.metadata_sha256);
+        let renewed = state.credential_generations.lock().unwrap()[&scope].clone();
+        assert_eq!(renewed.version, original.version);
+        assert_eq!(renewed.metadata_sha256, original.metadata_sha256);
+        assert_eq!(renewed.metadata, original.metadata);
+    }
+    // The same missing-secret condition with ample metadata needs only secret
+    // acquisition; it must not make an unconditional metadata request.
+    let (state, snapshot, scope, key) = fixture();
+    state.credential_leases.lock().unwrap().clear();
+    let (state, server) = broker(state, &snapshot, &scope, key, "success");
+    assert!(preparation::prepare_if_admitted(&state, &snapshot, &scope, false)
+        .unwrap().unwrap().secret_available);
+    assert_pair(&state, &snapshot, &scope);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["purpose"], "dispatchSecret");
+}
+
+#[test]
+fn operator_static_new_short_metadata_or_refreshed_pin_drift_stops_before_secret() {
+    for mode in ["insufficient-metadata", "metadata-generation-drift", "metadata-hash-drift"] {
+        for originally_missing in [false, true] {
+            // Drift has an original pin only in the retained-generation case.
+            if originally_missing && mode != "insufficient-metadata" {
+                continue;
+            }
+            let (state, snapshot, scope, key) = fixture();
+            seed(&state, &snapshot, &scope, 2_000, 2_000);
+            state.credential_leases.lock().unwrap().clear();
+            if originally_missing {
+                state.credential_generations.lock().unwrap().clear();
+            }
+            let (state, server) = broker(state, &snapshot, &scope, key, mode);
+            let failure = preparation::prepare_if_admitted(&state, &snapshot, &scope, false)
+                .err().expect("short or changed metadata must stop before a secret request");
+            let retained = state.credential_generations.lock().unwrap()[&scope].clone();
+            if mode == "metadata-generation-drift" {
+                // The signed generation was genuinely admitted into the cache;
+                // preparation refuses changing the originally selected pin.
+                assert_eq!(retained.version, 8);
+                assert_eq!(retained.metadata, metadata());
+                assert_eq!(failure, "operator static credential preparation unavailable");
+            } else if mode == "metadata-hash-drift" {
+                // An otherwise valid signed map at the same version is rejected
+                // by the cache's semantic guard, not by an unknown-field parser.
+                assert_eq!(failure, "credential metadata changed without a version increment");
+                assert_eq!(retained.version, 7);
+                assert_eq!(retained.metadata, metadata());
+                assert_eq!(retained.metadata_sha256, credential_lease_metadata_sha256(&metadata()));
+            }
+            let requests = server.finish();
+            assert_eq!(requests.len(), 1, "{mode}");
+            assert_eq!(requests[0]["purpose"], "generationMetadata");
+            assert!(state.credential_leases.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn operator_static_delayed_secret_and_final_generation_clocks_never_retry() {
+    let (state, snapshot, scope, key) = fixture();
+    state.credential_leases.lock().unwrap().clear();
+    let (state, server) = broker(state, &snapshot, &scope, key, "delayed-secret");
+    assert!(preparation::prepare_if_admitted(&state, &snapshot, &scope, false).is_err());
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["purpose"], "dispatchSecret");
+
+    for epoch_clock in [false, true] {
+        let (state, snapshot, scope, key) = fixture();
+        state.credential_leases.lock().unwrap().clear();
+        let (state, server) = broker(state, &snapshot, &scope, key, "final-expiry");
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let worker_scope = scope.clone();
+        let worker = thread::spawn(move || preparation::prepare_if_admitted(
+            &worker_state, &worker_snapshot, &worker_scope, false));
+        server.entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        {
+            // Controlled concurrent cache expiry only: no clock replacement,
+            // generation alteration, signed expiry extension or successful stub.
+            let mut generations = state.credential_generations.lock().unwrap();
+            let selected = generations.get_mut(&scope).unwrap();
+            if epoch_clock {
+                selected.expires_at_epoch_ms = now_epoch_ms() + 500;
+            } else {
+                selected.expires_at_monotonic = Instant::now() + Duration::from_millis(500);
+            }
+        }
+        server.release.send(()).unwrap();
+        assert!(worker.join().unwrap().is_err(), "epoch_clock={epoch_clock}");
+        let requests = server.finish();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["purpose"], "dispatchSecret");
+    }
 }
 
 #[test]

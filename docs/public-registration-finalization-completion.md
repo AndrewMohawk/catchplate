@@ -4,8 +4,11 @@ The source-only [HTTP contract](../serverware/control_plane_registration_finaliz
 and [routes](../serverware/control_plane_registration_finalization_completion_routes.py)
 expose separate present-permission actions for the retained finalization grant
 locator. They do not execute or retry SQL, activate an OIDC session, or turn an
-unsigned SQL observation into authenticated completion. The implementation is
-unbuilt, unexecuted and not production acceptance evidence.
+unsigned SQL observation into authenticated completion. Fourteen focused
+permission/diagnostic component tests passed on 2026-10-08, including the
+two-person refusal and redaction controls. An authenticated admitted-owner
+completion journey remains unexecuted; these checks are not production
+acceptance evidence.
 
 | Action | Operator POST | Purpose | Required action |
 | --- | --- | --- | --- |
@@ -13,7 +16,7 @@ unbuilt, unexecuted and not production acceptance evidence.
 | Recover completion | `/api/webauthn/register/recover-finalization-completion` | `recover-registration-finalization-completion` | `webauthn.registration.finalization.recover` |
 
 The same suffixes are available under `/api/auth/session/webauthn/register/`.
-Only those pending-session paths have an additional `/options` POST. All six
+Both operator and pending-session actions have an additional `/options` POST. All eight
 routes use strict 64 KiB JSON framing. Actions require exactly `purpose` and
 `localDigest`, with optional `bootstrapToken` and `mfa`; options accept only
 the two required fields. No caller-supplied subject, root, packet locator,
@@ -31,8 +34,9 @@ session/mode and original request/operation/local digests; the older generic
 seven-field handoff contract is unchanged.
 
 Operator requests require actual current admin/approver identity. Existing
-credential history requires a fresh action-bound WebAuthn assertion under the
-current mutation policy and configured two-person approval. Genuinely empty
+credential history requires a fresh completion-bound possession assertion under
+the current WebAuthn policy. Configured two-person completion currently refuses,
+as described below. Genuinely empty
 history requires fresh configured bootstrap, including development. Bootstrap
 cannot replace existing-credential MFA. Identity and the history branch are
 reread before dispatch, and the facade repeats genuine retained ownership under
@@ -41,19 +45,42 @@ the cold owner lock using authenticated user/session scalars, not a subject DTO.
 The [pending-session permission flow](finalization-pending-permission.md)
 requires explicit cookie CSRF, a fresh DB-time-valid pending session and current
 RBAC. Empty history requires bootstrap. When the finalization's exact target is
-the sole active credential owned by that user, fresh target-key assertion and
-configured two-person approval can authorize completion without activating the
-session. Foreign, revoked, extra or inconsistent credential history is denied.
+the sole active credential owned by that user, a fresh target-key possession
+assertion can authorize completion only when the action does not require
+two-person approval. This does not activate the session. Foreign, revoked, extra
+or inconsistent credential history is denied.
 
 Pending `/options` responses contain exactly `schema`, `purpose`, `localDigest`,
-`action`, `resourceId`, `payloadDigest`, `publicKey`, and
+`action`, `resourceId`, `payloadDigest`, `publicKey`, `expiresAtEpochNs`, and
 `automaticRetryAllowed: false`, with schema
 `serverware.webAuthnRegistrationFinalizationPermissionOptions/v1`. These are
 actual server-generated action-bound options, not an accepted posted binding.
-A 412/428 permission response preserves its actual action/resource/payload and
-approval negotiation fields, without an automatic retry instruction. A 428 has
-already consumed the assertion; explicit continuation requires another fresh
-assertion. See the [portal flow](portal-registration-handoff.md).
+
+The [possession helper](../serverware/control_plane_registration_finalization_permission.py)
+retains one random nonce on the admitted enrollment owner, bounded by its
+original context and at most 120 seconds. It burns the nonce before signature
+verification; rejection or an uncertain response does not permit reissue on that
+owner. Owner loss/restart invalidates the nonce. No metadata challenge, stored
+counter or `last_used_at`/`updated_at` write occurs. The observed counter must
+still satisfy the existing strict counter rule against the unchanged stored
+baseline. Session, credential and current policy are rechecked while preserving
+the complete pending metadata vector.
+
+## Current two-person boundary
+
+If the selected complete or recover action requires two-person approval, both
+operator and pending-session paths return HTTP 503 with fixed error
+`registration_finalization_completion_two_person_unavailable` before options,
+assertion consumption, bootstrap, approval writes or completion dispatch. This
+also applies to an empty-history branch. There is no implemented 428 approval
+negotiation or approval-continuation flow for these completion actions.
+
+Generic approval creation/consumption and ordinary WebAuthn bookkeeping would
+change roots that the completion service must match to the already committed
+plan. A future integrated authorization protocol must resolve that boundary
+explicitly; removing the guard, editing retained roots or wrapping the remote
+completion call in a local transaction is not a supported solution. The fixed
+503 diagnostic does not implement approval or authorize retry.
 
 ## Authenticated observation, not session activation
 

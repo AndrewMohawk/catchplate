@@ -18,7 +18,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cbor2
 from cryptography.hazmat.primitives import hashes
@@ -230,7 +230,7 @@ class FinalizationPermissionControls(unittest.TestCase):
 
     def test_wider_local_setup_does_not_change_ceremony_or_action_caps(self):
         from serverware import authority_contract, authority_local_limits
-        self.assertEqual(authority_local_limits.LOCAL_SETUP_MAX_NS, 3_600_000_000_000)
+        self.assertEqual(authority_local_limits.LOCAL_SETUP_MAX_NS, 5_400_000_000_000)
         self.assertEqual(authority_contract.VERIFIER_RESPONSE_MAX_AGE_NS, 30_000_000_000)
         self.assertEqual(permission.MAX_LIFETIME_NS, 120_000_000_000)
         for name, seconds in (("registration_options", 300), ("approval_options", 120),
@@ -268,22 +268,22 @@ class FinalizationPermissionControls(unittest.TestCase):
     def test_required_two_person_policy_refuses_before_pending_metadata_writes(self):
         from fastapi import HTTPException
         from serverware import control_plane_registration_finalization_completion_routes as routes
-        binding = {"action": permission.contract.COMPLETE_ACTION}
-        observed = []
-
-        def required(action):
-            observed.append(action)
-            return True
-
         # This is the pure source-policy refusal predicate, not authenticated
         # route dispatch or a successful application/approval fixture.
-        with self.assertRaises(HTTPException) as denied:
-            routes._approval_policy(SimpleNamespace(_control_plane_two_person_required=required), binding)
-        self.assertEqual(denied.exception.status_code, 503)
-        self.assertEqual(observed, [binding["action"]])
-        self.assertIsNone(routes._approval_policy(SimpleNamespace(
-            _control_plane_two_person_required=lambda action: False), binding))
-        for name, downstream in (("_operator", "possession.issue"), ("_permission", "possession.consume")):
+        for action in (permission.contract.COMPLETE_ACTION, permission.contract.RECOVER_ACTION):
+            binding = {"action": action}
+            required = Mock(return_value=True)
+            with self.subTest(action=action), self.assertRaises(HTTPException) as denied:
+                routes._approval_policy(SimpleNamespace(_control_plane_two_person_required=required), binding)
+            self.assertEqual(denied.exception.status_code, 503)
+            self.assertEqual(denied.exception.detail, {"error": routes.TWO_PERSON_UNAVAILABLE_ERROR})
+            required.assert_called_once_with(action)
+            self.assertIsNone(routes._approval_policy(SimpleNamespace(
+                _control_plane_two_person_required=lambda selected: False), binding))
+        for name, downstream in (("_operator", "possession.issue"),
+                ("_operator", "_dispatch"), ("_operator", "permission._bootstrap"),
+                ("_permission", "possession.consume"),
+                ("_permission", "application._require_control_plane_two_person")):
             body = function(routes, name)
             guards = calls(body, "_approval_policy")
             self.assertTrue(guards)
@@ -293,6 +293,91 @@ class FinalizationPermissionControls(unittest.TestCase):
         guard = min(node.lineno for node in calls(body, "routes._approval_policy"))
         self.assertLess(guard, calls(body, "_options")[0].lineno)
         self.assertLess(guard, calls(body, "_assertion")[0].lineno)
+        self.assertLess(guard, calls(body, "routes._dispatch")[0].lineno)
+        self.assertLess(guard, calls(body, "permission._bootstrap")[0].lineno)
+
+    def test_configured_two_person_refusal_precedes_possession_and_approval_helpers(self):
+        from fastapi import HTTPException
+        from serverware import control_plane_registration_finalization_completion_routes as routes
+
+        # Exercise the actual permission component with its real refusal
+        # predicate. Opaque objects are never admitted owners or identities;
+        # reaching any downstream helper is a test failure, not fake success.
+        for action in (permission.contract.COMPLETE_ACTION, permission.contract.RECOVER_ACTION):
+            required = Mock(return_value=True)
+            digest = Mock(side_effect=AssertionError("permission digest reached after refusal"))
+            authn = Mock(side_effect=AssertionError("possession policy reached after refusal"))
+            approval = Mock(side_effect=AssertionError("approval writer reached after refusal"))
+            application = SimpleNamespace(_control_plane_two_person_required=required,
+                _control_plane_payload_digest=digest,
+                _control_plane_mutation_authn_policy=authn,
+                _require_control_plane_two_person=approval)
+            with patch.object(permission, "consume", side_effect=AssertionError("possession consumed")) as consume:
+                with self.subTest(action=action), self.assertRaises(HTTPException) as denied:
+                    routes._permission(application, {"mfa": {"assertion": {"id": "unverified-carrier"}}},
+                        {"action": action}, object(), object())
+                self.assertEqual(denied.exception.status_code, 503)
+                self.assertEqual(denied.exception.detail, {"error": routes.TWO_PERSON_UNAVAILABLE_ERROR})
+                required.assert_called_once_with(action)
+                for downstream in (consume, digest, authn, approval):
+                    downstream.assert_not_called()
+
+    def test_fixed_two_person_503_diagnostic_retains_uncertainty_for_both_modes(self):
+        from fastapi import HTTPException
+        from serverware import control_plane_registration_finalization_completion_routes as routes
+
+        self.assertEqual(routes.TWO_PERSON_UNAVAILABLE_ERROR,
+            "registration_finalization_completion_two_person_unavailable")
+        for recovery in (False, True):
+            action = permission.contract.RECOVER_ACTION if recovery else permission.contract.COMPLETE_ACTION
+            with self.subTest(recovery=recovery), self.assertRaises(HTTPException) as denied:
+                routes._approval_policy(SimpleNamespace(_control_plane_two_person_required=lambda selected: True),
+                    {"action": action})
+            response = routes._http_error(denied.exception, recovery=recovery)
+            expected = routes.contract.unavailable(recovery=recovery)
+            expected["error"] = routes.TWO_PERSON_UNAVAILABLE_ERROR
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(json.loads(response.body), {"detail": expected})
+            self.assertIs(expected["automaticRetryAllowed"], False)
+            self.assertIs(expected["sessionActivated"], False)
+            self.assertIs(expected["currentnessEstablished"], False)
+            self.assertEqual(expected["remoteState"], "unknown")
+            for name, value in routes.HEADERS.items():
+                self.assertEqual(response.headers[name], value)
+
+    def test_arbitrary_server_details_and_retry_hints_are_redacted(self):
+        from fastapi import HTTPException
+        from serverware import control_plane_registration_finalization_completion_routes as routes
+
+        class ForeignDetail(dict):
+            pass
+
+        marker = "component-private-error-must-not-escape"
+        code = routes.TWO_PERSON_UNAVAILABLE_ERROR
+        details = (marker, [marker], {"error": marker},
+            {"error": code, "message": marker},
+            {"error": code, "automaticRetryAllowed": True},
+            {"error": code, "localDigest": PIN},
+            {"error": code, "remoteState": "committed", "sessionActivated": True},
+            ForeignDetail(error=code))
+        for recovery in (False, True):
+            for detail in details:
+                with self.subTest(recovery=recovery, detail=detail):
+                    response = routes._http_error(HTTPException(status_code=503, detail=detail,
+                        headers={"X-Private-Diagnostic": marker, "Retry-After": "1"}), recovery=recovery)
+                    self.assertEqual(response.status_code, 503)
+                    self.assertEqual(json.loads(response.body),
+                        {"detail": routes.contract.unavailable(recovery=recovery)})
+                    self.assertNotIn(marker, response.body.decode())
+                    self.assertNotIn("X-Private-Diagnostic", response.headers)
+                    self.assertNotIn("Retry-After", response.headers)
+            for status in (500, 502, 504):
+                with self.subTest(recovery=recovery, status=status):
+                    response = routes._http_error(HTTPException(status_code=status,
+                        detail={"error": code}), recovery=recovery)
+                    self.assertEqual(response.status_code, 503)
+                    self.assertEqual(json.loads(response.body),
+                        {"detail": routes.contract.unavailable(recovery=recovery)})
 
 
 if __name__ == "__main__":

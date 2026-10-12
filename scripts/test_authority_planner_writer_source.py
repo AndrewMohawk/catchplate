@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Pure planner-writer privilege SQL and nonimporting integration controls.
 
-Call only the real inert SQL builder. Bounded AST inspection does not import
-db/service, execute extracted functions, replace a registry, or manufacture
-successful catalog results. These controls are not PostgreSQL ACL, TLS, role,
-migration, transaction or whole-service admission evidence.
+Call the real inert SQL builder and inspect bounded source ASTs. Cursor
+lifecycle regressions execute actual persistence suffixes with synthetic
+cursors; they exclude the preceding plan/connection admission.
+No db/service import, registry replacement or successful catalog result is
+supplied. These controls are not PostgreSQL ACL, TLS, role, migration,
+transaction or whole-service admission evidence.
 """
 from __future__ import annotations
 
 import ast
+import base64
+import copy
 import hashlib
 import re
 import sys
@@ -31,6 +35,10 @@ TABLE_PRIVILEGES = {
     "policy_authority_operation_mutation_templates": frozenset({"SELECT"}),
     "policy_authority_planner_transactions": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "policy_authority_revocation_retained_plans": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_recovery_invalidation_retained_plans": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_recovery_history_pages": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_challenge_maintenance_pages": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_jit_original_pages": frozenset({"SELECT", "INSERT"}),
     "policy_authority_revocation_writer_requests": frozenset({"SELECT", "INSERT"}),
     "policy_authority_revocation_writer_acknowledgments": frozenset({"SELECT", "INSERT"}),
     "policy_authority_query_dependency_manifests": frozenset({"SELECT"}),
@@ -117,12 +125,240 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         # Fixed expected syntax is parsed, never evaluated or extracted.
         self.assertEqual(ast.dump(node), ast.dump(ast.parse(expression, mode="eval").body))
 
-    def test_exact_fifteen_table_privileges_are_immutable_and_do_not_grant_business_writes(self):
+    def test_completion_cas_snapshots_update_count_before_cursor_reuse_and_close(self):
+        from collections.abc import Mapping
+        from typing import Any
+        from serverware import authority_transition_registry
+        from serverware.authority_store.audit_capacity_sql import AUDIT_CAPACITY_FUNCTION_NAME
+
+        # Execute the actual persistence suffix only, not fabricated admission.
+        # The SQL boundary double follows psycopg: execute returns self, SELECT
+        # replaces rowcount, and cursor close resets it to -1.
+        _, module = source("serverware/authority_store/executor_v9.py")
+        completion = function(module, "complete_authority_planner_transaction")
+        start = next(i for i, node in enumerate(completion.body)
+                     if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                         and target.id == "plan_base64url" for target in node.targets))
+        self.assertEqual(ast.unparse(completion.body[start - 1]),
+                         "raw = _require_planner_writer(connection)")
+        wrapper = ast.parse("def persistence_tail(*, raw, exact_plan_bytes, planner_transaction_id, "
+            "authorization_projection_digest, planned_at_epoch_ns, plan, selected_json, mutation_json, "
+            "planner_identity):\n    pass\n").body[0]
+        wrapper.body = copy.deepcopy(completion.body[start:])
+
+        class StoreError(Exception):
+            pass
+
+        namespace = dict(base64=base64, hashlib=hashlib, Mapping=Mapping, Any=Any,
+            authority_transition_registry=authority_transition_registry,
+            AUDIT_CAPACITY_FUNCTION_NAME=AUDIT_CAPACITY_FUNCTION_NAME,
+            _db_value={"MetadataStoreError": StoreError}.__getitem__)
+        component = ast.Module(body=[copy.deepcopy(function(module, "_b64url")),
+            copy.deepcopy(function(module, "_require_v3_planner_row")), wrapper], type_ignores=[])
+        exec(compile(ast.fix_missing_locations(component), "<actual-completion-persistence-suffix>", "exec"), namespace)
+
+        plan_to_row = {
+            "operation": "operation", "operationId": "operation_id",
+            "requestDigest": "request_digest", "capabilityId": "capability_id",
+            "operationContractDigest": "operation_contract_digest",
+            "queryManifestDigest": "query_manifest_digest",
+            "selectedBusinessRowsDigest": "selected_business_rows_digest",
+            "mutationPlanDigest": "mutation_plan_digest", "workUnits": "work_units",
+            "authorityRootSetBeforeDigest": "authority_root_set_before_digest",
+            "deadlineMonotonicNs": "deadline_monotonic_ns", "deadlineEpochNs": "deadline_epoch_ns",
+            "fence": "fence",
+        }
+        plan = {key: "sha256:" + "1" * 64 for key in plan_to_row}
+        plan.update(operation="webauthn.challenge.create", workUnits=1,
+                    deadlineMonotonicNs=2, deadlineEpochNs=3, fence=4,
+                    authoritySnapshotDigest="sha256:" + "2" * 64)
+        identity = dict(sessionIdentityDigest="sha256:" + "3" * 64,
+                        measurementDigest="sha256:" + "4" * 64,
+                        attestationReceiptDigest="sha256:" + "5" * 64)
+        exact = b'{"syntheticPersistenceSuffix":true}'
+        row = {field: plan[key] for key, field in plan_to_row.items()}
+        row.update(plan_protocol="v3", retained_record_digest=None, status="planned",
+            authorization_projection_digest="sha256:" + "6" * 64,
+            authority_snapshot_digest=plan["authoritySnapshotDigest"],
+            exact_plan_base64url=base64.urlsafe_b64encode(exact).rstrip(b"=").decode("ascii"),
+            exact_plan_bytes_digest="sha256:" + hashlib.sha256(exact).hexdigest(),
+            exact_plan_byte_count=len(exact), planned_at_epoch_ns=10,
+            selected_business_rows_json="[]", mutation_plan_json="[]",
+            planner_session_identity_digest=identity["sessionIdentityDigest"],
+            planner_measurement_digest=identity["measurementDigest"],
+            planner_attestation_receipt_digest=identity["attestationReceiptDigest"])
+        arguments = dict(exact_plan_bytes=exact, planner_transaction_id="sha256:" + "7" * 64,
+            authorization_projection_digest=row["authorization_projection_digest"],
+            planned_at_epoch_ns=10, plan=plan, selected_json="[]", mutation_json="[]",
+            planner_identity=identity)
+
+        class Cursor:
+            def __init__(self, count, returned_row):
+                self.update_count = count
+                self.returned_row = returned_row
+                self.rowcount = -1
+                self.steps = 0
+                self.closed = False
+
+            def cursor(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                self.rowcount = -1
+                self.closed = True
+
+            def execute(self, statement, parameters):
+                self.steps += 1
+                if self.steps in (1, 4):
+                    expected = "SELECT * FROM serverware_metadata.policy_authority_planner_transactions "
+                    if not statement.startswith(expected) or parameters != (arguments["planner_transaction_id"],):
+                        raise AssertionError("unexpected synthetic planner-row read")
+                    self.rowcount = 1
+                elif self.steps == 2:
+                    if not statement.startswith("SELECT serverware_metadata." + AUDIT_CAPACITY_FUNCTION_NAME + "("):
+                        raise AssertionError("unexpected synthetic capacity call")
+                    self.rowcount = 1
+                elif self.steps == 3:
+                    if not statement.startswith("UPDATE serverware_metadata.policy_authority_planner_transactions "):
+                        raise AssertionError("unexpected synthetic completion update")
+                    self.rowcount = self.update_count
+                else:
+                    raise AssertionError("unexpected synthetic SQL step")
+                return self
+
+            def fetchone(self):
+                return dict(row) if self.steps == 1 else copy.deepcopy(self.returned_row)
+
+        cases = [(0, row, None), (1, row, None), (-1, row, "completion CAS failed"),
+                 (2, row, "completion CAS failed"), (1, None, "requires v3 protocol"),
+                 (0, {**row, "status": "reserved"}, "completion retry is not exact"),
+                 (1, {**row, "operation_id": "changed"}, "differs from its reservation")]
+        for count, returned_row, error in cases:
+            with self.subTest(update_count=count, refusal=error):
+                cursor = Cursor(count, returned_row)
+                if error is None:
+                    self.assertEqual(namespace["persistence_tail"](raw=cursor, **arguments), row)
+                else:
+                    with self.assertRaisesRegex(StoreError, error):
+                        namespace["persistence_tail"](raw=cursor, **arguments)
+                self.assertTrue(cursor.closed)
+                self.assertEqual(cursor.rowcount, -1)
+                self.assertEqual(cursor.steps, 4)
+
+    def test_failure_cas_retains_each_update_count_before_reuse_and_close(self):
+        from collections.abc import Mapping
+        from typing import Any
+        from serverware import authority_transition_registry
+
+        _, module = source("serverware/authority_store/executor_v9.py")
+        failure = function(module, "fail_authority_v9_transaction")
+        start = next(i for i, node in enumerate(failure.body) if isinstance(node, ast.With))
+        self.assertEqual(ast.unparse(failure.body[start - 1]),
+                         "raw = _require_planner_writer(connection)")
+        wrapper = ast.parse("def failure_tail(*, raw, capability_id, envelope_id, planner_transaction_id, "
+            "failure_code, exact_response_bytes, terminal_at_epoch_ns, response_base64url, "
+            "response_digest, failure_digest):\n    pass\n").body[0]
+        wrapper.body = copy.deepcopy(failure.body[start:])
+
+        class StoreError(Exception):
+            pass
+
+        namespace = dict(Mapping=Mapping, Any=Any,
+            authority_transition_registry=authority_transition_registry,
+            _db_value={"MetadataStoreError": StoreError}.__getitem__)
+        component = ast.Module(body=[copy.deepcopy(function(module, "_require_v3_planner_row")), wrapper],
+                               type_ignores=[])
+        exec(compile(ast.fix_missing_locations(component), "<actual-failure-persistence-suffix>", "exec"), namespace)
+        response = b'{"syntheticFailureSuffix":true}'
+        arguments = dict(capability_id="sha256:" + "1" * 64, envelope_id="synthetic-envelope",
+            planner_transaction_id="sha256:" + "2" * 64, failure_code="synthetic-refusal",
+            exact_response_bytes=response, terminal_at_epoch_ns=10,
+            response_base64url=base64.urlsafe_b64encode(response).rstrip(b"=").decode("ascii"),
+            response_digest="sha256:" + hashlib.sha256(response).hexdigest(),
+            failure_digest="sha256:" + "3" * 64)
+        binding = dict(capability_id=arguments["capability_id"], envelope_id=arguments["envelope_id"],
+                       planner_transaction_id=arguments["planner_transaction_id"])
+        rows = [dict(binding, status="issued", capability_protocol="v3", capability_record_digest=None,
+                     operation="webauthn.challenge.create"),
+                dict(binding, status="reserved"),
+                dict(binding, status="planned", plan_protocol="v3", retained_record_digest=None,
+                     operation="webauthn.challenge.create")]
+        terminal_rows = copy.deepcopy(rows)
+        for row in terminal_rows:
+            row.update(status="failed", failure_digest=arguments["failure_digest"],
+                failure_code=arguments["failure_code"], exact_response_base64url=arguments["response_base64url"],
+                exact_response_bytes_digest=arguments["response_digest"],
+                terminal_at_epoch_ns=arguments["terminal_at_epoch_ns"],
+                failed_at_epoch_ns=arguments["terminal_at_epoch_ns"])
+
+        class Cursor:
+            def __init__(self, counts, returned_rows):
+                self.counts = counts
+                self.rows = returned_rows
+                self.rowcount = -1
+                self.steps = 0
+                self.closed = False
+
+            def cursor(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                self.rowcount = -1
+                self.closed = True
+
+            def execute(self, statement, parameters=None):
+                self.steps += 1
+                tables = ("policy_authority_fence_heads", "policy_authority_writer_capabilities",
+                          "policy_authority_execution_envelopes", "policy_authority_planner_transactions")
+                if self.steps <= 4:
+                    expected = "SELECT * FROM serverware_metadata." + tables[self.steps - 1] + " "
+                    self.rowcount = 1
+                elif self.steps <= 7:
+                    expected = "UPDATE serverware_metadata." + tables[self.steps - 4] + " "
+                    self.rowcount = self.counts[self.steps - 5]
+                else:
+                    raise AssertionError("unexpected synthetic SQL step")
+                if not statement.startswith(expected):
+                    raise AssertionError("unexpected synthetic failure transaction statement")
+                return self
+
+            def fetchone(self):
+                return {} if self.steps == 1 else copy.deepcopy(self.rows[self.steps - 2])
+
+        expected = dict(status="failed", failureDigest=arguments["failure_digest"], exactResponseBytes=response)
+        cases = [((1, 1, 1), rows, None, 7), ((0, 0, 0), terminal_rows, None, 4)]
+        for index in range(3):
+            for refused in (0, -1, 2):
+                counts = [1, 1, 1]
+                counts[index] = refused
+                cases.append((tuple(counts), rows, "atomic failure CAS failed", 7))
+        changed_terminal = copy.deepcopy(terminal_rows)
+        changed_terminal[1]["terminal_at_epoch_ns"] += 1
+        cases.append(((1, 1, 1), changed_terminal, "failure retry is not exact", 4))
+        for counts, returned_rows, error, steps in cases:
+            with self.subTest(update_counts=counts, refusal=error, steps=steps):
+                cursor = Cursor(counts, returned_rows)
+                if error is None:
+                    self.assertEqual(namespace["failure_tail"](raw=cursor, **arguments), expected)
+                else:
+                    with self.assertRaisesRegex(StoreError, error):
+                        namespace["failure_tail"](raw=cursor, **arguments)
+                self.assertTrue(cursor.closed)
+                self.assertEqual(cursor.rowcount, -1)
+                self.assertEqual(cursor.steps, steps)
+
+    def test_exact_nineteen_table_privileges_are_immutable_and_do_not_grant_business_writes(self):
         self.assertIs(type(writer.PLANNER_WRITER_TABLE_PRIVILEGES), MappingProxyType)
         self.assertEqual(dict(writer.PLANNER_WRITER_TABLE_PRIVILEGES), TABLE_PRIVILEGES)
-        # Request/ACK custody add tables 12/13; WebAuthn raw3 evidence and
-        # raw4 transition custody add tables 14/15 without business writes.
-        self.assertEqual(len(TABLE_PRIVILEGES), 15)
+        # The existing 15-table roster plus recovery invalidation/history,
+        # challenge maintenance and JIT originals retain no business writes.
+        self.assertEqual(len(TABLE_PRIVILEGES), 19)
         self.assertTrue(all(type(name) is str and type(value) is frozenset
                             for name, value in writer.PLANNER_WRITER_TABLE_PRIVILEGES.items()))
         with self.assertRaises(TypeError):

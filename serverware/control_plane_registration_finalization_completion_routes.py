@@ -35,6 +35,7 @@ RECOVERY_PATHS = RECOVER_PATHS | frozenset({
     "/api/webauthn/register/recover-finalization-completion/options",
     "/api/auth/session/webauthn/register/recover-finalization-completion/options"})
 HEADERS = permission.HEADERS
+TWO_PERSON_UNAVAILABLE_ERROR = "registration_finalization_completion_two_person_unavailable"
 
 
 def error(status_code, code=None, *, recovery, local_digest=None):
@@ -46,7 +47,11 @@ def error(status_code, code=None, *, recovery, local_digest=None):
 
 def _http_error(exc, *, recovery):
     if exc.status_code >= 500:
-        return error(503, recovery=recovery)
+        # Expose only this exact source-owned refusal, never server exception text.
+        code = (TWO_PERSON_UNAVAILABLE_ERROR if exc.status_code == 503
+            and type(exc.detail) is dict
+            and exc.detail == {"error": TWO_PERSON_UNAVAILABLE_ERROR} else None)
+        return error(503, code, recovery=recovery)
     detail = contract.unavailable(recovery=recovery)
     if type(exc.detail) is dict:
         # Preserve the real permission challenge needed for assertion/approval,
@@ -110,7 +115,7 @@ def _approval_policy(application, binding):
     # A selected two-person completion policy needs its own integrated protocol.
     if application._control_plane_two_person_required(binding["action"]):
         raise HTTPException(status_code=503,
-            detail="two-person finalization completion is not available without a metadata transition")
+            detail={"error": TWO_PERSON_UNAVAILABLE_ERROR})
 
 
 def _permission(application, payload, binding, identity, owner):

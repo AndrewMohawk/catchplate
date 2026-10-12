@@ -682,6 +682,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_writer_reservation_peer.py \
 	scripts/test_authority_local_cohort.py \
 	scripts/test_authority_local_retained_rbac.py \
+	scripts/test_authority_local_retained_metadata.py \
 	scripts/test_authority_local_historical_archive.py \
 	scripts/test_authority_local_historical_archive_roundtrip.py \
 	scripts/test_authority_local_trust_commit.py \
@@ -970,6 +971,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_local_launch_authorization.py \
 	serverware/authority_local_cohort.py \
 	serverware/authority_local_retained_rbac.py \
+	serverware/authority_local_retained_metadata.py \
 	serverware/authority_local_trust_commit.py \
 	serverware/authority_local_enrollment_configuration.py \
 	serverware/authority_local_enrollment_attestation.py \
@@ -4186,6 +4188,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_local_launch_authorization.py \
 				serverware/authority_local_cohort.py \
 				serverware/authority_local_retained_rbac.py \
+				serverware/authority_local_retained_metadata.py \
 				serverware/authority_local_trust_commit.py \
 				serverware/authority_local_enrollment_configuration.py \
 				serverware/authority_local_enrollment_attestation.py \

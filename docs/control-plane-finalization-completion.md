@@ -141,15 +141,26 @@ The implemented [pending permission helper](finalization-pending-permission.md)
 keeps the pre-SQL empty-history rule intact. A fresh pending cookie, explicit
 CSRF and current roles precede permission: genuinely empty history with the
 target absent requires fresh bootstrap; exactly the one matching live target
-requires fresh target-key, action-bound WebAuthn plus configured two-person
-approval, not bootstrap. Extra, foreign or revoked history is denied. Dedicated
-pending-purpose options derive the action and payload binding server-side.
-Session, roles and credential identity are rechecked after permission, allowing
-only the expected verified counter/bookkeeping changes.
+requires fresh target-key completion possession, not bootstrap. Extra, foreign
+or revoked history is denied. Dedicated completion options derive the action and
+payload binding server-side. One nonce belongs to the actual enrollment owner,
+is clipped to its original context, and is spent before signature verification;
+it cannot be reissued on that owner or recovered after owner loss. Session,
+roles and the complete credential row are rechecked after permission. Stored
+counters, bookkeeping, challenges and approvals do not change, preserving the
+exact pending metadata vector.
+
+If the complete or recover action requires two-person approval, both public
+branches instead return HTTP 503 with fixed error
+`registration_finalization_completion_two_person_unavailable` before options,
+assertion consumption, bootstrap or dispatch. Ordinary approval writes would
+invalidate the committed after-vector required by the independent completion
+reader. A future integrated authorization protocol is required; the current
+refusal is intentional and has no guard-bypass or local-transaction workaround.
 
 Two explicit [portal controls](portal-registration-handoff.md) connect those
-actions without automatic chaining or retry. Approval continuation requires an
-explicit user action and another fresh assertion. F08 separate authenticated
+actions without automatic chaining or retry. There is no implemented 428
+two-person approval negotiation or continuation for completion/recovery. F08 separate authenticated
 OIDC activation is next; no completion route activates the pending session.
 
 Authenticated historical completion is not a live latest-head lease, packet

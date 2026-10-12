@@ -52,6 +52,9 @@ deployment-managed. The new [destination review workflow](docs/operator-proxy-de
 prepares retained configuration for a controlled restart; it does not apply live
 settings or grant application access. See [verification and current limits](docs/ordinary-client-verification.md)
 and the [operator workflow requirements](docs/operator-workspace-requirements.md).
+The [whole-project acceptance tracker](docs/project-completion.md) separates
+immediate ordinary-app work, requested provider features and the six independent
+production gates; none is silently dropped by the demo's progress.
 The older [fixed sandbox](https://serverware-sandbox.example.com/) remains
 separate and is not the credential-management demo.
 
@@ -66,7 +69,7 @@ depends on the deployment's advertised capabilities and approved destinations.
 
 | Job | Current operator-workspace boundary |
 | --- | --- |
-| Read or create GitHub issues and comments | Named-repository PAT permissions and a stock Octokit recipe; isolated synthetic-provider checks passed, not a real GitHub or deployed integration. [Contract](docs/operator-github-client-compatibility.md). |
+| Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Node/Python/Go proxy fixtures passed with static/PAT credentials; the new App-through-Rust SDK run and real GitHub acceptance remain open. [Contract](docs/operator-github-client-compatibility.md). |
 | Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. No real Google journey is established by the synthetic demo. |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
 | Publish an npm package | Named-package publishing preset and downloadable stock npm example; all 21 isolated cases passed. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |

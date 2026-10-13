@@ -3,7 +3,8 @@
 # JIT denial source repair
 
 Status: source implementation with passing focused, PostgreSQL and ordinary CI
-component results. The subsequent metadata-reader repair passed focused tests;
+component results. The subsequent metadata-reader repair also passed its
+56-suite CI inventory. The original-expiry repair below passed focused tests;
 its expanded CI inventory is pending. This is not a completed
 ordinary approval journey or deployment acceptance. The live application
 remains `a3899a95`; this repair has not been deployed.
@@ -141,10 +142,45 @@ opening boundary. Other suites cover pure denial, approval, policy and the
 regression runner. No PostgreSQL service, live data, provider or installed
 authority was used; the network-isolated test container was removed.
 
-The ordinary inventory now contains 56 suites, adding the existing metadata
-suite; that expanded inventory has not yet run in CI. The metadata suite and
-three JIT suites are explicitly excluded from the historical Coder inventory,
-not prepared native tests. No broker roster was changed.
+At `7e3fc8e3`, [CI 38386777401](https://github.com/example/private-deployment)
+passed all 56 suites: 488 Python tests and 145 Node groups, zero skips,
+443.426 seconds. Retained result: `ci-38386777401.hMZUS2C6/quick/result.json`,
+SHA256 `ead715c16777a93b8417e13b7b6544c2346e383e8f10a4119401ac43ab2c7e93`.
+
+### Original request expiry
+
+`jit.request` previously computed a fresh pending deadline from database time,
+even when the authenticated opaque documents expired earlier. It now requires
+finite original expiries on both documents and stores the earliest of those
+two limits and database time plus the configured TTL. It rounds down to the
+database's microsecond precision and uses that same exact value for the
+aggregate expiry. A replay preserves the original row/audit without renewal;
+malformed retained expiry or one beyond the documents' bounds is refused.
+
+`jit-original-expiry.hEn36oMR/results/result.json` passed seven suites / 68 tests,
+zero skips, in 32.953 seconds, with selected source unchanged. SHA256:
+`99ca79476a2a95d8fa2e3964f33fec05c36d19700cf255ea5e3fc6d5c022ac48`.
+The request suite's six new controls run the real kernel, opaque/evidence and
+aggregate consumers over explicitly synthetic admitted rows, not a genuine
+native seal or PostgreSQL commit. Adjacent private-input, material, registry,
+approval, denial and runner suites passed. The offline container was removed.
+
+The ordinary inventory now has 57 suites, adding that existing request suite;
+the expanded inventory has not yet run in CI. The affected JIT/metadata suites
+remain excluded from the historical Coder inventory, not prepared native tests.
+No broker roster was changed.
+
+The next integration target is the actual atomic `release.reserve` path.
+Rust refuses standalone legacy JIT composition, and the versioned reserve
+facade does not pass through standalone `jit.request` private-v2 ingress.
+Adding a producer only to that standalone service branch would not connect
+real proxy requests. Native-origin sealing needs the original authenticated
+CONNECT session/request owner and signed prepare-response originals carried
+through canonical preparation, under the original request deadline. The
+versioned reserve then needs commitment-only private decomposition and atomic
+custody/evidence/approval retention. These connections are not implemented by
+the expiry repair; do not repurpose bootstrap mTLS or treat a principal string,
+parsed DTO or unsigned preparation as caller authority.
 
 Still open: native authenticated private-review opening; the connected
 ordinary approval UI; approve/deny/expire terminal presentation and expiry

@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""JIT ingress components only: no custody, approval insertion or admission.
+"""JIT ingress/kernel components: no custody, durable insertion or admission.
 
 The installed DB facade is intercepted at its dispatch boundary by a terminal
 sentinel, never a successful writer response. Normalization, business-intent
 and authorization digests, and the actual query/transition kernel are real.
 The local signature tests immutable bytes, not a trusted authority envelope.
-No database, transport, provider, native pilot or opaque receipt is created.
+Expiry controls additionally execute the real kernel over explicitly synthetic
+admitted selected rows. Their receipt digests and retained originals exercise
+the actual opaque/evidence/aggregate consumers, not custody or root admission.
+No database, transport, provider, native pilot or durable receipt is created.
 """
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
+import base64
+from datetime import datetime, timedelta, timezone
 import hashlib
 import inspect
 import json
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -31,6 +36,10 @@ def no_network(event, _args):
 
 if __name__ == "__main__":
     sys.addaudithook(no_network)
+    # Offline import-only validator mode, never application startup. Importing
+    # these fixture helpers must preserve the caller suite's selected mode.
+    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -142,8 +151,8 @@ def arguments():
         service._controlled_writer_request_digest("jit.request", raw)
 
 
-def kernel_arguments():
-    _operation, document = dispatch_input(public_arguments())
+def kernel_arguments(values=None):
+    _operation, document = dispatch_input(public_arguments() if values is None else values)
     raw, explicit, _private = service._extract_v9_runtime_input(
         "jit.request", "ensure_jit_approval_request", document)
     assert explicit is None
@@ -363,6 +372,224 @@ class JitRequestIngressTests(unittest.TestCase):
             mutation.assert_not_called()
         self.assertEqual(context.arguments, before)
         self.assertEqual(context.selected_rows, ())
+
+
+class HeldRequestRows:
+    """Synthetic admitted originals, real kernel consumers; no crypto verdict.
+
+    The kernel trusts prior row admission. Fixed ciphertext/signature bytes below
+    are NOT a seal, signature verification, native attestation or custody proof.
+    They are held unchanged across delayed planning and replay controls.
+    """
+    EPOCH_NS = 1_791_720_000_000_000_000  # 2026-10-11T12:00:00Z, literal oracle.
+    OPAQUE = "policy_authority_opaque_values"
+    EVIDENCE = "policy_authority_external_evidence_receipts"
+    AGGREGATE = "policy_authority_bounded_aggregate_states"
+
+    def __init__(self, canonical_expiry, display_expiry, *, pending_ttl=300):
+        self.kernel = quota.KERNELS["jit.request"]
+        _raw, self.arguments, self.digest = kernel_arguments({**public_arguments(),
+            "pending_ttl_seconds": pending_ttl})
+        normalized = ingress.normalize(self.arguments, request_digest=self.digest)
+        self.item = identity(self.digest, "jit-approval-request")
+        self.rows = []
+        self.originals = []
+        for purpose, kind, field, expiry in (
+            ("jit-canonical-request", "approval-secret-json/v1", "canonical_request_digest", canonical_expiry),
+            ("jit-redacted-display", "approval-review-json/v1", "redacted_display_digest", display_expiry),
+        ):
+            binding = framed("serverware.policyAuthorityJitOpaqueValueBinding/v1", {
+                "schema": "serverware.policyAuthorityJitOpaqueValueBinding/v1", "valueKind": kind,
+                "approvalRequestId": self.item, "requestDigest": normalized["request_digest"],
+                "plaintextDigest": normalized[field]})
+            # The statement's explicit fixture label avoids inventing native
+            # evidence. The actual consumer checks all retained row digests.
+            statement = {"fixture": "synthetic admitted row, not verifier execution", "bindingDigest": binding}
+            signature = base64.urlsafe_b64encode(b"synthetic-not-verified-signature" * 2).decode().rstrip("=")
+            signature_digest = core.framed_digest("serverware.policyAuthorityExternalEvidenceSignature/v1",
+                b"Ed25519", signature.encode())
+            receipt_material = {
+                "schema": "serverware.policyAuthorityExternalEvidenceReceipt/v1",
+                "bindingDigest": binding, "evidenceType": "key-custody-seal/v1",
+                "expiresAtEpochNs": self.EPOCH_NS + 3600 * 1_000_000_000,
+                "signatureAlgorithm": "Ed25519", "signatureDigest": signature_digest,
+                "sourceRevision": contract.SOURCE_REVISION,
+                "statementDigest": framed("serverware.policyAuthorityExternalEvidenceStatement/v1", statement),
+                "verifiedAtEpochNs": self.EPOCH_NS,
+                "verifierAttestationReceiptDigest": sha(b"synthetic unattested selection"),
+                "verifierIdentityDigest": sha(b"synthetic verifier identity"),
+                "verifierMeasurementDigest": sha(b"synthetic verifier measurement"),
+            }
+            evidence_digest = framed("serverware.policyAuthorityExternalEvidenceReceipt/v1", receipt_material)
+            evidence = {
+                "evidence_digest": evidence_digest, "evidence_type": "key-custody-seal/v1",
+                "binding_digest": binding, "statement_json": canonical(statement).decode(),
+                "statement_digest": receipt_material["statementDigest"], "signature_algorithm": "Ed25519",
+                "signature_base64url": signature, "signature_digest": signature_digest,
+                "verified_at_epoch_ns": self.EPOCH_NS,
+                "expires_at_epoch_ns": receipt_material["expiresAtEpochNs"],
+                "verifier_identity_digest": receipt_material["verifierIdentityDigest"],
+                "verifier_measurement_digest": receipt_material["verifierMeasurementDigest"],
+                "verifier_attestation_receipt_digest": receipt_material["verifierAttestationReceiptDigest"],
+                "status": "verified", "consumed_operation_id": None, "consumed_at_epoch_ns": None,
+                "source_revision": contract.SOURCE_REVISION,
+            }
+            ciphertext = base64.urlsafe_b64encode(("synthetic-not-sealed:" + purpose).encode()).decode().rstrip("=")
+            opaque = {
+                "opaque_id": identity(self.digest, purpose), "value_kind": kind, "binding_digest": binding,
+                "algorithm": "synthetic-no-custody", "key_id": "synthetic-unadmitted-key",
+                "ciphertext_base64url": ciphertext,
+                "ciphertext_digest": core.framed_digest("serverware.policyAuthorityOpaqueCiphertext/v1",
+                    b"synthetic-no-custody", b"synthetic-unadmitted-key", ciphertext.encode()),
+                "producer_evidence_digest": evidence_digest, "created_at_epoch_ns": self.EPOCH_NS,
+                "expires_at_epoch_ns": expiry, "status": "active", "consumed_at_epoch_ns": None,
+                "source_revision": contract.SOURCE_REVISION,
+            }
+            self.add(self.OPAQUE, {"opaque_id": opaque["opaque_id"]}, opaque)
+            self.add(self.EVIDENCE, {"evidence_digest": evidence_digest}, evidence)
+            self.originals.append(copy.deepcopy(opaque))
+        aggregate_id, partition = quota._aggregate_key("jit-pending-approvals", "global")
+        aggregate = {"aggregate_id": aggregate_id, "aggregate_kind": "jit-pending-approvals",
+            "partition_digest": partition, "revision": 1, "live_count": 0, "active_count": 0,
+            "capacity_limit": 100, "reserved_units_json": "{}", "committed_units_json": "{}",
+            "next_sequence": 0, "minimum_expiry_epoch_ns": None,
+            "expiry_index_root_digest": sha(b"synthetic admitted empty expiry index"), "work_page_id": None,
+            "updated_at_epoch_ns": self.EPOCH_NS, "source_revision": contract.SOURCE_REVISION}
+        state = core._aggregate_state_material(aggregate, reserved_units={}, committed_units={})
+        aggregate.update(state_json=canonical(state).decode(), state_digest=framed(
+            "serverware.policyAuthorityAggregateState/v1", state))
+        self.add(self.AGGREGATE, {"aggregate_id": aggregate_id}, aggregate)
+        self.add("approval_requests", {"id": self.item}, None)
+        self.add("routes", {"id": normalized["route_id"]}, None)
+        self.add("metadata_audit_outbox", {"id": identity(self.digest, "metadata-audit-outbox")}, None)
+
+    def add(self, table, key, row):
+        self.rows.append({"table": table, "key": key, "keyDigest": core.framed_digest(
+            "serverware.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
+            "present": row is not None, "row": row, "contractSelector": None})
+
+    def context(self, now=NOW):
+        return core.KernelContext(operation="jit.request", arguments=copy.deepcopy(self.arguments),
+            selected_rows=tuple(copy.deepcopy(self.rows)), database_now=now, request_digest=self.digest)
+
+    def transition(self, now=NOW):
+        context = self.context(now)
+        before = copy.deepcopy(context.selected_rows)
+        result = self.kernel.transition(context)
+        if context.selected_rows != before:
+            raise AssertionError("kernel changed the retained originals")
+        return result
+
+    def apply_model(self, transition):
+        """Retain exact emitted rows for replay, not a database commit claim."""
+        for mutation in transition.mutations:
+            selected = next(item for item in self.rows if item["table"] == mutation["table"]
+                and item["key"] == mutation["key"])
+            if selected["row"] != mutation["expectedRow"]:
+                raise AssertionError("model CAS does not match the original")
+            selected.update(present=True, row=copy.deepcopy(mutation["row"]))
+
+
+class JitRequestExpiryTests(unittest.TestCase):
+    def assert_expiry(self, fixture, transition, expected_text, expected_ns):
+        self.assertEqual([(item["table"], item["operation"]) for item in transition.mutations], [
+            ("routes", "INSERT"), ("approval_requests", "INSERT"),
+            (fixture.AGGREGATE, "UPDATE"), ("metadata_audit_outbox", "INSERT")])
+        approval = transition.mutations[1]["row"]
+        aggregate = transition.mutations[2]["row"]
+        event = json.loads(transition.mutations[3]["row"]["event_json"])
+        self.assertEqual(approval["expires_at"], expected_text)
+        self.assertEqual(transition.result["expires_at"], expected_text)
+        self.assertEqual(event["expiresAt"], expected_text)
+        self.assertEqual(aggregate["minimum_expiry_epoch_ns"], expected_ns)
+        self.assertEqual(json.loads(aggregate["state_json"])["minimumExpiryEpochNs"], expected_ns)
+        self.assertEqual((aggregate["live_count"], aggregate["active_count"], aggregate["next_sequence"]), (1, 1, 1))
+        for field, original in zip(("canonical_request", "redacted_display"), fixture.originals):
+            self.assertEqual(approval[field], original["ciphertext_base64url"])
+            self.assertLessEqual(expected_ns, original["expires_at_epoch_ns"])
+        self.assertIs(transition.result["approval_created"], True)
+        self.assertIs(transition.result["idempotent_replay"], False)
+
+    def test_both_original_expiries_independently_cap_and_floor_exact_microseconds(self):
+        short = HeldRequestRows.EPOCH_NS + 12_345_678_999
+        long = HeldRequestRows.EPOCH_NS + 20_000_000_000
+        for first, second in ((short, long), (long, short), (short, short)):
+            with self.subTest(canonical_is_short=first == short, display_is_short=second == short):
+                fixture = HeldRequestRows(first, second)
+                result = fixture.transition(NOW + timedelta(seconds=3, microseconds=1000))
+                self.assert_expiry(fixture, result, "2026-10-11T12:00:12.345678+00:00",
+                    HeldRequestRows.EPOCH_NS + 12_345_678_000)
+
+    def test_pending_ttl_remains_upper_bound_and_aggregate_does_not_use_float(self):
+        fixture = HeldRequestRows(HeldRequestRows.EPOCH_NS + 3500_000_000_000,
+            HeldRequestRows.EPOCH_NS + 3600_000_000_000)
+        result = fixture.transition(NOW + timedelta(microseconds=1000))
+        self.assert_expiry(fixture, result, "2026-10-11T12:05:00.001000+00:00",
+            HeldRequestRows.EPOCH_NS + 300_001_000_000)
+
+    def test_delayed_admission_uses_held_originals_not_a_restarted_document_ttl(self):
+        end = HeldRequestRows.EPOCH_NS + 300_000_000_000
+        fixture = HeldRequestRows(end, end)
+        originals = copy.deepcopy(fixture.rows)
+        initial = fixture.transition()
+        delayed = fixture.transition(NOW + timedelta(seconds=37))
+        self.assert_expiry(fixture, delayed, "2026-10-11T12:05:00+00:00", end)
+        self.assertEqual(delayed.result["expires_at"], initial.result["expires_at"])
+        self.assertNotEqual(delayed.result["requested_at"], initial.result["requested_at"])
+        self.assertEqual(fixture.rows, originals)
+
+    def test_original_bounds_must_be_finite_current_exact_and_have_usable_microsecond(self):
+        end = HeldRequestRows.EPOCH_NS + 60_000_000_000
+        for index in range(2):
+            for bad in (None, True, float(end), str(end), 0, HeldRequestRows.EPOCH_NS,
+                        HeldRequestRows.EPOCH_NS + 999, 2**63):
+                with self.subTest(document=index, invalid_type=type(bad).__name__, value=bad):
+                    bounds = [end, end]
+                    bounds[index] = bad
+                    fixture = HeldRequestRows(*bounds)
+                    before = copy.deepcopy(fixture.rows)
+                    with self.assertRaises(core.TransitionKernelError):
+                        fixture.transition()
+                    self.assertEqual(fixture.rows, before)
+
+    def test_exact_replay_never_renews_ttl_or_changes_rows_audit_or_capacity(self):
+        end = HeldRequestRows.EPOCH_NS + 300_000_000_000
+        fixture = HeldRequestRows(end, end, pending_ttl=1)
+        first = fixture.transition()
+        self.assert_expiry(fixture, first, "2026-10-11T12:00:01+00:00",
+            HeldRequestRows.EPOCH_NS + 1_000_000_000)
+        fixture.apply_model(first)
+        retained = copy.deepcopy(fixture.rows)
+        for delay in (timedelta(microseconds=1), timedelta(seconds=2)):
+            replay = fixture.transition(NOW + delay)
+            self.assertEqual(replay.mutations, ())
+            self.assertEqual(replay.result, {**first.result, "approval_created": False, "idempotent_replay": True})
+            self.assertEqual(fixture.rows, retained)
+        # Elapsed business expiry may be reported as retained read-only replay;
+        # neither private document nor producer evidence validity is renewed.
+        with self.assertRaises(core.TransitionKernelError):
+            fixture.transition(NOW + timedelta(seconds=300))
+
+    def test_retained_replay_cannot_escape_original_document_expiry(self):
+        end = HeldRequestRows.EPOCH_NS + 60_000_000_000
+        for bad in (None, "invalid", "2026-10-11T12:00:30", "1970-01-01T00:00:00+00:00",
+                    "2026-10-11T12:01:00.000001+00:00"):
+            with self.subTest(retained_expiry=bad):
+                fixture = HeldRequestRows(end, end)
+                fixture.apply_model(fixture.transition())
+                approval = next(item["row"] for item in fixture.rows if item["table"] == "approval_requests")
+                audit = next(item["row"] for item in fixture.rows if item["table"] == "metadata_audit_outbox")
+                approval["expires_at"] = bad
+                # Keep the actual retained audit replay binding coherent, so
+                # its mismatch cannot masquerade as an expiry refusal.
+                event = json.loads(audit["event_json"])
+                event["expiresAt"] = bad
+                audit.update(event_json=canonical(event).decode(), event_digest=framed(
+                    "serverware.metadataAuditOutboxEvent/v1", event))
+                before = copy.deepcopy(fixture.rows)
+                with self.assertRaises(core.TransitionKernelError):
+                    fixture.transition(NOW + timedelta(seconds=1))
+                self.assertEqual(fixture.rows, before)
 
 
 if __name__ == "__main__":

@@ -871,6 +871,7 @@ override CODER_BLOCKED_PREREQUISITE_TEST_SCRIPTS := \
 override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_jit_approval.py \
 	scripts/test_authority_jit_denial.py \
+	scripts/test_authority_jit_request.py \
 	scripts/test_jit_denial_api.py \
 	scripts/test_approval_history_metadata.py \
 	scripts/test_agent_enrollment.py \

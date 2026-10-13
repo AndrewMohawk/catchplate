@@ -1987,6 +1987,26 @@ class _JitRequestKernel:
                 plaintext_digest=display_digest,
             ),
         )
+        # The custody owner fixed both document lifetimes before planning.
+        # Neither delayed admission nor replay may restart that original TTL.
+        document_expiry_ns = min(
+            _integer(value.get("expires_at_epoch_ns"),
+                "JIT original document expiry", minimum=1,
+                maximum=_SIGNED_BIGINT_MAX)
+            for value in (canonical_value, display_value)
+        )
+        now_ns = core._epoch_nanoseconds(context.database_now)
+        expiry_ns = min(now_ns + pending_ttl * 1_000_000_000,
+            document_expiry_ns)
+        # PostgreSQL timestamps and datetime represent microseconds. Round
+        # down, never past either authenticated nanosecond document bound.
+        expiry = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+            microseconds=expiry_ns // 1_000)
+        stored_expiry_ns = core._epoch_nanoseconds(expiry)
+        if stored_expiry_ns <= now_ns:
+            raise core.TransitionKernelError(
+                "JIT original document lifetime has no usable remainder"
+            )
         pending_key = core.framed_digest(
             "serverware.jitPendingApproval/v2",
             core.canonical_bytes(
@@ -2062,10 +2082,7 @@ class _JitRequestKernel:
                 **immutable,
                 "status": "pending",
                 "requested_at": now_s,
-                "expires_at": (
-                    context.database_now.astimezone(timezone.utc)
-                    + timedelta(seconds=pending_ttl)
-                ).isoformat(),
+                "expires_at": expiry.isoformat(),
                 "approved_until": None,
                 "decision_note": None,
                 "approved_by": None,
@@ -2087,13 +2104,7 @@ class _JitRequestKernel:
                     live_delta=1,
                     active_delta=1,
                     next_sequence_delta=1,
-                    minimum_expiry_epoch_ns=int(
-                        (
-                            context.database_now.astimezone(timezone.utc)
-                            + timedelta(seconds=pending_ttl)
-                        ).timestamp()
-                        * 1_000_000_000
-                    ),
+                    minimum_expiry_epoch_ns=stored_expiry_ns,
                 ),
             )
             replay = False
@@ -2104,6 +2115,17 @@ class _JitRequestKernel:
             ):
                 raise core.TransitionKernelError(
                     "JIT request identity was rebound"
+                )
+            try:
+                retained_expiry_ns = core._epoch_nanoseconds(
+                    datetime.fromisoformat(existing["expires_at"]))
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise core.TransitionKernelError(
+                    "JIT retained request expiry is invalid"
+                ) from exc
+            if not 0 < retained_expiry_ns <= document_expiry_ns:
+                raise core.TransitionKernelError(
+                    "JIT retained request exceeds its original document lifetime"
                 )
             row = existing
             request_mutations = ()

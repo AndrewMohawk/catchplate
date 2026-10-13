@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import Counter
 from contextlib import ExitStack, closing
+from datetime import datetime, timezone
 import hashlib
 from http.cookies import SimpleCookie
 import json
@@ -737,13 +739,126 @@ def retained_checkpoint():
     directory = Path(os.environ["SERVERWARE_DATA_DIR"])
     database = directory / "serverware.sqlite3"
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
-        logical = tuple(conn.iterdump())
+        # Existing startup reinstalls real guard triggers. iterdump() does not
+        # order those sqlite_master entries; compare the complete statement
+        # multiset, retaining every schema/data byte and duplicate statement.
+        logical = tuple(sorted(conn.iterdump()))
     private_clean("\n".join(logical).encode())
     key = Path(os.environ["SERVERWARE_OPERATOR_X_CUSTODY_DIR"]) / "provider-key.json"
     evidence = configuration_fixture.key_evidence(key)
     return {"database_logical_sha256": hashlib.sha256(encoded(logical)).hexdigest(),
         "policy_sha256": hashlib.sha256((directory / "policy-bundle.json").read_bytes()).hexdigest(),
         "key_identity": list(evidence)}
+
+
+def retained_row_digests():
+    """Failure diagnostics retain cell hashes, never values or SQL text."""
+    database = Path(os.environ["SERVERWARE_DATA_DIR"]) / "serverware.sqlite3"
+    result = {"schema": {}, "tables": {}}
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
+        conn.execute("BEGIN")
+        objects = conn.execute("SELECT name,type,tbl_name,sql FROM sqlite_master ORDER BY name").fetchall()
+        for name, kind, table, sql in objects:
+            result["schema"][name] = hashlib.sha256(encoded((kind, table, sql))).hexdigest()
+            if kind != "table":
+                continue
+            quoted = '"' + name.replace('"', '""') + '"'
+            columns = conn.execute("PRAGMA table_info(" + quoted + ")").fetchall()
+            primary = [index for _, index in sorted((column[5], index)
+                for index, column in enumerate(columns) if column[5])]
+            rows = []
+            for row in conn.execute("SELECT * FROM " + quoted):
+                cells = tuple(hashlib.sha256(encoded((type(value).__name__,
+                    value.hex() if type(value) is bytes else value))).hexdigest() for value in row)
+                rows.append(cells)
+            require(len(rows) <= 10000, "bounded cold-start diagnostic rows")
+            result["tables"][name] = {"columns": [column[1] for column in columns],
+                "primary": primary, "rows": rows}
+    return result
+
+
+def retained_startup_bookkeeping():
+    database = Path(os.environ["SERVERWARE_DATA_DIR"]) / "serverware.sqlite3"
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
+        rows = conn.execute("SELECT migration,version,applied_at FROM serverware_store_migrations "
+            "WHERE migration=?", ("policy_candidate_authority",)).fetchall()
+    require(len(rows) == 1, "exact retained startup migration")
+    return rows[0]
+
+
+def changed_retained_rows(before, after):
+    """Report exact changed schema/table/column names and counts, no values."""
+    changed = {"schema_objects": [name for name in sorted(before["schema"].keys() | after["schema"].keys())
+        if before["schema"].get(name) != after["schema"].get(name)], "tables": {}}
+    for name in sorted(before["tables"].keys() | after["tables"].keys()):
+        previous, current = before["tables"].get(name), after["tables"].get(name)
+        if previous is None or current is None:
+            changed["tables"][name] = {"presence_changed": True}
+            continue
+        if previous["columns"] != current["columns"] or previous["primary"] != current["primary"]:
+            changed["tables"][name] = {"columns_changed": True}
+            continue
+        if Counter(previous["rows"]) == Counter(current["rows"]):
+            continue
+        if previous["primary"]:
+            def keyed(value):
+                rows = {tuple(row[index] for index in value["primary"]): row for row in value["rows"]}
+                require(len(rows) == len(value["rows"]), "diagnostic primary-key uniqueness")
+                return rows
+            old, new = keyed(previous), keyed(current)
+            updates = [key for key in old.keys() & new.keys() if old[key] != new[key]]
+            changed["tables"][name] = {"inserted": len(new.keys() - old.keys()),
+                "deleted": len(old.keys() - new.keys()), "updated": len(updates),
+                "changed_columns": sorted({previous["columns"][index] for key in updates
+                    for index, (left, right) in enumerate(zip(old[key], new[key])) if left != right})}
+        else:
+            old, new = Counter(previous["rows"]), Counter(current["rows"])
+            changed["tables"][name] = {"inserted": sum((new - old).values()),
+                "deleted": sum((old - new).values()), "no_primary_key": True}
+    return changed
+
+
+def require_cold_retention(expected, checkpoint, before, after, old, new, interval):
+    """Permit only the existing startup migration's one wall-clock refresh.
+
+    db._record_policy_candidate_authority_migration refreshes this exact row with
+    iso_now() on startup. All other cells, rows, schema, policy and key remain
+    exact. Do not call this database-byte preservation or mask other timestamps.
+    """
+    require(checkpoint.keys() == expected.keys()
+        and checkpoint["policy_sha256"] == expected["policy_sha256"]
+        and checkpoint["key_identity"] == expected["key_identity"], "retained key and policy exact")
+    changes = changed_retained_rows(before, after)
+    require(changes == {"schema_objects": [], "tables": {"serverware_store_migrations": {
+        "inserted": 0, "deleted": 0, "updated": 1, "changed_columns": ["applied_at"]}}},
+        "only exact startup bookkeeping cell may change")
+    require(old[0] == new[0] == "policy_candidate_authority"
+        and type(old[1]) is int and old[1] > 0 and old[1] == new[1]
+        and type(new[1]) is int and type(old[2]) is str and type(new[2]) is str,
+        "retained migration identity and version")
+    old_at, new_at = datetime.fromisoformat(old[2]), datetime.fromisoformat(new[2])
+    require(old_at.tzinfo == new_at.tzinfo == timezone.utc
+        and old_at.isoformat() == old[2] and new_at.isoformat() == new[2]
+        and old_at < interval[0] <= new_at <= interval[1], "actual startup bookkeeping wall interval")
+    def row_digest(row):
+        return tuple(hashlib.sha256(encoded((type(value).__name__, value))).hexdigest() for value in row)
+    previous, current = before["tables"]["serverware_store_migrations"], after["tables"]["serverware_store_migrations"]
+    require(previous["columns"] == current["columns"] == ["migration", "version", "applied_at"]
+        and previous["primary"] == current["primary"] == [0], "exact migration table projection")
+    old_row, new_row = row_digest(old), row_digest(new)
+    prior, final = Counter(previous["rows"]), Counter(current["rows"])
+    require(prior[old_row] == final[new_row] == 1 and old_row != new_row,
+        "exact changed migration primary key")
+    prior.subtract([old_row])
+    prior.update([new_row])
+    require(+prior == final, "all other migration rows and cells exact")
+    require(checkpoint["database_logical_sha256"] != expected["database_logical_sha256"],
+        "raw logical hashes retain the bookkeeping change")
+    return {"database_logical_before_sha256": expected["database_logical_sha256"],
+        "database_logical_after_sha256": checkpoint["database_logical_sha256"],
+        "bookkeeping_update": {"table": "serverware_store_migrations", "primary_key": "policy_candidate_authority",
+            "column": "applied_at", "rows": 1, "within_actual_startup_interval": True},
+        "all_other_retained_cells_and_schema_exact": True}
 
 
 async def run_story(mode, expected=None):
@@ -754,6 +869,9 @@ async def run_story(mode, expected=None):
     sys.addaudithook(no_network)
     if mode == "reopen":
         require(type(expected) is dict and retained_checkpoint() == expected, "retained cold-start input")
+        before_startup = retained_row_digests()
+        prior_bookkeeping = retained_startup_bookkeeping()
+        startup_started = datetime.now(timezone.utc)
     story = Story()
     from serverware import operator_x_transport as transport
     started = False
@@ -765,6 +883,7 @@ async def run_story(mode, expected=None):
             await story.app.start()
             started = True
             if mode == "reopen":
+                startup_finished = datetime.now(timezone.utc)
                 before = story.snapshot()
                 discovery, _ = await story.request("GET", configuration_fixture.PREFIX)
                 require(discovery["state"] == "configured", "configured original client on cold restart")
@@ -781,7 +900,13 @@ async def run_story(mode, expected=None):
             started = False
             checkpoint = retained_checkpoint()
             if mode == "reopen":
-                require(checkpoint == expected, "cold restart modified retained authority or key")
+                after_startup = retained_row_digests()
+                if checkpoint != expected:
+                    FAILURE_CONTEXT["cold_changes"] = changed_retained_rows(before_startup, after_startup)
+                    FAILURE_CONTEXT["checkpoint_fields"] = sorted(key for key in checkpoint
+                        if checkpoint[key] != expected.get(key))
+                result["retention"] = require_cold_retention(expected, checkpoint, before_startup, after_startup,
+                    prior_bookkeeping, retained_startup_bookkeeping(), (startup_started, startup_finished))
             return {"story": mode, "full_asgi": True, "real_encrypted_custody": True,
                 "synthetic_provider_wire": True, "synthetic_gate_health": True,
                 "tls_or_rust_or_sdk_verified": False, "network_attempts": 0,
@@ -843,6 +968,8 @@ if __name__ == "__main__":
                 "frames": [[Path(frame.filename).name, frame.name, frame.lineno]
                 for frame in traceback.extract_tb(error.__traceback__)[-12:]],
                 "exception_locations": failure_locations(error),
+                "cold_changes": FAILURE_CONTEXT.get("cold_changes"),
+                "checkpoint_fields": FAILURE_CONTEXT.get("checkpoint_fields"),
                 "lifespan_frames": FAILURE_CONTEXT.get("lifespan_frames", [])}
             print(RESULT + json.dumps(outcome, sort_keys=True), flush=True)
             raise SystemExit(1) from None

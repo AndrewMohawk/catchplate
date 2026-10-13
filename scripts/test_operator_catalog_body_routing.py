@@ -40,6 +40,8 @@ X_CONFIGURATION = "/api/operator-demo/oauth/x/configuration/v1"
 GOOGLE_START = "/api/operator-demo/oauth/google/start"
 PROVIDER_POST_LIMITS = {GOOGLE_CONFIGURATION: 8192, GOOGLE_CONFIGURATION + "/cancel": 2048,
     X_CONFIGURATION: 8192, GOOGLE_START: 2048}
+X_ACCOUNT_POST_LIMITS = {"/api/operator-demo/oauth/x/start": 4096,
+    "/api/operator-demo/oauth/x/disconnect": 4096}
 
 
 def classification():
@@ -298,13 +300,15 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
     def test_exact_registered_roster_and_actual_endpoint_guards(self):
         from serverware import operator_catalog_api as api, operator_notification_api as notifications
         from serverware import operator_google_configuration_api as google, operator_x_configuration_api as x
+        from serverware import operator_x_accounts_api as x_accounts
         roster, _ = classification()
-        self.assertEqual(len(roster), 37)
+        self.assertEqual(len(roster), 40)
         self.assertIn("/api/operator-demo/credentials/github-app/replace-key", roster)
-        self.assertEqual(roster, api.MUTATION_PATHS | PROVIDER_POST_LIMITS.keys())
-        routes = [route for router in (api.router, notifications.router, google.router, x.router) for route in router.routes
+        self.assertIn("/api/operator-demo/access-rules/x-post", roster)
+        self.assertEqual(roster, api.MUTATION_PATHS | PROVIDER_POST_LIMITS.keys() | X_ACCOUNT_POST_LIMITS.keys())
+        routes = [route for router in (api.router, notifications.router, google.router, x.router, x_accounts.router) for route in router.routes
             if "POST" in route.methods]
-        self.assertEqual(len(routes), 36)
+        self.assertEqual(len(routes), 39)
         self.assertEqual({route.path for route in routes}, roster - {GOOGLE_START})
         for route in routes:
             with self.subTest(path=route.path):
@@ -321,7 +325,13 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
                 self.assertEqual(len(payload), 1)
                 self.assertLess(admit[0], payload[0])
                 self.assertFalse(any(name in {"body", "json", "stream"} for _, name in sequence))
-        for module in (google, x):
+                if route.path in X_ACCOUNT_POST_LIMITS:
+                    tree = ast.parse(textwrap.dedent(inspect.getsource(route.endpoint)))
+                    reads = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute) and node.func.attr == "_payload"]
+                    self.assertEqual(len(reads), 1)
+                    self.assertEqual(ast.literal_eval(reads[0].args[2]), X_ACCOUNT_POST_LIMITS[route.path])
+        for module in (google, x, x_accounts):
             self.assertIs(module.admission, api)
             tree = ast.parse(textwrap.dedent(inspect.getsource(module._admit)))
             first = tree.body[0].body[0].value
@@ -339,7 +349,7 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
                 self.assertFalse(owns("POST", path + suffix, operator_active=True))
         for path in (None, b"/api/operator-demo/credentials", "/api/operator-demo/%63redentials",
                 "/api/operator-demo/oauth/google/configuration/v3", "/api/operator-demo/oauth/x/configuration/v2",
-                "/api/operator-demo/oauth/x/start", "/api/authority/control-plane/custody",
+                "/api/operator-demo/oauth/x/start/v2", "/api/authority/control-plane/custody",
                 "/api/webauthn/register/prepare", "/api/operator-demo/catalog"):
             self.assertFalse(owns("POST", path, operator_active=True))
 

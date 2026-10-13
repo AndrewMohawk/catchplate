@@ -38,15 +38,20 @@ spec = importlib.util.spec_from_file_location('public_renderer_only', pathlib.Pa
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 scripts = module.SCRIPT_FILES
+historical_scripts = tuple(name for name in scripts if name not in {'workspace_x_accounts.js', 'workspace_x_post.js'})
 variants = []
 for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
                 {'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
                 {'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
                 {'workspace_gmail_sdk.js', 'workspace_x_configuration.js'}, {'workspace_x_configuration.js'}, set()):
-    module.SCRIPT_FILES = tuple(name for name in scripts if name not in omitted)
+    module.SCRIPT_FILES = tuple(name for name in historical_scripts if name not in omitted)
     module.render.cache_clear()
     variants.append({'scripts': module.SCRIPT_FILES,
         'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
+module.SCRIPT_FILES = scripts
+module.render.cache_clear()
+variants.append({'scripts': scripts,
+    'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
 print(json.dumps({'scripts': module.SCRIPT_FILES,
     'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii'), 'variants': variants}))
 `, path.join(ROOT, 'serverware/operator_demo_portal.py')],
@@ -129,9 +134,10 @@ function validate(f, route, value) {
   f.context.fixturePath = route; f.context.fixtureValue = value;
   return f.run('validate(fixturePath, fixtureValue)');
 }
-function disabledX(managed = false) {
-  const f = fixture(); f.context.mode = managed;
-  f.run('managedGoogle = mode; xConfigurationDisabled = serial(sourceScriptFiles()) === serial(X_CONFIGURATION_SCRIPTS);');
+function disabledX(managed = false, variantIndex = 5) {
+  const scripts = reference.variants[variantIndex].scripts;
+  const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + scripts.map(JSON.stringify).join(', ') + ')\n'}); f.context.mode = managed;
+  f.run('managedGoogle = mode; xConfigurationDisabled = disabledXConfigurationForSource();');
   assert.equal(f.run('xConfigurationDisabled'), true);
   f.context.fixtureReply = {status: 404, headers: [['content-type', 'application/json'], ['cache-control', 'no-store']],
     body_base64: Buffer.from(JSON.stringify(X_DISABLED)).toString('base64')};
@@ -167,11 +173,13 @@ const tests = [
     assert.equal(f.run('subprocessFailure("/usr/bin/docker", failure, undefined).bridge_refused'), false);
     assert.equal(forbiddenCalls, 0);
   }],
-  ['actual documentBytes matches all six closed Python renderer rosters in both checker modes', async () => {
-    assert.equal(reference.variants.length, 6);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true, true]);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_gmail_sdk.js')), [false, false, false, false, true, true]);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_x_configuration.js')), [false, false, false, false, false, true]);
+  ['actual documentBytes matches all seven closed Python renderer rosters in both checker modes', async () => {
+    assert.equal(reference.variants.length, 7);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_gmail_sdk.js')), [false, false, false, false, true, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_x_configuration.js')), [false, false, false, false, false, true, true]);
+    for (const name of ['workspace_x_accounts.js', 'workspace_x_post.js'])
+      assert.deepEqual(reference.variants.map(variant => variant.scripts.includes(name)), [false, false, false, false, false, false, true]);
     for (const variant of reference.variants) {
       for (const managed of [false, true]) {
       const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
@@ -226,8 +234,8 @@ const tests = [
     }
     assert.equal(forbiddenCalls, 0);
   }],
-  ['X configuration is additive only after Google configuration in the exact current roster', () => {
-    const names = reference.scripts;
+  ['X configuration is additive only after Google configuration in its exact historical roster', () => {
+    const names = reference.variants[5].scripts;
     assert.deepEqual(names.slice(-3), ['workspace_google_configuration.js', 'workspace_x_configuration.js', 'app.js']);
     const mixed = reference.variants.slice(0, 4).map(variant =>
       [...variant.scripts.slice(0, -1), 'workspace_x_configuration.js', 'app.js']);
@@ -240,13 +248,31 @@ const tests = [
     }
     assert.equal(forbiddenCalls, 0);
   }],
-  ['only the current roster permits the exact disabled-X GET flag and three additional reads', async () => {
+  ['X accounts and posting are admitted together only in the exact new roster', () => {
+    const names = reference.variants[6].scripts;
+    assert.deepEqual(names, reference.scripts);
+    assert.deepEqual(names.slice(names.indexOf('workspace_x.js'), names.indexOf('workspace_x.js') + 4),
+      ['workspace_x.js', 'workspace_x_accounts.js', 'workspace_x_post.js', 'workspace_alchemy.js']);
+    const changedRosters = [
+      names.filter(name => name !== 'workspace_x_accounts.js'), names.filter(name => name !== 'workspace_x_post.js'),
+      [...names, 'workspace_x_accounts.js'], [...names, 'workspace_x_post.js'],
+      names.map(name => name === 'workspace_x_accounts.js' ? 'workspace_x_post.js' : name === 'workspace_x_post.js' ? 'workspace_x_accounts.js' : name),
+      ...reference.variants.slice(0, 5).map(variant => [...variant.scripts.slice(0, -1), 'workspace_x_accounts.js', 'workspace_x_post.js', 'app.js']),
+    ];
+    for (const changed of changedRosters) {
+      const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + changed.map(JSON.stringify).join(', ') + ')\n'});
+      assert.throws(() => f.render(true), error => error.message === 'renderer_roster_refused');
+      assert.deepEqual(f.reads, ['operator_demo_portal.py']);
+    }
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['only the two exact X configuration rosters opt into the disabled-X GET flag and three additional reads', async () => {
     for (const variant of reference.variants) {
       for (const managed of [false, true]) {
         const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
         f.context.mode = managed;
-        f.run('managedGoogle = mode; xConfigurationDisabled = serial(sourceScriptFiles()) === serial(X_CONFIGURATION_SCRIPTS);');
-        const current = variant === reference.variants[5];
+        f.run('managedGoogle = mode; xConfigurationDisabled = disabledXConfigurationForSource();');
+        const current = variant === reference.variants[5] || variant === reference.variants[6];
         assert.equal(f.run('paths().includes(X_CONFIGURATION)'), current);
         if (!current) {
           await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
@@ -254,8 +280,8 @@ const tests = [
         }
       }
     }
-    for (const managed of [false, true]) {
-      const f = disabledX(managed);
+    for (const variantIndex of [5, 6]) for (const managed of [false, true]) {
+      const f = disabledX(managed, variantIndex);
       for (let index = 0; index < 3; index++) {
         const reply = await f.run('get(X_CONFIGURATION)');
         assert.equal(reply.status, 404); assert.equal(reply.headers['cache-control'], 'no-store');
@@ -265,7 +291,7 @@ const tests = [
         ({op: 'get', path: X_CONFIGURATION, x_configuration_disabled: true})));
       await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
       assert.equal(f.context.fixtureRequests.length, 3);
-      const bounded = disabledX(managed);
+      const bounded = disabledX(managed, variantIndex);
       bounded.context.cap = (managed ? 17 : 16) + 3;
       bounded.run('receipt.gets = Array.from({length: cap - 1}, () => ({path: "/", method: "GET"}));');
       await bounded.run('get(X_CONFIGURATION)');
@@ -273,9 +299,27 @@ const tests = [
       assert.equal(bounded.context.fixtureRequests.length, 1, 'total GET bound still enforced');
     }
     const runSource = source.slice(source.indexOf('async function run()'), source.indexOf(entrypoint));
-    assert(runSource.indexOf('await identity();') < runSource.indexOf('xConfigurationDisabled = serial(sourceScriptFiles())'));
+    assert(runSource.indexOf('await identity();') < runSource.indexOf('xConfigurationDisabled = disabledXConfigurationForSource()'));
     assert(runSource.indexOf('xConfigurationBrowserReadComplete = true;') < runSource.indexOf('await route.fulfill(response)'));
     assert(runSource.includes("xConfigurationDisabled && phase === 'proxy' && seen[path] === 1"));
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['X accounts roster permits no consent, operation, disconnect, posting or alternate configuration requests', async () => {
+    const f = disabledX(true, 6);
+    for (const route of ['/api/operator-demo/oauth/x/start',
+      '/api/operator-demo/oauth/x/operations/11111111-1111-4111-8111-111111111111',
+      '/api/operator-demo/oauth/x/accounts/11111111-1111-4111-8111-111111111111/disconnect-review',
+      '/api/operator-demo/oauth/x/disconnect', '/api/operator-demo/access-rules/x-post',
+      X_CONFIGURATION + '?review=true', X_CONFIGURATION + '/',
+      'https://serverware-demo.example.com' + X_CONFIGURATION]) {
+      f.context.fixturePath = route;
+      await assert.rejects(f.run('get(fixturePath)'), error => error.message === 'get_route_or_bound');
+    }
+    assert.equal(f.context.fixtureRequests.length, 0);
+    assert.equal(f.run('receipt.gets.length'), 0);
+    await f.run('get(X_CONFIGURATION)');
+    assert.deepEqual(JSON.parse(JSON.stringify(f.context.fixtureRequests)),
+      [{op: 'get', path: X_CONFIGURATION, x_configuration_disabled: true}]);
     assert.equal(forbiddenCalls, 0);
   }],
   ['disabled-X accepts only the fixed 404 detail and one no-store header, not generic errors', async () => {
@@ -287,10 +331,12 @@ const tests = [
       reply => reply.body_base64 = Buffer.from(JSON.stringify({...X_DISABLED, extra: true})).toString('base64'),
       reply => reply.body_base64 = Buffer.from('[]').toString('base64'),
       reply => reply.body_base64 = Buffer.from('{').toString('base64')]) {
-      const f = disabledX(); mutate(f.context.fixtureReply);
-      await assert.rejects(f.run('get(X_CONFIGURATION)'));
-      assert.equal(f.run('xConfigurationBrowserReadComplete'), false);
-      assert.equal(f.context.fixtureRequests.length, 1, 'no retry after invalid response');
+      for (const variantIndex of [5, 6]) {
+        const f = disabledX(false, variantIndex); mutate(f.context.fixtureReply);
+        await assert.rejects(f.run('get(X_CONFIGURATION)'));
+        assert.equal(f.run('xConfigurationBrowserReadComplete'), false);
+        assert.equal(f.context.fixtureRequests.length, 1, 'no retry after invalid response');
+      }
     }
     const f = disabledX(true); await f.run('get(X_CONFIGURATION)');
     assert.deepEqual(JSON.parse(f.run('JSON.stringify(before[X_CONFIGURATION])')), X_DISABLED);

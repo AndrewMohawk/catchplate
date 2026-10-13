@@ -163,6 +163,10 @@ function sourceScriptFiles() {
   need(SCRIPT_ROSTERS.some(roster => serial(names) === serial(roster)), 'renderer_roster_refused');
   return names;
 }
+function disabledXConfigurationForSource() {
+  const selected = serial(sourceScriptFiles());
+  return selected === serial(X_CONFIGURATION_SCRIPTS) || selected === serial(X_ACCOUNTS_SCRIPTS);
+}
 function documentBytes() {
   const names = sourceScriptFiles();
   const asset = name => readFileSync(join(source, 'serverware/operator_demo_web', name), 'utf8');
@@ -318,7 +322,7 @@ async function run() {
     ...(receipt.expected_upstreams ? {expected_upstreams: receipt.expected_upstreams} : {}),
     ...(expectedRevision !== null ? {expected_catalog_revision: expectedRevision} : {})}) + '\n', {flag: 'wx', mode: 0o600});
   phase = 'identity_before'; await identity();
-  xConfigurationDisabled = serial(sourceScriptFiles()) === serial(X_CONFIGURATION_SCRIPTS);
+  xConfigurationDisabled = disabledXConfigurationForSource();
   if (xConfigurationDisabled) receipt.expected_disabled_x_console_errors = 0;
   expectedHtml = documentBytes();
   phase = 'public_before'; for (const path of paths()) await get(path);

@@ -6078,6 +6078,27 @@ struct ReleaseAuthorizationReservation {
     dispatch_expires_at_epoch_ms: Option<u64>,
 }
 
+/// Retains the same verified response across reservation/proof clones without
+/// duplicating its zeroizing request/body or exposing signed originals in Debug.
+/// Identity equality is deliberately not equality between separate responses.
+/// This is retention only, not native caller or JIT-purpose admission.
+#[derive(Clone)]
+struct RetainedReleasePreparationOriginals(Arc<VerifiedReleaseAuthorizationHttpResponse>);
+
+impl std::fmt::Debug for RetainedReleasePreparationOriginals {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RetainedReleasePreparationOriginals([REDACTED])")
+    }
+}
+
+impl PartialEq for RetainedReleasePreparationOriginals {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RetainedReleasePreparationOriginals {}
+
 /// Constructed only from pinned, signed read-only CP preparation under the
 /// cold-retained profile, never a caller-provided profile or policy verdict.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6085,14 +6106,14 @@ struct ReleasePreparation {
     profile: ReleaseProfile,
     policy: Value,
     policy_sha256: String,
-    original: Vec<u8>,
+    originals: RetainedReleasePreparationOriginals,
     deadline: Instant,
 }
 
 impl ReleasePreparation {
     fn check(&self) -> Result<(), String> {
         custody_deadline_remaining(self.deadline, "native release preparation")?;
-        if !self.profile.has_approver_policy() || self.original.is_empty()
+        if !self.profile.has_approver_policy() || self.originals.0.body.is_empty()
             || native_policy_digest(&self.policy)? != self.policy_sha256 {
             return Err("native release preparation original differs".to_owned());
         }
@@ -28780,7 +28801,7 @@ fn prepare_release_policy(
         return Err("native release preparation digest or policy changed".to_owned());
     }
     let prepared = ReleasePreparation { profile, policy, policy_sha256,
-        original: verified.body.to_vec(), deadline };
+        originals: RetainedReleasePreparationOriginals(Arc::new(verified)), deadline };
     prepared.check()?;
     Ok(prepared)
 }
@@ -58741,6 +58762,178 @@ mod tests {
                 ),
             ],
         )
+    }
+
+    // Synthetic signing root, real response verifier, no native caller admission.
+    // The sent request bytes are retained originals, not a separately signed
+    // request-body proof: the response statement binds nonce/method/path/context.
+    fn release_preparation_test_originals(
+        profile: ReleaseProfile,
+    ) -> (VerifiedReleaseAuthorizationHttpResponse, HeaderMap) {
+        let signing_key = SigningKey::from_bytes(&[123u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &signing_key);
+        let nonce = general_purpose::URL_SAFE_NO_PAD.encode([124u8; 32]);
+        let request = IncomingRequest {
+            method: "POST".to_owned(),
+            target: format!("/api/data-plane/release-authorizations/{}",
+                profile.prepare_operation().expect("preparation operation")),
+            headers: BTreeMap::new(),
+            body: profile.canonical_ascii_bytes(&json!({
+                "private_test_value":"retained-request-only",
+                "canonical_request":{},
+            })).expect("exact sent request bytes"),
+            client_ip: None,
+        };
+        let body = json!({
+            "apiVersion":profile.preparation_version(),
+            "principalId":"retained-response-only",
+            "routeId":"route:test",
+            "policyHash":snapshot.hash,
+            "requestDigest":sha256_prefixed(b"request"),
+            "operationDigest":sha256_prefixed(b"operation"),
+            "approverPolicy":null,
+            "approverPolicySha256":native_policy_digest(&Value::Null).unwrap(),
+        });
+        let response = signed_control_plane_test_response(&signing_key, &snapshot,
+            &request, &nonce, u64::try_from(now_epoch_ms()).unwrap(), StatusCode::OK, body);
+        let parsed = parse_buffered_response(&response).expect("signed fixture response");
+        let mut headers = HeaderMap::new();
+        for (name, value) in &parsed.headers {
+            headers.append(HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value.as_str()).unwrap());
+        }
+        let status = StatusCode::from_u16(parsed.status).unwrap();
+        let authentication = verify_control_plane_signed_response(&snapshot,
+            &format!("https://control.example{}", request.target), "POST", &nonce,
+            status, &headers, parsed.body, "retained preparation fixture")
+            .expect("genuine synthetic-root signature verification");
+        (VerifiedReleaseAuthorizationHttpResponse {
+            status,
+            body: Zeroizing::new(parsed.body.to_vec()),
+            response_nonce: nonce,
+            request_body: Zeroizing::new(request.body.clone()),
+            authentication,
+        }, headers)
+    }
+
+    fn release_preparation_test_value(profile: ReleaseProfile, deadline: Instant)
+        -> ReleasePreparation {
+        let (verified, _) = release_preparation_test_originals(profile);
+        ReleasePreparation {
+            profile,
+            policy: Value::Null,
+            policy_sha256: native_policy_digest(&Value::Null).unwrap(),
+            originals: RetainedReleasePreparationOriginals(Arc::new(verified)),
+            deadline,
+        }
+    }
+
+    #[test]
+    fn release_preparation_retains_exact_verified_originals() {
+        let (verified, headers) = release_preparation_test_originals(ReleaseProfile::Native);
+        let response_bytes = verified.body.to_vec();
+        let request_bytes = verified.request_body.to_vec();
+        let response_allocation = verified.body.as_ptr();
+        let request_allocation = verified.request_body.as_ptr();
+        let statement = serde_json::to_value(&verified.authentication.statement).unwrap();
+        let retained = RetainedReleasePreparationOriginals(Arc::new(verified));
+        let original = &retained.0;
+        assert_eq!(original.status, StatusCode::OK);
+        assert_eq!(original.response_nonce, general_purpose::URL_SAFE_NO_PAD.encode([124u8; 32]));
+        assert_eq!(original.body.as_slice(), response_bytes.as_slice());
+        assert_eq!(original.request_body.as_slice(), request_bytes.as_slice());
+        assert_eq!(original.body.as_ptr(), response_allocation);
+        assert_eq!(original.request_body.as_ptr(), request_allocation);
+        let signed = &original.authentication;
+        for (actual, header) in [
+            (signed.key_id.as_str(), "x-serverware-response-key-id"),
+            (signed.body_digest.as_str(), "x-serverware-response-body-sha256"),
+            (signed.statement_b64.as_str(), "x-serverware-response-statement-b64"),
+            (signed.statement_digest.as_str(), "x-serverware-response-statement-sha256"),
+            (signed.signature.as_str(), "x-serverware-response-signature"),
+        ] {
+            assert_eq!(actual, headers.get(header).unwrap().to_str().unwrap());
+        }
+        assert_eq!(signed.response_headers,
+            canonical_control_plane_response_header_items(&headers).unwrap());
+        assert_eq!(serde_json::to_value(&signed.statement).unwrap(), statement);
+        assert_eq!(general_purpose::URL_SAFE_NO_PAD.decode(signed.statement_b64.as_bytes()).unwrap(),
+            canonical_json_ensure_ascii(&statement).into_bytes());
+    }
+
+    #[test]
+    fn release_preparation_retains_shared_identity_and_redacted_lifetime() {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let prepared = release_preparation_test_value(ReleaseProfile::Native, deadline);
+        let cloned = prepared.clone();
+        let weak = Arc::downgrade(&prepared.originals.0);
+        assert_eq!(prepared, cloned);
+        assert!(Arc::ptr_eq(&prepared.originals.0, &cloned.originals.0));
+        assert_eq!(Arc::strong_count(&prepared.originals.0), 2);
+        assert_eq!(format!("{:?}", prepared.originals),
+            "RetainedReleasePreparationOriginals([REDACTED])");
+        let debug = format!("{prepared:?}");
+        for private in ["retained-request-only", "retained-response-only",
+            prepared.originals.0.response_nonce.as_str(),
+            prepared.originals.0.authentication.statement_b64.as_str(),
+            prepared.originals.0.authentication.signature.as_str()] {
+            assert!(!debug.contains(private));
+        }
+        // A separately verified response is a distinct retained exchange.
+        let (separate, _) = release_preparation_test_originals(ReleaseProfile::Native);
+        let separate = RetainedReleasePreparationOriginals(Arc::new(separate));
+        assert_ne!(prepared.originals, separate);
+        drop(prepared);
+        assert_eq!(cloned.deadline, deadline);
+        assert_eq!(Arc::strong_count(&cloned.originals.0), 1);
+        assert!(weak.upgrade().is_some());
+        cloned.check().expect("same unexpired preparation after first owner drops");
+        drop(cloned);
+        assert!(weak.upgrade().is_none(), "last owner releases zeroizing originals");
+    }
+
+    #[test]
+    fn release_preparation_retains_deadline_and_existing_profile_checks() {
+        assert!(check_preparation_profile(ReleaseProfile::Legacy, None).is_ok());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        for profile in [ReleaseProfile::PolicyAware, ReleaseProfile::Native] {
+            let prepared = release_preparation_test_value(profile, deadline);
+            assert!(check_preparation_profile(profile, Some(&prepared)).is_ok());
+            assert!(check_preparation_profile(profile, None).is_err());
+            assert!(check_preparation_profile(ReleaseProfile::Legacy, Some(&prepared)).is_err());
+            let cloned = prepared.clone();
+            assert_eq!(cloned.deadline, deadline);
+            let mut drifted = cloned.clone();
+            drifted.policy = json!({"changed":true});
+            assert!(drifted.check().is_err());
+            let expired_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+            let expired = ReleasePreparation { deadline: expired_at, ..cloned };
+            let expired_clone = expired.clone();
+            assert_eq!(expired_clone.deadline, expired_at);
+            assert!(expired.check().is_err());
+            assert!(expired_clone.check().is_err());
+            let mut empty = release_preparation_test_value(profile, deadline);
+            Arc::get_mut(&mut empty.originals.0).unwrap().body.clear();
+            assert!(empty.check().is_err());
+        }
+    }
+
+    #[test]
+    fn release_preparation_retains_actual_producer_join() {
+        // Supplemental source guard: typed tests above do not admit a native caller.
+        let source = include_str!("main.rs");
+        let producer = source.split_once("fn prepare_release_policy(").unwrap().1
+            .split_once("\nfn request_release_authorization<'a>(").unwrap().0;
+        let verified = producer.find("let verified = post_release_authorization_http_on_deadline(").unwrap();
+        let scope = producer.find("native release preparation scope differs").unwrap();
+        let policy = producer.find("native JIT preparation differs from the actual route policy").unwrap();
+        let current = producer.find("native release preparation digest or policy changed").unwrap();
+        let retained = producer.find("originals: RetainedReleasePreparationOriginals(Arc::new(verified)), deadline").unwrap();
+        assert!(verified < scope && scope < policy && policy < current && current < retained);
+        assert!(producer[retained..].contains("prepared.check()?"));
+        assert!(producer.contains("&payload, || {}, Some(deadline)"));
+        assert!(!producer.contains("verified.body.to_vec()"));
+        assert!(!producer.contains("Instant::now()"));
     }
 
     #[test]

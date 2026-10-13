@@ -414,3 +414,31 @@ The retained result is
 `execution.json` records before/after protocol-source pins and cleanup.
 Unrelated example/documentation edits during execution were outside these
 frozen protocol files. This result is not Rust, native-admission or live evidence.
+
+Separately, the immutable `e230da0e` Rust build passed **24 library tests**
+(nine compound-release, nine standalone review and six ingress groups), **151
+binary tests** across 33 disjoint filters, and all **five API controls**. The
+standalone review groups used a fresh recorded Python FD3 fixture, not a real
+native admission or a v2 compound FD3 execution. Normal compilation then passed
+in 224.677 seconds and produced the existing byte-identical executable SHA-256
+`0908732386fad8f7c89e761665fbda763d3c522b275d6c34ade5322cbaa54b6b`.
+The actual compiler-input record now contains 519 files, including the added
+production module; the old 518-input record is not relabelled as this build.
+
+The retained `compound-jit-rust.LclJFL4W` record binds `normal.json` SHA-256
+`d3d819855e81ba0147723aa068cc2c496d0c32ee0939ff2c5ecb9670fc065653`
+and `normal-compiler-inputs.json` SHA-256
+`119f041f42d803934897162c8ebba571572c83375843bc034fda302cd7d0a76c`.
+All 46 owned cleanup receipts passed; source and predecessor caches were
+preserved. These test executables and compile/API checks do not prove native
+caller admission, protected approvals or a live rollout.
+
+The later exact `e7d7e05b` source passed
+[CI 38441019383](https://github.com/example/private-deployment):
+63 suites / 587 Python tests / 162 Node groups, zero skips, in 483.793 seconds.
+Artifact `11836890036` has digest
+`sha256:c03efb6f8341163263b5904d2415882ef44654bb445d1324b3bbc484f65ba221`;
+its result SHA-256 is
+`b650c7ebfcd45e1ec2bb2857a57935497972d920c5c5d2d954a0fe3bf10cc49b`.
+All 63 suite source pins and individual receipts were checked against that
+commit. This is hosted ordinary component evidence, separate from Rust tests.

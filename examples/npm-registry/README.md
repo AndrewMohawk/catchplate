@@ -9,8 +9,10 @@ claim that this project has contacted the public npm registry successfully.
 The current dependency pins are Node **25.5.0**, npm **11.20.0**, pacote
 **21.5.1**, and npm-registry-fetch **19.1.1**. The project requires those
 versions and POSIX process groups (Linux/macOS). Earlier isolated proxy
-acceptance below used npm 11.8.0/pacote 21.0.4; it is not acceptance of the
-updated graph. Other versions/platforms are unverified.
+acceptance used npm 11.8.0/pacote 21.0.4. The current pinned graph separately
+passed all 25 isolated proxy phases on October 13 after a narrow publish-receipt
+compatibility fix; see the current verification record below. Other
+versions/platforms are unverified.
 Run as a normal OS account with a resolvable home directory (as on a GitHub-hosted
 runner), not an arbitrary numeric container UID with no passwd entry.
 
@@ -254,9 +256,10 @@ upstream bundle: `brace-expansion`, `http-cache-semantics`, `ip-address`,
 `postcss-selector-parser`, and `undici` (three high, two moderate in the retained
 October 12 npm audit). This is a partial dependency repair, not an advisory-free
 or exploitability verdict. Do not hand-edit bundled dependencies or treat the
-older proxy receipt as verification of this updated graph.
+older proxy receipt as verification of this updated graph; the October 13
+acceptance below is a separate run with the updated dependencies.
 
-For this update, 29 Node component groups and 99 Python fixture/checker/recipe
+During the October 12 update, 29 Node component groups and 99 Python fixture/checker/recipe
 groups passed in a read-only, network-disabled container. The actual stock CLI
 also passed the separate loopback-only install, cold `ci`, and refused-audit
 protocol checks: 13 arrivals total, no cold-`ci` metadata reads, unchanged lock
@@ -266,6 +269,33 @@ establish publication or provider access for the updated versions. The first
 CLI attempt ran as an unsupported numeric UID without a passwd entry and
 failed before any registry arrival; using the image's existing normal account
 resolved that harness error without changing application configuration.
+
+## Current isolated proxy verification
+
+On October 13, 2026, source `e7d7e05b` passed the actual 25-phase example flow
+with npm 11.20.0, pacote 21.5.1 and npm-registry-fetch 19.1.1 through the real
+Serverware application, Rust gate and HTTPS proxy against a network-isolated
+synthetic registry. Nine commands succeeded and 16 expected refusals passed.
+The run verified three exact publications, install and cold `ci` with transitive
+package bytes and an unchanged lock, successful default audit, rejected audit
+failure despite npm exiting zero, permission/revocation controls, and the
+complete persisted audit chain. All owned containers were removed; source and
+cached dependency bytes were unchanged.
+
+The first current-graph attempt stopped at unscoped publication: npm succeeded,
+but our example expected the older flat JSON receipt instead of npm 11.20's
+package-keyed receipt. That failed attempt is retained and was not replayed.
+The fix accepts exactly one matching package key and preserves the inner
+package/version/ID/size and archive hash checks; 30 offline component tests
+passed, including malformed-receipt controls that assert one call and no retry.
+The successful acceptance used fresh runtime state and a new 519-input Rust
+build/source join, not the older verification record.
+
+See [the current acceptance record](../../docs/operator-npm-example-acceptance.md)
+for exact source and evidence identities. This proves the bounded example with
+a synthetic provider, not real npm entitlement, public routing, GitHub Actions
+execution, native approval, or deployment of this source. Upstream dependency
+advisories above remain; the project still never publishes by default.
 
 ## Historical isolated proxy verification
 

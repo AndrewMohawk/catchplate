@@ -13,6 +13,9 @@
   "overrides": {
     "@ethersproject/providers": "5.8.0",
     "@ethersproject/web": "5.8.0",
+    "@solana/web3.js@1.99.0": {
+      "jayson": "5.0.0"
+    },
     "ws@8": "8.21.0"
   }
 }

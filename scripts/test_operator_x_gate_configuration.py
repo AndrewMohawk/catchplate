@@ -31,6 +31,7 @@ def project(config, db):
     with publication.exclusive(), closing(db.connect()) as conn, ExitStack() as stack:
         conn.execute("PRAGMA query_only=ON")
         conn.execute("BEGIN")
+        namespace = [tuple(row) for row in conn.execute("PRAGMA database_list")]
         for module, names in ((keys, ("read_existing_pinned", "initialize_first_x")),
                 (custody, ("read_secret", "open_x"))):
             for name in names:
@@ -39,6 +40,7 @@ def project(config, db):
         assert public.expected_identity(conn) == {key: value[key] for key in (
             "operation", "profile_binding_digest", "effective_settings_digest")}
         assert conn.total_changes == 0 and conn.in_transaction
+        assert [tuple(row) for row in conn.execute("PRAGMA database_list")] == namespace
     assert (fixture.snapshot(config), fixture.key_snapshot()) == before
     assert set(value) == {"schema", "operation", "profile_binding", "profile_binding_digest",
         "effective_settings", "effective_settings_digest"}
@@ -125,6 +127,24 @@ def admission():
         fixture.refused(lambda: public.record(conn), public.GateConfigurationUnavailable)
     with publication.exclusive(), closing(db.connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        fixture.refused(lambda: public.record(conn), public.GateConfigurationUnavailable)
+    # Inspecting main must not manufacture temp; an existing shadow is still
+    # refused, not ignored by the side-effect-free namespace check.
+    from serverware import operator_x_configuration as configuration, operator_x_provider_custody as custody
+    from serverware import operator_x_admission as x_admission
+    with publication.exclusive(), closing(db.connect()) as conn:
+        conn.execute("BEGIN")
+        before = [tuple(row) for row in conn.execute("PRAGMA database_list")]
+        assert len(before) == 1 and before[0][1] == "main"
+        x_admission.check_connection(conn, x_admission.require_runtime())
+        assert configuration.retained_public_binding(conn) is None
+        assert custody._objects(conn) == {}
+        assert [tuple(row) for row in conn.execute("PRAGMA database_list")] == before
+        conn.execute("CREATE TEMP TABLE " + custody.TABLE + " (shadow TEXT)")
+        fixture.refused(lambda: custody._objects(conn), custody.CustodyError)
+        fixture.refused(lambda: configuration.retained_public_binding(conn), configuration.ConfigurationUnavailable)
+        fixture.refused(lambda: x_admission.check_connection(conn, x_admission.require_runtime()), x_admission.AdmissionError)
+        conn.execute("PRAGMA query_only=ON")
         fixture.refused(lambda: public.record(conn), public.GateConfigurationUnavailable)
     # Retained origin/fixture settings must use the original exact decoder.
     with publication.exclusive(), closing(db.connect()) as conn, conn:

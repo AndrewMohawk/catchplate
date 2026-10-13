@@ -71,6 +71,18 @@ def no_network(event, _arguments):
         raise AssertionError("connected X lifecycle attempted network contact")
 
 
+def failure_locations(error):
+    """Fixed structural diagnostics only; never stringify private exceptions."""
+    result, seen = [], set()
+    while error is not None and id(error) not in seen and len(result) < 8:
+        seen.add(id(error))
+        result.append({"type": type(error).__name__, "frames": [
+            [Path(frame.filename).name, frame.name, frame.lineno]
+            for frame in traceback.extract_tb(error.__traceback__)[-12:]]})
+        error = error.__cause__ if error.__cause__ is not None else error.__context__
+    return result
+
+
 class QueryApplication:
     """Encode the raw target into ASGI path/query; do not replace any handler."""
     def __init__(self, application):
@@ -794,6 +806,9 @@ class OperatorXLifecycleConnectedTests(unittest.TestCase):
         lines = [line.removeprefix(RESULT) for line in process.stdout.splitlines() if line.startswith(RESULT)]
         self.assertEqual(len(lines), 1, "worker did not return its closed receipt")
         receipt = json.loads(lines[0])
+        # Retain each structural worker receipt so a failed cold reopen cannot
+        # hide the preceding completed lifecycle in the parent test's log.
+        print(RESULT + json.dumps(receipt, sort_keys=True), flush=True)
         self.assertEqual(process.returncode, 0, json.dumps(receipt, sort_keys=True))
         self.assertEqual(receipt["story"], mode)
         self.assertTrue(receipt["full_asgi"] and receipt["real_encrypted_custody"])
@@ -824,8 +839,10 @@ if __name__ == "__main__":
             require(len(raw) <= 8192, "worker input bound")
             outcome = asyncio.run(run_story(sys.argv[2], json.loads(raw)))
         except BaseException as error:
-            outcome = {"failed": True, "frames": [[Path(frame.filename).name, frame.name, frame.lineno]
+            outcome = {"failed": True, "story": sys.argv[2],
+                "frames": [[Path(frame.filename).name, frame.name, frame.lineno]
                 for frame in traceback.extract_tb(error.__traceback__)[-12:]],
+                "exception_locations": failure_locations(error),
                 "lifespan_frames": FAILURE_CONTEXT.get("lifespan_frames", [])}
             print(RESULT + json.dumps(outcome, sort_keys=True), flush=True)
             raise SystemExit(1) from None

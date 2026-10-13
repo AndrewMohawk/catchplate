@@ -81,7 +81,11 @@ def _timestamp(value):
 
 def _objects(conn, prefix):
     # No temp shadowing and no similarly named extra objects in this namespace.
-    _require(conn.execute("SELECT 1 FROM sqlite_temp_master LIMIT 1").fetchone() is None)
+    # Inspect an existing temp schema only. Reading sqlite_temp_master creates
+    # an empty one, which would mutate this borrowed connection's namespace
+    # during catalog validation and break the main-only startup owner.
+    if any(row[1] == "temp" for row in conn.execute("PRAGMA database_list")):
+        _require(conn.execute("SELECT 1 FROM sqlite_temp_master LIMIT 1").fetchone() is None)
     rows = conn.execute("SELECT name,type,tbl_name,sql FROM main.sqlite_master "
         "WHERE lower(name) GLOB ? OR lower(tbl_name) GLOB ? LIMIT 17",
         (prefix + "*", prefix + "*")).fetchall()

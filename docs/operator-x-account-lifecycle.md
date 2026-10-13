@@ -67,9 +67,15 @@ disconnect with an unavailable gate. The first browser attempt exposed an
 incorrect test expectation for an intentionally disabled selector option;
 the corrected check passed without a production UI change.
 
-The first joined ASGI lifecycle attempt failed during cold startup before
-consent or provider contact. Its exact container was removed; the retained
-fixed-error trace is under diagnosis. It is not lifecycle acceptance.
+The first joined ASGI attempt completed configuration, consent, grants,
+refresh and disconnect against the synthetic provider, then failed in its
+second worker when reopening the retained database. The original frame-only
+diagnostic was initially misread as a first-start failure; the parent traceback
+and `interpretation-correction.md` retain the distinction. X metadata inspection
+had created an empty SQLite temporary schema on the borrowed startup connection.
+Inspection now checks an existing temp schema without creating one; shadow
+refusals and the Google main-only startup guard remain unchanged. The full
+four-group lifecycle suite still needs a successful post-fix result.
 Compiled Rust, actual SDK through the proxy, retained-state compatibility,
 deployment and real-provider acceptance must each be recorded separately
 before claiming those boundaries.

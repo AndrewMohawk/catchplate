@@ -179,8 +179,9 @@ def _objects(conn: sqlite3.Connection) -> dict:
     prefix = TABLE + "*"
     # Refuse temp shadowing instead of silently inspecting or writing a different
     # object. The connected owner separately proves the actual main DB identity.
-    _require(conn.execute("SELECT 1 FROM sqlite_temp_master WHERE lower(name) GLOB ? "
-        "OR lower(tbl_name) GLOB ? LIMIT 1", (prefix, prefix)).fetchone() is None)
+    if any(row[1] == "temp" for row in conn.execute("PRAGMA database_list")):
+        _require(conn.execute("SELECT 1 FROM sqlite_temp_master WHERE lower(name) GLOB ? "
+            "OR lower(tbl_name) GLOB ? LIMIT 1", (prefix, prefix)).fetchone() is None)
     rows = conn.execute("SELECT substr(name,1,129),type,substr(tbl_name,1,129),substr(sql,1,8193),"
         "length(name),length(tbl_name),length(sql) FROM main.sqlite_master "
         "WHERE lower(name) GLOB ? OR lower(tbl_name) GLOB ? LIMIT ?",

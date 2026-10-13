@@ -95,7 +95,8 @@ def check_connection(conn: sqlite3.Connection, admission: keys.DirectoryAdmissio
             [(0, "main", str(admission.data_directory / "serverware.sqlite3"))],
             [(0, "main", str(admission.data_directory / "serverware.sqlite3")), (1, "temp", "")],
         ))
-        _require(conn.execute("SELECT 1 FROM sqlite_temp_master LIMIT 1").fetchone() is None)
+        if len(databases) == 2:
+            _require(conn.execute("SELECT 1 FROM sqlite_temp_master LIMIT 1").fetchone() is None)
     except Exception:
         raise AdmissionError(_ERROR) from None
 

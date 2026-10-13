@@ -285,6 +285,15 @@ const tests = [
       {proxyUrl: 'https://user:secret@proxy.example.test'}, {caPath: 'bad\npath'}, {applicationId: 'not-uuid'}])
       assert.throws(() => pure.run('buildNpmClientRecipe(input)', {...input, ...change}));
   }],
+  ['setup labels distinguish reusable credentials from consuming clients', async () => {
+    const f = fixture({rules: []});
+    await f.event('connect-use-saved');
+    assert.equal(f.node('connect-credential-heading').textContent, 'Use a saved credential');
+    assert(HTML.includes('>Choose another credential type</button>'));
+    assert(HTML.includes('>Use this credential for a client</button>'));
+    assert(!/Connect an app|Accounts (?:and|&amp;|&) keys|Use a saved connection/.test(HTML + SOURCE));
+    assert.equal(f.posts.length, 0); assert.equal(f.clientCreations.length, 0);
+  }],
   ['missing npm capability leaves ordinary credentials available', async () => {
     const f = fixture({rules: [], capability: null});
     assert(f.node('connect-use-npm').disabled); assert(!f.node('connect-use-key').disabled);

@@ -501,7 +501,7 @@ function createConnectView(workspace, applications, proxy) {
     const googleOpen = connectionMethod === 'google';
     element('connect-method-choice').hidden = connectionMethod !== null;
     element('connect-credential-form').hidden = !['key', 'github', 'npm', 'x', 'alchemy', 'saved'].includes(connectionMethod);
-    element('connect-credential-heading').textContent = connectionMethod === 'alchemy' ? 'Save an Alchemy API or access key' : connectionMethod === 'x' ? 'Save an X app-only bearer token' : connectionMethod === 'npm' ? 'Save an npm token' : connectionMethod === 'github' ? newGithubApp() ? 'Connect a GitHub App' : 'Save a GitHub token' : connectionMethod === 'key' ? 'Use an API key' : 'Use a saved connection';
+    element('connect-credential-heading').textContent = connectionMethod === 'alchemy' ? 'Save an Alchemy API or access key' : connectionMethod === 'x' ? 'Save an X app-only bearer token' : connectionMethod === 'npm' ? 'Save an npm token' : connectionMethod === 'github' ? newGithubApp() ? 'Connect a GitHub App' : 'Save a GitHub token' : connectionMethod === 'key' ? 'Use an API key' : 'Use a saved credential';
     element('connect-google-slot').hidden = !googleOpen;
     element('connect-method-change').hidden = connectionMethod === null || googleOpen;
     element('connect-method-change').disabled = !writable() || Boolean(checkpoint);

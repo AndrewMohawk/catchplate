@@ -48,7 +48,7 @@ def return_link(target: str | None) -> str:
                 or intent_target(target[len(_PREFIX):-len(_SUFFIX)]) != target):
             raise ValueError("operator Google return target is invalid")
     # The closed relative-path grammar contains no HTML-significant characters.
-    return '<p><a href="' + target + '">Return to Connect</a></p>'
+    return '<p><a href="' + target + '">Continue credential setup</a></p>'
 
 
 def reauthorization_link(identifier: object) -> str:
@@ -56,4 +56,4 @@ def reauthorization_link(identifier: object) -> str:
     target = "/#credentials"
     if isinstance(identifier, str) and _UUID.fullmatch(identifier):
         target = "/?operator_google_reauthorization=" + identifier + "#credentials"
-    return '<p><a href="' + target + '">Return to Accounts and keys</a></p>'
+    return '<p><a href="' + target + '">Return to Credentials</a></p>'

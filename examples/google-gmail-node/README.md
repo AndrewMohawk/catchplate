@@ -16,7 +16,7 @@ attachment, history, profile or Calendar calls.
 1. In the operator workspace, configure Google and connect the intended Google
    account through real consent. This example does not initiate OAuth or discover
    application-default Google credentials.
-2. Select that saved account in **Connect an app**, choose an application
+2. Select that saved credential in **Set up access**, choose a client
    with **Basic** proxy authentication, and keep its one-time token private.
 3. Choose **Read Gmail** (`gmail_read_v1`) and **Official Gmail SDK**. The permission
    must advertise `orderedFormV1` and replace this exact full header value:

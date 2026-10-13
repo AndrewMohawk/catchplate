@@ -63,7 +63,7 @@
           </div>
           <button id="connect-credential-next" type="submit">Save credential &amp; continue</button>
         </fieldset></form>
-        <button id="connect-method-change" class="secondary" hidden>Change connection method</button>
+        <button id="connect-method-change" class="secondary" hidden>Choose another credential type</button>
         <div id="connect-google-slot" hidden>
           <article id="google-consent-panel" class="card" aria-labelledby="google-consent-title" hidden>
             <h2 id="google-consent-title">Connect Google · Read Gmail</h2>
@@ -76,7 +76,7 @@
             <p id="google-token-warning" class="notice" hidden>Save your one-time application token, then use “I've saved it; clear token” before leaving for Google. <a href="#applications">Open Clients</a>. It cannot be recovered after navigation.</p>
             <p id="google-consent-status" role="status" aria-live="polite"></p>
             <p id="google-consent-pending" class="notice" hidden>This consent attempt holds workspace changes while it is checked. You may leave explicitly; doing so does not cancel Google consent.</p>
-            <p id="google-consent-account" class="notice" hidden></p><button id="google-consent-use" hidden disabled>Use this account for an app</button>
+            <p id="google-consent-account" class="notice" hidden></p><button id="google-consent-use" hidden disabled>Use this credential for a client</button>
             <div class="actions"><button id="google-consent-refresh" class="secondary" disabled>Refresh Google status</button><button id="google-consent-leave" class="secondary">Leave Google setup</button></div>
             <details id="google-consent-history" hidden><summary>Saved connection attempts</summary><p class="small muted">An older attempt does not grant app access or prove current account health. Inspect it before deciding what to do; requests are never retried automatically.</p><ul id="google-consent-intents"></ul></details>
           </article>

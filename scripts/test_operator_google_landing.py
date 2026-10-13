@@ -127,7 +127,17 @@ def untrusted_failure_branch():
 class OperatorGoogleLandingPureTests(unittest.TestCase):
     def test_canonical_uuid_has_only_fixed_relative_destination(self):
         self.assertEqual(landing.intent_target(IDENTIFIER), TARGET)
-        self.assertEqual(landing.return_link(TARGET), '<p><a href="' + TARGET + '">Return to Connect</a></p>')
+        self.assertEqual(landing.return_link(TARGET), '<p><a href="' + TARGET + '">Continue credential setup</a></p>')
+
+    def test_reauthorization_returns_to_credentials_with_fixed_navigation(self):
+        self.assertEqual(landing.reauthorization_link(IDENTIFIER),
+            '<p><a href="/?operator_google_reauthorization=' + IDENTIFIER +
+            '#credentials">Return to Credentials</a></p>')
+        for value in (None, {}, IDENTIFIER.upper(), IDENTIFIER + '&state=secret',
+                'https://outside.invalid/'):
+            with self.subTest(value=value):
+                self.assertEqual(landing.reauthorization_link(value),
+                    '<p><a href="/#credentials">Return to Credentials</a></p>')
 
     def test_invalid_or_missing_uuid_uses_marker_free_fallback(self):
         for value in (None, {}, 1, "", IDENTIFIER.upper(), " " + IDENTIFIER, IDENTIFIER + "\n",

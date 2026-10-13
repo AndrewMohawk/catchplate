@@ -21,7 +21,7 @@ import threading
 from scripts import operator_github_fixture_network as isolated
 
 FIXTURE_IP, LOOPBACK, PROXY_HOST = isolated.FIXTURE_IP, isolated.LOOPBACK, isolated.PROXY_HOST
-CONTROL_HOST = "serverware-x.example.test"
+CONTROL_HOST = "serverware-x.example.com"
 CONTROL_ORIGIN = "https://" + CONTROL_HOST
 PROVIDER_HOSTS = ("x.com", "api.x.com")
 KEEPER_SECONDS, EDGE_SECONDS = 300, 240

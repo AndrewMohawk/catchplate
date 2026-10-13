@@ -291,7 +291,7 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(mapping["api.x.com"], "93.184.216.34")
         self.assertEqual(mapping[network.CONTROL_HOST], "127.0.0.1")
         self.assertEqual(mapping[network.PROXY_HOST], "127.0.0.1")
-        self.assertEqual(provider.CALLBACK_URL, "https://serverware-x.example.test/api/oauth/callback/x")
+        self.assertEqual(provider.CALLBACK_URL, "https://serverware-x.example.com/api/oauth/callback/x")
         self.assertEqual((network.KEEPER_SECONDS, network.EDGE_SECONDS), (300, 240))
         source = Path(network.__file__).read_text()
         self.assertIn('custody = ROOT / "x-custody"', source)

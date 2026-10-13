@@ -65,7 +65,7 @@ class RecipeTests(InertTests):
     def test_managed_app_only_custody_and_original_curated_gate_leaf_binds(self):
         app, gate = (self.config['services'][name] for name in ('serverware', 'decision-gate-rs'))
         env = app['environment']
-        self.assertEqual(env['SERVERWARE_PUBLIC_URL'], 'https://serverware-x.example.test')
+        self.assertEqual(env['SERVERWARE_PUBLIC_URL'], 'https://serverware-x.example.com')
         self.assertEqual(env['SERVERWARE_OPERATOR_MANAGED_X_ENABLED'], '1')
         self.assertEqual(env['SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED'], '1')
         self.assertEqual(env['SSL_CERT_FILE'], '/x-public/ca.pem')
@@ -111,7 +111,7 @@ class RecipeTests(InertTests):
         self.assertEqual(check['entrypoint'], ['/example-python/bin/python', '-B'])
         self.assertEqual(check['command'][0], '/app/scripts/check_operator_x_post.py')
         flags = dict(zip(check['command'][1::2], check['command'][2::2]))
-        self.assertEqual(flags['--control-base'], 'https://serverware-x.example.test')
+        self.assertEqual(flags['--control-base'], 'https://serverware-x.example.com')
         self.assertEqual(flags['--operator-origin'], flags['--control-base'])
         self.assertEqual(flags['--proxy-url'], 'https://proxy.operator-basic.example.test:8443')
         self.assertEqual(flags['--timeout-seconds'], '180')
@@ -130,6 +130,35 @@ class RecipeTests(InertTests):
         self.assertNotIn('x-username', json.dumps(check))
         self.assertNotIn('/x-custody', mounts)
         self.assertNotIn('/data', mounts)
+
+    def test_actual_production_origin_admission_and_closed_fixture_consistency(self):
+        # The production validator is pure; do not patch it, activate the app,
+        # initialize state or resolve the public-form fixture hostname.
+        from serverware import operator_demo
+        from scripts import operator_x_post_fixture_network as network
+        from scripts import operator_x_post_fixture as provider
+        from scripts import check_operator_x_post as checker
+        self.assertEqual(operator_demo.origin(recipe.CONTROL_ORIGIN),
+            ('https://serverware-x.example.com', '/'))
+        with self.assertRaises(ValueError):
+            operator_demo.origin('https://serverware-x.example.test')
+        self.assertEqual(recipe.CONTROL_ORIGIN, network.CONTROL_ORIGIN)
+        self.assertEqual(recipe.CONTROL_ORIGIN, checker.CONTROL)
+        self.assertEqual(network.CONTROL_HOST, 'serverware-x.example.com')
+        self.assertEqual(provider.CALLBACK_URL, recipe.CONTROL_ORIGIN + checker.CALLBACK)
+        mapping = {host: row[0] for row in (line.split() for line in network.HOSTS.decode().splitlines())
+            for host in row[1:]}
+        self.assertEqual(mapping[network.CONTROL_HOST], '127.0.0.1')
+        self.assertNotIn('serverware-x.example.test', mapping)
+        self.assertEqual(mapping['api.x.com'], '93.184.216.34')
+        self.assertEqual(mapping['x.com'], '93.184.216.34')
+        self.assertEqual(network.PROXY_HOST, 'proxy.operator-basic.example.test')
+        self.assertEqual(mapping[network.PROXY_HOST], '127.0.0.1')
+        state = 's' * 43
+        location = provider.CALLBACK_URL + '?code=synthetic-code&state=' + state
+        self.assertEqual(checker.callback_target([('Location', location)], state)[1], 'synthetic-code')
+        with self.assertRaises(checker.CheckFailure):
+            checker.callback_target([('Location', location.replace('.example.com', '.example.test'))], state)
 
     def test_exact_recomputation_rejects_any_recipe_drift(self):
         recipe.validate(self.config, *ARGS, **PINS)

@@ -41,7 +41,7 @@ PREFIX = "/api/operator-demo/oauth/x"
 CONFIGURATION = PREFIX + "/configuration/v1"
 CALLBACK = "/api/oauth/callback/x"
 PROXY = "https://proxy.operator-basic.example.test:8443"
-CONTROL = "https://serverware-x.example.test"
+CONTROL = "https://serverware-x.example.com"
 SCOPES = ["offline.access", "tweet.read", "tweet.write", "users.read"]
 DESCRIPTOR = {"schema": "serverware.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
 LEASE_REJECT = "data_plane.credential_lease.rejected"
@@ -232,7 +232,7 @@ def callback_target(headers, state):
     require(len(locations) == 1 and len(locations[0]) <= 8192, "one bounded X callback redirect required")
     parsed = urlsplit(locations[0]); pairs = parse_qsl(parsed.query, strict_parsing=True, max_num_fields=3)
     query = dict(pairs)
-    require((parsed.scheme, parsed.netloc, parsed.path, parsed.fragment) == ("https", "serverware-x.example.test", CALLBACK, "")
+    require((parsed.scheme, parsed.netloc, parsed.path, parsed.fragment) == ("https", "serverware-x.example.com", CALLBACK, "")
         and len(pairs) == len(query) and set(query) == {"code", "state"} and query["state"] == state
         and type(query["code"]) is str and 1 <= len(query["code"]) <= 1024, "X callback binding differs")
     return parsed.path + "?" + parsed.query, query["code"]

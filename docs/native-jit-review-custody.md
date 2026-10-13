@@ -186,12 +186,20 @@ and `normal-cleanup-join.json` has SHA-256
 `5d661de26e79b8c38210c0e9be2d0a2668c78c6668925db14c67ec576f40fc8c`.
 The normal executable has not been run or deployed; the 30/170/14 checks used
 separate test artifacts.
+The same 526-input closure was subsequently joined to the frozen 5,497-file
+`c456d399` snapshot. Its `source-c456-snapshot.JBZPONuR/result.json` SHA-256 is
+`294ba172d69ecabc25b8fe96a76ad06001732fcc63fb879c4bb46856d79587cc`.
 
 Separately, the [ordinary SQLite migration](operator-authority-contract-migration.md#verified-migration-controls)
 passed 12 synthetic tests with genuine old-source initialization, the actual
 migration, two target cold starts, seven rollback points and a postcommit
-unknown outcome control. This is not retained-data or native admission proof;
-retained-copy rehearsal and deployment remain pending.
+unknown outcome control. A separate [retained-copy rehearsal](operator-authority-contract-migration.md#retained-copy-rehearsal-at-c456d399)
+at `c456d399` then passed all ten roles and two genuine startup validations,
+preserving old rows, ordered audit, quota and custody through the additive
+transition. Its historical capture/environment are not a current promotion
+backup. Fresh capture, promotion, paired rollout and browser/proxy verification
+remain pending; neither run establishes native admission or normal-binary
+execution.
 
 The earlier isolated stages remain separate, with their failures preserved:
 

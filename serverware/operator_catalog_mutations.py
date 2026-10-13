@@ -97,7 +97,7 @@ def _policy_observation(state: dict, *, publication_failed: bool = False) -> dic
         if not publication_failed and loaded is not None and loaded == current == state["policy_hash"] else "pending"}
 
 
-def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool]:
+def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, bool]:
     """One bounded gate read for this catalog response, never a shared cache.
 
     Managed mode retains its before/after configuration and binary checks.
@@ -107,7 +107,7 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool]:
     """
     loaded, current = None, None
     x_available, alchemy_available, npm_install_available = False, False, False
-    x_post_available = False
+    x_post_available, x_post_quota_available = False, False
     try:
         from serverware import operator_catalog_x, operator_catalog_alchemy, operator_catalog_npm_install
         from serverware import operator_google_managed_config as managed
@@ -121,6 +121,7 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool]:
                 x_available, alchemy_available = observed["x_available"], observed["alchemy_available"]
                 npm_install_available = observed["npm_install_available"]
                 x_post_available = observed["x_post_available"]
+                x_post_quota_available = observed["x_post_quota_available"]
         else:
             observed = store.loaded_gate_status()
             if type(observed) is dict and observed.get("ok") is True:
@@ -129,21 +130,22 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool]:
                 alchemy_available = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
                 npm_install_available = operator_catalog_npm_install.gate_descriptor_matches(observed.get("operator_npm_install"))
                 from serverware import operator_x_readiness
-                x_observed = operator_x_readiness.observe_health(observed)
+                x_observed = operator_x_readiness.observe_health_quota(observed)
                 x_post_available = (x_observed["ready"] is True
                     and x_observed["policy_hash"] == x_observed["loaded_policy_hash"] == loaded)
+                x_post_quota_available = x_post_available and x_observed["daily_quota_available"] is True
         # Starts only after HTTP and any managed snapshots have closed.
         with store._require().metadata_connection() as conn:
             current = _state(conn)["policy_hash"]
     except Exception:
         current = None
         x_available, alchemy_available, npm_install_available = False, False, False
-        x_post_available = False
+        x_post_available, x_post_quota_available = False, False
     active = loaded is not None and loaded == current == state["policy_hash"]
     return ({"policy_hash": state["policy_hash"], "sequence": state["sequence"],
         "loaded_policy_hash": loaded, "activation": "active" if active else "pending"},
         active and x_available, active and alchemy_available, active and npm_install_available,
-        active and x_post_available)
+        active and x_post_available, active and x_post_quota_available)
 
 
 def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
@@ -658,10 +660,14 @@ def create_x_post_rule(payload: XPostRuleInput, actor_id: str) -> dict:
     from serverware import operator_catalog_x_post as x, operator_demo, operator_x_readiness
     if x.ORIGIN not in operator_demo.settings()["allowed_upstreams"]:
         raise ValueError("X destination is not deployment-allowlisted")
-    observed = x.require_available(payload.expected_policy_hash)
+    quota = payload.daily_post_attempt_limit is not None
+    observed = x.require_available(payload.expected_policy_hash, quota=quota)
 
     def change(db, conn, catalog):
-        operator_x_readiness.require_start(conn, observed)
+        if quota:
+            operator_x_readiness.require_quota_start(conn, observed)
+        else:
+            operator_x_readiness.require_start(conn, observed)
         _admit_create(conn, catalog, "access_rules")
         _target(catalog, "applications", payload.application_id)
         credential = _target(catalog, "credentials", payload.credential_id)
@@ -893,7 +899,7 @@ def catalog_status() -> dict:
             "active_max": MAX_ACTIVE_RESOURCES, "retained_max": MAX_RETAINED_RESOURCES} for collection in _RESULT_KEYS}
         observed_activity = operator_catalog_activity.project(
             conn, catalog, observed_at_epoch_ms=time.time_ns() // 1_000_000)
-    observation, x_available, alchemy_available, npm_install_available, x_post_available = _catalog_observation(state)
+    observation, x_available, alchemy_available, npm_install_available, x_post_available, x_post_quota_available = _catalog_observation(state)
     now, settings = time.time_ns() // 1_000_000, operator_demo.settings()
     from serverware import operator_catalog_npm_install
     from serverware import operator_catalog_x_oauth, operator_catalog_x_post
@@ -923,7 +929,8 @@ def catalog_status() -> dict:
             "github_app_key_replacement": operator_github_app.key_replacement_capability(),
             "x": operator_catalog_x._capability() if x_available else None,
             "x_oauth": operator_catalog_x_oauth.capability() if x_post_available else None,
-            "x_post": operator_catalog_x_post._capability() if x_post_available else None,
+            "x_post": operator_catalog_x_post._capability(daily_quota_available=x_post_quota_available)
+                if x_post_available else None,
             "alchemy": operator_catalog_alchemy._capability() if alchemy_available else None,
             "npm": operator_catalog_npm.capability(),
             "npm_publish": operator_catalog_npm_publish.capability(),

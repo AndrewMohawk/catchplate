@@ -41,6 +41,7 @@ MAX_CONTACTS, MAX_OBSERVATIONS, MAX_BODY = 64, 128, 32768
 POST_KEYS = frozenset(("ordinal", "client", "case", "generation", "requestBodySha256",
     "requestBodyBytes", "requestHeaders", "timestampEpochMs", "responseBodySha256",
     "responseBytes", "status", "postId", "providerCredentialMatched", "proxyAuthorizationPresent"))
+QUOTA_OBSERVATION_SCHEMA = "serverware.privateXQuotaProvider/v1"
 
 
 def require(condition):
@@ -226,9 +227,23 @@ class State:
         return encoded({"access_token": access, "refresh_token": refresh, "token_type": "bearer",
             "expires_in": ttl, "scope": " ".join(SCOPES)})
 
+    def _authorization_allowed(self):
+        return not self._codes
+
+    def _identity_key(self, value):
+        return value["generation"]
+
+    def _post_selection(self, ordinal):
+        require(ordinal <= 7)
+        return (profiles.CLIENTS[(ordinal - 1) % 3] if ordinal <= 6 else "node",
+            "success" if ordinal <= 6 else "reflection", 1 if ordinal <= 3 else 2)
+
+    def _public_family(self, value):
+        return {}
+
     def _dispatch(self, method, target, values, raw, wall, mono):
         if method == "GET" and target.startswith("/i/oauth2/authorize?"):
-            require(not self._codes and not raw and values.get("host") == "x.com"
+            require(self._authorization_allowed() and not raw and values.get("host") == "x.com"
                 and set(values) <= {"host", "connection", "user-agent", "accept", "accept-encoding"}
                 and values.get("accept-encoding", "identity") == "identity")
             uri = urlsplit(target)
@@ -269,8 +284,9 @@ class State:
             require(not raw and values.get("accept") == "application/json"
                 and set(values) <= {"host", "authorization", "accept", "connection"})
             _, value = self._access(values, wall, mono)
-            require(value["generation"] not in self._identity_generations)
-            self._identity_generations.add(value["generation"])
+            identity = self._identity_key(value)
+            require(identity not in self._identity_generations)
+            self._identity_generations.add(identity)
             return "identity", 200, (), encoded({"data": {"id": SUBJECT, "name": "Synthetic local X account", "username": USERNAME}})
         if method == "POST" and target == "/2/oauth2/revoke":
             self._basic(values, raw)
@@ -279,24 +295,79 @@ class State:
             value = self._tokens.get(args["token"])
             require(value is not None and value["hint"] == args["token_type_hint"] and not value["revoked"])
             value["revoked"] = True
-            self._revocations.append({"generation": value["generation"], "tokenTypeHint": value["hint"], "originalClientVerified": True})
+            self._revocations.append({"generation": value["generation"], "tokenTypeHint": value["hint"],
+                "originalClientVerified": True, **self._public_family(value)})
             return "revoke", 200, (), encoded({"revoked": True})
         require(method == "POST" and target == profiles.TARGET and len(self._posts) < 7)
         token, value = self._access(values, wall, mono)
         ordinal = len(self._posts) + 1
-        client = profiles.CLIENTS[(ordinal - 1) % 3] if ordinal <= 6 else "node"
-        case = "success" if ordinal <= 6 else "reflection"
-        generation = 1 if ordinal <= 3 else 2
+        client, case, generation = self._post_selection(ordinal)
         public_headers = {name: item for name, item in values.items() if name not in ("authorization", "connection")}
-        require(value["generation"] == generation and generation in self._identity_generations
+        require(value["generation"] == generation and self._identity_key(value) in self._identity_generations
             and public_headers == profiles.provider_headers(client, case) and raw == profiles.post_body(client, case))
         body = response_body(ordinal, reflected_token=token if case == "reflection" else None)
         self._posts.append({"ordinal": ordinal, "client": client, "case": case, "generation": generation,
             "requestBodySha256": sha(raw), "requestBodyBytes": len(raw), "requestHeaders": public_headers,
             "timestampEpochMs": wall, "responseBodySha256": sha(body), "responseBytes": len(body),
             "status": 201, "postId": str(9000000000000000000 + ordinal),
-            "providerCredentialMatched": True, "proxyAuthorizationPresent": False})
+            "providerCredentialMatched": True, "proxyAuthorizationPresent": False, **self._public_family(value)})
         return "posts", 201, (), body
+
+
+class QuotaState(State):
+    """Closed two-consent lane, separate from the original SDK provider.
+
+    Four posts only. A new token family for the same subject is issued only
+    after the first family is revoked; original expiry/lifetime never resets.
+    """
+
+    def __init__(self, **kwargs):
+        self._families = []
+        super().__init__(**kwargs)
+
+    def _view(self):
+        value = super()._view()
+        value["schema"] = QUOTA_OBSERVATION_SCHEMA
+        del value["issuedGenerations"]
+        value["issuedTokenFamilies"] = list(self._families)
+        return value
+
+    def _authorization_allowed(self):
+        return not self._codes or (len(self._codes) == 1 and len(self._posts) == 4
+            and self._families == [{"alias": 1, "generation": 1}, {"alias": 1, "generation": 2}]
+            and all(value["revoked"] for value in self._tokens.values()))
+
+    def _identity_key(self, value):
+        return value["alias"], value["generation"]
+
+    def _public_family(self, value):
+        return {"alias": value["alias"]}
+
+    def _post_selection(self, ordinal):
+        require(ordinal <= 4)
+        return profiles.CLIENTS[(ordinal - 1) % 3], "success", 1 if ordinal <= 3 else 2
+
+    def _issue(self, generation, ttl, wall, mono):
+        expected = ((1, 1), (1, 2), (2, 1))
+        require(len(self._families) < len(expected))
+        alias, selected = expected[len(self._families)]
+        require(generation == selected and len(self._codes) == alias
+            and ttl == (INITIAL_TTL_SECONDS if generation == 1 else REFRESH_TTL_SECONDS))
+        if generation == 2:
+            require(self._refresh_after_expiry and self._expired(wall, mono) and len(self._posts) == 3)
+        if alias == 2:
+            require(len(self._posts) == 4 and all(value["revoked"] for value in self._tokens.values()))
+        access, refresh = ("synthetic-x-quota-a" + str(alias) + "-" + kind + "-g" + str(generation)
+            + "-" + secrets.token_urlsafe(32) for kind in ("access", "refresh"))
+        for token, hint in ((access, "access_token"), (refresh, "refresh_token")):
+            self._tokens[token] = {"hint": hint, "alias": alias, "generation": generation,
+                "revoked": False, "used": False, "expires": wall + ttl * 1000, "mono_expires": mono + ttl}
+        self._families.append({"alias": alias, "generation": generation})
+        if alias == generation == 1:
+            self._initial_issued, self._initial_expires = wall, wall + ttl * 1000
+            self._initial_mono_expires = mono + ttl
+        return encoded({"access_token": access, "refresh_token": refresh, "token_type": "bearer",
+            "expires_in": ttl, "scope": " ".join(SCOPES)})
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -386,6 +457,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--lifetime-seconds", type=int, default=network.KEEPER_SECONDS)
+    parser.add_argument("--profile", choices=("sdk", "quota"), default="sdk")
     args = parser.parse_args()
     os.umask(0o077)
     require(args.lifetime_seconds == network.KEEPER_SECONDS)
@@ -400,7 +472,7 @@ def main():
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_alpn_protocols(["http/1.1"])
     context.load_cert_chain(str(PKI / "cert.pem"), str(PKI / "key.pem"))
-    state, stopped = State(directory=PKI), threading.Event()
+    state, stopped = (QuotaState if args.profile == "quota" else State)(directory=PKI), threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
     servers, threads = [], []

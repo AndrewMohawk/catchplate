@@ -123,7 +123,8 @@ def dependencies_sha256(value):
 
 
 def build(source, binary, initializer, root, node, node_modules, python_runtime, python_packages, go,
-          *, expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256):
+          *, expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256, quota=False):
+    require(type(quota) is bool, "closed quota profile required")
     require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-x-post-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private X posting root required")
     for value in (expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256):
@@ -191,6 +192,13 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         bind(python_packages, "/example-python/lib/python3.12/site-packages"), bind(go, "/example-go/x-post"),
         bind(LIBATOMIC, "/usr/lib/x86_64-linux-gnu/libatomic.so.1"),
         bind(runtime / "upstream-data/x/ca.pem", "/x-public/ca.pem"), bind(root / "dependencies.json", "/client-dependencies.json")]
+    if quota:
+        # The one explicit feature flag is the only environment change.
+        # Clocks, mounts, issuer and trust remain unchanged.
+        for service in (app, gate):
+            service["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
+        provider["command"] += ["--profile", "quota"]
+        check["command"][0] = "/app/scripts/check_operator_x_quota.py"
     require(set(services) == RUNTIME_SERVICES | {"initialize", "x-post-pki", "basic-pki"}
         and set(config) == {"name", "services"}, "closed X posting service roster required")
     for service in services.values():

@@ -46,6 +46,7 @@ mod operator_google_managed;
 mod operator_google_reconciliation;
 mod operator_google_preparation;
 mod operator_x_profile;
+mod operator_x_quota;
 mod operator_static_preparation;
 mod operator_background_renewal;
 mod operator_static_preparation_diagnostics;
@@ -2742,6 +2743,7 @@ struct GateState {
     native_enrollment_authorizer: Option<Arc<native_enrollment_authorizer::NativeEnrollmentAuthorizer>>,
     audit_client: Client,
     operator_audit_publication: Option<Arc<operator_audit_publication::Owner>>,
+    operator_x_quota_enabled: bool,
     measured_audit: Option<Mutex<native_audit_owner::Owner>>,
     measured_canary_delivery: Option<Mutex<native_canary_delivery::Owner>>,
     credential_lease_client: Client,
@@ -23938,13 +23940,45 @@ where
         &reqwest::blocking::Request,
     ) -> Result<Option<ShadowDispatchBarrierPermit>, String>,
 {
+    send_upstream_request_with_quota_owner(state, snapshot, binding, builder, maximum_timeout,
+        deadlines, require_response_proof, None, validate_request, observe_dispatch_barrier)
+}
+
+fn send_upstream_request_with_quota_owner<F, G>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+    builder: reqwest::blocking::RequestBuilder,
+    maximum_timeout: Option<Duration>,
+    deadlines: UpstreamSendDeadlines,
+    require_response_proof: bool,
+    mut quota: Option<&mut operator_x_quota::Request>,
+    validate_request: F,
+    observe_dispatch_barrier: G,
+) -> Result<reqwest::blocking::Response, UpstreamSendError>
+where
+    F: FnOnce(&reqwest::blocking::Request) -> Result<(), &'static str>,
+    G: FnOnce(&reqwest::blocking::Request) -> Result<Option<ShadowDispatchBarrierPermit>, String>,
+{
     let send = || {
         let (client, request) = builder.build_split();
         let mut request = request
             .map_err(redacted_reqwest_error)
             .map_err(UpstreamSendError::RequestBuild)?;
-        let authority = acquire_upstream_send_authority(state, snapshot, binding)
-            .map_err(UpstreamSendError::CredentialAuthority)?;
+        let mut validate_request = Some(validate_request);
+        // Quota contact must precede dispatch/snapshot guards. No retry or
+        // generic-cache fallback is possible after this owner's claim starts.
+        let authority = if let Some(owner) = quota.as_deref_mut() {
+            if require_response_proof { return Err(UpstreamSendError::CredentialAuthority("operator_x_quota_proof_refused")); }
+            let binding = binding.ok_or(UpstreamSendError::CredentialAuthority("operator_x_quota_binding_missing"))?;
+            validate_request.take().expect("single request validation")(&request)
+                .map_err(UpstreamSendError::CredentialAuthority)?;
+            owner.claim(state, snapshot, binding, &request)
+                .map_err(|_| UpstreamSendError::CredentialAuthority("operator_x_post_attempt_quota_unavailable"))?;
+            owner.acquire_send(state, snapshot, binding).map_err(UpstreamSendError::CredentialAuthority)?
+        } else {
+            acquire_upstream_send_authority(state, snapshot, binding).map_err(UpstreamSendError::CredentialAuthority)?
+        };
         if !policy_trust_is_fresh(state) {
             return Err(UpstreamSendError::CredentialAuthority(
                 "policy_trust_stale_before_upstream_send",
@@ -23980,7 +24014,7 @@ where
                 "credential_release_authorization_expired_before_upstream_send",
             ));
         }
-        validate_request(&request).map_err(UpstreamSendError::CredentialAuthority)?;
+        if let Some(validate) = validate_request { validate(&request).map_err(UpstreamSendError::CredentialAuthority)?; }
         let shadow_dispatch_permit = observe_dispatch_barrier(&request)
             .map_err(UpstreamSendError::DispatchBarrier)?;
         let final_upstream_request_commitment =
@@ -24033,6 +24067,11 @@ where
             .map_err(UpstreamSendError::CredentialAuthority)? {
             *request.timeout_mut() = Some(request.timeout().copied()
                 .map_or(remaining, |selected| selected.min(remaining)));
+        }
+        if let Some(owner) = quota.as_deref_mut() {
+            owner.consume_before_execute(state, snapshot,
+                binding.ok_or(UpstreamSendError::CredentialAuthority("operator_x_quota_binding_missing"))?, &request)
+                .map_err(UpstreamSendError::CredentialAuthority)?;
         }
         let result = client.execute(request);
         let (effect_state, effect_result_sha256) = match result.as_ref() {
@@ -35792,6 +35831,7 @@ fn decide_internal_for_forward<'a>(
         authenticated_principal_id,
         None,
         None,
+        None,
     )
 }
 
@@ -35802,6 +35842,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
     authenticated_principal_id: Option<&str>,
     shadow_admission: Option<ShadowAdmission>,
     google_preparation: Option<&mut operator_google_preparation::Request>,
+    quota_preparation: Option<&mut operator_x_quota::Request>,
 ) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
     let shadow_admission = shadow_admission.unwrap_or_else(|| {
         state.policy_shadow.capture_for_gate(state,
@@ -35824,6 +35865,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
         Some(&mut release_authorization),
         Some(shadow_admission),
         google_preparation,
+        quota_preparation,
         #[cfg(test)]
         None,
     );
@@ -35879,7 +35921,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
 ) -> Value {
     decide_internal_with_mode_and_shadow_and_google(
         state, snapshot, req, authenticated_principal_id, preview,
-        accepted_release_output, precomputed_shadow_admission, None,
+        accepted_release_output, precomputed_shadow_admission, None, None,
         #[cfg(test)] decision_at_epoch_ms_override,
     )
 }
@@ -35893,6 +35935,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
     mut accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
     precomputed_shadow_admission: Option<ShadowAdmission>,
     mut google_preparation: Option<&mut operator_google_preparation::Request>,
+    mut quota_preparation: Option<&mut operator_x_quota::Request>,
     #[cfg(test)] decision_at_epoch_ms_override: Option<u128>,
 ) -> Value {
     let started = Instant::now();
@@ -36471,6 +36514,12 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let atomic_release = state.atomic_release_authorization_enabled && !preview;
+    let ordinary_quota = !preview && !atomic_release && credential_scope.as_ref()
+        .is_some_and(|scope| operator_x_quota::admitted(state, snapshot, scope).unwrap_or(false));
+    if ordinary_quota && (quota_preparation.is_none() || proof_requested || req.client_request_digest.is_some()) {
+        return deny_for_route(503, "ordinary X quota forwarding owner unavailable",
+            json!({"error":"operator_x_post_attempt_quota_unavailable"}), route, started);
+    }
     if !preview && !atomic_release {
         if let Err(payload) = validate_legacy_release_composition(route, jit_required) {
             let reason = payload
@@ -36492,6 +36541,10 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
                 ActiveMutableEffectKind::CredentialLease,
                 scope,
                 || {
+                    if let Some(owner) = quota_preparation.as_deref_mut() {
+                        if let Some(info) = owner.acquire_if_admitted(state, snapshot, scope,
+                            proof_requested || req.client_request_digest.is_some())? { return Ok(info); }
+                    }
                     if let Some(info) = operator_static_preparation::prepare_if_admitted(
                         state, snapshot, scope, proof_requested || req.client_request_digest.is_some(),
                     )? { return Ok(info); }
@@ -36572,7 +36625,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         &mut operation,
         false,
         true,
-        preview || atomic_release,
+        preview || atomic_release || ordinary_quota,
     ) {
         let status = payload
             .get("status_code")
@@ -37313,7 +37366,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
     }
 
     if let Some(scope) = credential_scope.as_ref() {
-        if preflight_cached_credential_injection(
+        if !ordinary_quota && preflight_cached_credential_injection(
             state,
             snapshot,
             scope,
@@ -37451,7 +37504,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
                     &mut operation,
                     true,
                     true,
-                    false,
+                    ordinary_quota,
                 )
             },
         ) {
@@ -37638,7 +37691,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             "credential_generation_resolved":credential_ref.is_none() || credential_version != 0,
             "credential_secret_available":credential_ref.is_none() || secret_available,
             "jit_resolved":!jit_required || consumed_grant.is_some(),
-            "legacy_rate_limits_committed":allowed,
+            "legacy_rate_limits_committed":allowed && !ordinary_quota,
             "durable_budget_results_sha256":Value::Null,
             "snapshot_active_at_final_barrier":allowed,
         },
@@ -47043,6 +47096,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     // acquisition cannot restart or expand the existing fifteen-second bound.
     let operator_release_deadline = Instant::now() + CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT;
     let mut google_preparation = operator_google_preparation::Request::new(operator_release_deadline);
+    let mut quota_preparation = operator_x_quota::Request::new(operator_release_deadline);
     let mut shadow_finalization = shadow_admission
         .as_ref()
         .and_then(ShadowAdmission::finalization_handle);
@@ -47126,6 +47180,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         Some(shadow_admission),
         if v2_proof_requested || shadow_finalization.is_some() { None }
             else { Some(&mut google_preparation) },
+        if v2_proof_requested || shadow_finalization.is_some() { None }
+            else { Some(&mut quota_preparation) },
     );
     if shadow_finalization.is_some() {
         shadow_active_decision = Some(decision.clone());
@@ -47456,7 +47512,21 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             .get("credential_version")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let selected_lease = match operator_static_preparation::prepare_release_if_admitted(
+        let quota_lease = quota_preparation.prepare_release_if_admitted(
+            state, snapshot, &decision, &request.method, &upstream_url,
+            v2_proof_requested || response_proof_requested || client_request_digest.is_some()
+                || release_authorization.is_some() || route_streaming || shadow_finalization.is_some(),
+        );
+        let selected_lease = if quota_preparation.selected() {
+            match quota_lease {
+                Ok(Some(lease)) => { operator_release_audited = true; Ok(lease) },
+                _ => {
+                    enqueue_audit(state, "data_plane.request.denied", decision_audit_event(&decision,
+                        &request.method, &upstream_url, "denied", json!({"stage":"operator_x_quota","error":"operator_x_post_attempt_quota_unavailable"})));
+                    buffered!(quota_preparation.failure_response());
+                },
+            }
+        } else { match operator_static_preparation::prepare_release_if_admitted(
             state, snapshot, &decision, &request.method, &upstream_url,
             v2_proof_requested || response_proof_requested || client_request_digest.is_some()
                 || release_authorization.is_some() || route_streaming || shadow_finalization.is_some(),
@@ -47478,7 +47548,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 Err(_) => Err("operator_google_release_unavailable"),
             },
             Err(_) => Err("operator_static_release_unavailable"),
-        };
+        }};
         let lease = match selected_lease {
             Ok(lease) => lease,
             Err(_) => {
@@ -47577,7 +47647,9 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     }
     if credential_release_binding
         .as_ref()
-        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+        .is_some_and(|binding| if quota_preparation.selected() {
+            !quota_preparation.still_releasable(state, snapshot, binding)
+        } else { !credential_lease_still_releasable(state, snapshot, binding) })
     {
         buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -47602,7 +47674,9 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     }
     if credential_release_binding
         .as_ref()
-        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+        .is_some_and(|binding| if quota_preparation.selected() {
+            !quota_preparation.still_releasable(state, snapshot, binding)
+        } else { !credential_lease_still_releasable(state, snapshot, binding) })
     {
         buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -47690,7 +47764,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         }
         completed_response_proof_authorization = Some(authorization_context);
     }
-    let response = match send_upstream_request_with_current_lease_and_timeout_validated_and_finalized(
+    let response = match send_upstream_request_with_quota_owner(
         state,
         snapshot,
         credential_release_binding.as_ref(),
@@ -47698,6 +47772,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         None,
         send_deadlines,
         response_proof_requested,
+        if quota_preparation.selected() { Some(&mut quota_preparation) } else { None },
         |built| {
             let route = decision_route_context(snapshot, &decision, &request_method, &upstream_url)
                 .map_err(|_| "provider_request_body_route_invalid")?.route;
@@ -47732,6 +47807,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             response
         }
         Err(UpstreamSendError::CredentialAuthority(error)) => {
+            if quota_preparation.selected() { buffered!(quota_preparation.failure_response()); }
             if let Some(observation) = response_observation.as_deref_mut() {
                 observation.response_path = "authorized-not-attempted";
             }
@@ -48180,6 +48256,7 @@ fn forward_absolute_streaming_request_to(
         decision_request,
         authenticated_principal_id,
         Some(shadow_admission),
+        None,
         None,
     );
     if shadow_finalization.is_some() {
@@ -48844,6 +48921,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         decision_request,
         authenticated_principal_id,
         Some(shadow_admission),
+        None,
         None,
     );
     if shadow_finalization.is_some() {
@@ -51375,6 +51453,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
             "policy_trust_root_source":state.policy_trust_root_source.label(),
             "operator_x_app_read":x_app_read::gate_capability(),
             "operator_x_post":operator_x_profile::gate_capability(),
+            "operator_x_post_attempt_quota":operator_x_quota::capability(state),
             "operator_alchemy_rpc_read":alchemy_rpc_read::gate_capability(),
             "operator_npm_install":npm_install::gate_capability(),
             "attested_response_context":snapshot.attested_response_context,
@@ -54011,6 +54090,7 @@ fn main() -> Result<(), String> {
         operator_startup_guard.as_ref().ok_or("operator publication startup ownership missing")?.check()?;
     }
     proxy_basic_transport::require_runtime(&initialized_state, &current_snapshot(&initialized_state))?;
+    operator_x_quota::configure(&mut initialized_state)?;
     drop(operator_startup_guard);
     let state = Arc::new(initialized_state);
     if let Some(control) =
@@ -55442,6 +55522,7 @@ mod tests {
             native_enrollment_authorizer: None,
             audit_client: client.clone(),
             operator_audit_publication: None,
+            operator_x_quota_enabled: false,
             measured_audit: None,
             credential_lease_client: client,
             measured_canary_delivery: None,

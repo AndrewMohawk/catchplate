@@ -44,7 +44,17 @@ def _identity(value):
     return value
 
 
-def _local(conn, *, query_only):
+def _quota_store_ready(conn):
+    # Observation only: absence/corruption never creates or repairs a counter.
+    try:
+        from serverware import operator_x_quota
+        operator_x_quota.require_ready(conn)
+        return True
+    except Exception:
+        return False
+
+
+def _local(conn, *, query_only, quota=False):
     from serverware import config, operator_demo, operator_x_gate_configuration as public
     from serverware.operator_x_oauth_profile import API_ORIGINS
     document = public._project(conn, query_only=query_only)
@@ -58,27 +68,30 @@ def _local(conn, *, query_only):
         "operation", "profile_binding_digest", "effective_settings_digest")})
     return {"policy_hash": rows[0][1], "managed_x": identity,
         "expected_binary_digest": config.EXPECTED_DATA_PLANE_BINARY_DIGEST,
-        "destination_allowed": set(API_ORIGINS) <= set(document["effective_settings"]["allowed_upstreams"])}
+        "destination_allowed": set(API_ORIGINS) <= set(document["effective_settings"]["allowed_upstreams"]),
+        **({"quota_store_ready": _quota_store_ready(conn)} if quota else {})}
 
 
-def _snapshot():
+def _snapshot(*, quota=False):
     from serverware import operator_publication as publication
     from serverware.development_sandbox import _open_directory
     publication.assert_not_held()
     with publication.exclusive():
         with publication.closing_fd(_open_directory(publication._directory())) as directory:
             with publication._read_database(directory) as conn:
-                return _local(conn, query_only=True)
+                return _local(conn, query_only=True, **({"quota": True} if quota else {}))
 
 
-def _observe(document=_FETCH):
+def _observe(document=_FETCH, *, quota=False):
     result = {"ready": False, "policy_hash": None, "loaded_policy_hash": None, "managed_x": None}
+    if quota:
+        result["daily_quota_available"] = False
     try:
         from serverware import operator_publication as publication, operator_x_admission as admission
         publication.assert_not_held()
         if not admission.enabled() or document is None:
             return result
-        before = _snapshot()
+        before = _snapshot(**({"quota": True} if quota else {}))
         result.update(policy_hash=before["policy_hash"], managed_x=before["managed_x"])
         if document is _FETCH:
             from serverware import operator_demo_store as store
@@ -89,7 +102,7 @@ def _observe(document=_FETCH):
         shadow = document.get("policy_shadow")
         _require(type(shadow) is dict)
         identity = _identity(shadow.get("managed_x"))
-        after = _snapshot()
+        after = _snapshot(**({"quota": True} if quota else {}))
         result.update(policy_hash=after["policy_hash"], managed_x=after["managed_x"])
         result["ready"] = (before == after and document.get("ok") is True
             and identity["operation"] is not None and after["destination_allowed"] is True
@@ -98,8 +111,15 @@ def _observe(document=_FETCH):
             and identity == after["managed_x"]
             and type(document.get("operator_x_post")) is dict
             and document["operator_x_post"] == _DESCRIPTOR)
+        if quota:
+            from serverware.operator_catalog_x_post import quota_descriptor_matches
+            result["daily_quota_available"] = (result["ready"] is True
+                and before.get("quota_store_ready") is True and after.get("quota_store_ready") is True
+                and quota_descriptor_matches(document.get("operator_x_post_attempt_quota")))
     except Exception:
         result["ready"] = False
+        if quota:
+            result["daily_quota_available"] = False
     return result
 
 
@@ -111,6 +131,16 @@ def observe():
 def observe_health(document):
     """Display-only reuse of actual catalog health; None never triggers HTTP."""
     return _observe(document)
+
+
+def observe_quota():
+    """One fresh health read plus existing durable quota namespace checks."""
+    return _observe(quota=True)
+
+
+def observe_health_quota(document):
+    """Same catalog health, no additional request or initialization."""
+    return _observe(document, quota=True)
 
 
 def _captured(value):
@@ -145,3 +175,18 @@ def require_start(conn, observation):
     except Exception:
         from serverware.operator_catalog_schema import CatalogConflict
         raise CatalogConflict(_ERROR) from None
+
+
+def require_quota_start(conn, observation):
+    """Recheck a bounded-grant observation in the unchanged writer transaction."""
+    try:
+        _require(type(observation) is dict and set(observation) == {
+            "ready", "policy_hash", "loaded_policy_hash", "managed_x", "daily_quota_available"}
+            and observation["daily_quota_available"] is True)
+        require_start(conn, {key: value for key, value in observation.items()
+            if key != "daily_quota_available"})
+        from serverware import operator_x_quota
+        operator_x_quota.require_ready(conn)
+    except Exception:
+        from serverware.operator_catalog_schema import CatalogConflict
+        raise CatalogConflict("operator X posting-attempt quota unavailable") from None

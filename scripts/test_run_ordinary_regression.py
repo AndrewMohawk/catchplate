@@ -25,6 +25,9 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
         self.assertIn("test_operator_notification_google_events.py", paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
+        x_catalog = next(row for row in runner.SUITES if row.script == "test_operator_catalog_x_post.py")
+        self.assertEqual((x_catalog.category, x_catalog.runtime, x_catalog.arguments, x_catalog.seconds),
+            ("backend", "python", (), 240))
         for script in ("test_operator_public_proxy.py", "test_operator_public_proxy_control.py"):
             public_proxy = next(row for row in runner.SUITES if row.script == script)
             self.assertEqual((public_proxy.category, public_proxy.runtime, public_proxy.arguments, public_proxy.seconds),
@@ -41,9 +44,11 @@ class RunnerTests(unittest.TestCase):
         x_backend = {"test_operator_x_accounts_api.py", "test_operator_x_transport.py",
             "test_operator_x_refresh.py", "test_operator_x_lease_reconciliation.py",
             "test_operator_x_lease_boundary.py", "test_operator_x_secret_boundary.py",
-            "test_operator_x_readiness.py"}
-        x_ui = {"test_operator_x_accounts_ui.cjs", "test_operator_x_configuration_ui.mjs"}
+            "test_operator_x_readiness.py", "test_operator_x_quota.py", "test_operator_x_quota_api.py"}
+        x_ui = {"test_operator_x_accounts_ui.cjs", "test_operator_x_configuration_ui.mjs",
+            "test_operator_x_quota_ui.cjs"}
         x_fixture = {"test_operator_x_post_profiles.py", "test_operator_x_post_fixture.py",
+            "test_operator_x_quota_fixture.py", "test_operator_x_quota_checker.py",
             "test_operator_x_post_checker.py", "test_prepare_operator_x_post_fixture.py",
             "test_run_operator_x_post_fixture.py"}
         self.assertTrue(x_fixture <= set(paths))
@@ -183,7 +188,11 @@ class RunnerTests(unittest.TestCase):
                 "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"}, "PASS fixture\n"),
             "test_operator_x_configuration_ui.mjs": ({"ok": True, "browser": False, "network": False,
                 "scope": "actual JS with inert DOM and independent synthetic API DTOs; not backend, browser or provider acceptance"}, "PASS fixture\n"),
+            "test_operator_x_quota_ui.cjs": ({"ok": True, "browser": False, "network": False,
+                "scope": "shared X posting-attempt quota UI contracts; no backend or enforcement acceptance"}, "PASS fixture\n"),
         }
+        self.assertEqual({row.script for row in runner.SUITES if row.runtime == "node"},
+            set(examples) | {"test_operator_runtime_browser_assets.cjs"})
         for script, (shape, prefix) in examples.items():
             def wire(value):
                 return (prefix + json.dumps(value) + "\n").encode()
@@ -202,6 +211,15 @@ class RunnerTests(unittest.TestCase):
                 self.assertIsNone(runner.node_completion(script, b""))
                 self.assertIsNone(runner.node_completion(script, wire(valid) + b"extra\n"))
                 self.assertIsNone(runner.node_completion(script, wire(valid).replace(b'"groups": 1', b'"groups": 1,"groups": 1')))
+        quota = "test_operator_x_quota_ui.cjs"
+        quota_shape = examples[quota][0]
+        for count in (2, 11, 12):
+            terminal = json.dumps({**quota_shape, "groups": count}).encode() + b"\n"
+            self.assertEqual(runner.node_completion(quota, b"PASS fixture\n" * count + terminal), count)
+            self.assertIsNone(runner.node_completion(quota, b"PASS fixture\n" * (count - 1) + terminal))
+            self.assertIsNone(runner.node_completion(quota, b"PASS fixture\n" * (count + 1) + terminal))
+            self.assertIsNone(runner.node_completion(quota, b"PASS fixture\n" * count + terminal.replace(
+                b"no backend or enforcement acceptance", b"backend and enforcement accepted")))
         asset = "test_operator_runtime_browser_assets.cjs"
         self.assertEqual(runner.node_completion(asset,
             b"PASS fixture\nPASS 1 pure runtime-browser asset groups; no browser or service calls\n"), 1)

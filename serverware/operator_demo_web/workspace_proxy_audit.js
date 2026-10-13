@@ -138,7 +138,7 @@ function createProxyView(workspace, applications) {
     element('gmail-message-group').hidden = !messageRead;
     element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official ' + gmailProfile.label + ' SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
     element('client-template-warning').textContent = xPost ?
-      'This recipe publishes only when you explicitly run it locally with reviewed text and post-once confirmation. No daily quota is enforced. This page sends no post; never automatically retry an uncertain reply.' : npmInstall ?
+      'This recipe publishes only when you explicitly run it locally with reviewed text and post-once confirmation. ' + xPostQuotaSummary(rule) + ' This page sends no post; never automatically retry an uncertain reply.' : npmInstall ?
       'Review the exact dependency allowlist and local manifests before running the linked npm example. Installation writes only to your deliberately selected new output directory; lifecycle scripts stay disabled and default audit stays enabled. This page does not execute or verify the job.' : alchemy ?
       'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here and this page does not prove provider entitlement.' : x ?
       'Only the exact saved username is permitted. This cURL template uses a public dummy, never the real X token. The page does not execute a lookup or prove provider entitlement.' : npmPublish ?
@@ -226,7 +226,7 @@ function createProxyView(workspace, applications) {
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
     if (xPost) {
       element('client-guidance').textContent = (ready ? 'The exact policy is loaded; no post has been sent or tested. ' : 'Wait for the exact policy and resolve uncertain changes. ') +
-        'Use the reviewed examples/x-post-node project with your Serverware app token and locally supplied text. The client uses a public dummy; no X access or refresh token is shared. No daily posting quota, media, replies, quotes or threads. Keep both TLS checks enabled. Inspect Audit log and the account after any uncertain outcome; do not replay automatically.';
+        'Use the reviewed examples/x-post-node project with your Serverware app token and locally supplied text. The client uses a public dummy; no X access or refresh token is shared. ' + xPostQuotaSummary(rule) + ' No media, replies, quotes or threads. Keep both TLS checks enabled. Inspect Audit log and the account after any uncertain outcome; do not replay automatically.';
       return;
     }
     if (npmInstall) {
@@ -360,7 +360,7 @@ function createProxyView(workspace, applications) {
         required_local_environment: ['SERVERWARE_X_POST_TEXT', 'SERVERWARE_X_POST_CONFIRM'],
         confirmation_value: 'post-once', sdk_auth_token: operatorXPost.token};
       config.proxy_ca_file = element('x-post-proxy-ca-path').value || null;
-      config.note += ' Contains only the Serverware app token, not X credentials or post content. Text-only posting has no daily quota. This file is not executable; an uncertain post must never be automatically replayed.';
+      config.note += ' Contains only the Serverware app token, not X credentials or post content. ' + xPostQuotaSummary(rule) + ' This file is not executable; an uncertain post must never be automatically replayed.';
     }
     if (isAlchemyRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.chain = rule.chain;

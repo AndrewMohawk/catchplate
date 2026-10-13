@@ -137,7 +137,7 @@ class XCatalogComponents(unittest.TestCase):
         self.assertTrue(account.selected({account.MARKER: None}))
         self.refused(account.validate_identity, {"auth_type": "bearer", account.MARKER: None})
 
-    def test_post_input_refuses_quota_and_all_caller_selected_wire_fields(self):
+    def test_post_input_refuses_unknown_quota_and_caller_selected_wire_fields(self):
         self.assertEqual(inputs.XPostRuleInput(**payload()).operation_bundle, "x_text_post_v1")
         for key, value in (("daily_quota", 1), ("quota", {"max": 1}), ("operation_bundle", "x_username_read_v1"),
                 ("upstream_url", "https://api.x.com/2/tweets"), ("methods", ["POST"]),
@@ -145,6 +145,22 @@ class XCatalogComponents(unittest.TestCase):
                 ("provider_subject", "123"), ("expected_revision", True)):
             with self.subTest(field=key), self.assertRaises(ValidationError):
                 inputs.XPostRuleInput(**payload(**{key: value}))
+
+    def test_optional_attempt_limit_is_strict_and_legacy_rows_remain_unchanged(self):
+        original = rule()
+        self.assertNotIn("daily_post_attempt_limit", original)
+        self.assertEqual(post.public_fields(original), {"operation_bundle": "x_text_post_v1"})
+        for maximum in (1, 100, 1_000_000_000):
+            value = post.record_fields(inputs.XPostRuleInput(**payload(daily_post_attempt_limit=maximum)))
+            self.assertEqual(value, {**{key: value for key, value in original.items()
+                if key not in {"id", "route_id", "status", "ordinal", "version", "created_at"}},
+                "daily_post_attempt_limit": maximum})
+            self.assertEqual(post.public_fields(value), {
+                "operation_bundle": "x_text_post_v1", "daily_post_attempt_limit": maximum})
+        for maximum in (None, True, False, 0, -1, 1_000_000_001, 1.0, "1", [], {}):
+            with self.subTest(maximum=maximum), self.assertRaises(ValidationError):
+                inputs.XPostRuleInput(**payload(daily_post_attempt_limit=maximum))
+            self.refused(post.validate_shape, {**original, "daily_post_attempt_limit": maximum})
 
     def test_typed_rule_rejects_app_only_and_generic_crossovers(self):
         _, _, _, record, _ = fixture()
@@ -179,11 +195,70 @@ class XCatalogComponents(unittest.TestCase):
         self.assertFalse(any(row["type"] == "rateLimit" for row in document["routes"][0]["constraints"]))
 
     def test_same_application_cannot_silently_select_second_account(self):
+        _, _, _, credential, _ = fixture()
+        other = {**credential, "id": IDS[6], "provider_subject": "987654321"}
+        credentials = [credential, other]
         first = rule()
         second = {**first, "id": IDS[7], "credential_id": IDS[6]}
-        self.refused(post.validate_route_coexistence, [first, second])
-        post.validate_route_coexistence([first, {**second, "status": "revoked"}])
-        post.validate_route_coexistence([first, {**second, "application_id": IDS[7]}])
+        self.refused(post.validate_route_coexistence, [first, second], credentials)
+        post.validate_route_coexistence([first, {**second, "status": "revoked"}], credentials)
+        post.validate_route_coexistence([first, {**second, "application_id": IDS[7]}], credentials)
+
+    def test_quota_groups_verified_subject_across_credential_and_client_aliases(self):
+        _, _, _, credential, _ = fixture()
+        # Structural aliases, not fake consent: no storage/adoption occurs here.
+        alias = {**credential, "id": IDS[6], "oauth_client_id": "another-public-x-client"}
+        first = {**rule(), "daily_post_attempt_limit": 2}
+        second = {**first, "id": IDS[7], "route_id": "operator." + IDS[7],
+            "application_id": IDS[7], "credential_id": IDS[6]}
+        catalog = {"credentials": [credential, alias], "access_rules": [first]}
+        post.admit_rule(second, catalog)
+        post.validate_route_coexistence([first, second], catalog["credentials"])
+        for changed in ({key: value for key, value in second.items() if key != "daily_post_attempt_limit"},
+                {**second, "daily_post_attempt_limit": 3}):
+            self.refused(post.validate_route_coexistence, [first, changed], catalog["credentials"])
+            self.refused(post.validate_route_coexistence, [changed, first], catalog["credentials"])
+            with self.assertRaises(schema.CatalogConflict):
+                post.admit_rule(changed, catalog)
+        post.validate_route_coexistence([first, {**second, "daily_post_attempt_limit": 3,
+            "status": "revoked"}], catalog["credentials"])
+        post.validate_route_coexistence([first, {**second, "daily_post_attempt_limit": 3}],
+            [credential, {**alias, "provider_subject": "987654321"}])
+        self.refused(post.validate_route_coexistence, [first, second], [credential])
+
+    def test_limited_rule_renders_exact_existing_shared_utc_account_constraint(self):
+        from serverware import policy_bundle
+        _, _, _, credential, _ = fixture()
+        value = {**rule(), "daily_post_attempt_limit": 2}
+        application = {"id": IDS[4], "name": "Synthetic client", "status": "active", "ordinal": 1,
+            "version": 1, "principal_id": "agent:operator-demo:" + IDS[4],
+            "token_sha256": "sha256:" + "b" * 64, "token_expires_at_epoch_ms": 1_999_999_999_000}
+        document = policy.render({"credentials": [credential], "applications": [application],
+            "access_rules": [value]}, 2, "sha256:" + "c" * 64)
+        route = policy_bundle.compile_policy_bundle(document, verify_signature=False, validate_schema=True).routes[0]
+        self.assertEqual(route.constraints, (x_post.response_envelope(value["route_id"] + ".envelope"),
+            {"id": "x-post-account-utc-day-v1", "type": "rateLimit", "max": 2,
+                "calendarWindow": "utcDay", "windowSemantics": "calendarUTC", "store": "shared",
+                "key": {"scope": ["operation"], "operationFields": ["providerAccount"]}}))
+        x_post.validate_route(route)
+
+    def test_optional_quota_capability_is_closed_and_detached(self):
+        from serverware import operator_demo
+        expected = {"schema": "serverware.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
+            "period": "utc_day", "scope": "verified_x_account", "unit": "posting_attempt",
+            "minimum": 1, "maximum": 1_000_000_000}
+        self.assertTrue(post.quota_descriptor_matches(expected))
+        for descriptor in (None, {}, True, {**expected, "minimum": True},
+                {**expected, "maximum": 1e9}, {**expected, "scope": "credential"}, {**expected, "extra": 1}):
+            self.assertFalse(post.quota_descriptor_matches(descriptor))
+        with patch.object(operator_demo, "settings", return_value={"allowed_upstreams": [post.ORIGIN]}):
+            legacy = post._capability()
+            current = post._capability(daily_quota_available=True)
+            self.assertEqual(current, {**legacy, "daily_quota_available": True, "daily_quota": expected})
+            self.assertEqual(post._capability(daily_quota_available=1), legacy)
+            self.assertNotIn("daily_quota", legacy)
+            current["daily_quota"]["maximum"] = 0
+            self.assertEqual(post._capability(daily_quota_available=True)["daily_quota"], expected)
 
     def test_capability_has_no_quota_or_standalone_activation_claim(self):
         capability = account.capability()
@@ -207,6 +282,13 @@ class XCatalogComponents(unittest.TestCase):
             # Failure-only observer seam. No successful admission is asserted.
             with patch.object(operator_x_readiness, "observe", return_value=value), self.assertRaises(schema.CatalogConflict):
                 post.require_available(HASH)
+        for value in ({**good, "daily_quota_available": False},
+                {**good, "daily_quota_available": 1},
+                {**good, "daily_quota_available": True, "loaded_policy_hash": None}, good):
+            with patch.object(operator_x_readiness, "observe_quota", return_value=value), \
+                    patch.object(operator_x_readiness, "observe", side_effect=AssertionError("no fallback")), \
+                    self.assertRaises(schema.CatalogConflict):
+                post.require_available(HASH, quota=True)
 
 
 if __name__ == "__main__":

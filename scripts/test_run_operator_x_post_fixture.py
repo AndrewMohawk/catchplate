@@ -300,9 +300,10 @@ class RunnerTests(unittest.TestCase):
         index = next(i for i, node in enumerate(body) if isinstance(node, ast.ImportFrom)
             and node.module == "scripts.check_operator_x_post")
         self.assertEqual([(item.name, item.asname) for item in body[index].names], [("validate_success_result", None)])
-        self.assertEqual(ast.unparse(body[index + 1]), "result = json.loads(raw)")
-        self.assertEqual(ast.unparse(body[index + 2]), "validate_success_result(result)")
-        guard = ast.fix_missing_locations(ast.Module(body=[body[index + 3]], type_ignores=[]))
+        self.assertEqual(ast.unparse(body[index + 1]), "if quota:\n    from scripts.check_operator_x_quota import validate_success_result")
+        self.assertEqual(ast.unparse(body[index + 2]), "result = json.loads(raw)")
+        self.assertEqual(ast.unparse(body[index + 3]), "validate_success_result(result)")
+        guard = ast.fix_missing_locations(ast.Module(body=[body[index + 4]], type_ignores=[]))
         compiled = compile(guard, str(Path(runner.__file__)), "exec")
         valid = {"dataPlaneBinaryDigest": "sha256:" + "a" * 64,
             "goExampleSha256": "b" * 64, "dependenciesSha256": "c" * 64}
@@ -334,7 +335,7 @@ class RunnerTests(unittest.TestCase):
             and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "terminal.json")
         expression = compile(ast.Expression(body=terminal.args[1]), str(Path(runner.__file__)), "eval")
         receipt = eval(expression, {"phase": "complete", "success": True, "clean": True, "errors": [],
-            "time": runner.time, "begun": 990, "failure": None})
+            "time": runner.time, "begun": 990, "failure": None, "quota": False})
         self.assertEqual(receipt, {"schema": "serverware.privateXPostRun/v1", "phase": "complete", "success": True,
             "cleanup": True, "cleanupErrors": [], "elapsedSeconds": 10.0, "syntheticOnly": True,
             "realXVerified": False, "productionReady": False})

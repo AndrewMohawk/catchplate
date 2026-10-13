@@ -24,6 +24,9 @@ IDENTITY = {"operation": {"operation_id": "11111111-2222-4333-8444-555555555555"
     "profile_binding_digest": "sha256:" + "3" * 64,
     "effective_settings_digest": "sha256:" + "4" * 64}
 DESCRIPTOR = {"schema": "serverware.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
+QUOTA_DESCRIPTOR = {"schema": "serverware.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
+    "period": "utc_day", "scope": "verified_x_account", "unit": "posting_attempt",
+    "minimum": 1, "maximum": 1_000_000_000}
 
 
 @contextmanager
@@ -46,15 +49,21 @@ def health():
 
 
 class ReadinessTests(unittest.TestCase):
-    def observe(self, received, *, before=None, after=None, enabled=True, reused=False):
+    def observe(self, received, *, before=None, after=None, enabled=True, reused=False, quota=False):
         before = snapshot() if before is None else before
+        if quota and "quota_store_ready" not in before:
+            before = {**before, "quota_store_ready": True}
         after = deepcopy(before) if after is None else after
         reader = Mock(return_value=received)
         with owners(operator_x_admission=SimpleNamespace(enabled=lambda: enabled),
                 operator_demo_store=SimpleNamespace(loaded_gate_status=reader)), \
                 patch.object(readiness, "_snapshot", side_effect=[before, after]) as snapshots:
-            result = readiness.observe_health(received) if reused else readiness.observe()
-        self.assertEqual(set(result), {"ready", "policy_hash", "loaded_policy_hash", "managed_x"})
+            if quota:
+                result = readiness.observe_health_quota(received) if reused else readiness.observe_quota()
+            else:
+                result = readiness.observe_health(received) if reused else readiness.observe()
+        self.assertEqual(set(result), {"ready", "policy_hash", "loaded_policy_hash", "managed_x"}
+            | ({"daily_quota_available"} if quota else set()))
         return result, reader, snapshots
 
     def test_exact_configured_pair_uses_one_request_catalog_reuses_none(self):
@@ -138,6 +147,79 @@ class ReadinessTests(unittest.TestCase):
                     patch.object(readiness, "_local", return_value={**snapshot(), **changes}):
                 with self.assertRaises(Conflict):
                     readiness.require_start(connection, observation)
+
+    def test_quota_mode_joins_exact_same_health_without_changing_consent_contract(self):
+        received = {**health(), "operator_x_post_attempt_quota": dict(QUOTA_DESCRIPTOR)}
+        for reused in (False, True):
+            result, reader, snapshots = self.observe(received, quota=True, reused=reused)
+            self.assertTrue(result["ready"])
+            self.assertTrue(result["daily_quota_available"])
+            self.assertEqual(reader.call_count, 0 if reused else 1)
+            self.assertEqual(snapshots.call_count, 2)
+            self.assertTrue(all(call.kwargs == {"quota": True} for call in snapshots.call_args_list))
+        legacy, reader, snapshots = self.observe(received)
+        self.assertTrue(legacy["ready"])
+        self.assertNotIn("daily_quota_available", legacy)
+        self.assertTrue(all(call.kwargs == {} for call in snapshots.call_args_list))
+
+    def test_quota_marker_and_durable_storage_cannot_be_inferred_from_post_support(self):
+        for descriptor in (None, {}, {**QUOTA_DESCRIPTOR, "minimum": True},
+                {**QUOTA_DESCRIPTOR, "maximum": 1e9}, {**QUOTA_DESCRIPTOR, "scope": "credential"},
+                {**QUOTA_DESCRIPTOR, "extra": False}):
+            result, _, _ = self.observe({**health(), "operator_x_post_attempt_quota": descriptor}, quota=True)
+            self.assertTrue(result["ready"])
+            self.assertFalse(result["daily_quota_available"])
+        received = {**health(), "operator_x_post_attempt_quota": dict(QUOTA_DESCRIPTOR)}
+        for marker in (False, None, 1):
+            result, _, _ = self.observe(received, quota=True, before={**snapshot(), "quota_store_ready": marker})
+            self.assertTrue(result["ready"])
+            self.assertFalse(result["daily_quota_available"])
+        for after in ({**snapshot(), "quota_store_ready": False},
+                {**snapshot(), "quota_store_ready": True, "policy_hash": "sha256:" + "9" * 64}):
+            result, _, _ = self.observe(received, quota=True, after=after)
+            self.assertFalse(result["ready"])
+            self.assertFalse(result["daily_quota_available"])
+
+    def test_quota_marker_never_bypasses_original_binary_policy_identity_and_origin(self):
+        received = {**health(), "operator_x_post_attempt_quota": dict(QUOTA_DESCRIPTOR)}
+        for key in ("policy_hash", "data_plane_binary_digest"):
+            result, _, _ = self.observe({**received, key: "sha256:" + "9" * 64}, quota=True)
+            self.assertFalse(result["daily_quota_available"])
+        for key, value in (("destination_allowed", False), ("managed_x", {
+                **IDENTITY, "operation": None, "profile_binding_digest": None})):
+            result, _, _ = self.observe(received, quota=True, before={**snapshot(), key: value})
+            self.assertFalse(result["daily_quota_available"])
+        result, reader, snapshots = self.observe(None, reused=True, quota=True)
+        self.assertFalse(result["daily_quota_available"])
+        reader.assert_not_called()
+        snapshots.assert_not_called()
+
+    def test_writer_quota_recheck_is_read_only_and_never_initializes_or_fetches(self):
+        observation = self.observe({**health(), "operator_x_post_attempt_quota": dict(QUOTA_DESCRIPTOR)},
+            quota=True)[0]
+        connection = object()
+        require_ready = Mock()
+        with owners(operator_x_quota=SimpleNamespace(require_ready=require_ready)), \
+                patch.object(readiness, "_local", return_value=snapshot()) as local, \
+                patch.object(readiness, "observe_quota", side_effect=AssertionError("no HTTP in writer")):
+            readiness.require_quota_start(connection, observation)
+        local.assert_called_once_with(connection, query_only=False)
+        require_ready.assert_called_once_with(connection)
+        from serverware.operator_catalog_schema import CatalogConflict
+        for changed in ({**observation, "daily_quota_available": False},
+                {**observation, "daily_quota_available": 1}, {**observation, "extra": False},
+                {**observation, "loaded_policy_hash": "sha256:" + "9" * 64}):
+            require_ready.reset_mock()
+            with owners(operator_x_quota=SimpleNamespace(require_ready=require_ready)), \
+                    patch.object(readiness, "_local", return_value=snapshot()), self.assertRaises(CatalogConflict):
+                readiness.require_quota_start(connection, changed)
+            require_ready.assert_not_called()
+        with owners(operator_x_quota=SimpleNamespace(require_ready=Mock(side_effect=RuntimeError("private-canary")))), \
+                patch.object(readiness, "_local", return_value=snapshot()):
+            with self.assertRaises(CatalogConflict) as failure:
+                readiness.require_quota_start(connection, observation)
+            self.assertNotIn("private-canary", str(failure.exception))
+            self.assertFalse(readiness._quota_store_ready(connection))
 
 
 if __name__ == "__main__":

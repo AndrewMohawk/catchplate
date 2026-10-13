@@ -399,7 +399,7 @@ function createCredentialsView(workspace, actions = {}) {
         details.append(identity);
         if (xAccount) for (const [label, value] of [['X account', credential.provider_account], ['X subject', credential.provider_subject],
           ['OAuth client', credential.oauth_client_id], ['Consent scopes', credential.scopes.join(', ')],
-          ['Permission preset', 'Text-only posting; no daily quota']]) identity.append(textNode('dt', label), textNode('dd', value));
+          ['Permission preset', 'Text-only posting; review shared daily limits in each posting permission']]) identity.append(textNode('dt', label), textNode('dd', value));
         if (isGithubAppCredential(credential)) {
           const binding = credential.github_app;
           for (const [label, value] of [['GitHub App ID', binding.app_id], ['Installation ID', binding.installation_id],

@@ -15,9 +15,14 @@ BROKER_REQUEST_V2 = "serverware.nativeBrokerCredentialLeaseRequest/v2"
 POLICY_AWARE_REQUEST_V1 = "serverware.policyAwareCredentialLeaseRequest/v1"
 POLICY_AWARE_REQUEST_V2 = "serverware.policyAwareCredentialLeaseRequest/v2"
 POLICY_AWARE_AUTHORITY_V1 = "serverware.policyAwareCredentialLeaseRequestAuthority/v1"
+OPERATOR_X_QUOTA_REQUEST_V1 = "serverware.operatorXQuotaCredentialLeaseRequest/v1"
 
 
 def request_representation(api_version: str) -> tuple[str, bool]:
+    if api_version == OPERATOR_X_QUOTA_REQUEST_V1:
+        # Distinct ordinary signed wrapper; no native/requestAuthority fields.
+        # The existing unbound recipient encryption is retained inside it.
+        return "operator-x-quota", False
     if api_version == BROKER_REQUEST_V1:
         return "native-broker", False
     if api_version == BROKER_REQUEST_V2:

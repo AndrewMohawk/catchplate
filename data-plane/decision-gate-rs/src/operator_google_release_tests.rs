@@ -230,7 +230,7 @@ impl Fixture {
         // Exercise the actual forwarding-decision owner propagation, not a
         // separately acquired pin followed by an owner-less preview decision.
         let (decision, release) = decide_internal_for_forward_with_shadow(&self.state,
-            &self.snapshot, input, Some("agent:test"), None, Some(&mut owner));
+            &self.snapshot, input, Some("agent:test"), None, Some(&mut owner), None);
         assert!(release.is_none());
         assert_eq!(decision["allowed"], true, "actual ordinary decision: {decision}");
         assert_eq!(decision["credential_version"], version);

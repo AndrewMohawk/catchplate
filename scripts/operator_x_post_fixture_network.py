@@ -14,9 +14,14 @@ from pathlib import Path
 import runpy
 import signal
 import socket
+import sqlite3
 import ssl
+import stat
 import struct
 import threading
+import time
+import uuid
+import re
 
 from scripts import operator_github_fixture_network as isolated
 
@@ -29,6 +34,10 @@ ROOT, NETWORK_ROOT = Path("/fixture-runtime"), Path("/fixture-network")
 HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + PROXY_HOST + " " + CONTROL_HOST
     + "\n" + FIXTURE_IP + " " + " ".join(PROVIDER_HOSTS) + "\n").encode("ascii")
 RESOLV = isolated.RESOLV
+QUOTA_REQUEST = "x-quota-restart.request.json"
+QUOTA_ACK = "x-quota-restart.ack.json"
+QUOTA_TABLES = ("operator_x_quota_state", "operator_x_quota_accounts",
+    "operator_x_quota_buckets", "operator_x_quota_attempts")
 
 
 def require(condition):
@@ -52,6 +61,153 @@ def _write(path, raw, mode=0o400):
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(descriptor, "wb") as output:
         output.write(raw); output.flush(); os.fchmod(output.fileno(), mode); os.fsync(output.fileno())
+
+
+def quota_json(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        allow_nan=False).encode("ascii")
+
+
+def quota_checkpoint(value, *, ack=False):
+    """Closed public rendezvous, never a URL, command or ceremony capability."""
+    require(type(value) is dict and type(ack) is bool)
+    if ack:
+        require(set(value) == {"schema", "request_sha256", "status"}
+            and value["schema"] == "serverware.privateXQuotaRestartAck/v1"
+            and value["status"] == "retained_restarted"
+            and type(value["request_sha256"]) is str
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", value["request_sha256"]))
+    else:
+        require(set(value) == {"schema", "run_id", "phase", "policy_hash", "credential_id",
+            "application_ids", "initial_access_expires_at_epoch_ms"}
+            and value["schema"] == "serverware.privateXQuotaRestartRequest/v1"
+            and value["phase"] == "after_three"
+            and type(value["policy_hash"]) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", value["policy_hash"])
+            and type(value["application_ids"]) is list and len(value["application_ids"]) == 2)
+        identifiers = [value["run_id"], value["credential_id"], *value["application_ids"]]
+        require(all(type(item) is str and len(item) == 36 and str(uuid.UUID(item)) == item for item in identifiers)
+            and len(set(identifiers)) == 4)
+        expiry = value["initial_access_expires_at_epoch_ms"]
+        require(type(expiry) is int and 0 < expiry < 2**53)
+    require(len(quota_json(value)) <= 4096)
+    return value
+
+
+def read_quota_checkpoint(*, ack=False):
+    root = Path("/client-work")
+    info = root.lstat()
+    require(os.geteuid() == os.getegid() == 10001 and stat.S_ISDIR(info.st_mode)
+        and info.st_uid == info.st_gid == 10001 and stat.S_IMODE(info.st_mode) == 0o700)
+    path = root / (QUOTA_ACK if ack else QUOTA_REQUEST)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+            and before.st_uid == before.st_gid == 10001 and stat.S_IMODE(before.st_mode) == 0o600
+            and 0 < before.st_size <= 4096)
+        raw = stream.read(4097)
+        after = path.lstat()
+        identity = lambda row: (row.st_dev, row.st_ino, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+        require(identity(before) == identity(after) and len(raw) == before.st_size)
+    value = quota_checkpoint(json.loads(raw), ack=ack)
+    require(raw == quota_json(value))
+    return value
+
+
+def acknowledge_quota_restart(request_sha256):
+    request = read_quota_checkpoint()
+    require(request is not None and request_sha256 == "sha256:" + hashlib.sha256(quota_json(request)).hexdigest())
+    value = quota_checkpoint({"schema": "serverware.privateXQuotaRestartAck/v1",
+        "request_sha256": request_sha256, "status": "retained_restarted"}, ack=True)
+    root = Path("/client-work")
+    stage, target = root / (QUOTA_ACK + ".pending"), root / QUOTA_ACK
+    _write(stage, quota_json(value), 0o600)
+    os.link(stage, target, follow_symlinks=False)  # Exclusive publication; never replaces an ACK.
+    stage.unlink()
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    require(read_quota_checkpoint(ack=True) == value)
+    return value
+
+
+def quota_preservation_snapshot():
+    """Fixed synthetic read-only snapshot; only counts, inode pins and hashes escape.
+
+    Run while the gate is stopped, before and after the app's single restart.
+    No app imports, schema creation, secret decryption or SQLite writes.
+    """
+    import fcntl
+    require(os.geteuid() == os.getegid() == 10001)
+    require(json.loads(Path("/private-audit-fixture.json").read_bytes()) == {
+        "schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+    def identity(path):
+        row = path.lstat()
+        require(stat.S_ISREG(row.st_mode) and row.st_nlink == 1 and row.st_uid == row.st_gid == 10001)
+        return [row.st_dev, row.st_ino, stat.S_IMODE(row.st_mode)]
+    def file_hash(path):
+        before = identity(path)
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC), "rb") as stream:
+            raw = stream.read(4 * 1024**2 + 1)
+        require(0 < len(raw) <= 4 * 1024**2 and identity(path) == before)
+        return {"identity": before, "sha256": hashlib.sha256(raw).hexdigest()}
+    lock = Path("/data/.operator-publication.lock")
+    before_lock = identity(lock)
+    descriptor = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        until = time.monotonic() + 2
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                require(time.monotonic() < until)
+                time.sleep(.025)
+        require([os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino] == before_lock[:2])
+        database = identity(Path("/data/serverware.sqlite3"))
+        conn = sqlite3.connect("file:/data/serverware.sqlite3?mode=ro", uri=True, timeout=2)
+        try:
+            conn.execute("PRAGMA query_only=ON"); conn.execute("BEGIN")
+            tables = (*QUOTA_TABLES, "operator_catalog_state", "operator_catalog_credentials",
+                "operator_catalog_applications", "operator_catalog_rules", "operator_demo_settings",
+                "operator_demo_policy", "credentials", "credential_generations", "operator_x_configuration",
+                "operator_x_provider_custody", "operator_x_provider_custody_meta",
+                "operator_x_account_intents", "operator_x_account_work", "operator_x_account_captures")
+            projected = {}
+            for table in tables:
+                rows = conn.execute('SELECT * FROM "' + table + '" LIMIT 257').fetchall()
+                require(len(rows) <= 256)
+                normalized = [[{"bytes": item.hex()} if isinstance(item, bytes) else item for item in row] for row in rows]
+                raw = quota_json(sorted(normalized, key=quota_json))
+                require(len(raw) <= 4 * 1024**2)
+                projected[table] = {"rows": len(rows), "sha256": hashlib.sha256(raw).hexdigest()}
+            buckets = conn.execute("SELECT provider_subject,utc_day,claimed,outstanding FROM operator_x_quota_buckets").fetchall()
+            require(len(buckets) == 1 and buckets[0][0] == "18446744073709551001"
+                and type(buckets[0][2]) is int and buckets[0][2:] == (3, 0))
+            states = conn.execute("SELECT state FROM operator_x_quota_attempts").fetchall()
+            require(states == [("claimed",)] * 3)
+            policy = conn.execute("SELECT policy_hash FROM operator_demo_policy WHERE singleton=1").fetchone()
+            credentials = conn.execute("SELECT id,data_json FROM operator_catalog_credentials").fetchall()
+            applications = conn.execute("SELECT id,data_json FROM operator_catalog_applications").fetchall()
+            require(policy is not None and len(credentials) == 1 and json.loads(credentials[0][1])["status"] == "active"
+                and len(applications) == 2 and all(json.loads(row[1])["status"] == "active" for row in applications))
+        finally:
+            conn.close()
+        keys = {str(path): file_hash(path) for path in (Path("/data/master.key"),
+            Path("/data/policy-signing-ed25519.pem"), Path("/data/response-signing-ed25519.pem"),
+            Path("/x-custody/master.key"))}
+        require(identity(lock) == before_lock and identity(Path("/data/serverware.sqlite3")) == database)
+        return {"schema": "serverware.privateXQuotaPreservation/v1", "database": database,
+            "lock": before_lock, "tables": projected, "keys": keys, "claimed": 3, "outstanding": 0,
+            "policy_hash": policy[0], "credential_id": credentials[0][0],
+            "application_ids": sorted(row[0] for row in applications)}
+    finally:
+        os.close(descriptor)
 
 
 def prepare_network_files():
@@ -140,15 +296,23 @@ def edge():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("initialize", "network", "edge"))
-    operation = parser.parse_args().operation
+    parser.add_argument("operation", choices=("initialize", "network", "edge", "quota-request", "quota-ack", "quota-snapshot"))
+    parser.add_argument("--request-sha256")
+    args = parser.parse_args()
+    operation = args.operation
+    require((args.request_sha256 is not None) == (operation == "quota-ack"))
     os.umask(0o077)
     if operation == "initialize":
         signal.alarm(30); initialize()
     elif operation == "network":
         keep_namespace()
-    else:
+    elif operation == "edge":
         edge()
+    else:
+        signal.alarm(6)
+        value = (read_quota_checkpoint() if operation == "quota-request" else
+            acknowledge_quota_restart(args.request_sha256) if operation == "quota-ack" else quota_preservation_snapshot())
+        print(quota_json(value).decode("ascii"), flush=True)
 
 
 if __name__ == "__main__":

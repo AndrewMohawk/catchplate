@@ -92,11 +92,20 @@ class XUsernameRuleInput(NamedInput):
 
 
 class XPostRuleInput(NamedInput):
-    """One fixed text-posting permission; daily quota is not available here."""
+    """One fixed posting permission, optionally limited per verified account."""
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["x_text_post_v1"]
+    daily_post_attempt_limit: int | None = Field(default=None, ge=1, le=1_000_000_000)
     _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+    @field_validator("daily_post_attempt_limit", mode="before")
+    @classmethod
+    def explicit_attempt_limit(cls, value):
+        # Omission retains the old unbounded contract; null is not a limit.
+        if type(value) is not int:
+            raise ValueError("daily posting-attempt limit must be an integer")
+        return value
 
 
 class AlchemyKeyInput(NamedInput):

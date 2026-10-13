@@ -30,6 +30,7 @@ function createConnectView(workspace, applications, proxy) {
   let step = 0; let selectedCredential = ''; let selectedApplication = ''; let selectedRule = '';
   let review = null; let checkpoint = null; let open = false;
   let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
+  element('connect-x-post-quota').value = 'none';
   const catalog = () => workspace.state.catalog;
   const newGithubApp = () => connectionMethod === 'github' && element('connect-github-type').value === 'github_app_v1';
   const githubCreationAvailable = () => newGithubApp() ? githubAppDestinationAvailable(catalog()) :
@@ -319,9 +320,12 @@ function createConnectView(workspace, applications, proxy) {
       'This is the exact named repository you authorize, not a discovered or verified account relationship. The saved token must already have the required GitHub permission. No response-field setup is needed.';
     fields('connect-x-username-group', x);
     fields('connect-x-post-group', xPost);
+    const xPostQuotaProblem = xPost ? renderXPostQuotaForm(catalog(), credential(), true) : '';
     element('connect-x-post-summary').textContent = !xPost ? '' : !xPostAvailable(catalog(), credential()) ?
       'Posting is unavailable until this account, the approved destination and the current paired gate support the exact permission. No fallback grant is sent.' :
-      'Publish text as ' + credential().provider_account + '. Text only; no media, replies, quotes or threads. Daily quotas are unavailable: this permission has no daily limit. Supply text only in your local client.';
+      'Publish text as ' + credential().provider_account + '. Text only; no media, replies, quotes or threads. Supply text only in your local client. ' +
+      (xPostQuotaAvailable(catalog(), credential()) ? 'An optional shared daily posting-attempt restriction is available below.' :
+        'The paired gate does not advertise daily limits. Do not grant unlimited access if you require a limit.');
     fields('connect-alchemy-chain-group', alchemy);
     element('connect-alchemy-summary').textContent = !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ?
       'Choose an approved mainnet or Sepolia chain. The exact preset and its separately approved origin are required. No destination is added and no fallback permission is sent.' :
@@ -380,7 +384,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) ||
       !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
-      xPost && !xPostAvailable(catalog(), credential()) ||
+      xPost && (!xPostAvailable(catalog(), credential()) || Boolean(xPostQuotaProblem)) ||
       alchemy && !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ||
       npm && (npmInstall ? !npmInstallAvailable(catalog(), credential()) || !npmInstallNewRuleAvailable(catalog(), selectedApplication) :
         npmPublish ? !npmPublishAvailable(catalog(), credential()) || !publishGrantAvailable() :
@@ -570,7 +574,8 @@ function createConnectView(workspace, applications, proxy) {
     if (isXOAuthCredential(credential())) {
       if (element('connect-operation').value !== operatorXPost.bundle) throw operatorError('Choose the advertised X text-post permission. No fallback grant was sent.');
       const rule = {...xPostRuleFields(), name: 'Publish text · ' + credential().provider_account,
-        application_id: selectedApplication, credential_id: selectedCredential};
+        application_id: selectedApplication, credential_id: selectedCredential,
+        ...xPostQuotaInput(element('connect-x-post-quota').value, element('connect-x-post-limit').value, catalog(), credential())};
       if (!supported(rule)) throw operatorError('The connected account or paired X posting permission is unavailable. No grant was sent.');
       return rule;
     }
@@ -693,6 +698,8 @@ function createConnectView(workspace, applications, proxy) {
   element('connect-github-type').addEventListener('change', () => {
     element('connect-credential-secret').value = ''; element('connect-github-private-key').value = ''; review = null; render();
   });
+  for (const [id, event] of [['connect-x-post-quota', 'change'], ['connect-x-post-limit', 'input']])
+    element(id).addEventListener(event, () => { review = null; if (step === 3) step = 2; render(); });
   for (const [id, method] of [['connect-use-key', 'key'], ['connect-use-github', 'github'], ['connect-use-npm', 'npm'], ['connect-use-x', 'x'], ['connect-use-alchemy', 'alchemy'], ['connect-use-saved', 'saved']]) element(id).addEventListener('click', () => {
     if (step !== 0 || connectionMethod !== null || !writable() || checkpoint) return;
     if (method === 'github' && !catalog()?.capabilities.github && !catalog()?.capabilities.github_app) return;
@@ -723,6 +730,7 @@ function createConnectView(workspace, applications, proxy) {
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
     for (const id of ['connect-response-mode', 'connect-request-body-mode', 'connect-operation']) element(id).value = '';
     element('connect-restrictions').open = false;
+    element('connect-x-post-quota').value = 'none'; element('connect-x-post-limit').value = '';
     element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; proxy.mount(null); step = 0;
   }
   element('connect-cancel').addEventListener('click', () => {

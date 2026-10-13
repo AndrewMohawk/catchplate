@@ -78,6 +78,7 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             operator_catalog_github.validate_shape(rule)
         elif operator_catalog_gmail.selected(rule):
             operator_catalog_gmail.validate_shape(rule)
+    operator_catalog_x_post.validate_route_coexistence(catalog['access_rules'], catalog['credentials'])
     credentials = {row['id']: row for row in catalog['credentials']}
     applications = {row['id']: row for row in catalog['applications']}
     selected = [row for row in catalog['access_rules'] if row['status'] == 'active'

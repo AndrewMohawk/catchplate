@@ -115,7 +115,8 @@ pub(super) fn admitted<'a>(
             .is_some()
         || request_authority.is_some()
         || release_authorization.is_some()
-        || credential_scope_requires_release_authorization(state, snapshot, scope)?
+        || (credential_scope_requires_release_authorization(state, snapshot, scope)?
+            && !operator_x_quota::admitted(state, snapshot, scope)?)
     {
         return Err(refused());
     }

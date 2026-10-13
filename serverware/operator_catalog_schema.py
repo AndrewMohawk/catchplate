@@ -458,7 +458,7 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
     operator_catalog_x.validate_route_coexistence(catalog['access_rules'])
     operator_catalog_alchemy.validate_route_coexistence(catalog['access_rules'])
     from serverware import operator_catalog_x_post
-    operator_catalog_x_post.validate_route_coexistence(catalog['access_rules'])
+    operator_catalog_x_post.validate_route_coexistence(catalog['access_rules'], catalog['credentials'])
 
 
 def initialize(conn) -> None:

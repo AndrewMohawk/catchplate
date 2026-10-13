@@ -610,6 +610,12 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     if operator_active and not operator_demo.request_allowed(request.method, request.url.path):
         return JSONResponse(status_code=403, content={"detail":
             "This operator demo allows only scoped local connections; production and native authority mutations are unavailable."})
+    if (operator_active and request.method == "POST"
+            and request.scope.get("path") == "/api/data-plane/operator-x-quota/claim"):
+        # Only this new machine route owns its authenticated 33 KiB / 5 s
+        # parser. Do not prebuffer before that authentication; the unchanged
+        # outer ASGI signer still supplies common response security headers.
+        return await call_next(request)
     if _operator_catalog_body_is_route_owned(request.method, request.scope.get("path"),
             operator_active=operator_active):
         # Keep CSRF/admin/role/Origin admission ahead of the sole bounded body
@@ -2933,6 +2939,7 @@ class CredentialLeaseRequest(BaseModel):
         "serverware.nativeBrokerCredentialLeaseRequest/v2",
         "serverware.policyAwareCredentialLeaseRequest/v1",
         "serverware.policyAwareCredentialLeaseRequest/v2",
+        "serverware.operatorXQuotaCredentialLeaseRequest/v1",
     ] = Field(alias="apiVersion")
     purpose: Literal["generationMetadata", "dispatchSecret"]
     principal_id: str = Field(alias="principalId", min_length=1, max_length=1024)
@@ -2975,10 +2982,16 @@ class CredentialLeaseRequest(BaseModel):
     recipient_attestation: dict[str, Any] | None = Field(
         default=None, alias="recipientAttestation"
     )
+    operator_x_quota: dict[str, Any] | None = Field(default=None, alias="operatorXQuota")
 
     @model_validator(mode="after")
     def validate_recipient_attestation_size(self) -> CredentialLeaseRequest:
         profile, bound = lease_profiles.request_representation(self.api_version)
+        if profile == "operator-x-quota":
+            from serverware import operator_x_quota_api
+            operator_x_quota_api.validate_wire(self.model_dump(by_alias=True, exclude_unset=True))
+        elif "operator_x_quota" in self.model_fields_set:
+            raise ValueError("ordinary X quota context requires its separate lease profile")
         native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
         if native or policy_aware:
             if native:
@@ -3100,6 +3113,20 @@ class NativeCurrentCredentialLeaseRequest(BaseModel):
 
 class CredentialLeaseWireRequest(RootModel[CredentialLeaseRequest | NativeCurrentCredentialLeaseRequest]):
     pass
+
+
+class OperatorXQuotaClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_by_alias=True, validate_by_name=False)
+    api_version: Literal["serverware.operatorXQuotaClaimRequest/v1"] = Field(alias="apiVersion")
+    lease_request: CredentialLeaseRequest = Field(alias="leaseRequest")
+    reservation_id: str = Field(alias="reservationId", min_length=36, max_length=36)
+
+    @model_validator(mode="after")
+    def require_quota_profile(self):
+        if (self.lease_request.api_version != lease_profiles.OPERATOR_X_QUOTA_REQUEST_V1
+                or str(uuid.UUID(self.reservation_id)) != self.reservation_id):
+            raise ValueError("ordinary X quota claim requires its original request")
+        return self
 
 
 class CredentialCurrentnessPhase(BaseModel):
@@ -5329,6 +5356,18 @@ async def _bounded_credential_currentness_request(request: Request) -> Credentia
             "serverware.credentialCurrentnessRequest/v3": _STATIC_CURRENTNESS_REQUEST_MAX_BYTES},
     )
     return wire.root
+
+
+async def _bounded_operator_x_quota_claim(request: Request) -> OperatorXQuotaClaimRequest:
+    from serverware import operator_x_quota_api
+    try:
+        return await asyncio.wait_for(_bounded_exact_data_plane_model(request,
+            model_type=OperatorXQuotaClaimRequest, expected_token=DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+            maximum_bytes=operator_x_quota_api.MAX_REQUEST_BYTES + 1024,
+            label="ordinary X quota claim", capture_original_key="serverware.operator_x_quota_claim_original"),
+            timeout=5.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="ordinary X quota claim body expired") from None
 
 
 def _original_data_plane_request(request: Request, scope_key: str, payload: BaseModel) -> dict[str, Any]:
@@ -19744,6 +19783,11 @@ _CREDENTIAL_LEASE_PUBLIC_METADATA_STRING_FIELDS = (
 def _credential_lease_request_binding_sha256(
     payload: CredentialLeaseRequest,
 ) -> str:
+    if payload.api_version == lease_profiles.OPERATOR_X_QUOTA_REQUEST_V1:
+        from serverware import operator_x_quota_api
+        original = payload.model_dump(by_alias=True, exclude_unset=True)
+        operator_x_quota_api.validate_wire(original)
+        return operator_x_quota_api.digest(original)
     request_authority = (
         payload.request_authority.model_dump(
             by_alias=True,
@@ -19912,6 +19956,12 @@ def _assert_credential_lease_release_authorization(
     route: Any,
 ) -> dict[str, Any]:
     profile, bound = lease_profiles.request_representation(payload.api_version)
+    if profile == "operator-x-quota":
+        from serverware import operator_x_quota_api
+        try:
+            return operator_x_quota_api.require_route(route)
+        except Exception:
+            raise HTTPException(status_code=409, detail="ordinary X quota route is unavailable") from None
     native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
     release = payload.release_authorization
     jit = route.jit if isinstance(route.jit, dict) else {}
@@ -20480,6 +20530,24 @@ async def data_plane_measured_capture_retirement(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/data-plane/operator-x-quota/claim")
+def data_plane_operator_x_quota_claim(request: Request,
+        payload: OperatorXQuotaClaimRequest = Depends(_bounded_operator_x_quota_claim)) -> Response:
+    from serverware import operator_x_quota_api
+    _require_currentness_response_context(request, operator_x_quota_api.CLAIM_PATH)
+    original = _original_data_plane_request(request, "serverware.operator_x_quota_claim_original", payload)
+    try:
+        result = operator_x_quota_api.claim(original)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="ordinary X quota claim is unavailable") from None
+    # The existing ASGI signer binds the actual nonce, path and final body.
+    # Commit has already completed; a lost response never uncharges a claim.
+    return Response(content=_canonical_json(result), media_type="application/json",
+        headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/credential-leases")
 def data_plane_credential_leases(
     request: Request,
@@ -20488,6 +20556,7 @@ def data_plane_credential_leases(
     authenticated = True
     refresh_opening = None
     currentness_opening = None
+    quota_opening = None
     wire_payload = payload
     wrapped = isinstance(payload, NativeCurrentCredentialLeaseRequest)
     if wrapped:
@@ -20528,7 +20597,8 @@ def data_plane_credential_leases(
         dispatch_authority = _assert_credential_lease_release_authorization(
             payload, route=route
         )
-        x_oauth_allowed = (github_app_allowed and not bound_dispatch
+        x_quota = profile == "operator-x-quota"
+        x_oauth_allowed = (x_quota or github_app_allowed and not bound_dispatch
             and payload.api_version == "serverware.credentialLeaseRequest/v3"
             and dispatch_authority == {"controlled": False, "issuanceKind": None,
                 "requestAuthority": None, "requestAuthoritySha256": None, "releaseAuthorization": None})
@@ -20536,6 +20606,11 @@ def data_plane_credential_leases(
         x_deadline = (x_deadline_context[1] if type(x_deadline_context) is tuple
             and len(x_deadline_context) == 2 and x_deadline_context[0] is payload
             and type(x_deadline_context[1]) is float else None)
+        if x_quota:
+            from serverware import operator_x_quota_api
+            if wrapped or broker or currentness_opening is not None or refresh_opening is not None:
+                raise HTTPException(status_code=409, detail="ordinary X quota profile is unavailable")
+            quota_opening = operator_x_quota_api.Opening(request, payload, original_deadline=x_deadline)
         release_authorization = dispatch_authority["releaseAuthorization"]
         request_authority = dispatch_authority["requestAuthority"]
         if refresh_opening is not None:
@@ -20630,6 +20705,10 @@ def data_plane_credential_leases(
         )
 
         prepared_credential: dict[str, Any] | None = None
+        if (payload.purpose == "generationMetadata" and profile == "legacy"
+                and not wrapped and not broker and currentness_opening is None and refresh_opening is None):
+            from serverware import operator_x_quota_api
+            operator_x_quota_api.prepare_metadata(payload, route, original_deadline=x_deadline)
         if payload.purpose == "generationMetadata" and refresh_opening is not None:
             # Refresh is a separate, definite controlled transition BEFORE
             # this response pins the version. It cannot renew a dispatch pin.
@@ -20642,6 +20721,8 @@ def data_plane_credential_leases(
                 if refresh_opening is not None
                 else _broker_credential_for_lease(payload.credential_id)
                 if broker
+                else db.get_credential(payload.credential_id, include_secret=False)
+                if quota_opening is not None
                 else _credential_for_lease(payload.credential_id,
                     allow_legacy_oauth=currentness_opening is None, allow_github_app=github_app_allowed,
                     allow_x=x_oauth_allowed, expected_version=payload.expected_credential_version,
@@ -20768,6 +20849,9 @@ def data_plane_credential_leases(
             ),
         )
         expires_at_epoch_ms = issued_at_epoch_ms + ttl_ms
+        if quota_opening is not None:
+            # Durable reservation precedes any secret snapshot/decryption.
+            expires_at_epoch_ms = min(expires_at_epoch_ms, quota_opening.reserve())
         if request_authority is not None:
             expires_at_epoch_ms = min(
                 expires_at_epoch_ms,
@@ -20939,6 +21023,8 @@ def data_plane_credential_leases(
                     detail="recipientPublicKey is not a valid X25519 public key",
                 ) from exc
             envelope = {**aad, **encrypted}
+            if quota_opening is not None:
+                envelope = quota_opening.wrap(envelope)
             if currentness_opening is not None:
                 currentness_opening.check()
                 envelope = {
@@ -21035,6 +21121,8 @@ def data_plane_credential_leases(
             raise HTTPException(status_code=503, detail="credential currentness changed before lease output") from exc
     if x_oauth_current and (x_deadline is None or time.monotonic() >= x_deadline):
         raise HTTPException(status_code=409, detail="X account lease deadline expired before output")
+    if quota_opening is not None:
+        quota_opening.check()
     return Response(
         content=response_body,
         media_type="application/json",

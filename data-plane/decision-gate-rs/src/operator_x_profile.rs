@@ -35,7 +35,7 @@ pub(super) fn gate_capability() -> Value {
 }
 
 #[derive(Clone)]
-pub(super) struct Profile { client_id: String, binding_digest: String }
+pub(super) struct Profile { client_id: String, binding_digest: String, quota_enabled: bool }
 
 impl Profile {
     fn parse(binding: &Value) -> Result<Self, String> {
@@ -63,7 +63,8 @@ impl Profile {
             "revocation_url":"https://api.x.com/2/oauth2/revoke",
             "identity_url":"https://api.x.com/2/users/me"});
         if *binding != expected { return Err(refused()); }
-        Ok(Self { client_id: client.to_owned(), binding_digest: digest_json_ensure_ascii(&expected) })
+        Ok(Self { client_id: client.to_owned(), binding_digest: digest_json_ensure_ascii(&expected),
+            quota_enabled: operator_x_quota::selected_flag()? })
     }
 
     pub(super) fn binding_digest(&self) -> &str { &self.binding_digest }
@@ -95,9 +96,9 @@ impl Profile {
 
     fn route(&self, route: &Route) -> Result<(), String> {
         x_post::validate_route(route)?;
-        // The shared account-day quota contract remains supported elsewhere;
-        // this ordinary SQLite profile has no such authoritative quota owner.
-        if route.constraints.len() != 1
+        // Route syntax is not a dispatch permit. Limited routes additionally
+        // require the separately installed ordinary one-use quota owner.
+        if (route.constraints.len() != 1 && !self.quota_enabled)
             || route.adapter_config["credentialBinding"]["clientIds"] != json!([self.client_id])
             || route.adapter_config["credentialBinding"]["requiredScopes"] != json!(x_post::SCOPES) {
             return Err(refused());

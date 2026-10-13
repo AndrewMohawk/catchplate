@@ -21,6 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import prepare_operator_x_post_fixture as recipe
+from scripts import operator_x_post_fixture_network as network
 from scripts.run_operator_npm_example_fixture import NpmExampleRun, environment, memory_bytes
 from scripts.run_operator_x_examples_fixture import absolute_path, sha256, require, failure_site, limit_command_logs, MAX_LOG_BYTES
 from scripts.run_ordinary_regression import child_exit_status, stop_group
@@ -205,8 +206,131 @@ class XPostRun(NpmExampleRun):
         self.command("gate-start", compose + ["up", "-d", "--no-build", "--pull", "never", "--no-deps",
             "--wait", "--wait-timeout", "15", "decision-gate-rs"], 20)
 
+    def quota_helper(self, container, operation, suffix, *arguments):
+        require(re.fullmatch(r"[0-9a-f]{64}", container)
+            and operation in {"quota-request", "quota-ack", "quota-snapshot"})
+        python = "/example-python/bin/python" if operation != "quota-snapshot" else "python"
+        return json.loads(self.command(operation + "-" + suffix,
+            ["docker", "exec", container, python, "-B", "-m",
+                "scripts.operator_x_post_fixture_network", operation, *arguments], 7))
+
+    def quota_wait_healthy(self, container, name, seconds):
+        until = min(self.deadline - 6, time.monotonic() + seconds)
+        index = 0
+        while time.monotonic() < until:
+            state = json.loads(self.command("quota-health-" + name + "-" + str(index),
+                ["docker", "inspect", "--format", "{{json .State}}", container], 3))
+            require(state["Status"] == "running" and not state["OOMKilled"], "quota restart process failed")
+            if state.get("Health", {}).get("Status") == "healthy":
+                return
+            require(state.get("Health", {}).get("Status") == "starting", "quota restart unhealthy")
+            index += 1
+            time.sleep(.25)
+        raise ValueError("quota original restart budget expired")
+
+    def quota_provider_snapshot(self, container, suffix):
+        code = ("import json,ssl,urllib.request; c=ssl.create_default_context(cafile='/x/ca.pem'); "
+            "o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=c)); "
+            "r=o.open('https://api.x.com/__test__/observations',timeout=2); raw=r.read(131073); "
+            "assert r.status==200 and len(raw)<=131072; print(raw.decode('ascii'))")
+        value = json.loads(self.command("quota-provider-" + suffix,
+            ["docker", "exec", container, "python", "-B", "-c", code], 4))
+        require(value["schema"] == "serverware.privateXQuotaProvider/v1" and value["terminal"] == "running"
+            and value["issuedTokenFamilies"] == [{"alias": 1, "generation": 1}]
+            and value["counts"] == {"total": 6, "authorize": 1, "code": 1, "identity": 1,
+                "refresh": 0, "revoke": 0, "posts": 3, "rejected": 0}
+            and len(value["posts"]) == 3 and value["overflowed"] is False
+            and value["initialAccessExpired"] is False and value["refreshAfterInitialExpiry"] is False)
+        return value
+
+    def restart_for_quota(self, identities, request):
+        """One runner-owned exact-ID restart; checker has no Docker authority."""
+        network.quota_checkpoint(request)
+        require(not hasattr(self, "quota_restart") and self.deadline - time.monotonic() > 60
+            and time.time() * 1000 < request["initial_access_expires_at_epoch_ms"],
+            "quota original pre-expiry checkpoint refused")
+        before_rows = self.container_rows("quota-before-restart")
+        before = {row["Config"]["Labels"]["com.docker.compose.service"]: row for row in before_rows}
+        require({name: row["Id"] for name, row in before.items()} == identities
+            and all(row["State"]["Status"] == "running" and not row["State"]["OOMKilled"]
+                and row["RestartCount"] == 0 for row in before.values()))
+        provider = self.quota_provider_snapshot(identities["provider"], "before")
+        require(provider["initialAccessExpiresAtEpochMs"] == request["initial_access_expires_at_epoch_ms"])
+        # Stop the gate first. No new dispatch/claim may race the preservation
+        # snapshot or the app restart; provider, edge and keeper stay untouched.
+        gate, app, checker = (identities[name] for name in ("decision-gate-rs", "serverware", "check"))
+        self.command("quota-stop-gate", ["docker", "stop", "--time", "5", gate], 10)
+        stopped = json.loads(self.command("quota-stopped-gate", ["docker", "inspect", "--format", "{{json .State}}", gate], 3))
+        require(stopped["Status"] == "exited" and stopped["Pid"] == 0 and not stopped["OOMKilled"])
+        retained = self.quota_helper(app, "quota-snapshot", "before")
+        require(retained["policy_hash"] == request["policy_hash"]
+            and retained["credential_id"] == request["credential_id"]
+            and retained["application_ids"] == sorted(request["application_ids"]), "quota checkpoint context differs")
+        app_view = self.public_view(app, "app", "quota-before", initial=False)
+        self.command("quota-stop-app", ["docker", "stop", "--time", "5", app], 10)
+        stopped = json.loads(self.command("quota-stopped-app", ["docker", "inspect", "--format", "{{json .State}}", app], 3))
+        require(stopped["Status"] == "exited" and stopped["Pid"] == 0 and not stopped["OOMKilled"])
+        self.command("quota-start-app", ["docker", "start", app], 5)
+        self.quota_wait_healthy(app, "app", 25)
+        require(self.quota_helper(app, "quota-snapshot", "after") == retained,
+            "quota retained database/key state changed")
+        require(self.public_view(app, "app", "quota-after", initial=False) == app_view,
+            "quota retained publication changed")
+        self.command("quota-start-gate", ["docker", "start", gate], 5)
+        self.quota_wait_healthy(gate, "gate", 15)
+        require(self.public_view(gate, "gate", "quota-after", initial=False) == app_view,
+            "quota gate did not load original publication")
+        after_rows = self.container_rows("quota-after-restart")
+        after = {row["Config"]["Labels"]["com.docker.compose.service"]: row for row in after_rows}
+        require({name: row["Id"] for name, row in after.items()} == identities)
+        for name, row in after.items():
+            old = before[name]
+            require(all(row[key] == old[key] for key in ("Image", "Config", "HostConfig", "Mounts", "RestartCount"))
+                and row["State"]["Status"] == "running" and not row["State"]["OOMKilled"])
+            if name in {"serverware", "decision-gate-rs"}:
+                require(row["State"]["StartedAt"] != old["State"]["StartedAt"]
+                    and row["State"].get("Health", {}).get("Status") == "healthy")
+            else:
+                require(row["State"]["StartedAt"] == old["State"]["StartedAt"], "unrelated original lifetime reset")
+        require(time.time() * 1000 < request["initial_access_expires_at_epoch_ms"]
+            and self.deadline - time.monotonic() > 30, "original quota restart window elapsed")
+        require(self.quota_provider_snapshot(identities["provider"], "after") == provider,
+            "quota provider changed across restart")
+        request_hash = "sha256:" + recipe.hashlib.sha256(network.quota_json(request)).hexdigest()
+        acknowledgement = self.quota_helper(checker, "quota-ack", "once", "--request-sha256", request_hash)
+        require(acknowledgement == {"schema": "serverware.privateXQuotaRestartAck/v1",
+            "request_sha256": request_hash, "status": "retained_restarted"})
+        self.quota_restart = {"schema": "serverware.privateXQuotaRestart/v1", "request": request,
+            "requestSha256": request_hash, "retainedSnapshot": retained, "publicView": app_view,
+            "restarted": {name: {"id": identities[name], "beforeStartedAt": before[name]["State"]["StartedAt"],
+                "afterStartedAt": after[name]["State"]["StartedAt"], "manualRestarts": 1,
+                "automaticRestarts": after[name]["RestartCount"]} for name in ("serverware", "decision-gate-rs")},
+            "originalProviderEdgeKeeperUnchanged": True, "originalDeadlineUnchanged": True}
+        self.save("quota-restart.json", self.quota_restart)
+
+    def quota_checker_wait(self, identities):
+        until = min(self.deadline - 6, time.monotonic() + 190)
+        index = 0
+        while time.monotonic() < until:
+            state = json.loads(self.command("quota-check-state-" + str(index),
+                ["docker", "inspect", "--format", "{{json .State}}", identities["check"]], 3))
+            require(not state["OOMKilled"], "quota checker killed")
+            if state["Status"] == "exited":
+                require(hasattr(self, "quota_restart"), "quota checker exited before retained restart")
+                return state["ExitCode"]
+            require(state["Status"] == "running", "quota checker not running")
+            if not hasattr(self, "quota_restart"):
+                request = self.quota_helper(identities["check"], "quota-request", str(index))
+                if request is not None:
+                    self.restart_for_quota(identities, request)
+            index += 1
+            time.sleep(1)
+        raise ValueError("original quota checker deadline expired")
+
     def execute(self):
         args = self.args
+        quota = getattr(args, "quota", False)
+        require(type(quota) is bool)
         require(re.fullmatch(r"[0-9a-f]{40}", args.commit))
         for directory in (args.source, args.job_root, args.evidence):
             require(directory.is_dir() and directory.resolve() == directory and not directory.is_symlink())
@@ -226,7 +350,7 @@ class XPostRun(NpmExampleRun):
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root, args.node,
                 args.node_modules, args.python_runtime, args.python_packages, args.go,
                 expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
-                expected_dependencies_sha256=args.expected_dependencies_sha256)
+                expected_dependencies_sha256=args.expected_dependencies_sha256, quota=quota)
             self.project, self.services = config["name"], config["services"]
             image_ids, self.image_environments = {}, {}
             for index, image in enumerate(sorted({service["image"] for service in self.services.values()})):
@@ -295,11 +419,14 @@ class XPostRun(NpmExampleRun):
             phase = "checker"
             checker = identities["check"]
             self.command("checker-start", ["docker", "start", checker], 10)
-            exit_code = int(self.command("checker-wait", ["docker", "wait", checker], 190))
+            exit_code = (self.quota_checker_wait(identities) if quota else
+                int(self.command("checker-wait", ["docker", "wait", checker], 190)))
             raw = self.command("checker-result", ["docker", "logs", checker], 5)
             state = json.loads(self.command("checker-state", ["docker", "inspect", "--format", "{{json .State}}", checker], 5))
             require(exit_code == 0 and state["Status"] == "exited" and state["ExitCode"] == 0 and not state["OOMKilled"])
             from scripts.check_operator_x_post import validate_success_result
+            if quota:
+                from scripts.check_operator_x_quota import validate_success_result
             result = json.loads(raw); validate_success_result(result)
             require(result["dataPlaneBinaryDigest"] == "sha256:" + args.expected_binary_sha256
                 and result["goExampleSha256"] == args.expected_go_sha256
@@ -322,6 +449,7 @@ class XPostRun(NpmExampleRun):
                 "success": success, "cleanup": clean, "cleanupErrors": errors,
                 "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True,
                 "realXVerified": False, "productionReady": False,
+                **({"quotaProfile": True, "retainedRestart": hasattr(self, "quota_restart")} if quota else {}),
                 **({"failureSite": failure} if failure is not None else {})})
             print(json.dumps({"phase": phase, "success": success, "cleanup": clean}), flush=True)
         return 0 if success and clean else 1
@@ -332,6 +460,7 @@ def main():
     for name in ("source", "job-root", "evidence", "binary", "go", "node", "node-modules", "initializer", "python-runtime", "python-packages"):
         parser.add_argument("--" + name, type=absolute_path, required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--quota", action="store_true", help="separate retained-restart, same-subject limit4 acceptance")
     for name in ("expected-binary-sha256", "expected-go-sha256", "expected-dependencies-sha256"):
         parser.add_argument("--" + name, type=sha256, required=True)
     args = parser.parse_args()

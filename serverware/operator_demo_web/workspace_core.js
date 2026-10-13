@@ -111,6 +111,7 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
 function operatorRuleContentValid(rule, credential) {
   if (isAwsCredential(credential)) return false; // Stored tuple is not a header credential or a grant.
   if (rule && ['quota', 'daily_quota'].some(key => Object.hasOwn(rule, key))) return false;
+  if (rule && !isXPostRule(rule) && Object.hasOwn(rule, 'daily_post_attempt_limit')) return false;
   if (rule && !isAlchemyRule(rule) && Object.hasOwn(rule, 'chain')) return false;
   if (rule && !isXRule(rule) && Object.hasOwn(rule, 'username')) return false;
   if (rule && !isNpmPublishRule(rule) && ['package', 'tag', 'publishing_window'].some(key => Object.hasOwn(rule, key))) return false;
@@ -149,7 +150,8 @@ function operatorRuleSupported(rule, catalog) {
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
   if (isXPostRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
-    xPostRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && xPostAvailable(catalog, credential));
+    xPostRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && xPostAvailable(catalog, credential) &&
+    (!Object.hasOwn(rule, 'daily_post_attempt_limit') || xPostQuotaAvailable(catalog, credential)));
   if (isNpmInstallRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
     npmInstallRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && npmInstallAvailable(catalog, credential));
   if (isAlchemyRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
@@ -390,7 +392,7 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota'])
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit'])
       if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
   });
   for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';

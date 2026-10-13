@@ -64,9 +64,14 @@ SUITES = (
     Suite("backend", "test_operator_x_lease_boundary.py"),
     Suite("backend", "test_operator_x_secret_boundary.py"),
     Suite("backend", "test_operator_x_readiness.py"),
+    Suite("backend", "test_operator_catalog_x_post.py"),
+    Suite("backend", "test_operator_x_quota.py"),
+    Suite("backend", "test_operator_x_quota_api.py"),
     Suite("backend", "test_operator_x_post_profiles.py", seconds=60),
     Suite("backend", "test_operator_x_post_fixture.py", seconds=60),
+    Suite("backend", "test_operator_x_quota_fixture.py", seconds=60),
     Suite("backend", "test_operator_x_post_checker.py", seconds=60),
+    Suite("backend", "test_operator_x_quota_checker.py", seconds=60),
     Suite("backend", "test_prepare_operator_x_post_fixture.py", seconds=60),
     Suite("backend", "test_run_operator_x_post_fixture.py", seconds=60),
     Suite("backend", "test_operator_guided_checker.py", seconds=60),
@@ -86,6 +91,7 @@ SUITES = (
     Suite("ui_contract", "test_operator_gmail_sdk_languages.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_accounts_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_configuration_ui.mjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_x_quota_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_runtime_browser_assets.cjs", "node", seconds=60),
 )
 
@@ -199,6 +205,8 @@ def node_completion(script, raw):
             "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"},
         "test_operator_x_configuration_ui.mjs": {"ok": True, "browser": False, "network": False,
             "scope": "actual JS with inert DOM and independent synthetic API DTOs; not backend, browser or provider acceptance"},
+        "test_operator_x_quota_ui.cjs": {"ok": True, "browser": False, "network": False,
+            "scope": "shared X posting-attempt quota UI contracts; no backend or enforcement acceptance"},
     }
     def unique(pairs):
         value = {}

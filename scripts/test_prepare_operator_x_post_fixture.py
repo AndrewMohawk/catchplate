@@ -215,13 +215,16 @@ class InventoryTests(InertTests):
         self.assertNotEqual(recipe.dependencies_sha256(recipe.tree_inventory(self.root, kind='node')),
             recipe.dependencies_sha256(observed))
         entry.chmod(0o644); (self.root / 'empty').mkdir(mode=0o755)
+        # Synthetic readable directories must not depend on the CI umask.
+        (self.root / 'empty').chmod(0o755)
         self.assertNotEqual(recipe.tree_inventory(self.root, kind='node'), observed)
         (self.root / 'empty').rmdir(); entry.write_bytes(b'different bytes\n')
         self.assertNotEqual(recipe.tree_inventory(self.root, kind='node'), observed)
 
     def test_node_links_are_only_relative_internal_bin_files_and_python_has_none(self):
         self.write('package/index.js'); link = self.root / '.bin/tool'
-        link.parent.mkdir(mode=0o755); link.symlink_to('../package/index.js')
+        link.parent.mkdir(mode=0o755); link.parent.chmod(0o755)
+        link.symlink_to('../package/index.js')
         self.assertEqual(recipe.tree_inventory(self.root, kind='node')['symlinks'],
             {'.bin/tool': {'target': '../package/index.js', 'mode': 0o777}})
         with self.assertRaises(ValueError): recipe.tree_inventory(self.root, kind='python')
@@ -246,6 +249,7 @@ class InventoryTests(InertTests):
         self.write('runtime/pyvenv.cfg', b'version = 3.12.14\n')
         self.write('runtime/lib/.fixture'); runtime = self.root / 'runtime'
         (runtime / 'bin').mkdir(mode=0o755)
+        (runtime / 'bin').chmod(0o755)
         for name, target in recipe.RUNTIME_LINKS.items(): (runtime / name).symlink_to(target)
         actual = recipe.tree_inventory(runtime, kind='runtime')
         self.assertEqual({name: row['target'] for name, row in actual['symlinks'].items()}, {
@@ -262,6 +266,7 @@ class InventoryTests(InertTests):
             self.write('packages/' + name + '.dist-info/METADATA', ('Name: ' + name + '\nVersion: ' + version + '\n').encode())
         self.write('runtime/pyvenv.cfg', b'version = 3.12.14\n'); self.write('runtime/bin/activate')
         (self.root / 'runtime/lib').mkdir(mode=0o755)
+        (self.root / 'runtime/lib').chmod(0o755)
         for name, target in recipe.RUNTIME_LINKS.items(): (self.root / 'runtime' / name).symlink_to(target)
         args = (self.root / 'node', self.root / 'runtime', self.root / 'packages')
         observed = recipe.dependencies(*args)

@@ -28,6 +28,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 PIN_FILE = ROOT / "scripts/operator_authority_contract_migration_pins.json"
 PIN_SHA256 = "sha256:4199bfe9362e1f7990a612e5b1cae9b7603dc2908c953ea8ea6201f602dd8e5f"
+X_QUOTA_PIN_FILE = ROOT / "scripts/operator_authority_contract_migration_x_quota_pins.json"
+# Independently derived fixed transition; never a caller-selected pin artifact.
+X_QUOTA_PIN_SHA256 = "sha256:ea376f5dce618b3888f5418a48bd160de8d01b83779e525db48ac6529bb46582"
+TRANSITIONS = ("historical", "jit-denial-quota-v1")
 SCHEMA = "serverware.operatorAuthorityContractMigrationPlan/v1"
 RECEIPT_SCHEMA = "serverware.operatorAuthorityContractMigrationReceipt/v1"
 MARKER = ".serverware-operator-demo.json"
@@ -104,11 +108,31 @@ def held_file(path, maximum=MAX_FILE, *, private=True, allow_change=False):
         os.close(fd)
 
 
-def pins():
-    raw = PIN_FILE.read_bytes()
-    require(sha(raw) == PIN_SHA256)
+def transition_profile(transition):
+    require(type(transition) is str and transition in TRANSITIONS)
+    if transition == "historical":
+        return PIN_FILE, PIN_SHA256
+    require(type(X_QUOTA_PIN_SHA256) is str
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", X_QUOTA_PIN_SHA256) is not None)
+    return X_QUOTA_PIN_FILE, X_QUOTA_PIN_SHA256
+
+
+def transition_binding(pinned, transition):
+    _path, digest = transition_profile(transition)
+    if transition == "historical":
+        require("transitionId" not in pinned)
+        return digest, {}
+    require(pinned.get("transitionId") == transition)
+    return digest, {"transitionId": transition}
+
+
+def pins(transition="historical"):
+    path, expected = transition_profile(transition)
+    raw = path.read_bytes()
+    require(sha(raw) == expected)
     value = strict_json(raw)
     require(value["schema"] == "serverware.operatorAuthorityContractMigrationPins/v1")
+    transition_binding(value, transition)
     return value
 
 
@@ -269,7 +293,8 @@ def inspect(conn, pinned, helpers, *, expected_digest):
         "sqliteObjectsSha256": sha(canonical(schema))}
 
 
-def plan(directory, pinned, helpers):
+def plan(directory, pinned, helpers, *, transition="historical"):
+    pin_digest, binding = transition_binding(pinned, transition)
     with admitted_directory(directory) as directory:
         before_files = tree(directory)
         witness(directory, pinned)
@@ -287,14 +312,17 @@ def plan(directory, pinned, helpers):
             require(identity(os.stat(directory / DATABASE, follow_symlinks=False)) == original)
         sidecars_absent(directory)
         require(tree(directory) == before_files)
-        return {"schema": SCHEMA, "pinsSha256": PIN_SHA256, "databaseSha256": sha(raw),
+        return {"schema": SCHEMA, "pinsSha256": pin_digest, **binding, "databaseSha256": sha(raw),
             "targetContractDigest": pinned["target"]["sourceContractDigest"],
             "databaseIdentity": list(original), "files": before_files, **value}
 
 
-def apply(directory, pinned, helpers, reviewed, expected_plan_sha256, backup, *, checkpoint=lambda _stage: None):
+def apply(directory, pinned, helpers, reviewed, expected_plan_sha256, backup, *, checkpoint=lambda _stage: None,
+        transition="historical"):
+    pin_digest, binding = transition_binding(pinned, transition)
     require(reviewed.get("schema") == SCHEMA and sha(canonical(reviewed)) == expected_plan_sha256
-        and reviewed["pinsSha256"] == PIN_SHA256)
+        and reviewed["pinsSha256"] == pin_digest
+        and (reviewed.get("transitionId") == transition if binding else "transitionId" not in reviewed))
     backup = Path(backup)
     require(backup.is_absolute() and backup.resolve() == backup and not backup.is_relative_to(directory))
     with held_file(backup) as (_backup_fd, backup_identity, backup_raw):
@@ -342,7 +370,8 @@ def apply(directory, pinned, helpers, reviewed, expected_plan_sha256, backup, *,
                     conn.close()
             sidecars_absent(directory)
             require(tree(directory) == reviewed["files"])
-            return {"schema": RECEIPT_SCHEMA, "planSha256": expected_plan_sha256,
+            receipt_binding = {**binding, "pinsSha256": pin_digest} if binding else {}
+            return {"schema": RECEIPT_SCHEMA, **receipt_binding, "planSha256": expected_plan_sha256,
                 "backupSha256": sha(backup_raw), "beforeContract": before["contract"],
                 "afterContract": after["contract"], "unchangedRowsSha256": sha(canonical(after["rows"])),
                 "unchangedSqliteObjectsSha256": after["sqliteObjectsSha256"],
@@ -351,6 +380,8 @@ def apply(directory, pinned, helpers, reviewed, expected_plan_sha256, backup, *,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--transition", choices=TRANSITIONS, default="historical",
+        help="fixed reviewed transition; historical remains the default")
     parser.add_argument("--data-directory", required=True, type=Path)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--plan", type=Path)
@@ -358,16 +389,17 @@ def main():
     parser.add_argument("--backup", type=Path)
     parser.add_argument("--acknowledge-stopped-copied-store", action="store_true")
     args = parser.parse_args()
-    pinned = pins()
+    pinned = pins(args.transition)
     require(args.data_directory.exists())
     helpers = source(pinned, args.data_directory)
     if args.apply:
         require(args.acknowledge_stopped_copied_store and args.plan and args.backup and args.expected_plan_sha256)
         with held_file(args.plan, MAX_PLAN) as (_fd, _identity, raw):
-            result = apply(args.data_directory, pinned, helpers, strict_json(raw), args.expected_plan_sha256, args.backup)
+            result = apply(args.data_directory, pinned, helpers, strict_json(raw), args.expected_plan_sha256, args.backup,
+                transition=args.transition)
     else:
         require(not (args.plan or args.backup or args.expected_plan_sha256 or args.acknowledge_stopped_copied_store))
-        result = plan(args.data_directory, pinned, helpers)
+        result = plan(args.data_directory, pinned, helpers, transition=args.transition)
     print(canonical(result).decode())
 
 

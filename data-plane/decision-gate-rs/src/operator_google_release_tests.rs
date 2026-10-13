@@ -116,10 +116,13 @@ impl Authority {
 
     fn metadata(&self) -> BTreeMap<String, Value> {
         if !self.x { return metadata(); }
-        serde_json::from_value(json!({"provider":"x.oauth2","provider_id":"x","oauth":true,
+        let metadata = serde_json::from_value(json!({"provider":"x.oauth2","provider_id":"x","oauth":true,
             "provider_subject":crate::operator_x_profile::tests::SUBJECT,"provider_identity_verified":true,
             "oauth_client_id":crate::operator_x_profile::tests::CLIENT,"x_app_id":crate::operator_x_profile::tests::CLIENT,
-            "scopes":x_post::SCOPES,"expires_at":"2099-01-01T00:00:00Z"})).unwrap()
+            "scopes":x_post::SCOPES,"expires_at_epoch_ms":4_070_908_800_000u64})).unwrap();
+        // Match the app's closed public lease projection, not its display DTO.
+        validate_credential_generation_metadata(&metadata).unwrap();
+        metadata
     }
 
     fn target(&self) -> (&'static str, &'static str) {

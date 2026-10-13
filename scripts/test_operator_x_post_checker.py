@@ -4,7 +4,9 @@
 Literal synthetic wire/authority observations exercise refusal and exact joins.
 Process/HTTP orchestration doubles only test the checker; they never stand in
 for an accepted lifecycle, provider contact, encrypted lease or durable audit.
-No fixture, subprocess, socket, dependency installation or database is opened.
+No fixture, socket, dependency installation or database is opened. One bounded
+fresh Python -I -S child proves the actual stdlib-only import/help closure;
+private temporary files exercise the unchanged shared file reader.
 """
 from __future__ import annotations
 
@@ -14,13 +16,20 @@ from copy import deepcopy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import urlencode
 
 from scripts import check_operator_x_post as check
+from scripts import operator_fixture_pins as pins
+
+_REAL_POPEN = subprocess.Popen
 
 
 APP = "11111111-1111-4111-8111-111111111111"
@@ -163,6 +172,75 @@ class CheckerTests(unittest.TestCase):
     def validate_provider(self, value):
         return check.validate_observations(value, posts=7, connected=True, refreshed=True,
             disconnected=True, first_anchor=ANCHOR, expired=True)
+
+    def test_fresh_stdlib_only_import_and_help_need_no_provider_crypto(self):
+        # -I ignores user/PYTHONPATH state; -S removes installed site packages.
+        # The child audit hook prevents the imports/help path opening sockets,
+        # databases or another process. This is not an SDK/lifecycle run.
+        program = """
+import sys
+def audit(name, args):
+    if name.startswith(('socket.', 'sqlite3.', 'subprocess.')) or name in {'os.system', 'os.fork', 'os.posix_spawn'}:
+        raise RuntimeError('import-only process attempted an external effect')
+sys.addaudithook(audit)
+sys.path.insert(0, sys.argv[1])
+from scripts import check_operator_x_post as checker
+from scripts import operator_x_post_fixture, operator_x_post_fixture_network
+assert not any(name == 'cryptography' or name.startswith('cryptography.') for name in sys.modules)
+assert not any('site-packages' in path or 'dist-packages' in path for path in sys.path)
+assert checker.read_pin.__module__ == 'scripts.operator_fixture_pins'
+print('stdlib-only-checker-import: PASS', flush=True)
+sys.argv = ['check_operator_x_post.py', '--help']
+checker.main()
+"""
+        with patch.object(subprocess, "Popen", _REAL_POPEN):
+            result = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", program,
+                str(Path(__file__).resolve().parents[1])], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, env={"LANG": "C.UTF-8"}, check=False)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, b"")
+        self.assertLessEqual(len(result.stdout), 8192)
+        self.assertIn(b"stdlib-only-checker-import: PASS\n", result.stdout)
+        self.assertIn(b"--expected-dependencies-sha256", result.stdout)
+        self.assertIn(b"--timeout-seconds", result.stdout)
+
+    def test_shared_reader_exact_bytes_identity_bounds_and_path_custody(self):
+        self.assertIs(check.read_pin, pins.read_pin)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve()
+            path = directory / "original"; raw = b"synthetic-public-file" * 4096
+            path.write_bytes(raw)
+            identity, actual = pins.read_pin(path, len(raw))
+            info = path.stat()
+            self.assertEqual(actual, raw)
+            self.assertEqual(identity, (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns))
+            empty = directory / "empty"; empty.touch()
+            link = directory / "linked"; link.symlink_to(path)
+            for selected, maximum in ((path, len(raw) - 1), (empty, 1), (directory, 1024),
+                    (link, len(raw)), (Path("relative"), len(raw))):
+                with self.subTest(kind=selected.name), self.assertRaises(check.CheckFailure):
+                    pins.read_pin(selected, maximum)
+            with self.assertRaises(FileNotFoundError):
+                pins.read_pin(directory / "absent", 16)
+
+    def test_shared_reader_refuses_changed_identity_and_closes_descriptor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary).resolve() / "original"; path.write_bytes(b"synthetic-original")
+            original_stat, original_close = os.fstat, os.close
+            observed = []
+            def fstat(descriptor):
+                info = original_stat(descriptor); observed.append(descriptor)
+                if len(observed) == 1:
+                    return info
+                return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_mode=info.st_mode,
+                    st_size=info.st_size, st_mtime_ns=info.st_mtime_ns + 1, st_ctime_ns=info.st_ctime_ns)
+            with patch.object(pins.os, "fstat", side_effect=fstat), \
+                    patch.object(pins.os, "close", wraps=original_close) as close:
+                with self.assertRaises(check.CheckFailure):
+                    pins.read_pin(path, 128)
+                self.assertEqual(len(observed), 2)
+                close.assert_called_once_with(observed[0])
 
     def test_closed_json_rejects_duplicate_nonfinite_and_bounds(self):
         self.assertEqual(check.document(b'{"x":[1,"value"]}'), {"x": [1, "value"]})

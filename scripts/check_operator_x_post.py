@@ -32,7 +32,7 @@ from scripts import operator_x_post_profiles as profiles
 from scripts.check_operator_catalog import COLLECTIONS, OperatorCatalogCheck, claim_fixture, features
 from scripts.check_operator_demo import CheckFailure, Endpoint, SHA256, require, token_file
 from scripts.check_operator_github_examples import _child_exit_status, _cleanup_example_group
-from scripts.check_operator_gmail_sdk import read_pin
+from scripts.operator_fixture_pins import read_pin
 from scripts.check_operator_key_replacement import authority_projection
 from scripts.check_operator_ordinary_client import BLOCK, CONNECT, LEASE, RELEASE, START, OrdinaryClientCheck
 

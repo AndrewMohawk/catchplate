@@ -25,7 +25,7 @@ Opening client setup does not execute a request or renew a token.
 
 The guides prepared for the [GitHub Wiki](https://github.com/AndrewMohawk/serverware/wiki) cover
 first-time setup, provider credentials, client/SDK examples, permissions, proxy
-configuration, notifications and maintenance. Its [versioned source pages](docs/wiki/Home.md)
+configuration, notifications and maintenance. Its [versioned source pages](docs/wiki/)
 are kept with the application so the guide can be reviewed alongside changes.
 Wiki publication is pending: its Git repository currently returns
 `Repository not found`. A signed-in maintainer must check whether the first
